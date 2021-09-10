@@ -1,6 +1,6 @@
 [package]
 publish=false
-name = "rs-ydb-sdk"
+name = "ydb-protobuf"
 version = "0.1.0"
 authors = ["rekby <timofey.koolin@gmail.com>"]
 edition = "2018"
@@ -9,6 +9,9 @@ edition = "2018"
 
 [dependencies]
 prost = "0.8"
+prost-types = "0.8"
+
+tonic = "0.5"
 
 [build-dependencies]
 tonic-build = "0.5"
