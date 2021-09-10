@@ -1,7 +1,16 @@
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+#[path = "ydb.scheme.rs"]
+pub mod ydb_scheme;
+#[path = "google.protobuf.rs"]
+pub mod google_protobuf;
+#[path = "ydb.table_stats.rs"]
+pub mod ydb_table_stats;
+#[path = "ydb.issue.rs"]
+pub mod ydb_issue;
+#[path = "ydb.table.rs"]
+pub mod ydb_table;
+#[path = "ydb.rs"]
+pub mod ydb;
+#[path = "ydb.table.v1.rs"]
+pub mod ydb_table_v1;
+#[path = "ydb.operations.rs"]
+pub mod ydb_operations;
