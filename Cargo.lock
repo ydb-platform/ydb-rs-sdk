@@ -817,3 +817,7 @@ dependencies = [
  "tonic",
  "tonic-build",
 ]
+
+[[package]]
+name = "ydb-protobuf-build-helper"
+version = "0.1.0"

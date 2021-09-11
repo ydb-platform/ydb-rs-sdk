@@ -21,7 +21,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
         let mut compile_files = Vec::default();
     for dir in COMPILE_DIRS {
         for file in fs::read_dir(dir).unwrap() {
-            let f_name = file.unwrap().file_name().to_str().unwrap().to_owned();
+            let f_name = file.unwrap().dir_entry.file_name().to_str().unwrap().to_owned();
+            if !std::fs::metadata(f_name).unwrap().is_file(){
+                continue
+            }
+
             if f_name.to_lowercase().ends_with(".proto") {
                 compile_files.push(dir.to_string() + "/" + f_name.as_str());
             }
