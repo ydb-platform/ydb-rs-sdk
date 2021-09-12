@@ -1,139 +1,148 @@
-use std::fs;
-use std::io::Write;
-use std::collections::HashSet;
+use build_helpers::ProtoModule;
 use std::cmp::{min, Ordering};
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::{Read, Write};
+use std::path::PathBuf;
 
-const COMPILE_DIRS: &[&str] = &["../ydb-api-protos", "../ydb-api-protos/protos"];
-const INCLUDE_DIRS: &[&str] = &["../ydb-api-protos", "../ydb-api-protos/protos", "../ydb-api-protos/protos/validation"];
-const DEST_DIR: &str = "src";
+const COMPILE_DIRS: &[(&str, &str)] = &[
+    // src, dst
+    ("../ydb-api-protos", "src/generated"),
+];
+const INCLUDE_DIRS: &[&str] = &[
+    "../ydb-api-protos",
+    "../ydb-api-protos/protos",
+    "../ydb-api-protos/protos/validation",
+];
 
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("cargo:rerun-if-changed=../ydb-api-protos");
 
-fn main() -> Result<(), Box<dyn std::error::Error>>{
-
-    for file in fs::read_dir(DEST_DIR).unwrap() {
-        let fname = file.unwrap().file_name().to_str().unwrap().to_owned();
-        if fname == "lib.rs" {
-            continue
-        }
-        fs::remove_file(DEST_DIR.to_string() + "/" + fname.as_str());
+    for (src, dst) in COMPILE_DIRS {
+        clean_dst_dir(dst);
+        compile_proto_dir(src, INCLUDE_DIRS, dst);
+        generate_mod_file(dst);
     }
-
-        let mut compile_files = Vec::default();
-    for dir in COMPILE_DIRS {
-        for file in fs::read_dir(dir).unwrap() {
-            let f_name = file.unwrap().dir_entry.file_name().to_str().unwrap().to_owned();
-            if !std::fs::metadata(f_name).unwrap().is_file(){
-                continue
-            }
-
-            if f_name.to_lowercase().ends_with(".proto") {
-                compile_files.push(dir.to_string() + "/" + f_name.as_str());
-            }
-        }
-    }
-
-    println!("Compile files: {:?}", compile_files);
-
-    let mut include_dirs = Vec::with_capacity(INCLUDE_DIRS.len());
-    for d in INCLUDE_DIRS {
-        include_dirs.push(d.to_string());
-    }
-
-    for file in compile_files {
-        println!("Compile: {}", file);
-
-        tonic_build::configure()
-            .build_server(false)
-            .build_client(true)
-            .out_dir(DEST_DIR)
-            .compile(&[file],
-                     &include_dirs)
-            .expect("failed to compile protobuf");
-
-    }
-
-    // generate lib.rs
-    let mut modules = HashSet::<String>::new();
-    let mut mod_content = String::default();
-    for file in fs::read_dir(DEST_DIR).unwrap() {
-        let fname = file.unwrap().file_name().to_str().unwrap().to_owned();
-        if fname == "lib.rs" {
-            continue
-        }
-
-        let mod_name = match fname.strip_suffix( ".rs"){
-            Some(mod_name) => mod_name,
-            None => continue,
-        };
-
-        modules.insert(mod_name.to_string());
-        for (i, ch) in mod_name.char_indices() {
-            if ch == '.' {
-                modules.insert(mod_name[..i].to_string());
-            }
-        }
-    }
-
-    let mut modules:Vec<String> = modules.iter().cloned().collect();
-    modules.sort_unstable_by(|a,b| {
-        let mut a_chars = a.chars();
-        let mut b_chars = b.chars();
-        loop {
-            let a_ch = a_chars.next();
-            let b_ch = b_chars.next();
-
-            if a_ch == b_ch {
-                if a_ch.is_none() {
-                    return Ordering::Equal
-                }
-                continue
-            };
-            let a_ch = match a_ch {
-                Some(ch)=>ch,
-                None => return Ordering::Less
-            };
-            let b_ch = match b_ch {
-                Some(ch)=>ch,
-                None => return Ordering::Greater
-            };
-
-            return if a_ch == '.' {
-                Ordering::Less
-            } else if b_ch == '.' {
-                Ordering::Greater
-            } else {
-                a_ch.cmp(&b_ch)
-            };
-        }
-    });
-
-    let mut mod_content = String::new();
-    for mod_name in modules {
-        let parts  = mod_name.split(".").collect_vec();
-        let last_part = parts.last().unwrap();
-        mod_content += format!("mod {} {")
-    }
-
-    let mut lib_file = fs::File::create("src/lib.rs").unwrap();
-    lib_file.write_all(mod_content.as_bytes()).unwrap();
 
     Ok(())
 }
 
-fn main_off() -> Result<(), Box<dyn std::error::Error>> {
-    let mut include_dirs = Vec::with_capacity(INCLUDE_DIRS.len());
-    for d in INCLUDE_DIRS {
-        include_dirs.push(d.to_string());
+fn clean_dst_dir(dst: &str) -> Result<(), Box<dyn std::error::Error>> {
+    for file in fs::read_dir(dst)? {
+        let fname = file?.file_name().to_str().unwrap().to_owned();
+        let fpath = format!("{}/{}", dst, fname);
+        if fname == "lib.rs" || fname == "mod.rs" {
+            println!("truncate file: {}", &fpath);
+            let mut f = fs::File::create(&fpath)?;
+            f.set_len(0)?;
+            continue;
+        }
+        println!("remove file: {}", &fpath);
+        fs::remove_file(fpath);
     }
 
+    return Ok(());
+}
+
+fn compile_files(files: &[&str], include_dirs: &[&str], dst_dir: &str) {
+    println!("compile files: {:?}", files);
     tonic_build::configure()
         .build_server(false)
         .build_client(true)
-        .out_dir(DEST_DIR)
-        .compile(&["../ydb-api-protos/ydb_import_v1.proto".to_string()],
-                 &include_dirs)
+        .out_dir(dst_dir)
+        .compile(files, include_dirs)
         .expect("failed to compile protobuf");
+}
 
+fn compile_proto_dir(
+    src_dir: &str,
+    include_dirs: &[&str],
+    dst_dir: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // read src files
+    let mut files_for_compile: HashMap<String, Vec<String>> = HashMap::default();
 
-    Ok(())
+    for item in walkdir::WalkDir::new(src_dir) {
+        let item = item?;
+        let f_path = item.path().to_str().unwrap();
+        println!("read fpath for compile: {}", f_path);
+
+        if !item.metadata()?.is_file() {
+            println!("skip dir");
+            continue;
+        }
+
+        if !f_path.to_lowercase().ends_with(".proto") {
+            println!("skip non .proto");
+            continue;
+        }
+
+        let mut f = fs::File::open(item.path())?;
+        let mut f_content = String::new();
+        f.read_to_string(&mut f_content)?;
+        if let Some(package_name) = build_helpers::get_proto_package(f_content.as_str()) {
+            if let Some(vec) = files_for_compile.get_mut(package_name) {
+                vec.push(f_path.to_string());
+            } else {
+                files_for_compile.insert(package_name.to_string(), vec![f_path.to_string()]);
+            }
+        } else {
+            println!("Unknown package name for: {}", f_path);
+        }
+    }
+
+    let mut packages: Vec<_> = files_for_compile.keys().collect();
+
+    // hack for full compile Ydb package
+    // and overwrite parially compiled.
+    //
+    // Source of problem: few files have package Ydb, but not always
+    // all included by import and during compile ydb package overwrited few times
+    // for different dependencies.
+    // We need for last time ydb package will compile with full list of files.
+    packages.sort_by(|a, b| {
+        let (a, b) = (a.as_str(), b.as_str());
+
+        if a == b {
+            return Ordering::Equal;
+        }
+        if a == "Ydb" {
+            return Ordering::Greater;
+        }
+        if b == "Ydb" {
+            return Ordering::Less;
+        }
+
+        a.cmp(b)
+    });
+
+    for package in packages {
+        let files = files_for_compile.get(package).unwrap();
+        println!("Compile proto package \"{}\": {:?}", package, files);
+        let files: Vec<_> = files.iter().map(|s| s.as_str()).collect();
+        compile_files(files.as_slice(), include_dirs, dst_dir);
+    }
+
+    return Ok(());
+}
+
+fn generate_mod_file(dst_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let mut pm = ProtoModule::default();
+    for file in fs::read_dir(dst_dir)? {
+        let file = file?;
+        let fname = file.file_name().to_str().unwrap().to_owned();
+        let fpath = format!("{}/{}", dst_dir, fname);
+        if !fs::metadata(&fpath)?.is_file() {
+            continue;
+        }
+        if fname == "mod.rs" {
+            continue;
+        }
+        pm.add_file(fname.as_str());
+    }
+
+    let mod_path = format!("{}/mod.rs", dst_dir);
+    let mut mod_f = fs::File::create(mod_path)?;
+    mod_f.write_all(pm.to_string().as_bytes())?;
+    return Ok(());
 }

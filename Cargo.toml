@@ -1,6 +1,6 @@
 [workspace]
 members = [
     "ydb-protobuf",
-    "ydb-protobuf-build-helper",
+    "build-helpers",
     "sdk"
 ]
