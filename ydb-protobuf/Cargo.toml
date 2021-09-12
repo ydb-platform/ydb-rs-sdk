@@ -11,7 +11,7 @@ edition = "2018"
 prost = "0.8"
 prost-types = "0.8"
 
-tonic = "0.5"
+tonic = {version = "0.5", features=["tls", "tls-roots", "tls-webpki-roots"]}
 
 [build-dependencies]
 tonic-build = "0.5"

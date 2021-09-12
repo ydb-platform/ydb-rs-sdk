@@ -52,7 +52,7 @@ impl ProtoModule {
         keys.sort();
 
         for key in keys {
-            res += format!("{}mod {} {{\n", indent, key).as_str();
+            res += format!("{}pub mod {} {{\n", indent, key).as_str();
 
             let m = self.submodules.get(key).unwrap();
             res += m
@@ -157,8 +157,8 @@ mod tests {
         };
 
         let s = m.to_string();
-        let expected = "mod asd {
-  mod v1 {
+        let expected = "pub mod asd {
+  pub mod v1 {
     include!(\"asd.v1.rs\");
   }
 }

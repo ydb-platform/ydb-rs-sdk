@@ -1,10 +1,14 @@
 [package]
+publish=false
 name = "sdk"
-version = "0.1.0"
+version = "0.0.0"
 authors = ["rekby <timofey.koolin@gmail.com>"]
 edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+futures = "0.3"
+tokio = "1"
+tonic = "0.5"
 ydb-protobuf = {path="../ydb-protobuf"}

@@ -1,9 +1,8 @@
 use build_helpers::ProtoModule;
-use std::cmp::{min, Ordering};
-use std::collections::{HashMap, HashSet};
+use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
-use std::path::PathBuf;
 
 const COMPILE_DIRS: &[(&str, &str)] = &[
     // src, dst
@@ -19,9 +18,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=../ydb-api-protos");
 
     for (src, dst) in COMPILE_DIRS {
-        clean_dst_dir(dst);
-        compile_proto_dir(src, INCLUDE_DIRS, dst);
-        generate_mod_file(dst);
+        clean_dst_dir(dst)?;
+        compile_proto_dir(src, INCLUDE_DIRS, dst)?;
+        generate_mod_file(dst)?;
     }
 
     Ok(())
@@ -33,12 +32,11 @@ fn clean_dst_dir(dst: &str) -> Result<(), Box<dyn std::error::Error>> {
         let fpath = format!("{}/{}", dst, fname);
         if fname == "lib.rs" || fname == "mod.rs" {
             println!("truncate file: {}", &fpath);
-            let mut f = fs::File::create(&fpath)?;
-            f.set_len(0)?;
+            fs::File::create(&fpath)?;
             continue;
         }
         println!("remove file: {}", &fpath);
-        fs::remove_file(fpath);
+        fs::remove_file(fpath)?;
     }
 
     return Ok(());

@@ -1,93 +1,93 @@
-mod google {
-  mod protobuf {
+pub mod google {
+  pub mod protobuf {
     include!("google.protobuf.rs");
   }
 }
-mod ydb {
+pub mod ydb {
   include!("ydb.rs");
-  mod coordination {
+  pub mod coordination {
     include!("ydb.coordination.rs");
-    mod v1 {
+    pub mod v1 {
       include!("ydb.coordination.v1.rs");
     }
   }
-  mod discovery {
+  pub mod discovery {
     include!("ydb.discovery.rs");
-    mod v1 {
+    pub mod v1 {
       include!("ydb.discovery.v1.rs");
     }
   }
-  mod experimental {
+  pub mod experimental {
     include!("ydb.experimental.rs");
-    mod v1 {
+    pub mod v1 {
       include!("ydb.experimental.v1.rs");
     }
   }
-  mod export {
+  pub mod export {
     include!("ydb.export.rs");
-    mod v1 {
+    pub mod v1 {
       include!("ydb.export.v1.rs");
     }
   }
-  mod import {
+  pub mod import {
     include!("ydb.import.rs");
-    mod v1 {
+    pub mod v1 {
       include!("ydb.import.v1.rs");
     }
   }
-  mod issue {
+  pub mod issue {
     include!("ydb.issue.rs");
   }
-  mod monitoring {
+  pub mod monitoring {
     include!("ydb.monitoring.rs");
-    mod v1 {
+    pub mod v1 {
       include!("ydb.monitoring.v1.rs");
     }
   }
-  mod operation {
-    mod v1 {
+  pub mod operation {
+    pub mod v1 {
       include!("ydb.operation.v1.rs");
     }
   }
-  mod operations {
+  pub mod operations {
     include!("ydb.operations.rs");
   }
-  mod pers_queue {
-    mod cluster_discovery {
+  pub mod pers_queue {
+    pub mod cluster_discovery {
       include!("ydb.pers_queue.cluster_discovery.rs");
     }
-    mod error_code {
+    pub mod error_code {
       include!("ydb.pers_queue.error_code.rs");
     }
-    mod v1 {
+    pub mod v1 {
       include!("ydb.pers_queue.v1.rs");
     }
   }
-  mod rate_limiter {
+  pub mod rate_limiter {
     include!("ydb.rate_limiter.rs");
-    mod v1 {
+    pub mod v1 {
       include!("ydb.rate_limiter.v1.rs");
     }
   }
-  mod scheme {
+  pub mod scheme {
     include!("ydb.scheme.rs");
-    mod v1 {
+    pub mod v1 {
       include!("ydb.scheme.v1.rs");
     }
   }
-  mod scripting {
+  pub mod scripting {
     include!("ydb.scripting.rs");
-    mod v1 {
+    pub mod v1 {
       include!("ydb.scripting.v1.rs");
     }
   }
-  mod table {
+  pub mod table {
     include!("ydb.table.rs");
-    mod v1 {
+    pub mod v1 {
       include!("ydb.table.v1.rs");
     }
   }
-  mod table_stats {
+  pub mod table_stats {
     include!("ydb.table_stats.rs");
   }
 }
