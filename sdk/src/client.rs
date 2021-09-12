@@ -1,6 +1,16 @@
-use tonic::metadata::{Ascii, MetadataValue};
+use bytes::Buf;
+
+use tonic::metadata::{ MetadataValue};
 use tonic::{Request, Status};
-use ydb_protobuf::generated::ydb::discovery::{ListEndpointsRequest, WhoAmIRequest};
+use prost::Message;
+use ydb_protobuf::generated::ydb;
+use ydb::{
+    discovery::{ListEndpointsRequest, WhoAmIRequest},
+    status_ids::StatusCode,
+};
+
+use crate::errors::Error;
+use ydb_protobuf::generated::ydb::discovery::{WhoAmIResult, WhoAmIResponse};
 
 pub struct Client {}
 
@@ -11,7 +21,7 @@ impl Client {
 
     pub async fn who_am_i(
         self: &Self,
-    ) -> Result<ydb_protobuf::generated::ydb::status_ids::StatusCode, Box<dyn std::error::Error>>
+    ) -> Result<String, Box<dyn std::error::Error>>
     {
         let tls = tonic::transport::ClientTlsConfig::new();
         let channel =
@@ -22,22 +32,30 @@ impl Client {
 
         let mut discovery_client = ydb_protobuf::generated::ydb::discovery::v1
         ::discovery_service_client::DiscoveryServiceClient::with_interceptor(channel, set_auth_header);
-        let res = discovery_client
-            .list_endpoints(ListEndpointsRequest {
-                database: "/ru-central1/b1g7h2ccv6sa5m9rotq4/etn00qhcjn6pap901icc".to_string(),
-                service: vec![],
+        let op = discovery_client
+            .who_am_i(WhoAmIRequest {
+                include_groups: false
             })
-            .await?;
-        let op = res.into_inner().operation.unwrap();
+            .await?.into_inner().operation.unwrap();
+        if op.status() != StatusCode::Success {
+            return Err(Box::new(Error::from_str(format!("Bad status code: {:?}", op.status()).as_str())));
+        }
+        let opres = op.result.unwrap();
+        println!("res url: {:?}", opres.type_url);
 
-        return Ok(op.status());
+        let res:WhoAmIResult  = WhoAmIResult::decode(opres.value.as_slice())?;
+        println!("res: {:?}", res.user);
+        return Ok(res.user);
     }
 }
 
 fn set_auth_header(mut req: Request<()>) -> Result<Request<()>, Status> {
     let token = MetadataValue::from_str(std::env::var("IAM_TOKEN").unwrap().as_str()).unwrap();
+    let database = MetadataValue::from_str("/ru-central1/b1g7h2ccv6sa5m9rotq4/etn00qhcjn6pap901icc").unwrap();
+
     println!("rekby-auth");
-    req.metadata_mut().insert("authorization", token);
+    req.metadata_mut().insert("x-ydb-auth-ticket", token);
+    req.metadata_mut().insert("x-ydb-database", database);
     return Ok(req);
 }
 
@@ -51,7 +69,7 @@ mod test {
         let id = client.who_am_i().await?;
         assert_eq!(
             id,
-            ydb_protobuf::generated::ydb::status_ids::StatusCode::Success
+            "asd"
         );
         return Ok(());
     }

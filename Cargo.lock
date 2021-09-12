@@ -705,7 +705,9 @@ dependencies = [
 name = "sdk"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "futures",
+ "prost",
  "tokio",
  "tonic",
  "ydb-protobuf",

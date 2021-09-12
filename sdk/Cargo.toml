@@ -8,7 +8,9 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+bytes = "1"
 futures = "0.3"
+prost = "0.8"
 tokio = "1"
 tonic = "0.5"
 ydb-protobuf = {path="../ydb-protobuf"}
