@@ -51,7 +51,7 @@ impl Client {
 
 fn set_auth_header(mut req: Request<()>) -> Result<Request<()>, Status> {
     let token = MetadataValue::from_str(std::env::var("IAM_TOKEN").unwrap().as_str()).unwrap();
-    let database = MetadataValue::from_str("/ru-central1/b1g7h2ccv6sa5m9rotq4/etn00qhcjn6pap901icc").unwrap();
+    let database = MetadataValue::from_str(std::env::var("DB_NAME").unwrap().as_str()).unwrap();
 
     println!("rekby-auth");
     req.metadata_mut().insert("x-ydb-auth-ticket", token);
@@ -66,11 +66,7 @@ mod test {
     async fn who_am_i() -> Result<(), Box<dyn std::error::Error>> {
         let token = crate::credentials::StaticToken::from(std::env::var("IAM_TOKEN")?);
         let client = Client::new();
-        let id = client.who_am_i().await?;
-        assert_eq!(
-            id,
-            "asd"
-        );
+        client.who_am_i().await?;
         return Ok(());
     }
 }
