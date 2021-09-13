@@ -9,36 +9,51 @@ use ydb::{
     status_ids::StatusCode,
 };
 
-use crate::errors::Error;
+use crate::errors::{Error,Result};
 use ydb_protobuf::generated::ydb::discovery::{WhoAmIResult, WhoAmIResponse};
+use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;
+use tonic::transport::Channel;
+use tonic::codegen::InterceptedService;
 
-pub struct Client {}
+pub struct Client {
+    channel: tonic::transport::Channel,
+    endpoint: String,
+}
 
 impl Client {
-    pub fn new() -> Self {
-        return Client {};
+    pub fn new(endpoint: &str) -> Result<Self> {
+        let tls = tonic::transport::ClientTlsConfig::new();
+        let channel =
+            tonic::transport::Channel::from_shared(endpoint.to_string())?
+                .tls_config(tls)?
+                .connect_lazy()?;
+        return Ok(Client {
+            channel,
+            endpoint: endpoint.to_string()
+        });
+    }
+
+    fn create_client_discovery(self: &Self) -> DiscoveryServiceClient<
+        InterceptedService<Channel,  fn(Request<()>) -> std::result::Result<Request<()>, Status>>
+    >
+    {
+        let ch = self.channel.clone();
+        return ydb_protobuf::generated::ydb::discovery::v1
+        ::discovery_service_client::DiscoveryServiceClient::with_interceptor(ch, set_auth_header);
+
     }
 
     pub async fn who_am_i(
         self: &Self,
-    ) -> Result<String, Box<dyn std::error::Error>>
+    ) -> Result<String>
     {
-        let tls = tonic::transport::ClientTlsConfig::new();
-        let channel =
-            tonic::transport::Channel::from_static("https://ydb.serverless.yandexcloud.net:2135")
-                .tls_config(tls)?
-                .connect()
-                .await?;
-
-        let mut discovery_client = ydb_protobuf::generated::ydb::discovery::v1
-        ::discovery_service_client::DiscoveryServiceClient::with_interceptor(channel, set_auth_header);
-        let op = discovery_client
+        let op = self.create_client_discovery()
             .who_am_i(WhoAmIRequest {
                 include_groups: false
             })
             .await?.into_inner().operation.unwrap();
         if op.status() != StatusCode::Success {
-            return Err(Box::new(Error::from_str(format!("Bad status code: {:?}", op.status()).as_str())));
+            return Err(Error::from(op.status()));
         }
         let opres = op.result.unwrap();
         println!("res url: {:?}", opres.type_url);
@@ -49,7 +64,7 @@ impl Client {
     }
 }
 
-fn set_auth_header(mut req: Request<()>) -> Result<Request<()>, Status> {
+fn set_auth_header(mut req: Request<()>) -> std::result::Result<Request<()>, Status> {
     let token = MetadataValue::from_str(std::env::var("IAM_TOKEN").unwrap().as_str()).unwrap();
     let database = MetadataValue::from_str(std::env::var("DB_NAME").unwrap().as_str()).unwrap();
 
@@ -63,9 +78,9 @@ mod test {
     use super::*;
 
     #[tokio::test]
-    async fn who_am_i() -> Result<(), Box<dyn std::error::Error>> {
+    async fn who_am_i() -> Result<()> {
         let token = crate::credentials::StaticToken::from(std::env::var("IAM_TOKEN")?);
-        let client = Client::new();
+        let client = Client::new("https://ydb.serverless.yandexcloud.net:2135")?;
         client.who_am_i().await?;
         return Ok(());
     }
