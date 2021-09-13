@@ -14,6 +14,7 @@ prost-types = "0.8"
 tonic = {version = "0.5", features=["tls", "tls-roots", "tls-webpki-roots"]}
 
 [build-dependencies]
-tonic-build = "0.5"
 build-helpers = {path="../build-helpers"}
+prost-build = "0.8"
+tonic-build = "0.5"
 walkdir = "2"

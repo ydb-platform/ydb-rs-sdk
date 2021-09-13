@@ -44,11 +44,12 @@ fn clean_dst_dir(dst: &str) -> Result<(), Box<dyn std::error::Error>> {
 
 fn compile_files(files: &[&str], include_dirs: &[&str], dst_dir: &str) {
     println!("compile files: {:?}", files);
+    let cfg = prost_build::Config::default();
     tonic_build::configure()
         .build_server(false)
         .build_client(true)
         .out_dir(dst_dir)
-        .compile(files, include_dirs)
+        .compile_with_config(cfg, files, include_dirs)
         .expect("failed to compile protobuf");
 }
 
