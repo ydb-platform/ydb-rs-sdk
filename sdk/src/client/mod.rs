@@ -24,7 +24,7 @@ pub struct Client<C>
 where
     C: Credencials,
 {
-    channel: AuthService<C>,
+    channel: Channel,
     cred: C,
     endpoint: String,
 }
@@ -39,20 +39,8 @@ where
             .tls_config(tls)?
             .connect_lazy()?;
 
-        let auth_service_create = |ch| {
-            return internal::AuthService::new(
-                ch,
-                cred,
-                "/ru-central1/b1g7h2ccv6sa5m9rotq4/etn00qhcjn6pap901icc",
-            );
-        };
-
-        let auth_ch = ServiceBuilder::new()
-            .layer_fn(auth_service_create)
-            .service(channel);
-
         return Ok(Client {
-            channel: auth_ch,
+            channel: channel,
             cred,
             endpoint: endpoint.to_string(),
         });
@@ -79,8 +67,22 @@ where
     ) -> DiscoveryServiceClient<
         InterceptedService<Channel, fn(Request<()>) -> std::result::Result<Request<()>, Status>>,
     > {
+
+        let auth_service_create = |ch| {
+            return internal::AuthService::new(
+                ch,
+                self.cred.clone(),
+                "/ru-central1/b1g7h2ccv6sa5m9rotq4/etn00qhcjn6pap901icc",
+            );
+        };
+
+        let auth_ch = ServiceBuilder::new()
+            .layer_fn(auth_service_create)
+            .service(self.channel.clone());
+
+
         return ydb_protobuf::generated::ydb::discovery::v1
-        ::discovery_service_client::DiscoveryServiceClient::with_interceptor(ch, set_header_callback);
+        ::discovery_service_client::DiscoveryServiceClient::new(auth_ch);
     }
 
     pub async fn who_am_i(self: &Self) -> Result<String> {

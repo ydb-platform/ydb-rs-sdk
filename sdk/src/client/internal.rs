@@ -1,6 +1,7 @@
 use crate::credentials::Credencials;
 use std::task::{Context, Poll};
 use tonic::transport::Channel;
+use tonic::metadata::MetadataValue;
 
 pub(crate) struct AuthService<C>
 where
@@ -15,7 +16,7 @@ impl<C> AuthService<C>
 where
     C: crate::credentials::Credencials,
 {
-    pub fn new(ch: Channel, cred: C, database: &str) -> Self<C> {
+    pub fn new(ch: Channel, cred: C, database: &str) -> Self {
         return AuthService {
             ch,
             cred,
@@ -24,7 +25,7 @@ where
     }
 }
 
-impl tower::Service<tower::Request> for AuthService<C>
+impl<C> tower::Service<http::Request<tonic::body::BoxBody>> for AuthService<C>
 where
     C: Credencials,
 {
@@ -36,7 +37,7 @@ where
         self.ch.poll_ready(cx).map_err(Into::into)
     }
 
-    fn call(&mut self, req: tower::Request) -> Self::Future {
+    fn call(&mut self, req: http::Request<tonic::body::BoxBody>) -> Self::Future {
         let mut token = String::new();
         self.cred.fill_token(&mut token);
 
