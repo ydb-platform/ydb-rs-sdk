@@ -4,7 +4,7 @@ use std::task::{Context, Poll};
 use std::{future::Future, pin::Pin};
 use tonic::body::BoxBody;
 use tonic::transport::{Body, Channel};
-use tower::Service;
+use tower::{Service, ServiceBuilder};
 
 pub(crate) struct AuthService {
     ch: Channel,
@@ -55,4 +55,24 @@ impl Service<Request<BoxBody>> for AuthService {
             Ok(response)
         })
     }
+}
+
+pub(crate) fn create_grpc_client<T, CB>(
+    channel: &Channel,
+    cred: &Box<dyn Credencials>,
+    database: &str,
+    new_func: CB,
+) -> T
+where
+    CB: FnOnce(AuthService) -> T,
+{
+    let auth_service_create = |ch| {
+        return AuthService::new(ch, cred.clone(), database);
+    };
+
+    let auth_ch = ServiceBuilder::new()
+        .layer_fn(auth_service_create)
+        .service(channel.clone());
+
+    return new_func(auth_ch);
 }

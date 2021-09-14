@@ -4,16 +4,12 @@ use crate::client::internal::AuthService;
 use crate::credentials::Credencials;
 use crate::errors::{Error, Result};
 use prost::Message; // for decode result messages from bytes
-use tonic::transport::Channel;
-use tower::ServiceBuilder;
 use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_protobuf::generated::ydb::discovery::{WhoAmIRequest, WhoAmIResult};
 use ydb_protobuf::generated::ydb::status_ids::StatusCode;
 
 pub struct Client {
-    channel: Channel,
-    cred: Box<dyn Credencials>,
-    database: String,
+    discovery_client: DiscoveryServiceClient<AuthService>,
 }
 
 impl Client {
@@ -23,32 +19,17 @@ impl Client {
             .tls_config(tls)?
             .connect_lazy()?;
 
+        let create_grpc_client =
+            |new_func| internal::create_grpc_client(&channel, &cred, database, new_func);
+
         return Ok(Client {
-            channel,
-            cred,
-            database: database.to_string(),
+            discovery_client: create_grpc_client(DiscoveryServiceClient::new),
         });
     }
 
-    fn create_client<T, CB>(self: &Self, create_client: CB) -> T
-    where
-        CB: FnOnce(AuthService) -> T,
-    {
-        let auth_service_create = |ch| {
-            return internal::AuthService::new(ch, self.cred.clone(), self.database.as_str());
-        };
-
-        let auth_ch = ServiceBuilder::new()
-            .layer_fn(auth_service_create)
-            .service(self.channel.clone());
-
-        // return DiscoveryServiceClient::new(auth_ch);
-        return create_client(auth_ch);
-    }
-
-    pub async fn who_am_i(self: &Self) -> Result<String> {
+    pub async fn who_am_i(self: &mut Self) -> Result<String> {
         let op = self
-            .create_client(DiscoveryServiceClient::new)
+            .discovery_client
             .who_am_i(WhoAmIRequest {
                 include_groups: false,
             })
@@ -75,7 +56,7 @@ mod test {
     async fn who_am_i() -> Result<()> {
         let token = crate::credentials::StaticToken::from(std::env::var("IAM_TOKEN")?.as_str());
         let database = std::env::var("DB_NAME")?;
-        let client = Client::new(
+        let mut client = Client::new(
             "https://ydb.serverless.yandexcloud.net:2135",
             Box::new(token),
             database.as_str(),
