@@ -1,7 +1,8 @@
-pub trait Credencials {
+pub trait Credencials: Clone {
     fn fill_token(self: &Self, token: &mut String);
 }
 
+#[derive(Clone)]
 pub struct StaticToken {
     token: String,
 }

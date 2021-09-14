@@ -710,6 +710,7 @@ dependencies = [
  "prost",
  "tokio",
  "tonic",
+ "tower",
  "ydb-protobuf",
 ]
 

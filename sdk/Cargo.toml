@@ -13,4 +13,5 @@ futures = "0.3"
 prost = "0.8"
 tokio = "1"
 tonic = "0.5"
+tower = "0.4"
 ydb-protobuf = {path="../ydb-protobuf"}
