@@ -1,6 +1,9 @@
-pub trait Credencials: Clone {
+use dyn_clone::DynClone;
+
+pub trait Credencials: DynClone {
     fn fill_token(self: &Self, token: &mut String);
 }
+dyn_clone::clone_trait_object!(Credencials);
 
 #[derive(Clone)]
 pub struct StaticToken {
@@ -8,8 +11,10 @@ pub struct StaticToken {
 }
 
 impl StaticToken {
-    pub fn from(token: String) -> Self {
-        return StaticToken { token };
+    pub fn from(token: &str) -> Self {
+        return StaticToken {
+            token: token.to_string(),
+        };
     }
 }
 

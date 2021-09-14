@@ -20,69 +20,36 @@ use tower::ServiceBuilder;
 use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_protobuf::generated::ydb::discovery::{WhoAmIResponse, WhoAmIResult};
 
-pub struct Client<C>
-where
-    C: Credencials,
-{
+pub struct Client {
     channel: Channel,
-    cred: C,
-    endpoint: String,
+    cred: Box<dyn Credencials>,
+    database: String,
 }
 
-impl<C> Client<C>
-where
-    C: Credencials,
-{
-    pub fn new(endpoint: &str, cred: C) -> Result<Self> {
+impl Client {
+    pub fn new(endpoint: &str, cred: Box<dyn Credencials>, database: &str) -> Result<Self> {
         let tls = tonic::transport::ClientTlsConfig::new();
         let channel = tonic::transport::Channel::from_shared(endpoint.to_string())?
             .tls_config(tls)?
             .connect_lazy()?;
 
         return Ok(Client {
-            channel: channel,
+            channel,
             cred,
-            endpoint: endpoint.to_string(),
+            database: database.to_string(),
         });
     }
 
-    fn set_auth_header(
-        self: &Self,
-        mut req: Request<()>,
-    ) -> std::result::Result<Request<()>, Status> {
-        let mut token = String::new();
-        self.cred.fill_token(&mut token);
-
-        let token = MetadataValue::from_str(token.as_str()).unwrap();
-        let database = MetadataValue::from_str(std::env::var("DB_NAME").unwrap().as_str()).unwrap();
-
-        println!("rekby-auth");
-        req.metadata_mut().insert("x-ydb-auth-ticket", token);
-        req.metadata_mut().insert("x-ydb-database", database);
-        return Ok(req);
-    }
-
-    fn create_client_discovery(
-        self: &Self,
-    ) -> DiscoveryServiceClient<
-        InterceptedService<Channel, fn(Request<()>) -> std::result::Result<Request<()>, Status>>,
-    > {
-
+    fn create_client_discovery(self: &Self) -> DiscoveryServiceClient<AuthService> {
         let auth_service_create = |ch| {
-            return internal::AuthService::new(
-                ch,
-                self.cred.clone(),
-                "/ru-central1/b1g7h2ccv6sa5m9rotq4/etn00qhcjn6pap901icc",
-            );
+            return internal::AuthService::new(ch, self.cred.clone(), self.database.as_str());
         };
 
         let auth_ch = ServiceBuilder::new()
             .layer_fn(auth_service_create)
             .service(self.channel.clone());
 
-
-        return ydb_protobuf::generated::ydb::discovery::v1
-        ::discovery_service_client::DiscoveryServiceClient::new(auth_ch);
+        return DiscoveryServiceClient::new(auth_ch);
     }
 
     pub async fn who_am_i(self: &Self) -> Result<String> {
@@ -112,10 +79,12 @@ mod test {
 
     #[tokio::test]
     async fn who_am_i() -> Result<()> {
-        let token = crate::credentials::StaticToken::from(std::env::var("IAM_TOKEN")?);
+        let token = crate::credentials::StaticToken::from(std::env::var("IAM_TOKEN")?.as_str());
+        let database = std::env::var("DB_NAME")?;
         let client = Client::new(
             "https://ydb.serverless.yandexcloud.net:2135",
             Box::new(token),
+            database.as_str(),
         )?;
         client.who_am_i().await?;
         return Ok(());

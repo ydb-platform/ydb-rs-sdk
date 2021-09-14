@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display, Formatter};
 
-pub type Result<T> = std::result::Result<T,Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub enum Error {
@@ -9,8 +9,9 @@ pub enum Error {
 }
 
 impl Error {
-    pub fn from_str(s: &str)->Error{
-        return Error::Custom(s.to_string())
+    #[allow(dead_code)]
+    pub fn from_str(s: &str) -> Error {
+        return Error::Custom(s.to_string());
     }
 }
 
@@ -20,41 +21,40 @@ impl Display for Error {
     }
 }
 
-impl std::error::Error for Error {
-}
+impl std::error::Error for Error {}
 
 impl From<prost::DecodeError> for Error {
-    fn from(e: prost::DecodeError)->Self{
-        return Error::Custom(e.to_string())
+    fn from(e: prost::DecodeError) -> Self {
+        return Error::Custom(e.to_string());
     }
 }
 
-impl From<tonic::codegen::http::uri::InvalidUri> for Error{
+impl From<tonic::codegen::http::uri::InvalidUri> for Error {
     fn from(e: tonic::codegen::http::uri::InvalidUri) -> Self {
-        return Error::Custom(e.to_string())
+        return Error::Custom(e.to_string());
     }
 }
 
 impl From<tonic::transport::Error> for Error {
-    fn from(e: tonic::transport::Error)->Self{
-        return Error::Custom(e.to_string())
+    fn from(e: tonic::transport::Error) -> Self {
+        return Error::Custom(e.to_string());
     }
 }
 
 impl From<tonic::Status> for Error {
-    fn from(e: tonic::Status)->Self{
-        return Error::Custom(e.to_string())
+    fn from(e: tonic::Status) -> Self {
+        return Error::Custom(e.to_string());
     }
 }
 
 impl From<std::env::VarError> for Error {
-    fn from(e: std::env::VarError)->Self {
+    fn from(e: std::env::VarError) -> Self {
         return Error::Custom(e.to_string());
     }
 }
 
 impl From<ydb_protobuf::generated::ydb::status_ids::StatusCode> for Error {
-    fn from(e: ydb_protobuf::generated::ydb::status_ids::StatusCode)->Self{
-        return Error::YdbStatus(e)
+    fn from(e: ydb_protobuf::generated::ydb::status_ids::StatusCode) -> Self {
+        return Error::YdbStatus(e);
     }
 }
