@@ -3,7 +3,6 @@ use http::{HeaderValue, Request, Response};
 use std::task::{Context, Poll};
 use std::{future::Future, pin::Pin};
 use tonic::body::BoxBody;
-use tonic::metadata::MetadataValue;
 use tonic::transport::{Body, Channel};
 use tower::Service;
 

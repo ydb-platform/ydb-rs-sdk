@@ -1,24 +1,14 @@
 mod internal;
 
-use bytes::Buf;
-
-use prost::Message;
-use tonic::metadata::MetadataValue;
-use tonic::{Request, Status};
-use ydb::{
-    discovery::{ListEndpointsRequest, WhoAmIRequest},
-    status_ids::StatusCode,
-};
-use ydb_protobuf::generated::ydb;
-
 use crate::client::internal::AuthService;
 use crate::credentials::Credencials;
 use crate::errors::{Error, Result};
-use tonic::codegen::InterceptedService;
+use prost::Message;
 use tonic::transport::Channel;
 use tower::ServiceBuilder;
 use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;
-use ydb_protobuf::generated::ydb::discovery::{WhoAmIResponse, WhoAmIResult};
+use ydb_protobuf::generated::ydb::discovery::{WhoAmIRequest, WhoAmIResult};
+use ydb_protobuf::generated::ydb::status_ids::StatusCode;
 
 pub struct Client {
     channel: Channel,
