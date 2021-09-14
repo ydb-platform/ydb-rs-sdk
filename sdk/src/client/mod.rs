@@ -3,7 +3,7 @@ mod internal;
 use crate::client::internal::AuthService;
 use crate::credentials::Credencials;
 use crate::errors::{Error, Result};
-use prost::Message;
+use prost::Message; // for decode result messages from bytes
 use tonic::transport::Channel;
 use tower::ServiceBuilder;
 use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;
@@ -30,7 +30,10 @@ impl Client {
         });
     }
 
-    fn create_client_discovery(self: &Self) -> DiscoveryServiceClient<AuthService> {
+    fn create_client<T, CB>(self: &Self, create_client: CB) -> T
+    where
+        CB: FnOnce(AuthService) -> T,
+    {
         let auth_service_create = |ch| {
             return internal::AuthService::new(ch, self.cred.clone(), self.database.as_str());
         };
@@ -39,12 +42,13 @@ impl Client {
             .layer_fn(auth_service_create)
             .service(self.channel.clone());
 
-        return DiscoveryServiceClient::new(auth_ch);
+        // return DiscoveryServiceClient::new(auth_ch);
+        return create_client(auth_ch);
     }
 
     pub async fn who_am_i(self: &Self) -> Result<String> {
         let op = self
-            .create_client_discovery()
+            .create_client(DiscoveryServiceClient::new)
             .who_am_i(WhoAmIRequest {
                 include_groups: false,
             })
