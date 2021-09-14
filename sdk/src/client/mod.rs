@@ -1,9 +1,10 @@
 mod internal;
+mod trait_operation;
 
 use crate::client::internal::AuthService;
+use crate::client::trait_operation::Operation;
 use crate::credentials::Credencials;
 use crate::errors::{Error, Result};
-use prost::Message; // for decode result messages from bytes
 use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_protobuf::generated::ydb::discovery::{WhoAmIRequest, WhoAmIResult};
 use ydb_protobuf::generated::ydb::status_ids::StatusCode;
@@ -27,23 +28,29 @@ impl Client {
         });
     }
 
-    pub async fn who_am_i(self: &mut Self) -> Result<String> {
-        let op = self
-            .discovery_client
-            .who_am_i(WhoAmIRequest {
-                include_groups: false,
-            })
-            .await?
-            .into_inner()
-            .operation
-            .unwrap();
+    fn grpc_read_result<TOp, T>(resp: tonic::Response<TOp>) -> Result<T>
+    where
+        TOp: Operation,
+        T: Default + prost::Message,
+    {
+        let resp_inner = resp.into_inner();
+        let op = resp_inner.operation().unwrap();
         if op.status() != StatusCode::Success {
             return Err(Error::from(op.status()));
         }
         let opres = op.result.unwrap();
-        println!("res url: {:?}", opres.type_url);
+        let res: T = T::decode(opres.value.as_slice())?;
+        return Ok(res);
+    }
 
-        let res: WhoAmIResult = WhoAmIResult::decode(opres.value.as_slice())?;
+    pub async fn who_am_i(self: &mut Self) -> Result<String> {
+        let res = self
+            .discovery_client
+            .who_am_i(WhoAmIRequest {
+                include_groups: false,
+            })
+            .await?;
+        let res: WhoAmIResult = Self::grpc_read_result(res)?;
         println!("res: {:?}", res.user);
         return Ok(res.user);
     }
