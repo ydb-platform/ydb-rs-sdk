@@ -1,10 +1,13 @@
+use crate::client::trait_operation::Operation;
 use crate::credentials::Credencials;
+use crate::errors::{Error, Result};
 use http::{HeaderValue, Request, Response};
 use std::task::{Context, Poll};
 use std::{future::Future, pin::Pin};
 use tonic::body::BoxBody;
 use tonic::transport::{Body, Channel};
 use tower::{Service, ServiceBuilder};
+use ydb_protobuf::generated::ydb::status_ids::StatusCode;
 
 pub(crate) struct AuthService {
     ch: Channel,
@@ -27,9 +30,10 @@ impl Service<Request<BoxBody>> for AuthService {
     type Error = Box<dyn std::error::Error + Send + Sync>;
 
     #[allow(clippy::type_complexity)]
-    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+    type Future =
+        Pin<Box<dyn Future<Output = std::result::Result<Self::Response, Self::Error>> + Send>>;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
         self.ch.poll_ready(cx).map_err(Into::into)
     }
 
@@ -75,4 +79,19 @@ where
         .service(channel.clone());
 
     return new_func(auth_ch);
+}
+
+pub(crate) fn grpc_read_result<TOp, T>(resp: tonic::Response<TOp>) -> Result<T>
+where
+    TOp: Operation,
+    T: Default + prost::Message,
+{
+    let resp_inner = resp.into_inner();
+    let op = resp_inner.operation().unwrap();
+    if op.status() != StatusCode::Success {
+        return Err(Error::from(op.status()));
+    }
+    let opres = op.result.unwrap();
+    let res: T = T::decode(opres.value.as_slice())?;
+    return Ok(res);
 }
