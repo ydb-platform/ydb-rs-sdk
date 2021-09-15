@@ -23,6 +23,12 @@ impl Display for Error {
 
 impl std::error::Error for Error {}
 
+impl From<http::Error> for Error {
+    fn from(e: http::Error) -> Self {
+        return Error::Custom(e.to_string());
+    }
+}
+
 impl From<prost::DecodeError> for Error {
     fn from(e: prost::DecodeError) -> Self {
         return Error::Custom(e.to_string());

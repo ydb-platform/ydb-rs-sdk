@@ -4,15 +4,15 @@ mod trait_operation;
 use crate::client::internal::AuthService;
 use crate::credentials::Credencials;
 use crate::errors::Result;
-use tonic::transport::{Channel, ClientTlsConfig};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tower::ServiceBuilder;
 use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_protobuf::generated::ydb::discovery::{
-    ListEndpointsRequest, ListEndpointsResult, WhoAmIRequest, WhoAmIResult,
+    EndpointInfo, ListEndpointsRequest, ListEndpointsResult, WhoAmIRequest, WhoAmIResult,
 };
 
 pub struct Client {
-    start_endpoint: String,
+    start_endpoint: EndpointInfo,
     cred: Box<dyn Credencials>,
     database: String,
 
@@ -21,9 +21,13 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(endpoint: &str, cred: Box<dyn Credencials>, database: &str) -> Result<Self> {
+    pub fn new(
+        start_endpoint: EndpointInfo,
+        cred: Box<dyn Credencials>,
+        database: &str,
+    ) -> Result<Self> {
         return Ok(Client {
-            start_endpoint: endpoint.to_string(),
+            start_endpoint,
             cred,
             database: database.to_string(),
 
@@ -33,11 +37,8 @@ impl Client {
 
     pub async fn endpoints(
         self: &mut Self,
-        mut req: ListEndpointsRequest,
+        req: ListEndpointsRequest,
     ) -> Result<ListEndpointsResult> {
-        if req.database.is_empty() {
-            req.database = self.database.clone();
-        }
         internal::grpc_read_result(self.client_discovery()?.list_endpoints(req).await?)
     }
 
@@ -49,12 +50,18 @@ impl Client {
         return self.create_grpc_client(DiscoveryServiceClient::new);
     }
 
-    fn channel(self: &mut Self) -> Result<Channel> {
+    fn channel(self: &mut Self, endpoint_info: &EndpointInfo) -> Result<Channel> {
         if let Some(ch) = &self.channel {
             return Ok(ch.clone());
         }
 
-        let channel = Channel::from_shared(self.start_endpoint.clone())?
+        let uri = http::uri::Uri::builder()
+            .scheme(if endpoint_info.ssl { "https" } else { "http" })
+            .authority(format!("{}:{}", endpoint_info.address, endpoint_info.port).as_bytes())
+            .path_and_query("")
+            .build()?;
+
+        let channel = Endpoint::from(uri)
             .tls_config(ClientTlsConfig::new())?
             .connect_lazy()?;
 
@@ -72,7 +79,7 @@ impl Client {
             return AuthService::new(ch, cred.clone(), database.as_str());
         };
 
-        let channel = self.channel()?;
+        let channel = self.channel(&self.start_endpoint.clone())?;
 
         let auth_ch = ServiceBuilder::new()
             .layer_fn(auth_service_create)
@@ -90,7 +97,16 @@ mod test {
         let database = std::env::var("DB_NAME")?;
 
         return Client::new(
-            "https://ydb.serverless.yandexcloud.net:2135",
+            EndpointInfo {
+                address: "ydb.serverless.yandexcloud.net".to_string(),
+                port: 2135,
+                load_factor: 0.0,
+                ssl: true,
+                service: vec![],
+                location: "".to_string(),
+                node_id: 0,
+                ..EndpointInfo::default()
+            },
             Box::new(token),
             database.as_str(),
         );
