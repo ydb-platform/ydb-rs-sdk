@@ -1,25 +1,27 @@
+use crate::errors::Result;
 use dyn_clone::DynClone;
+use std::sync::Arc;
 
 pub trait Credencials: DynClone {
-    fn fill_token(self: &Self, token: &mut String);
+    fn create_token(self: &mut Self) -> Result<Arc<String>>;
 }
 dyn_clone::clone_trait_object!(Credencials);
 
 #[derive(Clone)]
 pub struct StaticToken {
-    token: String,
+    token: Arc<String>,
 }
 
 impl StaticToken {
     pub fn from(token: &str) -> Self {
         return StaticToken {
-            token: token.to_string(),
+            token: Arc::new(token.to_string()),
         };
     }
 }
 
 impl Credencials for StaticToken {
-    fn fill_token(self: &Self, token: &mut String) {
-        token.replace_range(.., self.token.as_str());
+    fn create_token(self: &mut Self) -> Result<Arc<String>> {
+        return Ok(self.token.clone());
     }
 }

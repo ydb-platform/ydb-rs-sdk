@@ -40,8 +40,7 @@ impl Service<Request<BoxBody>> for AuthService {
     fn call(&mut self, mut req: Request<BoxBody>) -> Self::Future {
         // let token = MetadataValue::from_str(token.as_str()).unwrap();
         let database = self.database.clone();
-        let mut token = String::new();
-        self.cred.fill_token(&mut token);
+        let token_result = self.cred.create_token();
 
         // This is necessary because tonic internally uses `tower::buffer::Buffer`.
         // See https://github.com/tower-rs/tower/issues/547#issuecomment-767629149
@@ -50,6 +49,7 @@ impl Service<Request<BoxBody>> for AuthService {
         let mut ch = std::mem::replace(&mut self.ch, clone);
 
         Box::pin(async move {
+            let token = token_result?;
             req.headers_mut()
                 .insert("x-ydb-database", HeaderValue::from_str(database.as_str())?);
             req.headers_mut()
