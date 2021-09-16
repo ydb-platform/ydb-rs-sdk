@@ -93,7 +93,8 @@ mod test {
     use super::*;
 
     fn create_client() -> Result<Client> {
-        let token = crate::credentials::StaticToken::from(std::env::var("IAM_TOKEN")?.as_str());
+        // let token = crate::credentials::StaticToken::from(std::env::var("IAM_TOKEN")?.as_str());
+        let token = crate::credentials::CommandLineYcToken::new();
         let database = std::env::var("DB_NAME")?;
 
         return Client::new(

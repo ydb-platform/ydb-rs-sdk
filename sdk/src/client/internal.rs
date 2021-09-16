@@ -50,6 +50,7 @@ impl Service<Request<BoxBody>> for AuthService {
 
         Box::pin(async move {
             let token = token_result?;
+
             req.headers_mut()
                 .insert("x-ydb-database", HeaderValue::from_str(database.as_str())?);
             req.headers_mut()

@@ -1,4 +1,5 @@
 use std::fmt::{Debug, Display, Formatter};
+use std::string::FromUtf8Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -35,6 +36,30 @@ impl From<prost::DecodeError> for Error {
     }
 }
 
+impl From<std::env::VarError> for Error {
+    fn from(e: std::env::VarError) -> Self {
+        return Error::Custom(e.to_string());
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(e: std::io::Error) -> Self {
+        return Error::Custom(e.to_string());
+    }
+}
+
+impl From<std::string::FromUtf8Error> for Error {
+    fn from(e: FromUtf8Error) -> Self {
+        return Error::Custom(e.to_string());
+    }
+}
+
+impl<T> From<std::sync::PoisonError<T>> for Error {
+    fn from(e: std::sync::PoisonError<T>) -> Self {
+        return Error::Custom(e.to_string());
+    }
+}
+
 impl From<tonic::codegen::http::uri::InvalidUri> for Error {
     fn from(e: tonic::codegen::http::uri::InvalidUri) -> Self {
         return Error::Custom(e.to_string());
@@ -49,12 +74,6 @@ impl From<tonic::transport::Error> for Error {
 
 impl From<tonic::Status> for Error {
     fn from(e: tonic::Status) -> Self {
-        return Error::Custom(e.to_string());
-    }
-}
-
-impl From<std::env::VarError> for Error {
-    fn from(e: std::env::VarError) -> Self {
         return Error::Custom(e.to_string());
     }
 }
