@@ -53,7 +53,6 @@ impl Credencials for CommandLineYcToken {
             if token.as_str() != "" {
                 return Ok(token.clone());
             }
-
             let result = std::process::Command::new("yc")
                 .args(["iam", "create-token"])
                 .output()?;
@@ -66,9 +65,7 @@ impl Credencials for CommandLineYcToken {
                 )));
             }
             *token = Arc::new(String::from_utf8(result.stdout)?.trim().to_string());
-
-            println!("rekby-token: got");
-            Ok(token.clone())
+            return Ok(token.clone());
         }
     }
 }

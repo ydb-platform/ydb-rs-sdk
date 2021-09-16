@@ -647,6 +647,7 @@ version = "0.0.0"
 dependencies = [
  "dyn-clone",
  "http",
+ "once_cell",
  "prost",
  "tokio",
  "tonic",

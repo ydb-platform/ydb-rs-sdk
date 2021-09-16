@@ -91,11 +91,20 @@ impl Client {
 
 mod test {
     use super::*;
+    use crate::credentials::CommandLineYcToken;
+    use once_cell::sync::Lazy;
+    use std::ops::Deref;
+    use std::sync::Mutex;
+
+    static CRED: Lazy<Mutex<CommandLineYcToken>> =
+        Lazy::new(|| Mutex::new(crate::credentials::CommandLineYcToken::new()));
 
     fn create_client() -> Result<Client> {
         // let token = crate::credentials::StaticToken::from(std::env::var("IAM_TOKEN")?.as_str());
-        let token = crate::credentials::CommandLineYcToken::new();
+        // let token = crate::credentials::CommandLineYcToken::new();
         let database = std::env::var("DB_NAME")?;
+        let token = CRED.lock()?.deref().clone();
+        let token = Box::new(token);
 
         return Client::new(
             EndpointInfo {
@@ -108,7 +117,7 @@ mod test {
                 node_id: 0,
                 ..EndpointInfo::default()
             },
-            Box::new(token),
+            token,
             database.as_str(),
         );
     }
