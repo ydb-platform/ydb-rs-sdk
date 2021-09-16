@@ -10,6 +10,10 @@ use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::Disco
 use ydb_protobuf::generated::ydb::discovery::{
     EndpointInfo, ListEndpointsRequest, ListEndpointsResult, WhoAmIRequest, WhoAmIResult,
 };
+use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
+use ydb_protobuf::generated::ydb::table::{
+    CreateSessionRequest, CreateSessionResult, ExecuteDataQueryRequest, ExecuteQueryResult,
+};
 
 pub struct Client {
     start_endpoint: EndpointInfo,
@@ -35,6 +39,23 @@ impl Client {
         });
     }
 
+    // usable functions
+    pub(crate) async fn create_session(
+        self: &mut Self,
+        client: &mut TableServiceClient<AuthService>,
+        req: CreateSessionRequest,
+    ) -> Result<CreateSessionResult> {
+        internal::grpc_read_result(client.create_session(req).await?)
+    }
+
+    pub(crate) async fn execute(
+        self: &mut Self,
+        client: &mut TableServiceClient<AuthService>,
+        req: ExecuteDataQueryRequest,
+    ) -> Result<ExecuteQueryResult> {
+        internal::grpc_read_result(client.execute_data_query(req).await?)
+    }
+
     pub async fn endpoints(
         self: &mut Self,
         req: ListEndpointsRequest,
@@ -46,10 +67,16 @@ impl Client {
         internal::grpc_read_result(self.client_discovery()?.who_am_i(req).await?)
     }
 
+    // clients
     fn client_discovery(self: &mut Self) -> Result<DiscoveryServiceClient<AuthService>> {
         return self.create_grpc_client(DiscoveryServiceClient::new);
     }
 
+    pub(crate) fn client_table(self: &mut Self) -> Result<TableServiceClient<AuthService>> {
+        return self.create_grpc_client(TableServiceClient::new);
+    }
+
+    // helpers for clients
     fn channel(self: &mut Self, endpoint_info: &EndpointInfo) -> Result<Channel> {
         if let Some(ch) = &self.channel {
             return Ok(ch.clone());
@@ -95,6 +122,11 @@ mod test {
     use once_cell::sync::Lazy;
     use std::ops::Deref;
     use std::sync::Mutex;
+    use ydb_protobuf::generated::ydb::table::transaction_control::TxSelector;
+    use ydb_protobuf::generated::ydb::table::transaction_settings::TxMode;
+    use ydb_protobuf::generated::ydb::table::{
+        OnlineModeSettings, TransactionControl, TransactionSettings,
+    };
 
     static CRED: Lazy<Mutex<CommandLineYcToken>> =
         Lazy::new(|| Mutex::new(crate::credentials::CommandLineYcToken::new()));
@@ -123,18 +155,60 @@ mod test {
     }
 
     #[tokio::test]
-    async fn who_am_i() -> Result<()> {
-        let res = create_client()?.who_am_i(WhoAmIRequest::default()).await?;
-        assert!(res.user.len() > 0);
+    async fn create_session() -> Result<()> {
+        let mut client = create_client()?;
+        let res = create_client()?
+            .create_session(&mut client.client_table()?, CreateSessionRequest::default())
+            .await?;
+        println!("session: {:?}", res);
         Ok(())
     }
 
     #[tokio::test]
     async fn endpoints() -> Result<()> {
-        let res = create_client()?
+        let _res = create_client()?
             .endpoints(ListEndpointsRequest::default())
             .await?;
-        println!("endpoints: {:?}", res);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn execute_data_query() -> Result<()> {
+        let mut client = create_client()?;
+        let mut table_client = client.client_table()?;
+        let session = client
+            .create_session(&mut table_client, CreateSessionRequest::default())
+            .await?;
+        println!("session: {:?}", session);
+        let req = ExecuteDataQueryRequest {
+            session_id: session.session_id,
+            tx_control: Some(TransactionControl {
+                commit_tx: false,
+                tx_selector: Some(TxSelector::BeginTx(TransactionSettings {
+                    tx_mode: Some(TxMode::OnlineReadOnly(OnlineModeSettings {
+                        allow_inconsistent_reads: true,
+                    })),
+                })),
+            }),
+            query: Some(ydb_protobuf::generated::ydb::table::Query {
+                query: Some(ydb_protobuf::generated::ydb::table::query::Query::YqlText(
+                    "SELECT 1+1".to_string(),
+                )),
+            }),
+            parameters: Default::default(),
+            query_cache_policy: None,
+            operation_params: None,
+            collect_stats: 0,
+        };
+        let res = client.execute(&mut table_client, req).await?;
+        println!("session: {:?}", res);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn who_am_i() -> Result<()> {
+        let res = create_client()?.who_am_i(WhoAmIRequest::default()).await?;
+        assert!(res.user.len() > 0);
         Ok(())
     }
 }
