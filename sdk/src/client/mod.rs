@@ -140,7 +140,7 @@ mod test {
 
         return Client::new(
             EndpointInfo {
-                address: "ydb.serverless.yandexcloud.net".to_string(),
+                address: std::env::var("DB_ENDPOINT")?,
                 port: 2135,
                 load_factor: 0.0,
                 ssl: true,
