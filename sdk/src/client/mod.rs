@@ -183,7 +183,7 @@ mod test {
         let req = ExecuteDataQueryRequest {
             session_id: session.session_id,
             tx_control: Some(TransactionControl {
-                commit_tx: false,
+                commit_tx: true,
                 tx_selector: Some(TxSelector::BeginTx(TransactionSettings {
                     tx_mode: Some(TxMode::OnlineReadOnly(OnlineModeSettings {
                         allow_inconsistent_reads: true,
