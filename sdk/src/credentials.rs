@@ -2,46 +2,46 @@ use crate::errors::{Error, Result};
 use dyn_clone::DynClone;
 use std::sync::{Arc, RwLock};
 
-pub trait Credencials: DynClone {
-    fn create_token(self: &mut Self) -> Result<Arc<String>>;
+pub trait Credentials: DynClone {
+    fn create_token(self: &mut Self) -> Result<String>;
 }
-dyn_clone::clone_trait_object!(Credencials);
+dyn_clone::clone_trait_object!(Credentials);
 
 #[derive(Clone)]
 pub struct StaticToken {
-    token: Arc<String>,
+    token: String,
 }
 
 impl StaticToken {
     #[allow(unused)]
     pub fn from(token: &str) -> Self {
         return StaticToken {
-            token: Arc::new(token.to_string()),
+            token: token.to_string(),
         };
     }
 }
 
-impl Credencials for StaticToken {
-    fn create_token(self: &mut Self) -> Result<Arc<String>> {
+impl Credentials for StaticToken {
+    fn create_token(self: &mut Self) -> Result<String> {
         return Ok(self.token.clone());
     }
 }
 
 #[derive(Clone)]
 pub struct CommandLineYcToken {
-    token: Arc<RwLock<Arc<String>>>,
+    token: Arc<RwLock<String>>,
 }
 
 impl CommandLineYcToken {
     pub fn new() -> Self {
         return CommandLineYcToken {
-            token: Arc::new(RwLock::new(Arc::new("".to_string()))),
+            token: Arc::new(RwLock::new("".to_string())),
         };
     }
 }
 
-impl Credencials for CommandLineYcToken {
-    fn create_token(self: &mut Self) -> Result<Arc<String>> {
+impl Credentials for CommandLineYcToken {
+    fn create_token(self: &mut Self) -> Result<String> {
         {
             let token = self.token.read()?;
             if token.as_str() != "" {
@@ -64,7 +64,7 @@ impl Credencials for CommandLineYcToken {
                     err
                 )));
             }
-            *token = Arc::new(String::from_utf8(result.stdout)?.trim().to_string());
+            *token = String::from_utf8(result.stdout)?.trim().to_string();
             return Ok(token.clone());
         }
     }

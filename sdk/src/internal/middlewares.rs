@@ -1,22 +1,21 @@
-use crate::client::trait_operation::Operation;
-use crate::credentials::Credencials;
-use crate::errors::{Error, Result};
-use http::{HeaderValue, Request, Response};
 use std::task::{Context, Poll};
 use std::{future::Future, pin::Pin};
+
+use http::{HeaderValue, Request, Response};
 use tonic::body::BoxBody;
 use tonic::transport::{Body, Channel};
 use tower::Service;
-use ydb_protobuf::generated::ydb::status_ids::StatusCode;
+
+use crate::credentials::Credentials;
 
 pub(crate) struct AuthService {
     ch: Channel,
-    cred: Box<dyn Credencials>,
+    cred: Box<dyn Credentials>,
     database: String,
 }
 
 impl AuthService {
-    pub fn new(ch: Channel, cred: Box<dyn Credencials>, database: &str) -> Self {
+    pub fn new(ch: Channel, cred: Box<dyn Credentials>, database: &str) -> Self {
         return AuthService {
             ch,
             cred,
@@ -60,19 +59,4 @@ impl Service<Request<BoxBody>> for AuthService {
             Ok(response)
         })
     }
-}
-
-pub(crate) fn grpc_read_result<TOp, T>(resp: tonic::Response<TOp>) -> Result<T>
-where
-    TOp: Operation,
-    T: Default + prost::Message,
-{
-    let resp_inner = resp.into_inner();
-    let op = resp_inner.operation().unwrap();
-    if op.status() != StatusCode::Success {
-        return Err(Error::from(op.status()));
-    }
-    let opres = op.result.unwrap();
-    let res: T = T::decode(opres.value.as_slice())?;
-    return Ok(res);
 }
