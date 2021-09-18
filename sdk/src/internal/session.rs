@@ -4,6 +4,7 @@ use crate::internal::middlewares::AuthService;
 use async_trait::async_trait;
 use derivative::Derivative;
 use tokio::io::AsyncWriteExt;
+use tokio::runtime::Runtime;
 use tokio::sync::mpsc;
 use ydb_protobuf::generated::ydb::operations::OperationParams;
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
@@ -60,7 +61,6 @@ pub(crate) struct SimpleSessionPool {
 impl SimpleSessionPool {
     pub fn new() -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
-
         tokio::spawn(async move { Self::close_sessions(receiver).await });
 
         Self {
@@ -80,8 +80,9 @@ impl SimpleSessionPool {
     }
 
     async fn close_sessions(mut receiver: mpsc::UnboundedReceiver<ClientSessionID>) {
+        println!("close loop");
         while let Some(mut pair) = receiver.recv().await {
-            println!("drop-receiver");
+            println!("drop-received: {}", pair.session_id);
             let session_id = pair.session_id.clone();
             let res = Self::close_session(pair).await;
             let mut stdout = tokio::io::stdout();
@@ -94,6 +95,7 @@ impl SimpleSessionPool {
                 .as_bytes(),
             );
         }
+        println!("close loop finished");
     }
 }
 
@@ -116,6 +118,7 @@ impl SessionPool for SimpleSessionPool {
                     client: client.clone(),
                     session_id: session_id.clone(),
                 });
+                println!("drop message sended")
             }),
         });
     }

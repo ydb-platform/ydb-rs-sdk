@@ -100,7 +100,7 @@ mod test {
             .await?;
         println!("session: {:?}", res);
         drop(res);
-        tokio::time::sleep(Duration::from_secs(5));
+        tokio::time::sleep(Duration::from_secs(1)).await;
         Ok(())
     }
 
