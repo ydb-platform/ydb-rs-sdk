@@ -1,13 +1,14 @@
 use crate::errors::{Error, Result};
 use dyn_clone::DynClone;
+use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 
-pub trait Credentials: DynClone {
+pub trait Credentials: Debug + DynClone + Send {
     fn create_token(self: &mut Self) -> Result<String>;
 }
 dyn_clone::clone_trait_object!(Credentials);
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct StaticToken {
     token: String,
 }
@@ -27,7 +28,7 @@ impl Credentials for StaticToken {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CommandLineYcToken {
     token: Arc<RwLock<String>>,
 }

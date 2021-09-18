@@ -3,36 +3,39 @@ use ydb_protobuf::generated::ydb::discovery::{
     ListEndpointsRequest, ListEndpointsResult, WhoAmIRequest, WhoAmIResult,
 };
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
-use ydb_protobuf::generated::ydb::table::{
-    CreateSessionRequest, CreateSessionResult, ExecuteDataQueryRequest, ExecuteQueryResult,
-};
+use ydb_protobuf::generated::ydb::table::CreateSessionRequest;
 
 use crate::errors::Result;
 use crate::internal::discovery::StaticDiscovery;
 use crate::internal::grpc;
 use crate::internal::grpc::ClientFabric;
 use crate::internal::middlewares::AuthService;
+use crate::internal::session::{Session, SessionPool};
+use std::sync::Arc;
 
 type Middleware = AuthService;
 
 pub(crate) struct Client<CF: ClientFabric> {
-    client_fabric: CF,
+    client_fabric: Arc<CF>,
+    session_pool: Box<dyn SessionPool>,
 }
 
 impl<CF: ClientFabric> Client<CF> {
-    pub fn new(grpc_client_fabric: CF) -> Result<Self> {
+    pub fn new(grpc_client_fabric: CF, session_pool: Box<dyn SessionPool>) -> Result<Self> {
+        let fabric = Arc::new(grpc_client_fabric);
         return Ok(Client {
-            client_fabric: grpc_client_fabric,
+            client_fabric: fabric,
+            session_pool,
         });
     }
 
-    // usable functions
     pub(crate) async fn create_session(
-        self: &Self,
-        client: &mut TableServiceClient<AuthService>,
+        self: &mut Self,
         req: CreateSessionRequest,
-    ) -> Result<CreateSessionResult> {
-        grpc::grpc_read_result(client.create_session(req).await?)
+    ) -> Result<Session> {
+        self.session_pool
+            .session(self.client_fabric.create(TableServiceClient::new)?, req)
+            .await
     }
 
     pub(crate) async fn endpoints(
@@ -40,14 +43,6 @@ impl<CF: ClientFabric> Client<CF> {
         req: ListEndpointsRequest,
     ) -> Result<ListEndpointsResult> {
         grpc::grpc_read_result(self.client_discovery()?.list_endpoints(req).await?)
-    }
-
-    pub(crate) async fn execute(
-        self: &Self,
-        client: &mut TableServiceClient<AuthService>,
-        req: ExecuteDataQueryRequest,
-    ) -> Result<ExecuteQueryResult> {
-        grpc::grpc_read_result(client.execute_data_query(req).await?)
     }
 
     pub async fn who_am_i(self: Self, req: WhoAmIRequest) -> Result<WhoAmIResult> {
@@ -58,15 +53,10 @@ impl<CF: ClientFabric> Client<CF> {
     fn client_discovery(self: &Self) -> Result<DiscoveryServiceClient<Middleware>> {
         return self.client_fabric.create(DiscoveryServiceClient::new);
     }
-
-    pub(crate) fn client_table(self: &mut Self) -> Result<TableServiceClient<Middleware>> {
-        return self.client_fabric.create(TableServiceClient::new);
-    }
 }
 
 mod test {
     use super::*;
-    use std::ops::Deref;
     use std::sync::Mutex;
 
     use once_cell::sync::Lazy;
@@ -80,6 +70,7 @@ mod test {
     use crate::credentials::CommandLineYcToken;
     use crate::internal::client::Client;
     use crate::internal::grpc::SimpleGrpcClient;
+    use crate::internal::session::SimpleSessionPool;
 
     static CRED: Lazy<Mutex<CommandLineYcToken>> =
         Lazy::new(|| Mutex::new(crate::credentials::CommandLineYcToken::new()));
@@ -96,16 +87,18 @@ mod test {
         let grpc_client_fabric =
             SimpleGrpcClient::new(Box::new(discovery), Box::new(credentials), database);
 
-        return Client::new(grpc_client_fabric);
+        let session_pool = SimpleSessionPool::new();
+
+        return Client::new(grpc_client_fabric, Box::new(session_pool));
     }
 
     #[tokio::test]
     async fn create_session() -> Result<()> {
-        let mut client = create_client()?;
-        let res = create_client()?
-            .create_session(&mut client.client_table()?, CreateSessionRequest::default())
+        let mut res = create_client()?
+            .create_session(CreateSessionRequest::default())
             .await?;
         println!("session: {:?}", res);
+        res.delete(None).await?;
         Ok(())
     }
 
@@ -120,13 +113,11 @@ mod test {
     #[tokio::test]
     async fn execute_data_query() -> Result<()> {
         let mut client = create_client()?;
-        let mut table_client = client.client_table()?;
-        let session = client
-            .create_session(&mut table_client, CreateSessionRequest::default())
+        let mut session = client
+            .create_session(CreateSessionRequest::default())
             .await?;
         println!("session: {:?}", session);
         let req = ExecuteDataQueryRequest {
-            session_id: session.session_id,
             tx_control: Some(TransactionControl {
                 commit_tx: true,
                 tx_selector: Some(TxSelector::BeginTx(TransactionSettings {
@@ -144,8 +135,9 @@ mod test {
             query_cache_policy: None,
             operation_params: None,
             collect_stats: 0,
+            ..ExecuteDataQueryRequest::default()
         };
-        let res = client.execute(&mut table_client, req).await?;
+        let res = session.execute(req).await?;
         println!("session: {:?}", res);
         Ok(())
     }

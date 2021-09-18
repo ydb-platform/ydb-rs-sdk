@@ -73,11 +73,29 @@ where
     T: Default + prost::Message,
 {
     let resp_inner = resp.into_inner();
-    let op = resp_inner.operation().unwrap();
+    let op = resp_inner
+        .operation()
+        .ok_or(Error::Custom("no operation object in result".into()))?;
     if op.status() != StatusCode::Success {
         return Err(Error::from(op.status()));
     }
-    let opres = op.result.unwrap();
+    let opres = op
+        .result
+        .ok_or(Error::Custom("no result data in operation".into()))?;
     let res: T = T::decode(opres.value.as_slice())?;
     return Ok(res);
+}
+
+pub(crate) fn grpc_read_void_result<TOp>(resp: tonic::Response<TOp>) -> errors::Result<()>
+where
+    TOp: Operation,
+{
+    let resp_inner = resp.into_inner();
+    let op = resp_inner
+        .operation()
+        .ok_or(Error::Custom("no operation object in result".into()))?;
+    if op.status() != StatusCode::Success {
+        return Err(Error::from(op.status()));
+    }
+    return Ok(());
 }

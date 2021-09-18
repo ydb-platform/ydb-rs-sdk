@@ -1,12 +1,20 @@
 use ydb_protobuf::generated::ydb::discovery::{ListEndpointsResponse, WhoAmIResponse};
 use ydb_protobuf::generated::ydb::operations::Operation as YdbOperation;
-use ydb_protobuf::generated::ydb::table::{CreateSessionResponse, ExecuteDataQueryResponse};
+use ydb_protobuf::generated::ydb::table::{
+    CreateSessionResponse, DeleteSessionResponse, ExecuteDataQueryResponse,
+};
 
 pub trait Operation {
     fn operation(self: &Self) -> Option<YdbOperation>;
 }
 
 impl Operation for CreateSessionResponse {
+    fn operation(self: &Self) -> Option<YdbOperation> {
+        return self.operation.clone();
+    }
+}
+
+impl Operation for DeleteSessionResponse {
     fn operation(self: &Self) -> Option<YdbOperation> {
         return self.operation.clone();
     }

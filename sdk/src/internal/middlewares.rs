@@ -8,6 +8,7 @@ use tower::Service;
 
 use crate::credentials::Credentials;
 
+#[derive(Clone, Debug)]
 pub(crate) struct AuthService {
     ch: Channel,
     cred: Box<dyn Credentials>,
