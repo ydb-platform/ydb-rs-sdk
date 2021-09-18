@@ -2,6 +2,9 @@ use crate::errors::Result;
 use crate::internal::grpc::{grpc_read_result, grpc_read_void_result};
 use crate::internal::middlewares::AuthService;
 use async_trait::async_trait;
+use derivative::Derivative;
+use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc;
 use ydb_protobuf::generated::ydb::operations::OperationParams;
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 use ydb_protobuf::generated::ydb::table::{
@@ -9,10 +12,14 @@ use ydb_protobuf::generated::ydb::table::{
     ExecuteQueryResult,
 };
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub(crate) struct Session {
     client: TableServiceClient<AuthService>,
     id: String,
+
+    #[derivative(Debug = "ignore")]
+    on_drop: Box<dyn Fn()>,
 }
 
 impl Session {
@@ -23,23 +30,12 @@ impl Session {
         req.session_id = self.id.clone();
         grpc_read_result(self.client.execute_data_query(req).await?)
     }
-
-    pub async fn delete(self: &mut Self, params: Option<OperationParams>) -> Result<()> {
-        println!("deleting session: {}", self.id);
-        grpc_read_void_result(
-            self.client
-                .delete_session(DeleteSessionRequest {
-                    session_id: self.id.clone(),
-                    operation_params: params,
-                })
-                .await?,
-        )
-    }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        // todo
+        println!("drop");
+        (self.on_drop)();
     }
 }
 
@@ -50,15 +46,54 @@ pub(crate) trait SessionPool {
         client: TableServiceClient<AuthService>,
         req: CreateSessionRequest,
     ) -> Result<Session>;
-
-    fn fast_put_session(self: &mut Self, s: Session);
 }
 
-pub(crate) struct SimpleSessionPool {}
+struct ClientSessionID {
+    pub client: TableServiceClient<AuthService>,
+    pub session_id: String,
+}
+
+pub(crate) struct SimpleSessionPool {
+    close_session_sender: mpsc::UnboundedSender<ClientSessionID>,
+}
 
 impl SimpleSessionPool {
     pub fn new() -> Self {
-        Self {}
+        let (sender, receiver) = mpsc::unbounded_channel();
+
+        tokio::spawn(async move { Self::close_sessions(receiver).await });
+
+        Self {
+            close_session_sender: sender,
+        }
+    }
+
+    async fn close_session(mut pair: ClientSessionID) -> Result<()> {
+        grpc_read_void_result(
+            pair.client
+                .delete_session(DeleteSessionRequest {
+                    session_id: pair.session_id,
+                    operation_params: None,
+                })
+                .await?,
+        )
+    }
+
+    async fn close_sessions(mut receiver: mpsc::UnboundedReceiver<ClientSessionID>) {
+        while let Some(mut pair) = receiver.recv().await {
+            println!("drop-receiver");
+            let session_id = pair.session_id.clone();
+            let res = Self::close_session(pair).await;
+            let mut stdout = tokio::io::stdout();
+            stdout.write_all(
+                format!(
+                    "session deleted. id: '{}', error_status: {:?}",
+                    session_id,
+                    res.err()
+                )
+                .as_bytes(),
+            );
+        }
     }
 }
 
@@ -70,11 +105,18 @@ impl SessionPool for SimpleSessionPool {
         req: CreateSessionRequest,
     ) -> Result<Session> {
         let res: CreateSessionResult = grpc_read_result(client.create_session(req).await?)?;
+        let sender = self.close_session_sender.clone();
+        let session_id = res.session_id.clone();
         return Ok(Session {
-            client: client,
-            id: res.session_id,
+            client: client.clone(),
+            id: session_id.clone(),
+            on_drop: Box::new(move || {
+                println!("on-drop");
+                let _ = sender.send(ClientSessionID {
+                    client: client.clone(),
+                    session_id: session_id.clone(),
+                });
+            }),
         });
     }
-
-    fn fast_put_session(self: &mut Self, _s: Session) {}
 }

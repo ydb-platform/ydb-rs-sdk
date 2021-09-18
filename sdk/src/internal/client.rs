@@ -71,6 +71,7 @@ mod test {
     use crate::internal::client::Client;
     use crate::internal::grpc::SimpleGrpcClient;
     use crate::internal::session::SimpleSessionPool;
+    use std::time::Duration;
 
     static CRED: Lazy<Mutex<CommandLineYcToken>> =
         Lazy::new(|| Mutex::new(crate::credentials::CommandLineYcToken::new()));
@@ -98,7 +99,8 @@ mod test {
             .create_session(CreateSessionRequest::default())
             .await?;
         println!("session: {:?}", res);
-        res.delete(None).await?;
+        drop(res);
+        tokio::time::sleep(Duration::from_secs(5));
         Ok(())
     }
 
