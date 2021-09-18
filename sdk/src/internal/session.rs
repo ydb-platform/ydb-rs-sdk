@@ -1,11 +1,14 @@
-use crate::errors::Result;
+use crate::errors::{Error, Result};
 use crate::internal::grpc::{grpc_read_result, grpc_read_void_result};
 use crate::internal::middlewares::AuthService;
 use async_trait::async_trait;
 use derivative::Derivative;
+use futures::executor::block_on;
+use std::ops::{Deref, DerefMut};
+use std::sync::{Arc, Mutex, RwLock};
 use tokio::io::AsyncWriteExt;
 use tokio::runtime::Runtime;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use ydb_protobuf::generated::ydb::operations::OperationParams;
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 use ydb_protobuf::generated::ydb::table::{
@@ -55,16 +58,19 @@ struct ClientSessionID {
 }
 
 pub(crate) struct SimpleSessionPool {
-    close_session_sender: mpsc::UnboundedSender<ClientSessionID>,
+    close_loop_finished: Mutex<oneshot::Receiver<()>>,
+    close_session_sender: RwLock<Option<mpsc::UnboundedSender<ClientSessionID>>>,
 }
 
 impl SimpleSessionPool {
     pub fn new() -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
-        tokio::spawn(async move { Self::close_sessions(receiver).await });
+        let (close_finished_sender, close_finished_receiver) = oneshot::channel::<()>();
+        tokio::spawn(async move { Self::close_sessions(close_finished_sender, receiver).await });
 
         Self {
-            close_session_sender: sender,
+            close_session_sender: RwLock::new(Some(sender)),
+            close_loop_finished: Mutex::new(close_finished_receiver),
         }
     }
 
@@ -79,7 +85,10 @@ impl SimpleSessionPool {
         )
     }
 
-    async fn close_sessions(mut receiver: mpsc::UnboundedReceiver<ClientSessionID>) {
+    async fn close_sessions(
+        mut close_finished: oneshot::Sender<()>,
+        mut receiver: mpsc::UnboundedReceiver<ClientSessionID>,
+    ) {
         println!("close loop");
         while let Some(mut pair) = receiver.recv().await {
             println!("drop-received: {}", pair.session_id);
@@ -96,6 +105,13 @@ impl SimpleSessionPool {
             );
         }
         println!("close loop finished");
+        close_finished.send(());
+    }
+}
+
+impl Drop for SimpleSessionPool {
+    fn drop(&mut self) {
+        // need to wait close sessions?
     }
 }
 
@@ -107,7 +123,10 @@ impl SessionPool for SimpleSessionPool {
         req: CreateSessionRequest,
     ) -> Result<Session> {
         let res: CreateSessionResult = grpc_read_result(client.create_session(req).await?)?;
-        let sender = self.close_session_sender.clone();
+        let mut sender = match self.close_session_sender.read().unwrap().deref() {
+            Some(sender) => sender.clone(),
+            None => return Err(Error::Custom("pool closed".into())),
+        };
         let session_id = res.session_id.clone();
         return Ok(Session {
             client: client.clone(),
