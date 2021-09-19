@@ -3,13 +3,9 @@ use crate::internal::grpc::{grpc_read_result, grpc_read_void_result};
 use crate::internal::middlewares::AuthService;
 use async_trait::async_trait;
 use derivative::Derivative;
-use futures::executor::block_on;
-use std::ops::{Deref, DerefMut};
-use std::sync::{Arc, Mutex, RwLock};
-use tokio::io::AsyncWriteExt;
-use tokio::runtime::Runtime;
-use tokio::sync::{mpsc, oneshot};
-use ydb_protobuf::generated::ydb::operations::OperationParams;
+use std::ops::Deref;
+use std::sync::{Arc, RwLock};
+use tokio::sync::mpsc;
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 use ydb_protobuf::generated::ydb::table::{
     CreateSessionRequest, CreateSessionResult, DeleteSessionRequest, ExecuteDataQueryRequest,
@@ -23,7 +19,7 @@ pub(crate) struct Session {
     id: String,
 
     #[derivative(Debug = "ignore")]
-    on_drop: Box<dyn Fn()>,
+    on_drop: Box<dyn Fn() + Send>,
 }
 
 impl Session {
@@ -44,12 +40,9 @@ impl Drop for Session {
 }
 
 #[async_trait]
-pub(crate) trait SessionPool: Send {
-    async fn session(
-        self: &mut Self,
-        client: TableServiceClient<AuthService>,
-        req: CreateSessionRequest,
-    ) -> Result<Session>;
+pub(crate) trait SessionPool: Sync + Send {
+    async fn session(&self) -> Result<Session>;
+    fn clone_pool(&self) -> Box<dyn SessionPool>;
 }
 
 struct ClientSessionID {
@@ -57,18 +50,33 @@ struct ClientSessionID {
     pub session_id: String,
 }
 
-pub(crate) struct SimpleSessionPool {
+struct SimpleSessionPoolSharedState {
+    client: TableServiceClient<AuthService>,
     close_session_sender: RwLock<Option<mpsc::UnboundedSender<ClientSessionID>>>,
 }
 
+impl Drop for SimpleSessionPoolSharedState {
+    fn drop(&mut self) {
+        *self.close_session_sender.write().unwrap() = None
+        // it is question about need to close all session from pool
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SimpleSessionPool {
+    shared_state: Arc<SimpleSessionPoolSharedState>,
+}
+
 impl SimpleSessionPool {
-    pub fn new() -> Self {
+    pub fn new(client: TableServiceClient<AuthService>) -> Self {
         let (sender, receiver) = mpsc::unbounded_channel();
-        let (close_finished_sender, close_finished_receiver) = oneshot::channel::<()>();
-        tokio::spawn(async move { Self::close_sessions(close_finished_sender, receiver).await });
+        tokio::spawn(async move { Self::close_sessions(receiver).await });
 
         Self {
-            close_session_sender: RwLock::new(Some(sender)),
+            shared_state: Arc::new(SimpleSessionPoolSharedState {
+                client,
+                close_session_sender: RwLock::new(Some(sender)),
+            }),
         }
     }
 
@@ -83,45 +91,38 @@ impl SimpleSessionPool {
         )
     }
 
-    async fn close_sessions(
-        mut close_finished: oneshot::Sender<()>,
-        mut receiver: mpsc::UnboundedReceiver<ClientSessionID>,
-    ) {
+    async fn close_sessions(mut receiver: mpsc::UnboundedReceiver<ClientSessionID>) {
         println!("close loop");
-        while let Some(mut pair) = receiver.recv().await {
+        while let Some(pair) = receiver.recv().await {
             println!("drop-received: {}", pair.session_id);
             let session_id = pair.session_id.clone();
             let res = Self::close_session(pair).await;
-            let mut stdout = tokio::io::stdout();
-            stdout.write_all(
-                format!(
-                    "session deleted. id: '{}', error_status: {:?}",
-                    session_id,
-                    res.err()
-                )
-                .as_bytes(),
+            println!(
+                "session deleted. id: '{}', error_status: {:?}",
+                session_id,
+                res.err()
             );
         }
         println!("close loop finished");
-        close_finished.send(());
-    }
-}
-
-impl Drop for SimpleSessionPool {
-    fn drop(&mut self) {
-        *self.close_session_sender.write().unwrap() = None
     }
 }
 
 #[async_trait]
 impl SessionPool for SimpleSessionPool {
-    async fn session(
-        self: &mut Self,
-        mut client: TableServiceClient<AuthService>,
-        req: CreateSessionRequest,
-    ) -> Result<Session> {
-        let res: CreateSessionResult = grpc_read_result(client.create_session(req).await?)?;
-        let mut sender = match self.close_session_sender.read().unwrap().deref() {
+    async fn session(&self) -> Result<Session> {
+        let mut client = self.shared_state.client.clone();
+        let res: CreateSessionResult = grpc_read_result(
+            client
+                .create_session(CreateSessionRequest::default())
+                .await?,
+        )?;
+        let sender = match self
+            .shared_state
+            .close_session_sender
+            .read()
+            .unwrap()
+            .deref()
+        {
             Some(sender) => sender.clone(),
             None => return Err(Error::Custom("pool closed".into())),
         };
@@ -138,5 +139,9 @@ impl SessionPool for SimpleSessionPool {
                 println!("drop message sended")
             }),
         });
+    }
+
+    fn clone_pool(&self) -> Box<dyn SessionPool> {
+        Box::new(self.clone())
     }
 }

@@ -3,7 +3,7 @@ use dyn_clone::DynClone;
 use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 
-pub trait Credentials: Debug + DynClone + Send {
+pub trait Credentials: Debug + DynClone + Send + Sync {
     fn create_token(self: &mut Self) -> Result<String>;
 }
 dyn_clone::clone_trait_object!(Credentials);

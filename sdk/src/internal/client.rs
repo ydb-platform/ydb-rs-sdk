@@ -3,7 +3,6 @@ use ydb_protobuf::generated::ydb::discovery::{
     ListEndpointsRequest, ListEndpointsResult, WhoAmIRequest, WhoAmIResult,
 };
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
-use ydb_protobuf::generated::ydb::table::CreateSessionRequest;
 
 use crate::errors::Result;
 use crate::internal::discovery::StaticDiscovery;
@@ -11,6 +10,7 @@ use crate::internal::grpc;
 use crate::internal::grpc::ClientFabric;
 use crate::internal::middlewares::AuthService;
 use crate::internal::session::{Session, SessionPool};
+use crate::internal::transaction::{AutoCommit, Mode, Transaction};
 use std::sync::Arc;
 
 type Middleware = AuthService;
@@ -18,6 +18,7 @@ type Middleware = AuthService;
 pub(crate) struct Client<CF: ClientFabric> {
     client_fabric: Arc<CF>,
     session_pool: Box<dyn SessionPool>,
+    error_on_truncate: bool,
 }
 
 impl<CF: ClientFabric> Client<CF> {
@@ -26,16 +27,23 @@ impl<CF: ClientFabric> Client<CF> {
         return Ok(Client {
             client_fabric: fabric,
             session_pool,
+            error_on_truncate: true,
         });
     }
 
-    pub(crate) async fn create_session(
-        self: &mut Self,
-        req: CreateSessionRequest,
-    ) -> Result<Session> {
-        self.session_pool
-            .session(self.client_fabric.create(TableServiceClient::new)?, req)
-            .await
+    #[allow(dead_code)]
+    pub fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
+        self.error_on_truncate = error_on_truncate;
+        return self;
+    }
+
+    pub async fn create_autocommit_transaction(&self, mode: Mode) -> Result<AutoCommit> {
+        return Ok(AutoCommit::new(self.session_pool.clone_pool(), mode)
+            .with_error_on_truncate(self.error_on_truncate));
+    }
+
+    pub(crate) async fn create_session(self: &mut Self) -> Result<Session> {
+        self.session_pool.session().await
     }
 
     pub(crate) async fn endpoints(
@@ -61,17 +69,10 @@ mod test {
 
     use once_cell::sync::Lazy;
 
-    use ydb_protobuf::generated::ydb::table::transaction_control::TxSelector;
-    use ydb_protobuf::generated::ydb::table::transaction_settings::TxMode;
-    use ydb_protobuf::generated::ydb::table::{
-        ExecuteDataQueryRequest, OnlineModeSettings, TransactionControl, TransactionSettings,
-    };
-
     use crate::credentials::CommandLineYcToken;
     use crate::internal::client::Client;
     use crate::internal::grpc::SimpleGrpcClient;
     use crate::internal::session::SimpleSessionPool;
-    use std::time::Duration;
 
     static CRED: Lazy<Mutex<CommandLineYcToken>> =
         Lazy::new(|| Mutex::new(crate::credentials::CommandLineYcToken::new()));
@@ -88,19 +89,16 @@ mod test {
         let grpc_client_fabric =
             SimpleGrpcClient::new(Box::new(discovery), Box::new(credentials), database);
 
-        let session_pool = SimpleSessionPool::new();
+        let table_client = grpc_client_fabric.create(TableServiceClient::new)?;
+        let session_pool = SimpleSessionPool::new(table_client);
 
         return Client::new(grpc_client_fabric, Box::new(session_pool));
     }
 
     #[tokio::test]
     async fn create_session() -> Result<()> {
-        let mut res = create_client()?
-            .create_session(CreateSessionRequest::default())
-            .await?;
+        let res = create_client()?.create_session().await?;
         println!("session: {:?}", res);
-        drop(res);
-        tokio::time::sleep(Duration::from_secs(1)).await;
         Ok(())
     }
 
@@ -114,33 +112,12 @@ mod test {
 
     #[tokio::test]
     async fn execute_data_query() -> Result<()> {
-        let mut client = create_client()?;
-        let mut session = client
-            .create_session(CreateSessionRequest::default())
+        let client = create_client()?;
+        let mut transaction = client
+            .create_autocommit_transaction(Mode::ReadOnline)
             .await?;
-        println!("session: {:?}", session);
-        let req = ExecuteDataQueryRequest {
-            tx_control: Some(TransactionControl {
-                commit_tx: true,
-                tx_selector: Some(TxSelector::BeginTx(TransactionSettings {
-                    tx_mode: Some(TxMode::OnlineReadOnly(OnlineModeSettings {
-                        allow_inconsistent_reads: true,
-                    })),
-                })),
-            }),
-            query: Some(ydb_protobuf::generated::ydb::table::Query {
-                query: Some(ydb_protobuf::generated::ydb::table::query::Query::YqlText(
-                    "SELECT 1+1".to_string(),
-                )),
-            }),
-            parameters: Default::default(),
-            query_cache_policy: None,
-            operation_params: None,
-            collect_stats: 0,
-            ..ExecuteDataQueryRequest::default()
-        };
-        let res = session.execute(req).await?;
-        println!("session: {:?}", res);
+        let res = transaction.query("SELECT 1+1".into()).await?;
+        println!("result: {:?}", res);
         Ok(())
     }
 

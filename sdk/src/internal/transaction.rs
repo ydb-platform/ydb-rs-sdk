@@ -2,21 +2,21 @@ use crate::errors::{Error, Result};
 use crate::internal::query::{Query, QueryResult};
 use crate::internal::session::SessionPool;
 use async_trait::async_trait;
-use std::sync::Arc;
 use ydb_protobuf::generated::ydb::table::transaction_control::TxSelector;
 use ydb_protobuf::generated::ydb::table::transaction_settings::TxMode;
 use ydb_protobuf::generated::ydb::table::{
     ExecuteDataQueryRequest, OnlineModeSettings, TransactionControl, TransactionSettings,
 };
 
-enum Mode {
+#[derive(Copy, Clone)]
+pub enum Mode {
     ReadOnline,
 }
 
-impl Into<TxMode> for Mode {
-    fn into(self) -> TxMode {
-        match self {
-            Self::ReadOnline => TxMode::OnlineReadOnly(OnlineModeSettings::default()),
+impl From<Mode> for TxMode {
+    fn from(m: Mode) -> Self {
+        match m {
+            Mode::ReadOnline => TxMode::OnlineReadOnly(OnlineModeSettings::default()),
         }
     }
 }
@@ -30,27 +30,42 @@ pub trait Transaction {
 
 pub struct AutoCommit {
     mode: Mode,
+    error_on_truncate_response: bool,
     session_pool: Box<dyn SessionPool>,
+}
+
+impl AutoCommit {
+    pub(crate) fn new(session_pool: Box<dyn SessionPool>, mode: Mode) -> Self {
+        return Self {
+            mode,
+            session_pool,
+            error_on_truncate_response: true,
+        };
+    }
+
+    pub fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
+        self.error_on_truncate_response = error_on_truncate;
+        return self;
+    }
 }
 
 #[async_trait]
 impl Transaction for AutoCommit {
     async fn query(self: &mut Self, query: Query) -> Result<QueryResult> {
-        return Err(Error::from("not implemented"));
-
-        // let mut session = self.session_pool.session().await?;
-        // let req = ExecuteDataQueryRequest {
-        //     tx_control: Some(TransactionControl {
-        //         commit_tx: true,
-        //         tx_selector: Some(TxSelector::BeginTx(TransactionSettings {
-        //             tx_mode: Some(TxMode::OnlineReadOnly(OnlineModeSettings {
-        //                 allow_inconsistent_reads: true,
-        //             })),
-        //         })),
-        //     }),
-        //     query: Some(query.into()),
-        //     ..ExecuteDataQueryRequest::default()
-        // };
+        let req = ExecuteDataQueryRequest {
+            tx_control: Some(TransactionControl {
+                commit_tx: true,
+                tx_selector: Some(TxSelector::BeginTx(TransactionSettings {
+                    tx_mode: Some(self.mode.into()),
+                })),
+            }),
+            query: Some(query.into()),
+            ..ExecuteDataQueryRequest::default()
+        };
+        let mut session = self.session_pool.session().await?;
+        let proto_res = session.execute(req).await?;
+        println!("res: {:?}", proto_res);
+        return QueryResult::from_proto(proto_res, self.error_on_truncate_response);
     }
 
     async fn commit(self: &mut Self) -> Result<()> {
