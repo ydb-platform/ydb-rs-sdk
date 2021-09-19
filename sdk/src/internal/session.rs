@@ -58,7 +58,6 @@ struct ClientSessionID {
 }
 
 pub(crate) struct SimpleSessionPool {
-    close_loop_finished: Mutex<oneshot::Receiver<()>>,
     close_session_sender: RwLock<Option<mpsc::UnboundedSender<ClientSessionID>>>,
 }
 
@@ -70,7 +69,6 @@ impl SimpleSessionPool {
 
         Self {
             close_session_sender: RwLock::new(Some(sender)),
-            close_loop_finished: Mutex::new(close_finished_receiver),
         }
     }
 
@@ -111,7 +109,7 @@ impl SimpleSessionPool {
 
 impl Drop for SimpleSessionPool {
     fn drop(&mut self) {
-        // need to wait close sessions?
+        *self.close_session_sender.write().unwrap() = None
     }
 }
 
