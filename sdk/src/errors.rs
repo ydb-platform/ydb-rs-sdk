@@ -48,6 +48,12 @@ impl From<std::io::Error> for Error {
     }
 }
 
+impl From<&str> for Error {
+    fn from(s: &str) -> Self {
+        return Self::Custom(s.to_string());
+    }
+}
+
 impl From<std::string::FromUtf8Error> for Error {
     fn from(e: FromUtf8Error) -> Self {
         return Error::Custom(e.to_string());

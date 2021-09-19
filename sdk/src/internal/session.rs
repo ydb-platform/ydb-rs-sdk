@@ -44,7 +44,7 @@ impl Drop for Session {
 }
 
 #[async_trait]
-pub(crate) trait SessionPool {
+pub(crate) trait SessionPool: Send {
     async fn session(
         self: &mut Self,
         client: TableServiceClient<AuthService>,
