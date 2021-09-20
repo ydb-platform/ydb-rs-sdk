@@ -73,6 +73,7 @@ mod test {
     use crate::internal::client::Client;
     use crate::internal::grpc::SimpleGrpcClient;
     use crate::internal::session::SimpleSessionPool;
+    use crate::types::YdbValue;
 
     static CRED: Lazy<Mutex<CommandLineYcToken>> =
         Lazy::new(|| Mutex::new(crate::credentials::CommandLineYcToken::new()));
@@ -117,6 +118,16 @@ mod test {
             .create_autocommit_transaction(Mode::ReadOnline)
             .await?;
         let res = transaction.query("SELECT 1+1".into()).await?;
+        assert_eq!(
+            &YdbValue::INT32(2),
+            res.first()
+                .unwrap()
+                .rows()
+                .next()
+                .unwrap()
+                .get_field_index(0)
+                .unwrap()
+        );
         println!("result: {:?}", res);
         Ok(())
     }

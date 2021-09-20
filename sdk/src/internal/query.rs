@@ -1,5 +1,6 @@
 use crate::errors::{Error, Result};
 use crate::types::YdbValue;
+use std::slice::Iter;
 use ydb_protobuf::generated::ydb::table::ExecuteQueryResult;
 
 pub struct Query {
@@ -110,6 +111,14 @@ impl QueryResult {
         }
         return Ok(res);
     }
+
+    pub fn first(&self) -> Option<&ResultSet> {
+        self.results.first()
+    }
+
+    pub fn result_sets(&self) -> Iter<'_, ResultSet> {
+        self.results.iter()
+    }
 }
 
 impl Default for QueryResult {
@@ -123,9 +132,22 @@ impl Default for QueryResult {
 
 #[derive(Debug)]
 pub struct ResultSet {
-    pub(crate) truncated: bool,
+    pub truncated: bool,
     pub(crate) columns: Vec<crate::types::Column>,
     pub(crate) rows: Vec<Vec<crate::types::YdbValue>>,
+}
+
+impl ResultSet {
+    pub fn columns(&self) -> &Vec<crate::types::Column> {
+        return &self.columns;
+    }
+
+    pub fn rows(&self) -> ResultSetRowsIter {
+        return ResultSetRowsIter {
+            columns: &self.columns,
+            row_iter: self.rows.iter(),
+        };
+    }
 }
 
 impl Default for ResultSet {
@@ -135,5 +157,48 @@ impl Default for ResultSet {
             columns: Vec::new(),
             rows: Vec::new(),
         };
+    }
+}
+
+#[derive(Debug)]
+pub struct Row<'a> {
+    columns: &'a Vec<crate::types::Column>,
+    fields: &'a Vec<crate::types::YdbValue>,
+}
+
+impl<'a> Row<'a> {
+    pub fn get_field(&self, name: &str) -> Option<&YdbValue> {
+        for (index, column) in self.columns.iter().enumerate() {
+            if column.name == name {
+                return self.fields.get(index);
+            }
+        }
+
+        return None;
+    }
+
+    pub fn get_field_index(&self, index: usize) -> Option<&YdbValue> {
+        return self.fields.get(index);
+    }
+}
+
+pub struct ResultSetRowsIter<'a> {
+    columns: &'a Vec<crate::types::Column>,
+    row_iter: Iter<'a, Vec<YdbValue>>,
+}
+
+impl<'a> Iterator for ResultSetRowsIter<'a> {
+    type Item = Row<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.row_iter.next() {
+            None => None,
+            Some(row) => {
+                return Some(Row {
+                    columns: self.columns,
+                    fields: row,
+                })
+            }
+        }
     }
 }

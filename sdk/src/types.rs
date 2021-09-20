@@ -3,7 +3,7 @@ use ydb_protobuf::generated::ydb::Value;
 
 /// Represent value, send or received from ydb
 /// That enum will be grow, when add support of new types
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum YdbValue {
     NULL,
     BOOL(bool),
