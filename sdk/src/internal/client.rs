@@ -11,7 +11,6 @@ use crate::internal::grpc::ClientFabric;
 use crate::internal::middlewares::AuthService;
 use crate::internal::session::{Session, SessionPool};
 use crate::internal::transaction::{AutoCommit, Mode, Transaction};
-use std::iter::FromIterator;
 use std::sync::Arc;
 
 type Middleware = AuthService;
@@ -129,6 +128,27 @@ mod test {
                 .next()
                 .unwrap()
                 .get_field_index(0)
+                .unwrap()
+        );
+        println!("result: {:?}", res);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn execute_data_query_field_name() -> Result<()> {
+        let client = create_client()?;
+        let mut transaction = client
+            .create_autocommit_transaction(Mode::ReadOnline)
+            .await?;
+        let res = transaction.query("SELECT 1+1 as s".into()).await?;
+        assert_eq!(
+            &YdbValue::INT32(2),
+            res.first()
+                .unwrap()
+                .rows()
+                .next()
+                .unwrap()
+                .get_field("s")
                 .unwrap()
         );
         println!("result: {:?}", res);

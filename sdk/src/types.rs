@@ -41,17 +41,6 @@ impl YdbValue {
         return Ok(val);
     }
 
-    pub(crate) fn get_proto_type_id(
-        &self,
-    ) -> Option<ydb_protobuf::generated::ydb::r#type::PrimitiveTypeId> {
-        use ydb_protobuf::generated::ydb::r#type::PrimitiveTypeId as ydb_id;
-
-        match self {
-            YdbValue::INT32(_) => Some(ydb_id::Int32),
-            _ => panic!("todo"),
-        }
-    }
-
     pub(crate) fn to_typed_value(self) -> ydb::TypedValue {
         match self {
             Self::INT32(val) => ydb::TypedValue {
@@ -64,18 +53,6 @@ impl YdbValue {
                     value: Some(ydb::value::Value::Int32Value(val)),
                     ..ydb::Value::default()
                 }),
-            },
-            _ => panic!("todo"),
-        }
-    }
-
-    pub(crate) fn to_ydb_value(self) -> ydb::Value {
-        use YdbValue::*;
-
-        match self {
-            INT32(val) => ydb::Value {
-                value: Some(ydb::value::Value::Int32Value(val)),
-                ..ydb::Value::default()
             },
             _ => panic!("todo"),
         }

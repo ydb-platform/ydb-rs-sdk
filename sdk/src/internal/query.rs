@@ -137,6 +137,7 @@ impl QueryResult {
         self.results.first()
     }
 
+    #[allow(dead_code)]
     pub fn result_sets(&self) -> Iter<'_, ResultSet> {
         self.results.iter()
     }
@@ -159,6 +160,7 @@ pub struct ResultSet {
 }
 
 impl ResultSet {
+    #[allow(dead_code)]
     pub fn columns(&self) -> &Vec<crate::types::Column> {
         return &self.columns;
     }
