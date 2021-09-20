@@ -11,6 +11,7 @@ use crate::internal::grpc::ClientFabric;
 use crate::internal::middlewares::AuthService;
 use crate::internal::session::{Session, SessionPool};
 use crate::internal::transaction::{AutoCommit, Mode, Transaction};
+use std::iter::FromIterator;
 use std::sync::Arc;
 
 type Middleware = AuthService;
@@ -72,8 +73,10 @@ mod test {
     use crate::credentials::CommandLineYcToken;
     use crate::internal::client::Client;
     use crate::internal::grpc::SimpleGrpcClient;
+    use crate::internal::query::Query;
     use crate::internal::session::SimpleSessionPool;
     use crate::types::YdbValue;
+    use std::collections::HashMap;
 
     static CRED: Lazy<Mutex<CommandLineYcToken>> =
         Lazy::new(|| Mutex::new(crate::credentials::CommandLineYcToken::new()));
@@ -129,6 +132,41 @@ mod test {
                 .unwrap()
         );
         println!("result: {:?}", res);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn execute_data_query_params() -> Result<()> {
+        let client = create_client()?;
+        let mut transaction = client
+            .create_autocommit_transaction(Mode::ReadOnline)
+            .await?;
+        let mut params = HashMap::new();
+        params.insert("$v".to_string(), YdbValue::INT32(3));
+        let res = transaction
+            .query(
+                Query::new()
+                    .with_query(
+                        "
+                DECLARE $v AS Int32;
+                SELECT $v+$v
+        "
+                        .into(),
+                    )
+                    .with_params(params),
+            )
+            .await?;
+        println!("result: {:?}", res);
+        assert_eq!(
+            &YdbValue::INT32(6),
+            res.first()
+                .unwrap()
+                .rows()
+                .next()
+                .unwrap()
+                .get_field_index(0)
+                .unwrap()
+        );
         Ok(())
     }
 

@@ -1,5 +1,5 @@
 use crate::errors::{Error, Result};
-use ydb_protobuf::generated::ydb::Value;
+use ydb_protobuf::generated::ydb;
 
 /// Represent value, send or received from ydb
 /// That enum will be grow, when add support of new types
@@ -15,11 +15,10 @@ pub enum YdbValue {
     FLOAT64(f64),
     BYTES(Vec<u8>),
     TEXT(String),
-    YdbValue(Box<YdbValue>),
 }
 
 impl YdbValue {
-    pub(crate) fn from_proto(proto_value: Value) -> Result<Self> {
+    pub(crate) fn from_proto(proto_value: ydb::Value) -> Result<Self> {
         use ydb_protobuf::generated::ydb::value::Value::*;
         println!("from proto item: {:?}", proto_value);
         let val = match proto_value.value {
@@ -35,11 +34,51 @@ impl YdbValue {
                 BytesValue(val) => YdbValue::BYTES(val),
                 TextValue(val) => YdbValue::TEXT(val),
                 NullFlagValue(_) => YdbValue::NULL,
-                NestedValue(val) => YdbValue::YdbValue(Box::new(Self::from_proto(*val)?)),
+                NestedValue(_) => return Err(Error::from("not implemented read nested")),
                 Low128(_) => return Err(Error::from("not implemented read i128")),
             },
         };
         return Ok(val);
+    }
+
+    pub(crate) fn get_proto_type_id(
+        &self,
+    ) -> Option<ydb_protobuf::generated::ydb::r#type::PrimitiveTypeId> {
+        use ydb_protobuf::generated::ydb::r#type::PrimitiveTypeId as ydb_id;
+
+        match self {
+            YdbValue::INT32(_) => Some(ydb_id::Int32),
+            _ => panic!("todo"),
+        }
+    }
+
+    pub(crate) fn to_typed_value(self) -> ydb::TypedValue {
+        match self {
+            Self::INT32(val) => ydb::TypedValue {
+                r#type: Some(ydb::Type {
+                    r#type: Some(ydb::r#type::Type::TypeId(
+                        ydb::r#type::PrimitiveTypeId::Int32.into(),
+                    )),
+                }),
+                value: Some(ydb::Value {
+                    value: Some(ydb::value::Value::Int32Value(val)),
+                    ..ydb::Value::default()
+                }),
+            },
+            _ => panic!("todo"),
+        }
+    }
+
+    pub(crate) fn to_ydb_value(self) -> ydb::Value {
+        use YdbValue::*;
+
+        match self {
+            INT32(val) => ydb::Value {
+                value: Some(ydb::value::Value::Int32Value(val)),
+                ..ydb::Value::default()
+            },
+            _ => panic!("todo"),
+        }
     }
 }
 

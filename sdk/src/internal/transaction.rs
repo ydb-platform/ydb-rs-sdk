@@ -59,8 +59,7 @@ impl Transaction for AutoCommit {
                     tx_mode: Some(self.mode.into()),
                 })),
             }),
-            query: Some(query.into()),
-            ..ExecuteDataQueryRequest::default()
+            ..query.to_proto()
         };
         let mut session = self.session_pool.session().await?;
         let proto_res = session.execute(req).await?;

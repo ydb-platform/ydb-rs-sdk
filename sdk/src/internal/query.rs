@@ -1,20 +1,52 @@
 use crate::errors::{Error, Result};
 use crate::types::YdbValue;
+use std::collections::HashMap;
 use std::slice::Iter;
-use ydb_protobuf::generated::ydb::table::ExecuteQueryResult;
+use ydb_protobuf::generated::ydb::table::{ExecuteDataQueryRequest, ExecuteQueryResult};
 
 pub struct Query {
     text: String,
+    parameters: HashMap<String, YdbValue>,
 }
 
 impl Query {
-    fn new() -> Self {
-        Query { text: "".into() }
+    pub fn new() -> Self {
+        Query {
+            text: "".into(),
+            parameters: HashMap::new(),
+        }
     }
 
     pub fn with_query(mut self: Self, query: String) -> Self {
         self.text = query;
         return self;
+    }
+
+    pub fn with_params(mut self, params: HashMap<String, YdbValue>) -> Self {
+        self.parameters = params;
+        return self;
+    }
+
+    pub(crate) fn to_proto(self) -> ExecuteDataQueryRequest {
+        // query
+        let query = ydb_protobuf::generated::ydb::table::Query {
+            query: Some(ydb_protobuf::generated::ydb::table::query::Query::YqlText(
+                self.text,
+            )),
+            ..ydb_protobuf::generated::ydb::table::Query::default()
+        };
+
+        let mut params = HashMap::with_capacity(self.parameters.len());
+
+        for (name, val) in self.parameters.into_iter() {
+            params.insert(name, val.to_typed_value());
+        }
+
+        return ExecuteDataQueryRequest {
+            query: Some(query),
+            parameters: params,
+            ..ExecuteDataQueryRequest::default()
+        };
     }
 }
 
@@ -33,17 +65,6 @@ impl From<&str> for Query {
 impl From<String> for Query {
     fn from(s: String) -> Self {
         Query::new().with_query(s)
-    }
-}
-
-impl Into<ydb_protobuf::generated::ydb::table::Query> for Query {
-    fn into(self) -> ydb_protobuf::generated::ydb::table::Query {
-        ydb_protobuf::generated::ydb::table::Query {
-            query: Some(ydb_protobuf::generated::ydb::table::query::Query::YqlText(
-                self.text,
-            )),
-            ..ydb_protobuf::generated::ydb::table::Query::default()
-        }
     }
 }
 
