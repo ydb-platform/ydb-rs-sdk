@@ -66,6 +66,12 @@ impl<T> From<std::sync::PoisonError<T>> for Error {
     }
 }
 
+impl From<strum::ParseError> for Error {
+    fn from(e: strum::ParseError) -> Self {
+        return Error::Custom(e.to_string());
+    }
+}
+
 impl From<tonic::codegen::http::uri::InvalidUri> for Error {
     fn from(e: tonic::codegen::http::uri::InvalidUri) -> Self {
         return Error::Custom(e.to_string());
