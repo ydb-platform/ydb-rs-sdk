@@ -14,6 +14,7 @@ dyn-clone = "1"
 http = "0.2"
 once_cell = "1.8"
 prost = "0.8"
+strum = { version = "0.21", features = ["derive"] }
 tokio = { version = "1", features = ["full"]}
 tonic = "0.5"
 tower = "0.4"

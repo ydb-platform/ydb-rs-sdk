@@ -3,7 +3,7 @@ use std::string::FromUtf8Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Error {
     Custom(String),
     YdbStatus(ydb_protobuf::generated::ydb::status_ids::StatusCode),

@@ -5,6 +5,7 @@ use ydb_protobuf::generated::ydb::discovery::{
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 
 use crate::errors::Result;
+use crate::internal::discovery::Service;
 use crate::internal::discovery::StaticDiscovery;
 use crate::internal::grpc;
 use crate::internal::grpc::ClientFabric;
@@ -59,7 +60,9 @@ impl<CF: ClientFabric> Client<CF> {
 
     // clients
     fn client_discovery(self: &Self) -> Result<DiscoveryServiceClient<Middleware>> {
-        return self.client_fabric.create(DiscoveryServiceClient::new);
+        return self
+            .client_fabric
+            .create(DiscoveryServiceClient::new, Service::Discovery);
     }
 }
 
@@ -71,7 +74,7 @@ mod test {
 
     use crate::credentials::CommandLineYcToken;
     use crate::internal::client::Client;
-    use crate::internal::grpc::SimpleGrpcClient;
+    use crate::internal::grpc::SimpleGrpcClientFabric;
     use crate::internal::query::Query;
     use crate::internal::session::SimpleSessionPool;
     use crate::types::YdbValue;
@@ -80,19 +83,18 @@ mod test {
     static CRED: Lazy<Mutex<CommandLineYcToken>> =
         Lazy::new(|| Mutex::new(crate::credentials::CommandLineYcToken::new()));
 
-    fn create_client() -> Result<Client<SimpleGrpcClient>> {
+    fn create_client() -> Result<Client<SimpleGrpcClientFabric>> {
         // let token = crate::credentials::StaticToken::from(std::env::var("IAM_TOKEN")?.as_str());
         // let token = crate::credentials::CommandLineYcToken::new();
         let database = std::env::var("DB_NAME")?;
         let credentials = CRED.lock()?.clone();
-        let discovery = StaticDiscovery {
-            endpoint: std::env::var("DB_ENDPOINT")?,
-        };
+        let discovery = StaticDiscovery::from_str(&std::env::var("DB_ENDPOINT")?)?;
 
         let grpc_client_fabric =
-            SimpleGrpcClient::new(Box::new(discovery), Box::new(credentials), database);
+            SimpleGrpcClientFabric::new(Box::new(discovery), Box::new(credentials), database);
 
-        let table_client = grpc_client_fabric.create(TableServiceClient::new)?;
+        let table_client =
+            grpc_client_fabric.create(TableServiceClient::new, Service::TableService)?;
         let session_pool = SimpleSessionPool::new(table_client);
 
         return Client::new(grpc_client_fabric, Box::new(session_pool));
@@ -110,6 +112,7 @@ mod test {
         let _res = create_client()?
             .endpoints(ListEndpointsRequest::default())
             .await?;
+        println!("{:?}", _res);
         Ok(())
     }
 

@@ -3,7 +3,7 @@ use ydb_protobuf::generated::ydb::status_ids::StatusCode;
 use crate::credentials::Credentials;
 use crate::errors;
 use crate::errors::{Error, Result};
-use crate::internal::discovery::Discovery;
+use crate::internal::discovery::{Discovery, Service};
 use crate::internal::middlewares::AuthService;
 use crate::internal::trait_operation::Operation;
 use std::str::FromStr;
@@ -13,33 +13,32 @@ use tower::ServiceBuilder;
 pub(crate) trait ClientFabric {
     // create grpc client
     // new_func - func for create grpc client from common middleware
-    fn create<T, CB>(self: &Self, new_func: CB) -> Result<T>
+    fn create<T, CB>(self: &Self, new_func: CB, service: Service) -> Result<T>
     where
         CB: FnOnce(AuthService) -> T;
 }
 
-pub(crate) struct SimpleGrpcClient {
+pub(crate) struct SimpleGrpcClientFabric {
     discovery: Box<dyn Discovery>,
     cred: Box<dyn Credentials>,
     database: String,
 }
 
-impl SimpleGrpcClient {
+impl SimpleGrpcClientFabric {
     pub fn new(
         discovery: Box<dyn Discovery>,
         cred: Box<dyn Credentials>,
         database: String,
     ) -> Self {
-        SimpleGrpcClient {
+        SimpleGrpcClientFabric {
             discovery,
             cred,
             database,
         }
     }
 
-    fn channel(self: &Self) -> Result<Channel> {
-        let uri = http::uri::Uri::from_str(self.discovery.endpoint()?.as_str())?;
-
+    fn channel(self: &Self, service: Service) -> Result<Channel> {
+        let uri = self.discovery.endpoint(service)?;
         let channel = Endpoint::from(uri)
             .tls_config(ClientTlsConfig::new())?
             .connect_lazy()?;
@@ -48,8 +47,8 @@ impl SimpleGrpcClient {
     }
 }
 
-impl ClientFabric for SimpleGrpcClient {
-    fn create<T, CB>(self: &Self, new_func: CB) -> Result<T>
+impl ClientFabric for SimpleGrpcClientFabric {
+    fn create<T, CB>(self: &Self, new_func: CB, service: Service) -> Result<T>
     where
         CB: FnOnce(AuthService) -> T,
     {
@@ -61,7 +60,7 @@ impl ClientFabric for SimpleGrpcClient {
 
         let auth_ch = ServiceBuilder::new()
             .layer_fn(auth_service_create)
-            .service(self.channel()?);
+            .service(self.channel(service)?);
 
         return Ok(new_func(auth_ch));
     }

@@ -42,19 +42,32 @@ impl YdbValue {
     }
 
     pub(crate) fn to_typed_value(self) -> ydb::TypedValue {
-        match self {
-            Self::INT32(val) => ydb::TypedValue {
+        use ydb::r#type::PrimitiveTypeId as pt;
+        use ydb::value::Value as pv;
+
+        fn to_typed(t: pt, v: pv) -> ydb::TypedValue {
+            ydb::TypedValue {
                 r#type: Some(ydb::Type {
-                    r#type: Some(ydb::r#type::Type::TypeId(
-                        ydb::r#type::PrimitiveTypeId::Int32.into(),
-                    )),
+                    r#type: Some(ydb::r#type::Type::TypeId(t.into())),
                 }),
                 value: Some(ydb::Value {
-                    value: Some(ydb::value::Value::Int32Value(val)),
+                    value: Some(v),
                     ..ydb::Value::default()
                 }),
-            },
-            _ => panic!("todo"),
+            }
+        }
+
+        match self {
+            Self::NULL => panic!("unimplemented"),
+            Self::INT32(val) => to_typed(pt::Int32, pv::Int32Value(val)),
+            Self::BOOL(val) => to_typed(pt::Bool, pv::BoolValue(val)),
+            Self::UINT32(val) => to_typed(pt::Uint32, pv::Uint32Value(val)),
+            Self::INT64(val) => to_typed(pt::Int64, pv::Int64Value(val)),
+            Self::UINT64(val) => to_typed(pt::Uint64, pv::Uint64Value(val)),
+            Self::FLOAT32(val) => to_typed(pt::Float, pv::FloatValue(val)),
+            Self::FLOAT64(val) => to_typed(pt::Double, pv::DoubleValue(val)),
+            Self::BYTES(val) => to_typed(pt::String, pv::BytesValue(val)),
+            Self::TEXT(val) => to_typed(pt::Utf8, pv::TextValue(val)),
         }
     }
 }
