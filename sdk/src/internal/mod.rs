@@ -1,8 +1,10 @@
 mod client;
 mod discovery;
 mod grpc;
+mod grpc_helper;
 mod middlewares;
 mod query;
 mod session;
+mod test_helpers;
 mod trait_operation;
 mod transaction;

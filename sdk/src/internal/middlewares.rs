@@ -16,12 +16,8 @@ pub(crate) struct AuthService {
 }
 
 impl AuthService {
-    pub fn new(ch: Channel, cred: Box<dyn Credentials>, database: &str) -> Self {
-        return AuthService {
-            ch,
-            cred,
-            database: database.to_string(),
-        };
+    pub fn new(ch: Channel, cred: Box<dyn Credentials>, database: String) -> Self {
+        return AuthService { ch, cred, database };
     }
 }
 

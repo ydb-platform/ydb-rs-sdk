@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_protobuf::generated::ydb::discovery::{
     ListEndpointsRequest, ListEndpointsResult, WhoAmIRequest, WhoAmIResult,
@@ -7,12 +9,11 @@ use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceC
 use crate::errors::Result;
 use crate::internal::discovery::Service;
 use crate::internal::discovery::StaticDiscovery;
-use crate::internal::grpc;
 use crate::internal::grpc::ClientFabric;
+use crate::internal::grpc_helper;
 use crate::internal::middlewares::AuthService;
 use crate::internal::session::{Session, SessionPool};
 use crate::internal::transaction::{AutoCommit, Mode, Transaction};
-use std::sync::Arc;
 
 type Middleware = AuthService;
 
@@ -51,11 +52,11 @@ impl<CF: ClientFabric> Client<CF> {
         self: &Self,
         req: ListEndpointsRequest,
     ) -> Result<ListEndpointsResult> {
-        grpc::grpc_read_result(self.client_discovery()?.list_endpoints(req).await?)
+        grpc_helper::grpc_read_result(self.client_discovery()?.list_endpoints(req).await?)
     }
 
     pub async fn who_am_i(self: Self, req: WhoAmIRequest) -> Result<WhoAmIResult> {
-        grpc::grpc_read_result(self.client_discovery()?.who_am_i(req).await?)
+        grpc_helper::grpc_read_result(self.client_discovery()?.who_am_i(req).await?)
     }
 
     // clients
@@ -67,31 +68,29 @@ impl<CF: ClientFabric> Client<CF> {
 }
 
 mod test {
-    use super::*;
-    use std::sync::Mutex;
+    use std::collections::HashMap;
 
-    use once_cell::sync::Lazy;
-
-    use crate::credentials::CommandLineYcToken;
     use crate::internal::client::Client;
     use crate::internal::grpc::SimpleGrpcClientFabric;
     use crate::internal::query::Query;
     use crate::internal::session::SimpleSessionPool;
+    use crate::internal::test_helpers::{CRED, DATABASE, START_ENDPOINT};
     use crate::types::YdbValue;
-    use std::collections::HashMap;
 
-    static CRED: Lazy<Mutex<CommandLineYcToken>> =
-        Lazy::new(|| Mutex::new(crate::credentials::CommandLineYcToken::new()));
+    use super::*;
 
     fn create_client() -> Result<Client<SimpleGrpcClientFabric>> {
         // let token = crate::credentials::StaticToken::from(std::env::var("IAM_TOKEN")?.as_str());
         // let token = crate::credentials::CommandLineYcToken::new();
-        let database = std::env::var("DB_NAME")?;
+        // let database = std::env::var("DB_NAME")?;
         let credentials = CRED.lock()?.clone();
-        let discovery = StaticDiscovery::from_str(&std::env::var("DB_ENDPOINT")?)?;
+        let discovery = StaticDiscovery::from_str(START_ENDPOINT.as_str())?;
 
-        let grpc_client_fabric =
-            SimpleGrpcClientFabric::new(Box::new(discovery), Box::new(credentials), database);
+        let grpc_client_fabric = SimpleGrpcClientFabric::new(
+            Box::new(discovery),
+            Box::new(credentials),
+            DATABASE.clone(),
+        );
 
         let table_client =
             grpc_client_fabric.create(TableServiceClient::new, Service::TableService)?;

@@ -1,16 +1,19 @@
-use crate::errors::{Error, Result};
-use crate::internal::grpc::{grpc_read_result, grpc_read_void_result};
-use crate::internal::middlewares::AuthService;
-use async_trait::async_trait;
-use derivative::Derivative;
 use std::ops::Deref;
 use std::sync::{Arc, RwLock};
+
+use async_trait::async_trait;
+use derivative::Derivative;
 use tokio::sync::mpsc;
+
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 use ydb_protobuf::generated::ydb::table::{
     CreateSessionRequest, CreateSessionResult, DeleteSessionRequest, ExecuteDataQueryRequest,
     ExecuteQueryResult,
 };
+
+use crate::errors::{Error, Result};
+use crate::internal::grpc_helper::{grpc_read_result, grpc_read_void_result};
+use crate::internal::middlewares::AuthService;
 
 #[derive(Derivative)]
 #[derivative(Debug)]
