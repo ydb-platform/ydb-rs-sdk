@@ -67,6 +67,7 @@ pub(crate) struct TimerDiscovery {
 }
 
 impl TimerDiscovery {
+    #[allow(dead_code)]
     pub(crate) fn new(
         cred: Box<dyn Credentials>,
         database: String,
@@ -81,6 +82,7 @@ impl TimerDiscovery {
         return Ok(TimerDiscovery { state });
     }
 
+    #[allow(dead_code)]
     async fn discovery_now(&self) -> Result<()> {
         return self.state.discovery_now().await;
     }
@@ -236,12 +238,12 @@ mod test {
 
         while cnt < 2 {
             println!("rekby-check");
-            if let mut endpoints = state.endpoints.write()? {
-                if endpoints.get(&Service::Discovery).unwrap().len() > 1 {
-                    endpoints.clone_from(&map);
-                    cnt += 1;
-                }
+            let mut endpoints = state.endpoints.write()?;
+            if endpoints.get(&Service::Discovery).unwrap().len() > 1 {
+                endpoints.clone_from(&map);
+                cnt += 1;
             }
+
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
 
