@@ -1,6 +1,5 @@
 use crate::errors::{Error, Result};
-use std::any::type_name;
-use std::convert::TryFrom;
+use chrono::{Date, NaiveDate, Utc};
 use ydb_protobuf::generated::ydb;
 
 /// Represent value, send or received from ydb
@@ -8,15 +7,32 @@ use ydb_protobuf::generated::ydb;
 #[derive(Debug, PartialEq)]
 pub enum YdbValue {
     NULL,
-    BOOL(bool),
-    INT32(i32),
-    UINT32(u32),
-    INT64(i64),
-    UINT64(u64),
-    FLOAT32(f32),
-    FLOAT64(f64),
-    BYTES(Vec<u8>),
-    TEXT(String),
+    Bool(bool),
+    Int8(i8),
+    Uint8(u8),
+    Int16(i16),
+    Uint16(u16),
+    Int32(i32),
+    Uint32(u32),
+    Int64(i64),
+    Uint64(u64),
+    Float(f32),
+    Double(f64),
+    Date(NaiveDate),
+    DateTime(chrono::NaiveDate),
+    Timestamp(chrono::NaiveDate),
+    Interval(std::time::Duration),
+    TzDate(chrono::Date<Utc>),
+    TzDateTime(chrono::DateTime<Utc>),
+    String(Vec<u8>), // Bytes
+    Utf8(String),
+    Yson(String),
+    Json(String),
+    Uuid(Vec<u8>),
+    JsonDocument(String),
+    DyNumber(Vec<u8>),
+    Decimal(rust_decimal::Decimal),
+    Optional(Option<Box<YdbValue>>),
 }
 
 impl YdbValue {
@@ -27,15 +43,15 @@ impl YdbValue {
         let val = match proto_value.value {
             None => return Err(Error::from("null value in proto value item")),
             Some(val) => match val {
-                BoolValue(val) => YdbValue::BOOL(val),
-                Int32Value(val) => YdbValue::INT32(val),
-                Uint32Value(val) => YdbValue::UINT32(val),
-                Int64Value(val) => YdbValue::INT64(val),
-                Uint64Value(val) => YdbValue::UINT64(val),
-                FloatValue(val) => YdbValue::FLOAT32(val),
-                DoubleValue(val) => YdbValue::FLOAT64(val),
-                BytesValue(val) => YdbValue::BYTES(val),
-                TextValue(val) => YdbValue::TEXT(val),
+                BoolValue(val) => YdbValue::Bool(val),
+                Int32Value(val) => YdbValue::Int32(val),
+                Uint32Value(val) => YdbValue::Uint32(val),
+                Int64Value(val) => YdbValue::Int64(val),
+                Uint64Value(val) => YdbValue::Uint64(val),
+                FloatValue(val) => YdbValue::Float(val),
+                DoubleValue(val) => YdbValue::Double(val),
+                BytesValue(val) => YdbValue::String(val),
+                TextValue(val) => YdbValue::Utf8(val),
                 NullFlagValue(_) => YdbValue::NULL,
                 NestedValue(_) => return Err(Error::from("not implemented read nested")),
                 Low128(_) => return Err(Error::from("not implemented read i128")),
@@ -54,19 +70,19 @@ impl YdbValue {
         {
             match t_val {
                 T::TypeId(t_id) => match P::from_i32(t_id) {
-                    Some(P::Bool) => Self::BOOL(false),
-                    Some(P::String) => Self::BYTES(Vec::default()),
-                    Some(P::Float) => Self::FLOAT32(0.0),
-                    Some(P::Double) => Self::FLOAT64(0.0),
-                    Some(P::Int32) => Self::INT32(0),
-                    Some(P::Int64) => Self::INT64(0),
-                    Some(P::Date) => unimplemented!(),
-                    Some(P::Datetime) => unimplemented!(),
-                    Some(P::Dynumber) => unimplemented!(),
-                    Some(P::Interval) => unimplemented!(),
-                    Some(P::Json) => Self::BYTES(Vec::default()),
-                    Some(P::JsonDocument) => Self::BYTES(Vec::default()),
-                    _ => unimplemented!("{:?}", t_id),
+                    Some(P::Bool) => Self::Bool(false),
+                    Some(P::String) => Self::String(Vec::default()),
+                    Some(P::Float) => Self::Float(0.0),
+                    Some(P::Double) => Self::Double(0.0),
+                    Some(P::Int32) => Self::Int32(0),
+                    Some(P::Int64) => Self::Int64(0),
+                    Some(P::Date) => unimplemented!("{:?} ({})", P::from_i32(t_id), t_id),
+                    Some(P::Datetime) => unimplemented!("{:?} ({})", P::from_i32(t_id), t_id),
+                    Some(P::Dynumber) => unimplemented!("{:?} ({})", P::from_i32(t_id), t_id),
+                    Some(P::Interval) => unimplemented!("{:?} ({})", P::from_i32(t_id), t_id),
+                    Some(P::Json) => Self::String(Vec::default()),
+                    Some(P::JsonDocument) => Self::String(Vec::default()),
+                    _ => unimplemented!("{:?} ({})", P::from_i32(t_id), t_id),
                 },
                 _ => unimplemented!("{:?}", t_val),
                 // think about map to internal types as 1:1
@@ -95,15 +111,15 @@ impl YdbValue {
 
         match self {
             Self::NULL => panic!("unimplemented"),
-            Self::INT32(val) => to_typed(pt::Int32, pv::Int32Value(val)),
-            Self::BOOL(val) => to_typed(pt::Bool, pv::BoolValue(val)),
-            Self::UINT32(val) => to_typed(pt::Uint32, pv::Uint32Value(val)),
-            Self::INT64(val) => to_typed(pt::Int64, pv::Int64Value(val)),
-            Self::UINT64(val) => to_typed(pt::Uint64, pv::Uint64Value(val)),
-            Self::FLOAT32(val) => to_typed(pt::Float, pv::FloatValue(val)),
-            Self::FLOAT64(val) => to_typed(pt::Double, pv::DoubleValue(val)),
-            Self::BYTES(val) => to_typed(pt::String, pv::BytesValue(val)),
-            Self::TEXT(val) => to_typed(pt::Utf8, pv::TextValue(val)),
+            Self::Int32(val) => to_typed(pt::Int32, pv::Int32Value(val)),
+            Self::Bool(val) => to_typed(pt::Bool, pv::BoolValue(val)),
+            Self::Uint32(val) => to_typed(pt::Uint32, pv::Uint32Value(val)),
+            Self::Int64(val) => to_typed(pt::Int64, pv::Int64Value(val)),
+            Self::Uint64(val) => to_typed(pt::Uint64, pv::Uint64Value(val)),
+            Self::Float(val) => to_typed(pt::Float, pv::FloatValue(val)),
+            Self::Double(val) => to_typed(pt::Double, pv::DoubleValue(val)),
+            Self::String(val) => to_typed(pt::String, pv::BytesValue(val)),
+            Self::Utf8(val) => to_typed(pt::Utf8, pv::TextValue(val)),
         }
     }
 }

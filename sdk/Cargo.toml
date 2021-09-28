@@ -9,6 +9,8 @@ edition = "2018"
 
 [dependencies]
 async-trait="0.1"
+chrono="0.4"
+rust_decimal = "1.16"
 derivative="2"
 dyn-clone = "1"
 http = "0.2"
