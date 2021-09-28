@@ -101,6 +101,7 @@ impl QueryResult {
             for proto_column in proto_result_set.columns {
                 result_set.columns.push(crate::types::Column {
                     name: proto_column.name,
+                    v_type: YdbValue::from_proto_type(proto_column.r#type)?,
                 })
             }
 
@@ -110,7 +111,9 @@ impl QueryResult {
                 proto_row.items.reverse();
 
                 let mut row = Vec::with_capacity(result_set.columns.len());
-                for _ in 0..result_set.columns.len() {
+                let mut column_index = result_set.columns.len();
+                while column_index > 0 {
+                    column_index -= 1;
                     if let Some(proto_val) = proto_row.items.pop() {
                         let val = YdbValue::from_proto(proto_val)?;
                         println!("ydb val: {:?}", val);

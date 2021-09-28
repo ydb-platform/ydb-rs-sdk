@@ -1,4 +1,6 @@
 use crate::errors::{Error, Result};
+use std::any::type_name;
+use std::convert::TryFrom;
 use ydb_protobuf::generated::ydb;
 
 /// Represent value, send or received from ydb
@@ -21,6 +23,7 @@ impl YdbValue {
     pub(crate) fn from_proto(proto_value: ydb::Value) -> Result<Self> {
         use ydb_protobuf::generated::ydb::value::Value::*;
         println!("from proto item: {:?}", proto_value);
+
         let val = match proto_value.value {
             None => return Err(Error::from("null value in proto value item")),
             Some(val) => match val {
@@ -39,6 +42,39 @@ impl YdbValue {
             },
         };
         return Ok(val);
+    }
+
+    // return empty value of requested type
+    pub(crate) fn from_proto_type(proto_type: Option<ydb::Type>) -> Result<Self> {
+        use ydb::r#type::PrimitiveTypeId as P;
+        use ydb::r#type::Type as T;
+        let res = if let Some(ydb::Type {
+            r#type: Some(t_val),
+        }) = proto_type
+        {
+            match t_val {
+                T::TypeId(t_id) => match P::from_i32(t_id) {
+                    Some(P::Bool) => Self::BOOL(false),
+                    Some(P::String) => Self::BYTES(Vec::default()),
+                    Some(P::Float) => Self::FLOAT32(0.0),
+                    Some(P::Double) => Self::FLOAT64(0.0),
+                    Some(P::Int32) => Self::INT32(0),
+                    Some(P::Int64) => Self::INT64(0),
+                    Some(P::Date) => unimplemented!(),
+                    Some(P::Datetime) => unimplemented!(),
+                    Some(P::Dynumber) => unimplemented!(),
+                    Some(P::Interval) => unimplemented!(),
+                    Some(P::Json) => Self::BYTES(Vec::default()),
+                    Some(P::JsonDocument) => Self::BYTES(Vec::default()),
+                    _ => unimplemented!("{:?}", t_id),
+                },
+                _ => unimplemented!("{:?}", t_val),
+                // think about map to internal types as 1:1
+            }
+        } else {
+            return Err(Error::Custom("column type is None".into()));
+        };
+        return Ok(res);
     }
 
     pub(crate) fn to_typed_value(self) -> ydb::TypedValue {
@@ -75,4 +111,5 @@ impl YdbValue {
 #[derive(Debug)]
 pub struct Column {
     pub name: String,
+    pub(crate) v_type: YdbValue,
 }
