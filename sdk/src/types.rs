@@ -1,5 +1,5 @@
 use crate::errors::{Error, Result};
-use chrono::{NaiveDate, Utc};
+use chrono::{FixedOffset, NaiveDate};
 use ydb_protobuf::generated::ydb;
 
 /// Represent value, send or received from ydb
@@ -23,8 +23,8 @@ pub enum YdbValue {
     DateTime(chrono::NaiveDate),
     Timestamp(chrono::NaiveDate),
     Interval(std::time::Duration),
-    TzDate(chrono::Date<Utc>),
-    TzDateTime(chrono::DateTime<Utc>),
+    TzDate(chrono::Date<FixedOffset>),
+    TzDateTime(chrono::DateTime<FixedOffset>),
     String(Vec<u8>), // Bytes
     Utf8(String),
     Yson(String),
