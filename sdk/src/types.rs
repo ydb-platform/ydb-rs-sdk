@@ -89,7 +89,7 @@ impl YdbValue {
     }
 
     // return empty value of requested type
-    pub(crate) fn from_proto_type(proto_type: Option<ydb::Type>) -> Result<Self> {
+    pub(crate) fn from_proto_type(proto_type: &Option<ydb::Type>) -> Result<Self> {
         use ydb::r#type::PrimitiveTypeId as P;
         use ydb::r#type::Type as T;
         let res = if let Some(ydb::Type {
@@ -97,20 +97,20 @@ impl YdbValue {
         }) = proto_type
         {
             match t_val {
-                T::TypeId(t_id) => match P::from_i32(t_id) {
+                T::TypeId(t_id) => match P::from_i32(*t_id) {
                     Some(P::Bool) => Self::Bool(false),
                     Some(P::String) => Self::String(Vec::default()),
                     Some(P::Float) => Self::Float(0.0),
                     Some(P::Double) => Self::Double(0.0),
                     Some(P::Int32) => Self::Int32(0),
                     Some(P::Int64) => Self::Int64(0),
-                    Some(P::Date) => unimplemented!("{:?} ({})", P::from_i32(t_id), t_id),
-                    Some(P::Datetime) => unimplemented!("{:?} ({})", P::from_i32(t_id), t_id),
-                    Some(P::Dynumber) => unimplemented!("{:?} ({})", P::from_i32(t_id), t_id),
-                    Some(P::Interval) => unimplemented!("{:?} ({})", P::from_i32(t_id), t_id),
+                    Some(P::Date) => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
+                    Some(P::Datetime) => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
+                    Some(P::Dynumber) => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
+                    Some(P::Interval) => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
                     Some(P::Json) => Self::String(Vec::default()),
                     Some(P::JsonDocument) => Self::String(Vec::default()),
-                    _ => unimplemented!("{:?} ({})", P::from_i32(t_id), t_id),
+                    _ => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
                 },
                 _ => unimplemented!("{:?}", t_val),
                 // think about map to internal types as 1:1

@@ -123,7 +123,7 @@ mod test {
             .await?;
         let res = transaction.query("SELECT 1+1".into()).await?;
         assert_eq!(
-            &YdbValue::Int32(2),
+            YdbValue::Int32(2),
             res.first()
                 .unwrap()
                 .rows()
@@ -144,7 +144,7 @@ mod test {
             .await?;
         let res = transaction.query("SELECT 1+1 as s".into()).await?;
         assert_eq!(
-            &YdbValue::Int32(2),
+            YdbValue::Int32(2),
             res.first()
                 .unwrap()
                 .rows()
@@ -180,7 +180,7 @@ mod test {
             .await?;
         println!("result: {:?}", res);
         assert_eq!(
-            &YdbValue::Int32(6),
+            YdbValue::Int32(6),
             res.first()
                 .unwrap()
                 .rows()

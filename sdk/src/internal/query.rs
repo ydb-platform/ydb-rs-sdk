@@ -2,6 +2,7 @@ use crate::errors::{Error, Result};
 use crate::types::YdbValue;
 use std::collections::HashMap;
 use std::slice::Iter;
+use std::sync::Arc;
 use ydb_protobuf::generated::ydb::table::{ExecuteDataQueryRequest, ExecuteQueryResult};
 
 pub struct Query {
@@ -70,7 +71,6 @@ impl From<String> for Query {
 
 #[derive(Debug)]
 pub struct QueryResult {
-    pub(crate) error: Option<Error>,
     pub(crate) results: Vec<ResultSet>,
 }
 
@@ -80,12 +80,12 @@ impl QueryResult {
         error_on_truncate: bool,
     ) -> Result<Self> {
         println!("proto_res: {:?}", proto_res);
-        let mut res = QueryResult::default();
+        let mut res = QueryResult {
+            results: Vec::new(),
+        };
         res.results.reserve_exact(proto_res.result_sets.len());
-        for proto_result_set in proto_res.result_sets {
-            let mut result_set = ResultSet::default();
-            result_set.truncated = proto_result_set.truncated;
-            if error_on_truncate && result_set.truncated {
+        for current_set in proto_res.result_sets.into_iter() {
+            if error_on_truncate && current_set.truncated {
                 return Err(format!(
                     "got truncated result. result set index: {}",
                     res.results.len()
@@ -93,47 +93,8 @@ impl QueryResult {
                 .as_str()
                 .into());
             }
+            let mut result_set = ResultSet::from_proto(current_set)?;
 
-            result_set
-                .columns
-                .reserve_exact(proto_result_set.columns.len());
-
-            for proto_column in proto_result_set.columns {
-                result_set.columns.push(crate::types::Column {
-                    name: proto_column.name,
-                    v_type: YdbValue::from_proto_type(proto_column.r#type)?,
-                })
-            }
-
-            result_set.rows.reserve_exact(proto_result_set.rows.len());
-            for mut proto_row in proto_result_set.rows {
-                // for pop and consume items in column order
-                proto_row.items.reverse();
-
-                let mut row = Vec::with_capacity(result_set.columns.len());
-                let mut column_index = result_set.columns.len();
-                while column_index > 0 {
-                    column_index -= 1;
-                    if let Some(proto_val) = proto_row.items.pop() {
-                        let val = YdbValue::from_proto(
-                            &result_set.columns[column_index].v_type,
-                            proto_val,
-                        )?;
-                        println!("ydb val: {:?}", val);
-                        row.push(val);
-                    } else {
-                        return Err(format!(
-                            "mismatch items in for with columns count. result set index: {}, row number: {}, need items: {}, has items: {}",
-                            res.results.len(),
-                            result_set.rows.len(),
-                            result_set.columns.len(),
-                            row.len(),
-                        ).as_str()
-                        .into());
-                    };
-                }
-                result_set.rows.push(row);
-            }
             res.results.push(result_set);
         }
         return Ok(res);
@@ -149,20 +110,10 @@ impl QueryResult {
     }
 }
 
-impl Default for QueryResult {
-    fn default() -> Self {
-        return QueryResult {
-            error: None,
-            results: Vec::new(),
-        };
-    }
-}
-
 #[derive(Debug)]
 pub struct ResultSet {
-    pub truncated: bool,
-    pub(crate) columns: Vec<crate::types::Column>,
-    pub(crate) rows: Vec<Vec<crate::types::YdbValue>>,
+    columns: Vec<crate::types::Column>,
+    pb: ydb_protobuf::generated::ydb::ResultSet,
 }
 
 impl ResultSet {
@@ -174,46 +125,51 @@ impl ResultSet {
     pub fn rows(&self) -> ResultSetRowsIter {
         return ResultSetRowsIter {
             columns: &self.columns,
-            row_iter: self.rows.iter(),
+            row_iter: self.pb.rows.iter(),
         };
     }
-}
 
-impl Default for ResultSet {
-    fn default() -> Self {
-        return ResultSet {
-            truncated: false,
-            columns: Vec::new(),
-            rows: Vec::new(),
-        };
+    pub fn truncated(&self) -> bool {
+        self.pb.truncated
+    }
+
+    pub(crate) fn from_proto(pb: ydb_protobuf::generated::ydb::ResultSet) -> Result<Self> {
+        let mut columns = Vec::with_capacity(pb.columns.len());
+        for pb_col in pb.columns.iter() {
+            columns.push(crate::types::Column {
+                name: pb_col.name.clone(),
+                v_type: YdbValue::from_proto_type(&pb_col.r#type)?,
+            })
+        }
+        Ok(Self { columns, pb })
     }
 }
 
 #[derive(Debug)]
 pub struct Row<'a> {
     columns: &'a Vec<crate::types::Column>,
-    fields: &'a Vec<crate::types::YdbValue>,
+    pb: &'a Vec<ydb_protobuf::generated::ydb::Value>,
 }
 
 impl<'a> Row<'a> {
-    pub fn get_field(&self, name: &str) -> Option<&YdbValue> {
+    pub fn get_field(&self, name: &str) -> Result<YdbValue> {
         for (index, column) in self.columns.iter().enumerate() {
             if column.name == name {
-                return self.fields.get(index);
+                return self.get_field_index(index);
             }
         }
 
-        return None;
+        return Err(Error::Custom("field not found".into()));
     }
 
-    pub fn get_field_index(&self, index: usize) -> Option<&YdbValue> {
-        return self.fields.get(index);
+    pub fn get_field_index(&self, index: usize) -> Result<YdbValue> {
+        YdbValue::from_proto(&self.columns[index].v_type, self.pb[index].clone())
     }
 }
 
 pub struct ResultSetRowsIter<'a> {
     columns: &'a Vec<crate::types::Column>,
-    row_iter: Iter<'a, Vec<YdbValue>>,
+    row_iter: Iter<'a, ydb_protobuf::generated::ydb::Value>,
 }
 
 impl<'a> Iterator for ResultSetRowsIter<'a> {
@@ -225,7 +181,7 @@ impl<'a> Iterator for ResultSetRowsIter<'a> {
             Some(row) => {
                 return Some(Row {
                     columns: self.columns,
-                    fields: row,
+                    pb: &row.items,
                 })
             }
         }
