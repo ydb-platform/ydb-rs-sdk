@@ -1,10 +1,11 @@
 use crate::errors::{Error, Result};
-use chrono::{Date, NaiveDate, Utc};
+use chrono::{NaiveDate, Utc};
 use ydb_protobuf::generated::ydb;
 
 /// Represent value, send or received from ydb
 /// That enum will be grow, when add support of new types
 #[derive(Debug, PartialEq)]
+#[allow(dead_code)]
 pub enum YdbValue {
     NULL,
     Bool(bool),
@@ -36,28 +37,55 @@ pub enum YdbValue {
 }
 
 impl YdbValue {
-    pub(crate) fn from_proto(proto_value: ydb::Value) -> Result<Self> {
-        use ydb_protobuf::generated::ydb::value::Value::*;
-        println!("from proto item: {:?}", proto_value);
+    pub(crate) fn from_proto(t: &YdbValue, proto_value: ydb::Value) -> Result<Self> {
+        use ydb_protobuf::generated::ydb::value::Value as pv;
 
-        let val = match proto_value.value {
-            None => return Err(Error::from("null value in proto value item")),
-            Some(val) => match val {
-                BoolValue(val) => YdbValue::Bool(val),
-                Int32Value(val) => YdbValue::Int32(val),
-                Uint32Value(val) => YdbValue::Uint32(val),
-                Int64Value(val) => YdbValue::Int64(val),
-                Uint64Value(val) => YdbValue::Uint64(val),
-                FloatValue(val) => YdbValue::Float(val),
-                DoubleValue(val) => YdbValue::Double(val),
-                BytesValue(val) => YdbValue::String(val),
-                TextValue(val) => YdbValue::Utf8(val),
-                NullFlagValue(_) => YdbValue::NULL,
-                NestedValue(_) => return Err(Error::from("not implemented read nested")),
-                Low128(_) => return Err(Error::from("not implemented read i128")),
-            },
+        #[allow(dead_code)] // compiler bag of warning?
+        fn unsupported() -> Result<YdbValue> {
+            return Err(Error::Custom(
+                "unsupoprted YdbValue and proto_value combinarion".into(),
+            ));
+        }
+
+        let res = match (t, proto_value.value) {
+            (YdbValue::NULL, _) => unimplemented!(),
+            (YdbValue::Bool(_), Some(pv::BoolValue(val))) => YdbValue::Bool(val),
+            (YdbValue::Bool(_), _) => return unsupported(),
+            (YdbValue::Int8(_), _) => unimplemented!(),
+            (YdbValue::Uint8(_), _) => unimplemented!(),
+            (YdbValue::Int16(_), _) => unimplemented!(),
+            (YdbValue::Uint16(_), _) => unimplemented!(),
+            (YdbValue::Int32(_), Some(pv::Int32Value(val))) => YdbValue::Int32(val),
+            (YdbValue::Int32(_), _) => return unsupported(),
+            (YdbValue::Uint32(_), Some(pv::Uint32Value(val))) => YdbValue::Uint32(val),
+            (YdbValue::Uint32(_), _) => return unsupported(),
+            (YdbValue::Int64(_), Some(pv::Int64Value(val))) => YdbValue::Int64(val),
+            (YdbValue::Int64(_), _) => return unsupported(),
+            (YdbValue::Uint64(_), Some(pv::Uint64Value(val))) => YdbValue::Uint64(val),
+            (YdbValue::Uint64(_), _) => return unsupported(),
+            (YdbValue::Float(_), Some(pv::FloatValue(val))) => YdbValue::Float(val),
+            (YdbValue::Float(_), _) => return unsupported(),
+            (YdbValue::Double(_), Some(pv::DoubleValue(val))) => YdbValue::Double(val),
+            (YdbValue::Double(_), _) => return unsupported(),
+            (YdbValue::Date(_), _) => unimplemented!(),
+            (YdbValue::DateTime(_), _) => unimplemented!(),
+            (YdbValue::Timestamp(_), _) => unimplemented!(),
+            (YdbValue::Interval(_), _) => unimplemented!(),
+            (YdbValue::TzDate(_), _) => unimplemented!(),
+            (YdbValue::TzDateTime(_), _) => unimplemented!(),
+            (YdbValue::String(_), Some(pv::BytesValue(val))) => YdbValue::String(val),
+            (YdbValue::String(_), _) => return unsupported(),
+            (YdbValue::Utf8(_), Some(pv::TextValue(val))) => YdbValue::Utf8(val),
+            (YdbValue::Utf8(_), _) => return unsupported(),
+            (YdbValue::Yson(_), _) => unimplemented!(),
+            (YdbValue::Json(_), _) => unimplemented!(),
+            (YdbValue::Uuid(_), _) => unimplemented!(),
+            (YdbValue::JsonDocument(_), _) => unimplemented!(),
+            (YdbValue::DyNumber(_), _) => unimplemented!(),
+            (YdbValue::Decimal(_), _) => unimplemented!(),
+            (YdbValue::Optional(_), _) => unimplemented!(),
         };
-        return Ok(val);
+        return Ok(res);
     }
 
     // return empty value of requested type
@@ -109,17 +137,36 @@ impl YdbValue {
             }
         }
 
+        #[allow(unreachable_patterns)]
         match self {
             Self::NULL => panic!("unimplemented"),
-            Self::Int32(val) => to_typed(pt::Int32, pv::Int32Value(val)),
             Self::Bool(val) => to_typed(pt::Bool, pv::BoolValue(val)),
+            Self::Int8(_) => unimplemented!(),
+            Self::Uint8(_) => unimplemented!(),
+            Self::Int16(_) => unimplemented!(),
+            Self::Uint16(_) => unimplemented!(),
+            Self::Int32(val) => to_typed(pt::Int32, pv::Int32Value(val)),
             Self::Uint32(val) => to_typed(pt::Uint32, pv::Uint32Value(val)),
             Self::Int64(val) => to_typed(pt::Int64, pv::Int64Value(val)),
             Self::Uint64(val) => to_typed(pt::Uint64, pv::Uint64Value(val)),
             Self::Float(val) => to_typed(pt::Float, pv::FloatValue(val)),
             Self::Double(val) => to_typed(pt::Double, pv::DoubleValue(val)),
+            Self::Date(_) => unimplemented!(),
+            Self::DateTime(_) => unimplemented!(),
+            Self::Timestamp(_) => unimplemented!(),
+            Self::Interval(_) => unimplemented!(),
+            Self::TzDate(_) => unimplemented!(),
+            Self::TzDateTime(_) => unimplemented!(),
             Self::String(val) => to_typed(pt::String, pv::BytesValue(val)),
             Self::Utf8(val) => to_typed(pt::Utf8, pv::TextValue(val)),
+            Self::TzDateTime(_) => unimplemented!(),
+            Self::Yson(_) => unimplemented!(),
+            Self::Json(_) => unimplemented!(),
+            Self::Uuid(_) => unimplemented!(),
+            Self::JsonDocument(_) => unimplemented!(),
+            Self::DyNumber(_) => unimplemented!(),
+            Self::Decimal(_) => unimplemented!(),
+            Self::Optional(_) => unimplemented!(),
         }
     }
 }

@@ -115,7 +115,10 @@ impl QueryResult {
                 while column_index > 0 {
                     column_index -= 1;
                     if let Some(proto_val) = proto_row.items.pop() {
-                        let val = YdbValue::from_proto(proto_val)?;
+                        let val = YdbValue::from_proto(
+                            &result_set.columns[column_index].v_type,
+                            proto_val,
+                        )?;
                         println!("ydb val: {:?}", val);
                         row.push(val);
                     } else {
