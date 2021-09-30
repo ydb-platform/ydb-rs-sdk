@@ -121,7 +121,7 @@ mod test {
         let mut transaction = client
             .create_autocommit_transaction(Mode::ReadOnline)
             .await?;
-        let res = transaction.query("SELECT 1+1".into()).await?;
+        let mut res = transaction.query("SELECT 1+1".into()).await?;
         assert_eq!(
             YdbValue::Int32(2),
             res.first()
@@ -129,7 +129,7 @@ mod test {
                 .rows()
                 .next()
                 .unwrap()
-                .get_field_index(0)
+                .remove_field(0)
                 .unwrap()
         );
         println!("result: {:?}", res);
@@ -142,7 +142,7 @@ mod test {
         let mut transaction = client
             .create_autocommit_transaction(Mode::ReadOnline)
             .await?;
-        let res = transaction.query("SELECT 1+1 as s".into()).await?;
+        let mut res = transaction.query("SELECT 1+1 as s".into()).await?;
         assert_eq!(
             YdbValue::Int32(2),
             res.first()
@@ -150,7 +150,7 @@ mod test {
                 .rows()
                 .next()
                 .unwrap()
-                .get_field("s")
+                .remove_field_by_name("s")
                 .unwrap()
         );
         println!("result: {:?}", res);
@@ -165,7 +165,7 @@ mod test {
             .await?;
         let mut params = HashMap::new();
         params.insert("$v".to_string(), YdbValue::Int32(3));
-        let res = transaction
+        let mut res = transaction
             .query(
                 Query::new()
                     .with_query(
@@ -186,7 +186,7 @@ mod test {
                 .rows()
                 .next()
                 .unwrap()
-                .get_field_index(0)
+                .remove_field(0)
                 .unwrap()
         );
         Ok(())

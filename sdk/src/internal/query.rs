@@ -1,8 +1,8 @@
 use crate::errors::{Error, Result};
 use crate::types::YdbValue;
 use std::collections::HashMap;
-use std::slice::Iter;
-use std::sync::Arc;
+use std::rc::Rc;
+use std::vec::IntoIter;
 use ydb_protobuf::generated::ydb::table::{ExecuteDataQueryRequest, ExecuteQueryResult};
 
 pub struct Query {
@@ -71,7 +71,7 @@ impl From<String> for Query {
 
 #[derive(Debug)]
 pub struct QueryResult {
-    pub(crate) results: Vec<ResultSet>,
+    pub(crate) results: Option<Vec<ResultSet>>,
 }
 
 impl QueryResult {
@@ -80,39 +80,44 @@ impl QueryResult {
         error_on_truncate: bool,
     ) -> Result<Self> {
         println!("proto_res: {:?}", proto_res);
-        let mut res = QueryResult {
-            results: Vec::new(),
-        };
-        res.results.reserve_exact(proto_res.result_sets.len());
+        let mut results = Vec::with_capacity(proto_res.result_sets.len());
         for current_set in proto_res.result_sets.into_iter() {
             if error_on_truncate && current_set.truncated {
-                return Err(format!(
-                    "got truncated result. result set index: {}",
-                    res.results.len()
-                )
-                .as_str()
-                .into());
+                return Err(
+                    format!("got truncated result. result set index: {}", results.len())
+                        .as_str()
+                        .into(),
+                );
             }
-            let mut result_set = ResultSet::from_proto(current_set)?;
+            let result_set = ResultSet::from_proto(current_set)?;
 
-            res.results.push(result_set);
+            results.push(result_set);
         }
-        return Ok(res);
+        return Ok(QueryResult {
+            results: Some(results),
+        });
     }
 
-    pub fn first(&self) -> Option<&ResultSet> {
-        self.results.first()
+    pub fn first(&mut self) -> Option<ResultSet> {
+        match self.result_sets() {
+            Some(mut sets) => sets.next(),
+            None => None,
+        }
     }
 
     #[allow(dead_code)]
-    pub fn result_sets(&self) -> Iter<'_, ResultSet> {
-        self.results.iter()
+    pub fn result_sets(&mut self) -> Option<IntoIter<ResultSet>> {
+        match self.results.take() {
+            Some(results) => Some(results.into_iter()),
+            None => None,
+        }
     }
 }
 
 #[derive(Debug)]
 pub struct ResultSet {
     columns: Vec<crate::types::Column>,
+    columns_by_name: HashMap<String, usize>,
     pb: ydb_protobuf::generated::ydb::ResultSet,
 }
 
@@ -122,13 +127,15 @@ impl ResultSet {
         return &self.columns;
     }
 
-    pub fn rows(&self) -> ResultSetRowsIter {
+    pub fn rows(self) -> ResultSetRowsIter {
         return ResultSetRowsIter {
-            columns: &self.columns,
-            row_iter: self.pb.rows.iter(),
+            columns: Rc::new(self.columns),
+            columns_by_name: Rc::new(self.columns_by_name),
+            row_iter: self.pb.rows.into_iter(),
         };
     }
 
+    #[allow(dead_code)]
     pub fn truncated(&self) -> bool {
         self.pb.truncated
     }
@@ -141,47 +148,68 @@ impl ResultSet {
                 v_type: YdbValue::from_proto_type(&pb_col.r#type)?,
             })
         }
-        Ok(Self { columns, pb })
+        let columns_by_name = columns
+            .iter()
+            .enumerate()
+            .map(|(k, v)| (v.name.clone(), k))
+            .collect();
+        Ok(Self {
+            columns,
+            columns_by_name,
+            pb,
+        })
+    }
+}
+
+impl IntoIterator for ResultSet {
+    type Item = Row;
+    type IntoIter = ResultSetRowsIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.rows()
     }
 }
 
 #[derive(Debug)]
-pub struct Row<'a> {
-    columns: &'a Vec<crate::types::Column>,
-    pb: &'a Vec<ydb_protobuf::generated::ydb::Value>,
+pub struct Row {
+    columns: Rc<Vec<crate::types::Column>>,
+    columns_by_name: Rc<HashMap<String, usize>>,
+    pb: HashMap<usize, ydb_protobuf::generated::ydb::Value>,
 }
 
-impl<'a> Row<'a> {
-    pub fn get_field(&self, name: &str) -> Result<YdbValue> {
-        for (index, column) in self.columns.iter().enumerate() {
-            if column.name == name {
-                return self.get_field_index(index);
-            }
+impl Row {
+    pub fn remove_field_by_name(&mut self, name: &str) -> Result<YdbValue> {
+        if let Some(&index) = self.columns_by_name.get(name) {
+            return self.remove_field(index);
         }
-
         return Err(Error::Custom("field not found".into()));
     }
 
-    pub fn get_field_index(&self, index: usize) -> Result<YdbValue> {
-        YdbValue::from_proto(&self.columns[index].v_type, self.pb[index].clone())
+    pub fn remove_field(&mut self, index: usize) -> Result<YdbValue> {
+        match self.pb.remove(&index) {
+            Some(val) => YdbValue::from_proto(&self.columns[index].v_type, val),
+            None => Err(Error::Custom("it has no the field".into())),
+        }
     }
 }
 
-pub struct ResultSetRowsIter<'a> {
-    columns: &'a Vec<crate::types::Column>,
-    row_iter: Iter<'a, ydb_protobuf::generated::ydb::Value>,
+pub struct ResultSetRowsIter {
+    columns: Rc<Vec<crate::types::Column>>,
+    columns_by_name: Rc<HashMap<String, usize>>,
+    row_iter: IntoIter<ydb_protobuf::generated::ydb::Value>,
 }
 
-impl<'a> Iterator for ResultSetRowsIter<'a> {
-    type Item = Row<'a>;
+impl Iterator for ResultSetRowsIter {
+    type Item = Row;
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.row_iter.next() {
             None => None,
             Some(row) => {
                 return Some(Row {
-                    columns: self.columns,
-                    pb: &row.items,
+                    columns: self.columns.clone(),
+                    columns_by_name: self.columns_by_name.clone(),
+                    pb: row.items.into_iter().enumerate().collect(),
                 })
             }
         }
