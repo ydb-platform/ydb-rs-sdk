@@ -5,6 +5,12 @@ pub mod google {
 }
 pub mod ydb {
   include!("ydb.rs");
+  pub mod cms {
+    include!("ydb.cms.rs");
+    pub mod v1 {
+      include!("ydb.cms.v1.rs");
+    }
+  }
   pub mod coordination {
     include!("ydb.coordination.rs");
     pub mod v1 {
@@ -15,12 +21,6 @@ pub mod ydb {
     include!("ydb.discovery.rs");
     pub mod v1 {
       include!("ydb.discovery.v1.rs");
-    }
-  }
-  pub mod experimental {
-    include!("ydb.experimental.rs");
-    pub mod v1 {
-      include!("ydb.experimental.v1.rs");
     }
   }
   pub mod export {
@@ -51,17 +51,6 @@ pub mod ydb {
   }
   pub mod operations {
     include!("ydb.operations.rs");
-  }
-  pub mod pers_queue {
-    pub mod cluster_discovery {
-      include!("ydb.pers_queue.cluster_discovery.rs");
-    }
-    pub mod error_code {
-      include!("ydb.pers_queue.error_code.rs");
-    }
-    pub mod v1 {
-      include!("ydb.pers_queue.v1.rs");
-    }
   }
   pub mod rate_limiter {
     include!("ydb.rate_limiter.rs");
