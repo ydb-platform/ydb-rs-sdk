@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock, Weak};
 use async_trait::async_trait;
 use http::uri::Authority;
 use http::Uri;
-use strum::{Display, EnumString};
+use strum::{Display, EnumIter, EnumString, IntoEnumIterator};
 
 use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_protobuf::generated::ydb::discovery::{
@@ -17,10 +17,12 @@ use ydb_protobuf::generated::ydb::discovery::{
 use crate::credentials::Credentials;
 use crate::errors::{Error, Result};
 use crate::internal::grpc_helper::{create_grpc_client, grpc_read_result};
+use std::iter::FromIterator;
 use std::time::Duration;
+use tokio::sync::watch::Receiver;
 
 #[allow(dead_code)]
-#[derive(Clone, Copy, Display, Debug, EnumString, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Display, Debug, EnumIter, EnumString, Eq, Hash, PartialEq)]
 pub(crate) enum Service {
     #[strum(serialize = "discovery")]
     Discovery,
@@ -38,20 +40,54 @@ pub(crate) enum Service {
     TableService,
 }
 
+#[derive(Clone)]
+pub(crate) struct DiscoveryState {
+    pub timestamp: std::time::Instant,
+    pub services: HashMap<Service, Vec<NodeInfo>>,
+}
+
+impl Default for DiscoveryState {
+    fn default() -> Self {
+        return DiscoveryState {
+            timestamp: std::time::Instant::now(),
+            services: HashMap::new(),
+        };
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct NodeInfo {
+    uri: Uri,
+}
+
 #[async_trait]
 pub(crate) trait Discovery: Send + Sync {
     fn endpoint(self: &Self, service: Service) -> Result<Uri>;
+    fn subscribe(&self) -> tokio::sync::watch::Receiver<DiscoveryState>;
 }
 
 pub(crate) struct StaticDiscovery {
     endpoint: Uri,
+    sender: tokio::sync::watch::Sender<DiscoveryState>,
 }
 
 impl StaticDiscovery {
     pub(crate) fn from_str(endpoint: &str) -> Result<Self> {
-        return Ok(StaticDiscovery {
-            endpoint: Uri::from_str(endpoint)?,
-        });
+        let endpoint = Uri::from_str(endpoint)?;
+        let state = DiscoveryState {
+            timestamp: std::time::Instant::now(),
+            services: HashMap::from_iter(Service::iter().map(|service| {
+                (
+                    service,
+                    vec![NodeInfo {
+                        uri: endpoint.clone(),
+                    }],
+                )
+            })),
+        };
+
+        let (sender, _) = tokio::sync::watch::channel(state);
+        return Ok(StaticDiscovery { endpoint, sender });
     }
 }
 
@@ -60,11 +96,16 @@ impl Discovery for StaticDiscovery {
     fn endpoint(self: &Self, _service: Service) -> Result<Uri> {
         return Ok(self.endpoint.clone());
     }
+
+    fn subscribe(&self) -> Receiver<DiscoveryState> {
+        return self.sender.subscribe();
+    }
 }
 
 #[derive(Clone)]
 pub(crate) struct TimerDiscovery {
     state: Arc<DiscoverySharedState>,
+    sender: Arc<tokio::sync::watch::Sender<DiscoveryState>>,
 }
 
 impl TimerDiscovery {
@@ -80,7 +121,11 @@ impl TimerDiscovery {
         tokio::spawn(async move {
             DiscoverySharedState::background_discovery(state_weak, interval).await;
         });
-        return Ok(TimerDiscovery { state });
+        let (sender, _) = tokio::sync::watch::channel(DiscoveryState::default());
+        return Ok(TimerDiscovery {
+            state,
+            sender: Arc::new(sender),
+        });
     }
 
     #[allow(dead_code)]
@@ -93,28 +138,46 @@ impl Discovery for TimerDiscovery {
     fn endpoint(self: &Self, service: Service) -> Result<Uri> {
         return self.state.endpoint(service);
     }
+
+    fn subscribe(&self) -> Receiver<DiscoveryState> {
+        todo!()
+    }
 }
 
 struct DiscoverySharedState {
     cred: Box<dyn Credentials>,
     database: String,
-    endpoints: RwLock<HashMap<Service, Vec<Uri>>>,
+    discovery_state: RwLock<DiscoveryState>,
+    sender: tokio::sync::watch::Sender<DiscoveryState>,
     next_index_base: AtomicUsize,
 }
 
 impl DiscoverySharedState {
     fn new(cred: Box<dyn Credentials>, database: String, endpoint: &str) -> Result<Self> {
         let mut map = HashMap::new();
-        map.insert(Service::Discovery, vec![http::Uri::from_str(endpoint)?]);
+        map.insert(
+            Service::Discovery,
+            vec![NodeInfo {
+                uri: http::Uri::from_str(endpoint)?,
+            }],
+        );
+        let state = DiscoveryState {
+            timestamp: std::time::Instant::now(),
+            services: map,
+        };
+        let (sender, _) = tokio::sync::watch::channel(state.clone());
+
         return Ok(Self {
             cred,
             database,
-            endpoints: RwLock::new(map),
+            discovery_state: RwLock::new(state),
             next_index_base: AtomicUsize::default(),
+            sender,
         });
     }
 
     async fn discovery_now(&self) -> Result<()> {
+        let start = std::time::Instant::now();
         let endpoint = self.endpoint(Service::Discovery)?;
         let mut discovery_client = create_grpc_client(
             endpoint,
@@ -132,10 +195,15 @@ impl DiscoverySharedState {
 
         let res: ListEndpointsResult = grpc_read_result(resp)?;
         println!("list endpoints: {:?}", res);
-        let new_endpoints = Self::list_endpoints_to_hashmap(res)?;
-
-        let mut self_map = self.endpoints.write()?;
-        self_map.clone_from(&new_endpoints);
+        let new_endpoints = Self::list_endpoints_to_services_map(res)?;
+        let new_state = DiscoveryState {
+            timestamp: start,
+            services: new_endpoints,
+        };
+        let mut self_map = self.discovery_state.write()?;
+        self_map.clone_from(&new_state);
+        drop(self_map);
+        let _ = self.sender.send(new_state);
 
         return Ok(());
     }
@@ -151,9 +219,9 @@ impl DiscoverySharedState {
         println!("stop background_discovery");
     }
 
-    fn list_endpoints_to_hashmap(
+    fn list_endpoints_to_services_map(
         mut list: ListEndpointsResult,
-    ) -> Result<HashMap<Service, Vec<Uri>>> {
+    ) -> Result<HashMap<Service, Vec<NodeInfo>>> {
         let mut map = HashMap::new();
 
         while let Some(mut endpoint_info) = list.endpoints.pop() {
@@ -172,7 +240,7 @@ impl DiscoverySharedState {
                     map.insert(service, Vec::new());
                     map.get_mut(&service).unwrap()
                 };
-                vec.push(uri.clone());
+                vec.push(NodeInfo { uri: uri.clone() });
             }
         }
 
@@ -197,9 +265,9 @@ impl Discovery for DiscoverySharedState {
     fn endpoint(self: &Self, service: Service) -> Result<Uri> {
         let base_index = self.next_index_base.fetch_add(1, Relaxed);
 
-        let map = self.endpoints.read()?;
-        let endpoints = map.get(&service);
-        let endpoints = match endpoints {
+        let map = self.discovery_state.read()?;
+        let nodes_info = map.services.get(&service);
+        let nodes_info = match nodes_info {
             Some(endpoints) => endpoints,
             None => {
                 return Err(Error::from(
@@ -207,14 +275,18 @@ impl Discovery for DiscoverySharedState {
                 ))
             }
         };
-        return Ok(endpoints[base_index % endpoints.len()].clone());
+        return Ok(nodes_info[base_index % nodes_info.len()].uri.clone());
+    }
+
+    fn subscribe(&self) -> Receiver<DiscoveryState> {
+        return self.sender.subscribe();
     }
 }
 
 #[cfg(test)]
 mod test {
     use crate::errors::Result;
-    use crate::internal::discovery::{DiscoverySharedState, Service};
+    use crate::internal::discovery::DiscoverySharedState;
     use crate::internal::test_helpers::{CRED, DATABASE, START_ENDPOINT};
     use std::sync::Arc;
     use std::time::Duration;
@@ -227,31 +299,21 @@ mod test {
             START_ENDPOINT.as_str(),
         )?;
 
-        let map = discovery_shared.endpoints.read()?.clone();
-
         let state = Arc::new(discovery_shared);
+        let mut rx = state.sender.subscribe();
+        // skip initial value
+        rx.borrow_and_update();
+
         let state_weak = Arc::downgrade(&state);
         tokio::spawn(async {
             DiscoverySharedState::background_discovery(state_weak, Duration::from_millis(50)).await;
         });
-        // return Ok(());
 
-        let mut cnt = 0;
-
-        while cnt < 2 {
-            println!("rekby-check");
-            let mut endpoints = state.endpoints.write()?;
-            if endpoints.get(&Service::Discovery).unwrap().len() > 1 {
-                endpoints.clone_from(&map);
-                cnt += 1;
-            }
-            drop(endpoints);
-
-            tokio::time::sleep(Duration::from_millis(50)).await;
+        // wait two updates
+        for _ in 0..2 {
+            rx.changed().await.unwrap();
+            assert!(rx.borrow().services.len() > 1);
         }
-
-        drop(state);
-        tokio::time::sleep(Duration::from_millis(1000)).await;
 
         return Ok(());
     }
