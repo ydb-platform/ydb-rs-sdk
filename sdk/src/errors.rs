@@ -6,7 +6,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug)]
 pub enum Error {
     Custom(String),
-    YdbStatus(ydb_protobuf::generated::ydb::status_ids::StatusCode),
+    YdbOperation(String),
 }
 
 impl Error {
@@ -90,8 +90,8 @@ impl From<tonic::Status> for Error {
     }
 }
 
-impl From<ydb_protobuf::generated::ydb::status_ids::StatusCode> for Error {
-    fn from(e: ydb_protobuf::generated::ydb::status_ids::StatusCode) -> Self {
-        return Error::YdbStatus(e);
+impl From<ydb_protobuf::generated::ydb::operations::Operation> for Error {
+    fn from(op: ydb_protobuf::generated::ydb::operations::Operation) -> Self {
+        return Error::YdbOperation(format!("{:?}", op));
     }
 }

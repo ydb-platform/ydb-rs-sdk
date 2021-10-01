@@ -67,6 +67,7 @@ impl<CF: ClientFabric> Client<CF> {
     }
 }
 
+#[cfg(test)]
 mod test {
     use std::collections::HashMap;
 
@@ -78,6 +79,7 @@ mod test {
     use crate::types::YdbValue;
 
     use super::*;
+    use std::iter::FromIterator;
 
     fn create_client() -> Result<Client<SimpleGrpcClientFabric>> {
         // let token = crate::credentials::StaticToken::from(std::env::var("IAM_TOKEN")?.as_str());
@@ -189,6 +191,39 @@ mod test {
                 .remove_field(0)
                 .unwrap()
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn select_list() -> Result<()> {
+        let client = create_client()?;
+        let mut transaction = client
+            .create_autocommit_transaction(Mode::ReadOnline)
+            .await?;
+        let res = transaction
+            .query(
+                Query::new()
+                    .with_query(
+                        "
+DECLARE $l AS List<Int32>;
+
+SELECT $l AS l;
+"
+                        .into(),
+                    )
+                    .with_params(HashMap::from_iter([(
+                        "$l".into(),
+                        YdbValue::List(Vec::from([
+                            YdbValue::Int32(1),
+                            YdbValue::Int32(2),
+                            YdbValue::Int32(3),
+                        ])),
+                    )])),
+            )
+            .await?;
+        println!("{:?}", res);
+        let res = res.results.unwrap().into_iter().next().unwrap();
+        assert_eq!(1, res.columns().len());
         Ok(())
     }
 

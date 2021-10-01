@@ -52,7 +52,7 @@ where
         .operation()
         .ok_or(Error::Custom("no operation object in result".into()))?;
     if op.status() != StatusCode::Success {
-        return Err(Error::from(op.status()));
+        return Err(Error::from(op));
     }
     let opres = op
         .result
@@ -70,7 +70,7 @@ where
         .operation()
         .ok_or(Error::Custom("no operation object in result".into()))?;
     if op.status() != StatusCode::Success {
-        return Err(Error::from(op.status()));
+        return Err(Error::from(op));
     }
     return Ok(());
 }

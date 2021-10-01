@@ -19,20 +19,21 @@ use crate::errors::{Error, Result};
 use crate::internal::grpc_helper::{create_grpc_client, grpc_read_result};
 use std::time::Duration;
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Display, Debug, EnumString, Eq, Hash, PartialEq)]
 pub(crate) enum Service {
     #[strum(serialize = "discovery")]
     Discovery,
 
-    // #[strum(serialize = "export")]
-    // Export,
-    //
-    // #[strum(serialize = "import")]
-    // Import,
-    //
-    // #[strum(serialize = "scripting")]
-    // Scripting,
-    //
+    #[strum(serialize = "export")]
+    Export,
+
+    #[strum(serialize = "import")]
+    Import,
+
+    #[strum(serialize = "scripting")]
+    Scripting,
+
     #[strum(serialize = "table_service")]
     TableService,
 }

@@ -1,5 +1,6 @@
 use crate::errors::{Error, Result};
 use chrono::{FixedOffset, NaiveDate};
+use std::ops::Deref;
 use ydb_protobuf::generated::ydb;
 
 /// Represent value, send or received from ydb
@@ -34,6 +35,8 @@ pub enum YdbValue {
     DyNumber(Vec<u8>),
     Decimal(rust_decimal::Decimal),
     Optional(Option<Box<YdbValue>>),
+
+    List(Vec<YdbValue>),
 }
 
 impl YdbValue {
@@ -47,25 +50,67 @@ impl YdbValue {
             ));
         }
 
-        let res = match (t, proto_value.value) {
+        let res = match (t, proto_value) {
             (YdbValue::NULL, _) => unimplemented!(),
-            (YdbValue::Bool(_), Some(pv::BoolValue(val))) => YdbValue::Bool(val),
+            (
+                YdbValue::Bool(_),
+                ydb::Value {
+                    value: Some(pv::BoolValue(val)),
+                    ..
+                },
+            ) => YdbValue::Bool(val),
             (YdbValue::Bool(_), _) => return unsupported(),
             (YdbValue::Int8(_), _) => unimplemented!(),
             (YdbValue::Uint8(_), _) => unimplemented!(),
             (YdbValue::Int16(_), _) => unimplemented!(),
             (YdbValue::Uint16(_), _) => unimplemented!(),
-            (YdbValue::Int32(_), Some(pv::Int32Value(val))) => YdbValue::Int32(val),
+            (
+                YdbValue::Int32(_),
+                ydb::Value {
+                    value: Some(pv::Int32Value(val)),
+                    ..
+                },
+            ) => YdbValue::Int32(val),
             (YdbValue::Int32(_), _) => return unsupported(),
-            (YdbValue::Uint32(_), Some(pv::Uint32Value(val))) => YdbValue::Uint32(val),
+            (
+                YdbValue::Uint32(_),
+                ydb::Value {
+                    value: Some(pv::Uint32Value(val)),
+                    ..
+                },
+            ) => YdbValue::Uint32(val),
             (YdbValue::Uint32(_), _) => return unsupported(),
-            (YdbValue::Int64(_), Some(pv::Int64Value(val))) => YdbValue::Int64(val),
+            (
+                YdbValue::Int64(_),
+                ydb::Value {
+                    value: Some(pv::Int64Value(val)),
+                    ..
+                },
+            ) => YdbValue::Int64(val),
             (YdbValue::Int64(_), _) => return unsupported(),
-            (YdbValue::Uint64(_), Some(pv::Uint64Value(val))) => YdbValue::Uint64(val),
+            (
+                YdbValue::Uint64(_),
+                ydb::Value {
+                    value: Some(pv::Uint64Value(val)),
+                    ..
+                },
+            ) => YdbValue::Uint64(val),
             (YdbValue::Uint64(_), _) => return unsupported(),
-            (YdbValue::Float(_), Some(pv::FloatValue(val))) => YdbValue::Float(val),
+            (
+                YdbValue::Float(_),
+                ydb::Value {
+                    value: Some(pv::FloatValue(val)),
+                    ..
+                },
+            ) => YdbValue::Float(val),
             (YdbValue::Float(_), _) => return unsupported(),
-            (YdbValue::Double(_), Some(pv::DoubleValue(val))) => YdbValue::Double(val),
+            (
+                YdbValue::Double(_),
+                ydb::Value {
+                    value: Some(pv::DoubleValue(val)),
+                    ..
+                },
+            ) => YdbValue::Double(val),
             (YdbValue::Double(_), _) => return unsupported(),
             (YdbValue::Date(_), _) => unimplemented!(),
             (YdbValue::DateTime(_), _) => unimplemented!(),
@@ -73,9 +118,21 @@ impl YdbValue {
             (YdbValue::Interval(_), _) => unimplemented!(),
             (YdbValue::TzDate(_), _) => unimplemented!(),
             (YdbValue::TzDateTime(_), _) => unimplemented!(),
-            (YdbValue::String(_), Some(pv::BytesValue(val))) => YdbValue::String(val),
+            (
+                YdbValue::String(_),
+                ydb::Value {
+                    value: Some(pv::BytesValue(val)),
+                    ..
+                },
+            ) => YdbValue::String(val),
             (YdbValue::String(_), _) => return unsupported(),
-            (YdbValue::Utf8(_), Some(pv::TextValue(val))) => YdbValue::Utf8(val),
+            (
+                YdbValue::Utf8(_),
+                ydb::Value {
+                    value: Some(pv::TextValue(val)),
+                    ..
+                },
+            ) => YdbValue::Utf8(val),
             (YdbValue::Utf8(_), _) => return unsupported(),
             (YdbValue::Yson(_), _) => unimplemented!(),
             (YdbValue::Json(_), _) => unimplemented!(),
@@ -84,6 +141,15 @@ impl YdbValue {
             (YdbValue::DyNumber(_), _) => unimplemented!(),
             (YdbValue::Decimal(_), _) => unimplemented!(),
             (YdbValue::Optional(_), _) => unimplemented!(),
+            (YdbValue::List(item_type_vec), ydb::Value { items, .. }) => {
+                let items_type = &item_type_vec[0];
+                let mut values = Vec::with_capacity(items.len());
+                items.into_iter().try_for_each(|item| {
+                    values.push(Self::from_proto(items_type, item)?);
+                    Result::<()>::Ok(())
+                })?;
+                YdbValue::List(values)
+            }
         };
         return Ok(res);
     }
@@ -112,6 +178,14 @@ impl YdbValue {
                     Some(P::JsonDocument) => Self::String(Vec::default()),
                     _ => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
                 },
+                T::ListType(oblt) => {
+                    let item = if let Some(blt) = &oblt.item {
+                        Self::from_proto_type(&Some(blt.deref().clone()))?
+                    } else {
+                        unimplemented!()
+                    };
+                    Self::List(Vec::from([item]))
+                }
                 _ => unimplemented!("{:?}", t_val),
                 // think about map to internal types as 1:1
             }
@@ -125,7 +199,7 @@ impl YdbValue {
         use ydb::r#type::PrimitiveTypeId as pt;
         use ydb::value::Value as pv;
 
-        fn to_typed(t: pt, v: pv) -> ydb::TypedValue {
+        fn proto_typed_value(t: pt, v: pv) -> ydb::TypedValue {
             ydb::TypedValue {
                 r#type: Some(ydb::Type {
                     r#type: Some(ydb::r#type::Type::TypeId(t.into())),
@@ -140,25 +214,25 @@ impl YdbValue {
         #[allow(unreachable_patterns)]
         match self {
             Self::NULL => panic!("unimplemented"),
-            Self::Bool(val) => to_typed(pt::Bool, pv::BoolValue(val)),
+            Self::Bool(val) => proto_typed_value(pt::Bool, pv::BoolValue(val)),
             Self::Int8(_) => unimplemented!(),
             Self::Uint8(_) => unimplemented!(),
             Self::Int16(_) => unimplemented!(),
             Self::Uint16(_) => unimplemented!(),
-            Self::Int32(val) => to_typed(pt::Int32, pv::Int32Value(val)),
-            Self::Uint32(val) => to_typed(pt::Uint32, pv::Uint32Value(val)),
-            Self::Int64(val) => to_typed(pt::Int64, pv::Int64Value(val)),
-            Self::Uint64(val) => to_typed(pt::Uint64, pv::Uint64Value(val)),
-            Self::Float(val) => to_typed(pt::Float, pv::FloatValue(val)),
-            Self::Double(val) => to_typed(pt::Double, pv::DoubleValue(val)),
+            Self::Int32(val) => proto_typed_value(pt::Int32, pv::Int32Value(val)),
+            Self::Uint32(val) => proto_typed_value(pt::Uint32, pv::Uint32Value(val)),
+            Self::Int64(val) => proto_typed_value(pt::Int64, pv::Int64Value(val)),
+            Self::Uint64(val) => proto_typed_value(pt::Uint64, pv::Uint64Value(val)),
+            Self::Float(val) => proto_typed_value(pt::Float, pv::FloatValue(val)),
+            Self::Double(val) => proto_typed_value(pt::Double, pv::DoubleValue(val)),
             Self::Date(_) => unimplemented!(),
             Self::DateTime(_) => unimplemented!(),
             Self::Timestamp(_) => unimplemented!(),
             Self::Interval(_) => unimplemented!(),
             Self::TzDate(_) => unimplemented!(),
             Self::TzDateTime(_) => unimplemented!(),
-            Self::String(val) => to_typed(pt::String, pv::BytesValue(val)),
-            Self::Utf8(val) => to_typed(pt::Utf8, pv::TextValue(val)),
+            Self::String(val) => proto_typed_value(pt::String, pv::BytesValue(val)),
+            Self::Utf8(val) => proto_typed_value(pt::Utf8, pv::TextValue(val)),
             Self::TzDateTime(_) => unimplemented!(),
             Self::Yson(_) => unimplemented!(),
             Self::Json(_) => unimplemented!(),
@@ -167,6 +241,31 @@ impl YdbValue {
             Self::DyNumber(_) => unimplemented!(),
             Self::Decimal(_) => unimplemented!(),
             Self::Optional(_) => unimplemented!(),
+            Self::List(items) => Self::to_typed_value_list(items),
+        }
+    }
+
+    fn to_typed_value_list(items: Vec<YdbValue>) -> ydb::TypedValue {
+        let proto_items: Vec<ydb::TypedValue> = items
+            .into_iter()
+            .map(|item| item.to_typed_value())
+            .collect();
+        if proto_items.len() == 0 {
+            unimplemented!()
+        };
+        ydb::TypedValue {
+            r#type: Some(ydb::Type {
+                r#type: Some(ydb::r#type::Type::ListType(Box::new(ydb::ListType {
+                    item: Some(Box::new(proto_items[0].r#type.clone().unwrap())),
+                }))),
+            }),
+            value: Some(ydb::Value {
+                items: proto_items
+                    .into_iter()
+                    .map(|item| item.value.unwrap())
+                    .collect(),
+                ..ydb::Value::default()
+            }),
         }
     }
 }
