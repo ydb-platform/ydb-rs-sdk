@@ -210,6 +210,7 @@ impl Discovery for DiscoverySharedState {
     }
 }
 
+#[cfg(test)]
 mod test {
     use crate::errors::Result;
     use crate::internal::discovery::{DiscoverySharedState, Service};
@@ -243,6 +244,7 @@ mod test {
                 endpoints.clone_from(&map);
                 cnt += 1;
             }
+            drop(endpoints);
 
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
