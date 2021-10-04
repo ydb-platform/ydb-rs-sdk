@@ -2,6 +2,7 @@ mod client;
 mod discovery;
 mod grpc;
 mod grpc_helper;
+mod load_balancer;
 mod middlewares;
 mod query;
 mod session;

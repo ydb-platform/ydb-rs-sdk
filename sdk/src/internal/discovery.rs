@@ -37,7 +37,7 @@ pub(crate) enum Service {
     Scripting,
 
     #[strum(serialize = "table_service")]
-    TableService,
+    Table,
 }
 
 #[derive(Clone)]
@@ -57,18 +57,18 @@ impl Default for DiscoveryState {
 
 #[derive(Clone)]
 pub(crate) struct NodeInfo {
-    uri: Uri,
+    pub(crate) uri: Uri,
 }
 
 #[async_trait]
 pub(crate) trait Discovery: Send + Sync {
     fn endpoint(self: &Self, service: Service) -> Result<Uri>;
-    fn subscribe(&self) -> tokio::sync::watch::Receiver<DiscoveryState>;
+    fn subscribe(&self) -> tokio::sync::watch::Receiver<Arc<DiscoveryState>>;
 }
 
 pub(crate) struct StaticDiscovery {
     endpoint: Uri,
-    sender: tokio::sync::watch::Sender<DiscoveryState>,
+    sender: tokio::sync::watch::Sender<Arc<DiscoveryState>>,
 }
 
 impl StaticDiscovery {
@@ -86,7 +86,7 @@ impl StaticDiscovery {
             })),
         };
 
-        let (sender, _) = tokio::sync::watch::channel(state);
+        let (sender, _) = tokio::sync::watch::channel(Arc::new(state));
         return Ok(StaticDiscovery { endpoint, sender });
     }
 }
@@ -97,7 +97,7 @@ impl Discovery for StaticDiscovery {
         return Ok(self.endpoint.clone());
     }
 
-    fn subscribe(&self) -> Receiver<DiscoveryState> {
+    fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
         return self.sender.subscribe();
     }
 }
@@ -139,7 +139,7 @@ impl Discovery for TimerDiscovery {
         return self.state.endpoint(service);
     }
 
-    fn subscribe(&self) -> Receiver<DiscoveryState> {
+    fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
         todo!()
     }
 }
@@ -147,8 +147,8 @@ impl Discovery for TimerDiscovery {
 struct DiscoverySharedState {
     cred: Box<dyn Credentials>,
     database: String,
-    discovery_state: RwLock<DiscoveryState>,
-    sender: tokio::sync::watch::Sender<DiscoveryState>,
+    discovery_state: RwLock<Arc<DiscoveryState>>,
+    sender: tokio::sync::watch::Sender<Arc<DiscoveryState>>,
     next_index_base: AtomicUsize,
 }
 
@@ -161,10 +161,10 @@ impl DiscoverySharedState {
                 uri: http::Uri::from_str(endpoint)?,
             }],
         );
-        let state = DiscoveryState {
+        let state = Arc::new(DiscoveryState {
             timestamp: std::time::Instant::now(),
             services: map,
-        };
+        });
         let (sender, _) = tokio::sync::watch::channel(state.clone());
 
         return Ok(Self {
@@ -196,12 +196,12 @@ impl DiscoverySharedState {
         let res: ListEndpointsResult = grpc_read_result(resp)?;
         println!("list endpoints: {:?}", res);
         let new_endpoints = Self::list_endpoints_to_services_map(res)?;
-        let new_state = DiscoveryState {
+        let new_state = Arc::new(DiscoveryState {
             timestamp: start,
             services: new_endpoints,
-        };
+        });
         let mut self_map = self.discovery_state.write()?;
-        self_map.clone_from(&new_state);
+        *self_map = new_state.clone();
         drop(self_map);
         let _ = self.sender.send(new_state);
 
@@ -278,7 +278,7 @@ impl Discovery for DiscoverySharedState {
         return Ok(nodes_info[base_index % nodes_info.len()].uri.clone());
     }
 
-    fn subscribe(&self) -> Receiver<DiscoveryState> {
+    fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
         return self.sender.subscribe();
     }
 }

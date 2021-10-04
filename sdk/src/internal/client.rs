@@ -94,8 +94,7 @@ mod test {
             DATABASE.clone(),
         );
 
-        let table_client =
-            grpc_client_fabric.create(TableServiceClient::new, Service::TableService)?;
+        let table_client = grpc_client_fabric.create(TableServiceClient::new, Service::Table)?;
         let session_pool = SimpleSessionPool::new(table_client);
 
         return Client::new(grpc_client_fabric, Box::new(session_pool));
