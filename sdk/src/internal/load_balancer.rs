@@ -5,6 +5,7 @@ use mockall;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, RwLock};
+use tokio::sync::watch::Receiver;
 
 #[mockall::automock]
 pub(crate) trait LoadBalancer {
@@ -90,6 +91,17 @@ impl LoadBalancer for RoundRobin {
     }
 }
 
+pub(crate) async fn update_load_balancer(
+    mut lb: impl LoadBalancer,
+    mut receiver: Receiver<Arc<DiscoveryState>>,
+) {
+    while receiver.changed().await.is_ok() {
+        // clone for prevent block send side while update current lb
+        let state = receiver.borrow_and_update().clone();
+        lb.set_discovery_state(&state);
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -116,6 +128,12 @@ mod test {
         assert_eq!(test_uri, s1.endpoint(Table)?);
         assert_eq!(test_uri, s2.endpoint(Table)?);
         assert_eq!(endpoint_counter.load(Relaxed), 2);
+        return UNIT_OK;
+    }
+
+    #[tokio::test]
+    async fn update_load_balancer() -> UnitResult {
+        unimplemented!();
         return UNIT_OK;
     }
 }
