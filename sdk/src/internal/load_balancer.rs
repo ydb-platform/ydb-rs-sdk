@@ -1,10 +1,12 @@
 use crate::errors::*;
 use crate::internal::discovery::{DiscoveryState, Service};
 use http::Uri;
+use mockall;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, RwLock};
 
+#[mockall::automock]
 pub(crate) trait LoadBalancer {
     fn endpoint(&self, service: Service) -> Result<Uri>;
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> Result<()>;
@@ -91,6 +93,7 @@ impl LoadBalancer for RoundRobin {
 mod test {
     use super::*;
     use crate::internal::discovery::Service::Table;
+    use mockall::predicate;
     use std::ops::Deref;
     use std::str::FromStr;
 
@@ -126,15 +129,24 @@ mod test {
 
     #[test]
     fn shared_load_balancer() -> UnitResult {
+        let endpoint_counter = Arc::new(AtomicUsize::new(0));
         let test_uri = Uri::from_str("http://test.com")?;
 
-        let s1 = SharedLoadBalancer::new(Box::new(MockBalancer::new(
-            test_uri.clone(),
-            DiscoveryState::default(),
-        )));
+        let mut lbMock = MockLoadBalancer::new();
+        let endpoint_counter_mock = endpoint_counter.clone();
+        let test_uri_mock = test_uri.clone();
+
+        lbMock.expect_endpoint().returning(move |_service| {
+            endpoint_counter_mock.fetch_add(1, Relaxed);
+            return Ok(test_uri_mock.clone());
+        });
+
+        let s1 = SharedLoadBalancer::new(Box::new(lbMock));
         let s2 = s1.clone();
 
         assert_eq!(test_uri, s1.endpoint(Table)?);
+        assert_eq!(test_uri, s2.endpoint(Table)?);
+        assert_eq!(endpoint_counter.load(Relaxed), 2);
         return UNIT_OK;
     }
 }
