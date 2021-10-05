@@ -40,6 +40,7 @@ pub(crate) struct StaticLoadBalancer {
 }
 
 impl StaticLoadBalancer {
+    #[allow(dead_code)]
     pub(crate) fn new(endpoint: Uri) -> Self {
         return Self { endpoint };
     }
@@ -93,55 +94,23 @@ impl LoadBalancer for RoundRobin {
 mod test {
     use super::*;
     use crate::internal::discovery::Service::Table;
-    use mockall::predicate;
-    use std::ops::Deref;
     use std::str::FromStr;
-
-    struct MockBalancer {
-        endpoint: Uri,
-        endpoint_counter: AtomicUsize,
-        set_updates_counter: AtomicUsize,
-        last_state: Arc<DiscoveryState>,
-    }
-
-    impl MockBalancer {
-        pub fn new(endpoint: Uri, state: DiscoveryState) -> Self {
-            return Self {
-                endpoint,
-                endpoint_counter: Default::default(),
-                set_updates_counter: Default::default(),
-                last_state: Arc::new(state),
-            };
-        }
-    }
-
-    impl LoadBalancer for MockBalancer {
-        fn endpoint(&self, service: Service) -> Result<Uri> {
-            self.endpoint_counter.fetch_add(1, Relaxed);
-            return Ok(self.endpoint.clone());
-        }
-
-        fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> Result<()> {
-            self.last_state = discovery_state.clone();
-            return UNIT_OK;
-        }
-    }
 
     #[test]
     fn shared_load_balancer() -> UnitResult {
         let endpoint_counter = Arc::new(AtomicUsize::new(0));
         let test_uri = Uri::from_str("http://test.com")?;
 
-        let mut lbMock = MockLoadBalancer::new();
+        let mut lb_mock = MockLoadBalancer::new();
         let endpoint_counter_mock = endpoint_counter.clone();
         let test_uri_mock = test_uri.clone();
 
-        lbMock.expect_endpoint().returning(move |_service| {
+        lb_mock.expect_endpoint().returning(move |_service| {
             endpoint_counter_mock.fetch_add(1, Relaxed);
             return Ok(test_uri_mock.clone());
         });
 
-        let s1 = SharedLoadBalancer::new(Box::new(lbMock));
+        let s1 = SharedLoadBalancer::new(Box::new(lb_mock));
         let s2 = s1.clone();
 
         assert_eq!(test_uri, s1.endpoint(Table)?);
