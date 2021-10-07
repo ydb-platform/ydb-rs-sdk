@@ -112,6 +112,7 @@ mod test {
     use crate::internal::discovery::Service::Table;
     use mockall::predicate;
     use std::str::FromStr;
+    use std::time::Duration;
 
     #[test]
     fn shared_load_balancer() -> UnitResult {
@@ -190,7 +191,13 @@ mod test {
             drop(sender);
         });
 
-        updater_finished_receiver.await.unwrap();
+        tokio::select! {
+            _ = updater_finished_receiver =>{}
+            _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                panic!("test failed");
+            }
+        }
+        // updater_finished_receiver.await.unwrap();
         return UNIT_OK;
     }
 }
