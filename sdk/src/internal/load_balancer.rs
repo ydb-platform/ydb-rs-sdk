@@ -8,7 +8,7 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::watch::Receiver;
 
 #[mockall::automock]
-pub(crate) trait LoadBalancer {
+pub(crate) trait LoadBalancer: Send + Sync {
     fn endpoint(&self, service: Service) -> Result<Uri>;
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> Result<()>;
 }
@@ -95,10 +95,13 @@ pub(crate) async fn update_load_balancer(
     mut lb: impl LoadBalancer,
     mut receiver: Receiver<Arc<DiscoveryState>>,
 ) {
-    while receiver.changed().await.is_ok() {
+    loop {
         // clone for prevent block send side while update current lb
         let state = receiver.borrow_and_update().clone();
-        lb.set_discovery_state(&state);
+        let _ = lb.set_discovery_state(&state);
+        if receiver.changed().await.is_err() {
+            break;
+        }
     }
 }
 
@@ -136,28 +139,58 @@ mod test {
     #[tokio::test]
     async fn update_load_balancer_test() -> UnitResult {
         let original_discovery_state = Arc::new(DiscoveryState::default());
-        let (mut sender, receiver) = tokio::sync::watch::channel(original_discovery_state.clone());
+        let (sender, receiver) = tokio::sync::watch::channel(original_discovery_state.clone());
 
         let new_discovery_state = Arc::new(DiscoveryState::default().with_node_info(
             Table,
             NodeInfo::new(Uri::from_str("http://test.com").unwrap()),
         ));
 
+        let (first_update_sender, first_update_receiver) = tokio::sync::oneshot::channel();
+        let (second_update_sender, second_update_receiver) = tokio::sync::oneshot::channel();
+        let (updater_finished_sender, updater_finished_receiver) =
+            tokio::sync::oneshot::channel::<()>();
+
+        let mut first_update_sender = Some(first_update_sender);
+        let mut second_update_sender = Some(second_update_sender);
         let mut lb_mock = MockLoadBalancer::new();
         lb_mock
             .expect_set_discovery_state()
             .with(predicate::eq(original_discovery_state.clone()))
             .times(1)
-            .returning(move |new_state: &Arc<DiscoveryState>| UNIT_OK);
+            .returning(move |_| {
+                println!("first set");
+                first_update_sender.take().unwrap().send(()).unwrap();
+                return UNIT_OK;
+            });
+
         lb_mock
             .expect_set_discovery_state()
             .with(predicate::eq(new_discovery_state.clone()))
             .times(1)
-            .returning(move |new_state: &Arc<DiscoveryState>| UNIT_OK);
+            .returning(move |_| {
+                println!("second set");
+                second_update_sender.take().unwrap().send(()).unwrap();
+                return UNIT_OK;
+            });
 
-        let mut shared_lb = SharedLoadBalancer::new(lb_mock);
-        tokio::spawn(async { update_load_balancer(shared_lb, receiver).await });
+        let shared_lb = SharedLoadBalancer::new(Box::new(lb_mock));
 
+        tokio::spawn(async move {
+            println!("updater start");
+            update_load_balancer(shared_lb, receiver).await;
+            println!("updater finished");
+            updater_finished_sender.send(()).unwrap();
+        });
+
+        tokio::spawn(async move {
+            first_update_receiver.await.unwrap();
+            sender.send(new_discovery_state).unwrap();
+            second_update_receiver.await.unwrap();
+            drop(sender);
+        });
+
+        updater_finished_receiver.await.unwrap();
         return UNIT_OK;
     }
 }
