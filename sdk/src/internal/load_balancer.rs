@@ -105,7 +105,9 @@ pub(crate) async fn update_load_balancer(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::internal::discovery::NodeInfo;
     use crate::internal::discovery::Service::Table;
+    use mockall::predicate;
     use std::str::FromStr;
 
     #[test]
@@ -132,8 +134,30 @@ mod test {
     }
 
     #[tokio::test]
-    async fn update_load_balancer() -> UnitResult {
-        unimplemented!();
+    async fn update_load_balancer_test() -> UnitResult {
+        let original_discovery_state = Arc::new(DiscoveryState::default());
+        let (mut sender, receiver) = tokio::sync::watch::channel(original_discovery_state.clone());
+
+        let new_discovery_state = Arc::new(DiscoveryState::default().with_node_info(
+            Table,
+            NodeInfo::new(Uri::from_str("http://test.com").unwrap()),
+        ));
+
+        let mut lb_mock = MockLoadBalancer::new();
+        lb_mock
+            .expect_set_discovery_state()
+            .with(predicate::eq(original_discovery_state.clone()))
+            .times(1)
+            .returning(move |new_state: &Arc<DiscoveryState>| UNIT_OK);
+        lb_mock
+            .expect_set_discovery_state()
+            .with(predicate::eq(new_discovery_state.clone()))
+            .times(1)
+            .returning(move |new_state: &Arc<DiscoveryState>| UNIT_OK);
+
+        let mut shared_lb = SharedLoadBalancer::new(lb_mock);
+        tokio::spawn(async { update_load_balancer(shared_lb, receiver).await });
+
         return UNIT_OK;
     }
 }

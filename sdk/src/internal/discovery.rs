@@ -40,10 +40,22 @@ pub(crate) enum Service {
     Table,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DiscoveryState {
     pub timestamp: std::time::Instant,
     pub services: HashMap<Service, Vec<NodeInfo>>,
+}
+
+impl DiscoveryState {
+    pub(crate) fn with_node_info(mut self, service: Service, node_info: NodeInfo) -> Self {
+        if !self.services.contains_key(&service) {
+            self.services.insert(service, Vec::new());
+        };
+
+        self.services.get_mut(&service).unwrap().push(node_info);
+
+        return self;
+    }
 }
 
 impl Default for DiscoveryState {
@@ -55,9 +67,15 @@ impl Default for DiscoveryState {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct NodeInfo {
     pub(crate) uri: Uri,
+}
+
+impl NodeInfo {
+    pub(crate) fn new(uri: Uri) -> Self {
+        return Self { uri };
+    }
 }
 
 #[async_trait]
