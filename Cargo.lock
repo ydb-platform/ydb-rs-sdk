@@ -896,6 +896,7 @@ dependencies = [
  "mockall",
  "once_cell",
  "prost",
+ "rand",
  "rust_decimal",
  "strum",
  "tokio",

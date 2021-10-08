@@ -13,12 +13,14 @@ pub(crate) trait LoadBalancer: Send + Sync {
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> Result<()>;
 }
 
+pub(crate) trait SharedLoadBalancer: LoadBalancer + Clone {}
+
 #[derive(Clone)]
-pub(crate) struct SharedLoadBalancer {
+pub(crate) struct ArcSharedLoadBalancer {
     inner: Arc<RwLock<Box<dyn LoadBalancer>>>,
 }
 
-impl SharedLoadBalancer {
+impl ArcSharedLoadBalancer {
     pub(crate) fn new(load_balancer: Box<dyn LoadBalancer>) -> Self {
         return Self {
             inner: Arc::new(RwLock::new(load_balancer)),
@@ -26,7 +28,7 @@ impl SharedLoadBalancer {
     }
 }
 
-impl LoadBalancer for SharedLoadBalancer {
+impl LoadBalancer for ArcSharedLoadBalancer {
     fn endpoint(&self, service: Service) -> Result<Uri> {
         return self.inner.read()?.endpoint(service);
     }
@@ -35,6 +37,8 @@ impl LoadBalancer for SharedLoadBalancer {
         self.inner.write()?.set_discovery_state(discovery_state)
     }
 }
+
+impl SharedLoadBalancer for ArcSharedLoadBalancer {}
 
 pub(crate) struct StaticLoadBalancer {
     endpoint: Uri,
@@ -59,14 +63,12 @@ impl LoadBalancer for StaticLoadBalancer {
     }
 }
 
-pub(crate) struct RoundRobin {
-    counter: AtomicUsize,
+pub(crate) struct RandomLoadBalancer {
     discovery_state: Arc<DiscoveryState>,
 }
 
-impl LoadBalancer for RoundRobin {
+impl LoadBalancer for RandomLoadBalancer {
     fn endpoint(&self, service: Service) -> Result<Uri> {
-        let counter = self.counter.fetch_add(1, Relaxed);
         let nodes = self.discovery_state.services.get(&service);
         match nodes {
             None => Err(Error::Custom(
@@ -74,7 +76,8 @@ impl LoadBalancer for RoundRobin {
             )),
             Some(nodes) => {
                 if nodes.len() > 0 {
-                    let node = &nodes[counter % nodes.len()];
+                    let index = rand::random::<usize>() % nodes.len();
+                    let node = &nodes[index % nodes.len()];
                     Ok(node.uri.clone())
                 } else {
                     Err(Error::Custom(
@@ -111,6 +114,8 @@ mod test {
     use crate::internal::discovery::NodeInfo;
     use crate::internal::discovery::Service::Table;
     use mockall::predicate;
+    use std::collections::HashMap;
+    use std::ops::Add;
     use std::str::FromStr;
     use std::time::Duration;
 
@@ -128,7 +133,7 @@ mod test {
             return Ok(test_uri_mock.clone());
         });
 
-        let s1 = SharedLoadBalancer::new(Box::new(lb_mock));
+        let s1 = ArcSharedLoadBalancer::new(Box::new(lb_mock));
         let s2 = s1.clone();
 
         assert_eq!(test_uri, s1.endpoint(Table)?);
@@ -175,7 +180,7 @@ mod test {
                 return UNIT_OK;
             });
 
-        let shared_lb = SharedLoadBalancer::new(Box::new(lb_mock));
+        let shared_lb = ArcSharedLoadBalancer::new(Box::new(lb_mock));
 
         tokio::spawn(async move {
             println!("updater start");
@@ -198,6 +203,34 @@ mod test {
             }
         }
         // updater_finished_receiver.await.unwrap();
+        return UNIT_OK;
+    }
+
+    #[test]
+    fn random_load_balancer() -> UnitResult {
+        let one = Uri::from_str("http://one:213")?;
+        let two = Uri::from_str("http://two:213")?;
+        let load_balancer = RandomLoadBalancer {
+            discovery_state: Arc::new(
+                DiscoveryState::default()
+                    .with_node_info(Table, NodeInfo::new(one.clone()))
+                    .with_node_info(Table, NodeInfo::new(two.clone())),
+            ),
+        };
+
+        let mut map = HashMap::new();
+        map.insert(one.clone(), 0);
+        map.insert(two.clone(), 0);
+
+        for i in 0..100 {
+            let u = load_balancer.endpoint(Table)?;
+            let val = *map.get_mut(&u).unwrap();
+            map.insert(u.clone(), val + 1);
+        }
+
+        assert_eq!(map.len(), 2);
+        assert!(*map.get(&one).unwrap() > 30);
+        assert!(*map.get(&two).unwrap() > 30);
         return UNIT_OK;
     }
 }
