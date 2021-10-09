@@ -3,7 +3,6 @@ mod client_fabric;
 mod client_table;
 mod discovery;
 mod grpc;
-mod grpc_helper;
 mod load_balancer;
 mod middlewares;
 mod query;

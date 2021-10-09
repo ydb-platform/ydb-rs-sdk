@@ -4,8 +4,8 @@ use crate::internal::client_common::DBCredentials;
 use crate::internal::client_table::TableClient;
 use crate::internal::discovery::StaticDiscovery;
 use crate::internal::discovery::{Discovery, Service};
-use crate::internal::grpc_helper;
-use crate::internal::grpc_helper::create_grpc_client_old;
+use crate::internal::grpc;
+use crate::internal::grpc::create_grpc_client_old;
 use crate::internal::load_balancer::{update_load_balancer, LoadBalancer, SharedLoadBalancer};
 use crate::internal::middlewares::AuthService;
 use crate::internal::transaction::{Mode, Transaction};
@@ -52,11 +52,11 @@ impl ClientFabric {
         self: &Self,
         req: ListEndpointsRequest,
     ) -> Result<ListEndpointsResult> {
-        grpc_helper::grpc_read_result(self.client_discovery()?.list_endpoints(req).await?)
+        grpc::grpc_read_result(self.client_discovery()?.list_endpoints(req).await?)
     }
 
     pub async fn who_am_i(self: Self, req: WhoAmIRequest) -> Result<WhoAmIResult> {
-        grpc_helper::grpc_read_result(self.client_discovery()?.who_am_i(req).await?)
+        grpc::grpc_read_result(self.client_discovery()?.who_am_i(req).await?)
     }
 
     // clients

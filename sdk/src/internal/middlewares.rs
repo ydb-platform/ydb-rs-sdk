@@ -7,17 +7,17 @@ use tonic::transport::{Body, Channel};
 use tower::Service;
 
 use crate::credentials::Credentials;
+use crate::internal::client_common::DBCredentials;
 
 #[derive(Clone, Debug)]
 pub(crate) struct AuthService {
     ch: Channel,
-    cred: Box<dyn Credentials>,
-    database: String,
+    cred: DBCredentials,
 }
 
 impl AuthService {
-    pub fn new(ch: Channel, cred: Box<dyn Credentials>, database: String) -> Self {
-        return AuthService { ch, cred, database };
+    pub fn new(ch: Channel, cred: DBCredentials) -> Self {
+        return AuthService { ch, cred };
     }
 }
 
@@ -35,8 +35,8 @@ impl Service<Request<BoxBody>> for AuthService {
 
     fn call(&mut self, mut req: Request<BoxBody>) -> Self::Future {
         // let token = MetadataValue::from_str(token.as_str()).unwrap();
-        let database = self.database.clone();
-        let token_result = self.cred.create_token();
+        let database = self.cred.database.clone();
+        let token_result = self.cred.credentials.create_token();
 
         // This is necessary because tonic internally uses `tower::buffer::Buffer`.
         // See https://github.com/tower-rs/tower/issues/547#issuecomment-767629149

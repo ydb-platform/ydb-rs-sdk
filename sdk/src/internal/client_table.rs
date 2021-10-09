@@ -2,7 +2,7 @@ use crate::errors::*;
 use crate::internal::client_common::DBCredentials;
 use crate::internal::client_fabric::Middleware;
 use crate::internal::discovery::Service;
-use crate::internal::grpc_helper::create_grpc_client;
+use crate::internal::grpc::create_grpc_client;
 use crate::internal::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::internal::session::Session;
 use crate::internal::session_pool::SessionPool;

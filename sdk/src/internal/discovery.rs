@@ -16,7 +16,7 @@ use ydb_protobuf::generated::ydb::discovery::{
 
 use crate::credentials::Credentials;
 use crate::errors::{Error, Result};
-use crate::internal::grpc_helper::{create_grpc_client_old, grpc_read_result};
+use crate::internal::grpc::{create_grpc_client_old, grpc_read_result};
 use std::iter::FromIterator;
 use std::time::Duration;
 use tokio::sync::watch::Receiver;

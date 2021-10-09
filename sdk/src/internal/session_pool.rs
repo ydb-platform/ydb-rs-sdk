@@ -2,7 +2,7 @@ use crate::errors::*;
 use crate::internal::client_common::DBCredentials;
 use crate::internal::client_fabric::Middleware;
 use crate::internal::discovery::Service;
-use crate::internal::grpc_helper::{create_grpc_client, grpc_read_result};
+use crate::internal::grpc::{create_grpc_client, grpc_read_result};
 use crate::internal::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::internal::session::Session;
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;

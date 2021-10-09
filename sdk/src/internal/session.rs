@@ -1,6 +1,6 @@
 use crate::errors::*;
 use crate::internal::client_fabric::Middleware;
-use crate::internal::grpc_helper::grpc_read_result;
+use crate::internal::grpc::grpc_read_result;
 use derivative::Derivative;
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 use ydb_protobuf::generated::ydb::table::{ExecuteDataQueryRequest, ExecuteQueryResult};
@@ -12,7 +12,7 @@ pub(crate) struct Session {
     id: String,
 
     #[derivative(Debug = "ignore")]
-    on_drop_callbacks: Vec<Box<dyn Fn() + Send>>,
+    on_drop_callbacks: Vec<Box<dyn FnOnce() + Send>>,
 }
 
 impl Session {
@@ -24,7 +24,7 @@ impl Session {
         };
     }
 
-    pub(crate) fn on_drop(&mut self, f: Box<dyn Fn() + Send>) {
+    pub(crate) fn on_drop(&mut self, f: Box<dyn FnOnce() + Send>) {
         self.on_drop_callbacks.push(f)
     }
 
@@ -40,7 +40,7 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         println!("drop");
-        for on_drop in self.on_drop_callbacks.iter().rev() {
+        while let Some(on_drop) = self.on_drop_callbacks.pop() {
             on_drop()
         }
     }
