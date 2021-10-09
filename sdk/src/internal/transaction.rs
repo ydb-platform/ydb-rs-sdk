@@ -1,6 +1,6 @@
 use crate::errors::{Error, Result};
 use crate::internal::query::{Query, QueryResult};
-use crate::internal::session::SessionPool;
+use crate::internal::session_pool::SessionPool;
 use async_trait::async_trait;
 use ydb_protobuf::generated::ydb::table::transaction_control::TxSelector;
 use ydb_protobuf::generated::ydb::table::transaction_settings::TxMode;
@@ -31,11 +31,11 @@ pub trait Transaction {
 pub struct AutoCommit {
     mode: Mode,
     error_on_truncate_response: bool,
-    session_pool: Box<dyn SessionPool>,
+    session_pool: SessionPool,
 }
 
 impl AutoCommit {
-    pub(crate) fn new(session_pool: Box<dyn SessionPool>, mode: Mode) -> Self {
+    pub(crate) fn new(session_pool: SessionPool, mode: Mode) -> Self {
         return Self {
             mode,
             session_pool,

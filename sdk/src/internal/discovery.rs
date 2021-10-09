@@ -16,7 +16,7 @@ use ydb_protobuf::generated::ydb::discovery::{
 
 use crate::credentials::Credentials;
 use crate::errors::{Error, Result};
-use crate::internal::grpc_helper::{create_grpc_client, grpc_read_result};
+use crate::internal::grpc_helper::{create_grpc_client_old, grpc_read_result};
 use std::iter::FromIterator;
 use std::time::Duration;
 use tokio::sync::watch::Receiver;
@@ -197,7 +197,7 @@ impl DiscoverySharedState {
     async fn discovery_now(&self) -> Result<()> {
         let start = std::time::Instant::now();
         let endpoint = self.endpoint(Service::Discovery)?;
-        let mut discovery_client = create_grpc_client(
+        let mut discovery_client = create_grpc_client_old(
             endpoint,
             self.cred.clone(),
             self.database.clone(),

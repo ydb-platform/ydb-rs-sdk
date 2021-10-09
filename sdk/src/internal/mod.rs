@@ -1,4 +1,6 @@
-mod client;
+mod client_common;
+mod client_fabric;
+mod client_table;
 mod discovery;
 mod grpc;
 mod grpc_helper;
@@ -6,6 +8,7 @@ mod load_balancer;
 mod middlewares;
 mod query;
 mod session;
+mod session_pool;
 mod test_helpers;
 mod trait_operation;
 mod transaction;

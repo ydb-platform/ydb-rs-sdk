@@ -3,29 +3,44 @@ use ydb_protobuf::generated::ydb::status_ids::StatusCode;
 use crate::credentials::Credentials;
 use crate::errors;
 use crate::errors::{Error, Result};
+use crate::internal::client_common::DBCredentials;
 use crate::internal::middlewares::AuthService;
 use crate::internal::trait_operation::Operation;
 use http::Uri;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tower::ServiceBuilder;
 
-pub(crate) fn create_grpc_client<T, CB>(
-    uri: Uri,
-    cred: Box<dyn Credentials>,
-    database: String,
-    new_func: CB,
-) -> Result<T>
+pub(crate) fn create_grpc_client<T, CB>(uri: Uri, cred: DBCredentials, new_func: CB) -> Result<T>
 where
     CB: FnOnce(AuthService) -> T,
 {
     let auth_service_create = |ch| {
-        return AuthService::new(ch, cred.clone(), database.clone());
+        return AuthService::new(ch, cred.credentials.clone(), cred.database.clone());
     };
     let channel = create_grpc_channel(uri)?;
     let auth_ch = ServiceBuilder::new()
         .layer_fn(auth_service_create)
         .service(channel);
     return Ok(new_func(auth_ch));
+}
+
+pub(crate) fn create_grpc_client_old<T, CB>(
+    uri: Uri,
+    credentials: Box<dyn Credentials>,
+    database: String,
+    new_func: CB,
+) -> Result<T>
+where
+    CB: FnOnce(AuthService) -> T,
+{
+    return create_grpc_client(
+        uri,
+        DBCredentials {
+            credentials,
+            database,
+        },
+        new_func,
+    );
 }
 
 fn create_grpc_channel(uri: Uri) -> Result<Channel> {

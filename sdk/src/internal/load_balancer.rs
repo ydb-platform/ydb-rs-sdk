@@ -13,14 +13,12 @@ pub(crate) trait LoadBalancer: Send + Sync {
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> Result<()>;
 }
 
-pub(crate) trait SharedLoadBalancer: LoadBalancer + Clone {}
-
 #[derive(Clone)]
-pub(crate) struct ArcSharedLoadBalancer {
+pub(crate) struct SharedLoadBalancer {
     inner: Arc<RwLock<Box<dyn LoadBalancer>>>,
 }
 
-impl ArcSharedLoadBalancer {
+impl SharedLoadBalancer {
     pub(crate) fn new(load_balancer: Box<dyn LoadBalancer>) -> Self {
         return Self {
             inner: Arc::new(RwLock::new(load_balancer)),
@@ -28,7 +26,7 @@ impl ArcSharedLoadBalancer {
     }
 }
 
-impl LoadBalancer for ArcSharedLoadBalancer {
+impl LoadBalancer for SharedLoadBalancer {
     fn endpoint(&self, service: Service) -> Result<Uri> {
         return self.inner.read()?.endpoint(service);
     }
@@ -37,8 +35,6 @@ impl LoadBalancer for ArcSharedLoadBalancer {
         self.inner.write()?.set_discovery_state(discovery_state)
     }
 }
-
-impl SharedLoadBalancer for ArcSharedLoadBalancer {}
 
 pub(crate) struct StaticLoadBalancer {
     endpoint: Uri,
@@ -65,6 +61,14 @@ impl LoadBalancer for StaticLoadBalancer {
 
 pub(crate) struct RandomLoadBalancer {
     discovery_state: Arc<DiscoveryState>,
+}
+
+impl RandomLoadBalancer {
+    pub(crate) fn new() -> Self {
+        Self {
+            discovery_state: Arc::new(DiscoveryState::default()),
+        }
+    }
 }
 
 impl LoadBalancer for RandomLoadBalancer {
@@ -115,7 +119,6 @@ mod test {
     use crate::internal::discovery::Service::Table;
     use mockall::predicate;
     use std::collections::HashMap;
-    use std::ops::Add;
     use std::str::FromStr;
     use std::time::Duration;
 
@@ -133,7 +136,7 @@ mod test {
             return Ok(test_uri_mock.clone());
         });
 
-        let s1 = ArcSharedLoadBalancer::new(Box::new(lb_mock));
+        let s1 = SharedLoadBalancer::new(Box::new(lb_mock));
         let s2 = s1.clone();
 
         assert_eq!(test_uri, s1.endpoint(Table)?);
@@ -180,7 +183,7 @@ mod test {
                 return UNIT_OK;
             });
 
-        let shared_lb = ArcSharedLoadBalancer::new(Box::new(lb_mock));
+        let shared_lb = SharedLoadBalancer::new(Box::new(lb_mock));
 
         tokio::spawn(async move {
             println!("updater start");
@@ -222,7 +225,7 @@ mod test {
         map.insert(one.clone(), 0);
         map.insert(two.clone(), 0);
 
-        for i in 0..100 {
+        for _ in 0..100 {
             let u = load_balancer.endpoint(Table)?;
             let val = *map.get_mut(&u).unwrap();
             map.insert(u.clone(), val + 1);

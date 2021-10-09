@@ -1,51 +1,51 @@
-use std::sync::Arc;
-
+use crate::credentials::Credentials;
+use crate::errors::Result;
+use crate::internal::client_common::DBCredentials;
+use crate::internal::client_table::TableClient;
+use crate::internal::discovery::StaticDiscovery;
+use crate::internal::discovery::{Discovery, Service};
+use crate::internal::grpc_helper;
+use crate::internal::grpc_helper::create_grpc_client_old;
+use crate::internal::load_balancer::{update_load_balancer, LoadBalancer, SharedLoadBalancer};
+use crate::internal::middlewares::AuthService;
+use crate::internal::transaction::{Mode, Transaction};
 use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_protobuf::generated::ydb::discovery::{
     ListEndpointsRequest, ListEndpointsResult, WhoAmIRequest, WhoAmIResult,
 };
-use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 
-use crate::errors::Result;
-use crate::internal::discovery::Service;
-use crate::internal::discovery::StaticDiscovery;
-use crate::internal::grpc::ClientFabric;
-use crate::internal::grpc_helper;
-use crate::internal::middlewares::AuthService;
-use crate::internal::session::{Session, SessionPool};
-use crate::internal::transaction::{AutoCommit, Mode, Transaction};
+pub(crate) type Middleware = AuthService;
 
-type Middleware = AuthService;
-
-pub(crate) struct Client<CF: ClientFabric> {
-    client_fabric: Arc<CF>,
-    session_pool: Box<dyn SessionPool>,
-    error_on_truncate: bool,
+pub(crate) struct ClientFabric {
+    credentials: DBCredentials,
+    discovery: Box<dyn Discovery>,
+    load_balancer: SharedLoadBalancer,
 }
 
-impl<CF: ClientFabric> Client<CF> {
-    pub fn new(grpc_client_fabric: CF, session_pool: Box<dyn SessionPool>) -> Result<Self> {
-        let fabric = Arc::new(grpc_client_fabric);
-        return Ok(Client {
-            client_fabric: fabric,
-            session_pool,
-            error_on_truncate: true,
+impl ClientFabric {
+    pub fn new(
+        credentials: Box<dyn Credentials>,
+        database: String,
+        discovery: Box<dyn Discovery>,
+        load_balancer: Box<dyn LoadBalancer>,
+    ) -> Result<Self> {
+        let shared_load_balancer = SharedLoadBalancer::new(load_balancer);
+        let background_lb = shared_load_balancer.clone();
+        let discovery_sub = discovery.subscribe();
+        tokio::spawn(async move { update_load_balancer(background_lb, discovery_sub) });
+
+        return Ok(ClientFabric {
+            credentials: DBCredentials {
+                credentials,
+                database,
+            },
+            discovery,
+            load_balancer: shared_load_balancer,
         });
     }
 
-    #[allow(dead_code)]
-    pub fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
-        self.error_on_truncate = error_on_truncate;
-        return self;
-    }
-
-    pub async fn create_autocommit_transaction(&self, mode: Mode) -> Result<AutoCommit> {
-        return Ok(AutoCommit::new(self.session_pool.clone_pool(), mode)
-            .with_error_on_truncate(self.error_on_truncate));
-    }
-
-    pub(crate) async fn create_session(self: &mut Self) -> Result<Session> {
-        self.session_pool.session().await
+    pub(crate) fn table_client(&self) -> TableClient {
+        return TableClient::new(self.credentials.clone(), self.load_balancer.clone());
     }
 
     pub(crate) async fn endpoints(
@@ -61,9 +61,12 @@ impl<CF: ClientFabric> Client<CF> {
 
     // clients
     fn client_discovery(self: &Self) -> Result<DiscoveryServiceClient<Middleware>> {
-        return self
-            .client_fabric
-            .create(DiscoveryServiceClient::new, Service::Discovery);
+        return create_grpc_client_old(
+            self.load_balancer.endpoint(Service::Discovery)?,
+            self.credentials.credentials.clone(),
+            self.credentials.database.clone(),
+            DiscoveryServiceClient::new,
+        );
     }
 }
 
@@ -71,38 +74,46 @@ impl<CF: ClientFabric> Client<CF> {
 mod test {
     use std::collections::HashMap;
 
-    use crate::internal::client::Client;
-    use crate::internal::grpc::SimpleGrpcClientFabric;
+    use crate::internal::client_fabric::ClientFabric;
     use crate::internal::query::Query;
-    use crate::internal::session::SimpleSessionPool;
     use crate::internal::test_helpers::{CRED, DATABASE, START_ENDPOINT};
     use crate::types::YdbValue;
 
     use super::*;
+    use crate::internal::load_balancer::RandomLoadBalancer;
+    use http::Uri;
     use std::iter::FromIterator;
+    use std::str::FromStr;
 
-    fn create_client() -> Result<Client<SimpleGrpcClientFabric>> {
+    fn create_client() -> Result<ClientFabric> {
         // let token = crate::credentials::StaticToken::from(std::env::var("IAM_TOKEN")?.as_str());
         // let token = crate::credentials::CommandLineYcToken::new();
         // let database = std::env::var("DB_NAME")?;
-        let credentials = CRED.lock()?.clone();
+        let endpoint_uri = Uri::from_str(START_ENDPOINT.as_str())?;
+        let credentials = Box::new(CRED.lock()?.clone());
+        // let discovery = TimerDiscovery::new(
+        //     credentials.clone(),
+        //     DATABASE.clone(),
+        //     START_ENDPOINT.as_str(),
+        //     Duration::from_secs(60),
+        // )?;
         let discovery = StaticDiscovery::from_str(START_ENDPOINT.as_str())?;
+        let mut load_balancer = Box::new(RandomLoadBalancer::new());
+        load_balancer
+            .set_discovery_state(&*discovery.subscribe().borrow())
+            .unwrap();
 
-        let grpc_client_fabric = SimpleGrpcClientFabric::new(
-            Box::new(discovery),
-            Box::new(credentials),
+        return ClientFabric::new(
+            credentials,
             DATABASE.clone(),
+            Box::new(discovery),
+            load_balancer,
         );
-
-        let table_client = grpc_client_fabric.create(TableServiceClient::new, Service::Table)?;
-        let session_pool = SimpleSessionPool::new(table_client);
-
-        return Client::new(grpc_client_fabric, Box::new(session_pool));
     }
 
     #[tokio::test]
     async fn create_session() -> Result<()> {
-        let res = create_client()?.create_session().await?;
+        let res = create_client()?.table_client().create_session().await?;
         println!("session: {:?}", res);
         Ok(())
     }
@@ -120,8 +131,8 @@ mod test {
     async fn execute_data_query() -> Result<()> {
         let client = create_client()?;
         let mut transaction = client
-            .create_autocommit_transaction(Mode::ReadOnline)
-            .await?;
+            .table_client()
+            .create_autocommit_transaction(Mode::ReadOnline);
         let mut res = transaction.query("SELECT 1+1".into()).await?;
         assert_eq!(
             YdbValue::Int32(2),
@@ -141,8 +152,8 @@ mod test {
     async fn execute_data_query_field_name() -> Result<()> {
         let client = create_client()?;
         let mut transaction = client
-            .create_autocommit_transaction(Mode::ReadOnline)
-            .await?;
+            .table_client()
+            .create_autocommit_transaction(Mode::ReadOnline);
         let mut res = transaction.query("SELECT 1+1 as s".into()).await?;
         assert_eq!(
             YdbValue::Int32(2),
@@ -162,8 +173,8 @@ mod test {
     async fn execute_data_query_params() -> Result<()> {
         let client = create_client()?;
         let mut transaction = client
-            .create_autocommit_transaction(Mode::ReadOnline)
-            .await?;
+            .table_client()
+            .create_autocommit_transaction(Mode::ReadOnline);
         let mut params = HashMap::new();
         params.insert("$v".to_string(), YdbValue::Int32(3));
         let mut res = transaction
@@ -197,8 +208,8 @@ mod test {
     async fn select_list() -> Result<()> {
         let client = create_client()?;
         let mut transaction = client
-            .create_autocommit_transaction(Mode::ReadOnline)
-            .await?;
+            .table_client()
+            .create_autocommit_transaction(Mode::ReadOnline);
         let res = transaction
             .query(
                 Query::new()

@@ -1,10 +1,10 @@
 use crate::credentials::Credentials;
 use crate::errors::Result;
 use crate::internal::discovery::{Discovery, Service};
-use crate::internal::grpc_helper::create_grpc_client;
+use crate::internal::grpc_helper::create_grpc_client_old;
 use crate::internal::middlewares::AuthService;
 
-pub(crate) trait ClientFabric {
+pub(crate) trait ProtoClientFabric {
     // create grpc client
     // new_func - func for create grpc client from common middleware
     fn create<T, CB>(self: &Self, new_func: CB, service: Service) -> Result<T>
@@ -32,12 +32,12 @@ impl SimpleGrpcClientFabric {
     }
 }
 
-impl ClientFabric for SimpleGrpcClientFabric {
+impl ProtoClientFabric for SimpleGrpcClientFabric {
     fn create<T, CB>(self: &Self, new_func: CB, service: Service) -> Result<T>
     where
         CB: FnOnce(AuthService) -> T,
     {
-        return create_grpc_client(
+        return create_grpc_client_old(
             self.discovery.endpoint(service)?,
             self.cred.clone(),
             self.database.clone(),
