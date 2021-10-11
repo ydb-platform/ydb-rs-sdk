@@ -1,5 +1,6 @@
 use crate::errors::{Error, Result};
 use chrono::{FixedOffset, NaiveDate};
+use std::convert::TryFrom;
 use std::ops::Deref;
 use ydb_protobuf::generated::ydb;
 
@@ -44,9 +45,13 @@ impl YdbValue {
         use ydb_protobuf::generated::ydb::value::Value as pv;
 
         #[allow(dead_code)] // compiler bag of warning?
-        fn unsupported() -> Result<YdbValue> {
+        fn unsupported(proto_value: ydb::Value) -> Result<YdbValue> {
             return Err(Error::Custom(
-                "unsupoprted YdbValue and proto_value combinarion".into(),
+                format!(
+                    "unsupported YdbValue and proto_value combination: {:?}",
+                    proto_value
+                )
+                .into(),
             ));
         }
 
@@ -59,19 +64,33 @@ impl YdbValue {
                     ..
                 },
             ) => YdbValue::Bool(val),
-            (YdbValue::Bool(_), _) => return unsupported(),
-            (YdbValue::Int8(_), _) => unimplemented!(),
+            (YdbValue::Bool(_), proto_value) => return unsupported(proto_value),
+            (
+                YdbValue::Int8(_),
+                ydb::Value {
+                    value: Some(pv::Int32Value(val)),
+                    ..
+                },
+            ) => YdbValue::Int8(i8::try_from(val)?),
+            (YdbValue::Int8(_), proto_value) => return unsupported(proto_value),
+            (
+                YdbValue::Uint8(_),
+                ydb::Value {
+                    value: Some(pv::Uint32Value(val)),
+                    ..
+                },
+            ) => YdbValue::Uint8(u8::try_from(val)?),
             (YdbValue::Uint8(_), _) => unimplemented!(),
             (YdbValue::Int16(_), _) => unimplemented!(),
             (YdbValue::Uint16(_), _) => unimplemented!(),
             (
                 YdbValue::Int32(_),
                 ydb::Value {
-                    value: Some(pv::Int32Value(val)),
+                    value: Some(pv::Uint32Value(val)),
                     ..
                 },
-            ) => YdbValue::Int32(val),
-            (YdbValue::Int32(_), _) => return unsupported(),
+            ) => YdbValue::Uint16(u16::try_from(val)?),
+            (YdbValue::Int32(_), proto_value) => return unsupported(proto_value),
             (
                 YdbValue::Uint32(_),
                 ydb::Value {
@@ -79,7 +98,7 @@ impl YdbValue {
                     ..
                 },
             ) => YdbValue::Uint32(val),
-            (YdbValue::Uint32(_), _) => return unsupported(),
+            (YdbValue::Uint32(_), proto_value) => return unsupported(proto_value),
             (
                 YdbValue::Int64(_),
                 ydb::Value {
@@ -87,7 +106,7 @@ impl YdbValue {
                     ..
                 },
             ) => YdbValue::Int64(val),
-            (YdbValue::Int64(_), _) => return unsupported(),
+            (YdbValue::Int64(_), proto_value) => return unsupported(proto_value),
             (
                 YdbValue::Uint64(_),
                 ydb::Value {
@@ -95,7 +114,7 @@ impl YdbValue {
                     ..
                 },
             ) => YdbValue::Uint64(val),
-            (YdbValue::Uint64(_), _) => return unsupported(),
+            (YdbValue::Uint64(_), proto_value) => return unsupported(proto_value),
             (
                 YdbValue::Float(_),
                 ydb::Value {
@@ -103,7 +122,7 @@ impl YdbValue {
                     ..
                 },
             ) => YdbValue::Float(val),
-            (YdbValue::Float(_), _) => return unsupported(),
+            (YdbValue::Float(_), proto_value) => return unsupported(proto_value),
             (
                 YdbValue::Double(_),
                 ydb::Value {
@@ -111,7 +130,7 @@ impl YdbValue {
                     ..
                 },
             ) => YdbValue::Double(val),
-            (YdbValue::Double(_), _) => return unsupported(),
+            (YdbValue::Double(_), proto_value) => return unsupported(proto_value),
             (YdbValue::Date(_), _) => unimplemented!(),
             (YdbValue::DateTime(_), _) => unimplemented!(),
             (YdbValue::Timestamp(_), _) => unimplemented!(),
@@ -125,7 +144,7 @@ impl YdbValue {
                     ..
                 },
             ) => YdbValue::String(val),
-            (YdbValue::String(_), _) => return unsupported(),
+            (YdbValue::String(_), proto_value) => return unsupported(proto_value),
             (
                 YdbValue::Utf8(_),
                 ydb::Value {
@@ -133,7 +152,7 @@ impl YdbValue {
                     ..
                 },
             ) => YdbValue::Utf8(val),
-            (YdbValue::Utf8(_), _) => return unsupported(),
+            (YdbValue::Utf8(_), proto_value) => return unsupported(proto_value),
             (YdbValue::Yson(_), _) => unimplemented!(),
             (YdbValue::Json(_), _) => unimplemented!(),
             (YdbValue::Uuid(_), _) => unimplemented!(),

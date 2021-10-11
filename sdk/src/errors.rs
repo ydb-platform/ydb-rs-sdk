@@ -56,6 +56,12 @@ impl From<&str> for Error {
     }
 }
 
+impl From<std::num::TryFromIntError> for Error {
+    fn from(e: std::num::TryFromIntError) -> Self {
+        return Error::Custom(e.to_string());
+    }
+}
+
 impl From<std::string::FromUtf8Error> for Error {
     fn from(e: FromUtf8Error) -> Self {
         return Error::Custom(e.to_string());
