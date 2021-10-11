@@ -1,13 +1,13 @@
 use crate::errors::{Error, Result};
-use chrono::{FixedOffset, NaiveDate};
-use std::convert::TryFrom;
+use std::convert::{TryFrom, TryInto};
 use std::fmt::Debug;
 use std::ops::Deref;
+use strum::EnumIter;
 use ydb_protobuf::generated::ydb;
 
 /// Represent value, send or received from ydb
 /// That enum will be grow, when add support of new types
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, EnumIter, PartialEq)]
 #[allow(dead_code)]
 pub enum YdbValue {
     NULL,
@@ -22,12 +22,10 @@ pub enum YdbValue {
     Uint64(u64),
     Float(f32),
     Double(f64),
-    Date(NaiveDate),
-    DateTime(chrono::NaiveDate),
-    Timestamp(chrono::NaiveDate),
+    Date(std::time::Duration),
+    DateTime(std::time::Duration),
+    Timestamp(std::time::Duration),
     Interval(std::time::Duration),
-    TzDate(chrono::Date<FixedOffset>),
-    TzDateTime(chrono::DateTime<FixedOffset>),
     String(Vec<u8>), // Bytes
     Utf8(String),
     Yson(String),
@@ -60,17 +58,22 @@ impl YdbValue {
                     value: Some(pv::Int32Value(val)),
                     ..
                 },
-            ) => YdbValue::Int8(i8::try_from(val)?),
+            ) => YdbValue::Int8(val.try_into()?),
             (
                 YdbValue::Uint8(_),
                 ydb::Value {
                     value: Some(pv::Uint32Value(val)),
                     ..
                 },
-            ) => YdbValue::Uint8(u8::try_from(val)?),
-            (YdbValue::Uint8(_), _) => unimplemented!(),
-            (YdbValue::Int16(_), _) => unimplemented!(),
-            (YdbValue::Uint16(_), _) => unimplemented!(),
+            ) => YdbValue::Uint8(val.try_into()?),
+            (YdbValue::Int16(_), ydb::Value{
+                value: Some(pv::Int32Value(val)),
+                ..
+            }) => YdbValue::Int16(val.try_into()?),
+            (YdbValue::Uint16(_), ydb::Value{
+                value: Some(pv::Uint32Value(val)),
+                ..
+            }) => YdbValue::Uint16(val.try_into()?),
             (
                 YdbValue::Int32(_),
                 ydb::Value {
@@ -117,8 +120,6 @@ impl YdbValue {
             (YdbValue::DateTime(_), _) => unimplemented!(),
             (YdbValue::Timestamp(_), _) => unimplemented!(),
             (YdbValue::Interval(_), _) => unimplemented!(),
-            (YdbValue::TzDate(_), _) => unimplemented!(),
-            (YdbValue::TzDateTime(_), _) => unimplemented!(),
             (
                 YdbValue::String(_),
                 ydb::Value {
@@ -174,8 +175,14 @@ impl YdbValue {
                     Some(P::String) => Self::String(Vec::default()),
                     Some(P::Float) => Self::Float(0.0),
                     Some(P::Double) => Self::Double(0.0),
+                    Some(P::Int8) => Self::Int8(0),
+                    Some(P::Uint8) => Self::Uint8(0),
+                    Some(P::Int16) => Self::Int16(0),
+                    Some(P::Uint16) => Self::Uint16(0),
                     Some(P::Int32) => Self::Int32(0),
+                    Some(P::Uint32) => Self::Uint32(0),
                     Some(P::Int64) => Self::Int64(0),
+                    Some(P::Uint64) => Self::Uint64(0),
                     Some(P::Date) => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
                     Some(P::Datetime) => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
                     Some(P::Dynumber) => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
@@ -221,10 +228,10 @@ impl YdbValue {
         match self {
             Self::NULL => panic!("unimplemented"),
             Self::Bool(val) => proto_typed_value(pt::Bool, pv::BoolValue(val)),
-            Self::Int8(_) => unimplemented!(),
-            Self::Uint8(_) => unimplemented!(),
-            Self::Int16(_) => unimplemented!(),
-            Self::Uint16(_) => unimplemented!(),
+            Self::Int8(val) => proto_typed_value(pt::Int8, pv::Int32Value(val.into())),
+            Self::Uint8(val) => proto_typed_value(pt::Uint8, pv::Uint32Value(val.into())),
+            Self::Int16(val) => proto_typed_value(pt::Int16, pv::Int32Value(val.into())),
+            Self::Uint16(val) => proto_typed_value(pt::Uint16, pv::Uint32Value(val.into())),
             Self::Int32(val) => proto_typed_value(pt::Int32, pv::Int32Value(val)),
             Self::Uint32(val) => proto_typed_value(pt::Uint32, pv::Uint32Value(val)),
             Self::Int64(val) => proto_typed_value(pt::Int64, pv::Int64Value(val)),
@@ -235,11 +242,8 @@ impl YdbValue {
             Self::DateTime(_) => unimplemented!(),
             Self::Timestamp(_) => unimplemented!(),
             Self::Interval(_) => unimplemented!(),
-            Self::TzDate(_) => unimplemented!(),
-            Self::TzDateTime(_) => unimplemented!(),
             Self::String(val) => proto_typed_value(pt::String, pv::BytesValue(val)),
             Self::Utf8(val) => proto_typed_value(pt::Utf8, pv::TextValue(val)),
-            Self::TzDateTime(_) => unimplemented!(),
             Self::Yson(_) => unimplemented!(),
             Self::Json(_) => unimplemented!(),
             Self::Uuid(_) => unimplemented!(),
@@ -280,4 +284,51 @@ impl YdbValue {
 pub struct Column {
     pub name: String,
     pub(crate) v_type: YdbValue,
+}
+
+#[cfg(test)]
+mod test {
+    use crate::errors::{UnitResult, UNIT_OK};
+    use crate::types::YdbValue;
+    use std::collections::HashSet;
+    use strum::IntoEnumIterator;
+
+    #[test]
+    fn serialize() -> UnitResult {
+        let mut discriminants = HashSet::new();
+        let values = vec![
+            YdbValue::Bool(false),
+            YdbValue::Bool(true),
+            YdbValue::Int8(0),
+            YdbValue::Int8(i8::MAX),
+            YdbValue::Int8(i8::MIN),
+            YdbValue::Uint8(0),
+            YdbValue::Uint8(u8::MAX),
+            YdbValue::Uint8(u8::MIN),
+            YdbValue::Int16(0),
+            YdbValue::Int16(i16::MAX),
+            YdbValue::Int16(i16::MIN),
+            YdbValue::Uint16(0),
+            YdbValue::Uint16(u16::MAX),
+            YdbValue::Uint16(u16::MIN),
+        ];
+        for v in values.into_iter() {
+            discriminants.insert(std::mem::discriminant(&v));
+            let proto = v.clone().to_typed_value();
+            let t = YdbValue::from_proto_type(&proto.r#type)?;
+            let v2 = YdbValue::from_proto(&t, proto.value.unwrap())?;
+            assert_eq!(&v, &v2);
+        }
+
+        let mut non_tested = Vec::new();
+        for v in YdbValue::iter() {
+            if !discriminants.contains(&std::mem::discriminant(&v)) {
+                non_tested.push(format!("{:?}", &v));
+            }
+        }
+
+        assert_eq!(Vec::<String>::new(), non_tested);
+
+        return UNIT_OK;
+    }
 }

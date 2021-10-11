@@ -6,7 +6,6 @@ use tonic::body::BoxBody;
 use tonic::transport::{Body, Channel};
 use tower::Service;
 
-use crate::credentials::Credentials;
 use crate::internal::client_common::DBCredentials;
 
 #[derive(Clone, Debug)]
