@@ -293,25 +293,24 @@ mod test {
     use std::collections::HashSet;
     use strum::IntoEnumIterator;
 
+    macro_rules! num_tests {
+        ($en_name:ident, $type_name:ty) => {
+            values.push($en_name(0));
+            values.push($type_name::MIN);
+            values.push($en_name($type_name: MAX));
+        };
+    }
+
     #[test]
     fn serialize() -> UnitResult {
         let mut discriminants = HashSet::new();
-        let values = vec![
-            YdbValue::Bool(false),
-            YdbValue::Bool(true),
-            YdbValue::Int8(0),
-            YdbValue::Int8(i8::MAX),
-            YdbValue::Int8(i8::MIN),
-            YdbValue::Uint8(0),
-            YdbValue::Uint8(u8::MAX),
-            YdbValue::Uint8(u8::MIN),
-            YdbValue::Int16(0),
-            YdbValue::Int16(i16::MAX),
-            YdbValue::Int16(i16::MIN),
-            YdbValue::Uint16(0),
-            YdbValue::Uint16(u16::MAX),
-            YdbValue::Uint16(u16::MIN),
-        ];
+        let values = vec![YdbValue::Bool(false), YdbValue::Bool(true)];
+
+        use YdbValue::*;
+
+        num_tests!(Int8, i8);
+        num_tests!(Uint8, u8);
+
         for v in values.into_iter() {
             discriminants.insert(std::mem::discriminant(&v));
             let proto = v.clone().to_typed_value();
