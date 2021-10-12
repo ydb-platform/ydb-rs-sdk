@@ -44,7 +44,10 @@ impl YdbValue {
         use ydb_protobuf::generated::ydb::value::Value as pv;
 
         let res = match (t, proto_value) {
-            (YdbValue::NULL, _) => unimplemented!(),
+            (YdbValue::NULL, ydb::Value {
+                value: Some(pv::NullFlagValue(_)),
+                ..
+            }) => YdbValue::NULL,
             (
                 YdbValue::Bool(_),
                 ydb::Value {
@@ -291,25 +294,34 @@ mod test {
     use crate::errors::{UnitResult, UNIT_OK};
     use crate::types::YdbValue;
     use std::collections::HashSet;
+    use std::convert::TryInto;
     use strum::IntoEnumIterator;
-
-    macro_rules! num_tests {
-        ($en_name:ident, $type_name:ty) => {
-            values.push($en_name(0));
-            values.push($type_name::MIN);
-            values.push($en_name($type_name: MAX));
-        };
-    }
 
     #[test]
     fn serialize() -> UnitResult {
+        // test zero, one, minimum and maximum values
+        macro_rules! num_tests {
+            ($values:ident, $en_name:path, $type_name:ty) => {
+                $values.push($en_name(0_u8.try_into().unwrap())); // try_into need for convert to float types
+                $values.push($en_name(1_u8.try_into().unwrap()));
+                $values.push($en_name(<$type_name>::MIN));
+                $values.push($en_name(<$type_name>::MAX));
+            };
+        }
+
         let mut discriminants = HashSet::new();
-        let values = vec![YdbValue::Bool(false), YdbValue::Bool(true)];
+        let mut values = vec![YdbValue::Bool(false), YdbValue::Bool(true)];
 
-        use YdbValue::*;
-
-        num_tests!(Int8, i8);
-        num_tests!(Uint8, u8);
+        num_tests!(values, YdbValue::Int8, i8);
+        num_tests!(values, YdbValue::Uint8, u8);
+        num_tests!(values, YdbValue::Int16, i16);
+        num_tests!(values, YdbValue::Uint16, u16);
+        num_tests!(values, YdbValue::Int32, i32);
+        num_tests!(values, YdbValue::Uint32, u32);
+        num_tests!(values, YdbValue::Int64, i64);
+        num_tests!(values, YdbValue::Uint64, u64);
+        num_tests!(values, YdbValue::Float, f32);
+        num_tests!(values, YdbValue::Double, f64);
 
         for v in values.into_iter() {
             discriminants.insert(std::mem::discriminant(&v));
