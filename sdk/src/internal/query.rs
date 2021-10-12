@@ -28,7 +28,7 @@ impl Query {
         return self;
     }
 
-    pub(crate) fn to_proto(self) -> ExecuteDataQueryRequest {
+    pub(crate) fn to_proto(self) -> Result<ExecuteDataQueryRequest> {
         // query
         let query = ydb_protobuf::generated::ydb::table::Query {
             query: Some(ydb_protobuf::generated::ydb::table::query::Query::YqlText(
@@ -40,14 +40,14 @@ impl Query {
         let mut params = HashMap::with_capacity(self.parameters.len());
 
         for (name, val) in self.parameters.into_iter() {
-            params.insert(name, val.to_typed_value());
+            params.insert(name, val.to_typed_value()?);
         }
 
-        return ExecuteDataQueryRequest {
+        return Ok(ExecuteDataQueryRequest {
             query: Some(query),
             parameters: params,
             ..ExecuteDataQueryRequest::default()
-        };
+        });
     }
 }
 

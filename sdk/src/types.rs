@@ -229,7 +229,7 @@ impl YdbValue {
         return Ok(res);
     }
 
-    pub(crate) fn to_typed_value(self) -> ydb::TypedValue {
+    pub(crate) fn to_typed_value(self) -> Result<ydb::TypedValue> {
         use ydb::r#type::PrimitiveTypeId as pt;
         use ydb::value::Value as pv;
 
@@ -246,7 +246,7 @@ impl YdbValue {
         }
 
         #[allow(unreachable_patterns)]
-        match self {
+        let res = match self {
             Self::Bool(val) => proto_typed_value(pt::Bool, pv::BoolValue(val)),
             Self::Int8(val) => proto_typed_value(pt::Int8, pv::Int32Value(val.into())),
             Self::Uint8(val) => proto_typed_value(pt::Uint8, pv::Uint32Value(val.into())),
@@ -260,7 +260,7 @@ impl YdbValue {
             Self::Double(val) => proto_typed_value(pt::Double, pv::DoubleValue(val)),
             Self::Date(val) => proto_typed_value(
                 pt::Date,
-                pv::Uint32Value((val.as_secs() / SECONDS_PER_DAY).try_into().unwrap()), // panic if out of range
+                pv::Uint32Value((val.as_secs() / SECONDS_PER_DAY).try_into()?),
             ),
             Self::DateTime(_) => unimplemented!(),
             Self::Timestamp(_) => unimplemented!(),
@@ -274,19 +274,26 @@ impl YdbValue {
             Self::DyNumber(_) => unimplemented!(),
             Self::Decimal(_) => unimplemented!(),
             Self::Optional(_) => unimplemented!(),
-            Self::List(items) => Self::to_typed_value_list(items),
-        }
+            Self::List(items) => Self::to_typed_value_list(items)?,
+        };
+        return Ok(res);
     }
 
-    fn to_typed_value_list(items: Vec<YdbValue>) -> ydb::TypedValue {
-        let proto_items: Vec<ydb::TypedValue> = items
+    fn to_typed_value_list(items: Vec<YdbValue>) -> Result<ydb::TypedValue> {
+        let proto_items_result: Vec<Result<ydb::TypedValue>> = items
             .into_iter()
             .map(|item| item.to_typed_value())
             .collect();
-        if proto_items.len() == 0 {
+        if proto_items_result.len() == 0 {
             unimplemented!()
         };
-        ydb::TypedValue {
+
+        let mut proto_items = Vec::with_capacity(proto_items_result.len());
+        for item in proto_items_result.into_iter() {
+            proto_items.push(item?);
+        }
+
+        Ok(ydb::TypedValue {
             r#type: Some(ydb::Type {
                 r#type: Some(ydb::r#type::Type::ListType(Box::new(ydb::ListType {
                     item: Some(Box::new(proto_items[0].r#type.clone().unwrap())),
@@ -299,7 +306,7 @@ impl YdbValue {
                     .collect(),
                 ..ydb::Value::default()
             }),
-        }
+        })
     }
 }
 
@@ -348,7 +355,7 @@ mod test {
 
         for v in values.into_iter() {
             discriminants.insert(std::mem::discriminant(&v));
-            let proto = v.clone().to_typed_value();
+            let proto = v.clone().to_typed_value()?;
             let t = YdbValue::from_proto_type(&proto.r#type)?;
             let v2 = YdbValue::from_proto(&t, proto.value.unwrap())?;
             assert_eq!(&v, &v2);
