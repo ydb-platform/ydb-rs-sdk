@@ -135,6 +135,7 @@ mod test {
             .table_client()
             .create_autocommit_transaction(Mode::ReadOnline);
         let mut res = transaction.query("SELECT 1+1".into()).await?;
+        println!("result: {:?}", &res);
         assert_eq!(
             YdbValue::Int32(2),
             res.first()
@@ -145,7 +146,6 @@ mod test {
                 .remove_field(0)
                 .unwrap()
         );
-        println!("result: {:?}", res);
         Ok(())
     }
 
@@ -156,6 +156,7 @@ mod test {
             .table_client()
             .create_autocommit_transaction(Mode::ReadOnline);
         let mut res = transaction.query("SELECT 1+1 as s".into()).await?;
+        println!("result: {:?}", &res);
         assert_eq!(
             YdbValue::Int32(2),
             res.first()
@@ -166,7 +167,6 @@ mod test {
                 .remove_field_by_name("s")
                 .unwrap()
         );
-        println!("result: {:?}", res);
         Ok(())
     }
 
@@ -206,6 +206,38 @@ mod test {
     }
 
     #[tokio::test]
+    async fn select_int() -> UnitResult {
+        let client = create_client()?;
+        let v = YdbValue::Uint32(0);
+
+        let mut transaction = client
+            .table_client()
+            .create_autocommit_transaction(Mode::ReadOnline);
+        let res = transaction
+            .query(
+                Query::new()
+                    .with_query(
+                        "
+DECLARE $test AS UInt32;
+
+SELECT $test AS test;
+"
+                        .into(),
+                    )
+                    .with_params(HashMap::from_iter([("$test".into(), v.clone())])),
+            )
+            .await?;
+
+        let res = res.results.into_iter().next().unwrap();
+        assert_eq!(1, res.columns().len());
+        assert_eq!(v, res.rows().next().unwrap().remove_field_by_name("test")?);
+
+        return UNIT_OK;
+
+        return UNIT_OK;
+    }
+
+    #[tokio::test]
     async fn select_optional() -> UnitResult {
         let client = create_client()?;
         let mut transaction = client
@@ -229,7 +261,7 @@ SELECT $test AS test;
             )
             .await?;
 
-        let res = res.results.unwrap().into_iter().next().unwrap();
+        let res = res.results.into_iter().next().unwrap();
         assert_eq!(1, res.columns().len());
         assert_eq!(
             YdbValue::optional_from(YdbValue::Int32(0), Some(YdbValue::Int32(3)))?,
@@ -270,8 +302,15 @@ SELECT $l AS l;
             )
             .await?;
         println!("{:?}", res);
-        let res = res.results.unwrap().into_iter().next().unwrap();
+        let res = res.results.into_iter().next().unwrap();
         assert_eq!(1, res.columns().len());
+        assert_eq!(
+            YdbValue::list_from(
+                YdbValue::Int32(0),
+                vec![YdbValue::Int32(1), YdbValue::Int32(2), YdbValue::Int32(3)]
+            )?,
+            res.rows().next().unwrap().remove_field_by_name("l")?
+        );
         Ok(())
     }
 

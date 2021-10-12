@@ -71,7 +71,7 @@ impl From<String> for Query {
 
 #[derive(Debug)]
 pub struct QueryResult {
-    pub(crate) results: Option<Vec<ResultSet>>,
+    pub(crate) results: Vec<ResultSet>,
 }
 
 impl QueryResult {
@@ -93,24 +93,11 @@ impl QueryResult {
 
             results.push(result_set);
         }
-        return Ok(QueryResult {
-            results: Some(results),
-        });
+        return Ok(QueryResult { results });
     }
 
-    pub fn first(&mut self) -> Option<ResultSet> {
-        match self.result_sets() {
-            Some(mut sets) => sets.next(),
-            None => None,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn result_sets(&mut self) -> Option<IntoIter<ResultSet>> {
-        match self.results.take() {
-            Some(results) => Some(results.into_iter()),
-            None => None,
-        }
+    pub fn first(self) -> Option<ResultSet> {
+        self.results.into_iter().next()
     }
 }
 
