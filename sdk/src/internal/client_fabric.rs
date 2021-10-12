@@ -77,9 +77,10 @@ mod test {
     use crate::internal::client_fabric::ClientFabric;
     use crate::internal::query::Query;
     use crate::internal::test_helpers::{CRED, DATABASE, START_ENDPOINT};
-    use crate::types::YdbValue;
+    use crate::types::{YdbList, YdbValue};
 
     use super::*;
+    use crate::errors::{UnitResult, UNIT_OK};
     use crate::internal::load_balancer::RandomLoadBalancer;
     use http::Uri;
     use std::iter::FromIterator;
@@ -205,6 +206,40 @@ mod test {
     }
 
     #[tokio::test]
+    async fn select_optional() -> UnitResult {
+        let client = create_client()?;
+        let mut transaction = client
+            .table_client()
+            .create_autocommit_transaction(Mode::ReadOnline);
+        let res = transaction
+            .query(
+                Query::new()
+                    .with_query(
+                        "
+DECLARE $test AS Optional<Int32>;
+
+SELECT $test AS test;
+"
+                        .into(),
+                    )
+                    .with_params(HashMap::from_iter([(
+                        "$test".into(),
+                        YdbValue::optional_from(YdbValue::Int32(0), Some(YdbValue::Int32(3)))?,
+                    )])),
+            )
+            .await?;
+
+        let res = res.results.unwrap().into_iter().next().unwrap();
+        assert_eq!(1, res.columns().len());
+        assert_eq!(
+            YdbValue::optional_from(YdbValue::Int32(0), Some(YdbValue::Int32(3)))?,
+            res.rows().next().unwrap().remove_field_by_name("test")?
+        );
+
+        return UNIT_OK;
+    }
+
+    #[tokio::test]
     async fn select_list() -> Result<()> {
         let client = create_client()?;
         let mut transaction = client
@@ -223,11 +258,14 @@ SELECT $l AS l;
                     )
                     .with_params(HashMap::from_iter([(
                         "$l".into(),
-                        YdbValue::List(Vec::from([
-                            YdbValue::Int32(1),
-                            YdbValue::Int32(2),
-                            YdbValue::Int32(3),
-                        ])),
+                        YdbValue::List(Box::new(YdbList {
+                            t: YdbValue::Int32(0),
+                            values: Vec::from([
+                                YdbValue::Int32(1),
+                                YdbValue::Int32(2),
+                                YdbValue::Int32(3),
+                            ]),
+                        })),
                     )])),
             )
             .await?;
