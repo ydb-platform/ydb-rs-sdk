@@ -208,7 +208,7 @@ mod test {
     #[tokio::test]
     async fn select_int() -> UnitResult {
         let client = create_client()?;
-        let v = YdbValue::Uint32(0);
+        let v = YdbValue::Int32(123);
 
         let mut transaction = client
             .table_client()
@@ -218,7 +218,7 @@ mod test {
                 Query::new()
                     .with_query(
                         "
-DECLARE $test AS UInt32;
+DECLARE $test AS Int32;
 
 SELECT $test AS test;
 "

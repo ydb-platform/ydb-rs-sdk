@@ -62,9 +62,10 @@ impl Transaction for AutoCommit {
             ..query.to_proto()?
         };
         let mut session = self.session_pool.session().await?;
-        let proto_res = session.execute(req).await?;
-        println!("res: {:?}", proto_res);
-        return QueryResult::from_proto(proto_res, self.error_on_truncate_response);
+        println!("req: {:#?}", &req);
+        let proto_res = session.execute(req).await;
+        println!("res: {:#?}", proto_res);
+        return QueryResult::from_proto(proto_res?, self.error_on_truncate_response);
     }
 
     async fn commit(self: &mut Self) -> Result<()> {
