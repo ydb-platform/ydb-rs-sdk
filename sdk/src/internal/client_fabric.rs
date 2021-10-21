@@ -77,7 +77,7 @@ mod test {
     use crate::internal::client_fabric::ClientFabric;
     use crate::internal::query::Query;
     use crate::internal::test_helpers::{CRED, DATABASE, START_ENDPOINT};
-    use crate::types::{YdbList, YdbValue};
+    use crate::types::{YdbList, YdbStruct, YdbValue};
 
     use super::*;
     use crate::errors::{UnitResult, UNIT_OK};
@@ -310,6 +310,65 @@ SELECT $l AS l;
                 vec![YdbValue::Int32(1), YdbValue::Int32(2), YdbValue::Int32(3)]
             )?,
             res.rows().next().unwrap().remove_field_by_name("l")?
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn select_struct() -> Result<()> {
+        let client = create_client()?;
+        let mut transaction = client
+            .table_client()
+            .create_autocommit_transaction(Mode::ReadOnline);
+        let res = transaction
+            .query(
+                Query::new()
+                    .with_query(
+                        "
+DECLARE $l AS List<Struct<
+    a: Int64
+>>;
+
+SELECT 
+    SUM(a) AS s
+FROM
+    AS_TABLE($l);
+;
+"
+                        .into(),
+                    )
+                    .with_params(HashMap::from_iter([(
+                        "$l".into(),
+                        YdbValue::List(Box::new(YdbList {
+                            t: YdbValue::Struct(YdbStruct::from_names_and_values(
+                                vec!["a".into()],
+                                vec![YdbValue::Int64(0)],
+                            )?),
+                            values: vec![
+                                YdbValue::Struct(YdbStruct::from_names_and_values(
+                                    vec!["a".into()],
+                                    vec![YdbValue::Int64(1)],
+                                )?),
+                                YdbValue::Struct(YdbStruct::from_names_and_values(
+                                    vec!["a".into()],
+                                    vec![YdbValue::Int64(2)],
+                                )?),
+                                YdbValue::Struct(YdbStruct::from_names_and_values(
+                                    vec!["a".into()],
+                                    vec![YdbValue::Int64(3)],
+                                )?),
+                            ],
+                        })),
+                    )])),
+            )
+            .await?;
+        println!("{:?}", res);
+        let res = res.results.into_iter().next().unwrap();
+        assert_eq!(1, res.columns().len());
+
+        assert_eq!(
+            YdbValue::optional_from(YdbValue::Int64(0), Some(YdbValue::Int64(6)))?,
+            res.rows().next().unwrap().remove_field_by_name("s")?
         );
         Ok(())
     }

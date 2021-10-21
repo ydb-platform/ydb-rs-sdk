@@ -1,4 +1,5 @@
 use crate::errors::{Error, Result};
+use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -33,29 +34,50 @@ pub enum YdbValue {
     Yson(Vec<u8>),
     Json(Vec<u8>),
     JsonDocument(Vec<u8>),
-    Optional(Box<YdbOptional>),
 
+    Optional(Box<YdbOptional>),
     List(Box<YdbList>),
+    Struct(YdbStruct),
 }
 
-impl YdbValue {
-    pub fn list_from(t: YdbValue, values: Vec<YdbValue>) -> Result<Self> {
-        for (index, value) in values.iter().enumerate() {
-            if std::mem::discriminant(&t) != std::mem::discriminant(value) {
-                return Err(Error::Custom(format!("failed list_from: type and value has different enum-types. index: {}, type: '{:?}', value: '{:?}'", index, t, value)));
-            }
-        }
+#[derive(Clone, Debug, PartialEq)]
+pub struct YdbStruct {
+    fields_name: Vec<String>,
+    values: Vec<YdbValue>,
+}
 
-        return Ok(YdbValue::List(Box::new(YdbList { t, values })));
+impl YdbStruct {
+    pub fn insert(&mut self, name: String, v: YdbValue) {
+        self.fields_name.push(name);
+        self.values.push(v);
     }
 
-    pub fn optional_from(t: YdbValue, value: Option<YdbValue>) -> Result<Self> {
-        if let Some(value) = &value {
-            if std::mem::discriminant(&t) != std::mem::discriminant(value) {
-                return Err(Error::Custom(format!("failed optional_from: type and value has different enum-types. type: '{:?}', value: '{:?}'", t, value)));
-            }
-        }
-        Ok(YdbValue::Optional(Box::new(YdbOptional { t, value })))
+    pub fn from_names_and_values(fields_name: Vec<String>, values: Vec<YdbValue>) -> Result<Self> {
+        if fields_name.len() != values.len() {
+            return Err(Error::Custom(format!("different len fields_name and values. fields_name len: {}, values len: {}. fields_name: {:?}, values: {:?}", fields_name.len(), values.len(), fields_name, values).into()));
+        };
+
+        return Ok(YdbStruct {
+            fields_name,
+            values,
+        });
+    }
+
+    pub fn new() -> Self {
+        return Self::with_capacity(0);
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        return YdbStruct {
+            fields_name: Vec::with_capacity(capacity),
+            values: Vec::with_capacity(capacity),
+        };
+    }
+}
+
+impl Default for YdbStruct {
+    fn default() -> Self {
+        return Self::new();
     }
 }
 
@@ -132,6 +154,25 @@ impl SignedInterval {
 }
 
 impl YdbValue {
+    pub fn list_from(t: YdbValue, values: Vec<YdbValue>) -> Result<Self> {
+        for (index, value) in values.iter().enumerate() {
+            if std::mem::discriminant(&t) != std::mem::discriminant(value) {
+                return Err(Error::Custom(format!("failed list_from: type and value has different enum-types. index: {}, type: '{:?}', value: '{:?}'", index, t, value)));
+            }
+        }
+
+        return Ok(YdbValue::List(Box::new(YdbList { t, values })));
+    }
+
+    pub fn optional_from(t: YdbValue, value: Option<YdbValue>) -> Result<Self> {
+        if let Some(value) = &value {
+            if std::mem::discriminant(&t) != std::mem::discriminant(value) {
+                return Err(Error::Custom(format!("failed optional_from: type and value has different enum-types. type: '{:?}', value: '{:?}'", t, value)));
+            }
+        }
+        Ok(YdbValue::Optional(Box::new(YdbOptional { t, value })))
+    }
+
     // return empty value of requested type
     pub(crate) fn from_proto_type(proto_type: &Option<ydb::Type>) -> Result<Self> {
         use ydb::r#type::PrimitiveTypeId as P;
@@ -185,6 +226,14 @@ impl YdbValue {
                         values: Vec::default(),
                     }))
                 }
+                T::StructType(struct_type) => {
+                    let mut s = YdbStruct::with_capacity(struct_type.members.len());
+                    for field in &struct_type.members {
+                        let t = Self::from_proto_type(&field.r#type)?;
+                        s.insert(field.name.clone(), t);
+                    }
+                    Self::Struct(s)
+                }
                 _ => unimplemented!("{:?}", t_val),
                 // think about map to internal types as 1:1
             }
@@ -216,6 +265,9 @@ impl YdbValue {
                     values,
                 }))
             }
+            (YdbValue::Struct(struct_t), ydb::Value { items, .. }) => {
+                Self::from_proto_struct(struct_t, items)?
+            }
             (t, proto_value) => {
                 return return Err(Error::Custom(
                     format!(
@@ -227,6 +279,25 @@ impl YdbValue {
             }
         };
         return Ok(res);
+    }
+
+    fn from_proto_struct(t: &YdbStruct, items: Vec<ydb::Value>) -> Result<YdbValue> {
+        if t.fields_name.len() != items.len() {
+            return Err(Error::Custom(
+                format!(
+                    "struct description and items has diferrent length. t: {:?}, items: {:?}",
+                    t, items
+                )
+                .into(),
+            ));
+        };
+
+        let mut res = YdbStruct::with_capacity(t.fields_name.len());
+        for (index, item) in items.into_iter().enumerate() {
+            let v = YdbValue::from_proto(&t.values[index], item)?;
+            res.insert(t.fields_name[index].clone(), v);
+        }
+        return Ok(YdbValue::Struct(res));
     }
 
     fn from_proto_value(
@@ -341,6 +412,7 @@ impl YdbValue {
             }
             Self::Optional(val) => Self::to_typed_optional(val)?,
             Self::List(items) => Self::to_typed_value_list(items)?,
+            YdbValue::Struct(s) => { Self::to_typed_struct(s) }?,
         };
         return Ok(res);
     }
@@ -367,6 +439,29 @@ impl YdbValue {
             }),
             value: Some(val),
         })
+    }
+
+    fn to_typed_struct(s: YdbStruct) -> Result<ydb::TypedValue> {
+        let mut members: Vec<ydb::StructMember> = Vec::with_capacity(s.fields_name.len());
+        let mut items: Vec<ydb::Value> = Vec::with_capacity(s.fields_name.len());
+        for (index, v) in s.values.into_iter().enumerate() {
+            let typed_val = v.to_typed_value()?;
+            members.push(ydb::StructMember {
+                name: s.fields_name[index].clone(),
+                r#type: typed_val.r#type,
+            });
+            items.push(typed_val.value.unwrap());
+        }
+
+        return Ok(ydb::TypedValue {
+            r#type: Some(ydb::Type {
+                r#type: Some(ydb::r#type::Type::StructType(ydb::StructType { members })),
+            }),
+            value: Some(ydb::Value {
+                items,
+                ..ydb::Value::default()
+            }),
+        });
     }
 
     fn to_typed_value_list(ydb_list: Box<YdbList>) -> Result<ydb::TypedValue> {
@@ -408,7 +503,7 @@ pub struct Column {
 #[cfg(test)]
 mod test {
     use crate::errors::{UnitResult, UNIT_OK};
-    use crate::types::{Sign, SignedInterval, YdbValue};
+    use crate::types::{Sign, SignedInterval, YdbStruct, YdbValue};
     use std::collections::HashSet;
     use std::convert::TryInto;
     use std::ops::Add;
@@ -480,6 +575,17 @@ mod test {
             vec![YdbValue::Int8(1), YdbValue::Int8(2), YdbValue::Int8(3)],
         )?);
 
+        values.push(YdbValue::Struct(YdbStruct {
+            fields_name: vec!["a".into(), "b".into()],
+            values: vec![
+                YdbValue::Int32(1),
+                YdbValue::list_from(
+                    YdbValue::Int32(0),
+                    vec![YdbValue::Int32(1), YdbValue::Int32(2), YdbValue::Int32(3)],
+                )?,
+            ],
+        }));
+
         for v in values.into_iter() {
             discriminants.insert(std::mem::discriminant(&v));
             let proto = v.clone().to_typed_value()?;
@@ -495,7 +601,7 @@ mod test {
             }
         }
 
-        assert_eq!(Vec::<String>::new(), non_tested);
+        assert_eq!(non_tested.len(), 0, "{:?}", non_tested);
 
         return UNIT_OK;
     }
