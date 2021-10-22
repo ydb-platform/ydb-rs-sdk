@@ -374,6 +374,62 @@ FROM
     }
 
     #[tokio::test]
+    async fn select_int64_null4() -> Result<()> {
+        let client = create_client()?;
+        let mut transaction = client
+            .table_client()
+            .create_autocommit_transaction(Mode::ReadOnline);
+        let res = transaction
+            .query(
+                Query::new().with_query(
+                    "
+SELECT CAST(NULL AS Optional<Int64>)
+;
+"
+                    .into(),
+                ),
+            )
+            .await?;
+        println!("{:?}", res);
+        let res = res.results.into_iter().next().unwrap();
+        assert_eq!(1, res.columns().len());
+
+        assert_eq!(
+            YdbValue::optional_from(YdbValue::Int64(0), None)?,
+            res.rows().next().unwrap().remove_field(0)?
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn select_void_null() -> Result<()> {
+        let client = create_client()?;
+        let mut transaction = client
+            .table_client()
+            .create_autocommit_transaction(Mode::ReadOnline);
+        let res = transaction
+            .query(
+                Query::new().with_query(
+                    "
+SELECT NULL
+;
+"
+                    .into(),
+                ),
+            )
+            .await?;
+        println!("{:?}", res);
+        let res = res.results.into_iter().next().unwrap();
+        assert_eq!(1, res.columns().len());
+
+        assert_eq!(
+            YdbValue::optional_from(YdbValue::Void, None)?,
+            res.rows().next().unwrap().remove_field(0)?
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn who_am_i() -> Result<()> {
         let res = create_client()?.who_am_i(WhoAmIRequest::default()).await?;
         assert!(res.user.len() > 0);

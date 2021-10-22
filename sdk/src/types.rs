@@ -14,6 +14,7 @@ const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 #[derive(Clone, Debug, EnumIter, PartialEq)]
 #[allow(dead_code)]
 pub enum YdbValue {
+    Void,
     Bool(bool),
     Int8(i8),
     Uint8(u8),
@@ -207,6 +208,7 @@ impl YdbValue {
                     Some(P::JsonDocument) => Self::JsonDocument(Vec::default()),
                     _ => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
                 },
+                T::VoidType(_) => YdbValue::Void,
                 T::OptionalType(val) => {
                     let t = if let Some(item) = &val.item {
                         Some(*item.clone())
@@ -247,6 +249,7 @@ impl YdbValue {
         use ydb_protobuf::generated::ydb::value::Value as pv;
 
         let res = match (t, proto_value) {
+            (YdbValue::Void, _) => YdbValue::Void,
             (
                 t,
                 ydb::Value {
@@ -381,6 +384,19 @@ impl YdbValue {
 
         #[allow(unreachable_patterns)]
         let res = match self {
+            Self::Void => ydb::TypedValue {
+                r#type: Some(ydb::Type {
+                    r#type: Some(ydb::r#type::Type::VoidType(
+                        prost_types::NullValue::NullValue.into(),
+                    )),
+                }),
+                value: Some(ydb::Value {
+                    value: Some(ydb::value::Value::NullFlagValue(
+                        prost_types::NullValue::NullValue.into(),
+                    )),
+                    ..ydb::Value::default()
+                }),
+            },
             Self::Bool(val) => proto_typed_value(pt::Bool, pv::BoolValue(val)),
             Self::Int8(val) => proto_typed_value(pt::Int8, pv::Int32Value(val.into())),
             Self::Uint8(val) => proto_typed_value(pt::Uint8, pv::Uint32Value(val.into())),
@@ -544,6 +560,8 @@ mod test {
         num_tests!(values, YdbValue::Uint64, u64);
         num_tests!(values, YdbValue::Float, f32);
         num_tests!(values, YdbValue::Double, f64);
+
+        values.push(YdbValue::Void);
 
         values.push(YdbValue::Date(std::time::Duration::from_secs(1633996800))); //Tue Oct 12 00:00:00 UTC 2021
         values.push(YdbValue::DateTime(std::time::Duration::from_secs(
