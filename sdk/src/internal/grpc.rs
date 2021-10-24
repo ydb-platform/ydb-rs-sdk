@@ -1,3 +1,4 @@
+use std::time::Duration;
 use ydb_protobuf::generated::ydb::status_ids::StatusCode;
 
 use crate::credentials::Credentials;
@@ -54,6 +55,7 @@ fn create_grpc_channel(uri: Uri) -> Result<Channel> {
     if tls {
         endpoint = endpoint.tls_config(ClientTlsConfig::new())?
     };
+    endpoint = endpoint.tcp_keepalive(Some(Duration::from_secs(15))); // tcp keepalive similar to default in golang lib
     return Ok(endpoint.connect_lazy()?);
 }
 
