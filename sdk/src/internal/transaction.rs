@@ -62,6 +62,7 @@ impl Transaction for AutoCommit {
             ..query.to_proto()?
         };
         let mut session = self.session_pool.session().await?;
+        println!("session: {:#?}", &session);
         println!("req: {:#?}", &req);
         let proto_res = session.execute(req).await;
         println!("res: {:#?}", proto_res);
