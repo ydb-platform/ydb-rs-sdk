@@ -23,9 +23,9 @@ impl From<Mode> for TxMode {
 
 #[async_trait]
 pub trait Transaction {
-    async fn query(self: &mut Self, query: Query) -> Result<QueryResult>;
-    async fn commit(self: &mut Self) -> Result<()>;
-    async fn rollback(self: &mut Self) -> Result<()>;
+    async fn query(&mut self, query: Query) -> Result<QueryResult>;
+    async fn commit(&mut self) -> Result<()>;
+    async fn rollback(&mut self) -> Result<()>;
 }
 
 pub struct AutoCommit {
@@ -51,7 +51,7 @@ impl AutoCommit {
 
 #[async_trait]
 impl Transaction for AutoCommit {
-    async fn query(self: &mut Self, query: Query) -> Result<QueryResult> {
+    async fn query(&mut self, query: Query) -> Result<QueryResult> {
         let req = ExecuteDataQueryRequest {
             tx_control: Some(TransactionControl {
                 commit_tx: true,
@@ -69,11 +69,11 @@ impl Transaction for AutoCommit {
         return QueryResult::from_proto(proto_res?, self.error_on_truncate_response);
     }
 
-    async fn commit(self: &mut Self) -> Result<()> {
+    async fn commit(&mut self) -> Result<()> {
         return Ok(());
     }
 
-    async fn rollback(self: &mut Self) -> Result<()> {
+    async fn rollback(&mut self) -> Result<()> {
         return Err(Error::from("impossible to rollback autocommit transaction"));
     }
 }

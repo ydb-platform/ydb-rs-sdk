@@ -3,7 +3,7 @@ publish=false
 name = "ydb-protobuf"
 version = "0.0.1"
 authors = ["rekby <timofey.koolin@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
