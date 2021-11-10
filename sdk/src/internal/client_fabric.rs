@@ -2,13 +2,13 @@ use crate::credentials::Credentials;
 use crate::errors::Result;
 use crate::internal::client_common::DBCredentials;
 use crate::internal::client_table::TableClient;
-use crate::internal::discovery::StaticDiscovery;
+
 use crate::internal::discovery::{Discovery, Service};
 use crate::internal::grpc;
 use crate::internal::grpc::create_grpc_client_old;
 use crate::internal::load_balancer::{update_load_balancer, LoadBalancer, SharedLoadBalancer};
 use crate::internal::middlewares::AuthService;
-use crate::internal::transaction::{Mode, Transaction};
+
 use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_protobuf::generated::ydb::discovery::{
     ListEndpointsRequest, ListEndpointsResult, WhoAmIRequest, WhoAmIResult,
@@ -75,13 +75,16 @@ mod test {
     use std::collections::HashMap;
 
     use crate::internal::client_fabric::ClientFabric;
+    use crate::internal::discovery::StaticDiscovery;
     use crate::internal::query::Query;
     use crate::internal::test_helpers::{CRED, DATABASE, START_ENDPOINT};
+    use crate::internal::transaction::Transaction;
     use crate::types::{YdbList, YdbStruct, YdbValue};
 
     use super::*;
     use crate::errors::{UnitResult, UNIT_OK};
     use crate::internal::load_balancer::RandomLoadBalancer;
+    use crate::internal::transaction::Mode;
     use http::Uri;
     use std::iter::FromIterator;
     use std::str::FromStr;
@@ -90,7 +93,7 @@ mod test {
         // let token = crate::credentials::StaticToken::from(std::env::var("IAM_TOKEN")?.as_str());
         // let token = crate::credentials::CommandLineYcToken::new();
         // let database = std::env::var("DB_NAME")?;
-        let endpoint_uri = Uri::from_str(START_ENDPOINT.as_str())?;
+        let _endpoint_uri = Uri::from_str(START_ENDPOINT.as_str())?;
         let credentials = Box::new(CRED.lock()?.clone());
         // let discovery = TimerDiscovery::new(
         //     credentials.clone(),
@@ -134,7 +137,7 @@ mod test {
         let mut transaction = client
             .table_client()
             .create_autocommit_transaction(Mode::ReadOnline);
-        let mut res = transaction.query("SELECT 1+1".into()).await?;
+        let res = transaction.query("SELECT 1+1".into()).await?;
         println!("result: {:?}", &res);
         assert_eq!(
             YdbValue::Int32(2),
@@ -155,7 +158,7 @@ mod test {
         let mut transaction = client
             .table_client()
             .create_autocommit_transaction(Mode::ReadOnline);
-        let mut res = transaction.query("SELECT 1+1 as s".into()).await?;
+        let res = transaction.query("SELECT 1+1 as s".into()).await?;
         println!("result: {:?}", &res);
         assert_eq!(
             YdbValue::Int32(2),
@@ -178,7 +181,7 @@ mod test {
             .create_autocommit_transaction(Mode::ReadOnline);
         let mut params = HashMap::new();
         params.insert("$v".to_string(), YdbValue::Int32(3));
-        let mut res = transaction
+        let res = transaction
             .query(
                 Query::new()
                     .with_query(

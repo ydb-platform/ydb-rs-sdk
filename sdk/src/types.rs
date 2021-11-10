@@ -1,6 +1,6 @@
 use crate::errors::{Error, Result};
-use std::collections::HashMap;
-use std::convert::{TryFrom, TryInto};
+
+use std::convert::{TryInto};
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::time::Duration;
@@ -246,7 +246,7 @@ impl YdbValue {
     }
 
     pub(crate) fn from_proto(t: &YdbValue, proto_value: ydb::Value) -> Result<Self> {
-        use ydb_protobuf::generated::ydb::value::Value as pv;
+        
 
         let res = match (t, proto_value) {
             (YdbValue::Void, _) => YdbValue::Void,
@@ -434,7 +434,7 @@ impl YdbValue {
     }
 
     fn to_typed_optional(optional: Box<YdbOptional>) -> Result<ydb::TypedValue> {
-        if let YdbValue::Optional(opt) = optional.t {
+        if let YdbValue::Optional(_opt) = optional.t {
             unimplemented!("nested optional")
         }
 
@@ -521,8 +521,8 @@ mod test {
     use crate::errors::{UnitResult, UNIT_OK};
     use crate::types::{Sign, SignedInterval, YdbStruct, YdbValue};
     use std::collections::HashSet;
-    use std::convert::TryInto;
-    use std::ops::Add;
+    
+    
     use std::time::Duration;
     use strum::IntoEnumIterator;
 

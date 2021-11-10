@@ -2,8 +2,8 @@ use crate::errors::*;
 use crate::internal::discovery::{DiscoveryState, Service};
 use http::Uri;
 use mockall;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering::Relaxed;
+
+
 use std::sync::{Arc, RwLock};
 use tokio::sync::watch::Receiver;
 
@@ -120,6 +120,8 @@ mod test {
     use mockall::predicate;
     use std::collections::HashMap;
     use std::str::FromStr;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering::Relaxed;
     use std::time::Duration;
 
     #[test]
