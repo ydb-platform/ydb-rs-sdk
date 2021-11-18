@@ -16,7 +16,7 @@ use ydb_protobuf::generated::ydb::discovery::{
 
 use crate::credentials::Credentials;
 use crate::errors::{Error, Result};
-use crate::internal::grpc::{create_grpc_client_old, grpc_read_result};
+use crate::internal::grpc::{create_grpc_client_old, grpc_read_operation_result};
 use std::iter::FromIterator;
 use std::time::Duration;
 use tokio::sync::watch::Receiver;
@@ -211,7 +211,7 @@ impl DiscoverySharedState {
             })
             .await?;
 
-        let res: ListEndpointsResult = grpc_read_result(resp)?;
+        let res: ListEndpointsResult = grpc_read_operation_result(resp)?;
         println!("list endpoints: {:?}", res);
         let new_endpoints = Self::list_endpoints_to_services_map(res)?;
         let new_state = Arc::new(DiscoveryState {

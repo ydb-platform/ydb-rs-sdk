@@ -52,11 +52,11 @@ impl ClientFabric {
         self: &Self,
         req: ListEndpointsRequest,
     ) -> Result<ListEndpointsResult> {
-        grpc::grpc_read_result(self.client_discovery()?.list_endpoints(req).await?)
+        grpc::grpc_read_operation_result(self.client_discovery()?.list_endpoints(req).await?)
     }
 
     pub async fn who_am_i(self: Self, req: WhoAmIRequest) -> Result<WhoAmIResult> {
-        grpc::grpc_read_result(self.client_discovery()?.who_am_i(req).await?)
+        grpc::grpc_read_operation_result(self.client_discovery()?.who_am_i(req).await?)
     }
 
     // clients

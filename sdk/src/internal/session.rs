@@ -1,6 +1,6 @@
 use crate::errors::*;
 use crate::internal::client_fabric::Middleware;
-use crate::internal::grpc::grpc_read_result;
+use crate::internal::grpc::grpc_read_operation_result;
 use derivative::Derivative;
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 use ydb_protobuf::generated::ydb::table::{ExecuteDataQueryRequest, ExecuteQueryResult};

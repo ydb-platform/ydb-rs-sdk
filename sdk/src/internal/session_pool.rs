@@ -2,7 +2,7 @@ use crate::errors::*;
 use crate::internal::client_common::DBCredentials;
 use crate::internal::client_fabric::Middleware;
 use crate::internal::discovery::Service;
-use crate::internal::grpc::{create_grpc_client, grpc_read_result};
+use crate::internal::grpc::{create_grpc_client, grpc_read_operation_result};
 use crate::internal::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::internal::session::Session;
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
@@ -23,7 +23,7 @@ impl SessionPool {
 
     pub(crate) async fn session(&mut self) -> Result<Session> {
         let mut client = self.channel_pool.create_channel()?;
-        let session_res: CreateSessionResult = grpc_read_result(
+        let session_res: CreateSessionResult = grpc_read_operation_result(
             client
                 .create_session(CreateSessionRequest::default())
                 .await?,

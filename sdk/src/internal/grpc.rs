@@ -60,7 +60,7 @@ fn create_grpc_channel(uri: Uri) -> Result<Channel> {
     return Ok(endpoint.connect_lazy()?);
 }
 
-pub(crate) fn grpc_read_result<TOp, T>(resp: tonic::Response<TOp>) -> errors::Result<T>
+pub(crate) fn grpc_read_operation_result<TOp, T>(resp: tonic::Response<TOp>) -> errors::Result<T>
 where
     TOp: Operation,
     T: Default + prost::Message,
@@ -79,7 +79,7 @@ where
     return Ok(res);
 }
 
-pub(crate) fn grpc_read_void_result<TOp>(resp: tonic::Response<TOp>) -> errors::Result<()>
+pub(crate) fn grpc_read_void_operation_result<TOp>(resp: tonic::Response<TOp>) -> errors::Result<()>
 where
     TOp: Operation,
 {
