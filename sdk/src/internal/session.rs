@@ -9,7 +9,7 @@ use ydb_protobuf::generated::ydb::table::{ExecuteDataQueryRequest, ExecuteQueryR
 #[derivative(Debug)]
 pub(crate) struct Session {
     client: TableServiceClient<Middleware>,
-    id: String,
+    pub(crate) id: String,
 
     #[derivative(Debug = "ignore")]
     on_drop_callbacks: Vec<Box<dyn FnOnce() + Send>>,
@@ -27,19 +27,11 @@ impl Session {
     pub(crate) fn on_drop(&mut self, f: Box<dyn FnOnce() + Send>) {
         self.on_drop_callbacks.push(f)
     }
-
-    pub async fn execute(
-        self: &mut Self,
-        mut req: ExecuteDataQueryRequest,
-    ) -> Result<ExecuteQueryResult> {
-        req.session_id = self.id.clone();
-        grpc_read_result(self.client.execute_data_query(req).await?)
-    }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        println!("drop");
+        println!("drop session: {}", &self.id);
         while let Some(on_drop) = self.on_drop_callbacks.pop() {
             on_drop()
         }

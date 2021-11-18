@@ -34,7 +34,7 @@ impl TableClient {
     }
 
     pub(crate) fn create_autocommit_transaction(&self, mode: Mode) -> impl Transaction {
-        AutoCommit::new(self.session_pool.clone(), mode)
+        AutoCommit::new(self.channel_pool.clone(), self.session_pool.clone(), mode)
     }
 
     pub(crate) async fn create_session(&mut self) -> Result<Session> {
