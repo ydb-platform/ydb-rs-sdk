@@ -136,7 +136,7 @@ mod test {
         let client = create_client()?;
         let mut transaction = client
             .table_client()
-            .create_autocommit_transaction(Mode::ReadOnline);
+            .create_autocommit_transaction(Mode::OnlineReadonly);
         let res = transaction.query("SELECT 1+1".into()).await?;
         println!("result: {:?}", &res);
         assert_eq!(
@@ -157,7 +157,7 @@ mod test {
         let client = create_client()?;
         let mut transaction = client
             .table_client()
-            .create_autocommit_transaction(Mode::ReadOnline);
+            .create_autocommit_transaction(Mode::OnlineReadonly);
         let res = transaction.query("SELECT 1+1 as s".into()).await?;
         println!("result: {:?}", &res);
         assert_eq!(
@@ -178,7 +178,7 @@ mod test {
         let client = create_client()?;
         let mut transaction = client
             .table_client()
-            .create_autocommit_transaction(Mode::ReadOnline);
+            .create_autocommit_transaction(Mode::OnlineReadonly);
         let mut params = HashMap::new();
         params.insert("$v".to_string(), YdbValue::Int32(3));
         let res = transaction
@@ -215,7 +215,7 @@ mod test {
 
         let mut transaction = client
             .table_client()
-            .create_autocommit_transaction(Mode::ReadOnline);
+            .create_autocommit_transaction(Mode::OnlineReadonly);
         let res = transaction
             .query(
                 Query::new()
@@ -245,7 +245,7 @@ SELECT $test AS test;
         let client = create_client()?;
         let mut transaction = client
             .table_client()
-            .create_autocommit_transaction(Mode::ReadOnline);
+            .create_autocommit_transaction(Mode::OnlineReadonly);
         let res = transaction
             .query(
                 Query::new()
@@ -279,7 +279,7 @@ SELECT $test AS test;
         let client = create_client()?;
         let mut transaction = client
             .table_client()
-            .create_autocommit_transaction(Mode::ReadOnline);
+            .create_autocommit_transaction(Mode::OnlineReadonly);
         let res = transaction
             .query(
                 Query::new()
@@ -322,7 +322,7 @@ SELECT $l AS l;
         let client = create_client()?;
         let mut transaction = client
             .table_client()
-            .create_autocommit_transaction(Mode::ReadOnline);
+            .create_autocommit_transaction(Mode::OnlineReadonly);
         let res = transaction
             .query(
                 Query::new()
@@ -381,7 +381,7 @@ FROM
         let client = create_client()?;
         let mut transaction = client
             .table_client()
-            .create_autocommit_transaction(Mode::ReadOnline);
+            .create_autocommit_transaction(Mode::OnlineReadonly);
         let res = transaction
             .query(
                 Query::new().with_query(
@@ -409,7 +409,7 @@ SELECT CAST(NULL AS Optional<Int64>)
         let client = create_client()?;
         let mut transaction = client
             .table_client()
-            .create_autocommit_transaction(Mode::ReadOnline);
+            .create_autocommit_transaction(Mode::OnlineReadonly);
         let res = transaction
             .query(
                 Query::new().with_query(

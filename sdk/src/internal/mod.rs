@@ -11,3 +11,4 @@ mod session_pool;
 mod test_helpers;
 mod trait_operation;
 mod transaction;
+mod channel_pool;

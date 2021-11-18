@@ -3,6 +3,9 @@ use std::{future::Future, pin::Pin};
 
 use http::{HeaderValue, Request, Response};
 use tonic::body::BoxBody;
+use tonic::metadata::AsciiMetadataValue;
+use tonic::service::Interceptor;
+use tonic::{Code, Status};
 use tonic::transport::{Body, Channel};
 use tower::Service;
 
@@ -54,5 +57,41 @@ impl Service<Request<BoxBody>> for AuthService {
             let response = ch.call(req).await?;
             Ok(response)
         })
+    }
+}
+
+
+pub(crate) struct AuthInterceptor {
+    cred: DBCredentials,
+}
+
+impl Interceptor for AuthInterceptor {
+    fn call(&mut self, mut request: tonic::Request<()>) -> Result<tonic::Request<()>, Status> {
+        let db_name = match AsciiMetadataValue::from_str(self.cred.database.as_str()) {
+            Ok(val)=>val,
+            Err(err)=>{
+                return Err(Status::new(Code::InvalidArgument, "non-ascii dbname received for auth interceptor"))
+            }
+        };
+        request.metadata_mut().insert("x-ydb-database", db_name);
+
+        let token = match self.cred.credentials.create_token() {
+            Ok(token)=>{
+                match AsciiMetadataValue::from_str(token.as_str()) {
+                    Ok(val)=>val,
+                    Err(err)=>{
+                        return Err(Status::new(Code::InvalidArgument, "non-ascii token received for auth interceptor"))
+                    }
+                }
+            },
+            Err(err)=>{
+                return Err(Status::new(
+                    Code::Internal,
+                    format!("error receive auth token for auth interceptor: {}", err.to_string())
+                ))
+            }
+        };
+        request.metadata_mut().insert("x-ydb-auth-ticket", token);
+        return Ok(request);
     }
 }

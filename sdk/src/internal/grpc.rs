@@ -8,6 +8,7 @@ use crate::internal::client_common::DBCredentials;
 use crate::internal::middlewares::AuthService;
 use crate::internal::trait_operation::Operation;
 use http::Uri;
+use tonic::service::Interceptor;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tower::ServiceBuilder;
 
