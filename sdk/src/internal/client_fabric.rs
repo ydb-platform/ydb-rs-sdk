@@ -79,7 +79,7 @@ mod test {
     use crate::internal::query::Query;
     use crate::internal::test_helpers::{CRED, DATABASE, START_ENDPOINT};
     use crate::internal::transaction::Transaction;
-    use crate::types::{YdbList, YdbStruct, YdbValue};
+    use crate::types::{YdbList, YdbOptional, YdbStruct, YdbValue};
 
     use super::*;
     use crate::errors::{UnitResult, UNIT_OK};
@@ -88,6 +88,7 @@ mod test {
     use http::Uri;
     use std::iter::FromIterator;
     use std::str::FromStr;
+    use crate::internal::transaction::Mode::SerializableReadWrite;
 
     fn create_client() -> Result<ClientFabric> {
         // let token = crate::credentials::StaticToken::from(std::env::var("IAM_TOKEN")?.as_str());
@@ -206,6 +207,52 @@ mod test {
                 .unwrap()
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn multistep_transaction()->Result<()>{
+        let client = create_client()?;
+        let mut tx_auto = client.table_client().create_autocommit_transaction(SerializableReadWrite);
+
+        let mut tx = client.table_client().create_multiquery_transaction();
+        tx.query(Query::new().with_query("DELETE FROM test_values".into())).await?;
+        tx.commit().await?;
+
+        let mut tx = client.table_client().create_multiquery_transaction();
+        tx.query(Query::new().with_query("UPSERT INTO test_values (id, vInt64) VALUES(1, 2)".into())).await?;
+        tx.query(Query::new()
+            .with_query("
+                DECLARE $key AS Int64;
+                DECLARE $val AS Int64;
+
+                UPSERT INTO test_values (id, vInt64) VALUES($key, $val)
+            ".into())
+            .with_params(HashMap::from([
+                ("$key".into(), YdbValue::Int64(2)),
+                ("$val".into(), YdbValue::Int64(3)),
+            ]))
+        ).await?;
+
+        // check table before commit
+        let auto_res = tx_auto.query(Query::new().with_query("SELECT vInt64 FROM test_values WHERE id=1".into())).await?;
+        assert!(auto_res.first().unwrap().rows().next().is_none());
+
+        tx.commit().await?;
+
+        // check table after commit
+        let auto_res = tx_auto.query(Query::new().with_query("SELECT vInt64 FROM test_values WHERE id=1".into())).await?;
+        assert_eq!(YdbValue::optional_from(YdbValue::Int64(0), Some(YdbValue::Int64(2)))?,
+                   auto_res
+                       .first()
+                       .unwrap()
+                       .rows()
+                       .next()
+                       .unwrap()
+                       .remove_field_by_name("vInt64")
+                       .unwrap()
+        );
+
+        return Ok(());
     }
 
     #[tokio::test]

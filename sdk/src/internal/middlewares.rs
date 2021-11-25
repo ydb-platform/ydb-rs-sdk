@@ -80,7 +80,7 @@ impl Interceptor for AuthInterceptor {
                 match AsciiMetadataValue::from_str(token.as_str()) {
                     Ok(val)=>val,
                     Err(err)=>{
-                        return Err(Status::new(Code::InvalidArgument, "non-ascii token received for auth interceptor"))
+                        return Err(Status::new(Code::InvalidArgument, format!("non-ascii token received for auth interceptor: {}", err)))
                     }
                 }
             },

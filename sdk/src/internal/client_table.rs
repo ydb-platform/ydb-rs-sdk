@@ -1,4 +1,3 @@
-use tonic::transport::Channel;
 use crate::errors::*;
 use crate::internal::client_common::DBCredentials;
 use crate::internal::client_fabric::Middleware;
@@ -7,7 +6,7 @@ use crate::internal::grpc::{create_grpc_client};
 use crate::internal::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::internal::session::Session;
 use crate::internal::session_pool::SessionPool;
-use crate::internal::transaction::{AutoCommit, Mode, Transaction};
+use crate::internal::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 use crate::internal::channel_pool::ChannelPool;
 use crate::internal::middlewares::AuthService;
@@ -33,8 +32,12 @@ impl TableClient {
         };
     }
 
-    pub(crate) fn create_autocommit_transaction(&self, mode: Mode) -> impl Transaction {
-        AutoCommit::new(self.channel_pool.clone(), self.session_pool.clone(), mode)
+    pub fn create_autocommit_transaction(&self, mode: Mode) -> impl Transaction {
+        AutoCommit::new(self.channel_pool.clone(), self.session_pool.clone(), mode).with_error_on_truncate(self.error_on_truncate)
+    }
+
+    pub fn create_multiquery_transaction(&self) -> impl Transaction {
+        SerializableReadWriteTx::new(self.channel_pool.clone(), self.session_pool.clone()).with_error_on_truncate(self.error_on_truncate)
     }
 
     pub(crate) async fn create_session(&mut self) -> Result<Session> {
