@@ -29,7 +29,7 @@ impl From<Mode> for TxMode {
 }
 
 #[async_trait]
-pub trait Transaction {
+pub trait Transaction: Drop {
     async fn query(&mut self, query: Query) -> Result<QueryResult>;
     async fn commit(&mut self) -> Result<()>;
     async fn rollback(&mut self) -> Result<()>;
@@ -58,6 +58,10 @@ impl AutoCommit {
         self.error_on_truncate_response = error_on_truncate;
         return self;
     }
+}
+
+impl Drop for AutoCommit {
+    fn drop(&mut self) {}
 }
 
 #[async_trait]
@@ -120,6 +124,35 @@ impl SerializableReadWriteTx {
     pub fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
         self.error_on_truncate_response = error_on_truncate;
         return self;
+    }
+}
+
+impl Drop for SerializableReadWriteTx {
+    // rollback if unfinished
+    fn drop(&mut self) {
+        if !self.finished {
+            let session_id = if let Some(session) = &self.session {
+                session.id.clone()
+            } else {
+                return
+            };
+
+            let tx_id  = if let Some(tx_id) = &self.id {
+                tx_id.clone()
+            } else {
+                return
+            };
+
+            let ch = if let Ok(ch) = self.channel_pool.create_channel() {
+                ch
+            } else {
+                return
+            };
+            tokio::spawn(async move {
+                rollback_request(ch, session_id, tx_id).await;
+            });
+        };
+        return;
     }
 }
 
@@ -213,27 +246,37 @@ impl Transaction for SerializableReadWriteTx {
         }
         self.finished = true;
 
+        let session_id = if let Some(session) = &self.session {
+            session.id.clone()
+        } else {
+            // rollback non started transaction ok
+            self.finished = true;
+            self.rollbacked = true;
+            return Ok(())
+        };
+
         let id = if let Some(id) = &self.id {
-            id
+            id.clone()
         } else {
             // rollback non started transaction - ok
             self.rollbacked = true;
             return Ok(())
         };
 
-        let req = RollbackTransactionRequest {
-            session_id: self.session.as_mut().unwrap().id.clone(),
-            tx_id: id.clone(),
-            ..RollbackTransactionRequest::default()
-        };
-
-        let mut ch = self.channel_pool.create_channel()?;
-
-        // todo retries
-        grpc_read_void_operation_result(ch.rollback_transaction(req).await?)?;
-
         self.rollbacked = true;
-        return Ok(());
+        return rollback_request(self.channel_pool.create_channel()?, session_id, id).await;
     }
+}
 
+async fn rollback_request(mut ch: TableServiceClient<Middleware>, session_id: String, tx_id: String)->Result<()>{
+    let req = RollbackTransactionRequest {
+        session_id,
+        tx_id,
+        ..RollbackTransactionRequest::default()
+    };
+
+    // todo retries
+    grpc_read_void_operation_result(ch.rollback_transaction(req).await?)?;
+
+    return Ok(());
 }

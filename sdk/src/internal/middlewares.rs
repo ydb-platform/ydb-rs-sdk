@@ -92,6 +92,7 @@ impl Interceptor for AuthInterceptor {
             }
         };
         request.metadata_mut().insert("x-ydb-auth-ticket", token);
+        request.metadata_mut().insert("x-ydb-sdk-build-info", AsciiMetadataValue::from_str("ydb-go-sdk/0.0.0").unwrap());
         return Ok(request);
     }
 }
