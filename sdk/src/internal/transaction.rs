@@ -4,11 +4,13 @@ use crate::internal::session_pool::SessionPool;
 use async_trait::async_trait;
 use ydb_protobuf::generated::ydb::table::transaction_control::TxSelector;
 use ydb_protobuf::generated::ydb::table::transaction_settings::TxMode;
-use ydb_protobuf::generated::ydb::table::{CommitTransactionRequest, CommitTransactionResponse, CommitTransactionResult, ExecuteDataQueryRequest, ExecuteQueryResult, OnlineModeSettings, SerializableModeSettings, TransactionControl, TransactionSettings};
+use ydb_protobuf::generated::ydb::table::{CommitTransactionRequest, CommitTransactionResponse, CommitTransactionResult, ExecuteDataQueryRequest, ExecuteQueryResult, OnlineModeSettings, RollbackTransactionRequest, SerializableModeSettings, TransactionControl, TransactionSettings};
+use ydb_protobuf::generated::ydb::table::transaction_settings::TxMode::SerializableReadWrite;
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
+use crate::errors::Error::Custom;
 use crate::internal::channel_pool::ChannelPool;
 use crate::internal::client_fabric::Middleware;
-use crate::internal::grpc::grpc_read_operation_result;
+use crate::internal::grpc::{grpc_read_operation_result, grpc_read_void_operation_result};
 use crate::internal::session::Session;
 
 #[derive(Copy, Clone)]
@@ -21,7 +23,7 @@ impl From<Mode> for TxMode {
     fn from(m: Mode) -> Self {
         match m {
             Mode::OnlineReadonly => TxMode::OnlineReadOnly(OnlineModeSettings::default()),
-            SerializableReadWrite=> TxMode::SerializableReadWrite(SerializableModeSettings::default()),
+            Mode::SerializableReadWrite=> TxMode::SerializableReadWrite(SerializableModeSettings::default()),
         }
     }
 }
@@ -65,13 +67,13 @@ impl Transaction for AutoCommit {
         let req = ExecuteDataQueryRequest {
             session_id: session.id.clone(),
             tx_control: Some(TransactionControl {
-            commit_tx: true,
-            tx_selector: Some(TxSelector::BeginTx(TransactionSettings {
-                tx_mode: Some(self.mode.into()),
-            })),
-        }),
-        ..query.to_proto()?
-    };
+                commit_tx: true,
+                tx_selector: Some(TxSelector::BeginTx(TransactionSettings {
+                    tx_mode: Some(self.mode.into()),
+                })),
+            }),
+            ..query.to_proto()?
+        };
         println!("session: {:#?}", &session);
         println!("req: {:#?}", &req);
         let proto_res: Result<ExecuteQueryResult> = grpc_read_operation_result(self.channel_pool.create_channel()?.execute_data_query(req).await?);
@@ -88,7 +90,7 @@ impl Transaction for AutoCommit {
     }
 }
 
-pub struct SerializableReadWrite {
+pub struct SerializableReadWriteTx {
     error_on_truncate_response: bool,
     session_pool: SessionPool,
     channel_pool: ChannelPool<TableServiceClient<Middleware>>,
@@ -96,10 +98,11 @@ pub struct SerializableReadWrite {
     id: Option<String>,
     session: Option<Session>,
     comitted: bool,
+    rollbacked: bool,
     finished: bool,
 }
 
-impl SerializableReadWrite {
+impl SerializableReadWriteTx {
     pub(crate) fn new(channel_pool: ChannelPool<TableServiceClient<Middleware>>, session_pool: SessionPool) -> Self {
         return Self {
             error_on_truncate_response: false,
@@ -109,6 +112,7 @@ impl SerializableReadWrite {
             id: None,
             session: None,
             comitted: false,
+            rollbacked: false,
             finished: false,
         }
     }
@@ -120,32 +124,66 @@ impl SerializableReadWrite {
 }
 
 #[async_trait]
-impl Transaction for SerializableReadWrite {
+impl Transaction for SerializableReadWriteTx {
     async fn query(&mut self, query: Query) -> Result<QueryResult>{
-        todo!();
+        let mut session = if let Some(session) = self.session.as_mut() {
+            session
+        } else {
+            self.session = Some(self.session_pool.session().await?);
+            println!("got session from pool");
+            self.session.as_mut().unwrap()
+        };
+        println!("session: {:#?}", session);
+
+        let tx_selector = if let Some(tx_id) = &self.id {
+            println!("tx_id: {}", tx_id);
+            TxSelector::TxId(tx_id.clone())
+        } else {
+            println!("start new transaction");
+            TxSelector::BeginTx(TransactionSettings {
+                tx_mode: Some(Mode::SerializableReadWrite.into()),
+                ..TransactionSettings::default()
+            })
+        };
+
+        let req = ExecuteDataQueryRequest {
+            session_id: session.id.clone(),
+            tx_control: Some(TransactionControl {
+                commit_tx: false,
+                tx_selector: Some(tx_selector),
+                ..TransactionControl::default()
+            },
+            ),
+            ..query.to_proto()?
+        };
+        println!("req: {:#?}", &req);
+        let proto_res: Result<ExecuteQueryResult> = grpc_read_operation_result(self.channel_pool.create_channel()?.execute_data_query(req).await?);
+        println!("res: {:#?}", proto_res);
+        let proto_res = proto_res?;
+        if self.id.is_none() {
+            let meta = proto_res.tx_meta.as_ref().ok_or(Custom(format!("meta is empty in query response: {:?}", &proto_res)))?;
+            self.id = Some(meta.id.clone());
+        };
+
+        return QueryResult::from_proto(proto_res, self.error_on_truncate_response);
     }
 
     async fn commit(&mut self) -> Result<()>{
         if self.comitted {
-            // commit many time - ok
-            return Ok(())
-        }
-
-        if self.id.is_none() {
-            // commit non started transaction - ok
-            self.comitted = true;
-            self.finished = true;
+            // commit many times - ok
             return Ok(())
         }
 
         if self.finished {
-            return Err(Error::Custom(format!("commit finished uncomitted transaction: {:?}", &self.id).into()))
+            return Err(Error::Custom(format!("commit finished non comitted transaction: {:?}", &self.id).into()))
         }
-        self.finished;
+        self.finished = true;
 
         let id = if let Some(id) = &self.id {
             id
         } else {
+            // commit non started transaction - ok
+            self.comitted = true;
             return Ok(())
         };
 
@@ -156,12 +194,46 @@ impl Transaction for SerializableReadWrite {
         };
 
         let mut ch = self.channel_pool.create_channel()?;
+
+        // todo - retries
         let res: CommitTransactionResult = grpc_read_operation_result(ch.commit_transaction(req).await?)?;
+
+        self.comitted = true;
         return Ok(());
     }
 
     async fn rollback(&mut self) -> Result<()>{
-        todo!();
+        // double rollback is ok
+        if self.rollbacked {
+            return Ok(())
+        }
+
+        if self.finished {
+            return Err(Error::Custom(format!("rollback finished non rollbacked transaction: {:?}", &self.id).into()))
+        }
+        self.finished = true;
+
+        let id = if let Some(id) = &self.id {
+            id
+        } else {
+            // rollback non started transaction - ok
+            self.rollbacked = true;
+            return Ok(())
+        };
+
+        let req = RollbackTransactionRequest {
+            session_id: self.session.as_mut().unwrap().id.clone(),
+            tx_id: id.clone(),
+            ..RollbackTransactionRequest::default()
+        };
+
+        let mut ch = self.channel_pool.create_channel()?;
+
+        // todo retries
+        grpc_read_void_operation_result(ch.rollback_transaction(req).await?)?;
+
+        self.rollbacked = true;
+        return Ok(());
     }
 
 }
