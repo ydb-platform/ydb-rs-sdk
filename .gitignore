@@ -1,3 +1,3 @@
-/rs-ydb-sdk.iml
-/.idea/
-/target/
+.DS_Store
+/.idea
+/target
