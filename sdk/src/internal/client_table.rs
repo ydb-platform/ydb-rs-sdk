@@ -23,7 +23,7 @@ impl TableClient {
 
         return Self {
             error_on_truncate: false,
-            session_pool: SessionPool::new(channel_pool.clone()),
+            session_pool: SessionPool::new(Box::new(channel_pool.clone())),
             channel_pool,
         };
     }

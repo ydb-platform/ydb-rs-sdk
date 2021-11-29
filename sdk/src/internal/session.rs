@@ -8,7 +8,6 @@ use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceC
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub(crate) struct Session {
-    client: TableServiceClient<Middleware>,
     pub(crate) id: String,
 
     #[derivative(Debug = "ignore")]
@@ -16,9 +15,8 @@ pub(crate) struct Session {
 }
 
 impl Session {
-    pub(crate) fn new(client: TableServiceClient<Middleware>, id: String) -> Self {
+    pub(crate) fn new(id: String) -> Self {
         return Self {
-            client,
             id,
             on_drop_callbacks: Vec::new(),
         };
