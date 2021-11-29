@@ -18,7 +18,6 @@ pub(crate) type Middleware = AuthService;
 
 pub(crate) struct ClientFabric {
     credentials: DBCredentials,
-    discovery: Box<dyn Discovery>,
     load_balancer: SharedLoadBalancer,
 }
 
@@ -39,7 +38,6 @@ impl ClientFabric {
                 credentials,
                 database,
             },
-            discovery,
             load_balancer: shared_load_balancer,
         });
     }
@@ -79,10 +77,9 @@ mod test {
     use crate::internal::query::Query;
     use crate::internal::test_helpers::{CRED, DATABASE, START_ENDPOINT};
     use crate::internal::transaction::Transaction;
-    use crate::types::{YdbList, YdbOptional, YdbStruct, YdbValue};
+    use crate::types::{YdbList, YdbStruct, YdbValue};
 
     use super::*;
-    use crate::errors::{UnitResult, UNIT_OK};
     use crate::internal::load_balancer::RandomLoadBalancer;
     use crate::internal::transaction::Mode;
     use http::Uri;
@@ -256,7 +253,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn select_int() -> UnitResult {
+    async fn select_int() -> Result<()> {
         let client = create_client()?;
         let v = YdbValue::Int32(123);
 
@@ -282,13 +279,11 @@ SELECT $test AS test;
         assert_eq!(1, res.columns().len());
         assert_eq!(v, res.rows().next().unwrap().remove_field_by_name("test")?);
 
-        return UNIT_OK;
-
-        return UNIT_OK;
+        return Ok(());
     }
 
     #[tokio::test]
-    async fn select_optional() -> UnitResult {
+    async fn select_optional() -> Result<()> {
         let client = create_client()?;
         let mut transaction = client
             .table_client()
@@ -318,7 +313,7 @@ SELECT $test AS test;
             res.rows().next().unwrap().remove_field_by_name("test")?
         );
 
-        return UNIT_OK;
+        return Ok(());
     }
 
     #[tokio::test]

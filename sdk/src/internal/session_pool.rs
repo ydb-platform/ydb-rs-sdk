@@ -1,9 +1,8 @@
 use crate::errors::*;
-use crate::internal::client_common::DBCredentials;
 use crate::internal::client_fabric::Middleware;
-use crate::internal::discovery::Service;
-use crate::internal::grpc::{create_grpc_client, grpc_read_operation_result};
-use crate::internal::load_balancer::{LoadBalancer, SharedLoadBalancer};
+
+use crate::internal::grpc::{grpc_read_operation_result};
+
 use crate::internal::session::Session;
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 use ydb_protobuf::generated::ydb::table::{CreateSessionRequest, CreateSessionResult};
@@ -15,7 +14,7 @@ pub(crate) struct SessionPool {
 }
 
 impl SessionPool {
-    pub(crate) fn new(channel_pool: ChannelPool<TableServiceClient<Middleware>>, credencials: DBCredentials) -> Self {
+    pub(crate) fn new(channel_pool: ChannelPool<TableServiceClient<Middleware>>) -> Self {
         return Self {
             channel_pool,
         };

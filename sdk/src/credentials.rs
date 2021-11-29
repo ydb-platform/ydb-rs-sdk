@@ -34,6 +34,7 @@ pub struct CommandLineYcToken {
 }
 
 impl CommandLineYcToken {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         return CommandLineYcToken {
             token: Arc::new(RwLock::new("".to_string())),

@@ -202,7 +202,6 @@ impl YdbValue {
                     Some(P::Date) => Self::Date(Duration::default()),
                     Some(P::Datetime) => Self::DateTime(Duration::default()),
                     Some(P::Dynumber) => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
-                    Some(P::Interval) => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
                     Some(P::Json) => Self::Json(Vec::default()),
                     Some(P::Yson) => Self::Yson(Vec::default()),
                     Some(P::JsonDocument) => Self::JsonDocument(Vec::default()),
@@ -246,8 +245,6 @@ impl YdbValue {
     }
 
     pub(crate) fn from_proto(t: &YdbValue, proto_value: ydb::Value) -> Result<Self> {
-        
-
         let res = match (t, proto_value) {
             (YdbValue::Void, _) => YdbValue::Void,
             (
@@ -272,7 +269,7 @@ impl YdbValue {
                 Self::from_proto_struct(struct_t, items)?
             }
             (t, proto_value) => {
-                return return Err(Error::Custom(
+                return Err(Error::Custom(
                     format!(
                         "unsupported from_proto combination: t: '{:?}', proto_value: '{:?}'",
                         t, proto_value
@@ -518,16 +515,15 @@ pub struct Column {
 
 #[cfg(test)]
 mod test {
-    use crate::errors::{UnitResult, UNIT_OK};
     use crate::types::{Sign, SignedInterval, YdbStruct, YdbValue};
     use std::collections::HashSet;
-    
+    use crate::errors::{Result};
     
     use std::time::Duration;
     use strum::IntoEnumIterator;
 
     #[test]
-    fn serialize() -> UnitResult {
+    fn serialize() -> Result<()> {
         // test zero, one, minimum and maximum values
         macro_rules! num_tests {
             ($values:ident, $en_name:path, $type_name:ty) => {
@@ -621,6 +617,6 @@ mod test {
 
         assert_eq!(non_tested.len(), 0, "{:?}", non_tested);
 
-        return UNIT_OK;
+        return Ok(());
     }
 }

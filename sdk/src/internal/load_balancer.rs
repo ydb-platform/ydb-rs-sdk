@@ -125,7 +125,7 @@ mod test {
     use std::time::Duration;
 
     #[test]
-    fn shared_load_balancer() -> UnitResult {
+    fn shared_load_balancer() -> Result<()> {
         let endpoint_counter = Arc::new(AtomicUsize::new(0));
         let test_uri = Uri::from_str("http://test.com")?;
 
@@ -144,11 +144,11 @@ mod test {
         assert_eq!(test_uri, s1.endpoint(Table)?);
         assert_eq!(test_uri, s2.endpoint(Table)?);
         assert_eq!(endpoint_counter.load(Relaxed), 2);
-        return UNIT_OK;
+        return Ok(());
     }
 
     #[tokio::test]
-    async fn update_load_balancer_test() -> UnitResult {
+    async fn update_load_balancer_test() -> Result<()> {
         let original_discovery_state = Arc::new(DiscoveryState::default());
         let (sender, receiver) = tokio::sync::watch::channel(original_discovery_state.clone());
 
@@ -172,7 +172,7 @@ mod test {
             .returning(move |_| {
                 println!("first set");
                 first_update_sender.take().unwrap().send(()).unwrap();
-                return UNIT_OK;
+                return Ok(());
             });
 
         lb_mock
@@ -182,7 +182,7 @@ mod test {
             .returning(move |_| {
                 println!("second set");
                 second_update_sender.take().unwrap().send(()).unwrap();
-                return UNIT_OK;
+                return Ok(());
             });
 
         let shared_lb = SharedLoadBalancer::new(Box::new(lb_mock));
@@ -208,11 +208,11 @@ mod test {
             }
         }
         // updater_finished_receiver.await.unwrap();
-        return UNIT_OK;
+        return Ok(());
     }
 
     #[test]
-    fn random_load_balancer() -> UnitResult {
+    fn random_load_balancer() -> Result<()> {
         let one = Uri::from_str("http://one:213")?;
         let two = Uri::from_str("http://two:213")?;
         let load_balancer = RandomLoadBalancer {
@@ -236,6 +236,6 @@ mod test {
         assert_eq!(map.len(), 2);
         assert!(*map.get(&one).unwrap() > 30);
         assert!(*map.get(&two).unwrap() > 30);
-        return UNIT_OK;
+        return Ok(());
     }
 }

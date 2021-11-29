@@ -69,7 +69,7 @@ impl Interceptor for AuthInterceptor {
     fn call(&mut self, mut request: tonic::Request<()>) -> Result<tonic::Request<()>, Status> {
         let db_name = match AsciiMetadataValue::from_str(self.cred.database.as_str()) {
             Ok(val)=>val,
-            Err(err)=>{
+            Err(_err)=>{
                 return Err(Status::new(Code::InvalidArgument, "non-ascii dbname received for auth interceptor"))
             }
         };

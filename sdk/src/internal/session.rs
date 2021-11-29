@@ -1,9 +1,9 @@
-use crate::errors::*;
+
 use crate::internal::client_fabric::Middleware;
-use crate::internal::grpc::grpc_read_operation_result;
+
 use derivative::Derivative;
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
-use ydb_protobuf::generated::ydb::table::{ExecuteDataQueryRequest, ExecuteQueryResult};
+
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -24,6 +24,7 @@ impl Session {
         };
     }
 
+    #[allow(dead_code)]
     pub(crate) fn on_drop(&mut self, f: Box<dyn FnOnce() + Send>) {
         self.on_drop_callbacks.push(f)
     }

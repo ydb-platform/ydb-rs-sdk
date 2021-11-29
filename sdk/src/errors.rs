@@ -2,8 +2,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::string::FromUtf8Error;
 
 pub type Result<T> = std::result::Result<T, Error>;
-pub type UnitResult = Result<()>;
-pub const UNIT_OK: UnitResult = Ok(());
 
 #[derive(Clone, Debug)]
 pub enum Error {

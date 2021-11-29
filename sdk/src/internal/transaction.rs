@@ -1,11 +1,11 @@
-use crate::errors::{Error, Result, UNIT_OK};
+use crate::errors::{Error, Result};
 use crate::internal::query::{Query, QueryResult};
 use crate::internal::session_pool::SessionPool;
 use async_trait::async_trait;
 use ydb_protobuf::generated::ydb::table::transaction_control::TxSelector;
 use ydb_protobuf::generated::ydb::table::transaction_settings::TxMode;
-use ydb_protobuf::generated::ydb::table::{CommitTransactionRequest, CommitTransactionResponse, CommitTransactionResult, ExecuteDataQueryRequest, ExecuteQueryResult, OnlineModeSettings, RollbackTransactionRequest, SerializableModeSettings, TransactionControl, TransactionSettings};
-use ydb_protobuf::generated::ydb::table::transaction_settings::TxMode::SerializableReadWrite;
+use ydb_protobuf::generated::ydb::table::{CommitTransactionRequest, CommitTransactionResult, ExecuteDataQueryRequest, ExecuteQueryResult, OnlineModeSettings, RollbackTransactionRequest, SerializableModeSettings, TransactionControl, TransactionSettings};
+
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 use crate::errors::Error::Custom;
 use crate::internal::channel_pool::ChannelPool;
@@ -29,7 +29,7 @@ impl From<Mode> for TxMode {
 }
 
 #[async_trait]
-pub trait Transaction: Drop {
+pub trait Transaction {
     async fn query(&mut self, query: Query) -> Result<QueryResult>;
     async fn commit(&mut self) -> Result<()>;
     async fn rollback(&mut self) -> Result<()>;
@@ -67,7 +67,7 @@ impl Drop for AutoCommit {
 #[async_trait]
 impl Transaction for AutoCommit {
     async fn query(&mut self, query: Query) -> Result<QueryResult> {
-        let mut session = self.session_pool.session().await?;
+        let session = self.session_pool.session().await?;
         let req = ExecuteDataQueryRequest {
             session_id: session.id.clone(),
             tx_control: Some(TransactionControl {
@@ -149,7 +149,7 @@ impl Drop for SerializableReadWriteTx {
                 return
             };
             tokio::spawn(async move {
-                rollback_request(ch, session_id, tx_id).await;
+                let _ = rollback_request(ch, session_id, tx_id).await;
             });
         };
         return;
@@ -159,7 +159,7 @@ impl Drop for SerializableReadWriteTx {
 #[async_trait]
 impl Transaction for SerializableReadWriteTx {
     async fn query(&mut self, query: Query) -> Result<QueryResult>{
-        let mut session = if let Some(session) = self.session.as_mut() {
+        let session = if let Some(session) = self.session.as_mut() {
             session
         } else {
             self.session = Some(self.session_pool.session().await?);
@@ -229,7 +229,7 @@ impl Transaction for SerializableReadWriteTx {
         let mut ch = self.channel_pool.create_channel()?;
 
         // todo - retries
-        let res: CommitTransactionResult = grpc_read_operation_result(ch.commit_transaction(req).await?)?;
+        let _res: CommitTransactionResult = grpc_read_operation_result(ch.commit_transaction(req).await?)?;
 
         self.comitted = true;
         return Ok(());
