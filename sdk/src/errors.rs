@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::string::FromUtf8Error;
+use tokio::sync::AcquireError;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -80,6 +81,12 @@ impl From<strum::ParseError> for Error {
 
 impl From<tonic::codegen::http::uri::InvalidUri> for Error {
     fn from(e: tonic::codegen::http::uri::InvalidUri) -> Self {
+        return Error::Custom(e.to_string());
+    }
+}
+
+impl From<tokio::sync::AcquireError> for Error {
+    fn from(e: AcquireError) -> Self {
         return Error::Custom(e.to_string());
     }
 }
