@@ -62,6 +62,8 @@ impl SessionPool {
 
 #[cfg(test)]
 mod test {
+    use std::time::Duration;
+    use tokio::sync::oneshot;
     use super::*;
 
     struct  CreateSessionMock {}
@@ -69,13 +71,34 @@ mod test {
     #[async_trait]
     impl CreateSession for CreateSessionMock {
         async fn create_session(&self)->Result<Session> {
-            return Ok((Session::new("asd".into())))
+            return Ok(Session::new("asd".into()))
         }
     }
 
     #[tokio::test]
     async fn max_active_session()->Result<()>{
         let mut pool = SessionPool::new(Box::new(CreateSessionMock{})).with_max_active_sessions(1);
+        let first_session = pool.session().await?;
+
+        let (thread_started_sender, thread_started_receiver) = oneshot::channel();
+        let (second_session_got_sender, mut second_session_got_receiver) = oneshot::channel();
+        let mut cloned_pool = pool.clone();
+
+        tokio::spawn(async move {
+            thread_started_sender.send(true).unwrap();
+            cloned_pool.session().await.unwrap();
+            second_session_got_sender.send(true).unwrap();
+        });
+
+        thread_started_receiver.await?;
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        assert!(second_session_got_receiver.try_recv().is_err());
+
+        drop(first_session);
+
+        second_session_got_receiver.await?;
 
         return Ok(());
     }

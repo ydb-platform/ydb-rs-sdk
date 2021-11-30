@@ -91,6 +91,12 @@ impl From<tokio::sync::AcquireError> for Error {
     }
 }
 
+impl From<tokio::sync::oneshot::error::RecvError> for Error {
+    fn from(e: tokio::sync::oneshot::error::RecvError) -> Self {
+        return Error::Custom(e.to_string());
+    }
+}
+
 impl From<tonic::transport::Error> for Error {
     fn from(e: tonic::transport::Error) -> Self {
         return Error::Custom(e.to_string());

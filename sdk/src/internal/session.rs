@@ -1,9 +1,5 @@
 
-use crate::internal::client_fabric::Middleware;
-
 use derivative::Derivative;
-use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
-
 
 #[derive(Derivative)]
 #[derivative(Debug)]
