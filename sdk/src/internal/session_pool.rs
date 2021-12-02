@@ -1,5 +1,7 @@
+use std::borrow::Borrow;
+use std::collections::VecDeque;
 use async_trait::async_trait;
-use std::sync::{Arc};
+use std::sync::{Arc, Mutex};
 use tokio::sync::Semaphore;
 use crate::errors::*;
 use crate::internal::client_fabric::Middleware;
@@ -34,6 +36,7 @@ impl CreateSession for ChannelPool<TableServiceClient<Middleware>> {
 pub(crate) struct SessionPool {
     active_sessions: Arc<Semaphore>,
     create_session: Arc<Box<dyn CreateSession>>,
+    idle_sessions: Arc<Mutex<VecDeque<Session>>>,
 }
 
 impl SessionPool {
@@ -41,8 +44,8 @@ impl SessionPool {
         return Self {
             active_sessions: Arc::new(Semaphore::new(DEFAULT_SIZE)),
             create_session: Arc::new(channel_pool),
+            idle_sessions:Arc::new(Mutex::new(VecDeque::new())),
         };
-
     }
 
     pub(crate) fn with_max_active_sessions(mut self, size: usize)->Self {
@@ -52,8 +55,25 @@ impl SessionPool {
 
     pub(crate) async fn session(&mut self) -> Result<Session> {
         let active_session_permit = self.active_sessions.clone().acquire_owned().await?;
-        let mut session = self.create_session.create_session().await?;
-        session.on_drop(Box::new( move|| {
+        let idle_sessions = self.idle_sessions.clone();
+        let mut session = {
+            let session = {
+                // brackets need for drop mutex guard before async await
+                idle_sessions.lock()?.pop_front()
+            };
+            if let Some(session) = session {
+                println!("got session from pool: {}", &session.id);
+                session
+            } else {
+                let session = self.create_session.create_session().await?;
+                println!("create session: {}", &session.id);
+                session
+            }
+        };
+
+        session.on_drop(Box::new( move|s: &mut Session| {
+            println!("moved to pool: {}", s.id);
+            idle_sessions.lock().unwrap().push_back(s.clone_without_ondrop());
             drop(active_session_permit);
         }));
         return Ok(session);

@@ -163,7 +163,7 @@ impl Transaction for SerializableReadWriteTx {
             session
         } else {
             self.session = Some(self.session_pool.session().await?);
-            println!("got session from pool");
+            println!("create session from transaction");
             self.session.as_mut().unwrap()
         };
         println!("session: {:#?}", session);
