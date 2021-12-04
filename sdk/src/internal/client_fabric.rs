@@ -207,7 +207,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn multistep_transaction()->Result<()>{
+    async fn interactive_transaction()->Result<()>{
         let client = create_client()?;
         let mut tx_auto = client.table_client().create_autocommit_transaction(SerializableReadWrite);
 
@@ -216,13 +216,13 @@ mod test {
         tx.commit().await?;
 
         let mut tx = client.table_client().create_multiquery_transaction();
-        tx.query(Query::new().with_query("UPSERT INTO test_values (id, vInt64) VALUES(1, 2)".into())).await?;
+        tx.query(Query::new().with_query("UPSERT INTO test_values (id, vInt64) VALUES (1, 2)".into())).await?;
         tx.query(Query::new()
             .with_query("
                 DECLARE $key AS Int64;
                 DECLARE $val AS Int64;
 
-                UPSERT INTO test_values (id, vInt64) VALUES($key, $val)
+                UPSERT INTO test_values (id, vInt64) VALUES ($key, $val)
             ".into())
             .with_params(HashMap::from([
                 ("$key".into(), YdbValue::Int64(2)),
