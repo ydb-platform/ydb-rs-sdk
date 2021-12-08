@@ -7,7 +7,13 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug)]
 pub enum Error {
     Custom(String),
-    YdbOperation(String),
+    YdbOperation(YdbOperationError),
+}
+
+#[derive(Clone, Debug)]
+pub struct YdbOperationError {
+    pub(crate) message: String,
+    pub(crate) operation_status: i32,
 }
 
 impl Error {
@@ -111,6 +117,6 @@ impl From<tonic::Status> for Error {
 
 impl From<ydb_protobuf::generated::ydb::operations::Operation> for Error {
     fn from(op: ydb_protobuf::generated::ydb::operations::Operation) -> Self {
-        return Error::YdbOperation(format!("{:?}", op));
+        return Error::YdbOperation(YdbOperationError{message: format!("{:?}", &op), operation_status: op.status});
     }
 }

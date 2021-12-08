@@ -67,7 +67,7 @@ impl Drop for AutoCommit {
 #[async_trait]
 impl Transaction for AutoCommit {
     async fn query(&mut self, query: Query) -> Result<QueryResult> {
-        let session = self.session_pool.session().await?;
+        let mut session = self.session_pool.session().await?;
         let req = ExecuteDataQueryRequest {
             session_id: session.id.clone(),
             tx_control: Some(TransactionControl {
@@ -80,7 +80,7 @@ impl Transaction for AutoCommit {
         };
         println!("session: {:#?}", &session);
         println!("req: {:#?}", &req);
-        let proto_res: Result<ExecuteQueryResult> = grpc_read_operation_result(self.channel_pool.create_channel()?.execute_data_query(req).await?);
+        let proto_res: Result<ExecuteQueryResult> = session.handle_error(grpc_read_operation_result(self.channel_pool.create_channel()?.execute_data_query(req).await?));
         println!("res: {:#?}", proto_res);
         return QueryResult::from_proto(proto_res?, self.error_on_truncate_response);
     }
@@ -149,6 +149,7 @@ impl Drop for SerializableReadWriteTx {
                 return
             };
             tokio::spawn(async move {
+                // todo: handle session error
                 let _ = rollback_request(ch, session_id, tx_id).await;
             });
         };
@@ -190,7 +191,7 @@ impl Transaction for SerializableReadWriteTx {
             ..query.to_proto()?
         };
         println!("req: {:#?}", &req);
-        let proto_res: Result<ExecuteQueryResult> = grpc_read_operation_result(self.channel_pool.create_channel()?.execute_data_query(req).await?);
+        let proto_res: Result<ExecuteQueryResult> = session.handle_error(grpc_read_operation_result(self.channel_pool.create_channel()?.execute_data_query(req).await?));
         println!("res: {:#?}", proto_res);
         let proto_res = proto_res?;
         if self.id.is_none() {
@@ -229,7 +230,7 @@ impl Transaction for SerializableReadWriteTx {
         let mut ch = self.channel_pool.create_channel()?;
 
         // todo - retries
-        let _res: CommitTransactionResult = grpc_read_operation_result(ch.commit_transaction(req).await?)?;
+        let _res: CommitTransactionResult = self.session.as_mut().unwrap().handle_error(grpc_read_operation_result(ch.commit_transaction(req).await?))?;
 
         self.comitted = true;
         return Ok(());
@@ -246,8 +247,8 @@ impl Transaction for SerializableReadWriteTx {
         }
         self.finished = true;
 
-        let session_id = if let Some(session) = &self.session {
-            session.id.clone()
+        let session = if let Some(session) = &mut self.session {
+            session
         } else {
             // rollback non started transaction ok
             self.finished = true;
@@ -264,7 +265,7 @@ impl Transaction for SerializableReadWriteTx {
         };
 
         self.rollbacked = true;
-        return rollback_request(self.channel_pool.create_channel()?, session_id, id).await;
+        return session.handle_error(rollback_request(self.channel_pool.create_channel()?, session.id.clone(), id).await);
     }
 }
 
