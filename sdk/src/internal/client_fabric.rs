@@ -5,7 +5,6 @@ use crate::internal::client_table::TableClient;
 
 use crate::internal::discovery::{Discovery, Service};
 use crate::internal::grpc;
-use crate::internal::grpc::create_grpc_client_old;
 use crate::internal::load_balancer::{update_load_balancer, LoadBalancer, SharedLoadBalancer};
 use crate::internal::middlewares::AuthService;
 
@@ -13,6 +12,7 @@ use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::Disco
 use ydb_protobuf::generated::ydb::discovery::{
     ListEndpointsRequest, ListEndpointsResult, WhoAmIRequest, WhoAmIResult,
 };
+use crate::internal::grpc::create_grpc_client;
 
 pub(crate) type Middleware = AuthService;
 
@@ -59,10 +59,9 @@ impl ClientFabric {
 
     // clients
     fn client_discovery(self: &Self) -> Result<DiscoveryServiceClient<Middleware>> {
-        return create_grpc_client_old(
+        return create_grpc_client(
             self.load_balancer.endpoint(Service::Discovery)?,
-            self.credentials.credentials.clone(),
-            self.credentials.database.clone(),
+            self.credentials.clone(),
             DiscoveryServiceClient::new,
         );
     }

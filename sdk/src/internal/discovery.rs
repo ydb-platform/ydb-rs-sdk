@@ -14,12 +14,12 @@ use ydb_protobuf::generated::ydb::discovery::{
     EndpointInfo, ListEndpointsRequest, ListEndpointsResult,
 };
 
-use crate::credentials::Credentials;
 use crate::errors::{Error, Result};
-use crate::internal::grpc::{create_grpc_client_old, grpc_read_operation_result};
+use crate::internal::grpc::{create_grpc_client, grpc_read_operation_result};
 use std::iter::FromIterator;
 use std::time::Duration;
 use tokio::sync::watch::Receiver;
+use crate::internal::client_common::DBCredentials;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Display, Debug, EnumIter, EnumString, Eq, Hash, PartialEq)]
@@ -129,7 +129,7 @@ pub(crate) struct TimerDiscovery {
 impl TimerDiscovery {
     #[allow(dead_code)]
     pub(crate) fn new(
-        cred: Box<dyn Credentials>,
+        cred: DBCredentials,
         database: String,
         endpoint: &str,
         interval: Duration,
@@ -163,7 +163,7 @@ impl Discovery for TimerDiscovery {
 }
 
 struct DiscoverySharedState {
-    cred: Box<dyn Credentials>,
+    cred: DBCredentials,
     database: String,
     discovery_state: RwLock<Arc<DiscoveryState>>,
     sender: tokio::sync::watch::Sender<Arc<DiscoveryState>>,
@@ -171,7 +171,7 @@ struct DiscoverySharedState {
 }
 
 impl DiscoverySharedState {
-    fn new(cred: Box<dyn Credentials>, database: String, endpoint: &str) -> Result<Self> {
+    fn new(cred: DBCredentials, database: String, endpoint: &str) -> Result<Self> {
         let mut map = HashMap::new();
         map.insert(
             Service::Discovery,
@@ -197,10 +197,9 @@ impl DiscoverySharedState {
     async fn discovery_now(&self) -> Result<()> {
         let start = std::time::Instant::now();
         let endpoint = self.endpoint(Service::Discovery)?;
-        let mut discovery_client = create_grpc_client_old(
+        let mut discovery_client = create_grpc_client(
             endpoint,
             self.cred.clone(),
-            self.database.clone(),
             DiscoveryServiceClient::new,
         )?;
 
@@ -308,11 +307,13 @@ mod test {
     use crate::internal::test_helpers::{CRED, DATABASE, START_ENDPOINT};
     use std::sync::Arc;
     use std::time::Duration;
+    use crate::internal::client_common::DBCredentials;
 
     #[tokio::test]
     async fn test_background_discovery() -> Result<()> {
+        let cred = DBCredentials{database: DATABASE.clone(), credentials: Box::new(CRED.lock()?.clone())};
         let discovery_shared = DiscoverySharedState::new(
-            Box::new(CRED.lock()?.clone()),
+            cred,
             DATABASE.clone(),
             START_ENDPOINT.as_str(),
         )?;

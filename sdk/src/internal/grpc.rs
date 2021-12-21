@@ -1,7 +1,6 @@
 use std::time::Duration;
 use ydb_protobuf::generated::ydb::status_ids::StatusCode;
 
-use crate::credentials::Credentials;
 use crate::errors;
 use crate::errors::{Error, Result};
 use crate::internal::client_common::DBCredentials;
@@ -24,25 +23,6 @@ where
         .layer_fn(auth_service_create)
         .service(channel);
     return Ok(new_func(auth_ch));
-}
-
-pub(crate) fn create_grpc_client_old<T, CB>(
-    uri: Uri,
-    credentials: Box<dyn Credentials>,
-    database: String,
-    new_func: CB,
-) -> Result<T>
-where
-    CB: FnOnce(AuthService) -> T,
-{
-    return create_grpc_client(
-        uri,
-        DBCredentials {
-            credentials,
-            database,
-        },
-        new_func,
-    );
 }
 
 fn create_grpc_channel(uri: Uri) -> Result<Channel> {
