@@ -9,7 +9,6 @@ use crate::internal::session_pool::SessionPool;
 use crate::internal::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 use crate::internal::channel_pool::ChannelPool;
-use async_trait::async_trait;
 
 pub(crate) struct TableClient {
     error_on_truncate: bool,

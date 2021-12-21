@@ -1,6 +1,5 @@
-use std::borrow::Borrow;
-use std::collections::VecDeque;
-use std::ops::{Add, Sub};
+use std::collections::vec_deque::VecDeque;
+use std::ops::{Sub};
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Semaphore;
@@ -70,7 +69,7 @@ impl SessionPool {
             idle_sessions:Arc::new(Mutex::new(VecDeque::new())),
         };
 
-        // tokio::spawn(sessions_pinger(pool.create_session.clone(), Arc::downgrade(&pool.idle_sessions), std::time::Duration::from_secs(60)));
+        tokio::spawn(sessions_pinger(pool.create_session.clone(), Arc::downgrade(&pool.idle_sessions), std::time::Duration::from_secs(60)));
         return pool;
     }
 
@@ -114,10 +113,10 @@ impl SessionPool {
 async fn sessions_pinger(session_client: Arc<Box<dyn SessionClient>>, idle_sessions: Weak<Mutex<VecDeque<IdleSessionItem>>>, interval: std::time::Duration) {
     let mut sleep_time = interval;
     loop {
-        tokio::time::sleep(sleep_time);
+        tokio::time::sleep(sleep_time).await;
         let ping_since = std::time::Instant::now().sub(interval);
         {
-            let mut idle_sessions = if let Some(idle_sessions) = idle_sessions.upgrade() {
+            let idle_sessions = if let Some(idle_sessions) = idle_sessions.upgrade() {
                 idle_sessions
             } else {
                 return
@@ -172,7 +171,7 @@ mod test {
             return Ok(Session::new("asd".into()))
         }
 
-        async fn keepalive_session(&self, session: &mut Session)->Result<()>{
+        async fn keepalive_session(&self, _session: &mut Session)->Result<()>{
             return Ok(())
         }
     }

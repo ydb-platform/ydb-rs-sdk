@@ -1,8 +1,5 @@
 use derivative::Derivative;
-use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
-use crate::internal::channel_pool::ChannelPool;
-use crate::internal::client_fabric::Middleware;
-use crate::errors::{Error, Result, YdbOperationError};
+use crate::errors::{Error, Result};
 
 #[derive(Derivative)]
 #[derivative(Debug)]
