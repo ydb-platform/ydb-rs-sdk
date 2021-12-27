@@ -4,28 +4,37 @@ use ydb_protobuf::generated::ydb::status_ids::StatusCode;
 use crate::errors;
 use crate::errors::{Error, Result};
 use crate::internal::client_common::DBCredentials;
-use crate::internal::middlewares::AuthService;
+use crate::internal::middlewares::{AuthService};
 use crate::internal::trait_operation::Operation;
 use http::Uri;
+use tonic::body::BoxBody;
 
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tower::ServiceBuilder;
+use crate::internal::channel_pool::ChannelProxy;
 
 pub(crate) fn create_grpc_client<T, CB>(uri: Uri, cred: DBCredentials, new_func: CB) -> Result<T>
 where
     CB: FnOnce(AuthService) -> T,
 {
+    let channel = create_grpc_channel(uri)?;
+    return create_client_on_channel(channel, cred, new_func)
+}
+
+fn create_client_on_channel<NewFuncT, ClientT>(channel: ChannelProxy, cred: DBCredentials, new_func: NewFuncT) -> Result<ClientT>
+where
+    NewFuncT: FnOnce(AuthService) -> ClientT,
+{
     let auth_service_create = |ch| {
         return AuthService::new(ch, cred.clone());
     };
-    let channel = create_grpc_channel(uri)?;
     let auth_ch = ServiceBuilder::new()
         .layer_fn(auth_service_create)
         .service(channel);
     return Ok(new_func(auth_ch));
 }
 
-fn create_grpc_channel(uri: Uri) -> Result<Channel> {
+fn create_grpc_channel(uri: Uri) -> Result<ChannelProxy> {
     let tls = if let Some(scheme) = uri.scheme_str() {
         scheme == "https" || scheme == "grpcs"
     } else {
@@ -37,7 +46,7 @@ fn create_grpc_channel(uri: Uri) -> Result<Channel> {
         endpoint = endpoint.tls_config(ClientTlsConfig::new())?
     };
     endpoint = endpoint.tcp_keepalive(Some(Duration::from_secs(15))); // tcp keepalive similar to default in golang lib
-    return Ok(endpoint.connect_lazy()?);
+    return Ok(ChannelProxy::new(endpoint.connect_lazy()?));
 }
 
 pub(crate) fn grpc_read_operation_result<TOp, T>(resp: tonic::Response<TOp>) -> errors::Result<T>

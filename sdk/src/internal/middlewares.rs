@@ -8,17 +8,18 @@ use tonic::service::Interceptor;
 use tonic::{Code, Status};
 use tonic::transport::{Body, Channel};
 use tower::Service;
+use crate::internal::channel_pool::ChannelProxy;
 
 use crate::internal::client_common::DBCredentials;
 
 #[derive(Clone, Debug)]
 pub(crate) struct AuthService {
-    ch: Channel,
+    ch: ChannelProxy,
     cred: DBCredentials,
 }
 
 impl AuthService {
-    pub fn new(ch: Channel, cred: DBCredentials) -> Self {
+    pub fn new(ch: ChannelProxy, cred: DBCredentials) -> Self {
         return AuthService { ch, cred };
     }
 }

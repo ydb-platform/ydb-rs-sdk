@@ -1,6 +1,12 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use http::Uri;
+use std::task::{Context, Poll};
+use http::{Request, Uri};
+use tonic::body::BoxBody;
+use tonic::client::GrpcService;
+use tonic::codegen::{Body, StdError};
+use tonic::transport::Channel;
+use tonic::transport::channel::ResponseFuture;
 use crate::internal::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::errors::Result;
 use crate::internal::client_common::DBCredentials;
@@ -63,5 +69,30 @@ impl<T> ChannelPool<T> where T:Clone {
         } else {
             None
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ChannelProxy {
+    ch: Channel,
+}
+
+impl ChannelProxy {
+    pub fn new(ch: Channel)->Self{
+        return ChannelProxy{ch}
+    }
+}
+
+impl tower::Service<http::Request<BoxBody>> for ChannelProxy {
+    type Response = http::Response<tonic::transport::Body>;
+    type Error = tonic::transport::Error;
+    type Future = tonic::transport::channel::ResponseFuture;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
+        return tower::Service::poll_ready(&mut self.ch, cx)
+    }
+
+    fn call(&mut self, req: Request<BoxBody>) -> Self::Future {
+        return tower::Service::call(&mut self.ch, req)
     }
 }
