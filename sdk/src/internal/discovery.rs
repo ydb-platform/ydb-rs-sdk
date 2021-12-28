@@ -123,7 +123,6 @@ impl Discovery for StaticDiscovery {
 #[derive(Clone)]
 pub(crate) struct TimerDiscovery {
     state: Arc<DiscoverySharedState>,
-    sender: Arc<tokio::sync::watch::Sender<DiscoveryState>>,
 }
 
 impl TimerDiscovery {
@@ -139,10 +138,8 @@ impl TimerDiscovery {
         tokio::spawn(async move {
             DiscoverySharedState::background_discovery(state_weak, interval).await;
         });
-        let (sender, _) = tokio::sync::watch::channel(DiscoveryState::default());
         return Ok(TimerDiscovery {
             state,
-            sender: Arc::new(sender),
         });
     }
 

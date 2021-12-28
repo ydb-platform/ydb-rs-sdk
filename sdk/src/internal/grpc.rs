@@ -7,17 +7,25 @@ use crate::internal::client_common::DBCredentials;
 use crate::internal::middlewares::{AuthService};
 use crate::internal::trait_operation::Operation;
 use http::Uri;
-use tonic::body::BoxBody;
+use tokio::sync::mpsc;
 
-use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
+use tonic::transport::{ClientTlsConfig, Endpoint};
 use tower::ServiceBuilder;
-use crate::internal::channel_pool::ChannelProxy;
+use crate::internal::channel_pool::{ChannelProxy, ChannelProxyErrorSender};
 
 pub(crate) fn create_grpc_client<T, CB>(uri: Uri, cred: DBCredentials, new_func: CB) -> Result<T>
-where
-    CB: FnOnce(AuthService) -> T,
+    where
+        CB: FnOnce(AuthService) -> T,
 {
-    let channel = create_grpc_channel(uri)?;
+    return create_grpc_client_with_error_sender(uri, cred, None, new_func)
+}
+
+
+pub(crate) fn create_grpc_client_with_error_sender<T, CB>(uri: Uri, cred: DBCredentials, error_sender: ChannelProxyErrorSender, new_func: CB) -> Result<T>
+    where
+        CB: FnOnce(AuthService) -> T,
+{
+    let channel = create_grpc_channel(uri, error_sender)?;
     return create_client_on_channel(channel, cred, new_func)
 }
 
@@ -34,7 +42,7 @@ where
     return Ok(new_func(auth_ch));
 }
 
-fn create_grpc_channel(uri: Uri) -> Result<ChannelProxy> {
+fn create_grpc_channel(uri: Uri, error_sender: Option<mpsc::Sender<()>>) -> Result<ChannelProxy> {
     let tls = if let Some(scheme) = uri.scheme_str() {
         scheme == "https" || scheme == "grpcs"
     } else {
@@ -46,7 +54,7 @@ fn create_grpc_channel(uri: Uri) -> Result<ChannelProxy> {
         endpoint = endpoint.tls_config(ClientTlsConfig::new())?
     };
     endpoint = endpoint.tcp_keepalive(Some(Duration::from_secs(15))); // tcp keepalive similar to default in golang lib
-    return Ok(ChannelProxy::new(endpoint.connect_lazy()?));
+    return Ok(ChannelProxy::new(endpoint.connect_lazy()?, error_sender));
 }
 
 pub(crate) fn grpc_read_operation_result<TOp, T>(resp: tonic::Response<TOp>) -> errors::Result<T>

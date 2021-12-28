@@ -6,7 +6,7 @@ use tonic::body::BoxBody;
 use tonic::metadata::AsciiMetadataValue;
 use tonic::service::Interceptor;
 use tonic::{Code, Status};
-use tonic::transport::{Body, Channel};
+use tonic::transport::{Body};
 use tower::Service;
 use crate::internal::channel_pool::ChannelProxy;
 

@@ -12,6 +12,7 @@ pub enum Error {
 
 #[derive(Clone, Debug)]
 pub struct YdbOperationError {
+    #[allow(dead_code)]
     pub(crate) message: String,
     pub(crate) operation_status: i32,
 }
