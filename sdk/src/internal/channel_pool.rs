@@ -11,7 +11,7 @@ use crate::internal::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::errors::Result;
 use crate::internal::client_common::DBCredentials;
 use crate::internal::discovery::Service;
-use crate::internal::grpc::{create_grpc_client, create_grpc_client_with_error_sender};
+use crate::internal::grpc::{create_grpc_client_with_error_sender};
 use crate::internal::middlewares::AuthService;
 
 type ChannelErrorInfo=();
