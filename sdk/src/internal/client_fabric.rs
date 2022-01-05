@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use crate::credentials::Credentials;
 use crate::errors::Result;
 use crate::internal::client_common::DBCredentials;
@@ -19,6 +20,7 @@ pub(crate) type Middleware = AuthService;
 pub(crate) struct ClientFabric {
     credentials: DBCredentials,
     load_balancer: SharedLoadBalancer,
+    discovery: Arc<Box<dyn Discovery>>,
 }
 
 impl ClientFabric {
@@ -26,24 +28,20 @@ impl ClientFabric {
         credentials: Box<dyn Credentials>,
         database: String,
         discovery: Box<dyn Discovery>,
-        load_balancer: Box<dyn LoadBalancer>,
     ) -> Result<Self> {
-        let shared_load_balancer = SharedLoadBalancer::new(load_balancer);
-        let background_lb = shared_load_balancer.clone();
-        let discovery_sub = discovery.subscribe();
-        tokio::spawn(async move { update_load_balancer(background_lb, discovery_sub) });
-
+        let discovery = Arc::new(discovery);
         return Ok(ClientFabric {
             credentials: DBCredentials {
                 credentials,
                 database,
             },
-            load_balancer: shared_load_balancer,
+            load_balancer: SharedLoadBalancer::new(discovery.as_ref()),
+            discovery,
         });
     }
 
     pub(crate) fn table_client(&self) -> TableClient {
-        return TableClient::new(self.credentials.clone(), self.load_balancer.clone());
+        return TableClient::new(self.credentials.clone(), self.discovery.clone());
     }
 
     pub(crate) async fn endpoints(
@@ -99,16 +97,11 @@ mod test {
         //     Duration::from_secs(60),
         // )?;
         let discovery = StaticDiscovery::from_str(START_ENDPOINT.as_str())?;
-        let mut load_balancer = Box::new(RandomLoadBalancer::new());
-        load_balancer
-            .set_discovery_state(&*discovery.subscribe().borrow())
-            .unwrap();
 
         return ClientFabric::new(
             credentials,
             DATABASE.clone(),
             Box::new(discovery),
-            load_balancer,
         );
     }
 

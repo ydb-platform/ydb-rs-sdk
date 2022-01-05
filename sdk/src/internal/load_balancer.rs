@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use crate::errors::*;
-use crate::internal::discovery::{DiscoveryState, Service};
+use crate::internal::discovery::{Discovery, DiscoveryState, Service};
 use http::Uri;
 use mockall;
 
@@ -12,7 +12,6 @@ use tokio::sync::watch::Receiver;
 pub(crate) trait LoadBalancer: Send + Sync {
     fn endpoint(&self, service: Service) -> Result<Uri>;
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> Result<()>;
-    fn pessimize(&mut self, endpoint: &Uri) -> Result<()>;
 }
 
 #[derive(Clone)]
@@ -21,10 +20,23 @@ pub(crate) struct SharedLoadBalancer {
 }
 
 impl SharedLoadBalancer {
-    pub(crate) fn new(load_balancer: Box<dyn LoadBalancer>) -> Self {
+    pub(crate) fn new(discovery: &Box<dyn Discovery>) ->Self {
+        return Self::new_with_balancer_and_updater(Box::new(RandomLoadBalancer::new()), discovery);
+    }
+
+    pub(crate) fn new_with_balancer(load_balancer: Box<dyn LoadBalancer>) -> Self {
         return Self {
             inner: Arc::new(RwLock::new(load_balancer)),
         };
+    }
+
+    pub(crate) fn new_with_balancer_and_updater(load_balancer: Box<dyn LoadBalancer>, discovery: &Box<dyn Discovery>) ->Self {
+        let mut shared_lb = Self::new_with_balancer(load_balancer);
+        shared_lb.set_discovery_state(&discovery.state());
+        let shared_lb_updater = shared_lb.clone();
+        let discovery_receiver = discovery.subscribe();
+        tokio::spawn(async move { update_load_balancer(shared_lb_updater, discovery_receiver).await });
+        return shared_lb;
     }
 }
 
@@ -35,10 +47,6 @@ impl LoadBalancer for SharedLoadBalancer {
 
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> Result<()> {
         self.inner.write()?.set_discovery_state(discovery_state)
-    }
-
-    fn pessimize(&mut self, endpoint: &Uri) -> Result<()> {
-        return self.inner.write().unwrap().pessimize(endpoint)
     }
 }
 
@@ -63,22 +71,16 @@ impl LoadBalancer for StaticLoadBalancer {
             "static balancer no way to update state".into(),
         ))
     }
-
-    fn pessimize(&mut self, _endpoint: &Uri) -> Result<()> {
-        return Ok(())
-    }
 }
 
 pub(crate) struct RandomLoadBalancer {
     discovery_state: Arc<DiscoveryState>,
-    pessimized_nodes: HashMap<Service, HashSet<usize>>, // pessimized node indexes for discovery_state.services
 }
 
 impl RandomLoadBalancer {
     pub(crate) fn new() -> Self {
         Self {
             discovery_state: Arc::new(DiscoveryState::default()),
-            pessimized_nodes: HashMap::default(),
         }
     }
 }
@@ -92,17 +94,9 @@ impl LoadBalancer for RandomLoadBalancer {
             )),
             Some(nodes) => {
                 if nodes.len() > 0 {
-                    loop {
                         let index = rand::random::<usize>() % nodes.len();
-                        if let Some(pessimized_nodes) = self.pessimized_nodes.get(&service) {
-                            // if all nodes pessimized - allow to select random node as usual
-                            if pessimized_nodes.len() < nodes.len() &&  pessimized_nodes.contains(&index) {
-                                continue
-                            }
-                        }
                         let node = &nodes[index % nodes.len()];
                         return Ok(node.uri.clone());
-                    }
                 } else {
                     Err(Error::Custom(
                         format!("empty endpoint list for service: {}", service).into(),
@@ -114,22 +108,7 @@ impl LoadBalancer for RandomLoadBalancer {
 
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> Result<()> {
         self.discovery_state = discovery_state.clone();
-        self.pessimized_nodes.clear();
         Ok(())
-    }
-
-    fn pessimize(&mut self, endpoint: &Uri) -> Result<()> {
-        for (service, nodes) in self.discovery_state.services.iter(){
-            for (index, node) in nodes.iter().enumerate() {
-                if &node.uri == endpoint {
-                    if !self.pessimized_nodes.contains_key(service) {
-                        self.pessimized_nodes.insert(service.clone(), HashSet::new());
-                    };
-                    self.pessimized_nodes.get_mut(service).unwrap().insert(index);
-                }
-            }
-        };
-        return Ok(());
     }
 }
 
@@ -173,7 +152,7 @@ mod test {
             return Ok(test_uri_mock.clone());
         });
 
-        let s1 = SharedLoadBalancer::new(Box::new(lb_mock));
+        let s1 = SharedLoadBalancer::new_with_balancer(Box::new(lb_mock));
         let s2 = s1.clone();
 
         assert_eq!(test_uri, s1.endpoint(Table)?);
@@ -220,7 +199,7 @@ mod test {
                 return Ok(());
             });
 
-        let shared_lb = SharedLoadBalancer::new(Box::new(lb_mock));
+        let shared_lb = SharedLoadBalancer::new_with_balancer(Box::new(lb_mock));
 
         tokio::spawn(async move {
             println!("updater start");
@@ -256,7 +235,6 @@ mod test {
                     .with_node_info(Table, NodeInfo::new(one.clone()))
                     .with_node_info(Table, NodeInfo::new(two.clone())),
             ),
-            pessimized_nodes: HashMap::default(),
         };
 
         let mut map = HashMap::new();

@@ -1,11 +1,12 @@
+use std::sync::Arc;
 use crate::errors::*;
 use crate::internal::client_common::DBCredentials;
 use crate::internal::client_fabric::Middleware;
-use crate::internal::discovery::Service;
+use crate::internal::discovery::{Discovery, Service};
 
 use crate::internal::load_balancer::{SharedLoadBalancer};
 use crate::internal::session::Session;
-use crate::internal::session_pool::SessionPool;
+use crate::internal::session_pool::{SessionClient, SessionPool};
 use crate::internal::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 use crate::internal::channel_pool::ChannelPool;
@@ -17,8 +18,8 @@ pub(crate) struct TableClient {
 }
 
 impl TableClient {
-    pub(crate) fn new(credencials: DBCredentials, load_balancer: SharedLoadBalancer) -> Self {
-        let channel_pool =ChannelPool::new::<TableServiceClient<Middleware>>(load_balancer.clone(), credencials.clone(), Service::Table, TableServiceClient::new);
+    pub(crate) fn new(credencials: DBCredentials, discovery: Arc<Box<dyn Discovery>>,) -> Self {
+        let channel_pool =ChannelPool::new::<TableServiceClient<Middleware>>(discovery, credencials.clone(), Service::Table, TableServiceClient::new);
 
         return Self {
             error_on_truncate: false,

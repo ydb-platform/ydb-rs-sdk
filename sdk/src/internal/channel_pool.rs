@@ -8,10 +8,10 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
 use tonic::body::BoxBody;
 use tonic::transport::Channel;
-use crate::internal::load_balancer::{LoadBalancer, SharedLoadBalancer};
+use crate::internal::load_balancer::{LoadBalancer, RandomLoadBalancer, SharedLoadBalancer};
 use crate::errors::Result;
 use crate::internal::client_common::DBCredentials;
-use crate::internal::discovery::Service;
+use crate::internal::discovery::{Discovery, Service};
 use crate::internal::grpc::{create_grpc_client_with_error_sender};
 use crate::internal::middlewares::AuthService;
 
@@ -19,6 +19,7 @@ pub(crate) struct ChannelErrorInfo {
     endpoint: Uri,
 }
 
+// TODO: implement Channel for Channel pool for drop-in replacements in grpc-clients
 #[derive(Clone)]
 pub(crate) struct ChannelPool<T> where T:Clone{
     create_new_channel_fn: fn (AuthService) -> T,
@@ -42,12 +43,13 @@ impl<T> SharedState<T> {
 }
 
 impl<T> ChannelPool<T> where T:Clone {
-    pub(crate) fn new<CB>(load_balancer: SharedLoadBalancer, credentials: DBCredentials, service: Service, create_new_channel_fn: fn (AuthService) -> T) ->Self
+    pub(crate) fn new<CB>(discovery: Arc<Box<dyn Discovery>>, credentials: DBCredentials, service: Service, create_new_channel_fn: fn (AuthService) -> T) ->Self
     {
-        let (sender, receiver) = mpsc::channel(1);
+        let load_balancer = SharedLoadBalancer::new(discovery.as_ref());
+        let (channel_error_sender, channel_error_receiver) = mpsc::channel(1);
         let pessimization_balancer = load_balancer.clone();
         tokio::spawn(async move {
-           Self::node_pessimization_loop(pessimization_balancer, receiver).await;
+           Self::node_pessimization_loop(discovery, channel_error_receiver).await;
         });
         return Self{
             create_new_channel_fn,
@@ -55,7 +57,7 @@ impl<T> ChannelPool<T> where T:Clone {
             load_balancer,
             service,
             shared_state: Arc::new(Mutex::new(SharedState::new())),
-            channel_error_sender: sender,
+            channel_error_sender,
         }
     }
 
@@ -83,11 +85,10 @@ impl<T> ChannelPool<T> where T:Clone {
         }
     }
 
-    async fn node_pessimization_loop(mut load_balancer: SharedLoadBalancer, mut errors: Receiver<ChannelErrorInfo>) {
+    async fn node_pessimization_loop(discovery: Arc<Box<dyn Discovery>>, mut errors: Receiver<ChannelErrorInfo>) {
         loop {
             if let Some(err) = errors.recv().await {
-                // TODO: log error
-                let _ = load_balancer.pessimize(&err.endpoint);
+                discovery.pessimization(&err.endpoint)
             } else {
                 return
             };

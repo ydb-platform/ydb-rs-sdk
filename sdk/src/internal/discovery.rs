@@ -1,8 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, RwLock, RwLockWriteGuard, Weak};
 
 use async_trait::async_trait;
 use http::uri::Authority;
@@ -44,9 +44,54 @@ pub(crate) enum Service {
 pub(crate) struct DiscoveryState {
     pub timestamp: std::time::Instant,
     pub services: HashMap<Service, Vec<NodeInfo>>,
+
+    pessimized_nodes: HashSet<Uri>,
+    original_services: HashMap<Service, Vec<NodeInfo>>,
 }
 
 impl DiscoveryState {
+
+    pub(crate) fn new(timestamp: std::time::Instant, services: HashMap<Service, Vec<NodeInfo>>)->Self{
+        return DiscoveryState{
+            timestamp,
+            services: services.clone(),
+            pessimized_nodes:HashSet::new(),
+            original_services: services,
+        }
+    }
+
+    // pessimize return true if state was changed
+    pub(crate) fn pessimize(&mut self, uri: &Uri)->bool {
+        if self.pessimized_nodes.contains(uri){
+            return false
+        };
+
+        self.pessimized_nodes.insert(uri.clone());
+        self.build_services();
+        return true
+    }
+
+    fn build_services(&mut self){
+        self.services.clear();
+
+        for (service, origin_nodes) in self.original_services.iter() {
+            let mut nodes = Vec::with_capacity(origin_nodes.len());
+
+            for origin_node in origin_nodes.iter() {
+                if !self.pessimized_nodes.contains(&origin_node.uri) {
+                    nodes.push(origin_node.clone())
+                }
+            }
+
+            // if all nodes pessimized - use full nodes set
+            if nodes.len() == 0 {
+                nodes.clone_from(origin_nodes)
+            }
+
+            self.services.insert(service.clone(), nodes);
+        }
+    }
+
     pub(crate) fn with_node_info(mut self, service: Service, node_info: NodeInfo) -> Self {
         if !self.services.contains_key(&service) {
             self.services.insert(service, Vec::new());
@@ -60,10 +105,7 @@ impl DiscoveryState {
 
 impl Default for DiscoveryState {
     fn default() -> Self {
-        return DiscoveryState {
-            timestamp: std::time::Instant::now(),
-            services: HashMap::new(),
-        };
+        return DiscoveryState::new(std::time::Instant::now(), HashMap::default());
     }
 }
 
@@ -80,43 +122,48 @@ impl NodeInfo {
 
 #[async_trait]
 pub(crate) trait Discovery: Send + Sync {
-    fn endpoint(self: &Self, service: Service) -> Result<Uri>;
+    fn pessimization(&self, uri: &Uri);
     fn subscribe(&self) -> tokio::sync::watch::Receiver<Arc<DiscoveryState>>;
+    fn state(&self)->Arc<DiscoveryState>;
 }
 
 pub(crate) struct StaticDiscovery {
     endpoint: Uri,
     sender: tokio::sync::watch::Sender<Arc<DiscoveryState>>,
+    discovery_state: Arc<DiscoveryState>,
 }
 
 impl StaticDiscovery {
     pub(crate) fn from_str(endpoint: &str) -> Result<Self> {
         let endpoint = Uri::from_str(endpoint)?;
-        let state = DiscoveryState {
-            timestamp: std::time::Instant::now(),
-            services: HashMap::from_iter(Service::iter().map(|service| {
-                (
-                    service,
-                    vec![NodeInfo {
-                        uri: endpoint.clone(),
-                    }],
-                )
-            })),
-        };
+        let services = HashMap::from_iter(Service::iter().map(|service| {
+            (
+                service,
+                vec![NodeInfo {
+                    uri: endpoint.clone(),
+                }],
+            )
+        }));
 
-        let (sender, _) = tokio::sync::watch::channel(Arc::new(state));
-        return Ok(StaticDiscovery { endpoint, sender });
+        let state = DiscoveryState::new(std::time::Instant::now(), services);
+        let state = Arc::new(state);
+        let (sender, _) = tokio::sync::watch::channel(state.clone());
+        return Ok(StaticDiscovery { endpoint, sender, discovery_state: state });
     }
 }
 
 #[async_trait]
 impl Discovery for StaticDiscovery {
-    fn endpoint(self: &Self, _service: Service) -> Result<Uri> {
-        return Ok(self.endpoint.clone());
+    fn pessimization(&self, _uri: &Uri) {
+        // pass
     }
 
     fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
         return self.sender.subscribe();
+    }
+
+    fn state(&self) -> Arc<DiscoveryState> {
+        return self.discovery_state.clone();
     }
 }
 
@@ -150,17 +197,22 @@ impl TimerDiscovery {
 }
 
 impl Discovery for TimerDiscovery {
-    fn endpoint(self: &Self, service: Service) -> Result<Uri> {
-        return self.state.endpoint(service);
+    fn pessimization(&self, uri: &Uri) {
+        self.state.pessimization(uri);
     }
 
     fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
         todo!()
     }
+
+    fn state(&self) -> Arc<DiscoveryState> {
+        return self.state.state();
+    }
 }
 
 struct DiscoverySharedState {
     cred: DBCredentials,
+    discovery_uri: Uri,
     database: String,
     discovery_state: RwLock<Arc<DiscoveryState>>,
     sender: tokio::sync::watch::Sender<Arc<DiscoveryState>>,
@@ -169,22 +221,13 @@ struct DiscoverySharedState {
 
 impl DiscoverySharedState {
     fn new(cred: DBCredentials, database: String, endpoint: &str) -> Result<Self> {
-        let mut map = HashMap::new();
-        map.insert(
-            Service::Discovery,
-            vec![NodeInfo {
-                uri: http::Uri::from_str(endpoint)?,
-            }],
-        );
-        let state = Arc::new(DiscoveryState {
-            timestamp: std::time::Instant::now(),
-            services: map,
-        });
+        let state = Arc::new(DiscoveryState::new(std::time::Instant::now(),HashMap::new()));
         let (sender, _) = tokio::sync::watch::channel(state.clone());
 
         return Ok(Self {
             cred,
             database,
+            discovery_uri: http::Uri::from_str(endpoint)?,
             discovery_state: RwLock::new(state),
             next_index_base: AtomicUsize::default(),
             sender,
@@ -193,9 +236,8 @@ impl DiscoverySharedState {
 
     async fn discovery_now(&self) -> Result<()> {
         let start = std::time::Instant::now();
-        let endpoint = self.endpoint(Service::Discovery)?;
         let mut discovery_client = create_grpc_client(
-            endpoint,
+            self.discovery_uri.clone(),
             self.cred.clone(),
             DiscoveryServiceClient::new,
         )?;
@@ -210,16 +252,14 @@ impl DiscoverySharedState {
         let res: ListEndpointsResult = grpc_read_operation_result(resp)?;
         println!("list endpoints: {:?}", res);
         let new_endpoints = Self::list_endpoints_to_services_map(res)?;
-        let new_state = Arc::new(DiscoveryState {
-            timestamp: start,
-            services: new_endpoints,
-        });
-        let mut self_map = self.discovery_state.write()?;
-        *self_map = new_state.clone();
-        drop(self_map);
-        let _ = self.sender.send(new_state);
-
+        self.set_discovery_state(self.discovery_state.write().unwrap(), DiscoveryState::new(start, new_endpoints));
         return Ok(());
+    }
+
+    fn set_discovery_state(&self, mut locked_state: RwLockWriteGuard<Arc<DiscoveryState>>, new_state: DiscoveryState){
+        let new_state = Arc::new(new_state);
+        *locked_state = new_state.clone();
+        let _ = self.sender.send(new_state);
     }
 
     async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
@@ -276,24 +316,21 @@ impl DiscoverySharedState {
 
 #[async_trait]
 impl Discovery for DiscoverySharedState {
-    fn endpoint(self: &Self, service: Service) -> Result<Uri> {
-        let base_index = self.next_index_base.fetch_add(1, Relaxed);
-
-        let map = self.discovery_state.read()?;
-        let nodes_info = map.services.get(&service);
-        let nodes_info = match nodes_info {
-            Some(endpoints) => endpoints,
-            None => {
-                return Err(Error::from(
-                    format!("empty endpoints list for service {:?}", service).as_str(),
-                ))
-            }
-        };
-        return Ok(nodes_info[base_index % nodes_info.len()].uri.clone());
+    fn pessimization(&self, uri: &Uri) {
+        // TODO: suppress force copy every time
+        let lock = self.discovery_state.write().unwrap();
+        let mut discovery_state = lock.as_ref().clone();
+        if discovery_state.pessimize(uri) {
+            self.set_discovery_state(lock, discovery_state)
+        }
     }
 
     fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
         return self.sender.subscribe();
+    }
+
+    fn state(&self) -> Arc<DiscoveryState> {
+        return self.discovery_state.read().unwrap().clone();
     }
 }
 
