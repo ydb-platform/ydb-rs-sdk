@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use crate::errors::*;
 use crate::internal::discovery::{DiscoveryState, Service};
 use http::Uri;
@@ -11,6 +12,7 @@ use tokio::sync::watch::Receiver;
 pub(crate) trait LoadBalancer: Send + Sync {
     fn endpoint(&self, service: Service) -> Result<Uri>;
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> Result<()>;
+    fn pessimize(&mut self, endpoint: &Uri) -> Result<()>;
 }
 
 #[derive(Clone)]
@@ -33,6 +35,10 @@ impl LoadBalancer for SharedLoadBalancer {
 
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> Result<()> {
         self.inner.write()?.set_discovery_state(discovery_state)
+    }
+
+    fn pessimize(&mut self, endpoint: &Uri) -> Result<()> {
+        return self.inner.write().unwrap().pessimize(endpoint)
     }
 }
 
@@ -57,16 +63,22 @@ impl LoadBalancer for StaticLoadBalancer {
             "static balancer no way to update state".into(),
         ))
     }
+
+    fn pessimize(&mut self, _endpoint: &Uri) -> Result<()> {
+        return Ok(())
+    }
 }
 
 pub(crate) struct RandomLoadBalancer {
     discovery_state: Arc<DiscoveryState>,
+    pessimized_nodes: HashMap<Service, HashSet<usize>>, // pessimized node indexes for discovery_state.services
 }
 
 impl RandomLoadBalancer {
     pub(crate) fn new() -> Self {
         Self {
             discovery_state: Arc::new(DiscoveryState::default()),
+            pessimized_nodes: HashMap::default(),
         }
     }
 }
@@ -80,9 +92,17 @@ impl LoadBalancer for RandomLoadBalancer {
             )),
             Some(nodes) => {
                 if nodes.len() > 0 {
-                    let index = rand::random::<usize>() % nodes.len();
-                    let node = &nodes[index % nodes.len()];
-                    Ok(node.uri.clone())
+                    loop {
+                        let index = rand::random::<usize>() % nodes.len();
+                        if let Some(pessimized_nodes) = self.pessimized_nodes.get(&service) {
+                            // if all nodes pessimized - allow to select random node as usual
+                            if pessimized_nodes.len() < nodes.len() &&  pessimized_nodes.contains(&index) {
+                                continue
+                            }
+                        }
+                        let node = &nodes[index % nodes.len()];
+                        return Ok(node.uri.clone());
+                    }
                 } else {
                     Err(Error::Custom(
                         format!("empty endpoint list for service: {}", service).into(),
@@ -94,7 +114,22 @@ impl LoadBalancer for RandomLoadBalancer {
 
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> Result<()> {
         self.discovery_state = discovery_state.clone();
+        self.pessimized_nodes.clear();
         Ok(())
+    }
+
+    fn pessimize(&mut self, endpoint: &Uri) -> Result<()> {
+        for (service, nodes) in self.discovery_state.services.iter(){
+            for (index, node) in nodes.iter().enumerate() {
+                if &node.uri == endpoint {
+                    if !self.pessimized_nodes.contains_key(service) {
+                        self.pessimized_nodes.insert(service.clone(), HashSet::new());
+                    };
+                    self.pessimized_nodes.get_mut(service).unwrap().insert(index);
+                }
+            }
+        };
+        return Ok(());
     }
 }
 
@@ -221,6 +256,7 @@ mod test {
                     .with_node_info(Table, NodeInfo::new(one.clone()))
                     .with_node_info(Table, NodeInfo::new(two.clone())),
             ),
+            pessimized_nodes: HashMap::default(),
         };
 
         let mut map = HashMap::new();

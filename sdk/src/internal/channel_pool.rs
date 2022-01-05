@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use http::{Request, Uri};
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::Receiver;
 use tonic::body::BoxBody;
 use tonic::transport::Channel;
 use crate::internal::load_balancer::{LoadBalancer, SharedLoadBalancer};
@@ -14,7 +15,9 @@ use crate::internal::discovery::Service;
 use crate::internal::grpc::{create_grpc_client_with_error_sender};
 use crate::internal::middlewares::AuthService;
 
-type ChannelErrorInfo=();
+pub(crate) struct ChannelErrorInfo {
+    endpoint: Uri,
+}
 
 #[derive(Clone)]
 pub(crate) struct ChannelPool<T> where T:Clone{
@@ -28,14 +31,12 @@ pub(crate) struct ChannelPool<T> where T:Clone{
 
 struct SharedState<T> {
     channels: HashMap<Uri,T>,
-    channel_error_receiver: mpsc::Receiver<ChannelErrorInfo>,
 }
 
 impl<T> SharedState<T> {
-    fn new(error_receiver: mpsc::Receiver<ChannelErrorInfo>)->Self{
+    fn new()->Self{
         return Self{
             channels: HashMap::new(),
-            channel_error_receiver: error_receiver,
         }
     }
 }
@@ -44,12 +45,16 @@ impl<T> ChannelPool<T> where T:Clone {
     pub(crate) fn new<CB>(load_balancer: SharedLoadBalancer, credentials: DBCredentials, service: Service, create_new_channel_fn: fn (AuthService) -> T) ->Self
     {
         let (sender, receiver) = mpsc::channel(1);
+        let pessimization_balancer = load_balancer.clone();
+        tokio::spawn(async move {
+           Self::node_pessimization_loop(pessimization_balancer, receiver).await;
+        });
         return Self{
             create_new_channel_fn,
             credentials,
             load_balancer,
             service,
-            shared_state: Arc::new(Mutex::new(SharedState::new(receiver))),
+            shared_state: Arc::new(Mutex::new(SharedState::new())),
             channel_error_sender: sender,
         }
     }
@@ -77,11 +82,23 @@ impl<T> ChannelPool<T> where T:Clone {
             None
         }
     }
+
+    async fn node_pessimization_loop(mut load_balancer: SharedLoadBalancer, mut errors: Receiver<ChannelErrorInfo>) {
+        loop {
+            if let Some(err) = errors.recv().await {
+                // TODO: log error
+                let _ = load_balancer.pessimize(&err.endpoint);
+            } else {
+                return
+            };
+        }
+    }
 }
 
 pub struct ChannelProxyFuture {
+    endpoint: Uri,
     inner: <Channel as tower::Service<http::Request<BoxBody>> >::Future,
-    error_event: Option<tokio::sync::mpsc::Sender<()>>,
+    error_event: Option<tokio::sync::mpsc::Sender<ChannelErrorInfo>>,
 }
 
 impl Future for ChannelProxyFuture {
@@ -90,10 +107,11 @@ impl Future for ChannelProxyFuture {
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let res =  Future::poll(Pin::new(& mut self.inner), cx);
         if let (Poll::Ready(Err(_)), Some(sender)) = (&res, self.error_event.clone()) {
+            let endpoint = self.endpoint.clone();
             tokio::spawn(async move {
                 // TODO: tokio spawn - is workaround.
                 // ideal way - async send message to sender and wait it here
-                sender.send(()).await.ok();
+                sender.send(ChannelErrorInfo{endpoint}).await.ok();
             });
         }
         return res;
@@ -104,6 +122,7 @@ pub(crate) type ChannelProxyErrorSender=Option<tokio::sync::mpsc::Sender<Channel
 
 #[derive(Clone, Debug)]
 pub(crate) struct ChannelProxy {
+    endpoint: Uri,
     ch: Channel,
     error_sender: ChannelProxyErrorSender
 }
@@ -112,9 +131,9 @@ type ChannelResponse = <Channel as tower::Service<http::Request<BoxBody>> >::Res
 type ChannelError = <Channel as tower::Service<http::Request<BoxBody>> >::Error;
 
 impl ChannelProxy {
-    pub fn new(ch: Channel, error_sender: ChannelProxyErrorSender) ->Self{
+    pub fn new(endpoint: Uri, ch: Channel, error_sender: ChannelProxyErrorSender) ->Self{
         return ChannelProxy{
-            ch, error_sender
+            endpoint, ch, error_sender
         }
     }
 }
@@ -130,6 +149,7 @@ impl tower::Service<http::Request<BoxBody>> for ChannelProxy {
 
     fn call(&mut self, req: Request<BoxBody>) -> Self::Future {
         return ChannelProxyFuture{
+            endpoint: self.endpoint.clone(),
             inner: tower::Service::call(&mut self.ch, req),
             error_event: self.error_sender.clone(),
         }

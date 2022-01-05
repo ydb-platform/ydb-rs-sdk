@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tower::ServiceBuilder;
-use crate::internal::channel_pool::{ChannelProxy, ChannelProxyErrorSender};
+use crate::internal::channel_pool::{ChannelErrorInfo, ChannelProxy, ChannelProxyErrorSender};
 
 pub(crate) fn create_grpc_client<T, CB>(uri: Uri, cred: DBCredentials, new_func: CB) -> Result<T>
     where
@@ -42,19 +42,19 @@ where
     return Ok(new_func(auth_ch));
 }
 
-fn create_grpc_channel(uri: Uri, error_sender: Option<mpsc::Sender<()>>) -> Result<ChannelProxy> {
+fn create_grpc_channel(uri: Uri, error_sender: Option<mpsc::Sender<ChannelErrorInfo>>) -> Result<ChannelProxy> {
     let tls = if let Some(scheme) = uri.scheme_str() {
         scheme == "https" || scheme == "grpcs"
     } else {
         false
     };
 
-    let mut endpoint = Endpoint::from(uri);
+    let mut endpoint = Endpoint::from(uri.clone());
     if tls {
         endpoint = endpoint.tls_config(ClientTlsConfig::new())?
     };
     endpoint = endpoint.tcp_keepalive(Some(Duration::from_secs(15))); // tcp keepalive similar to default in golang lib
-    return Ok(ChannelProxy::new(endpoint.connect_lazy()?, error_sender));
+    return Ok(ChannelProxy::new(uri, endpoint.connect_lazy()?, error_sender));
 }
 
 pub(crate) fn grpc_read_operation_result<TOp, T>(resp: tonic::Response<TOp>) -> errors::Result<T>
