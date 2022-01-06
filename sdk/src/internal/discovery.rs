@@ -18,6 +18,7 @@ use crate::errors::{Error, Result};
 use crate::internal::grpc::{create_grpc_client, grpc_read_operation_result};
 use std::iter::FromIterator;
 use std::time::Duration;
+use tokio::sync::Mutex;
 use tokio::sync::watch::Receiver;
 use crate::internal::client_common::DBCredentials;
 
@@ -199,6 +200,21 @@ impl TimerDiscovery {
 impl Discovery for TimerDiscovery {
     fn pessimization(&self, uri: &Uri) {
         self.state.pessimization(uri);
+
+        // check if need force discovery
+        let state = self.state();
+        for (service, origin_nodes) in state.original_services.iter() {
+            let pessimized_nodes = origin_nodes.iter().filter(|node| state.pessimized_nodes.contains(&node.uri)).count();
+            if pessimized_nodes > 0 && pessimized_nodes >= origin_nodes.len() / 2 {
+                let shared_state_for_discovery = Arc::downgrade(&self.state);
+                tokio::spawn(async move {
+                    if let Some(state) = shared_state_for_discovery.upgrade(){
+                        let _ = state.discovery_now();
+                    }
+                });
+            }
+        }
+
     }
 
     fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
@@ -214,9 +230,11 @@ struct DiscoverySharedState {
     cred: DBCredentials,
     discovery_uri: Uri,
     database: String,
-    discovery_state: RwLock<Arc<DiscoveryState>>,
     sender: tokio::sync::watch::Sender<Arc<DiscoveryState>>,
     next_index_base: AtomicUsize,
+
+    discovery_process: Mutex<()>,
+    discovery_state: RwLock<Arc<DiscoveryState>>,
 }
 
 impl DiscoverySharedState {
@@ -228,13 +246,16 @@ impl DiscoverySharedState {
             cred,
             database,
             discovery_uri: http::Uri::from_str(endpoint)?,
-            discovery_state: RwLock::new(state),
             next_index_base: AtomicUsize::default(),
             sender,
+            discovery_process: Mutex::new(()),
+            discovery_state: RwLock::new(state),
         });
     }
 
     async fn discovery_now(&self) -> Result<()> {
+        let discovery_lock = self.discovery_process.lock().await;
+
         let start = std::time::Instant::now();
         let mut discovery_client = create_grpc_client(
             self.discovery_uri.clone(),
@@ -252,12 +273,14 @@ impl DiscoverySharedState {
         let res: ListEndpointsResult = grpc_read_operation_result(resp)?;
         println!("list endpoints: {:?}", res);
         let new_endpoints = Self::list_endpoints_to_services_map(res)?;
-        self.set_discovery_state(self.discovery_state.write().unwrap(), DiscoveryState::new(start, new_endpoints));
+        self.set_discovery_state(self.discovery_state.write().unwrap(), Arc::new(DiscoveryState::new(start, new_endpoints)));
+
+        // lock until exit
+        drop(discovery_lock);
         return Ok(());
     }
 
-    fn set_discovery_state(&self, mut locked_state: RwLockWriteGuard<Arc<DiscoveryState>>, new_state: DiscoveryState){
-        let new_state = Arc::new(new_state);
+    fn set_discovery_state(&self, mut locked_state: RwLockWriteGuard<Arc<DiscoveryState>>, new_state: Arc<DiscoveryState>){
         *locked_state = new_state.clone();
         let _ = self.sender.send(new_state);
     }
@@ -320,9 +343,11 @@ impl Discovery for DiscoverySharedState {
         // TODO: suppress force copy every time
         let lock = self.discovery_state.write().unwrap();
         let mut discovery_state = lock.as_ref().clone();
-        if discovery_state.pessimize(uri) {
-            self.set_discovery_state(lock, discovery_state)
+        if !discovery_state.pessimize(uri) {
+            return
         }
+        let discovery_state= Arc::new(discovery_state);
+        self.set_discovery_state(lock, discovery_state);
     }
 
     fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
