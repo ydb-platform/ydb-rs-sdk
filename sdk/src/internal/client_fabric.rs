@@ -77,7 +77,6 @@ mod test {
     use crate::types::{YdbList, YdbStruct, YdbValue};
 
     use super::*;
-    use crate::internal::load_balancer::RandomLoadBalancer;
     use crate::internal::transaction::Mode;
     use http::Uri;
     use std::iter::FromIterator;

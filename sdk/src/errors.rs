@@ -7,6 +7,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone, Debug)]
 pub enum Error {
     Custom(String),
+    Transport(String),
     YdbOperation(YdbOperationError),
 }
 
@@ -106,7 +107,7 @@ impl From<tokio::sync::oneshot::error::RecvError> for Error {
 
 impl From<tonic::transport::Error> for Error {
     fn from(e: tonic::transport::Error) -> Self {
-        return Error::Custom(e.to_string());
+        return Error::Transport(e.to_string());
     }
 }
 

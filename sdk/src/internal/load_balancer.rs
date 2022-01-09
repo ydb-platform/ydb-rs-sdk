@@ -32,7 +32,7 @@ impl SharedLoadBalancer {
 
     pub(crate) fn new_with_balancer_and_updater(load_balancer: Box<dyn LoadBalancer>, discovery: &Box<dyn Discovery>) ->Self {
         let mut shared_lb = Self::new_with_balancer(load_balancer);
-        shared_lb.set_discovery_state(&discovery.state());
+        let _ = shared_lb.set_discovery_state(&discovery.state());
         let shared_lb_updater = shared_lb.clone();
         let discovery_receiver = discovery.subscribe();
         tokio::spawn(async move { update_load_balancer(shared_lb_updater, discovery_receiver).await });
