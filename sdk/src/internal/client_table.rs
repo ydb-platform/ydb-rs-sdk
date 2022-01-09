@@ -38,7 +38,7 @@ impl TableClient {
         AutoCommit::new(self.channel_pool.clone(), self.session_pool.clone(), mode).with_error_on_truncate(self.error_on_truncate)
     }
 
-    pub fn create_multiquery_transaction(&self) -> impl Transaction {
+    pub fn create_interactive_transaction(&self) -> impl Transaction {
         SerializableReadWriteTx::new(self.channel_pool.clone(), self.session_pool.clone()).with_error_on_truncate(self.error_on_truncate)
     }
 

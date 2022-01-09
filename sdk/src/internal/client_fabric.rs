@@ -203,11 +203,11 @@ mod test {
         let client = create_client()?;
         let mut tx_auto = client.table_client().create_autocommit_transaction(SerializableReadWrite);
 
-        let mut tx = client.table_client().create_multiquery_transaction();
+        let mut tx = client.table_client().create_interactive_transaction();
         tx.query(Query::new().with_query("DELETE FROM test_values".into())).await?;
         tx.commit().await?;
 
-        let mut tx = client.table_client().create_multiquery_transaction();
+        let mut tx = client.table_client().create_interactive_transaction();
         tx.query(Query::new().with_query("UPSERT INTO test_values (id, vInt64) VALUES (1, 2)".into())).await?;
         tx.query(Query::new()
             .with_query("
