@@ -1,8 +1,37 @@
+use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
 use std::string::FromUtf8Error;
 use tokio::sync::AcquireError;
 
 pub type Result<T> = std::result::Result<T, Error>;
+pub type ResultWithCustomerErr<T,Err> = std::result::Result<T,YdbOrCustomerError<Err>>;
+
+pub enum YdbOrCustomerError<Err: std::error::Error> {
+    YDB(Error),
+    Customer(Err)
+}
+
+impl<Err: std::error::Error> Debug for YdbOrCustomerError<Err> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        return match self {
+            Self::YDB(err) => Debug::fmt(err, f),
+            Self::Customer(err) => Debug::fmt(err, f)
+        }
+    }
+}
+
+impl<Err: std::error::Error> Display for YdbOrCustomerError<Err> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        return match self {
+            Self::YDB(err)=>Display::fmt(err, f),
+            Self::Customer(err)=>Display::fmt(err, f),
+        }
+    }
+}
+
+impl<Err: std::error::Error> std::error::Error for YdbOrCustomerError<Err> {
+
+}
 
 #[derive(Clone, Debug)]
 pub enum Error {

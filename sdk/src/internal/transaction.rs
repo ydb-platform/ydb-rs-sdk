@@ -13,7 +13,7 @@ use crate::internal::client_fabric::Middleware;
 use crate::internal::grpc::{grpc_read_operation_result, grpc_read_void_operation_result};
 use crate::internal::session::Session;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 pub enum Mode {
     OnlineReadonly,
     SerializableReadWrite,
