@@ -48,20 +48,20 @@ impl ClientFabric {
         self: &Self,
         req: ListEndpointsRequest,
     ) -> Result<ListEndpointsResult> {
-        grpc::grpc_read_operation_result(self.client_discovery()?.list_endpoints(req).await?)
+        grpc::grpc_read_operation_result(self.client_discovery().await?.list_endpoints(req).await?)
     }
 
     pub async fn who_am_i(self: Self, req: WhoAmIRequest) -> Result<WhoAmIResult> {
-        grpc::grpc_read_operation_result(self.client_discovery()?.who_am_i(req).await?)
+        grpc::grpc_read_operation_result(self.client_discovery().await?.who_am_i(req).await?)
     }
 
     // clients
-    fn client_discovery(self: &Self) -> Result<DiscoveryServiceClient<Middleware>> {
+    async fn client_discovery(self: &Self) -> Result<DiscoveryServiceClient<Middleware>> {
         return create_grpc_client(
             self.load_balancer.endpoint(Service::Discovery)?,
             self.credentials.clone(),
             DiscoveryServiceClient::new,
-        );
+        ).await;
     }
 }
 

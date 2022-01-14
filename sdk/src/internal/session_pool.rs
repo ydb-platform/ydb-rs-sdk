@@ -23,7 +23,7 @@ pub(crate) trait SessionClient: Send + Sync {
 #[async_trait]
 impl SessionClient for ChannelPool<TableServiceClient<Middleware>> {
     async fn create_session(&self)->Result<Session>{
-        let mut channel = self.create_channel()?;
+        let mut channel = self.create_channel().await?;
         let session_res: CreateSessionResult = grpc_read_operation_result(
             channel
                 .create_session(CreateSessionRequest::default())
@@ -35,7 +35,7 @@ impl SessionClient for ChannelPool<TableServiceClient<Middleware>> {
 
     async fn keepalive_session(&self, session: &mut Session)->Result<()>{
         use ydb_protobuf::generated::ydb::table::keep_alive_result::SessionStatus;
-        let mut channel = self.create_channel()?;
+        let mut channel = self.create_channel().await?;
         let keepalive_res: KeepAliveResult = session.handle_error(grpc_read_operation_result(channel.keep_alive(KeepAliveRequest{
             session_id: session.id.clone(),
             ..KeepAliveRequest::default()

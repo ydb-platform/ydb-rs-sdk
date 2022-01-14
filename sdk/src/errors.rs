@@ -2,6 +2,7 @@ use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
 use std::string::FromUtf8Error;
 use tokio::sync::AcquireError;
+use crate::errors::NeedRetry::{False, IdempotentOnly, True};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type ResultWithCustomerErr<T,Err> = std::result::Result<T,YdbOrCustomerError<Err>>;
@@ -33,10 +34,18 @@ impl<Err: std::error::Error> std::error::Error for YdbOrCustomerError<Err> {
 
 }
 
-#[derive(Clone, Debug)]
+pub(crate) enum NeedRetry {
+    True,               // operation guarantee to not completed, error is temporary, need retry
+    IdempotentOnly,     // operation in unknown state - it may be completed or not, error temporary. Operation may be auto retry for idempotent operations only.
+    False,              // operation is completed or error is stable (for example yql syntaxt errror) and no need retry
+}
+
+#[derive(Debug)]
 pub enum Error {
     Custom(String),
+    TransportDial(tonic::transport::Error),
     Transport(String),
+    TransportGRPCStatus(tonic::Status),
     YdbOperation(YdbOperationError),
 }
 
@@ -51,6 +60,33 @@ impl Error {
     #[allow(dead_code)]
     pub fn from_str(s: &str) -> Error {
         return Error::Custom(s.to_string());
+    }
+    pub (crate) fn need_retry(&self)->NeedRetry {
+        match self {
+            Self::Custom(_)=>NeedRetry::False,
+            Self::TransportDial(_)=>NeedRetry::True,
+            Self::Transport(_)=>IdempotentOnly, // TODO: check when transport error created
+            Self::TransportGRPCStatus(status)=>{
+                use tonic::Code;
+                match status.code() {
+                    Code::Aborted | Code::ResourceExhausted => NeedRetry::True,
+                    Code::Internal | Code::Cancelled | Code::Unavailable => NeedRetry::IdempotentOnly,
+                    _ => NeedRetry::False,
+                }
+            },
+            Self::YdbOperation(ydb_err)=> {
+                use ydb_protobuf::generated::ydb::status_ids::StatusCode;
+                if let Some(status) = StatusCode::from_i32(ydb_err.operation_status){
+                    match status {
+                        StatusCode::Aborted | StatusCode::Unavailable | StatusCode::Overloaded | StatusCode::BadSession | StatusCode::SessionBusy => NeedRetry::True,
+                        StatusCode::Undetermined => NeedRetry::IdempotentOnly,
+                        _ => NeedRetry::False,
+                    }
+                } else {
+                    NeedRetry::False
+                }
+            }
+        }
     }
 }
 
@@ -142,7 +178,7 @@ impl From<tonic::transport::Error> for Error {
 
 impl From<tonic::Status> for Error {
     fn from(e: tonic::Status) -> Self {
-        return Error::Custom(e.to_string());
+        return Error::TransportGRPCStatus(e);
     }
 }
 

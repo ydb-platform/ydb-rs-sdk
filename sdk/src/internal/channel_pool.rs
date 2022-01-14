@@ -16,7 +16,7 @@ use crate::internal::grpc::{create_grpc_client_with_error_sender};
 use crate::internal::middlewares::AuthService;
 
 pub(crate) struct ChannelErrorInfo {
-    endpoint: Uri,
+    pub endpoint: Uri,
 }
 
 // TODO: implement Channel for Channel pool for drop-in replacements in grpc-clients
@@ -61,17 +61,17 @@ impl<T> ChannelPool<T> where T:Clone {
         }
     }
 
-    pub(crate) fn create_channel(&self)->Result<T>{
+    pub(crate) async fn create_channel(&self)->Result<T>{
         let endpoint = self.load_balancer.endpoint(self.service)?;
         return if let Some(ch) = self.get_channel_from_pool(&endpoint){
             Ok(ch)
         } else {
-            match create_grpc_client_with_error_sender(endpoint.clone(), self.credentials.clone(),  Some(self.channel_error_sender.clone()), self.create_new_channel_fn) {
+            match create_grpc_client_with_error_sender(endpoint.clone(), self.credentials.clone(), Some(self.channel_error_sender.clone()), self.create_new_channel_fn).await {
                 Ok(ch) => {
                     self.shared_state.lock()?.channels.insert(endpoint, ch.clone());
                     Ok(ch)
-                }
-                Err(err)=> Err(err)
+                },
+                Err(err) => Err(err),
             }
         };
     }

@@ -80,7 +80,7 @@ impl Transaction for AutoCommit {
         };
         println!("session: {:#?}", &session);
         println!("req: {:#?}", &req);
-        let proto_res: Result<ExecuteQueryResult> = session.handle_error(grpc_read_operation_result(self.channel_pool.create_channel()?.execute_data_query(req).await?));
+        let proto_res: Result<ExecuteQueryResult> = session.handle_error(grpc_read_operation_result(self.channel_pool.create_channel().await?.execute_data_query(req).await?));
         println!("res: {:#?}", proto_res);
         return QueryResult::from_proto(proto_res?, self.error_on_truncate_response);
     }
@@ -143,14 +143,14 @@ impl Drop for SerializableReadWriteTx {
                 return
             };
 
-            let ch = if let Ok(ch) = self.channel_pool.create_channel() {
-                ch
-            } else {
-                return
-            };
+            let pool = self.channel_pool.clone();
             tokio::spawn(async move {
-                // todo: handle session error
-                let _ = rollback_request(ch, session_id, tx_id).await;
+                if let Ok(ch) = pool.create_channel().await {
+                    // todo: handle session error
+                    let _ = rollback_request(ch, session_id, tx_id).await;
+                } else {
+                    return
+                };
             });
         };
         return;
@@ -191,7 +191,7 @@ impl Transaction for SerializableReadWriteTx {
             ..query.to_proto()?
         };
         println!("req: {:#?}", &req);
-        let proto_res: Result<ExecuteQueryResult> = session.handle_error(grpc_read_operation_result(self.channel_pool.create_channel()?.execute_data_query(req).await?));
+        let proto_res: Result<ExecuteQueryResult> = session.handle_error(grpc_read_operation_result(self.channel_pool.create_channel().await?.execute_data_query(req).await?));
         println!("res: {:#?}", proto_res);
         let proto_res = proto_res?;
         if self.id.is_none() {
@@ -227,7 +227,7 @@ impl Transaction for SerializableReadWriteTx {
             ..CommitTransactionRequest::default()
         };
 
-        let mut ch = self.channel_pool.create_channel()?;
+        let mut ch = self.channel_pool.create_channel().await?;
 
         // todo - retries
         let _res: CommitTransactionResult = self.session.as_mut().unwrap().handle_error(grpc_read_operation_result(ch.commit_transaction(req).await?))?;
@@ -265,7 +265,7 @@ impl Transaction for SerializableReadWriteTx {
         };
 
         self.rollbacked = true;
-        return session.handle_error(rollback_request(self.channel_pool.create_channel()?, session.id.clone(), id).await);
+        return session.handle_error(rollback_request(self.channel_pool.create_channel().await?, session.id.clone(), id).await);
     }
 }
 

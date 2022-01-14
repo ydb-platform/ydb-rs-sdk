@@ -152,8 +152,9 @@ impl TableClient {
             YdbOrCustomerError::YDB(err)=>err,
         };
 
-        match (is_idempotent_operation,ydb_err) {
-            (true, Error::Transport(_))=> return Ok(()),
+        return match (ydb_err.need_retry(), is_idempotent_operation) {
+            (NeedRetry::True, _) =>Ok(()),
+            (NeedRetry::IdempotentOnly, true) => Ok(()),
             _ => Err(err)
         }
     }

@@ -261,7 +261,7 @@ impl DiscoverySharedState {
             self.discovery_uri.clone(),
             self.cred.clone(),
             DiscoveryServiceClient::new,
-        )?;
+        ).await?;
 
         let resp = discovery_client
             .list_endpoints(ListEndpointsRequest {
