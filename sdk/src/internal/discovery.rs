@@ -363,18 +363,18 @@ impl Discovery for DiscoverySharedState {
 mod test {
     use crate::errors::Result;
     use crate::internal::discovery::DiscoverySharedState;
-    use crate::internal::test_helpers::{CRED, DATABASE, START_ENDPOINT};
     use std::sync::Arc;
     use std::time::Duration;
     use crate::internal::client_common::DBCredentials;
+    use crate::internal::test_helpers::CONNECTION_INFO;
 
     #[tokio::test]
     async fn test_background_discovery() -> Result<()> {
-        let cred = DBCredentials{database: DATABASE.clone(), credentials: Box::new(CRED.lock()?.clone())};
+        let cred = DBCredentials{database: CONNECTION_INFO.database.clone(), credentials: CONNECTION_INFO.credentials.clone()};
         let discovery_shared = DiscoverySharedState::new(
             cred,
-            DATABASE.clone(),
-            START_ENDPOINT.as_str(),
+            CONNECTION_INFO.database.clone(),
+            CONNECTION_INFO.discovery_endpoint.as_str(),
         )?;
 
         let state = Arc::new(discovery_shared);

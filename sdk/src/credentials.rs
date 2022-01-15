@@ -1,7 +1,8 @@
 use crate::errors::{Error, Result};
 use dyn_clone::DynClone;
 use std::fmt::Debug;
-use std::sync::{Arc, RwLock};
+use std::process::Command;
+use std::sync::{Arc, Mutex, RwLock};
 
 pub trait Credentials: Debug + DynClone + Send + Sync {
     fn create_token(self: &mut Self) -> Result<String>;
@@ -31,14 +32,25 @@ impl Credentials for StaticToken {
 #[derive(Clone, Debug)]
 pub struct CommandLineYcToken {
     token: Arc<RwLock<String>>,
+    command: Arc<Mutex<Command>>,
 }
 
 impl CommandLineYcToken {
     #[allow(dead_code)]
-    pub fn new() -> Self {
-        return CommandLineYcToken {
+    pub fn from_string_cmd(cmd: &str) -> Result<Self> {
+        let cmd_parts: Vec<&str> = cmd.split_whitespace().collect();
+
+        if cmd_parts.len() < 1 {
+            return Err(Error::Custom(format!("can't split get token command: '{}'", cmd).into()))
+        }
+
+        let mut command = Command::new(cmd_parts[0]);
+        command.args(&cmd_parts.as_slice()[1..]);
+
+        return Ok(CommandLineYcToken {
             token: Arc::new(RwLock::new("".to_string())),
-        };
+            command: Arc::new(Mutex::new(command)),
+        });
     }
 }
 
@@ -55,9 +67,7 @@ impl Credentials for CommandLineYcToken {
             if token.as_str() != "" {
                 return Ok(token.clone());
             }
-            let result = std::process::Command::new("yc")
-                .args(["iam", "create-token"])
-                .output()?;
+            let result = self.command.lock()?.output()?;
             if !result.status.success() {
                 let err = String::from_utf8(result.stderr)?;
                 return Err(Error::Custom(format!(

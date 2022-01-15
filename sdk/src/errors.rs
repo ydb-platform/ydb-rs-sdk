@@ -2,6 +2,7 @@ use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
 use std::string::FromUtf8Error;
 use tokio::sync::AcquireError;
+use url::ParseError;
 use crate::errors::NeedRetry::{False, IdempotentOnly, True};
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -179,6 +180,12 @@ impl From<tonic::transport::Error> for Error {
 impl From<tonic::Status> for Error {
     fn from(e: tonic::Status) -> Self {
         return Error::TransportGRPCStatus(e);
+    }
+}
+
+impl From<url::ParseError> for Error {
+    fn from(e: ParseError) -> Self {
+        return Self::Custom(e.to_string())
     }
 }
 

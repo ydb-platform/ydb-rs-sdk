@@ -10,6 +10,7 @@ edition = "2021"
 [dependencies]
 async-trait="0.1"
 chrono="0.4"
+ctor="0.1"
 derivative="2"
 dyn-clone = "1"
 http = "0.2"
@@ -24,4 +25,5 @@ strum = { version = "0.21", features = ["derive"] }
 tokio = { version = "1", features = ["full"]}
 tonic = "0.5"
 tower = "0.4"
+url="2.2"
 ydb-protobuf = {path="../ydb-protobuf"}

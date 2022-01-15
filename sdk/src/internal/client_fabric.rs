@@ -72,7 +72,6 @@ mod test {
     use crate::internal::client_fabric::ClientFabric;
     use crate::internal::discovery::StaticDiscovery;
     use crate::internal::query::Query;
-    use crate::internal::test_helpers::{CRED, DATABASE, START_ENDPOINT};
     use crate::internal::transaction::Transaction;
     use crate::types::{YdbList, YdbStruct, YdbValue};
 
@@ -81,25 +80,17 @@ mod test {
     use http::Uri;
     use std::iter::FromIterator;
     use std::str::FromStr;
+    use crate::internal::test_helpers::CONNECTION_INFO;
     use crate::internal::transaction::Mode::SerializableReadWrite;
 
     fn create_client() -> Result<ClientFabric> {
-        // let token = crate::credentials::StaticToken::from(std::env::var("IAM_TOKEN")?.as_str());
-        // let token = crate::credentials::CommandLineYcToken::new();
-        // let database = std::env::var("DB_NAME")?;
-        let _endpoint_uri = Uri::from_str(START_ENDPOINT.as_str())?;
-        let credentials = Box::new(CRED.lock()?.clone());
-        // let discovery = TimerDiscovery::new(
-        //     credentials.clone(),
-        //     DATABASE.clone(),
-        //     START_ENDPOINT.as_str(),
-        //     Duration::from_secs(60),
-        // )?;
-        let discovery = StaticDiscovery::from_str(START_ENDPOINT.as_str())?;
+        let _endpoint_uri = Uri::from_str(CONNECTION_INFO.discovery_endpoint.as_str())?;
+
+        let discovery = StaticDiscovery::from_str(CONNECTION_INFO.discovery_endpoint.as_str())?;
 
         return ClientFabric::new(
-            credentials,
-            DATABASE.clone(),
+            CONNECTION_INFO.credentials.clone(),
+            CONNECTION_INFO.database.clone(),
             Box::new(discovery),
         );
     }
