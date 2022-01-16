@@ -173,16 +173,14 @@ async fn interactive_transaction()->Result<()>{
 async fn retry_test() -> Result<()>{
     let client = create_client()?;
 
-    let attempt_orig = Arc::new(Mutex::new(0));
-    let attempt = attempt_orig.clone();
-
-    let res = client.table_client().retry_transaction(TransactionRetryOptions::new(), |mut t| async {
-        let mut t = t; // force lifetime of t inside closure
+    let attempt = Arc::new(Mutex::new(0));
+    let opts = TransactionRetryOptions::new().with_timeout(Duration::from_secs(15));
+    let res = client.table_client().retry_transaction(opts, |t| async {
+        let mut t = t; // force borrow for lifetime of t inside closure
         let mut locked_res = attempt.lock().unwrap();
         *locked_res += 1;
 
         let res = t.query(Query::new().with_query("SELECT 1+1 as res".into())).await?;
-
         let res = res.first().unwrap().rows().next().unwrap().remove_field_by_name("res").unwrap();
 
         assert_eq!(YdbValue::Int32(2), res);
@@ -190,6 +188,7 @@ async fn retry_test() -> Result<()>{
         if *locked_res < 3 {
             return Err(YdbOrCustomerError::YDB(Error::TransportGRPCStatus(Arc::new(Status::new(Code::Aborted, "test")))))
         }
+        t.commit().await?;
         Ok(*locked_res)
     }).await;
 
