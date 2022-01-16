@@ -10,7 +10,9 @@ use crate::internal::transaction::Mode;
 use http::Uri;
 use std::iter::FromIterator;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tonic::{Code, Status};
 use ydb_protobuf::generated::ydb::discovery::{ListEndpointsRequest, WhoAmIRequest};
 use crate::internal::client_table::TransactionRetryOptions;
 use crate::internal::test_helpers::CONNECTION_INFO;
@@ -171,12 +173,30 @@ async fn interactive_transaction()->Result<()>{
 async fn retry_test() -> Result<()>{
     let client = create_client()?;
 
-    async fn callback()->ResultWithCustomerErr<()> {
-        return Ok(())
-    };
-    let a = client.table_client().retry_transaction(TransactionRetryOptions::new(), || async {
-        return Ok(())
+    let attempt_orig = Arc::new(Mutex::new(0));
+    let attempt = attempt_orig.clone();
+
+    let res = client.table_client().retry_transaction(TransactionRetryOptions::new(), |mut t| async {
+        let mut t = t; // force lifetime of t inside closure
+        let mut locked_res = attempt.lock().unwrap();
+        *locked_res += 1;
+
+        let res = t.query(Query::new().with_query("SELECT 1+1 as res".into())).await?;
+
+        let res = res.first().unwrap().rows().next().unwrap().remove_field_by_name("res").unwrap();
+
+        assert_eq!(YdbValue::Int32(2), res);
+
+        if *locked_res < 3 {
+            return Err(YdbOrCustomerError::YDB(Error::TransportGRPCStatus(Arc::new(Status::new(Code::Aborted, "test")))))
+        }
+        Ok(*locked_res)
     }).await;
+
+    match res {
+        Ok(val)=>assert_eq!(val, 3),
+        Err(err)=>panic!("retry test failed with error result: {:?}", err)
+    }
 
     return Ok(());
 }

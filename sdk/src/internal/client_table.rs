@@ -19,11 +19,14 @@ use crate::internal::channel_pool::ChannelPool;
 const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
 
+type TransactionArgType=Box<dyn Transaction>; // real type may be changed
+
 pub struct TransactionRetryOptions {
     mode: Mode,
     autocommit: bool, // Commit transaction after every query. From DB side it visible as many small transactions
     idempotent_operation: bool,
     retrier: Option<Arc<Box<dyn Retry>>>,
+
 }
 
 impl TransactionRetryOptions {
@@ -51,11 +54,8 @@ impl TransactionRetryOptions {
         return self;
     }
 
-    pub fn with_timeout(mut self, timeout: Option<Duration>)->Self {
-        self.retrier = match timeout {
-            Some(timeout) => Some(Arc::new(Box::new(TimeoutRetrier{timeout}))),
-            None=>None,
-        };
+    pub fn with_timeout(mut self, timeout: Duration)->Self {
+        self.retrier =  Some(Arc::new(Box::new(TimeoutRetrier{timeout})));
         return self;
     }
 }
@@ -102,7 +102,7 @@ impl TableClient {
         return self.session_pool.session().await;
     }
 
-    pub async fn retry_transaction<CallbackFuture, CallbackResult>(&self, opts: TransactionRetryOptions, callback: impl Fn()-> CallbackFuture) ->ResultWithCustomerErr<CallbackResult>
+    pub async fn retry_transaction<CallbackFuture, CallbackResult>(&self, opts: TransactionRetryOptions, callback: impl Fn(TransactionArgType)-> CallbackFuture) ->ResultWithCustomerErr<CallbackResult>
     where
         CallbackFuture: Future<Output=ResultWithCustomerErr<CallbackResult>>,
     {
@@ -110,7 +110,7 @@ impl TableClient {
         let mut attempts : usize = 0;
         let start = Instant::now();
         loop {
-            let transaction: Box<dyn Transaction> = if opts.autocommit {
+            let mut transaction: Box<dyn Transaction> = if opts.autocommit {
                 Box::new(self.create_autocommit_transaction(opts.mode))
             } else {
                 if opts.mode != Mode::SerializableReadWrite {
@@ -119,13 +119,17 @@ impl TableClient {
                 Box::new(self.create_interactive_transaction())
             };
 
-            let res = callback().await;
+            let res = callback(transaction).await;
 
             let err = if let Err(err) = res {
                 err
             } else {
                 return res;
             };
+
+            if !Self::check_retry_error(opts.idempotent_operation, &err) {
+                return Err(err)
+            }
 
             let now = Instant::now();
             attempts+= 1;
@@ -135,8 +139,6 @@ impl TableClient {
             } else {
                 return Err(err)
             };
-
-            Self::check_retry_error(opts.idempotent_operation, err)?;
         };
     }
 
@@ -146,16 +148,16 @@ impl TableClient {
         return self;
     }
 
-    fn check_retry_error(is_idempotent_operation: bool, err: YdbOrCustomerError)->std::result::Result<(),YdbOrCustomerError>{
+    fn check_retry_error(is_idempotent_operation: bool, err: &YdbOrCustomerError)->bool{
         let ydb_err = match &err {
-            YdbOrCustomerError::Customer(_) => return Err(err),
+            YdbOrCustomerError::Customer(_) => return false,
             YdbOrCustomerError::YDB(err)=>err,
         };
 
-        return match (ydb_err.need_retry(), is_idempotent_operation) {
-            (NeedRetry::True, _) =>Ok(()),
-            (NeedRetry::IdempotentOnly, true) => Ok(()),
-            _ => Err(err)
+        return match ydb_err.need_retry() {
+            NeedRetry::True => true,
+            NeedRetry::IdempotentOnly=>is_idempotent_operation,
+            NeedRetry::False=>false,
         }
     }
 }

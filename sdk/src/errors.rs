@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
 use std::string::FromUtf8Error;
+use std::sync::Arc;
 use tokio::sync::AcquireError;
 use url::ParseError;
 use crate::errors::NeedRetry::{False, IdempotentOnly, True};
@@ -8,14 +9,19 @@ use crate::errors::NeedRetry::{False, IdempotentOnly, True};
 pub type Result<T> = std::result::Result<T, Error>;
 pub type ResultWithCustomerErr<T> = std::result::Result<T,YdbOrCustomerError>;
 
+#[derive(Clone)]
 pub enum YdbOrCustomerError {
     YDB(Error),
-    Customer(Box<dyn std::error::Error>)
+    Customer(Arc<Box<dyn std::error::Error>>)
 }
 
 impl YdbOrCustomerError {
-    pub fn custom<T: Into<String>>(s: T)->Self{
-        return Self::Customer(Box::new(Error::Custom(s.into())))
+    pub fn from_mess<T: Into<String>>(s: T)->Self{
+        return Self::Customer(Arc::new(Box::new(Error::Custom(s.into()))))
+    }
+
+    pub fn from_err<T: std::error::Error + 'static>(err: T)->Self {
+        return Self::Customer(Arc::new(Box::new(err)))
     }
 }
 
@@ -49,12 +55,12 @@ pub(crate) enum NeedRetry {
     False,              // operation is completed or error is stable (for example yql syntaxt errror) and no need retry
 }
 
-#[derive(Debug)]
+#[derive(Clone,Debug)]
 pub enum Error {
     Custom(String),
-    TransportDial(tonic::transport::Error),
+    TransportDial(Arc::<tonic::transport::Error>),
     Transport(String),
-    TransportGRPCStatus(tonic::Status),
+    TransportGRPCStatus(Arc::<tonic::Status>),
     YdbOperation(YdbOperationError),
 }
 
@@ -187,7 +193,7 @@ impl From<tonic::transport::Error> for Error {
 
 impl From<tonic::Status> for Error {
     fn from(e: tonic::Status) -> Self {
-        return Error::TransportGRPCStatus(e);
+        return Error::TransportGRPCStatus(Arc::new(e));
     }
 }
 

@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 use ydb_protobuf::generated::ydb::status_ids::StatusCode;
 
@@ -60,7 +61,7 @@ async fn create_grpc_channel(uri: Uri, error_sender: Option<mpsc::Sender<Channel
             if let Some(sender) = error_sender {
                 sender.send(ChannelErrorInfo{ endpoint: uri }).await;
             };
-            Err(Error::TransportDial(err))
+            Err(Error::TransportDial(Arc::new(err)))
         },
     }
 }
