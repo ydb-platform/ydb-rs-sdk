@@ -6,14 +6,20 @@ use url::ParseError;
 use crate::errors::NeedRetry::{False, IdempotentOnly, True};
 
 pub type Result<T> = std::result::Result<T, Error>;
-pub type ResultWithCustomerErr<T,Err> = std::result::Result<T,YdbOrCustomerError<Err>>;
+pub type ResultWithCustomerErr<T> = std::result::Result<T,YdbOrCustomerError>;
 
-pub enum YdbOrCustomerError<Err: std::error::Error> {
+pub enum YdbOrCustomerError {
     YDB(Error),
-    Customer(Err)
+    Customer(Box<dyn std::error::Error>)
 }
 
-impl<Err: std::error::Error> Debug for YdbOrCustomerError<Err> {
+impl YdbOrCustomerError {
+    pub fn custom<T: Into<String>>(s: T)->Self{
+        return Self::Customer(Box::new(Error::Custom(s.into())))
+    }
+}
+
+impl Debug for YdbOrCustomerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         return match self {
             Self::YDB(err) => Debug::fmt(err, f),
@@ -22,7 +28,7 @@ impl<Err: std::error::Error> Debug for YdbOrCustomerError<Err> {
     }
 }
 
-impl<Err: std::error::Error> Display for YdbOrCustomerError<Err> {
+impl Display for YdbOrCustomerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         return match self {
             Self::YDB(err)=>Display::fmt(err, f),
@@ -31,8 +37,10 @@ impl<Err: std::error::Error> Display for YdbOrCustomerError<Err> {
     }
 }
 
-impl<Err: std::error::Error> std::error::Error for YdbOrCustomerError<Err> {
-
+impl From<Error> for YdbOrCustomerError {
+    fn from(e: Error) -> Self {
+        return Self::YDB(e)
+    }
 }
 
 pub(crate) enum NeedRetry {

@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use num::pow;
@@ -101,10 +102,9 @@ impl TableClient {
         return self.session_pool.session().await;
     }
 
-    pub async fn retry_transaction<Op,OpRes,OpErr>(&self, opts: TransactionRetryOptions, op: Op)->ResultWithCustomerErr<OpRes, OpErr>
+    pub async fn retry_transaction<CallbackFuture, CallbackResult>(&self, opts: TransactionRetryOptions, callback: impl Fn()-> CallbackFuture) ->ResultWithCustomerErr<CallbackResult>
     where
-        OpErr: std::error::Error,
-        Op: Fn(Box<dyn Transaction>)->ResultWithCustomerErr<OpRes, OpErr>
+        CallbackFuture: Future<Output=ResultWithCustomerErr<CallbackResult>>,
     {
         let retrier = opts.retrier.unwrap_or_else(|| self.retrier.clone());
         let mut attempts : usize = 0;
@@ -114,12 +114,12 @@ impl TableClient {
                 Box::new(self.create_autocommit_transaction(opts.mode))
             } else {
                 if opts.mode != Mode::SerializableReadWrite {
-                    return Err(YdbOrCustomerError::<OpErr>::YDB(Error::Custom("only serializable rw transactions allow to interactive mode".into())))
+                    return Err(YdbOrCustomerError::YDB(Error::Custom("only serializable rw transactions allow to interactive mode".into())))
                 }
                 Box::new(self.create_interactive_transaction())
             };
 
-            let res = op(transaction);
+            let res = callback().await;
 
             let err = if let Err(err) = res {
                 err
@@ -146,7 +146,7 @@ impl TableClient {
         return self;
     }
 
-    fn check_retry_error<Err: std::error::Error>(is_idempotent_operation: bool, err: YdbOrCustomerError<Err>)->std::result::Result<(),YdbOrCustomerError<Err>>{
+    fn check_retry_error(is_idempotent_operation: bool, err: YdbOrCustomerError)->std::result::Result<(),YdbOrCustomerError>{
         let ydb_err = match &err {
             YdbOrCustomerError::Customer(_) => return Err(err),
             YdbOrCustomerError::YDB(err)=>err,

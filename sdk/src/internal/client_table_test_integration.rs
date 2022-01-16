@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::errors::Result;
+use crate::errors::{Error, Result, ResultWithCustomerErr, YdbOrCustomerError};
 use crate::internal::client_fabric::ClientFabric;
 use crate::internal::discovery::StaticDiscovery;
 use crate::internal::query::Query;
@@ -10,7 +10,9 @@ use crate::internal::transaction::Mode;
 use http::Uri;
 use std::iter::FromIterator;
 use std::str::FromStr;
+use std::time::Duration;
 use ydb_protobuf::generated::ydb::discovery::{ListEndpointsRequest, WhoAmIRequest};
+use crate::internal::client_table::TransactionRetryOptions;
 use crate::internal::test_helpers::CONNECTION_INFO;
 use crate::internal::transaction::Mode::SerializableReadWrite;
 
@@ -161,6 +163,20 @@ async fn interactive_transaction()->Result<()>{
                    .remove_field_by_name("vInt64")
                    .unwrap()
     );
+
+    return Ok(());
+}
+
+#[tokio::test]
+async fn retry_test() -> Result<()>{
+    let client = create_client()?;
+
+    async fn callback()->ResultWithCustomerErr<()> {
+        return Ok(())
+    };
+    let a = client.table_client().retry_transaction(TransactionRetryOptions::new(), || async {
+        return Ok(())
+    }).await;
 
     return Ok(());
 }
