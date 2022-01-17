@@ -10,7 +10,8 @@ use crate::internal::session::Session;
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 use ydb_protobuf::generated::ydb::table::{CreateSessionRequest, CreateSessionResult, KeepAliveRequest, KeepAliveResult};
 use crate::errors::Error::Custom;
-use crate::internal::channel_pool::ChannelPool;
+use crate::internal::channel_pool::ChannelPoolImpl;
+use crate::internal::client_table::TableServiceClientType;
 
 const DEFAULT_SIZE: usize = 1000;
 
@@ -21,7 +22,7 @@ pub(crate) trait SessionClient: Send + Sync {
 }
 
 #[async_trait]
-impl SessionClient for ChannelPool<TableServiceClient<Middleware>> {
+impl SessionClient for ChannelPoolImpl<TableServiceClientType> {
     async fn create_session(&self)->Result<Session>{
         let mut channel = self.create_channel().await?;
         let session_res: CreateSessionResult = grpc_read_operation_result(

@@ -8,8 +8,9 @@ use ydb_protobuf::generated::ydb::table::{CommitTransactionRequest, CommitTransa
 
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 use crate::errors::Error::Custom;
-use crate::internal::channel_pool::ChannelPool;
+use crate::internal::channel_pool::ChannelPoolImpl;
 use crate::internal::client_fabric::Middleware;
+use crate::internal::client_table::TableServiceClientType;
 use crate::internal::grpc::{grpc_read_operation_result, grpc_read_void_operation_result};
 use crate::internal::session::Session;
 
@@ -41,11 +42,11 @@ pub struct AutoCommit {
     mode: Mode,
     error_on_truncate_response: bool,
     session_pool: SessionPool,
-    channel_pool: ChannelPool<TableServiceClient<Middleware>>,
+    channel_pool: ChannelPoolImpl<TableServiceClientType>,
 }
 
 impl AutoCommit {
-    pub(crate) fn new(channel_pool: ChannelPool<TableServiceClient<Middleware>>, session_pool: SessionPool, mode: Mode) -> Self {
+    pub(crate) fn new(channel_pool: ChannelPoolImpl<TableServiceClientType>, session_pool: SessionPool, mode: Mode) -> Self {
         return Self {
             mode,
             channel_pool,
@@ -97,7 +98,7 @@ impl Transaction for AutoCommit {
 pub struct SerializableReadWriteTx {
     error_on_truncate_response: bool,
     session_pool: SessionPool,
-    channel_pool: ChannelPool<TableServiceClient<Middleware>>,
+    channel_pool: ChannelPoolImpl<TableServiceClientType>,
 
     id: Option<String>,
     session: Option<Session>,
@@ -107,7 +108,7 @@ pub struct SerializableReadWriteTx {
 }
 
 impl SerializableReadWriteTx {
-    pub(crate) fn new(channel_pool: ChannelPool<TableServiceClient<Middleware>>, session_pool: SessionPool) -> Self {
+    pub(crate) fn new(channel_pool: ChannelPoolImpl<TableServiceClientType>, session_pool: SessionPool) -> Self {
         return Self {
             error_on_truncate_response: false,
             session_pool,
@@ -269,7 +270,7 @@ impl Transaction for SerializableReadWriteTx {
     }
 }
 
-async fn rollback_request(mut ch: TableServiceClient<Middleware>, session_id: String, tx_id: String)->Result<()>{
+async fn rollback_request(mut ch: TableServiceClientType, session_id: String, tx_id: String)->Result<()>{
     let req = RollbackTransactionRequest {
         session_id,
         tx_id,

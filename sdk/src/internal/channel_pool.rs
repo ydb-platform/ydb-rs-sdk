@@ -14,6 +14,12 @@ use crate::internal::client_common::DBCredentials;
 use crate::internal::discovery::{Discovery, Service};
 use crate::internal::grpc::{create_grpc_client_with_error_sender};
 use crate::internal::middlewares::AuthService;
+use async_trait::async_trait;
+
+#[async_trait]
+pub(crate) trait ChannelPool<T> {
+    async fn create_channel(&self)->Result<T>;
+}
 
 pub(crate) struct ChannelErrorInfo {
     pub endpoint: Uri,
@@ -21,7 +27,7 @@ pub(crate) struct ChannelErrorInfo {
 
 // TODO: implement Channel for Channel pool for drop-in replacements in grpc-clients
 #[derive(Clone)]
-pub(crate) struct ChannelPool<T> where T:Clone{
+pub(crate) struct ChannelPoolImpl<T> where T:Clone{
     create_new_channel_fn: fn (AuthService) -> T,
     credentials: DBCredentials,
     load_balancer: SharedLoadBalancer,
@@ -42,7 +48,7 @@ impl<T> SharedState<T> {
     }
 }
 
-impl<T> ChannelPool<T> where T:Clone {
+impl<T> ChannelPoolImpl<T> where T:Clone {
     pub(crate) fn new<CB>(discovery: Arc<Box<dyn Discovery>>, credentials: DBCredentials, service: Service, create_new_channel_fn: fn (AuthService) -> T) ->Self
     {
         let load_balancer = SharedLoadBalancer::new(discovery.as_ref());
@@ -93,6 +99,14 @@ impl<T> ChannelPool<T> where T:Clone {
                 return
             };
         }
+    }
+}
+
+#[async_trait]
+impl<T> ChannelPool<T> for ChannelPoolImpl<T>
+where T:Clone + Send {
+    async fn create_channel(&self) -> Result<T> {
+        return ChannelPool::<T>::create_channel(self).await;
     }
 }
 

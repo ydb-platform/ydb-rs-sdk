@@ -14,10 +14,12 @@ use crate::internal::session::Session;
 use crate::internal::session_pool::{SessionClient, SessionPool};
 use crate::internal::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
-use crate::internal::channel_pool::ChannelPool;
+use crate::internal::channel_pool::ChannelPoolImpl;
 
 const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
+
+pub(crate) type TableServiceClientType=TableServiceClient<Middleware>;
 
 type TransactionArgType=Box<dyn Transaction>; // real type may be changed
 
@@ -63,13 +65,13 @@ impl TransactionRetryOptions {
 pub(crate) struct TableClient {
     error_on_truncate: bool,
     session_pool: SessionPool,
-    channel_pool: ChannelPool<TableServiceClient<Middleware>>,
+    channel_pool: ChannelPoolImpl<TableServiceClientType>,
     retrier: Arc<Box<dyn Retry>>,
 }
 
 impl TableClient {
     pub(crate) fn new(credencials: DBCredentials, discovery: Arc<Box<dyn Discovery>>,) -> Self {
-        let channel_pool =ChannelPool::new::<TableServiceClient<Middleware>>(discovery, credencials.clone(), Service::Table, TableServiceClient::new);
+        let channel_pool = ChannelPoolImpl::new::<TableServiceClientType>(discovery, credencials.clone(), Service::Table, TableServiceClient::new);
 
         return Self {
             error_on_truncate: false,
