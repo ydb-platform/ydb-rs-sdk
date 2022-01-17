@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
 use tonic::body::BoxBody;
 use tonic::transport::Channel;
-use crate::internal::load_balancer::{LoadBalancer, RandomLoadBalancer, SharedLoadBalancer};
+use crate::internal::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::errors::Result;
 use crate::internal::client_common::DBCredentials;
 use crate::internal::discovery::{Discovery, Service};
@@ -53,7 +53,6 @@ impl<T> ChannelPoolImpl<T> where T:Clone {
     {
         let load_balancer = SharedLoadBalancer::new(discovery.as_ref());
         let (channel_error_sender, channel_error_receiver) = mpsc::channel(1);
-        let pessimization_balancer = load_balancer.clone();
         tokio::spawn(async move {
            Self::node_pessimization_loop(discovery, channel_error_receiver).await;
         });

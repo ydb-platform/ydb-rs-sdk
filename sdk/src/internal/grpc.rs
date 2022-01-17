@@ -55,11 +55,13 @@ async fn create_grpc_channel(uri: Uri, error_sender: Option<mpsc::Sender<Channel
         endpoint = endpoint.tls_config(ClientTlsConfig::new())?
     };
     endpoint = endpoint.tcp_keepalive(Some(Duration::from_secs(15))); // tcp keepalive similar to default in golang lib
+
     return match endpoint.connect().await {
         Ok(channel)=>Ok(ChannelProxy::new(uri, channel, error_sender)),
         Err(err)=>{
             if let Some(sender) = error_sender {
-                sender.send(ChannelErrorInfo{ endpoint: uri }).await;
+                // ignore notify error
+                let _ = sender.send(ChannelErrorInfo{ endpoint: uri }).await;
             };
             Err(Error::TransportDial(Arc::new(err)))
         },

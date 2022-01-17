@@ -1,4 +1,3 @@
-use std::collections::{HashMap, HashSet};
 use crate::errors::*;
 use crate::internal::discovery::{Discovery, DiscoveryState, Service};
 use http::Uri;

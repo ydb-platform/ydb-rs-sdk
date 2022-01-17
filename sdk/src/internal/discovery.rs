@@ -1,7 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, RwLock, RwLockWriteGuard, Weak};
 
 use async_trait::async_trait;
@@ -14,7 +12,7 @@ use ydb_protobuf::generated::ydb::discovery::{
     EndpointInfo, ListEndpointsRequest, ListEndpointsResult,
 };
 
-use crate::errors::{Error, Result};
+use crate::errors::{Result};
 use crate::internal::grpc::{create_grpc_client, grpc_read_operation_result};
 use std::iter::FromIterator;
 use std::time::Duration;
@@ -129,7 +127,6 @@ pub(crate) trait Discovery: Send + Sync {
 }
 
 pub(crate) struct StaticDiscovery {
-    endpoint: Uri,
     sender: tokio::sync::watch::Sender<Arc<DiscoveryState>>,
     discovery_state: Arc<DiscoveryState>,
 }
@@ -149,7 +146,7 @@ impl StaticDiscovery {
         let state = DiscoveryState::new(std::time::Instant::now(), services);
         let state = Arc::new(state);
         let (sender, _) = tokio::sync::watch::channel(state.clone());
-        return Ok(StaticDiscovery { endpoint, sender, discovery_state: state });
+        return Ok(StaticDiscovery { sender, discovery_state: state });
     }
 }
 
@@ -203,7 +200,7 @@ impl Discovery for TimerDiscovery {
 
         // check if need force discovery
         let state = self.state();
-        for (service, origin_nodes) in state.original_services.iter() {
+        for (_service, origin_nodes) in state.original_services.iter() {
             let pessimized_nodes = origin_nodes.iter().filter(|node| state.pessimized_nodes.contains(&node.uri)).count();
             if pessimized_nodes > 0 && pessimized_nodes >= origin_nodes.len() / 2 {
                 let shared_state_for_discovery = Arc::downgrade(&self.state);
@@ -231,7 +228,6 @@ struct DiscoverySharedState {
     discovery_uri: Uri,
     database: String,
     sender: tokio::sync::watch::Sender<Arc<DiscoveryState>>,
-    next_index_base: AtomicUsize,
 
     discovery_process: Mutex<()>,
     discovery_state: RwLock<Arc<DiscoveryState>>,
@@ -246,7 +242,6 @@ impl DiscoverySharedState {
             cred,
             database,
             discovery_uri: http::Uri::from_str(endpoint)?,
-            next_index_base: AtomicUsize::default(),
             sender,
             discovery_process: Mutex::new(()),
             discovery_state: RwLock::new(state),

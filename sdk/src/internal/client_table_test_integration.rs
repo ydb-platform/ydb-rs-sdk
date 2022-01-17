@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 
-use crate::errors::{Error, Result, ResultWithCustomerErr, YdbOrCustomerError};
+use crate::errors::{Error, Result, YdbOrCustomerError};
 use crate::internal::client_fabric::ClientFabric;
+use crate::internal::client_table::TransactionRetryOptions;
 use crate::internal::discovery::StaticDiscovery;
 use crate::internal::query::Query;
+use crate::internal::test_helpers::CONNECTION_INFO;
+use crate::internal::transaction::Mode;
+use crate::internal::transaction::Mode::SerializableReadWrite;
 use crate::internal::transaction::Transaction;
 use crate::types::{YdbList, YdbStruct, YdbValue};
-use crate::internal::transaction::Mode;
 use http::Uri;
 use std::iter::FromIterator;
 use std::str::FromStr;
@@ -14,9 +17,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tonic::{Code, Status};
 use ydb_protobuf::generated::ydb::discovery::{ListEndpointsRequest, WhoAmIRequest};
-use crate::internal::client_table::TransactionRetryOptions;
-use crate::internal::test_helpers::CONNECTION_INFO;
-use crate::internal::transaction::Mode::SerializableReadWrite;
 
 fn create_client() -> Result<ClientFabric> {
     let _endpoint_uri = Uri::from_str(CONNECTION_INFO.discovery_endpoint.as_str())?;
@@ -104,7 +104,7 @@ async fn execute_data_query_params() -> Result<()> {
                 DECLARE $v AS Int32;
                 SELECT $v+$v
         "
-                        .into(),
+                    .into(),
                 )
                 .with_params(params),
         )
@@ -124,77 +124,105 @@ async fn execute_data_query_params() -> Result<()> {
 }
 
 #[tokio::test]
-async fn interactive_transaction()->Result<()>{
+async fn interactive_transaction() -> Result<()> {
     let client = create_client()?;
-    let mut tx_auto = client.table_client().create_autocommit_transaction(SerializableReadWrite);
+    let mut tx_auto = client
+        .table_client()
+        .create_autocommit_transaction(SerializableReadWrite);
 
     let mut tx = client.table_client().create_interactive_transaction();
-    tx.query(Query::new().with_query("DELETE FROM test_values".into())).await?;
+    tx.query(Query::new().with_query("DELETE FROM test_values".into()))
+        .await?;
     tx.commit().await?;
 
     let mut tx = client.table_client().create_interactive_transaction();
-    tx.query(Query::new().with_query("UPSERT INTO test_values (id, vInt64) VALUES (1, 2)".into())).await?;
-    tx.query(Query::new()
-        .with_query("
+    tx.query(Query::new().with_query("UPSERT INTO test_values (id, vInt64) VALUES (1, 2)".into()))
+        .await?;
+    tx.query(
+        Query::new()
+            .with_query(
+                "
                 DECLARE $key AS Int64;
                 DECLARE $val AS Int64;
 
                 UPSERT INTO test_values (id, vInt64) VALUES ($key, $val)
-            ".into())
-        .with_params(HashMap::from([
-            ("$key".into(), YdbValue::Int64(2)),
-            ("$val".into(), YdbValue::Int64(3)),
-        ]))
-    ).await?;
+            "
+                .into(),
+            )
+            .with_params(HashMap::from([
+                ("$key".into(), YdbValue::Int64(2)),
+                ("$val".into(), YdbValue::Int64(3)),
+            ])),
+    )
+    .await?;
 
     // check table before commit
-    let auto_res = tx_auto.query(Query::new().with_query("SELECT vInt64 FROM test_values WHERE id=1".into())).await?;
+    let auto_res = tx_auto
+        .query(Query::new().with_query("SELECT vInt64 FROM test_values WHERE id=1".into()))
+        .await?;
     assert!(auto_res.first().unwrap().rows().next().is_none());
 
     tx.commit().await?;
 
     // check table after commit
-    let auto_res = tx_auto.query(Query::new().with_query("SELECT vInt64 FROM test_values WHERE id=1".into())).await?;
-    assert_eq!(YdbValue::optional_from(YdbValue::Int64(0), Some(YdbValue::Int64(2)))?,
-               auto_res
-                   .first()
-                   .unwrap()
-                   .rows()
-                   .next()
-                   .unwrap()
-                   .remove_field_by_name("vInt64")
-                   .unwrap()
+    let auto_res = tx_auto
+        .query(Query::new().with_query("SELECT vInt64 FROM test_values WHERE id=1".into()))
+        .await?;
+    assert_eq!(
+        YdbValue::optional_from(YdbValue::Int64(0), Some(YdbValue::Int64(2)))?,
+        auto_res
+            .first()
+            .unwrap()
+            .rows()
+            .next()
+            .unwrap()
+            .remove_field_by_name("vInt64")
+            .unwrap()
     );
 
     return Ok(());
 }
 
 #[tokio::test]
-async fn retry_test() -> Result<()>{
+async fn retry_test() -> Result<()> {
     let client = create_client()?;
 
     let attempt = Arc::new(Mutex::new(0));
     let opts = TransactionRetryOptions::new().with_timeout(Duration::from_secs(15));
-    let res = client.table_client().retry_transaction(opts, |t| async {
-        let mut t = t; // force borrow for lifetime of t inside closure
-        let mut locked_res = attempt.lock().unwrap();
-        *locked_res += 1;
+    let res = client
+        .table_client()
+        .retry_transaction(opts, |t| async {
+            let mut t = t; // force borrow for lifetime of t inside closure
+            let mut locked_res = attempt.lock().unwrap();
+            *locked_res += 1;
 
-        let res = t.query(Query::new().with_query("SELECT 1+1 as res".into())).await?;
-        let res = res.first().unwrap().rows().next().unwrap().remove_field_by_name("res").unwrap();
+            let res = t
+                .query(Query::new().with_query("SELECT 1+1 as res".into()))
+                .await?;
+            let res = res
+                .first()
+                .unwrap()
+                .rows()
+                .next()
+                .unwrap()
+                .remove_field_by_name("res")
+                .unwrap();
 
-        assert_eq!(YdbValue::Int32(2), res);
+            assert_eq!(YdbValue::Int32(2), res);
 
-        if *locked_res < 3 {
-            return Err(YdbOrCustomerError::YDB(Error::TransportGRPCStatus(Arc::new(Status::new(Code::Aborted, "test")))))
-        }
-        t.commit().await?;
-        Ok(*locked_res)
-    }).await;
+            if *locked_res < 3 {
+                return Err(YdbOrCustomerError::YDB(Error::TransportGRPCStatus(
+                    Arc::new(Status::new(Code::Aborted, "test")),
+                )));
+            }
+            t.commit().await?;
+            Ok(*locked_res)
+        })
+        .await;
 
     match res {
-        Ok(val)=>assert_eq!(val, 3),
-        Err(err)=>panic!("retry test failed with error result: {:?}", err)
+        Ok(val) => assert_eq!(val, 3),
+        Err(err) => panic!("retry test failed with error result: {:?}", err),
     }
 
     return Ok(());
@@ -217,7 +245,7 @@ DECLARE $test AS Int32;
 
 SELECT $test AS test;
 "
-                        .into(),
+                    .into(),
                 )
                 .with_params(HashMap::from_iter([("$test".into(), v.clone())])),
         )
@@ -245,7 +273,7 @@ DECLARE $test AS Optional<Int32>;
 
 SELECT $test AS test;
 "
-                        .into(),
+                    .into(),
                 )
                 .with_params(HashMap::from_iter([(
                     "$test".into(),
@@ -279,7 +307,7 @@ DECLARE $l AS List<Int32>;
 
 SELECT $l AS l;
 "
-                        .into(),
+                    .into(),
                 )
                 .with_params(HashMap::from_iter([(
                     "$l".into(),
@@ -328,7 +356,7 @@ FROM
     AS_TABLE($l);
 ;
 "
-                        .into(),
+                    .into(),
                 )
                 .with_params(HashMap::from_iter([(
                     "$l".into(),
@@ -379,7 +407,7 @@ async fn select_int64_null4() -> Result<()> {
 SELECT CAST(NULL AS Optional<Int64>)
 ;
 "
-                    .into(),
+                .into(),
             ),
         )
         .await?;
@@ -407,7 +435,7 @@ async fn select_void_null() -> Result<()> {
 SELECT NULL
 ;
 "
-                    .into(),
+                .into(),
             ),
         )
         .await?;

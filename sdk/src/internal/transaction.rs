@@ -6,10 +6,8 @@ use ydb_protobuf::generated::ydb::table::transaction_control::TxSelector;
 use ydb_protobuf::generated::ydb::table::transaction_settings::TxMode;
 use ydb_protobuf::generated::ydb::table::{CommitTransactionRequest, CommitTransactionResult, ExecuteDataQueryRequest, ExecuteQueryResult, OnlineModeSettings, RollbackTransactionRequest, SerializableModeSettings, TransactionControl, TransactionSettings};
 
-use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 use crate::errors::Error::Custom;
 use crate::internal::channel_pool::ChannelPoolImpl;
-use crate::internal::client_fabric::Middleware;
 use crate::internal::client_table::TableServiceClientType;
 use crate::internal::grpc::{grpc_read_operation_result, grpc_read_void_operation_result};
 use crate::internal::session::Session;
