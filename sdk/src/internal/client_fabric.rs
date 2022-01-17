@@ -6,7 +6,7 @@ use crate::internal::client_table::TableClient;
 
 use crate::internal::discovery::{Discovery, Service};
 use crate::internal::grpc;
-use crate::internal::load_balancer::{update_load_balancer, LoadBalancer, SharedLoadBalancer};
+use crate::internal::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::internal::middlewares::AuthService;
 
 use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;

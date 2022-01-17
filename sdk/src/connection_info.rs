@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::hash::Hash;
+
 use std::sync::Mutex;
-use http::Uri;
+
 use once_cell::sync::Lazy;
-use url::Url;
+
 use crate::errors::{Error,Result};
 use crate::credentials::{Credentials, StaticToken};
 
@@ -40,7 +40,7 @@ impl ConnectionInfo {
 
         connection_info = Self::parse_endpoint(uri, connection_info)?;
 
-        let mut handlers = PARAM_HANDLERS.lock()?;
+        let handlers = PARAM_HANDLERS.lock()?;
 
         for (key, _) in url::Url::parse(uri)?.query_pairs() {
             if let Some(handler) = handlers.get(key.as_ref()) {

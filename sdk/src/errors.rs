@@ -1,10 +1,10 @@
-use std::any::Any;
+
 use std::fmt::{Debug, Display, Formatter};
 use std::string::FromUtf8Error;
 use std::sync::Arc;
 use tokio::sync::AcquireError;
 use url::ParseError;
-use crate::errors::NeedRetry::{False, IdempotentOnly, True};
+use crate::errors::NeedRetry::{IdempotentOnly};
 
 pub type Result<T> = std::result::Result<T, Error>;
 pub type ResultWithCustomerErr<T> = std::result::Result<T,YdbOrCustomerError>;

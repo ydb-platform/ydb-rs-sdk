@@ -1,4 +1,4 @@
-use std::any::Any;
+
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -9,9 +9,9 @@ use crate::internal::client_common::DBCredentials;
 use crate::internal::client_fabric::Middleware;
 use crate::internal::discovery::{Discovery, Service};
 
-use crate::internal::load_balancer::{SharedLoadBalancer};
+
 use crate::internal::session::Session;
-use crate::internal::session_pool::{SessionClient, SessionPool};
+use crate::internal::session_pool::{SessionPool};
 use crate::internal::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 use crate::internal::channel_pool::ChannelPoolImpl;
@@ -112,7 +112,7 @@ impl TableClient {
         let mut attempts : usize = 0;
         let start = Instant::now();
         loop {
-            let mut transaction: Box<dyn Transaction> = if opts.autocommit {
+            let transaction: Box<dyn Transaction> = if opts.autocommit {
                 Box::new(self.create_autocommit_transaction(opts.mode))
             } else {
                 if opts.mode != Mode::SerializableReadWrite {
