@@ -1,63 +1,63 @@
-
-use std::future::Future;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-use num::pow;
-use tokio::time::sleep;
 use crate::errors::*;
 use crate::internal::client_common::DBCredentials;
 use crate::internal::client_fabric::Middleware;
 use crate::internal::discovery::{Discovery, Service};
+use num::pow;
+use std::future::Future;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::time::sleep;
 
-
+use crate::internal::channel_pool::ChannelPoolImpl;
 use crate::internal::session::Session;
-use crate::internal::session_pool::{SessionPool};
+use crate::internal::session_pool::SessionPool;
 use crate::internal::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
-use crate::internal::channel_pool::ChannelPoolImpl;
 
 const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
 
-pub(crate) type TableServiceClientType=TableServiceClient<Middleware>;
+pub(crate) type TableServiceClientType = TableServiceClient<Middleware>;
 
-type TransactionArgType=Box<dyn Transaction>; // real type may be changed
+type TransactionArgType = Box<dyn Transaction>; // real type may be changed
 
 pub struct TransactionRetryOptions {
     mode: Mode,
     autocommit: bool, // Commit transaction after every query. From DB side it visible as many small transactions
     idempotent_operation: bool,
     retrier: Option<Arc<Box<dyn Retry>>>,
-
 }
 
 impl TransactionRetryOptions {
-    pub fn new()->Self{
-        return Self{
+    pub fn new() -> Self {
+        return Self {
             mode: Mode::SerializableReadWrite,
             autocommit: false,
             idempotent_operation: false,
             retrier: None,
-        }
+        };
     }
 
-    pub fn with_mode(mut self, mode: Mode)->Self {
+    #[allow(dead_code)]
+    pub fn with_mode(mut self, mode: Mode) -> Self {
         self.mode = mode;
-        return self
+        return self;
     }
 
-    pub fn with_autocommit(mut self, autocommit: bool)->Self {
+    #[allow(dead_code)]
+    pub fn with_autocommit(mut self, autocommit: bool) -> Self {
         self.autocommit = autocommit;
         return self;
     }
 
-    pub fn with_idempotent(mut self, idempotent: bool)->Self {
+    #[allow(dead_code)]
+    pub fn with_idempotent(mut self, idempotent: bool) -> Self {
         self.idempotent_operation = idempotent;
         return self;
     }
 
-    pub fn with_timeout(mut self, timeout: Duration)->Self {
-        self.retrier =  Some(Arc::new(Box::new(TimeoutRetrier{timeout})));
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.retrier = Some(Arc::new(Box::new(TimeoutRetrier { timeout })));
         return self;
     }
 }
@@ -70,8 +70,13 @@ pub(crate) struct TableClient {
 }
 
 impl TableClient {
-    pub(crate) fn new(credencials: DBCredentials, discovery: Arc<Box<dyn Discovery>>,) -> Self {
-        let channel_pool = ChannelPoolImpl::new::<TableServiceClientType>(discovery, credencials.clone(), Service::Table, TableServiceClient::new);
+    pub(crate) fn new(credencials: DBCredentials, discovery: Arc<Box<dyn Discovery>>) -> Self {
+        let channel_pool = ChannelPoolImpl::new::<TableServiceClientType>(
+            discovery,
+            credencials.clone(),
+            Service::Table,
+            TableServiceClient::new,
+        );
 
         return Self {
             error_on_truncate: false,
@@ -82,41 +87,50 @@ impl TableClient {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn with_max_active_session(mut self, size: usize)->Self {
+    pub(crate) fn with_max_active_session(mut self, size: usize) -> Self {
         self.session_pool = self.session_pool.with_max_active_sessions(size);
         return self;
     }
 
-    pub fn with_retry_timeout(mut self, timeout: Duration)->Self {
-        self.retrier = Arc::new(Box::new(TimeoutRetrier{timeout}));
+    #[allow(dead_code)]
+    pub fn with_retry_timeout(mut self, timeout: Duration) -> Self {
+        self.retrier = Arc::new(Box::new(TimeoutRetrier { timeout }));
         return self;
     }
 
     pub fn create_autocommit_transaction(&self, mode: Mode) -> impl Transaction {
-        AutoCommit::new(self.channel_pool.clone(), self.session_pool.clone(), mode).with_error_on_truncate(self.error_on_truncate)
+        AutoCommit::new(self.channel_pool.clone(), self.session_pool.clone(), mode)
+            .with_error_on_truncate(self.error_on_truncate)
     }
 
     pub fn create_interactive_transaction(&self) -> impl Transaction {
-        SerializableReadWriteTx::new(self.channel_pool.clone(), self.session_pool.clone()).with_error_on_truncate(self.error_on_truncate)
+        SerializableReadWriteTx::new(self.channel_pool.clone(), self.session_pool.clone())
+            .with_error_on_truncate(self.error_on_truncate)
     }
 
     pub(crate) async fn create_session(&mut self) -> Result<Session> {
         return self.session_pool.session().await;
     }
 
-    pub async fn retry_transaction<CallbackFuture, CallbackResult>(&self, opts: TransactionRetryOptions, callback: impl Fn(TransactionArgType)-> CallbackFuture) ->ResultWithCustomerErr<CallbackResult>
+    pub async fn retry_transaction<CallbackFuture, CallbackResult>(
+        &self,
+        opts: TransactionRetryOptions,
+        callback: impl Fn(TransactionArgType) -> CallbackFuture,
+    ) -> ResultWithCustomerErr<CallbackResult>
     where
-        CallbackFuture: Future<Output=ResultWithCustomerErr<CallbackResult>>,
+        CallbackFuture: Future<Output = ResultWithCustomerErr<CallbackResult>>,
     {
         let retrier = opts.retrier.unwrap_or_else(|| self.retrier.clone());
-        let mut attempts : usize = 0;
+        let mut attempts: usize = 0;
         let start = Instant::now();
         loop {
             let transaction: Box<dyn Transaction> = if opts.autocommit {
                 Box::new(self.create_autocommit_transaction(opts.mode))
             } else {
                 if opts.mode != Mode::SerializableReadWrite {
-                    return Err(YdbOrCustomerError::YDB(Error::Custom("only serializable rw transactions allow to interactive mode".into())))
+                    return Err(YdbOrCustomerError::YDB(Error::Custom(
+                        "only serializable rw transactions allow to interactive mode".into(),
+                    )));
                 }
                 Box::new(self.create_interactive_transaction())
             };
@@ -130,18 +144,21 @@ impl TableClient {
             };
 
             if !Self::check_retry_error(opts.idempotent_operation, &err) {
-                return Err(err)
+                return Err(err);
             }
 
             let now = Instant::now();
-            attempts+= 1;
-            let loop_decision = retrier.wait_duration(RetryParams{ attempt: attempts, time_from_start: now.duration_since(start) });
+            attempts += 1;
+            let loop_decision = retrier.wait_duration(RetryParams {
+                attempt: attempts,
+                time_from_start: now.duration_since(start),
+            });
             if loop_decision.allow_retry {
                 sleep(loop_decision.wait_timeout).await;
             } else {
-                return Err(err)
+                return Err(err);
             };
-        };
+        }
     }
 
     #[allow(dead_code)]
@@ -150,17 +167,17 @@ impl TableClient {
         return self;
     }
 
-    fn check_retry_error(is_idempotent_operation: bool, err: &YdbOrCustomerError)->bool{
+    fn check_retry_error(is_idempotent_operation: bool, err: &YdbOrCustomerError) -> bool {
         let ydb_err = match &err {
             YdbOrCustomerError::Customer(_) => return false,
-            YdbOrCustomerError::YDB(err)=>err,
+            YdbOrCustomerError::YDB(err) => err,
         };
 
         return match ydb_err.need_retry() {
             NeedRetry::True => true,
-            NeedRetry::IdempotentOnly=>is_idempotent_operation,
-            NeedRetry::False=>false,
-        }
+            NeedRetry::IdempotentOnly => is_idempotent_operation,
+            NeedRetry::False => false,
+        };
     }
 }
 
@@ -177,18 +194,18 @@ struct RetryDecision {
 }
 
 trait Retry {
-    fn wait_duration(&self, params: RetryParams)->RetryDecision;
+    fn wait_duration(&self, params: RetryParams) -> RetryDecision;
 }
 
 struct TimeoutRetrier {
-    timeout: Duration
+    timeout: Duration,
 }
 
 impl Default for TimeoutRetrier {
     fn default() -> Self {
         return Self {
             timeout: DEFAULT_RETRY_TIMEOUT,
-        }
+        };
     }
 }
 
@@ -197,7 +214,8 @@ impl Retry for TimeoutRetrier {
         let mut res = RetryDecision::default();
         if params.time_from_start < self.timeout {
             if params.attempt > 0 {
-                res.wait_timeout = Duration::from_millis(pow(INITIAL_RETRY_BACKOFF_MILLISECONDS, params.attempt));
+                res.wait_timeout =
+                    Duration::from_millis(pow(INITIAL_RETRY_BACKOFF_MILLISECONDS, params.attempt));
             }
             res.allow_retry = (params.time_from_start + res.wait_timeout) < self.timeout;
         };

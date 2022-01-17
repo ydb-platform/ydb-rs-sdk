@@ -1,27 +1,28 @@
-
+use crate::errors::NeedRetry::IdempotentOnly;
 use std::fmt::{Debug, Display, Formatter};
 use std::string::FromUtf8Error;
 use std::sync::Arc;
 use tokio::sync::AcquireError;
 use url::ParseError;
-use crate::errors::NeedRetry::{IdempotentOnly};
 
 pub type Result<T> = std::result::Result<T, Error>;
-pub type ResultWithCustomerErr<T> = std::result::Result<T,YdbOrCustomerError>;
+pub type ResultWithCustomerErr<T> = std::result::Result<T, YdbOrCustomerError>;
 
 #[derive(Clone)]
 pub enum YdbOrCustomerError {
     YDB(Error),
-    Customer(Arc<Box<dyn std::error::Error>>)
+    Customer(Arc<Box<dyn std::error::Error>>),
 }
 
 impl YdbOrCustomerError {
-    pub fn from_mess<T: Into<String>>(s: T)->Self{
-        return Self::Customer(Arc::new(Box::new(Error::Custom(s.into()))))
+    #[allow(dead_code)]
+    pub fn from_mess<T: Into<String>>(s: T) -> Self {
+        return Self::Customer(Arc::new(Box::new(Error::Custom(s.into()))));
     }
 
-    pub fn from_err<T: std::error::Error + 'static>(err: T)->Self {
-        return Self::Customer(Arc::new(Box::new(err)))
+    #[allow(dead_code)]
+    pub fn from_err<T: std::error::Error + 'static>(err: T) -> Self {
+        return Self::Customer(Arc::new(Box::new(err)));
     }
 }
 
@@ -29,38 +30,38 @@ impl Debug for YdbOrCustomerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         return match self {
             Self::YDB(err) => Debug::fmt(err, f),
-            Self::Customer(err) => Debug::fmt(err, f)
-        }
+            Self::Customer(err) => Debug::fmt(err, f),
+        };
     }
 }
 
 impl Display for YdbOrCustomerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         return match self {
-            Self::YDB(err)=>Display::fmt(err, f),
-            Self::Customer(err)=>Display::fmt(err, f),
-        }
+            Self::YDB(err) => Display::fmt(err, f),
+            Self::Customer(err) => Display::fmt(err, f),
+        };
     }
 }
 
 impl From<Error> for YdbOrCustomerError {
     fn from(e: Error) -> Self {
-        return Self::YDB(e)
+        return Self::YDB(e);
     }
 }
 
 pub(crate) enum NeedRetry {
-    True,               // operation guarantee to not completed, error is temporary, need retry
-    IdempotentOnly,     // operation in unknown state - it may be completed or not, error temporary. Operation may be auto retry for idempotent operations only.
-    False,              // operation is completed or error is stable (for example yql syntaxt errror) and no need retry
+    True,           // operation guarantee to not completed, error is temporary, need retry
+    IdempotentOnly, // operation in unknown state - it may be completed or not, error temporary. Operation may be auto retry for idempotent operations only.
+    False, // operation is completed or error is stable (for example yql syntaxt errror) and no need retry
 }
 
-#[derive(Clone,Debug)]
+#[derive(Clone, Debug)]
 pub enum Error {
     Custom(String),
-    TransportDial(Arc::<tonic::transport::Error>),
+    TransportDial(Arc<tonic::transport::Error>),
     Transport(String),
-    TransportGRPCStatus(Arc::<tonic::Status>),
+    TransportGRPCStatus(Arc<tonic::Status>),
     YdbOperation(YdbOperationError),
 }
 
@@ -76,24 +77,30 @@ impl Error {
     pub fn from_str(s: &str) -> Error {
         return Error::Custom(s.to_string());
     }
-    pub (crate) fn need_retry(&self)->NeedRetry {
+    pub(crate) fn need_retry(&self) -> NeedRetry {
         match self {
-            Self::Custom(_)=>NeedRetry::False,
-            Self::TransportDial(_)=>NeedRetry::True,
-            Self::Transport(_)=>IdempotentOnly, // TODO: check when transport error created
-            Self::TransportGRPCStatus(status)=>{
+            Self::Custom(_) => NeedRetry::False,
+            Self::TransportDial(_) => NeedRetry::True,
+            Self::Transport(_) => IdempotentOnly, // TODO: check when transport error created
+            Self::TransportGRPCStatus(status) => {
                 use tonic::Code;
                 match status.code() {
                     Code::Aborted | Code::ResourceExhausted => NeedRetry::True,
-                    Code::Internal | Code::Cancelled | Code::Unavailable => NeedRetry::IdempotentOnly,
+                    Code::Internal | Code::Cancelled | Code::Unavailable => {
+                        NeedRetry::IdempotentOnly
+                    }
                     _ => NeedRetry::False,
                 }
-            },
-            Self::YdbOperation(ydb_err)=> {
+            }
+            Self::YdbOperation(ydb_err) => {
                 use ydb_protobuf::generated::ydb::status_ids::StatusCode;
-                if let Some(status) = StatusCode::from_i32(ydb_err.operation_status){
+                if let Some(status) = StatusCode::from_i32(ydb_err.operation_status) {
                     match status {
-                        StatusCode::Aborted | StatusCode::Unavailable | StatusCode::Overloaded | StatusCode::BadSession | StatusCode::SessionBusy => NeedRetry::True,
+                        StatusCode::Aborted
+                        | StatusCode::Unavailable
+                        | StatusCode::Overloaded
+                        | StatusCode::BadSession
+                        | StatusCode::SessionBusy => NeedRetry::True,
                         StatusCode::Undetermined => NeedRetry::IdempotentOnly,
                         _ => NeedRetry::False,
                     }
@@ -199,12 +206,15 @@ impl From<tonic::Status> for Error {
 
 impl From<url::ParseError> for Error {
     fn from(e: ParseError) -> Self {
-        return Self::Custom(e.to_string())
+        return Self::Custom(e.to_string());
     }
 }
 
 impl From<ydb_protobuf::generated::ydb::operations::Operation> for Error {
     fn from(op: ydb_protobuf::generated::ydb::operations::Operation) -> Self {
-        return Error::YdbOperation(YdbOperationError{message: format!("{:?}", &op), operation_status: op.status});
+        return Error::YdbOperation(YdbOperationError {
+            message: format!("{:?}", &op),
+            operation_status: op.status,
+        });
     }
 }
