@@ -75,9 +75,7 @@ impl Drop for AutoCommit {
 #[async_trait]
 impl Transaction for AutoCommit {
     async fn query(&mut self, query: Query) -> Result<QueryResult> {
-        let mut session = self.session_pool.session().await?;
         let req = ExecuteDataQueryRequest {
-            session_id: session.id.clone(),
             tx_control: Some(TransactionControl {
                 commit_tx: true,
                 tx_selector: Some(TxSelector::BeginTx(TransactionSettings {
@@ -86,18 +84,11 @@ impl Transaction for AutoCommit {
             }),
             ..query.to_proto()?
         };
-        println!("session: {:#?}", &session);
-        println!("req: {:#?}", &req);
-        let proto_res: Result<ExecuteQueryResult> =
-            session.handle_error(grpc_read_operation_result(
-                self.channel_pool
-                    .create_channel()
-                    .await?
-                    .execute_data_query(req)
-                    .await?,
-            ));
-        println!("res: {:#?}", proto_res);
-        return QueryResult::from_proto(proto_res?, self.error_on_truncate_response);
+
+        let mut session = self.session_pool.session().await?;
+        return session
+            .execute_data_query(req, self.error_on_truncate_response)
+            .await;
     }
 
     async fn commit(&mut self) -> Result<()> {
@@ -196,7 +187,6 @@ impl Transaction for SerializableReadWriteTx {
         };
 
         let req = ExecuteDataQueryRequest {
-            session_id: session.id.clone(),
             tx_control: Some(TransactionControl {
                 commit_tx: false,
                 tx_selector: Some(tx_selector),
@@ -204,26 +194,14 @@ impl Transaction for SerializableReadWriteTx {
             }),
             ..query.to_proto()?
         };
-        println!("req: {:#?}", &req);
-        let proto_res: Result<ExecuteQueryResult> =
-            session.handle_error(grpc_read_operation_result(
-                self.channel_pool
-                    .create_channel()
-                    .await?
-                    .execute_data_query(req)
-                    .await?,
-            ));
-        println!("res: {:#?}", proto_res);
-        let proto_res = proto_res?;
+        let query_result = session
+            .execute_data_query(req, self.error_on_truncate_response)
+            .await?;
         if self.id.is_none() {
-            let meta = proto_res.tx_meta.as_ref().ok_or(Custom(format!(
-                "meta is empty in query response: {:?}",
-                &proto_res
-            )))?;
-            self.id = Some(meta.id.clone());
+            self.id = query_result.session_id.clone();
         };
 
-        return QueryResult::from_proto(proto_res, self.error_on_truncate_response);
+        return Ok(query_result);
     }
 
     async fn commit(&mut self) -> Result<()> {

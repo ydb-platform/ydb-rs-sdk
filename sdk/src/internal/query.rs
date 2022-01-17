@@ -71,6 +71,7 @@ impl From<String> for Query {
 
 #[derive(Debug)]
 pub struct QueryResult {
+    pub(crate) session_id: Option<String>,
     pub(crate) results: Vec<ResultSet>,
 }
 
@@ -93,7 +94,17 @@ impl QueryResult {
 
             results.push(result_set);
         }
-        return Ok(QueryResult { results });
+
+        let session_id = if let Some(meta) = proto_res.tx_meta {
+            Some(meta.id)
+        } else {
+            None
+        };
+
+        return Ok(QueryResult {
+            session_id,
+            results,
+        });
     }
 
     pub fn first(self) -> Option<ResultSet> {

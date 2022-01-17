@@ -1,6 +1,10 @@
 use crate::errors::{Error, Result};
-use crate::internal::client_table::TableServiceChannelPool;
+use crate::internal::client_table::{TableServiceChannelPool, TableServiceClientType};
+use crate::internal::grpc::grpc_read_operation_result;
+use crate::internal::query::QueryResult;
+use crate::internal::trait_operation::Operation;
 use derivative::Derivative;
+use ydb_protobuf::generated::ydb::table::{ExecuteDataQueryRequest, ExecuteQueryResult};
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -36,6 +40,33 @@ impl Session {
             }
         };
         return res;
+    }
+
+    fn handle_operation_result<TOp, T>(&mut self, response: tonic::Response<TOp>) -> Result<T>
+    where
+        TOp: Operation,
+        T: Default + prost::Message,
+    {
+        let res: Result<T> = grpc_read_operation_result(response);
+        return self.handle_error(res);
+    }
+
+    pub(crate) async fn execute_data_query(
+        &mut self,
+        mut req: ExecuteDataQueryRequest,
+        error_on_truncated: bool,
+    ) -> Result<QueryResult> {
+        if req.session_id.is_empty() {
+            req.session_id.clone_from(&self.id);
+        }
+        let mut channel = self.get_channel().await?;
+        let response = channel.execute_data_query(req).await?;
+        let operation_result: ExecuteQueryResult = self.handle_operation_result(response)?;
+        return QueryResult::from_proto(operation_result, error_on_truncated);
+    }
+
+    async fn get_channel(&self) -> Result<TableServiceClientType> {
+        return self.channel_pool.create_channel().await;
     }
 
     #[allow(dead_code)]
