@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 
-use crate::internal::channel_pool::ChannelPoolImpl;
+use crate::internal::channel_pool::{ChannelPool, ChannelPoolImpl};
 use crate::internal::session::Session;
 use crate::internal::session_pool::SessionPool;
 use crate::internal::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
@@ -18,6 +18,7 @@ const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
 
 pub(crate) type TableServiceClientType = TableServiceClient<Middleware>;
+pub(crate) type TableServiceChannelPool = Arc<Box<dyn ChannelPool<TableServiceClientType>>>;
 
 type TransactionArgType = Box<dyn Transaction>; // real type may be changed
 
@@ -65,7 +66,7 @@ impl TransactionRetryOptions {
 pub(crate) struct TableClient {
     error_on_truncate: bool,
     session_pool: SessionPool,
-    channel_pool: ChannelPoolImpl<TableServiceClientType>,
+    channel_pool: TableServiceChannelPool,
     retrier: Arc<Box<dyn Retry>>,
 }
 
@@ -77,6 +78,7 @@ impl TableClient {
             Service::Table,
             TableServiceClient::new,
         );
+        let channel_pool: TableServiceChannelPool = Arc::new(Box::new(channel_pool));
 
         return Self {
             error_on_truncate: false,

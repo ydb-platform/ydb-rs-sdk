@@ -1,48 +1,56 @@
-use std::collections::vec_deque::VecDeque;
-use std::ops::{Sub};
+use crate::errors::Error::Custom;
+use crate::errors::*;
+use crate::internal::client_table::TableServiceChannelPool;
+use crate::internal::grpc::grpc_read_operation_result;
+use crate::internal::session::Session;
 use async_trait::async_trait;
+use std::collections::vec_deque::VecDeque;
+use std::ops::Sub;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Semaphore;
-use crate::errors::*;
-use crate::internal::grpc::{grpc_read_operation_result};
-use crate::internal::session::Session;
-use ydb_protobuf::generated::ydb::table::{CreateSessionRequest, CreateSessionResult, KeepAliveRequest, KeepAliveResult};
-use crate::errors::Error::Custom;
-use crate::internal::channel_pool::ChannelPoolImpl;
-use crate::internal::client_table::TableServiceClientType;
+use ydb_protobuf::generated::ydb::table::{
+    CreateSessionRequest, CreateSessionResult, KeepAliveRequest, KeepAliveResult,
+};
 
 const DEFAULT_SIZE: usize = 1000;
 
 #[async_trait]
 pub(crate) trait SessionClient: Send + Sync {
-    async fn create_session(&self)->Result<Session>;
-    async fn keepalive_session(&self, session: &mut Session)->Result<()>;
+    async fn create_session(&self) -> Result<Session>;
+    async fn keepalive_session(&self, session: &mut Session) -> Result<()>;
 }
 
 #[async_trait]
-impl SessionClient for ChannelPoolImpl<TableServiceClientType> {
-    async fn create_session(&self)->Result<Session>{
+impl SessionClient for TableServiceChannelPool {
+    async fn create_session(&self) -> Result<Session> {
         let mut channel = self.create_channel().await?;
         let session_res: CreateSessionResult = grpc_read_operation_result(
             channel
                 .create_session(CreateSessionRequest::default())
                 .await?,
         )?;
-        let session = Session::new(session_res.session_id);
+        let session = Session::new(session_res.session_id, self.clone());
         return Ok(session);
     }
 
-    async fn keepalive_session(&self, session: &mut Session)->Result<()>{
+    async fn keepalive_session(&self, session: &mut Session) -> Result<()> {
         use ydb_protobuf::generated::ydb::table::keep_alive_result::SessionStatus;
         let mut channel = self.create_channel().await?;
-        let keepalive_res: KeepAliveResult = session.handle_error(grpc_read_operation_result(channel.keep_alive(KeepAliveRequest{
-            session_id: session.id.clone(),
-            ..KeepAliveRequest::default()
-        }).await?))?;
+        let keepalive_res: KeepAliveResult = session.handle_error(grpc_read_operation_result(
+            channel
+                .keep_alive(KeepAliveRequest {
+                    session_id: session.id.clone(),
+                    ..KeepAliveRequest::default()
+                })
+                .await?,
+        ))?;
         if SessionStatus::from_i32(keepalive_res.session_status) == Some(SessionStatus::Ready) {
-            return Ok(())
+            return Ok(());
         }
-        return Err(Custom(format!("bad status while session ping: {:?}", keepalive_res)))
+        return Err(Custom(format!(
+            "bad status while session ping: {:?}",
+            keepalive_res
+        )));
     }
 }
 
@@ -61,18 +69,22 @@ struct IdleSessionItem {
 }
 
 impl SessionPool {
-    pub(crate) fn new(channel_pool: Box<dyn SessionClient>)-> Self {
+    pub(crate) fn new(session_client: Box<dyn SessionClient>) -> Self {
         let pool = Self {
             active_sessions: Arc::new(Semaphore::new(DEFAULT_SIZE)),
-            create_session: Arc::new(channel_pool),
-            idle_sessions:Arc::new(Mutex::new(VecDeque::new())),
+            create_session: Arc::new(session_client),
+            idle_sessions: Arc::new(Mutex::new(VecDeque::new())),
         };
 
-        tokio::spawn(sessions_pinger(pool.create_session.clone(), Arc::downgrade(&pool.idle_sessions), std::time::Duration::from_secs(60)));
+        tokio::spawn(sessions_pinger(
+            pool.create_session.clone(),
+            Arc::downgrade(&pool.idle_sessions),
+            std::time::Duration::from_secs(60),
+        ));
         return pool;
     }
 
-    pub(crate) fn with_max_active_sessions(mut self, size: usize)->Self {
+    pub(crate) fn with_max_active_sessions(mut self, size: usize) -> Self {
         self.active_sessions = Arc::new(Semaphore::new(size));
         return self;
     }
@@ -96,9 +108,9 @@ impl SessionPool {
             }
         };
 
-        session.on_drop(Box::new( move|s: &mut Session| {
+        session.on_drop(Box::new(move |s: &mut Session| {
             println!("moved to pool: {}", s.id);
-            let item = IdleSessionItem{
+            let item = IdleSessionItem {
                 idle_since: std::time::Instant::now(),
                 session: s.clone_without_ondrop(),
             };
@@ -109,7 +121,11 @@ impl SessionPool {
     }
 }
 
-async fn sessions_pinger(session_client: Arc<Box<dyn SessionClient>>, idle_sessions: Weak<Mutex<VecDeque<IdleSessionItem>>>, interval: std::time::Duration) {
+async fn sessions_pinger(
+    session_client: Arc<Box<dyn SessionClient>>,
+    idle_sessions: Weak<Mutex<VecDeque<IdleSessionItem>>>,
+    interval: std::time::Duration,
+) {
     let mut sleep_time = interval;
     loop {
         tokio::time::sleep(sleep_time).await;
@@ -118,7 +134,7 @@ async fn sessions_pinger(session_client: Arc<Box<dyn SessionClient>>, idle_sessi
             let idle_sessions = if let Some(idle_sessions) = idle_sessions.upgrade() {
                 idle_sessions
             } else {
-                return
+                return;
             };
 
             'sessions: loop {
@@ -138,9 +154,11 @@ async fn sessions_pinger(session_client: Arc<Box<dyn SessionClient>>, idle_sessi
                         break 'sessions;
                     }
                 };
-                if session_client.keepalive_session(&mut session).await.is_ok() && session.can_pooled {
+                if session_client.keepalive_session(&mut session).await.is_ok()
+                    && session.can_pooled
+                {
                     let mut idle_sessions = idle_sessions.lock().unwrap();
-                    idle_sessions.push_back(IdleSessionItem{
+                    idle_sessions.push_back(IdleSessionItem {
                         idle_since: std::time::Instant::now(),
                         session,
                     });
@@ -154,30 +172,45 @@ async fn sessions_pinger(session_client: Arc<Box<dyn SessionClient>>, idle_sessi
 
 #[cfg(test)]
 mod test {
-    use std::time::Duration;
-    use async_trait::async_trait;
-    use tokio::sync::oneshot;
-    use crate::internal::session::Session;
-    use crate::errors::Result;
-    use crate::internal::session_pool::SessionPool;
     use super::SessionClient;
+    use crate::errors::{Error, Result};
+    use crate::internal::channel_pool::ChannelPool;
+    use crate::internal::client_table::{TableServiceChannelPool, TableServiceClientType};
+    use crate::internal::session::Session;
+    use crate::internal::session_pool::SessionPool;
+    use async_trait::async_trait;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::oneshot;
 
-    struct  SessionClientMock {}
+    struct SessionClientMock {}
 
     #[async_trait]
     impl SessionClient for SessionClientMock {
-        async fn create_session(&self)->Result<Session> {
-            return Ok(Session::new("asd".into()))
+        async fn create_session(&self) -> Result<Session> {
+            return Ok(Session::new(
+                "asd".into(),
+                Arc::new(Box::new(TableChannelPoolMock {})),
+            ));
         }
 
-        async fn keepalive_session(&self, _session: &mut Session)->Result<()>{
-            return Ok(())
+        async fn keepalive_session(&self, _session: &mut Session) -> Result<()> {
+            return Ok(());
+        }
+    }
+
+    struct TableChannelPoolMock {}
+
+    #[async_trait]
+    impl ChannelPool<TableServiceClientType> for TableChannelPoolMock {
+        async fn create_channel(&self) -> Result<TableServiceClientType> {
+            return Err(Error::Custom("test".into()));
         }
     }
 
     #[tokio::test]
-    async fn max_active_session()->Result<()>{
-        let mut pool = SessionPool::new(Box::new(SessionClientMock{})).with_max_active_sessions(1);
+    async fn max_active_session() -> Result<()> {
+        let mut pool = SessionPool::new(Box::new(SessionClientMock {})).with_max_active_sessions(1);
         let first_session = pool.session().await?;
 
         let (thread_started_sender, thread_started_receiver) = oneshot::channel();
