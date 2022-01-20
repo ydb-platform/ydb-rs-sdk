@@ -1,55 +1,29 @@
 use ydb_protobuf::generated::ydb::discovery::{ListEndpointsResponse, WhoAmIResponse};
 use ydb_protobuf::generated::ydb::operations::Operation as YdbOperation;
-use ydb_protobuf::generated::ydb::table::{CommitTransactionResponse, CreateSessionResponse, DeleteSessionResponse, ExecuteDataQueryResponse, KeepAliveResponse, RollbackTransactionResponse};
+use ydb_protobuf::generated::ydb::table::{
+    CommitTransactionResponse, CreateSessionResponse, DeleteSessionResponse,
+    ExecuteDataQueryResponse, KeepAliveResponse, RollbackTransactionResponse,
+};
 
 pub trait Operation {
     fn operation(self: &Self) -> Option<YdbOperation>;
 }
 
-impl Operation for CommitTransactionResponse {
-    fn operation(self: &Self) -> Option<YdbOperation> {
-        return self.operation.clone();
-    }
+macro_rules! operation_impl_for {
+    ($t:ty) => {
+        impl Operation for $t {
+            fn operation(&self) -> Option<YdbOperation> {
+                return self.operation.clone();
+            }
+        }
+    };
 }
 
-impl Operation for CreateSessionResponse {
-    fn operation(self: &Self) -> Option<YdbOperation> {
-        return self.operation.clone();
-    }
-}
-
-impl Operation for DeleteSessionResponse {
-    fn operation(self: &Self) -> Option<YdbOperation> {
-        return self.operation.clone();
-    }
-}
-
-impl Operation for ExecuteDataQueryResponse {
-    fn operation(self: &Self) -> Option<YdbOperation> {
-        return self.operation.clone();
-    }
-}
-
-impl Operation for ListEndpointsResponse {
-    fn operation(self: &Self) -> Option<YdbOperation> {
-        return self.operation.clone();
-    }
-}
-
-impl Operation for KeepAliveResponse {
-    fn operation(self: &Self) -> Option<YdbOperation> {
-        return self.operation.clone();
-    }
-}
-
-impl Operation for RollbackTransactionResponse {
-    fn operation(self: &Self) -> Option<YdbOperation> {
-        return self.operation.clone();
-    }
-}
-
-impl Operation for WhoAmIResponse {
-    fn operation(self: &Self) -> Option<YdbOperation> {
-        return self.operation.clone();
-    }
-}
+operation_impl_for!(CommitTransactionResponse);
+operation_impl_for!(CreateSessionResponse);
+operation_impl_for!(DeleteSessionResponse);
+operation_impl_for!(ExecuteDataQueryResponse);
+operation_impl_for!(KeepAliveResponse);
+operation_impl_for!(ListEndpointsResponse);
+operation_impl_for!(RollbackTransactionResponse);
+operation_impl_for!(WhoAmIResponse);
