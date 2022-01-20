@@ -17,7 +17,6 @@ const DEFAULT_SIZE: usize = 1000;
 #[async_trait]
 pub(crate) trait SessionClient: Send + Sync {
     async fn create_session(&self) -> Result<Session>;
-    async fn keepalive_session(&self, session: &mut Session) -> Result<()>;
 }
 
 #[async_trait]
@@ -31,26 +30,6 @@ impl SessionClient for TableServiceChannelPool {
         )?;
         let session = Session::new(session_res.session_id, self.clone());
         return Ok(session);
-    }
-
-    async fn keepalive_session(&self, session: &mut Session) -> Result<()> {
-        use ydb_protobuf::generated::ydb::table::keep_alive_result::SessionStatus;
-        let mut channel = self.create_channel().await?;
-        let keepalive_res: KeepAliveResult = session.handle_error(grpc_read_operation_result(
-            channel
-                .keep_alive(KeepAliveRequest {
-                    session_id: session.id.clone(),
-                    ..KeepAliveRequest::default()
-                })
-                .await?,
-        ))?;
-        if SessionStatus::from_i32(keepalive_res.session_status) == Some(SessionStatus::Ready) {
-            return Ok(());
-        }
-        return Err(Custom(format!(
-            "bad status while session ping: {:?}",
-            keepalive_res
-        )));
     }
 }
 
@@ -154,9 +133,7 @@ async fn sessions_pinger(
                         break 'sessions;
                     }
                 };
-                if session_client.keepalive_session(&mut session).await.is_ok()
-                    && session.can_pooled
-                {
+                if session.keepalive().await.is_ok() && session.can_pooled {
                     let mut idle_sessions = idle_sessions.lock().unwrap();
                     idle_sessions.push_back(IdleSessionItem {
                         idle_since: std::time::Instant::now(),
@@ -192,10 +169,6 @@ mod test {
                 "asd".into(),
                 Arc::new(Box::new(TableChannelPoolMock {})),
             ));
-        }
-
-        async fn keepalive_session(&self, _session: &mut Session) -> Result<()> {
-            return Ok(());
         }
     }
 

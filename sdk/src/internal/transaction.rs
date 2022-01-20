@@ -137,29 +137,12 @@ impl Drop for SerializableReadWriteTx {
     // rollback if unfinished
     fn drop(&mut self) {
         if !self.finished {
-            let session_id = if let Some(session) = &self.session {
-                session.id.clone()
-            } else {
-                return;
+            if let (Some(tx_id), Some(mut session)) = (self.id.take(), self.session.take()) {
+                tokio::spawn(async move {
+                    let _ = session.rollback_transaction(tx_id);
+                });
             };
-
-            let tx_id = if let Some(tx_id) = &self.id {
-                tx_id.clone()
-            } else {
-                return;
-            };
-
-            let pool = self.channel_pool.clone();
-            tokio::spawn(async move {
-                if let Ok(ch) = pool.create_channel().await {
-                    // todo: handle session error
-                    let _ = rollback_request(ch, session_id, tx_id).await;
-                } else {
-                    return;
-                };
-            });
         };
-        return;
     }
 }
 
@@ -217,7 +200,7 @@ impl Transaction for SerializableReadWriteTx {
         }
         self.finished = true;
 
-        let id = if let Some(id) = &self.id {
+        let tx_id = if let Some(id) = &self.id {
             id
         } else {
             // commit non started transaction - ok
@@ -225,25 +208,15 @@ impl Transaction for SerializableReadWriteTx {
             return Ok(());
         };
 
-        let req = CommitTransactionRequest {
-            session_id: self.session.as_mut().unwrap().id.clone(),
-            tx_id: id.clone(),
-            ..CommitTransactionRequest::default()
-        };
-
-        let mut ch = self.channel_pool.create_channel().await?;
-
-        // todo - retries
-        let _res: CommitTransactionResult =
-            self.session
-                .as_mut()
-                .unwrap()
-                .handle_error(grpc_read_operation_result(
-                    ch.commit_transaction(req).await?,
-                ))?;
-
-        self.comitted = true;
-        return Ok(());
+        if let Some(session) = self.session.as_mut() {
+            session.commit_transaction(tx_id.clone()).await?;
+            self.comitted = true;
+            return Ok(());
+        } else {
+            return Err(Error::InternalError(
+                "commit transaction without session (internal error)".into(),
+            ));
+        }
     }
 
     async fn rollback(&mut self) -> Result<()> {
@@ -272,7 +245,7 @@ impl Transaction for SerializableReadWriteTx {
             return Ok(());
         };
 
-        let id = if let Some(id) = &self.id {
+        let tx_id = if let Some(id) = &self.id {
             id.clone()
         } else {
             // rollback non started transaction - ok
@@ -281,30 +254,7 @@ impl Transaction for SerializableReadWriteTx {
         };
 
         self.rollbacked = true;
-        return session.handle_error(
-            rollback_request(
-                self.channel_pool.create_channel().await?,
-                session.id.clone(),
-                id,
-            )
-            .await,
-        );
+
+        return session.rollback_transaction(tx_id).await;
     }
-}
-
-async fn rollback_request(
-    mut ch: TableServiceClientType,
-    session_id: String,
-    tx_id: String,
-) -> Result<()> {
-    let req = RollbackTransactionRequest {
-        session_id,
-        tx_id,
-        ..RollbackTransactionRequest::default()
-    };
-
-    // todo retries
-    grpc_read_void_operation_result(ch.rollback_transaction(req).await?)?;
-
-    return Ok(());
 }

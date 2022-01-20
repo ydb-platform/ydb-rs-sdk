@@ -59,6 +59,7 @@ pub(crate) enum NeedRetry {
 #[derive(Clone, Debug)]
 pub enum Error {
     Custom(String),
+    InternalError(String),
     TransportDial(Arc<tonic::transport::Error>),
     Transport(String),
     TransportGRPCStatus(Arc<tonic::Status>),
@@ -80,6 +81,7 @@ impl Error {
     pub(crate) fn need_retry(&self) -> NeedRetry {
         match self {
             Self::Custom(_) => NeedRetry::False,
+            Self::InternalError(_) => NeedRetry::False,
             Self::TransportDial(_) => NeedRetry::True,
             Self::Transport(_) => IdempotentOnly, // TODO: check when transport error created
             Self::TransportGRPCStatus(status) => {

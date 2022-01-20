@@ -5,32 +5,44 @@ use ydb_protobuf::generated::ydb::status_ids::StatusCode;
 use crate::errors;
 use crate::errors::{Error, Result};
 use crate::internal::client_common::DBCredentials;
-use crate::internal::middlewares::{AuthService};
+use crate::internal::middlewares::AuthService;
 use crate::internal::trait_operation::Operation;
 use http::Uri;
 use tokio::sync::mpsc;
 
+use crate::internal::channel_pool::{ChannelErrorInfo, ChannelProxy, ChannelProxyErrorSender};
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tower::ServiceBuilder;
-use crate::internal::channel_pool::{ChannelErrorInfo, ChannelProxy, ChannelProxyErrorSender};
 
-pub(crate) async fn create_grpc_client<T, CB>(uri: Uri, cred: DBCredentials, new_func: CB) -> Result<T>
-    where
-        CB: FnOnce(AuthService) -> T,
+pub(crate) async fn create_grpc_client<T, CB>(
+    uri: Uri,
+    cred: DBCredentials,
+    new_func: CB,
+) -> Result<T>
+where
+    CB: FnOnce(AuthService) -> T,
 {
-    return create_grpc_client_with_error_sender(uri, cred, None, new_func).await
+    return create_grpc_client_with_error_sender(uri, cred, None, new_func).await;
 }
 
-
-pub(crate) async fn create_grpc_client_with_error_sender<T, CB>(uri: Uri, cred: DBCredentials, error_sender: ChannelProxyErrorSender, new_func: CB) -> Result<T>
-    where
-        CB: FnOnce(AuthService) -> T,
+pub(crate) async fn create_grpc_client_with_error_sender<T, CB>(
+    uri: Uri,
+    cred: DBCredentials,
+    error_sender: ChannelProxyErrorSender,
+    new_func: CB,
+) -> Result<T>
+where
+    CB: FnOnce(AuthService) -> T,
 {
     let channel = create_grpc_channel(uri, error_sender).await?;
-    return create_client_on_channel(channel, cred, new_func)
+    return create_client_on_channel(channel, cred, new_func);
 }
 
-fn create_client_on_channel<NewFuncT, ClientT>(channel: ChannelProxy, cred: DBCredentials, new_func: NewFuncT) -> Result<ClientT>
+fn create_client_on_channel<NewFuncT, ClientT>(
+    channel: ChannelProxy,
+    cred: DBCredentials,
+    new_func: NewFuncT,
+) -> Result<ClientT>
 where
     NewFuncT: FnOnce(AuthService) -> ClientT,
 {
@@ -43,7 +55,10 @@ where
     return Ok(new_func(auth_ch));
 }
 
-async fn create_grpc_channel(uri: Uri, error_sender: Option<mpsc::Sender<ChannelErrorInfo>>) -> Result<ChannelProxy> {
+async fn create_grpc_channel(
+    uri: Uri,
+    error_sender: Option<mpsc::Sender<ChannelErrorInfo>>,
+) -> Result<ChannelProxy> {
     let tls = if let Some(scheme) = uri.scheme_str() {
         scheme == "https" || scheme == "grpcs"
     } else {
@@ -57,15 +72,15 @@ async fn create_grpc_channel(uri: Uri, error_sender: Option<mpsc::Sender<Channel
     endpoint = endpoint.tcp_keepalive(Some(Duration::from_secs(15))); // tcp keepalive similar to default in golang lib
 
     return match endpoint.connect().await {
-        Ok(channel)=>Ok(ChannelProxy::new(uri, channel, error_sender)),
-        Err(err)=>{
+        Ok(channel) => Ok(ChannelProxy::new(uri, channel, error_sender)),
+        Err(err) => {
             if let Some(sender) = error_sender {
                 // ignore notify error
-                let _ = sender.send(ChannelErrorInfo{ endpoint: uri }).await;
+                let _ = sender.send(ChannelErrorInfo { endpoint: uri }).await;
             };
             Err(Error::TransportDial(Arc::new(err)))
-        },
-    }
+        }
+    };
 }
 
 pub(crate) fn grpc_read_operation_result<TOp, T>(resp: tonic::Response<TOp>) -> errors::Result<T>
