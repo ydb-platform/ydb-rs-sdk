@@ -2,6 +2,7 @@ use crate::errors::NeedRetry::IdempotentOnly;
 use std::fmt::{Debug, Display, Formatter};
 use std::string::FromUtf8Error;
 use std::sync::Arc;
+use std::time::SystemTimeError;
 use tokio::sync::AcquireError;
 use url::ParseError;
 
@@ -166,6 +167,12 @@ impl From<std::string::FromUtf8Error> for Error {
 
 impl<T> From<std::sync::PoisonError<T>> for Error {
     fn from(e: std::sync::PoisonError<T>) -> Self {
+        return Error::Custom(e.to_string());
+    }
+}
+
+impl From<std::time::SystemTimeError> for Error {
+    fn from(e: SystemTimeError) -> Self {
         return Error::Custom(e.to_string());
     }
 }

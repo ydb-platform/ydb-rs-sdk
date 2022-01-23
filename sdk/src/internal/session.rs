@@ -9,7 +9,7 @@ use std::future::Future;
 use ydb_protobuf::generated::ydb::table::keep_alive_result::SessionStatus;
 use ydb_protobuf::generated::ydb::table::{
     CommitTransactionRequest, CommitTransactionResult, ExecuteDataQueryRequest, ExecuteQueryResult,
-    KeepAliveRequest, KeepAliveResult, RollbackTransactionRequest,
+    ExecuteSchemeQueryRequest, KeepAliveRequest, KeepAliveResult, RollbackTransactionRequest,
 };
 
 #[derive(Derivative)]
@@ -72,6 +72,21 @@ impl Session {
             .await?;
         let _: CommitTransactionResult = self.handle_operation_result(response)?;
         return Ok(());
+    }
+
+    pub async fn execute_schema_query(&mut self, query: String) -> Result<()> {
+        let resp = self
+            .channel_pool
+            .create_channel()
+            .await?
+            .execute_scheme_query(ExecuteSchemeQueryRequest {
+                session_id: self.id.clone(),
+                yql_text: query,
+                ..ExecuteSchemeQueryRequest::default()
+            })
+            .await?;
+
+        return grpc_read_void_operation_result(resp);
     }
 
     pub(crate) async fn execute_data_query(

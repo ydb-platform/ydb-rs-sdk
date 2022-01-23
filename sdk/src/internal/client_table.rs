@@ -7,6 +7,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
+use ydb_protobuf::generated::ydb::table::ExecuteSchemeQueryRequest;
 
 use crate::internal::channel_pool::{ChannelPool, ChannelPoolImpl};
 use crate::internal::session::Session;

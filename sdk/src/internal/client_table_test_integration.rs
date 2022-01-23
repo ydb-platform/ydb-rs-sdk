@@ -5,6 +5,7 @@ use crate::internal::client_fabric::ClientFabric;
 use crate::internal::client_table::TransactionRetryOptions;
 use crate::internal::discovery::StaticDiscovery;
 use crate::internal::query::Query;
+use crate::internal::session::Session;
 use crate::internal::test_helpers::CONNECTION_INFO;
 use crate::internal::transaction::Mode;
 use crate::internal::transaction::Mode::SerializableReadWrite;
@@ -14,7 +15,8 @@ use http::Uri;
 use std::iter::FromIterator;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time;
+use std::time::{Duration, UNIX_EPOCH};
 use tonic::{Code, Status};
 use ydb_protobuf::generated::ydb::discovery::{ListEndpointsRequest, WhoAmIRequest};
 
@@ -224,6 +226,29 @@ async fn retry_test() -> Result<()> {
         Ok(val) => assert_eq!(val, 3),
         Err(err) => panic!("retry test failed with error result: {:?}", err),
     }
+
+    return Ok(());
+}
+
+#[tokio::test]
+async fn scheme_query() -> Result<()> {
+    let client = create_client()?;
+    let mut table_client = client.table_client();
+
+    let time_now = time::SystemTime::now().duration_since(UNIX_EPOCH)?;
+    let table_name = format!("test_table_{}", time_now.as_millis());
+
+    let mut session = table_client.create_session().await?;
+    session
+        .execute_schema_query(format!(
+            "CREATE TABLE {} (id String, PRIMARY KEY (id))",
+            table_name
+        ))
+        .await?;
+
+    session
+        .execute_schema_query(format!("DROP TABLE {}", table_name))
+        .await?;
 
     return Ok(());
 }

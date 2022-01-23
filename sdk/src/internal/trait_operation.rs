@@ -2,7 +2,8 @@ use ydb_protobuf::generated::ydb::discovery::{ListEndpointsResponse, WhoAmIRespo
 use ydb_protobuf::generated::ydb::operations::Operation as YdbOperation;
 use ydb_protobuf::generated::ydb::table::{
     CommitTransactionResponse, CreateSessionResponse, DeleteSessionResponse,
-    ExecuteDataQueryResponse, KeepAliveResponse, RollbackTransactionResponse,
+    ExecuteDataQueryResponse, ExecuteSchemeQueryResponse, KeepAliveResponse,
+    RollbackTransactionResponse,
 };
 
 pub trait Operation {
@@ -23,6 +24,7 @@ operation_impl_for!(CommitTransactionResponse);
 operation_impl_for!(CreateSessionResponse);
 operation_impl_for!(DeleteSessionResponse);
 operation_impl_for!(ExecuteDataQueryResponse);
+operation_impl_for!(ExecuteSchemeQueryResponse);
 operation_impl_for!(KeepAliveResponse);
 operation_impl_for!(ListEndpointsResponse);
 operation_impl_for!(RollbackTransactionResponse);
