@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::errors::{Error, Result, YdbOrCustomerError};
 use crate::internal::client_fabric::ClientFabric;
-use crate::internal::client_table::{SessionRetryOptions, TransactionRetryOptions};
+use crate::internal::client_table::{RetryOptions, TransactionOptions};
 use crate::internal::discovery::StaticDiscovery;
 use crate::internal::query::Query;
 use crate::internal::session::Session;
@@ -190,10 +190,10 @@ async fn retry_test() -> Result<()> {
     let client = create_client()?;
 
     let attempt = Arc::new(Mutex::new(0));
-    let opts = TransactionRetryOptions::new().with_timeout(Duration::from_secs(15));
+    let opts = RetryOptions::new().with_timeout(Duration::from_secs(15));
     let res = client
         .table_client()
-        .retry_transaction(opts, |t| async {
+        .retry_transaction(TransactionOptions::new(), opts, |t| async {
             let mut t = t; // force borrow for lifetime of t inside closure
             let mut locked_res = attempt.lock().unwrap();
             *locked_res += 1;
@@ -239,7 +239,7 @@ async fn scheme_query() -> Result<()> {
     let table_name = format!("test_table_{}", time_now.as_millis());
 
     table_client
-        .retry_with_session(SessionRetryOptions::new(), |session| async {
+        .retry_with_session(RetryOptions::new(), |session| async {
             let mut session = session; // force borrow for lifetime of t inside closure
             session
                 .execute_schema_query(format!(
@@ -254,7 +254,7 @@ async fn scheme_query() -> Result<()> {
         .unwrap();
 
     table_client
-        .retry_with_session(SessionRetryOptions::new(), |session| async {
+        .retry_with_session(RetryOptions::new(), |session| async {
             let mut session = session; // force borrow for lifetime of t inside closure
             session
                 .execute_schema_query(format!("DROP TABLE {}", table_name))

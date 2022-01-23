@@ -23,20 +23,16 @@ pub(crate) type TableServiceChannelPool = Arc<Box<dyn ChannelPool<TableServiceCl
 
 type TransactionArgType = Box<dyn Transaction>; // real type may be changed
 
-pub struct TransactionRetryOptions {
+pub struct TransactionOptions {
     mode: Mode,
     autocommit: bool, // Commit transaction after every query. From DB side it visible as many small transactions
-    idempotent_operation: bool,
-    retrier: Option<Arc<Box<dyn Retry>>>,
 }
 
-impl TransactionRetryOptions {
+impl TransactionOptions {
     pub fn new() -> Self {
         return Self {
             mode: Mode::SerializableReadWrite,
             autocommit: false,
-            idempotent_operation: false,
-            retrier: None,
         };
     }
 
@@ -51,25 +47,14 @@ impl TransactionRetryOptions {
         self.autocommit = autocommit;
         return self;
     }
-
-    #[allow(dead_code)]
-    pub fn with_idempotent(mut self, idempotent: bool) -> Self {
-        self.idempotent_operation = idempotent;
-        return self;
-    }
-
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.retrier = Some(Arc::new(Box::new(TimeoutRetrier { timeout })));
-        return self;
-    }
 }
 
-pub struct SessionRetryOptions {
+pub struct RetryOptions {
     idempotent_operation: bool,
     retrier: Option<Arc<Box<dyn Retry>>>,
 }
 
-impl SessionRetryOptions {
+impl RetryOptions {
     pub fn new() -> Self {
         return Self {
             idempotent_operation: false,
@@ -141,20 +126,23 @@ impl TableClient {
 
     pub async fn retry_transaction<CallbackFuture, CallbackResult>(
         &self,
-        opts: TransactionRetryOptions,
+        transaction_options: TransactionOptions,
+        retry_options: RetryOptions,
         callback: impl Fn(TransactionArgType) -> CallbackFuture,
     ) -> ResultWithCustomerErr<CallbackResult>
     where
         CallbackFuture: Future<Output = ResultWithCustomerErr<CallbackResult>>,
     {
-        let retrier = opts.retrier.unwrap_or_else(|| self.retrier.clone());
+        let retrier = retry_options
+            .retrier
+            .unwrap_or_else(|| self.retrier.clone());
         let mut attempts: usize = 0;
         let start = Instant::now();
         loop {
-            let transaction: Box<dyn Transaction> = if opts.autocommit {
-                Box::new(self.create_autocommit_transaction(opts.mode))
+            let transaction: Box<dyn Transaction> = if transaction_options.autocommit {
+                Box::new(self.create_autocommit_transaction(transaction_options.mode))
             } else {
-                if opts.mode != Mode::SerializableReadWrite {
+                if transaction_options.mode != Mode::SerializableReadWrite {
                     return Err(YdbOrCustomerError::YDB(Error::Custom(
                         "only serializable rw transactions allow to interactive mode".into(),
                     )));
@@ -170,7 +158,7 @@ impl TableClient {
                 return res;
             };
 
-            if !Self::check_retry_error(opts.idempotent_operation, &err) {
+            if !Self::check_retry_error(retry_options.idempotent_operation, &err) {
                 return Err(err);
             }
 
@@ -190,7 +178,7 @@ impl TableClient {
 
     pub async fn retry_with_session<CallbackFuture, CallbackResult>(
         &self,
-        opts: SessionRetryOptions,
+        opts: RetryOptions,
         callback: impl Fn(Session) -> CallbackFuture,
     ) -> ResultWithCustomerErr<CallbackResult>
     where
