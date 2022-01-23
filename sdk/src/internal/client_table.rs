@@ -64,6 +64,30 @@ impl TransactionRetryOptions {
     }
 }
 
+pub struct SessionRetryOptions {
+    idempotent_operation: bool,
+    retrier: Option<Arc<Box<dyn Retry>>>,
+}
+
+impl SessionRetryOptions {
+    pub fn new() -> Self {
+        return Self {
+            idempotent_operation: false,
+            retrier: None,
+        };
+    }
+
+    pub fn with_idempotent(mut self, idempotent: bool) -> Self {
+        self.idempotent_operation = idempotent;
+        return self;
+    }
+
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.retrier = Some(Arc::new(Box::new(TimeoutRetrier { timeout })));
+        return self;
+    }
+}
+
 pub(crate) struct TableClient {
     error_on_truncate: bool,
     session_pool: SessionPool,
@@ -139,6 +163,45 @@ impl TableClient {
             };
 
             let res = callback(transaction).await;
+
+            let err = if let Err(err) = res {
+                err
+            } else {
+                return res;
+            };
+
+            if !Self::check_retry_error(opts.idempotent_operation, &err) {
+                return Err(err);
+            }
+
+            let now = Instant::now();
+            attempts += 1;
+            let loop_decision = retrier.wait_duration(RetryParams {
+                attempt: attempts,
+                time_from_start: now.duration_since(start),
+            });
+            if loop_decision.allow_retry {
+                sleep(loop_decision.wait_timeout).await;
+            } else {
+                return Err(err);
+            };
+        }
+    }
+
+    pub async fn retry_with_session<CallbackFuture, CallbackResult>(
+        &self,
+        opts: SessionRetryOptions,
+        callback: impl Fn(Session) -> CallbackFuture,
+    ) -> ResultWithCustomerErr<CallbackResult>
+    where
+        CallbackFuture: Future<Output = ResultWithCustomerErr<CallbackResult>>,
+    {
+        let retrier = opts.retrier.unwrap_or_else(|| self.retrier.clone());
+        let mut attempts: usize = 0;
+        let start = Instant::now();
+        loop {
+            let mut session = self.session_pool.session().await?;
+            let res = callback(session).await;
 
             let err = if let Err(err) = res {
                 err

@@ -68,7 +68,7 @@ impl SessionPool {
         return self;
     }
 
-    pub(crate) async fn session(&mut self) -> Result<Session> {
+    pub(crate) async fn session(&self) -> Result<Session> {
         let active_session_permit = self.active_sessions.clone().acquire_owned().await?;
         let idle_sessions = self.idle_sessions.clone();
 

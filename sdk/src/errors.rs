@@ -45,6 +45,8 @@ impl Display for YdbOrCustomerError {
     }
 }
 
+impl std::error::Error for YdbOrCustomerError {}
+
 impl From<Error> for YdbOrCustomerError {
     fn from(e: Error) -> Self {
         return Self::YDB(e);
