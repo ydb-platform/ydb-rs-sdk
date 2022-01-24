@@ -5,6 +5,7 @@ use crate::internal::client_fabric::ClientFabric;
 use crate::internal::client_table::{RetryOptions, TransactionOptions};
 use crate::internal::discovery::StaticDiscovery;
 use crate::internal::query::Query;
+use crate::internal::result::ResultSet;
 use crate::internal::session::Session;
 use crate::internal::test_helpers::CONNECTION_INFO;
 use crate::internal::transaction::Mode;
@@ -22,7 +23,6 @@ use ydb_protobuf::generated::ydb::discovery::{ListEndpointsRequest, WhoAmIReques
 
 fn create_client() -> Result<ClientFabric> {
     let _endpoint_uri = Uri::from_str(CONNECTION_INFO.discovery_endpoint.as_str())?;
-
     let discovery = StaticDiscovery::from_str(CONNECTION_INFO.discovery_endpoint.as_str())?;
 
     return ClientFabric::new(
@@ -128,6 +128,16 @@ async fn execute_data_query_params() -> Result<()> {
 #[tokio::test]
 async fn interactive_transaction() -> Result<()> {
     let client = create_client()?;
+
+    let _ = client
+        .table_client()
+        .create_session()
+        .await?
+        .execute_schema_query(
+            "CREATE TABLE test_values (id Int64, vInt64 Int64, PRIMARY KEY (id))) ".to_string(),
+        )
+        .await;
+
     let mut tx_auto = client
         .table_client()
         .create_autocommit_transaction(SerializableReadWrite);
@@ -488,6 +498,95 @@ SELECT NULL
         res.rows().next().unwrap().remove_field(0)?
     );
     Ok(())
+}
+
+#[tokio::test]
+async fn stream_query() -> Result<()> {
+    let mut client = create_client()?.table_client();
+    let mut session = client.create_session().await?;
+
+    let _ = session
+        .execute_schema_query("DROP TABLE stream_query".to_string())
+        .await;
+
+    session
+        .execute_schema_query("CREATE TABLE stream_query (val Int32, PRIMARY KEY (val))".into())
+        .await?;
+
+    let generate_count = 50000;
+    client
+        .retry_transaction(TransactionOptions::new(), RetryOptions::new(), |tr| async {
+            let mut tr = tr;
+
+            let mut values = Vec::new();
+            for i in 1..=generate_count {
+                values.push(YdbValue::Struct(YdbStruct::from_names_and_values(
+                    vec!["val".to_string()],
+                    vec![YdbValue::Int32(i)],
+                )?))
+            }
+
+            let mut query = Query::new()
+                .with_query(
+                    "
+DECLARE $values AS List<Struct<
+    val: Int32,
+> >;
+
+UPSERT INTO stream_query
+SELECT
+    val 
+FROM
+    AS_TABLE($values);            
+"
+                    .to_string(),
+                )
+                .with_params(
+                    [(
+                        "$values".to_string(),
+                        YdbValue::list_from(values[0].clone(), values)?,
+                    )]
+                    .into_iter()
+                    .collect(),
+                );
+
+            tr.query(query).await?;
+            tr.commit().await?;
+            return Ok(());
+        })
+        .await
+        .unwrap();
+
+    let query = Query::new().with_query("SELECT val FROM stream_query".to_string());
+    let mut res = session.execute_scan_query(query).await?;
+    let mut sum = 0;
+    let mut result_set_count = 0;
+    loop {
+        let result_set = if let Some(result_set) = res.next().await? {
+            result_set_count += 1;
+            result_set
+        } else {
+            break;
+        };
+
+        for mut row in result_set.into_iter() {
+            match row.remove_field(0)? {
+                YdbValue::Optional(boxed_val) => match boxed_val.value.unwrap() {
+                    YdbValue::Int32(val) => sum += val,
+                    val => panic!("unexpected ydb boxed_value type: {:?}", val),
+                },
+                val => panic!("unexpected ydb valye type: {:?}", val),
+            };
+        }
+    }
+
+    let mut expected_sum = 0;
+    for i in 1..=generate_count {
+        expected_sum += i;
+    }
+    assert_eq!(expected_sum, sum);
+    assert!(result_set_count > 1); // ensure get multiply results
+    return Ok(());
 }
 
 #[tokio::test]

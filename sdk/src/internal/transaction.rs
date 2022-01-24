@@ -1,5 +1,5 @@
 use crate::errors::{Error, Result};
-use crate::internal::query::{Query, QueryResult};
+use crate::internal::query::Query;
 use crate::internal::session_pool::SessionPool;
 use async_trait::async_trait;
 use ydb_protobuf::generated::ydb::table::transaction_control::TxSelector;
@@ -13,6 +13,7 @@ use ydb_protobuf::generated::ydb::table::{
 use crate::errors::Error::Custom;
 use crate::internal::client_table::{TableServiceChannelPool, TableServiceClientType};
 use crate::internal::grpc::{grpc_read_operation_result, grpc_read_void_operation_result};
+use crate::internal::result::QueryResult;
 use crate::internal::session::Session;
 
 #[derive(Copy, Clone, PartialEq)]
