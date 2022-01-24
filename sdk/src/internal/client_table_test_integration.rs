@@ -134,9 +134,9 @@ async fn interactive_transaction() -> Result<()> {
         .create_session()
         .await?
         .execute_schema_query(
-            "CREATE TABLE test_values (id Int64, vInt64 Int64, PRIMARY KEY (id))) ".to_string(),
+            "CREATE TABLE test_values (id Int64, vInt64 Int64, PRIMARY KEY (id))".to_string(),
         )
-        .await;
+        .await?;
 
     let mut tx_auto = client
         .table_client()
@@ -513,7 +513,7 @@ async fn stream_query() -> Result<()> {
         .execute_schema_query("CREATE TABLE stream_query (val Int32, PRIMARY KEY (val))".into())
         .await?;
 
-    let generate_count = 50000;
+    let generate_count = 20000;
     client
         .retry_transaction(TransactionOptions::new(), RetryOptions::new(), |tr| async {
             let mut tr = tr;
