@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::vec::IntoIter;
 use ydb_protobuf::generated::ydb::table::{ExecuteDataQueryRequest, ExecuteQueryResult};
+use ydb_protobuf::generated::ydb::TypedValue;
 
 pub struct Query {
     text: String,
@@ -28,26 +29,23 @@ impl Query {
         return self;
     }
 
-    pub(crate) fn to_proto(self) -> Result<ExecuteDataQueryRequest> {
-        // query
-        let query = ydb_protobuf::generated::ydb::table::Query {
+    pub(crate) fn query_to_proto(&self) -> ydb_protobuf::generated::ydb::table::Query {
+        return ydb_protobuf::generated::ydb::table::Query {
             query: Some(ydb_protobuf::generated::ydb::table::query::Query::YqlText(
-                self.text,
+                self.text.clone(),
             )),
             ..ydb_protobuf::generated::ydb::table::Query::default()
         };
+    }
 
+    pub(crate) fn params_to_proto(self) -> Result<HashMap<String, TypedValue>> {
         let mut params = HashMap::with_capacity(self.parameters.len());
 
         for (name, val) in self.parameters.into_iter() {
             params.insert(name, val.to_typed_value()?);
         }
 
-        return Ok(ExecuteDataQueryRequest {
-            query: Some(query),
-            parameters: params,
-            ..ExecuteDataQueryRequest::default()
-        });
+        return Ok(params);
     }
 }
 

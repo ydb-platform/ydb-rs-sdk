@@ -1,7 +1,7 @@
 use crate::errors::{Error, Result};
 use crate::internal::client_table::{TableServiceChannelPool, TableServiceClientType};
 use crate::internal::grpc::{grpc_read_operation_result, grpc_read_void_operation_result};
-use crate::internal::query::QueryResult;
+use crate::internal::query::{Query, QueryResult};
 use crate::internal::trait_operation;
 use crate::internal::trait_operation::Operation;
 use derivative::Derivative;
@@ -9,7 +9,8 @@ use std::future::Future;
 use ydb_protobuf::generated::ydb::table::keep_alive_result::SessionStatus;
 use ydb_protobuf::generated::ydb::table::{
     CommitTransactionRequest, CommitTransactionResult, ExecuteDataQueryRequest, ExecuteQueryResult,
-    ExecuteSchemeQueryRequest, KeepAliveRequest, KeepAliveResult, RollbackTransactionRequest,
+    ExecuteScanQueryRequest, ExecuteSchemeQueryRequest, KeepAliveRequest, KeepAliveResult,
+    RollbackTransactionRequest,
 };
 
 #[derive(Derivative)]
@@ -100,6 +101,15 @@ impl Session {
         let operation_result: ExecuteQueryResult = self.handle_operation_result(response)?;
         return QueryResult::from_proto(operation_result, error_on_truncated);
     }
+
+    // pub(crate) async fn execute_scan_query(&mut self, query: Query) -> Result<()> {
+    //     let mut channel = self.channel_pool.create_channel().await?;
+    //     let proto_query = query.to_proto()?;
+    //     channel.stream_execute_scan_query(ExecuteScanQueryRequest {
+    //         query: Some(),
+    //         ..ExecuteScanQueryRequest::default()
+    //     })
+    // }
 
     pub(crate) async fn rollback_transaction(&mut self, tx_id: String) -> Result<()> {
         let mut channel = self.get_channel().await?;

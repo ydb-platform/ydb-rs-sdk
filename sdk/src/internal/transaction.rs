@@ -82,7 +82,9 @@ impl Transaction for AutoCommit {
                     tx_mode: Some(self.mode.into()),
                 })),
             }),
-            ..query.to_proto()?
+            query: Some(query.query_to_proto()),
+            parameters: query.params_to_proto()?,
+            ..ExecuteDataQueryRequest::default()
         };
 
         let mut session = self.session_pool.session().await?;
@@ -175,7 +177,9 @@ impl Transaction for SerializableReadWriteTx {
                 tx_selector: Some(tx_selector),
                 ..TransactionControl::default()
             }),
-            ..query.to_proto()?
+            query: Some(query.query_to_proto()),
+            parameters: query.params_to_proto()?,
+            ..ExecuteDataQueryRequest::default()
         };
         let query_result = session
             .execute_data_query(req, self.error_on_truncate_response)
