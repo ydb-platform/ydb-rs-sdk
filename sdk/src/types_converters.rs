@@ -1,6 +1,7 @@
 use crate::errors::YdbError;
 use crate::types::YdbValue;
 use std::any::type_name;
+use std::time::{Duration, SystemTime};
 
 macro_rules! try_from_simple {
     ($target_type:ty, $($variant:path),+) => {
@@ -19,21 +20,22 @@ macro_rules! try_from_simple {
             }
         }
 
+        try_from_optional!($target_type, $($variant),+);
+    };
+}
+
+macro_rules! try_from_optional {
+    ($target_type:ty, $($variant:path),+) => {
         impl TryFrom<YdbValue> for Option<$target_type> {
             type Error = YdbError;
 
             fn try_from(value: YdbValue) -> Result<Self, Self::Error> {
                 match value {
-                    $($variant(val) => Ok(Some(val.into())),)+
                     YdbValue::Optional(opt_val) => match opt_val.value {
                         Some(val) => Ok(Some(val.try_into()?)),
                         None => Ok(None),
                     },
-                    value => Err(YdbError::Convert(format!(
-                        "failed to convert from {} to {}",
-                        value.kind_static(),
-                        type_name::<Self>(),
-                    ))),
+                    value => Ok(Some(value.try_into()?)),
                 }
             }
         }
@@ -80,3 +82,41 @@ try_from_simple!(
 );
 try_from_simple!(f32, YdbValue::Float);
 try_from_simple!(f64, YdbValue::Float, YdbValue::Double);
+try_from_simple!(
+    Duration,
+    YdbValue::Date,
+    YdbValue::DateTime,
+    YdbValue::Timestamp
+);
+
+impl TryFrom<YdbValue> for SystemTime {
+    type Error = YdbError;
+
+    fn try_from(value: YdbValue) -> Result<Self, Self::Error> {
+        fn duration_to_system_time(val: Duration) -> Result<SystemTime, YdbError> {
+            match SystemTime::UNIX_EPOCH.checked_add(val) {
+                Some(res) => Ok(res),
+                None => Err(YdbError::Convert(format!(
+                    "error while convert ydb duration to system time"
+                ))),
+            }
+        }
+
+        match value {
+            YdbValue::Date(val) => duration_to_system_time(val),
+            YdbValue::DateTime(val) => duration_to_system_time(val),
+            YdbValue::Timestamp(val) => duration_to_system_time(val),
+            value => Err(YdbError::Convert(format!(
+                "failed to convert from {} to {}",
+                value.kind_static(),
+                type_name::<Self>(),
+            ))),
+        }
+    }
+}
+try_from_optional!(
+    SystemTime,
+    YdbValue::Date,
+    YdbValue::DateTime,
+    YdbValue::Timestamp
+);

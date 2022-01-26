@@ -30,8 +30,8 @@ pub enum YdbValue {
     Float(f32),
     Double(f64),
     Date(std::time::Duration), // seconds from UNIX_EPOCH to start of day in UTC.
-    DateTime(std::time::Duration),
-    Timestamp(std::time::Duration),
+    DateTime(std::time::Duration), // seconds from UNIX_EPOCH to start of day in UTC.
+    Timestamp(std::time::Duration), // seconds from UNIX_EPOCH to start of day in UTC.
     Interval(SignedInterval),
     String(Vec<u8>), // Bytes
     Utf8(String),
