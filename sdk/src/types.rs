@@ -1,6 +1,6 @@
 use crate::errors::{Error, Result};
 
-use std::convert::{TryInto};
+use std::convert::TryInto;
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::time::Duration;
@@ -13,6 +13,7 @@ const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 /// That enum will be grow, when add support of new types
 #[derive(Clone, Debug, EnumIter, PartialEq)]
 #[allow(dead_code)]
+#[non_exhaustive]
 pub enum YdbValue {
     Void,
     Bool(bool),
@@ -515,10 +516,10 @@ pub struct Column {
 
 #[cfg(test)]
 mod test {
+    use crate::errors::Result;
     use crate::types::{Sign, SignedInterval, YdbStruct, YdbValue};
     use std::collections::HashSet;
-    use crate::errors::{Result};
-    
+
     use std::time::Duration;
     use strum::IntoEnumIterator;
 

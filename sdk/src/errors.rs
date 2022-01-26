@@ -60,6 +60,7 @@ pub(crate) enum NeedRetry {
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum Error {
     Custom(String),
     InternalError(String),
@@ -70,6 +71,7 @@ pub enum Error {
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct YdbStatusError {
     #[allow(dead_code)]
     pub message: String,
@@ -78,6 +80,7 @@ pub struct YdbStatusError {
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct YdbIssue {
     pub code: u32,
     pub message: String,
