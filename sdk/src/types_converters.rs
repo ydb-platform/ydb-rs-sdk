@@ -72,10 +72,17 @@ try_from_simple!(
     YdbValue::Uint32,
     YdbValue::Uint64
 );
-try_from_simple!(String, YdbValue::Utf8);
+try_from_simple!(
+    String,
+    YdbValue::Utf8,
+    YdbValue::Json,
+    YdbValue::JsonDocument,
+    YdbValue::Yson
+);
 try_from_simple!(
     Vec<u8>,
     YdbValue::String,
+    YdbValue::Utf8,
     YdbValue::Json,
     YdbValue::JsonDocument,
     YdbValue::Yson

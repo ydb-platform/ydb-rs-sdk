@@ -35,9 +35,9 @@ pub enum YdbValue {
     Interval(SignedInterval),
     String(Vec<u8>), // Bytes
     Utf8(String),
-    Yson(Vec<u8>),
-    Json(Vec<u8>),
-    JsonDocument(Vec<u8>),
+    Yson(String),
+    Json(String),
+    JsonDocument(String),
 
     Optional(Box<YdbOptional>),
     List(Box<YdbList>),
@@ -215,9 +215,9 @@ impl YdbValue {
                     Some(P::Date) => Self::Date(Duration::default()),
                     Some(P::Datetime) => Self::DateTime(Duration::default()),
                     Some(P::Dynumber) => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
-                    Some(P::Json) => Self::Json(Vec::default()),
-                    Some(P::Yson) => Self::Yson(Vec::default()),
-                    Some(P::JsonDocument) => Self::JsonDocument(Vec::default()),
+                    Some(P::Json) => Self::Json(String::default()),
+                    Some(P::Yson) => Self::Yson(String::default()),
+                    Some(P::JsonDocument) => Self::JsonDocument(String::default()),
                     _ => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
                 },
                 T::VoidType(_) => YdbValue::Void,
@@ -345,11 +345,9 @@ impl YdbValue {
             }
             (YdbValue::String(_), pv::BytesValue(val)) => YdbValue::String(val),
             (YdbValue::Utf8(_), pv::TextValue(val)) => YdbValue::Utf8(val),
-            (YdbValue::Yson(_), pv::TextValue(val)) => YdbValue::Yson(Vec::from(val)),
-            (YdbValue::Json(_), pv::TextValue(val)) => YdbValue::Json(Vec::from(val)),
-            (YdbValue::JsonDocument(_), pv::TextValue(val)) => {
-                YdbValue::JsonDocument(Vec::from(val))
-            }
+            (YdbValue::Yson(_), pv::TextValue(val)) => YdbValue::Yson(val),
+            (YdbValue::Json(_), pv::TextValue(val)) => YdbValue::Json(val),
+            (YdbValue::JsonDocument(_), pv::TextValue(val)) => YdbValue::JsonDocument(val),
             (YdbValue::Optional(ydb_optional), val) => {
                 Self::from_proto_value_optional(ydb_optional, val)?
             }
@@ -431,11 +429,9 @@ impl YdbValue {
             Self::Interval(val) => proto_typed_value(pt::Interval, pv::Int64Value(val.as_nanos()?)),
             Self::String(val) => proto_typed_value(pt::String, pv::BytesValue(val)),
             Self::Utf8(val) => proto_typed_value(pt::Utf8, pv::TextValue(val)),
-            Self::Yson(val) => proto_typed_value(pt::Yson, pv::TextValue(String::from_utf8(val)?)),
-            Self::Json(val) => proto_typed_value(pt::Json, pv::TextValue(String::from_utf8(val)?)),
-            Self::JsonDocument(val) => {
-                proto_typed_value(pt::JsonDocument, pv::TextValue(String::from_utf8(val)?))
-            }
+            Self::Yson(val) => proto_typed_value(pt::Yson, pv::TextValue(val)),
+            Self::Json(val) => proto_typed_value(pt::Json, pv::TextValue(val)),
+            Self::JsonDocument(val) => proto_typed_value(pt::JsonDocument, pv::TextValue(val)),
             Self::Optional(val) => Self::to_typed_optional(val)?,
             Self::List(items) => Self::to_typed_value_list(items)?,
             YdbValue::Struct(s) => { Self::to_typed_struct(s) }?,
