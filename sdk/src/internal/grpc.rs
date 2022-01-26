@@ -131,7 +131,7 @@ pub(crate) fn proto_issues_to_ydb_issues(proto_issues: Vec<IssueMessage>) -> Vec
 pub(crate) fn create_operation_error(
     op: ydb_protobuf::generated::ydb::operations::Operation,
 ) -> Error {
-    return Error::YdbStatusError(crate::errors::YdbOperationError {
+    return Error::YdbStatusError(crate::errors::YdbStatusError {
         message: format!("{:?}", &op),
         operation_status: op.status,
         issues: proto_issues_to_ydb_issues(op.issues),

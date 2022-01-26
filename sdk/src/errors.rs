@@ -66,11 +66,11 @@ pub enum Error {
     TransportDial(Arc<tonic::transport::Error>),
     Transport(String),
     TransportGRPCStatus(Arc<tonic::Status>),
-    YdbStatusError(YdbOperationError),
+    YdbStatusError(YdbStatusError),
 }
 
 #[derive(Clone, Debug)]
-pub struct YdbOperationError {
+pub struct YdbStatusError {
     #[allow(dead_code)]
     pub message: String,
     pub operation_status: i32,

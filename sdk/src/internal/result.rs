@@ -1,5 +1,5 @@
 use crate::errors;
-use crate::errors::{Error, Result, YdbOperationError};
+use crate::errors::{Error, Result, YdbStatusError};
 use crate::internal::grpc::proto_issues_to_ydb_issues;
 use crate::types::YdbValue;
 use std::collections::HashMap;
@@ -170,7 +170,7 @@ impl StreamResult {
             return Ok(None);
         };
         if partial_response.status() != StatusCode::Success {
-            return Err(Error::YdbStatusError(YdbOperationError {
+            return Err(Error::YdbStatusError(YdbStatusError {
                 message: format!("{:?}", partial_response.issues),
                 operation_status: partial_response.status,
                 issues: proto_issues_to_ydb_issues(partial_response.issues),
