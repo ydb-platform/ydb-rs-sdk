@@ -3,14 +3,13 @@ use crate::internal::discovery::{Discovery, DiscoveryState, Service};
 use http::Uri;
 use mockall;
 
-
 use std::sync::{Arc, RwLock};
 use tokio::sync::watch::Receiver;
 
 #[mockall::automock]
 pub(crate) trait LoadBalancer: Send + Sync {
-    fn endpoint(&self, service: Service) -> Result<Uri>;
-    fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> Result<()>;
+    fn endpoint(&self, service: Service) -> YdbResult<Uri>;
+    fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()>;
 }
 
 #[derive(Clone)]
@@ -19,7 +18,7 @@ pub(crate) struct SharedLoadBalancer {
 }
 
 impl SharedLoadBalancer {
-    pub(crate) fn new(discovery: &Box<dyn Discovery>) ->Self {
+    pub(crate) fn new(discovery: &Box<dyn Discovery>) -> Self {
         return Self::new_with_balancer_and_updater(Box::new(RandomLoadBalancer::new()), discovery);
     }
 
@@ -29,22 +28,27 @@ impl SharedLoadBalancer {
         };
     }
 
-    pub(crate) fn new_with_balancer_and_updater(load_balancer: Box<dyn LoadBalancer>, discovery: &Box<dyn Discovery>) ->Self {
+    pub(crate) fn new_with_balancer_and_updater(
+        load_balancer: Box<dyn LoadBalancer>,
+        discovery: &Box<dyn Discovery>,
+    ) -> Self {
         let mut shared_lb = Self::new_with_balancer(load_balancer);
         let _ = shared_lb.set_discovery_state(&discovery.state());
         let shared_lb_updater = shared_lb.clone();
         let discovery_receiver = discovery.subscribe();
-        tokio::spawn(async move { update_load_balancer(shared_lb_updater, discovery_receiver).await });
+        tokio::spawn(
+            async move { update_load_balancer(shared_lb_updater, discovery_receiver).await },
+        );
         return shared_lb;
     }
 }
 
 impl LoadBalancer for SharedLoadBalancer {
-    fn endpoint(&self, service: Service) -> Result<Uri> {
+    fn endpoint(&self, service: Service) -> YdbResult<Uri> {
         return self.inner.read()?.endpoint(service);
     }
 
-    fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> Result<()> {
+    fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()> {
         self.inner.write()?.set_discovery_state(discovery_state)
     }
 }
@@ -61,12 +65,12 @@ impl StaticLoadBalancer {
 }
 
 impl LoadBalancer for StaticLoadBalancer {
-    fn endpoint(&self, _: Service) -> Result<Uri> {
+    fn endpoint(&self, _: Service) -> YdbResult<Uri> {
         return Ok(self.endpoint.clone());
     }
 
-    fn set_discovery_state(&mut self, _: &Arc<DiscoveryState>) -> Result<()> {
-        Err(Error::Custom(
+    fn set_discovery_state(&mut self, _: &Arc<DiscoveryState>) -> YdbResult<()> {
+        Err(YdbError::Custom(
             "static balancer no way to update state".into(),
         ))
     }
@@ -85,19 +89,19 @@ impl RandomLoadBalancer {
 }
 
 impl LoadBalancer for RandomLoadBalancer {
-    fn endpoint(&self, service: Service) -> Result<Uri> {
+    fn endpoint(&self, service: Service) -> YdbResult<Uri> {
         let nodes = self.discovery_state.services.get(&service);
         match nodes {
-            None => Err(Error::Custom(
+            None => Err(YdbError::Custom(
                 format!("no endpoints for service: '{}'", service).into(),
             )),
             Some(nodes) => {
                 if nodes.len() > 0 {
-                        let index = rand::random::<usize>() % nodes.len();
-                        let node = &nodes[index % nodes.len()];
-                        return Ok(node.uri.clone());
+                    let index = rand::random::<usize>() % nodes.len();
+                    let node = &nodes[index % nodes.len()];
+                    return Ok(node.uri.clone());
                 } else {
-                    Err(Error::Custom(
+                    Err(YdbError::Custom(
                         format!("empty endpoint list for service: {}", service).into(),
                     ))
                 }
@@ -105,7 +109,7 @@ impl LoadBalancer for RandomLoadBalancer {
         }
     }
 
-    fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> Result<()> {
+    fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()> {
         self.discovery_state = discovery_state.clone();
         Ok(())
     }
@@ -138,7 +142,7 @@ mod test {
     use std::time::Duration;
 
     #[test]
-    fn shared_load_balancer() -> Result<()> {
+    fn shared_load_balancer() -> YdbResult<()> {
         let endpoint_counter = Arc::new(AtomicUsize::new(0));
         let test_uri = Uri::from_str("http://test.com")?;
 
@@ -161,7 +165,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn update_load_balancer_test() -> Result<()> {
+    async fn update_load_balancer_test() -> YdbResult<()> {
         let original_discovery_state = Arc::new(DiscoveryState::default());
         let (sender, receiver) = tokio::sync::watch::channel(original_discovery_state.clone());
 
@@ -225,7 +229,7 @@ mod test {
     }
 
     #[test]
-    fn random_load_balancer() -> Result<()> {
+    fn random_load_balancer() -> YdbResult<()> {
         let one = Uri::from_str("http://one:213")?;
         let two = Uri::from_str("http://two:213")?;
         let load_balancer = RandomLoadBalancer {

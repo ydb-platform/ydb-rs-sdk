@@ -1,4 +1,4 @@
-use crate::errors::{Error, Result};
+use crate::errors::{YdbError, YdbResult};
 use crate::internal::query::Query;
 use crate::internal::session_pool::SessionPool;
 use async_trait::async_trait;
@@ -10,7 +10,7 @@ use ydb_protobuf::generated::ydb::table::{
     TransactionSettings,
 };
 
-use crate::errors::Error::Custom;
+use crate::errors::YdbError::Custom;
 use crate::internal::client_table::{TableServiceChannelPool, TableServiceClientType};
 use crate::internal::grpc::{grpc_read_operation_result, grpc_read_void_operation_result};
 use crate::internal::result::QueryResult;
@@ -35,9 +35,9 @@ impl From<Mode> for TxMode {
 
 #[async_trait]
 pub trait Transaction {
-    async fn query(&mut self, query: Query) -> Result<QueryResult>;
-    async fn commit(&mut self) -> Result<()>;
-    async fn rollback(&mut self) -> Result<()>;
+    async fn query(&mut self, query: Query) -> YdbResult<QueryResult>;
+    async fn commit(&mut self) -> YdbResult<()>;
+    async fn rollback(&mut self) -> YdbResult<()>;
 }
 
 // TODO: operations timeout
@@ -75,7 +75,7 @@ impl Drop for AutoCommit {
 
 #[async_trait]
 impl Transaction for AutoCommit {
-    async fn query(&mut self, query: Query) -> Result<QueryResult> {
+    async fn query(&mut self, query: Query) -> YdbResult<QueryResult> {
         let req = ExecuteDataQueryRequest {
             tx_control: Some(TransactionControl {
                 commit_tx: true,
@@ -94,12 +94,14 @@ impl Transaction for AutoCommit {
             .await;
     }
 
-    async fn commit(&mut self) -> Result<()> {
+    async fn commit(&mut self) -> YdbResult<()> {
         return Ok(());
     }
 
-    async fn rollback(&mut self) -> Result<()> {
-        return Err(Error::from("impossible to rollback autocommit transaction"));
+    async fn rollback(&mut self) -> YdbResult<()> {
+        return Err(YdbError::from(
+            "impossible to rollback autocommit transaction",
+        ));
     }
 }
 
@@ -151,7 +153,7 @@ impl Drop for SerializableReadWriteTx {
 
 #[async_trait]
 impl Transaction for SerializableReadWriteTx {
-    async fn query(&mut self, query: Query) -> Result<QueryResult> {
+    async fn query(&mut self, query: Query) -> YdbResult<QueryResult> {
         let session = if let Some(session) = self.session.as_mut() {
             session
         } else {
@@ -192,14 +194,14 @@ impl Transaction for SerializableReadWriteTx {
         return Ok(query_result);
     }
 
-    async fn commit(&mut self) -> Result<()> {
+    async fn commit(&mut self) -> YdbResult<()> {
         if self.comitted {
             // commit many times - ok
             return Ok(());
         }
 
         if self.finished {
-            return Err(Error::Custom(
+            return Err(YdbError::Custom(
                 format!("commit finished non comitted transaction: {:?}", &self.id).into(),
             ));
         }
@@ -218,20 +220,20 @@ impl Transaction for SerializableReadWriteTx {
             self.comitted = true;
             return Ok(());
         } else {
-            return Err(Error::InternalError(
+            return Err(YdbError::InternalError(
                 "commit transaction without session (internal error)".into(),
             ));
         }
     }
 
-    async fn rollback(&mut self) -> Result<()> {
+    async fn rollback(&mut self) -> YdbResult<()> {
         // double rollback is ok
         if self.rollbacked {
             return Ok(());
         }
 
         if self.finished {
-            return Err(Error::Custom(
+            return Err(YdbError::Custom(
                 format!(
                     "rollback finished non rollbacked transaction: {:?}",
                     &self.id

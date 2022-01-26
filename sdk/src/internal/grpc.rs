@@ -3,7 +3,7 @@ use std::time::Duration;
 use ydb_protobuf::generated::ydb::status_ids::StatusCode;
 
 use crate::errors;
-use crate::errors::{Error, Result, YdbIssue};
+use crate::errors::{YdbError, YdbIssue, YdbResult};
 use crate::internal::client_common::DBCredentials;
 use crate::internal::middlewares::AuthService;
 use crate::internal::trait_operation::Operation;
@@ -19,7 +19,7 @@ pub(crate) async fn create_grpc_client<T, CB>(
     uri: Uri,
     cred: DBCredentials,
     new_func: CB,
-) -> Result<T>
+) -> YdbResult<T>
 where
     CB: FnOnce(AuthService) -> T,
 {
@@ -31,7 +31,7 @@ pub(crate) async fn create_grpc_client_with_error_sender<T, CB>(
     cred: DBCredentials,
     error_sender: ChannelProxyErrorSender,
     new_func: CB,
-) -> Result<T>
+) -> YdbResult<T>
 where
     CB: FnOnce(AuthService) -> T,
 {
@@ -43,7 +43,7 @@ fn create_client_on_channel<NewFuncT, ClientT>(
     channel: ChannelProxy,
     cred: DBCredentials,
     new_func: NewFuncT,
-) -> Result<ClientT>
+) -> YdbResult<ClientT>
 where
     NewFuncT: FnOnce(AuthService) -> ClientT,
 {
@@ -59,7 +59,7 @@ where
 async fn create_grpc_channel(
     uri: Uri,
     error_sender: Option<mpsc::Sender<ChannelErrorInfo>>,
-) -> Result<ChannelProxy> {
+) -> YdbResult<ChannelProxy> {
     let tls = if let Some(scheme) = uri.scheme_str() {
         scheme == "https" || scheme == "grpcs"
     } else {
@@ -79,12 +79,12 @@ async fn create_grpc_channel(
                 // ignore notify error
                 let _ = sender.send(ChannelErrorInfo { endpoint: uri }).await;
             };
-            Err(Error::TransportDial(Arc::new(err)))
+            Err(YdbError::TransportDial(Arc::new(err)))
         }
     };
 }
 
-pub(crate) fn grpc_read_operation_result<TOp, T>(resp: tonic::Response<TOp>) -> errors::Result<T>
+pub(crate) fn grpc_read_operation_result<TOp, T>(resp: tonic::Response<TOp>) -> errors::YdbResult<T>
 where
     TOp: Operation,
     T: Default + prost::Message,
@@ -92,25 +92,27 @@ where
     let resp_inner = resp.into_inner();
     let op = resp_inner
         .operation()
-        .ok_or(Error::Custom("no operation object in result".into()))?;
+        .ok_or(YdbError::Custom("no operation object in result".into()))?;
     if op.status() != StatusCode::Success {
         return Err(create_operation_error(op));
     }
     let opres = op
         .result
-        .ok_or(Error::Custom("no result data in operation".into()))?;
+        .ok_or(YdbError::Custom("no result data in operation".into()))?;
     let res: T = T::decode(opres.value.as_slice())?;
     return Ok(res);
 }
 
-pub(crate) fn grpc_read_void_operation_result<TOp>(resp: tonic::Response<TOp>) -> errors::Result<()>
+pub(crate) fn grpc_read_void_operation_result<TOp>(
+    resp: tonic::Response<TOp>,
+) -> errors::YdbResult<()>
 where
     TOp: Operation,
 {
     let resp_inner = resp.into_inner();
     let op = resp_inner
         .operation()
-        .ok_or(Error::Custom("no operation object in result".into()))?;
+        .ok_or(YdbError::Custom("no operation object in result".into()))?;
     if op.status() != StatusCode::Success {
         return Err(create_operation_error(op));
     }
@@ -130,8 +132,8 @@ pub(crate) fn proto_issues_to_ydb_issues(proto_issues: Vec<IssueMessage>) -> Vec
 
 pub(crate) fn create_operation_error(
     op: ydb_protobuf::generated::ydb::operations::Operation,
-) -> Error {
-    return Error::YdbStatusError(crate::errors::YdbStatusError {
+) -> YdbError {
+    return YdbError::YdbStatusError(crate::errors::YdbStatusError {
         message: format!("{:?}", &op),
         operation_status: op.status,
         issues: proto_issues_to_ydb_issues(op.issues),

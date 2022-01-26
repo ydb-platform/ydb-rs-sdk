@@ -1,4 +1,4 @@
-use crate::errors::Error::Custom;
+use crate::errors::YdbError::Custom;
 use crate::errors::*;
 use crate::internal::client_table::TableServiceChannelPool;
 use crate::internal::grpc::grpc_read_operation_result;
@@ -16,12 +16,12 @@ const DEFAULT_SIZE: usize = 1000;
 
 #[async_trait]
 pub(crate) trait SessionClient: Send + Sync {
-    async fn create_session(&self) -> Result<Session>;
+    async fn create_session(&self) -> YdbResult<Session>;
 }
 
 #[async_trait]
 impl SessionClient for TableServiceChannelPool {
-    async fn create_session(&self) -> Result<Session> {
+    async fn create_session(&self) -> YdbResult<Session> {
         let mut channel = self.create_channel().await?;
         let session_res: CreateSessionResult = grpc_read_operation_result(
             channel
@@ -68,7 +68,7 @@ impl SessionPool {
         return self;
     }
 
-    pub(crate) async fn session(&self) -> Result<Session> {
+    pub(crate) async fn session(&self) -> YdbResult<Session> {
         let active_session_permit = self.active_sessions.clone().acquire_owned().await?;
         let idle_sessions = self.idle_sessions.clone();
 
@@ -150,7 +150,7 @@ async fn sessions_pinger(
 #[cfg(test)]
 mod test {
     use super::SessionClient;
-    use crate::errors::{Error, Result};
+    use crate::errors::{YdbError, YdbResult};
     use crate::internal::channel_pool::ChannelPool;
     use crate::internal::client_table::{TableServiceChannelPool, TableServiceClientType};
     use crate::internal::session::Session;
@@ -164,7 +164,7 @@ mod test {
 
     #[async_trait]
     impl SessionClient for SessionClientMock {
-        async fn create_session(&self) -> Result<Session> {
+        async fn create_session(&self) -> YdbResult<Session> {
             return Ok(Session::new(
                 "asd".into(),
                 Arc::new(Box::new(TableChannelPoolMock {})),
@@ -176,13 +176,13 @@ mod test {
 
     #[async_trait]
     impl ChannelPool<TableServiceClientType> for TableChannelPoolMock {
-        async fn create_channel(&self) -> Result<TableServiceClientType> {
-            return Err(Error::Custom("test".into()));
+        async fn create_channel(&self) -> YdbResult<TableServiceClientType> {
+            return Err(YdbError::Custom("test".into()));
         }
     }
 
     #[tokio::test]
-    async fn max_active_session() -> Result<()> {
+    async fn max_active_session() -> YdbResult<()> {
         let mut pool = SessionPool::new(Box::new(SessionClientMock {})).with_max_active_sessions(1);
         let first_session = pool.session().await?;
 

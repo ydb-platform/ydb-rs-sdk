@@ -1,4 +1,4 @@
-use crate::errors::{Error, Result};
+use crate::errors::{YdbError, YdbResult};
 use crate::internal::client_table::{TableServiceChannelPool, TableServiceClientType};
 use crate::internal::grpc::{grpc_read_operation_result, grpc_read_void_operation_result};
 use crate::internal::query::Query;
@@ -38,8 +38,8 @@ impl Session {
         };
     }
 
-    pub(crate) fn handle_error(&mut self, err: &Error) {
-        if let Error::YdbStatusError(err) = err {
+    pub(crate) fn handle_error(&mut self, err: &YdbError) {
+        if let YdbError::YdbStatusError(err) = err {
             use ydb_protobuf::generated::ydb::status_ids::StatusCode;
             if let Some(status) = StatusCode::from_i32(err.operation_status) {
                 if status == StatusCode::BadSession || status == StatusCode::SessionExpired {
@@ -49,19 +49,19 @@ impl Session {
         }
     }
 
-    fn handle_operation_result<TOp, T>(&mut self, response: tonic::Response<TOp>) -> Result<T>
+    fn handle_operation_result<TOp, T>(&mut self, response: tonic::Response<TOp>) -> YdbResult<T>
     where
         TOp: Operation,
         T: Default + prost::Message,
     {
-        let res: Result<T> = grpc_read_operation_result(response);
+        let res: YdbResult<T> = grpc_read_operation_result(response);
         if let Err(err) = &res {
             self.handle_error(err);
         }
         return res;
     }
 
-    pub(crate) async fn commit_transaction(&mut self, tx_id: String) -> Result<()> {
+    pub(crate) async fn commit_transaction(&mut self, tx_id: String) -> YdbResult<()> {
         let mut channel = self.get_channel().await?;
 
         // todo: retry commit always idempotent
@@ -76,7 +76,7 @@ impl Session {
         return Ok(());
     }
 
-    pub async fn execute_schema_query(&mut self, query: String) -> Result<()> {
+    pub async fn execute_schema_query(&mut self, query: String) -> YdbResult<()> {
         let resp = self
             .channel_pool
             .create_channel()
@@ -95,7 +95,7 @@ impl Session {
         &mut self,
         mut req: ExecuteDataQueryRequest,
         error_on_truncated: bool,
-    ) -> Result<QueryResult> {
+    ) -> YdbResult<QueryResult> {
         req.session_id.clone_from(&self.id);
         let mut channel = self.get_channel().await?;
         let response = channel.execute_data_query(req).await?;
@@ -103,7 +103,7 @@ impl Session {
         return QueryResult::from_proto(operation_result, error_on_truncated);
     }
 
-    pub(crate) async fn execute_scan_query(&mut self, query: Query) -> Result<StreamResult> {
+    pub(crate) async fn execute_scan_query(&mut self, query: Query) -> YdbResult<StreamResult> {
         let mut channel = self.channel_pool.create_channel().await?;
         let resp = channel
             .stream_execute_scan_query(ExecuteScanQueryRequest {
@@ -117,7 +117,7 @@ impl Session {
         return Ok(StreamResult { results: stream });
     }
 
-    pub(crate) async fn rollback_transaction(&mut self, tx_id: String) -> Result<()> {
+    pub(crate) async fn rollback_transaction(&mut self, tx_id: String) -> YdbResult<()> {
         let mut channel = self.get_channel().await?;
 
         // todo: retry commit always idempotent
@@ -138,9 +138,9 @@ impl Session {
         };
     }
 
-    pub(crate) async fn keepalive(&mut self) -> Result<()> {
+    pub(crate) async fn keepalive(&mut self) -> YdbResult<()> {
         let mut channel = self.get_channel().await?;
-        let res: Result<KeepAliveResult> = grpc_read_operation_result(
+        let res: YdbResult<KeepAliveResult> = grpc_read_operation_result(
             channel
                 .keep_alive(KeepAliveRequest {
                     session_id: self.id.clone(),
@@ -160,13 +160,13 @@ impl Session {
         if SessionStatus::from_i32(keepalive_res.session_status) == Some(SessionStatus::Ready) {
             return Ok(());
         }
-        return Err(Error::Custom(format!(
+        return Err(YdbError::Custom(format!(
             "bad status while session ping: {:?}",
             keepalive_res
         )));
     }
 
-    async fn get_channel(&self) -> Result<TableServiceClientType> {
+    async fn get_channel(&self) -> YdbResult<TableServiceClientType> {
         return self.channel_pool.create_channel().await;
     }
 

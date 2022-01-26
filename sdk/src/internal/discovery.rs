@@ -12,13 +12,13 @@ use ydb_protobuf::generated::ydb::discovery::{
     EndpointInfo, ListEndpointsRequest, ListEndpointsResult,
 };
 
-use crate::errors::{Result};
+use crate::errors::YdbResult;
+use crate::internal::client_common::DBCredentials;
 use crate::internal::grpc::{create_grpc_client, grpc_read_operation_result};
 use std::iter::FromIterator;
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tokio::sync::watch::Receiver;
-use crate::internal::client_common::DBCredentials;
+use tokio::sync::Mutex;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Display, Debug, EnumIter, EnumString, Eq, Hash, PartialEq)]
@@ -49,28 +49,30 @@ pub(crate) struct DiscoveryState {
 }
 
 impl DiscoveryState {
-
-    pub(crate) fn new(timestamp: std::time::Instant, services: HashMap<Service, Vec<NodeInfo>>)->Self{
-        return DiscoveryState{
+    pub(crate) fn new(
+        timestamp: std::time::Instant,
+        services: HashMap<Service, Vec<NodeInfo>>,
+    ) -> Self {
+        return DiscoveryState {
             timestamp,
             services: services.clone(),
-            pessimized_nodes:HashSet::new(),
+            pessimized_nodes: HashSet::new(),
             original_services: services,
-        }
+        };
     }
 
     // pessimize return true if state was changed
-    pub(crate) fn pessimize(&mut self, uri: &Uri)->bool {
-        if self.pessimized_nodes.contains(uri){
-            return false
+    pub(crate) fn pessimize(&mut self, uri: &Uri) -> bool {
+        if self.pessimized_nodes.contains(uri) {
+            return false;
         };
 
         self.pessimized_nodes.insert(uri.clone());
         self.build_services();
-        return true
+        return true;
     }
 
-    fn build_services(&mut self){
+    fn build_services(&mut self) {
         self.services.clear();
 
         for (service, origin_nodes) in self.original_services.iter() {
@@ -123,7 +125,7 @@ impl NodeInfo {
 pub(crate) trait Discovery: Send + Sync {
     fn pessimization(&self, uri: &Uri);
     fn subscribe(&self) -> tokio::sync::watch::Receiver<Arc<DiscoveryState>>;
-    fn state(&self)->Arc<DiscoveryState>;
+    fn state(&self) -> Arc<DiscoveryState>;
 }
 
 pub(crate) struct StaticDiscovery {
@@ -132,7 +134,7 @@ pub(crate) struct StaticDiscovery {
 }
 
 impl StaticDiscovery {
-    pub(crate) fn from_str(endpoint: &str) -> Result<Self> {
+    pub(crate) fn from_str(endpoint: &str) -> YdbResult<Self> {
         let endpoint = Uri::from_str(endpoint)?;
         let services = HashMap::from_iter(Service::iter().map(|service| {
             (
@@ -146,7 +148,10 @@ impl StaticDiscovery {
         let state = DiscoveryState::new(std::time::Instant::now(), services);
         let state = Arc::new(state);
         let (sender, _) = tokio::sync::watch::channel(state.clone());
-        return Ok(StaticDiscovery { sender, discovery_state: state });
+        return Ok(StaticDiscovery {
+            sender,
+            discovery_state: state,
+        });
     }
 }
 
@@ -177,19 +182,17 @@ impl TimerDiscovery {
         database: String,
         endpoint: &str,
         interval: Duration,
-    ) -> Result<Self> {
+    ) -> YdbResult<Self> {
         let state = Arc::new(DiscoverySharedState::new(cred, database, endpoint)?);
         let state_weak = Arc::downgrade(&state);
         tokio::spawn(async move {
             DiscoverySharedState::background_discovery(state_weak, interval).await;
         });
-        return Ok(TimerDiscovery {
-            state,
-        });
+        return Ok(TimerDiscovery { state });
     }
 
     #[allow(dead_code)]
-    async fn discovery_now(&self) -> Result<()> {
+    async fn discovery_now(&self) -> YdbResult<()> {
         return self.state.discovery_now().await;
     }
 }
@@ -201,17 +204,19 @@ impl Discovery for TimerDiscovery {
         // check if need force discovery
         let state = self.state();
         for (_service, origin_nodes) in state.original_services.iter() {
-            let pessimized_nodes = origin_nodes.iter().filter(|node| state.pessimized_nodes.contains(&node.uri)).count();
+            let pessimized_nodes = origin_nodes
+                .iter()
+                .filter(|node| state.pessimized_nodes.contains(&node.uri))
+                .count();
             if pessimized_nodes > 0 && pessimized_nodes >= origin_nodes.len() / 2 {
                 let shared_state_for_discovery = Arc::downgrade(&self.state);
                 tokio::spawn(async move {
-                    if let Some(state) = shared_state_for_discovery.upgrade(){
+                    if let Some(state) = shared_state_for_discovery.upgrade() {
                         let _ = state.discovery_now();
                     }
                 });
             }
         }
-
     }
 
     fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
@@ -234,8 +239,11 @@ struct DiscoverySharedState {
 }
 
 impl DiscoverySharedState {
-    fn new(cred: DBCredentials, database: String, endpoint: &str) -> Result<Self> {
-        let state = Arc::new(DiscoveryState::new(std::time::Instant::now(),HashMap::new()));
+    fn new(cred: DBCredentials, database: String, endpoint: &str) -> YdbResult<Self> {
+        let state = Arc::new(DiscoveryState::new(
+            std::time::Instant::now(),
+            HashMap::new(),
+        ));
         let (sender, _) = tokio::sync::watch::channel(state.clone());
 
         return Ok(Self {
@@ -248,7 +256,7 @@ impl DiscoverySharedState {
         });
     }
 
-    async fn discovery_now(&self) -> Result<()> {
+    async fn discovery_now(&self) -> YdbResult<()> {
         let discovery_lock = self.discovery_process.lock().await;
 
         let start = std::time::Instant::now();
@@ -256,7 +264,8 @@ impl DiscoverySharedState {
             self.discovery_uri.clone(),
             self.cred.clone(),
             DiscoveryServiceClient::new,
-        ).await?;
+        )
+        .await?;
 
         let resp = discovery_client
             .list_endpoints(ListEndpointsRequest {
@@ -268,14 +277,21 @@ impl DiscoverySharedState {
         let res: ListEndpointsResult = grpc_read_operation_result(resp)?;
         println!("list endpoints: {:?}", res);
         let new_endpoints = Self::list_endpoints_to_services_map(res)?;
-        self.set_discovery_state(self.discovery_state.write().unwrap(), Arc::new(DiscoveryState::new(start, new_endpoints)));
+        self.set_discovery_state(
+            self.discovery_state.write().unwrap(),
+            Arc::new(DiscoveryState::new(start, new_endpoints)),
+        );
 
         // lock until exit
         drop(discovery_lock);
         return Ok(());
     }
 
-    fn set_discovery_state(&self, mut locked_state: RwLockWriteGuard<Arc<DiscoveryState>>, new_state: Arc<DiscoveryState>){
+    fn set_discovery_state(
+        &self,
+        mut locked_state: RwLockWriteGuard<Arc<DiscoveryState>>,
+        new_state: Arc<DiscoveryState>,
+    ) {
         *locked_state = new_state.clone();
         let _ = self.sender.send(new_state);
     }
@@ -293,7 +309,7 @@ impl DiscoverySharedState {
 
     fn list_endpoints_to_services_map(
         mut list: ListEndpointsResult,
-    ) -> Result<HashMap<Service, Vec<NodeInfo>>> {
+    ) -> YdbResult<HashMap<Service, Vec<NodeInfo>>> {
         let mut map = HashMap::new();
 
         while let Some(mut endpoint_info) = list.endpoints.pop() {
@@ -319,7 +335,7 @@ impl DiscoverySharedState {
         return Ok(map);
     }
 
-    fn endpoint_info_to_uri(endpoint_info: &EndpointInfo) -> Result<Uri> {
+    fn endpoint_info_to_uri(endpoint_info: &EndpointInfo) -> YdbResult<Uri> {
         let authority: Authority = Authority::from_str(
             format!("{}:{}", endpoint_info.address, endpoint_info.port).as_str(),
         )?;
@@ -339,9 +355,9 @@ impl Discovery for DiscoverySharedState {
         let lock = self.discovery_state.write().unwrap();
         let mut discovery_state = lock.as_ref().clone();
         if !discovery_state.pessimize(uri) {
-            return
+            return;
         }
-        let discovery_state= Arc::new(discovery_state);
+        let discovery_state = Arc::new(discovery_state);
         self.set_discovery_state(lock, discovery_state);
     }
 
@@ -356,16 +372,19 @@ impl Discovery for DiscoverySharedState {
 
 #[cfg(test)]
 mod test {
-    use crate::errors::Result;
+    use crate::errors::YdbResult;
+    use crate::internal::client_common::DBCredentials;
     use crate::internal::discovery::DiscoverySharedState;
+    use crate::internal::test_helpers::CONNECTION_INFO;
     use std::sync::Arc;
     use std::time::Duration;
-    use crate::internal::client_common::DBCredentials;
-    use crate::internal::test_helpers::CONNECTION_INFO;
 
     #[tokio::test]
-    async fn test_background_discovery() -> Result<()> {
-        let cred = DBCredentials{database: CONNECTION_INFO.database.clone(), credentials: CONNECTION_INFO.credentials.clone()};
+    async fn test_background_discovery() -> YdbResult<()> {
+        let cred = DBCredentials {
+            database: CONNECTION_INFO.database.clone(),
+            credentials: CONNECTION_INFO.credentials.clone(),
+        };
         let discovery_shared = DiscoverySharedState::new(
             cred,
             CONNECTION_INFO.database.clone(),

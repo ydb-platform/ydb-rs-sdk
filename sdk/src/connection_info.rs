@@ -5,9 +5,9 @@ use std::sync::Mutex;
 use once_cell::sync::Lazy;
 
 use crate::credentials::{Credentials, StaticToken};
-use crate::errors::{Error, Result};
+use crate::errors::{YdbError, YdbResult};
 
-type ParamHandler = fn(&str, ConnectionInfo) -> Result<ConnectionInfo>;
+type ParamHandler = fn(&str, ConnectionInfo) -> YdbResult<ConnectionInfo>;
 
 static PARAM_HANDLERS: Lazy<Mutex<HashMap<String, ParamHandler>>> = Lazy::new(|| {
     Mutex::new({
@@ -37,7 +37,7 @@ impl Default for ConnectionInfo {
 }
 
 impl ConnectionInfo {
-    pub fn parse(uri: &str) -> Result<ConnectionInfo> {
+    pub fn parse(uri: &str) -> YdbResult<ConnectionInfo> {
         let mut connection_info = ConnectionInfo::default();
 
         connection_info = Self::parse_endpoint(uri, connection_info)?;
@@ -52,7 +52,7 @@ impl ConnectionInfo {
         return Ok(connection_info);
     }
 
-    fn parse_endpoint(s: &str, mut connection_info: ConnectionInfo) -> Result<ConnectionInfo> {
+    fn parse_endpoint(s: &str, mut connection_info: ConnectionInfo) -> YdbResult<ConnectionInfo> {
         let url = url::Url::parse(s)?;
         connection_info.discovery_endpoint = format!(
             "{}://{}:{}",
@@ -67,10 +67,10 @@ impl ConnectionInfo {
 
 // TODO: ParamHandler to Fn trait
 #[allow(dead_code)]
-pub fn register(param_name: &str, handler: ParamHandler) -> Result<()> {
+pub fn register(param_name: &str, handler: ParamHandler) -> YdbResult<()> {
     let mut lock = PARAM_HANDLERS.lock()?;
     if lock.contains_key(param_name) {
-        return Err(Error::Custom(
+        return Err(YdbError::Custom(
             format!("param handler already exist for '{}'", param_name).into(),
         ));
     };
@@ -79,7 +79,7 @@ pub fn register(param_name: &str, handler: ParamHandler) -> Result<()> {
     return Ok(());
 }
 
-fn database(uri: &str, mut connection_info: ConnectionInfo) -> Result<ConnectionInfo> {
+fn database(uri: &str, mut connection_info: ConnectionInfo) -> YdbResult<ConnectionInfo> {
     for (key, value) in url::Url::parse(uri)?.query_pairs() {
         if key != "database" {
             continue;
@@ -90,7 +90,7 @@ fn database(uri: &str, mut connection_info: ConnectionInfo) -> Result<Connection
     return Ok(connection_info);
 }
 
-fn token_cmd(uri: &str, mut connection_info: ConnectionInfo) -> Result<ConnectionInfo> {
+fn token_cmd(uri: &str, mut connection_info: ConnectionInfo) -> YdbResult<ConnectionInfo> {
     for (key, value) in url::Url::parse(uri)?.query_pairs() {
         if key != "token_cmd" {
             continue;

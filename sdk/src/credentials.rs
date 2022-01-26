@@ -1,11 +1,11 @@
-use crate::errors::{Error, Result};
+use crate::errors::{YdbError, YdbResult};
 use dyn_clone::DynClone;
 use std::fmt::Debug;
 use std::process::Command;
 use std::sync::{Arc, Mutex, RwLock};
 
 pub trait Credentials: Debug + DynClone + Send + Sync {
-    fn create_token(self: &mut Self) -> Result<String>;
+    fn create_token(self: &mut Self) -> YdbResult<String>;
 }
 dyn_clone::clone_trait_object!(Credentials);
 
@@ -24,7 +24,7 @@ impl StaticToken {
 }
 
 impl Credentials for StaticToken {
-    fn create_token(self: &mut Self) -> Result<String> {
+    fn create_token(self: &mut Self) -> YdbResult<String> {
         return Ok(self.token.clone());
     }
 }
@@ -37,11 +37,13 @@ pub struct CommandLineYcToken {
 
 impl CommandLineYcToken {
     #[allow(dead_code)]
-    pub fn from_string_cmd(cmd: &str) -> Result<Self> {
+    pub fn from_string_cmd(cmd: &str) -> YdbResult<Self> {
         let cmd_parts: Vec<&str> = cmd.split_whitespace().collect();
 
         if cmd_parts.len() < 1 {
-            return Err(Error::Custom(format!("can't split get token command: '{}'", cmd).into()))
+            return Err(YdbError::Custom(
+                format!("can't split get token command: '{}'", cmd).into(),
+            ));
         }
 
         let mut command = Command::new(cmd_parts[0]);
@@ -55,7 +57,7 @@ impl CommandLineYcToken {
 }
 
 impl Credentials for CommandLineYcToken {
-    fn create_token(self: &mut Self) -> Result<String> {
+    fn create_token(self: &mut Self) -> YdbResult<String> {
         {
             let token = self.token.read()?;
             if token.as_str() != "" {
@@ -70,7 +72,7 @@ impl Credentials for CommandLineYcToken {
             let result = self.command.lock()?.output()?;
             if !result.status.success() {
                 let err = String::from_utf8(result.stderr)?;
-                return Err(Error::Custom(format!(
+                return Err(YdbError::Custom(format!(
                     "can't execute yc ({}): {}",
                     result.status.code().unwrap(),
                     err

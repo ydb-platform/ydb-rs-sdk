@@ -1,4 +1,4 @@
-use crate::errors::{Error, Result};
+use crate::errors::{YdbError, YdbResult};
 
 use std::convert::TryInto;
 use std::fmt::Debug;
@@ -54,9 +54,12 @@ impl YdbStruct {
         self.values.push(v);
     }
 
-    pub fn from_names_and_values(fields_name: Vec<String>, values: Vec<YdbValue>) -> Result<Self> {
+    pub fn from_names_and_values(
+        fields_name: Vec<String>,
+        values: Vec<YdbValue>,
+    ) -> YdbResult<Self> {
         if fields_name.len() != values.len() {
-            return Err(Error::Custom(format!("different len fields_name and values. fields_name len: {}, values len: {}. fields_name: {:?}, values: {:?}", fields_name.len(), values.len(), fields_name, values).into()));
+            return Err(YdbError::Custom(format!("different len fields_name and values. fields_name len: {}, values len: {}. fields_name: {:?}, values: {:?}", fields_name.len(), values.len(), fields_name, values).into()));
         };
 
         return Ok(YdbStruct {
@@ -132,7 +135,7 @@ pub struct SignedInterval {
 }
 
 impl SignedInterval {
-    pub(crate) fn as_nanos(self) -> Result<i64> {
+    pub(crate) fn as_nanos(self) -> YdbResult<i64> {
         let nanos: i64 = self.duration.as_nanos().try_into()?;
         let res = match self.sign {
             Sign::Plus => nanos,
@@ -156,27 +159,27 @@ impl SignedInterval {
 }
 
 impl YdbValue {
-    pub fn list_from(t: YdbValue, values: Vec<YdbValue>) -> Result<Self> {
+    pub fn list_from(t: YdbValue, values: Vec<YdbValue>) -> YdbResult<Self> {
         for (index, value) in values.iter().enumerate() {
             if std::mem::discriminant(&t) != std::mem::discriminant(value) {
-                return Err(Error::Custom(format!("failed list_from: type and value has different enum-types. index: {}, type: '{:?}', value: '{:?}'", index, t, value)));
+                return Err(YdbError::Custom(format!("failed list_from: type and value has different enum-types. index: {}, type: '{:?}', value: '{:?}'", index, t, value)));
             }
         }
 
         return Ok(YdbValue::List(Box::new(YdbList { t, values })));
     }
 
-    pub fn optional_from(t: YdbValue, value: Option<YdbValue>) -> Result<Self> {
+    pub fn optional_from(t: YdbValue, value: Option<YdbValue>) -> YdbResult<Self> {
         if let Some(value) = &value {
             if std::mem::discriminant(&t) != std::mem::discriminant(value) {
-                return Err(Error::Custom(format!("failed optional_from: type and value has different enum-types. type: '{:?}', value: '{:?}'", t, value)));
+                return Err(YdbError::Custom(format!("failed optional_from: type and value has different enum-types. type: '{:?}', value: '{:?}'", t, value)));
             }
         }
         Ok(YdbValue::Optional(Box::new(YdbOptional { t, value })))
     }
 
     // return empty value of requested type
-    pub(crate) fn from_proto_type(proto_type: &Option<ydb::Type>) -> Result<Self> {
+    pub(crate) fn from_proto_type(proto_type: &Option<ydb::Type>) -> YdbResult<Self> {
         use ydb::r#type::PrimitiveTypeId as P;
         use ydb::r#type::Type as T;
         let res = if let Some(ydb::Type {
@@ -213,7 +216,7 @@ impl YdbValue {
                     let t = if let Some(item) = &val.item {
                         Some(*item.clone())
                     } else {
-                        return Err(Error::Custom("none item in optional type".into()));
+                        return Err(YdbError::Custom("none item in optional type".into()));
                     };
                     return Self::optional_from(Self::from_proto_type(&t)?, None);
                 }
@@ -240,12 +243,12 @@ impl YdbValue {
                 // think about map to internal types as 1:1
             }
         } else {
-            return Err(Error::Custom("column type is None".into()));
+            return Err(YdbError::Custom("column type is None".into()));
         };
         return Ok(res);
     }
 
-    pub(crate) fn from_proto(t: &YdbValue, proto_value: ydb::Value) -> Result<Self> {
+    pub(crate) fn from_proto(t: &YdbValue, proto_value: ydb::Value) -> YdbResult<Self> {
         let res = match (t, proto_value) {
             (YdbValue::Void, _) => YdbValue::Void,
             (
@@ -259,7 +262,7 @@ impl YdbValue {
                 let mut values = Vec::with_capacity(items.len());
                 items.into_iter().try_for_each(|item| {
                     values.push(Self::from_proto(items_type, item)?);
-                    Result::<()>::Ok(())
+                    YdbResult::<()>::Ok(())
                 })?;
                 YdbValue::List(Box::new(YdbList {
                     t: items_type.clone(),
@@ -270,7 +273,7 @@ impl YdbValue {
                 Self::from_proto_struct(struct_t, items)?
             }
             (t, proto_value) => {
-                return Err(Error::Custom(
+                return Err(YdbError::Custom(
                     format!(
                         "unsupported from_proto combination: t: '{:?}', proto_value: '{:?}'",
                         t, proto_value
@@ -282,9 +285,9 @@ impl YdbValue {
         return Ok(res);
     }
 
-    fn from_proto_struct(t: &YdbStruct, items: Vec<ydb::Value>) -> Result<YdbValue> {
+    fn from_proto_struct(t: &YdbStruct, items: Vec<ydb::Value>) -> YdbResult<YdbValue> {
         if t.fields_name.len() != items.len() {
-            return Err(Error::Custom(
+            return Err(YdbError::Custom(
                 format!(
                     "struct description and items has diferrent length. t: {:?}, items: {:?}",
                     t, items
@@ -304,7 +307,7 @@ impl YdbValue {
     fn from_proto_value(
         t: &YdbValue,
         v: ydb_protobuf::generated::ydb::value::Value,
-    ) -> Result<YdbValue> {
+    ) -> YdbResult<YdbValue> {
         use ydb_protobuf::generated::ydb::value::Value as pv;
 
         let res = match (t, v) {
@@ -342,7 +345,7 @@ impl YdbValue {
                 Self::from_proto_value_optional(ydb_optional, val)?
             }
             (t, val) => {
-                return Err(Error::Custom(format!(
+                return Err(YdbError::Custom(format!(
                     "unexpected from_proto_value. t: '{:?}', val: '{:?}'",
                     t, val
                 )))
@@ -354,7 +357,7 @@ impl YdbValue {
     fn from_proto_value_optional(
         t: &Box<YdbOptional>,
         val: ydb_protobuf::generated::ydb::value::Value,
-    ) -> Result<Self> {
+    ) -> YdbResult<Self> {
         use ydb_protobuf::generated::ydb::value::Value as pv;
 
         let res = match val {
@@ -364,7 +367,7 @@ impl YdbValue {
         return Ok(res);
     }
 
-    pub(crate) fn to_typed_value(self) -> Result<ydb::TypedValue> {
+    pub(crate) fn to_typed_value(self) -> YdbResult<ydb::TypedValue> {
         use ydb::r#type::PrimitiveTypeId as pt;
         use ydb::value::Value as pv;
 
@@ -431,7 +434,7 @@ impl YdbValue {
         return Ok(res);
     }
 
-    fn to_typed_optional(optional: Box<YdbOptional>) -> Result<ydb::TypedValue> {
+    fn to_typed_optional(optional: Box<YdbOptional>) -> YdbResult<ydb::TypedValue> {
         if let YdbValue::Optional(_opt) = optional.t {
             unimplemented!("nested optional")
         }
@@ -455,7 +458,7 @@ impl YdbValue {
         })
     }
 
-    fn to_typed_struct(s: YdbStruct) -> Result<ydb::TypedValue> {
+    fn to_typed_struct(s: YdbStruct) -> YdbResult<ydb::TypedValue> {
         let mut members: Vec<ydb::StructMember> = Vec::with_capacity(s.fields_name.len());
         let mut items: Vec<ydb::Value> = Vec::with_capacity(s.fields_name.len());
         for (index, v) in s.values.into_iter().enumerate() {
@@ -478,9 +481,9 @@ impl YdbValue {
         });
     }
 
-    fn to_typed_value_list(ydb_list: Box<YdbList>) -> Result<ydb::TypedValue> {
+    fn to_typed_value_list(ydb_list: Box<YdbList>) -> YdbResult<ydb::TypedValue> {
         let ydb_list_type = ydb_list.t;
-        let proto_items_result: Vec<Result<ydb::TypedValue>> = ydb_list
+        let proto_items_result: Vec<YdbResult<ydb::TypedValue>> = ydb_list
             .values
             .into_iter()
             .map(|item| item.to_typed_value())
@@ -516,7 +519,7 @@ pub struct Column {
 
 #[cfg(test)]
 mod test {
-    use crate::errors::Result;
+    use crate::errors::YdbResult;
     use crate::types::{Sign, SignedInterval, YdbStruct, YdbValue};
     use std::collections::HashSet;
 
@@ -524,7 +527,7 @@ mod test {
     use strum::IntoEnumIterator;
 
     #[test]
-    fn serialize() -> Result<()> {
+    fn serialize() -> YdbResult<()> {
         // test zero, one, minimum and maximum values
         macro_rules! num_tests {
             ($values:ident, $en_name:path, $type_name:ty) => {

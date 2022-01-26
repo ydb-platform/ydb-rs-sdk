@@ -120,7 +120,7 @@ impl TableClient {
             .with_error_on_truncate(self.error_on_truncate)
     }
 
-    pub(crate) async fn create_session(&mut self) -> Result<Session> {
+    pub(crate) async fn create_session(&mut self) -> YdbResult<Session> {
         return self.session_pool.session().await;
     }
 
@@ -129,9 +129,9 @@ impl TableClient {
         transaction_options: TransactionOptions,
         retry_options: RetryOptions,
         callback: impl Fn(TransactionArgType) -> CallbackFuture,
-    ) -> ResultWithCustomerErr<CallbackResult>
+    ) -> YdbResultWithCustomerErr<CallbackResult>
     where
-        CallbackFuture: Future<Output = ResultWithCustomerErr<CallbackResult>>,
+        CallbackFuture: Future<Output = YdbResultWithCustomerErr<CallbackResult>>,
     {
         let retrier = retry_options
             .retrier
@@ -143,7 +143,7 @@ impl TableClient {
                 Box::new(self.create_autocommit_transaction(transaction_options.mode))
             } else {
                 if transaction_options.mode != Mode::SerializableReadWrite {
-                    return Err(YdbOrCustomerError::YDB(Error::Custom(
+                    return Err(YdbOrCustomerError::YDB(YdbError::Custom(
                         "only serializable rw transactions allow to interactive mode".into(),
                     )));
                 }
@@ -180,9 +180,9 @@ impl TableClient {
         &self,
         opts: RetryOptions,
         callback: impl Fn(Session) -> CallbackFuture,
-    ) -> ResultWithCustomerErr<CallbackResult>
+    ) -> YdbResultWithCustomerErr<CallbackResult>
     where
-        CallbackFuture: Future<Output = ResultWithCustomerErr<CallbackResult>>,
+        CallbackFuture: Future<Output = YdbResultWithCustomerErr<CallbackResult>>,
     {
         let retrier = opts.retrier.unwrap_or_else(|| self.retrier.clone());
         let mut attempts: usize = 0;

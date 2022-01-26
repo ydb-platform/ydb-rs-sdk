@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::errors::{Error, Result, YdbOrCustomerError};
+use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::internal::client_fabric::ClientFabric;
 use crate::internal::client_table::{RetryOptions, TransactionOptions};
 use crate::internal::discovery::StaticDiscovery;
@@ -21,7 +21,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use tonic::{Code, Status};
 use ydb_protobuf::generated::ydb::discovery::{ListEndpointsRequest, WhoAmIRequest};
 
-fn create_client() -> Result<ClientFabric> {
+fn create_client() -> YdbResult<ClientFabric> {
     let _endpoint_uri = Uri::from_str(CONNECTION_INFO.discovery_endpoint.as_str())?;
     let discovery = StaticDiscovery::from_str(CONNECTION_INFO.discovery_endpoint.as_str())?;
 
@@ -33,14 +33,14 @@ fn create_client() -> Result<ClientFabric> {
 }
 
 #[tokio::test]
-async fn create_session() -> Result<()> {
+async fn create_session() -> YdbResult<()> {
     let res = create_client()?.table_client().create_session().await?;
     println!("session: {:?}", res);
     Ok(())
 }
 
 #[tokio::test]
-async fn endpoints() -> Result<()> {
+async fn endpoints() -> YdbResult<()> {
     let _res = create_client()?
         .endpoints(ListEndpointsRequest::default())
         .await?;
@@ -49,7 +49,7 @@ async fn endpoints() -> Result<()> {
 }
 
 #[tokio::test]
-async fn execute_data_query() -> Result<()> {
+async fn execute_data_query() -> YdbResult<()> {
     let client = create_client()?;
     let mut transaction = client
         .table_client()
@@ -70,7 +70,7 @@ async fn execute_data_query() -> Result<()> {
 }
 
 #[tokio::test]
-async fn execute_data_query_field_name() -> Result<()> {
+async fn execute_data_query_field_name() -> YdbResult<()> {
     let client = create_client()?;
     let mut transaction = client
         .table_client()
@@ -91,7 +91,7 @@ async fn execute_data_query_field_name() -> Result<()> {
 }
 
 #[tokio::test]
-async fn execute_data_query_params() -> Result<()> {
+async fn execute_data_query_params() -> YdbResult<()> {
     let client = create_client()?;
     let mut transaction = client
         .table_client()
@@ -126,7 +126,7 @@ async fn execute_data_query_params() -> Result<()> {
 }
 
 #[tokio::test]
-async fn interactive_transaction() -> Result<()> {
+async fn interactive_transaction() -> YdbResult<()> {
     let client = create_client()?;
 
     let _ = client
@@ -196,7 +196,7 @@ async fn interactive_transaction() -> Result<()> {
 }
 
 #[tokio::test]
-async fn retry_test() -> Result<()> {
+async fn retry_test() -> YdbResult<()> {
     let client = create_client()?;
 
     let attempt = Arc::new(Mutex::new(0));
@@ -223,7 +223,7 @@ async fn retry_test() -> Result<()> {
             assert_eq!(YdbValue::Int32(2), res);
 
             if *locked_res < 3 {
-                return Err(YdbOrCustomerError::YDB(Error::TransportGRPCStatus(
+                return Err(YdbOrCustomerError::YDB(YdbError::TransportGRPCStatus(
                     Arc::new(Status::new(Code::Aborted, "test")),
                 )));
             }
@@ -241,7 +241,7 @@ async fn retry_test() -> Result<()> {
 }
 
 #[tokio::test]
-async fn scheme_query() -> Result<()> {
+async fn scheme_query() -> YdbResult<()> {
     let client = create_client()?;
     let mut table_client = client.table_client();
 
@@ -279,7 +279,7 @@ async fn scheme_query() -> Result<()> {
 }
 
 #[tokio::test]
-async fn select_int() -> Result<()> {
+async fn select_int() -> YdbResult<()> {
     let client = create_client()?;
     let v = YdbValue::Int32(123);
 
@@ -309,7 +309,7 @@ SELECT $test AS test;
 }
 
 #[tokio::test]
-async fn select_optional() -> Result<()> {
+async fn select_optional() -> YdbResult<()> {
     let client = create_client()?;
     let mut transaction = client
         .table_client()
@@ -343,7 +343,7 @@ SELECT $test AS test;
 }
 
 #[tokio::test]
-async fn select_list() -> Result<()> {
+async fn select_list() -> YdbResult<()> {
     let client = create_client()?;
     let mut transaction = client
         .table_client()
@@ -386,7 +386,7 @@ SELECT $l AS l;
 }
 
 #[tokio::test]
-async fn select_struct() -> Result<()> {
+async fn select_struct() -> YdbResult<()> {
     let client = create_client()?;
     let mut transaction = client
         .table_client()
@@ -445,7 +445,7 @@ FROM
 }
 
 #[tokio::test]
-async fn select_int64_null4() -> Result<()> {
+async fn select_int64_null4() -> YdbResult<()> {
     let client = create_client()?;
     let mut transaction = client
         .table_client()
@@ -473,7 +473,7 @@ SELECT CAST(NULL AS Optional<Int64>)
 }
 
 #[tokio::test]
-async fn select_void_null() -> Result<()> {
+async fn select_void_null() -> YdbResult<()> {
     let client = create_client()?;
     let mut transaction = client
         .table_client()
@@ -501,7 +501,7 @@ SELECT NULL
 }
 
 #[tokio::test]
-async fn stream_query() -> Result<()> {
+async fn stream_query() -> YdbResult<()> {
     let mut client = create_client()?.table_client();
     let mut session = client.create_session().await?;
 
@@ -590,7 +590,7 @@ FROM
 }
 
 #[tokio::test]
-async fn who_am_i() -> Result<()> {
+async fn who_am_i() -> YdbResult<()> {
     let res = create_client()?.who_am_i(WhoAmIRequest::default()).await?;
     assert!(res.user.len() > 0);
     Ok(())

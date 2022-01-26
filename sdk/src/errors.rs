@@ -6,19 +6,19 @@ use std::time::SystemTimeError;
 use tokio::sync::AcquireError;
 use url::ParseError;
 
-pub type Result<T> = std::result::Result<T, Error>;
-pub type ResultWithCustomerErr<T> = std::result::Result<T, YdbOrCustomerError>;
+pub type YdbResult<T> = std::result::Result<T, YdbError>;
+pub type YdbResultWithCustomerErr<T> = std::result::Result<T, YdbOrCustomerError>;
 
 #[derive(Clone)]
 pub enum YdbOrCustomerError {
-    YDB(Error),
+    YDB(YdbError),
     Customer(Arc<Box<dyn std::error::Error>>),
 }
 
 impl YdbOrCustomerError {
     #[allow(dead_code)]
     pub fn from_mess<T: Into<String>>(s: T) -> Self {
-        return Self::Customer(Arc::new(Box::new(Error::Custom(s.into()))));
+        return Self::Customer(Arc::new(Box::new(YdbError::Custom(s.into()))));
     }
 
     #[allow(dead_code)]
@@ -47,8 +47,8 @@ impl Display for YdbOrCustomerError {
 
 impl std::error::Error for YdbOrCustomerError {}
 
-impl From<Error> for YdbOrCustomerError {
-    fn from(e: Error) -> Self {
+impl From<YdbError> for YdbOrCustomerError {
+    fn from(e: YdbError) -> Self {
         return Self::YDB(e);
     }
 }
@@ -61,7 +61,7 @@ pub(crate) enum NeedRetry {
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
-pub enum Error {
+pub enum YdbError {
     Custom(String),
     InternalError(String),
     TransportDial(Arc<tonic::transport::Error>),
@@ -87,10 +87,10 @@ pub struct YdbIssue {
     pub issues: Vec<YdbIssue>,
 }
 
-impl Error {
+impl YdbError {
     #[allow(dead_code)]
-    pub fn from_str(s: &str) -> Error {
-        return Error::Custom(s.to_string());
+    pub fn from_str(s: &str) -> YdbError {
+        return YdbError::Custom(s.to_string());
     }
     pub(crate) fn need_retry(&self) -> NeedRetry {
         match self {
@@ -128,105 +128,105 @@ impl Error {
     }
 }
 
-impl Display for Error {
+impl Display for YdbError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self::Debug::fmt(self, f)
     }
 }
 
-impl std::error::Error for Error {}
+impl std::error::Error for YdbError {}
 
-impl From<http::Error> for Error {
+impl From<http::Error> for YdbError {
     fn from(e: http::Error) -> Self {
-        return Error::Custom(e.to_string());
+        return YdbError::Custom(e.to_string());
     }
 }
 
-impl From<prost::DecodeError> for Error {
+impl From<prost::DecodeError> for YdbError {
     fn from(e: prost::DecodeError) -> Self {
-        return Error::Custom(e.to_string());
+        return YdbError::Custom(e.to_string());
     }
 }
 
-impl From<std::env::VarError> for Error {
+impl From<std::env::VarError> for YdbError {
     fn from(e: std::env::VarError) -> Self {
-        return Error::Custom(e.to_string());
+        return YdbError::Custom(e.to_string());
     }
 }
 
-impl From<std::io::Error> for Error {
+impl From<std::io::Error> for YdbError {
     fn from(e: std::io::Error) -> Self {
-        return Error::Custom(e.to_string());
+        return YdbError::Custom(e.to_string());
     }
 }
 
-impl From<&str> for Error {
+impl From<&str> for YdbError {
     fn from(s: &str) -> Self {
         return Self::Custom(s.to_string());
     }
 }
 
-impl From<std::num::TryFromIntError> for Error {
+impl From<std::num::TryFromIntError> for YdbError {
     fn from(e: std::num::TryFromIntError) -> Self {
-        return Error::Custom(e.to_string());
+        return YdbError::Custom(e.to_string());
     }
 }
 
-impl From<std::string::FromUtf8Error> for Error {
+impl From<std::string::FromUtf8Error> for YdbError {
     fn from(e: FromUtf8Error) -> Self {
-        return Error::Custom(e.to_string());
+        return YdbError::Custom(e.to_string());
     }
 }
 
-impl<T> From<std::sync::PoisonError<T>> for Error {
+impl<T> From<std::sync::PoisonError<T>> for YdbError {
     fn from(e: std::sync::PoisonError<T>) -> Self {
-        return Error::Custom(e.to_string());
+        return YdbError::Custom(e.to_string());
     }
 }
 
-impl From<std::time::SystemTimeError> for Error {
+impl From<std::time::SystemTimeError> for YdbError {
     fn from(e: SystemTimeError) -> Self {
-        return Error::Custom(e.to_string());
+        return YdbError::Custom(e.to_string());
     }
 }
 
-impl From<strum::ParseError> for Error {
+impl From<strum::ParseError> for YdbError {
     fn from(e: strum::ParseError) -> Self {
-        return Error::Custom(e.to_string());
+        return YdbError::Custom(e.to_string());
     }
 }
 
-impl From<tonic::codegen::http::uri::InvalidUri> for Error {
+impl From<tonic::codegen::http::uri::InvalidUri> for YdbError {
     fn from(e: tonic::codegen::http::uri::InvalidUri) -> Self {
-        return Error::Custom(e.to_string());
+        return YdbError::Custom(e.to_string());
     }
 }
 
-impl From<tokio::sync::AcquireError> for Error {
+impl From<tokio::sync::AcquireError> for YdbError {
     fn from(e: AcquireError) -> Self {
-        return Error::Custom(e.to_string());
+        return YdbError::Custom(e.to_string());
     }
 }
 
-impl From<tokio::sync::oneshot::error::RecvError> for Error {
+impl From<tokio::sync::oneshot::error::RecvError> for YdbError {
     fn from(e: tokio::sync::oneshot::error::RecvError) -> Self {
-        return Error::Custom(e.to_string());
+        return YdbError::Custom(e.to_string());
     }
 }
 
-impl From<tonic::transport::Error> for Error {
+impl From<tonic::transport::Error> for YdbError {
     fn from(e: tonic::transport::Error) -> Self {
-        return Error::Transport(e.to_string());
+        return YdbError::Transport(e.to_string());
     }
 }
 
-impl From<tonic::Status> for Error {
+impl From<tonic::Status> for YdbError {
     fn from(e: tonic::Status) -> Self {
-        return Error::TransportGRPCStatus(Arc::new(e));
+        return YdbError::TransportGRPCStatus(Arc::new(e));
     }
 }
 
-impl From<url::ParseError> for Error {
+impl From<url::ParseError> for YdbError {
     fn from(e: ParseError) -> Self {
         return Self::Custom(e.to_string());
     }

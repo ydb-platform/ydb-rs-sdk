@@ -1,5 +1,5 @@
 use crate::errors;
-use crate::errors::{Error, Result, YdbStatusError};
+use crate::errors::{YdbError, YdbResult, YdbStatusError};
 use crate::internal::grpc::proto_issues_to_ydb_issues;
 use crate::types::YdbValue;
 use std::collections::HashMap;
@@ -23,7 +23,7 @@ impl QueryResult {
     pub(crate) fn from_proto(
         proto_res: ExecuteQueryResult,
         error_on_truncate: bool,
-    ) -> errors::Result<Self> {
+    ) -> errors::YdbResult<Self> {
         println!("proto_res: {:?}", proto_res);
         let mut results = Vec::with_capacity(proto_res.result_sets.len());
         for current_set in proto_res.result_sets.into_iter() {
@@ -82,7 +82,9 @@ impl ResultSet {
         self.pb.truncated
     }
 
-    pub(crate) fn from_proto(pb: ydb_protobuf::generated::ydb::ResultSet) -> errors::Result<Self> {
+    pub(crate) fn from_proto(
+        pb: ydb_protobuf::generated::ydb::ResultSet,
+    ) -> errors::YdbResult<Self> {
         let mut columns = Vec::with_capacity(pb.columns.len());
         for pb_col in pb.columns.iter() {
             columns.push(crate::types::Column {
@@ -120,17 +122,17 @@ pub struct Row {
 }
 
 impl Row {
-    pub fn remove_field_by_name(&mut self, name: &str) -> errors::Result<YdbValue> {
+    pub fn remove_field_by_name(&mut self, name: &str) -> errors::YdbResult<YdbValue> {
         if let Some(&index) = self.columns_by_name.get(name) {
             return self.remove_field(index);
         }
-        return Err(Error::Custom("field not found".into()));
+        return Err(YdbError::Custom("field not found".into()));
     }
 
-    pub fn remove_field(&mut self, index: usize) -> errors::Result<YdbValue> {
+    pub fn remove_field(&mut self, index: usize) -> errors::YdbResult<YdbValue> {
         match self.pb.remove(&index) {
             Some(val) => YdbValue::from_proto(&self.columns[index].v_type, val),
-            None => Err(Error::Custom("it has no the field".into())),
+            None => Err(YdbError::Custom("it has no the field".into())),
         }
     }
 }
@@ -163,14 +165,14 @@ pub struct StreamResult {
 }
 
 impl StreamResult {
-    pub async fn next(&mut self) -> Result<Option<ResultSet>> {
+    pub async fn next(&mut self) -> YdbResult<Option<ResultSet>> {
         let partial_response = if let Some(partial_response) = self.results.message().await? {
             partial_response
         } else {
             return Ok(None);
         };
         if partial_response.status() != StatusCode::Success {
-            return Err(Error::YdbStatusError(YdbStatusError {
+            return Err(YdbError::YdbStatusError(YdbStatusError {
                 message: format!("{:?}", partial_response.issues),
                 operation_status: partial_response.status,
                 issues: proto_issues_to_ydb_issues(partial_response.issues),
@@ -183,7 +185,7 @@ impl StreamResult {
                 return Ok(None);
             }
         } else {
-            return Err(Error::InternalError("unexpected empty result".into()));
+            return Err(YdbError::InternalError("unexpected empty result".into()));
         };
         let result_set = ResultSet::from_proto(proto_result_set)?;
         return Ok(Some(result_set));

@@ -1,4 +1,4 @@
-use crate::errors::Result;
+use crate::errors::YdbResult;
 use crate::internal::client_common::DBCredentials;
 use crate::internal::discovery::{Discovery, Service};
 use crate::internal::grpc::create_grpc_client_with_error_sender;
@@ -21,7 +21,7 @@ pub(crate) trait ChannelPool<T>: Send + Sync
 where
     T: Send,
 {
-    async fn create_channel(&self) -> Result<T>;
+    async fn create_channel(&self) -> YdbResult<T>;
 }
 
 pub(crate) struct ChannelErrorInfo {
@@ -107,7 +107,7 @@ impl<T> ChannelPool<T> for ChannelPoolImpl<T>
 where
     T: Clone + Send,
 {
-    async fn create_channel(&self) -> Result<T> {
+    async fn create_channel(&self) -> YdbResult<T> {
         let endpoint = self.load_balancer.endpoint(self.service)?;
         return if let Some(ch) = self.get_channel_from_pool(&endpoint) {
             Ok(ch)

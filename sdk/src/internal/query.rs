@@ -1,4 +1,4 @@
-use crate::errors::{Error, Result};
+use crate::errors::{YdbError, YdbResult};
 use crate::types::YdbValue;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -38,7 +38,7 @@ impl Query {
         };
     }
 
-    pub(crate) fn params_to_proto(self) -> Result<HashMap<String, TypedValue>> {
+    pub(crate) fn params_to_proto(self) -> YdbResult<HashMap<String, TypedValue>> {
         let mut params = HashMap::with_capacity(self.parameters.len());
 
         for (name, val) in self.parameters.into_iter() {
