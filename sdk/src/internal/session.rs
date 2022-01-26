@@ -39,7 +39,7 @@ impl Session {
     }
 
     pub(crate) fn handle_error(&mut self, err: &Error) {
-        if let Error::YdbOperation(err) = err {
+        if let Error::YdbStatusError(err) = err {
             use ydb_protobuf::generated::ydb::status_ids::StatusCode;
             if let Some(status) = StatusCode::from_i32(err.operation_status) {
                 if status == StatusCode::BadSession || status == StatusCode::SessionExpired {

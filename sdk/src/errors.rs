@@ -66,14 +66,22 @@ pub enum Error {
     TransportDial(Arc<tonic::transport::Error>),
     Transport(String),
     TransportGRPCStatus(Arc<tonic::Status>),
-    YdbOperation(YdbOperationError),
+    YdbStatusError(YdbOperationError),
 }
 
 #[derive(Clone, Debug)]
 pub struct YdbOperationError {
     #[allow(dead_code)]
-    pub(crate) message: String,
-    pub(crate) operation_status: i32,
+    pub message: String,
+    pub operation_status: i32,
+    pub issues: Vec<YdbIssue>,
+}
+
+#[derive(Clone, Debug)]
+pub struct YdbIssue {
+    pub code: u32,
+    pub message: String,
+    pub issues: Vec<YdbIssue>,
 }
 
 impl Error {
@@ -97,7 +105,7 @@ impl Error {
                     _ => NeedRetry::False,
                 }
             }
-            Self::YdbOperation(ydb_err) => {
+            Self::YdbStatusError(ydb_err) => {
                 use ydb_protobuf::generated::ydb::status_ids::StatusCode;
                 if let Some(status) = StatusCode::from_i32(ydb_err.operation_status) {
                     match status {
@@ -218,14 +226,5 @@ impl From<tonic::Status> for Error {
 impl From<url::ParseError> for Error {
     fn from(e: ParseError) -> Self {
         return Self::Custom(e.to_string());
-    }
-}
-
-impl From<ydb_protobuf::generated::ydb::operations::Operation> for Error {
-    fn from(op: ydb_protobuf::generated::ydb::operations::Operation) -> Self {
-        return Error::YdbOperation(YdbOperationError {
-            message: format!("{:?}", &op),
-            operation_status: op.status,
-        });
     }
 }

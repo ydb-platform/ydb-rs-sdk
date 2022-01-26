@@ -3,7 +3,7 @@ use std::time::Duration;
 use ydb_protobuf::generated::ydb::status_ids::StatusCode;
 
 use crate::errors;
-use crate::errors::{Error, Result};
+use crate::errors::{Error, Result, YdbIssue};
 use crate::internal::client_common::DBCredentials;
 use crate::internal::middlewares::AuthService;
 use crate::internal::trait_operation::Operation;
@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use crate::internal::channel_pool::{ChannelErrorInfo, ChannelProxy, ChannelProxyErrorSender};
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tower::ServiceBuilder;
+use ydb_protobuf::generated::ydb::issue::IssueMessage;
 
 pub(crate) async fn create_grpc_client<T, CB>(
     uri: Uri,
@@ -93,7 +94,7 @@ where
         .operation()
         .ok_or(Error::Custom("no operation object in result".into()))?;
     if op.status() != StatusCode::Success {
-        return Err(Error::from(op));
+        return Err(create_operation_error(op));
     }
     let opres = op
         .result
@@ -111,7 +112,28 @@ where
         .operation()
         .ok_or(Error::Custom("no operation object in result".into()))?;
     if op.status() != StatusCode::Success {
-        return Err(Error::from(op));
+        return Err(create_operation_error(op));
     }
     return Ok(());
+}
+
+pub(crate) fn proto_issues_to_ydb_issues(proto_issues: Vec<IssueMessage>) -> Vec<YdbIssue> {
+    proto_issues
+        .into_iter()
+        .map(|proto_issue| YdbIssue {
+            code: proto_issue.issue_code,
+            message: proto_issue.message,
+            issues: proto_issues_to_ydb_issues(proto_issue.issues),
+        })
+        .collect()
+}
+
+pub(crate) fn create_operation_error(
+    op: ydb_protobuf::generated::ydb::operations::Operation,
+) -> Error {
+    return Error::YdbStatusError(crate::errors::YdbOperationError {
+        message: format!("{:?}", &op),
+        operation_status: op.status,
+        issues: proto_issues_to_ydb_issues(op.issues),
+    });
 }

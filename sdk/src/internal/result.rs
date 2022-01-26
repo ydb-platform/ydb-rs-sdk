@@ -1,5 +1,6 @@
 use crate::errors;
 use crate::errors::{Error, Result, YdbOperationError};
+use crate::internal::grpc::proto_issues_to_ydb_issues;
 use crate::types::YdbValue;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -169,9 +170,10 @@ impl StreamResult {
             return Ok(None);
         };
         if partial_response.status() != StatusCode::Success {
-            return Err(Error::YdbOperation(YdbOperationError {
+            return Err(Error::YdbStatusError(YdbOperationError {
                 message: format!("{:?}", partial_response.issues),
                 operation_status: partial_response.status,
+                issues: proto_issues_to_ydb_issues(partial_response.issues),
             }));
         };
         let proto_result_set = if let Some(partial_result) = partial_response.result {
