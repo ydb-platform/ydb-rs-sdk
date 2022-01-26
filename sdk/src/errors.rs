@@ -63,6 +63,7 @@ pub(crate) enum NeedRetry {
 #[non_exhaustive]
 pub enum YdbError {
     Custom(String),
+    Convert(String),
     InternalError(String),
     TransportDial(Arc<tonic::transport::Error>),
     Transport(String),
@@ -94,6 +95,7 @@ impl YdbError {
     }
     pub(crate) fn need_retry(&self) -> NeedRetry {
         match self {
+            Self::Convert(_) => NeedRetry::False,
             Self::Custom(_) => NeedRetry::False,
             Self::InternalError(_) => NeedRetry::False,
             Self::TransportDial(_) => NeedRetry::True,

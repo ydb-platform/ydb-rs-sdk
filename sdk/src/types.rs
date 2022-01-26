@@ -4,14 +4,16 @@ use std::convert::TryInto;
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::time::Duration;
-use strum::EnumIter;
+use strum::{EnumDiscriminants, EnumIter, IntoStaticStr};
 use ydb_protobuf::generated::ydb;
 
 const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 
 /// Represent value, send or received from ydb
 /// That enum will be grow, when add support of new types
-#[derive(Clone, Debug, EnumIter, PartialEq)]
+#[derive(Clone, Debug, EnumDiscriminants, EnumIter, PartialEq)]
+#[strum_discriminants(vis())] // private
+#[strum_discriminants(derive(IntoStaticStr))]
 #[allow(dead_code)]
 #[non_exhaustive]
 pub enum YdbValue {
@@ -40,6 +42,13 @@ pub enum YdbValue {
     Optional(Box<YdbOptional>),
     List(Box<YdbList>),
     Struct(YdbStruct),
+}
+
+impl YdbValue {
+    pub(crate) fn kind_static(&self) -> &'static str {
+        let discriminant: YdbValueDiscriminants = self.into();
+        return discriminant.into();
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
