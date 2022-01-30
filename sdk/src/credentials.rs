@@ -1,17 +1,41 @@
 use crate::errors::{YdbError, YdbResult};
 use dyn_clone::DynClone;
 use std::fmt::Debug;
+use std::ops::Add;
 use std::process::Command;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
+
+pub const DEFAULT_TOKEN_RENEW_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour
+
+#[derive(Debug, Clone)]
+pub struct TokenInfo {
+    pub(crate) token: String,
+    next_renew: Instant,
+}
+
+impl TokenInfo {
+    pub fn token(token: String) -> Self {
+        return Self {
+            token,
+            next_renew: Instant::now().add(DEFAULT_TOKEN_RENEW_INTERVAL),
+        };
+    }
+
+    pub fn with_renew(mut self, next_renew: Instant) -> Self {
+        self.next_renew = next_renew;
+        return self;
+    }
+}
 
 pub trait Credentials: Debug + DynClone + Send + Sync {
-    fn create_token(self: &mut Self) -> YdbResult<String>;
+    fn create_token(self: &mut Self) -> YdbResult<TokenInfo>;
 }
 dyn_clone::clone_trait_object!(Credentials);
 
 #[derive(Debug, Clone)]
 pub struct StaticToken {
-    token: String,
+    pub token: String,
 }
 
 impl StaticToken {
@@ -24,8 +48,8 @@ impl StaticToken {
 }
 
 impl Credentials for StaticToken {
-    fn create_token(self: &mut Self) -> YdbResult<String> {
-        return Ok(self.token.clone());
+    fn create_token(self: &mut Self) -> YdbResult<TokenInfo> {
+        return Ok(TokenInfo::token(self.token.clone()));
     }
 }
 
@@ -57,17 +81,17 @@ impl CommandLineYcToken {
 }
 
 impl Credentials for CommandLineYcToken {
-    fn create_token(self: &mut Self) -> YdbResult<String> {
+    fn create_token(self: &mut Self) -> YdbResult<TokenInfo> {
         {
             let token = self.token.read()?;
             if token.as_str() != "" {
-                return Ok(token.clone());
+                return Ok(TokenInfo::token(token.clone()));
             }
         }
         {
             let mut token = self.token.write()?;
             if token.as_str() != "" {
-                return Ok(token.clone());
+                return Ok(TokenInfo::token(token.clone()));
             }
             let result = self.command.lock()?.output()?;
             if !result.status.success() {
@@ -79,7 +103,7 @@ impl Credentials for CommandLineYcToken {
                 )));
             }
             *token = String::from_utf8(result.stdout)?.trim().to_string();
-            return Ok(token.clone());
+            return Ok(TokenInfo::token(token.clone()));
         }
     }
 }

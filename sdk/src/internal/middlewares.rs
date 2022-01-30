@@ -1,14 +1,14 @@
 use std::task::{Context, Poll};
 use std::{future::Future, pin::Pin};
 
+use crate::internal::channel_pool::ChannelProxy;
 use http::{HeaderValue, Request, Response};
 use tonic::body::BoxBody;
 use tonic::metadata::AsciiMetadataValue;
 use tonic::service::Interceptor;
+use tonic::transport::Body;
 use tonic::{Code, Status};
-use tonic::transport::{Body};
 use tower::Service;
-use crate::internal::channel_pool::ChannelProxy;
 
 use crate::internal::client_common::DBCredentials;
 
@@ -48,19 +48,20 @@ impl Service<Request<BoxBody>> for AuthService {
         let mut ch = std::mem::replace(&mut self.ch, clone);
 
         Box::pin(async move {
-            let token = token_result?;
+            let token_info = token_result?;
 
             req.headers_mut()
                 .insert("x-ydb-database", HeaderValue::from_str(database.as_str())?);
-            req.headers_mut()
-                .insert("x-ydb-auth-ticket", HeaderValue::from_str(token.as_str())?);
+            req.headers_mut().insert(
+                "x-ydb-auth-ticket",
+                HeaderValue::from_str(token_info.token.as_str())?,
+            );
 
             let response = ch.call(req).await?;
             Ok(response)
         })
     }
 }
-
 
 pub(crate) struct AuthInterceptor {
     cred: DBCredentials,
@@ -69,31 +70,43 @@ pub(crate) struct AuthInterceptor {
 impl Interceptor for AuthInterceptor {
     fn call(&mut self, mut request: tonic::Request<()>) -> Result<tonic::Request<()>, Status> {
         let db_name = match AsciiMetadataValue::from_str(self.cred.database.as_str()) {
-            Ok(val)=>val,
-            Err(_err)=>{
-                return Err(Status::new(Code::InvalidArgument, "non-ascii dbname received for auth interceptor"))
+            Ok(val) => val,
+            Err(_err) => {
+                return Err(Status::new(
+                    Code::InvalidArgument,
+                    "non-ascii dbname received for auth interceptor",
+                ))
             }
         };
         request.metadata_mut().insert("x-ydb-database", db_name);
 
-        let token = match self.cred.credentials.create_token() {
-            Ok(token)=>{
-                match AsciiMetadataValue::from_str(token.as_str()) {
-                    Ok(val)=>val,
-                    Err(err)=>{
-                        return Err(Status::new(Code::InvalidArgument, format!("non-ascii token received for auth interceptor: {}", err)))
-                    }
+        let token_info = match self.cred.credentials.create_token() {
+            Ok(token_info) => match AsciiMetadataValue::from_str(token_info.token.as_str()) {
+                Ok(val) => val,
+                Err(err) => {
+                    return Err(Status::new(
+                        Code::InvalidArgument,
+                        format!("non-ascii token received for auth interceptor: {}", err),
+                    ))
                 }
             },
-            Err(err)=>{
+            Err(err) => {
                 return Err(Status::new(
                     Code::Internal,
-                    format!("error receive auth token for auth interceptor: {}", err.to_string())
+                    format!(
+                        "error receive auth token for auth interceptor: {}",
+                        err.to_string()
+                    ),
                 ))
             }
         };
-        request.metadata_mut().insert("x-ydb-auth-ticket", token);
-        request.metadata_mut().insert("x-ydb-sdk-build-info", AsciiMetadataValue::from_str("ydb-go-sdk/0.0.0").unwrap());
+        request
+            .metadata_mut()
+            .insert("x-ydb-auth-ticket", token_info);
+        request.metadata_mut().insert(
+            "x-ydb-sdk-build-info",
+            AsciiMetadataValue::from_str("ydb-go-sdk/0.0.0").unwrap(),
+        );
         return Ok(request);
     }
 }
