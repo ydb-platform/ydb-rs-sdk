@@ -39,7 +39,7 @@ impl Service<Request<BoxBody>> for AuthService {
     fn call(&mut self, mut req: Request<BoxBody>) -> Self::Future {
         // let token = MetadataValue::from_str(token.as_str()).unwrap();
         let database = self.cred.database.clone();
-        let token_result = self.cred.credentials.create_token();
+        let token = self.cred.token_cache.token();
 
         // This is necessary because tonic internally uses `tower::buffer::Buffer`.
         // See https://github.com/tower-rs/tower/issues/547#issuecomment-767629149
@@ -48,14 +48,10 @@ impl Service<Request<BoxBody>> for AuthService {
         let mut ch = std::mem::replace(&mut self.ch, clone);
 
         Box::pin(async move {
-            let token_info = token_result?;
-
             req.headers_mut()
                 .insert("x-ydb-database", HeaderValue::from_str(database.as_str())?);
-            req.headers_mut().insert(
-                "x-ydb-auth-ticket",
-                HeaderValue::from_str(token_info.token.as_str())?,
-            );
+            req.headers_mut()
+                .insert("x-ydb-auth-ticket", HeaderValue::from_str(token.as_str())?);
 
             let response = ch.call(req).await?;
             Ok(response)
@@ -80,29 +76,16 @@ impl Interceptor for AuthInterceptor {
         };
         request.metadata_mut().insert("x-ydb-database", db_name);
 
-        let token_info = match self.cred.credentials.create_token() {
-            Ok(token_info) => match AsciiMetadataValue::from_str(token_info.token.as_str()) {
-                Ok(val) => val,
-                Err(err) => {
-                    return Err(Status::new(
-                        Code::InvalidArgument,
-                        format!("non-ascii token received for auth interceptor: {}", err),
-                    ))
-                }
-            },
+        let token = match AsciiMetadataValue::from_str(self.cred.token_cache.token().as_str()) {
+            Ok(val) => val,
             Err(err) => {
                 return Err(Status::new(
-                    Code::Internal,
-                    format!(
-                        "error receive auth token for auth interceptor: {}",
-                        err.to_string()
-                    ),
+                    Code::InvalidArgument,
+                    format!("non-ascii token received for auth interceptor: {}", err),
                 ))
             }
         };
-        request
-            .metadata_mut()
-            .insert("x-ydb-auth-ticket", token_info);
+        request.metadata_mut().insert("x-ydb-auth-ticket", token);
         request.metadata_mut().insert(
             "x-ydb-sdk-build-info",
             AsciiMetadataValue::from_str("ydb-go-sdk/0.0.0").unwrap(),

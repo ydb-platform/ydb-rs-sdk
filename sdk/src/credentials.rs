@@ -11,7 +11,7 @@ pub const DEFAULT_TOKEN_RENEW_INTERVAL: Duration = Duration::from_secs(3600); //
 #[derive(Debug, Clone)]
 pub struct TokenInfo {
     pub(crate) token: String,
-    next_renew: Instant,
+    pub(crate) next_renew: Instant,
 }
 
 impl TokenInfo {

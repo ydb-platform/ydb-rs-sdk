@@ -373,7 +373,7 @@ impl Discovery for DiscoverySharedState {
 #[cfg(test)]
 mod test {
     use crate::errors::YdbResult;
-    use crate::internal::client_common::DBCredentials;
+    use crate::internal::client_common::{DBCredentials, TokenCache};
     use crate::internal::discovery::DiscoverySharedState;
     use crate::internal::test_helpers::CONNECTION_INFO;
     use std::sync::Arc;
@@ -383,7 +383,7 @@ mod test {
     async fn test_background_discovery() -> YdbResult<()> {
         let cred = DBCredentials {
             database: CONNECTION_INFO.database.clone(),
-            credentials: CONNECTION_INFO.credentials.clone(),
+            token_cache: TokenCache::new(CONNECTION_INFO.credentials.clone())?,
         };
         let discovery_shared = DiscoverySharedState::new(
             cred,

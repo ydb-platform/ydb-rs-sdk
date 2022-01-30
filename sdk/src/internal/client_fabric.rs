@@ -1,6 +1,6 @@
 use crate::credentials::Credentials;
 use crate::errors::YdbResult;
-use crate::internal::client_common::DBCredentials;
+use crate::internal::client_common::{DBCredentials, TokenCache};
 use crate::internal::client_table::TableClient;
 use std::sync::Arc;
 
@@ -32,7 +32,7 @@ impl ClientFabric {
         let discovery = Arc::new(discovery);
         return Ok(ClientFabric {
             credentials: DBCredentials {
-                credentials,
+                token_cache: TokenCache::new(credentials)?,
                 database,
             },
             load_balancer: SharedLoadBalancer::new(discovery.as_ref()),
