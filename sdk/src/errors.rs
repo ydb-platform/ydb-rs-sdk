@@ -136,6 +136,16 @@ impl Display for YdbError {
     }
 }
 
+macro_rules! to_custom_ydb_err {
+    ($t:ty) => {
+        impl From<$t> for YdbError {
+            fn from(e: $t) -> Self {
+                return YdbError::Custom(e.to_string());
+            }
+        }
+    };
+}
+
 impl std::error::Error for YdbError {}
 
 impl From<http::Error> for YdbError {
@@ -233,6 +243,8 @@ impl From<tokio::sync::oneshot::error::RecvError> for YdbError {
         return YdbError::Custom(e.to_string());
     }
 }
+
+to_custom_ydb_err!(tokio::sync::watch::error::RecvError);
 
 impl From<tonic::transport::Error> for YdbError {
     fn from(e: tonic::transport::Error) -> Self {

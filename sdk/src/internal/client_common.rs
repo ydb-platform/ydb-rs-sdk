@@ -5,6 +5,7 @@ use std::ops::DerefMut;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::thread;
 use std::time::Instant;
+use tokio::sync::watch;
 
 #[derive(Clone, Debug)]
 pub(crate) struct DBCredentials {
@@ -17,6 +18,8 @@ struct TokenCacheState {
     pub credentials: CredentialsRef,
     token_info: TokenInfo,
     token_renewing: Arc<Mutex<()>>,
+    token_received: watch::Receiver<bool>,
+    token_received_sender: watch::Sender<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -24,12 +27,17 @@ pub(crate) struct TokenCache(Arc<RwLock<TokenCacheState>>);
 
 impl TokenCache {
     pub fn new(mut credentials: CredentialsRef) -> YdbResult<Self> {
-        let token_info = credentials.create_token()?;
-        Ok(TokenCache(Arc::new(RwLock::new(TokenCacheState {
+        let (token_received_sender, token_received) = watch::channel(false);
+        let token_cache = TokenCache(Arc::new(RwLock::new(TokenCacheState {
             credentials,
-            token_info,
+            token_info: TokenInfo::token("".to_string()),
             token_renewing: Arc::new(Mutex::new(())),
-        }))))
+            token_received,
+            token_received_sender,
+        })));
+        let token_cache_clone = token_cache.clone();
+        tokio::task::spawn_blocking(move || token_cache_clone.renew_token_blocking());
+        return Ok(token_cache);
     }
 
     pub fn token(&self) -> String {
@@ -44,6 +52,18 @@ impl TokenCache {
             };
         };
         return read.token_info.token.clone();
+    }
+
+    pub async fn wait_token(&self) -> YdbResult<()> {
+        let mut ch = self.0.read().unwrap().token_received.clone();
+        loop {
+            let received = *ch.borrow_and_update();
+            if received {
+                return Ok(());
+            }
+
+            ch.changed().await?;
+        }
     }
 
     fn renew_token_blocking(self) {
@@ -66,7 +86,8 @@ impl TokenCache {
             Ok(token_info) => {
                 println!("token renewed");
                 let mut write = self.0.write().unwrap();
-                write.token_info = token_info
+                write.token_info = token_info;
+                write.token_received_sender.send(true);
             }
             Err(err) => {
                 println!("renew token error: {}", err)

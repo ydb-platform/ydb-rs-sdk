@@ -25,15 +25,13 @@ async fn create_client() -> YdbResult<ClientFabric> {
     let _endpoint_uri = Uri::from_str(CONNECTION_INFO.discovery_endpoint.as_str())?;
     let discovery = StaticDiscovery::from_str(CONNECTION_INFO.discovery_endpoint.as_str())?;
 
-    return tokio::task::spawn_blocking(move || {
-        ClientFabric::new(
-            CONNECTION_INFO.credentials.clone(),
-            CONNECTION_INFO.database.clone(),
-            Box::new(discovery),
-        )
-    })
-    .await
-    .unwrap();
+    let client = ClientFabric::new(
+        CONNECTION_INFO.credentials.clone(),
+        CONNECTION_INFO.database.clone(),
+        Box::new(discovery),
+    )?;
+    client.wait().await?;
+    return Ok(client);
 }
 
 #[tokio::test]

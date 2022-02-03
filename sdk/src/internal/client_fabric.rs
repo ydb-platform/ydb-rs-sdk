@@ -41,6 +41,10 @@ impl ClientFabric {
         });
     }
 
+    pub async fn wait(&self) -> YdbResult<()> {
+        return self.credentials.token_cache.wait_token().await;
+    }
+
     pub(crate) fn table_client(&self) -> TableClient {
         return TableClient::new(self.credentials.clone(), self.discovery.clone());
     }
