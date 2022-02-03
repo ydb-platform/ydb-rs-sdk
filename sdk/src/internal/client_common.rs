@@ -1,5 +1,6 @@
-use crate::credentials::{Credentials, TokenInfo};
+use crate::credentials::CredentialsRef;
 use crate::errors::YdbResult;
+use crate::pub_traits::{Credentials, TokenInfo};
 use std::ops::DerefMut;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use std::thread;
@@ -13,7 +14,7 @@ pub(crate) struct DBCredentials {
 
 #[derive(Debug)]
 struct TokenCacheState {
-    pub credentials: Box<dyn Credentials>,
+    pub credentials: CredentialsRef,
     token_info: TokenInfo,
     token_renewing: Arc<Mutex<()>>,
 }
@@ -22,7 +23,7 @@ struct TokenCacheState {
 pub(crate) struct TokenCache(Arc<RwLock<TokenCacheState>>);
 
 impl TokenCache {
-    pub fn new(mut credentials: Box<dyn Credentials>) -> YdbResult<Self> {
+    pub fn new(mut credentials: CredentialsRef) -> YdbResult<Self> {
         let token_info = credentials.create_token()?;
         Ok(TokenCache(Arc::new(RwLock::new(TokenCacheState {
             credentials,
@@ -56,7 +57,12 @@ impl TokenCache {
 
         let mut cred = { self.0.write().unwrap().credentials.clone() };
 
-        match cred.create_token() {
+        let res = std::thread::spawn(move || cred.create_token())
+            .join()
+            .unwrap();
+
+        // match cred.create_token() {
+        match res {
             Ok(token_info) => {
                 println!("token renewed");
                 let mut write = self.0.write().unwrap();

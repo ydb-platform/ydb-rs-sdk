@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use once_cell::sync::Lazy;
 
-use crate::credentials::{Credentials, StaticToken};
+use crate::credentials::{
+    credencials_ref, CredentialsRef, GoogleComputeEngineMetadata, StaticToken,
+};
 use crate::errors::{YdbError, YdbResult};
+use crate::pub_traits::Credentials;
 
 type ParamHandler = fn(&str, ConnectionInfo) -> YdbResult<ConnectionInfo>;
 
@@ -15,7 +18,7 @@ static PARAM_HANDLERS: Lazy<Mutex<HashMap<String, ParamHandler>>> = Lazy::new(||
 
         m.insert("database".to_string(), database);
         m.insert("token_cmd".to_string(), token_cmd);
-
+        m.insert("token_metadata".to_string(), token_metadata);
         m
     })
 });
@@ -23,7 +26,7 @@ static PARAM_HANDLERS: Lazy<Mutex<HashMap<String, ParamHandler>>> = Lazy::new(||
 pub struct ConnectionInfo {
     pub discovery_endpoint: String, // scheme://host:port, scheme one of grpc/grpcs
     pub database: String,
-    pub credentials: Box<dyn Credentials>,
+    pub credentials: CredentialsRef,
 }
 
 impl Default for ConnectionInfo {
@@ -31,7 +34,7 @@ impl Default for ConnectionInfo {
         return Self {
             discovery_endpoint: "".to_string(),
             database: "".to_string(),
-            credentials: Box::new(StaticToken::from("")),
+            credentials: credencials_ref(StaticToken::from("")),
         };
     }
 }
@@ -96,9 +99,30 @@ fn token_cmd(uri: &str, mut connection_info: ConnectionInfo) -> YdbResult<Connec
             continue;
         };
 
-        connection_info.credentials = Box::new(
+        connection_info.credentials = credencials_ref(
             crate::credentials::CommandLineYcToken::from_string_cmd(value.as_ref())?,
         );
+    }
+    return Ok(connection_info);
+}
+
+fn token_metadata(uri: &str, mut connection_info: ConnectionInfo) -> YdbResult<ConnectionInfo> {
+    for (key, value) in url::Url::parse(uri)?.query_pairs() {
+        if key != "token_metadata" {
+            continue;
+        };
+
+        match value.as_ref() {
+            "google" => {
+                connection_info.credentials = credencials_ref(GoogleComputeEngineMetadata::new())
+            }
+            _ => {
+                return Err(YdbError::Custom(format!(
+                    "unknown metadata format: '{}'",
+                    value
+                )))
+            }
+        }
     }
     return Ok(connection_info);
 }

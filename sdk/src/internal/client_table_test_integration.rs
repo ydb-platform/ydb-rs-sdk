@@ -21,27 +21,36 @@ use std::time::{Duration, UNIX_EPOCH};
 use tonic::{Code, Status};
 use ydb_protobuf::generated::ydb::discovery::{ListEndpointsRequest, WhoAmIRequest};
 
-fn create_client() -> YdbResult<ClientFabric> {
+async fn create_client() -> YdbResult<ClientFabric> {
     let _endpoint_uri = Uri::from_str(CONNECTION_INFO.discovery_endpoint.as_str())?;
     let discovery = StaticDiscovery::from_str(CONNECTION_INFO.discovery_endpoint.as_str())?;
 
-    return ClientFabric::new(
-        CONNECTION_INFO.credentials.clone(),
-        CONNECTION_INFO.database.clone(),
-        Box::new(discovery),
-    );
+    return tokio::task::spawn_blocking(move || {
+        ClientFabric::new(
+            CONNECTION_INFO.credentials.clone(),
+            CONNECTION_INFO.database.clone(),
+            Box::new(discovery),
+        )
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
 async fn create_session() -> YdbResult<()> {
-    let res = create_client()?.table_client().create_session().await?;
+    let res = create_client()
+        .await?
+        .table_client()
+        .create_session()
+        .await?;
     println!("session: {:?}", res);
     Ok(())
 }
 
 #[tokio::test]
 async fn endpoints() -> YdbResult<()> {
-    let _res = create_client()?
+    let _res = create_client()
+        .await?
         .endpoints(ListEndpointsRequest::default())
         .await?;
     println!("{:?}", _res);
@@ -50,7 +59,7 @@ async fn endpoints() -> YdbResult<()> {
 
 #[tokio::test]
 async fn execute_data_query() -> YdbResult<()> {
-    let client = create_client()?;
+    let client = create_client().await?;
     let mut transaction = client
         .table_client()
         .create_autocommit_transaction(Mode::OnlineReadonly);
@@ -71,7 +80,7 @@ async fn execute_data_query() -> YdbResult<()> {
 
 #[tokio::test]
 async fn execute_data_query_field_name() -> YdbResult<()> {
-    let client = create_client()?;
+    let client = create_client().await?;
     let mut transaction = client
         .table_client()
         .create_autocommit_transaction(Mode::OnlineReadonly);
@@ -92,7 +101,7 @@ async fn execute_data_query_field_name() -> YdbResult<()> {
 
 #[tokio::test]
 async fn execute_data_query_params() -> YdbResult<()> {
-    let client = create_client()?;
+    let client = create_client().await?;
     let mut transaction = client
         .table_client()
         .create_autocommit_transaction(Mode::OnlineReadonly);
@@ -127,7 +136,7 @@ async fn execute_data_query_params() -> YdbResult<()> {
 
 #[tokio::test]
 async fn interactive_transaction() -> YdbResult<()> {
-    let client = create_client()?;
+    let client = create_client().await?;
 
     let _ = client
         .table_client()
@@ -197,7 +206,7 @@ async fn interactive_transaction() -> YdbResult<()> {
 
 #[tokio::test]
 async fn retry_test() -> YdbResult<()> {
-    let client = create_client()?;
+    let client = create_client().await?;
 
     let attempt = Arc::new(Mutex::new(0));
     let opts = RetryOptions::new().with_timeout(Duration::from_secs(15));
@@ -242,7 +251,7 @@ async fn retry_test() -> YdbResult<()> {
 
 #[tokio::test]
 async fn scheme_query() -> YdbResult<()> {
-    let client = create_client()?;
+    let client = create_client().await?;
     let mut table_client = client.table_client();
 
     let time_now = time::SystemTime::now().duration_since(UNIX_EPOCH)?;
@@ -280,7 +289,7 @@ async fn scheme_query() -> YdbResult<()> {
 
 #[tokio::test]
 async fn select_int() -> YdbResult<()> {
-    let client = create_client()?;
+    let client = create_client().await?;
     let v = YdbValue::Int32(123);
 
     let mut transaction = client
@@ -310,7 +319,7 @@ SELECT $test AS test;
 
 #[tokio::test]
 async fn select_optional() -> YdbResult<()> {
-    let client = create_client()?;
+    let client = create_client().await?;
     let mut transaction = client
         .table_client()
         .create_autocommit_transaction(Mode::OnlineReadonly);
@@ -344,7 +353,7 @@ SELECT $test AS test;
 
 #[tokio::test]
 async fn select_list() -> YdbResult<()> {
-    let client = create_client()?;
+    let client = create_client().await?;
     let mut transaction = client
         .table_client()
         .create_autocommit_transaction(Mode::OnlineReadonly);
@@ -387,7 +396,7 @@ SELECT $l AS l;
 
 #[tokio::test]
 async fn select_struct() -> YdbResult<()> {
-    let client = create_client()?;
+    let client = create_client().await?;
     let mut transaction = client
         .table_client()
         .create_autocommit_transaction(Mode::OnlineReadonly);
@@ -446,7 +455,7 @@ FROM
 
 #[tokio::test]
 async fn select_int64_null4() -> YdbResult<()> {
-    let client = create_client()?;
+    let client = create_client().await?;
     let mut transaction = client
         .table_client()
         .create_autocommit_transaction(Mode::OnlineReadonly);
@@ -474,7 +483,7 @@ SELECT CAST(NULL AS Optional<Int64>)
 
 #[tokio::test]
 async fn select_void_null() -> YdbResult<()> {
-    let client = create_client()?;
+    let client = create_client().await?;
     let mut transaction = client
         .table_client()
         .create_autocommit_transaction(Mode::OnlineReadonly);
@@ -502,7 +511,7 @@ SELECT NULL
 
 #[tokio::test]
 async fn stream_query() -> YdbResult<()> {
-    let mut client = create_client()?.table_client();
+    let mut client = create_client().await?.table_client();
     let mut session = client.create_session().await?;
 
     let _ = session
@@ -589,9 +598,13 @@ FROM
     return Ok(());
 }
 
-#[tokio::test]
+// #[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
 async fn who_am_i() -> YdbResult<()> {
-    let res = create_client()?.who_am_i(WhoAmIRequest::default()).await?;
+    let res = create_client()
+        .await?
+        .who_am_i(WhoAmIRequest::default())
+        .await?;
     assert!(res.user.len() > 0);
     Ok(())
 }

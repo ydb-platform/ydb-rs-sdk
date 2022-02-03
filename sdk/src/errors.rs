@@ -150,6 +150,24 @@ impl From<prost::DecodeError> for YdbError {
     }
 }
 
+impl From<reqwest::Error> for YdbError {
+    fn from(e: reqwest::Error) -> Self {
+        return YdbError::Custom(e.to_string());
+    }
+}
+
+impl From<tokio::task::JoinError> for YdbError {
+    fn from(e: tokio::task::JoinError) -> Self {
+        return YdbError::Custom(e.to_string());
+    }
+}
+
+impl From<Box<dyn std::any::Any + Send>> for YdbError {
+    fn from(e: Box<dyn std::any::Any + Send>) -> Self {
+        return YdbError::Custom(format!("{:?}", e));
+    }
+}
+
 impl From<std::env::VarError> for YdbError {
     fn from(e: std::env::VarError) -> Self {
         return YdbError::Custom(e.to_string());

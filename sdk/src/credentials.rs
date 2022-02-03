@@ -1,37 +1,18 @@
 use crate::errors::{YdbError, YdbResult};
+use crate::pub_traits::{Credentials, TokenInfo};
 use dyn_clone::DynClone;
-use std::fmt::Debug;
+use serde::Deserialize;
+use std::fmt::{format, Debug};
 use std::ops::Add;
 use std::process::Command;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
-pub const DEFAULT_TOKEN_RENEW_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour
+pub(crate) type CredentialsRef = Arc<Box<dyn Credentials>>;
 
-#[derive(Debug, Clone)]
-pub struct TokenInfo {
-    pub(crate) token: String,
-    pub(crate) next_renew: Instant,
+pub(crate) fn credencials_ref<T: 'static + Credentials>(cred: T) -> CredentialsRef {
+    Arc::new(Box::new(cred))
 }
-
-impl TokenInfo {
-    pub fn token(token: String) -> Self {
-        return Self {
-            token,
-            next_renew: Instant::now().add(DEFAULT_TOKEN_RENEW_INTERVAL),
-        };
-    }
-
-    pub fn with_renew(mut self, next_renew: Instant) -> Self {
-        self.next_renew = next_renew;
-        return self;
-    }
-}
-
-pub trait Credentials: Debug + DynClone + Send + Sync {
-    fn create_token(self: &mut Self) -> YdbResult<TokenInfo>;
-}
-dyn_clone::clone_trait_object!(Credentials);
 
 #[derive(Debug, Clone)]
 pub struct StaticToken {
@@ -48,8 +29,20 @@ impl StaticToken {
 }
 
 impl Credentials for StaticToken {
-    fn create_token(self: &mut Self) -> YdbResult<TokenInfo> {
+    fn create_token(&self) -> YdbResult<TokenInfo> {
         return Ok(TokenInfo::token(self.token.clone()));
+    }
+
+    fn debug_string(&self) -> String {
+        let (begin, end) = if self.token.len() > 20 {
+            (
+                &self.token.as_str()[0..3],
+                &self.token.as_str()[(self.token.len() - 3)..self.token.len()],
+            )
+        } else {
+            ("xxx", "xxx")
+        };
+        return format!("static token: {begin}...{end}");
     }
 }
 
@@ -81,7 +74,7 @@ impl CommandLineYcToken {
 }
 
 impl Credentials for CommandLineYcToken {
-    fn create_token(self: &mut Self) -> YdbResult<TokenInfo> {
+    fn create_token(&self) -> YdbResult<TokenInfo> {
         {
             let token = self.token.read()?;
             if token.as_str() != "" {
@@ -105,5 +98,66 @@ impl Credentials for CommandLineYcToken {
             *token = String::from_utf8(result.stdout)?.trim().to_string();
             return Ok(TokenInfo::token(token.clone()));
         }
+    }
+
+    fn debug_string(&self) -> String {
+        let token = self.token.read().unwrap();
+        let (_begin, _end) = if token.len() > 20 {
+            (
+                &token.as_str()[0..3],
+                &token.as_str()[(token.len() - 3)..token.len()],
+            )
+        } else {
+            ("xxx", "xxx")
+        };
+
+        return format!("{:?} ({_begin}..{_end})", self.command.lock().unwrap(),);
+    }
+}
+
+pub struct GoogleComputeEngineMetadata {
+    uri: String,
+}
+
+impl GoogleComputeEngineMetadata {
+    pub fn new() -> Self {
+        Self{
+            uri: "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token".parse().unwrap(),
+        }
+    }
+}
+
+impl Credentials for GoogleComputeEngineMetadata {
+    fn create_token(&self) -> YdbResult<TokenInfo> {
+        http::Request::builder()
+            .uri(self.uri.clone())
+            .header("Metadata-Flavor", "Google");
+        let mut request =
+            reqwest::blocking::Request::new(reqwest::Method::GET, self.uri.parse().unwrap());
+        request
+            .headers_mut()
+            .insert("Metadata-Flavor", "Google".parse().unwrap());
+
+        #[derive(Deserialize)]
+        struct TokenResponse {
+            access_token: String,
+            expires_in: u64,
+            token_type: String,
+        }
+
+        let client = reqwest::blocking::Client::new();
+        let res: TokenResponse = client
+            .request(reqwest::Method::GET, self.uri.as_str())
+            .header("Metadata-Flavor", "Google")
+            .send()?
+            .json()?;
+        return Ok(
+            TokenInfo::token(format!("{} {}", res.token_type, res.access_token))
+                .with_renew(Instant::now().add(Duration::from_secs(res.expires_in))),
+        );
+    }
+
+    fn debug_string(&self) -> String {
+        return format!("GoogleComputeEngineMetadata from {}", self.uri.as_str());
     }
 }

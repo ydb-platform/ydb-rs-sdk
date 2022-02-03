@@ -1,4 +1,3 @@
-use crate::credentials::Credentials;
 use crate::errors::YdbResult;
 use crate::internal::client_common::{DBCredentials, TokenCache};
 use crate::internal::client_table::TableClient;
@@ -9,7 +8,9 @@ use crate::internal::grpc;
 use crate::internal::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::internal::middlewares::AuthService;
 
+use crate::credentials::CredentialsRef;
 use crate::internal::grpc::create_grpc_client;
+use crate::pub_traits::Credentials;
 use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_protobuf::generated::ydb::discovery::{
     ListEndpointsRequest, ListEndpointsResult, WhoAmIRequest, WhoAmIResult,
@@ -25,7 +26,7 @@ pub(crate) struct ClientFabric {
 
 impl ClientFabric {
     pub fn new(
-        credentials: Box<dyn Credentials>,
+        credentials: CredentialsRef,
         database: String,
         discovery: Box<dyn Discovery>,
     ) -> YdbResult<Self> {
