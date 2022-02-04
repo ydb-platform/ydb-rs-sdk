@@ -137,74 +137,42 @@ impl Display for YdbError {
 }
 
 macro_rules! to_custom_ydb_err {
-    ($t:ty) => {
+    ($($t:ty),+) => {
+        $(
         impl From<$t> for YdbError {
             fn from(e: $t) -> Self {
                 return YdbError::Custom(e.to_string());
             }
         }
+        )+
     };
 }
 
 impl std::error::Error for YdbError {}
 
-impl From<http::Error> for YdbError {
-    fn from(e: http::Error) -> Self {
-        return YdbError::Custom(e.to_string());
-    }
-}
-
-impl From<prost::DecodeError> for YdbError {
-    fn from(e: prost::DecodeError) -> Self {
-        return YdbError::Custom(e.to_string());
-    }
-}
-
-impl From<reqwest::Error> for YdbError {
-    fn from(e: reqwest::Error) -> Self {
-        return YdbError::Custom(e.to_string());
-    }
-}
-
-impl From<tokio::task::JoinError> for YdbError {
-    fn from(e: tokio::task::JoinError) -> Self {
-        return YdbError::Custom(e.to_string());
-    }
-}
+to_custom_ydb_err!(
+    http::Error,
+    prost::DecodeError,
+    reqwest::Error,
+    std::env::VarError,
+    std::io::Error,
+    std::num::TryFromIntError,
+    std::string::FromUtf8Error,
+    std::time::SystemTimeError,
+    &str,
+    strum::ParseError,
+    tonic::transport::Error,
+    tokio::sync::AcquireError,
+    tokio::sync::oneshot::error::RecvError,
+    tokio::sync::watch::error::RecvError,
+    tokio::task::JoinError,
+    tonic::codegen::http::uri::InvalidUri,
+    url::ParseError
+);
 
 impl From<Box<dyn std::any::Any + Send>> for YdbError {
     fn from(e: Box<dyn std::any::Any + Send>) -> Self {
         return YdbError::Custom(format!("{:?}", e));
-    }
-}
-
-impl From<std::env::VarError> for YdbError {
-    fn from(e: std::env::VarError) -> Self {
-        return YdbError::Custom(e.to_string());
-    }
-}
-
-impl From<std::io::Error> for YdbError {
-    fn from(e: std::io::Error) -> Self {
-        return YdbError::Custom(e.to_string());
-    }
-}
-
-impl From<&str> for YdbError {
-    fn from(s: &str) -> Self {
-        return Self::Custom(s.to_string());
-    }
-}
-
-impl From<std::num::TryFromIntError> for YdbError {
-    fn from(e: std::num::TryFromIntError) -> Self {
-        return YdbError::Custom(e.to_string());
-    }
-}
-
-impl From<std::string::FromUtf8Error> for YdbError {
-    fn from(e: FromUtf8Error) -> Self {
-        return YdbError::Custom(e.to_string());
     }
 }
 
@@ -214,52 +182,8 @@ impl<T> From<std::sync::PoisonError<T>> for YdbError {
     }
 }
 
-impl From<std::time::SystemTimeError> for YdbError {
-    fn from(e: SystemTimeError) -> Self {
-        return YdbError::Custom(e.to_string());
-    }
-}
-
-impl From<strum::ParseError> for YdbError {
-    fn from(e: strum::ParseError) -> Self {
-        return YdbError::Custom(e.to_string());
-    }
-}
-
-impl From<tonic::codegen::http::uri::InvalidUri> for YdbError {
-    fn from(e: tonic::codegen::http::uri::InvalidUri) -> Self {
-        return YdbError::Custom(e.to_string());
-    }
-}
-
-impl From<tokio::sync::AcquireError> for YdbError {
-    fn from(e: AcquireError) -> Self {
-        return YdbError::Custom(e.to_string());
-    }
-}
-
-impl From<tokio::sync::oneshot::error::RecvError> for YdbError {
-    fn from(e: tokio::sync::oneshot::error::RecvError) -> Self {
-        return YdbError::Custom(e.to_string());
-    }
-}
-
-to_custom_ydb_err!(tokio::sync::watch::error::RecvError);
-
-impl From<tonic::transport::Error> for YdbError {
-    fn from(e: tonic::transport::Error) -> Self {
-        return YdbError::Transport(e.to_string());
-    }
-}
-
 impl From<tonic::Status> for YdbError {
     fn from(e: tonic::Status) -> Self {
         return YdbError::TransportGRPCStatus(Arc::new(e));
-    }
-}
-
-impl From<url::ParseError> for YdbError {
-    fn from(e: ParseError) -> Self {
-        return Self::Custom(e.to_string());
     }
 }
