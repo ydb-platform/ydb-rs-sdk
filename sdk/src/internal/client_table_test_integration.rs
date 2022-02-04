@@ -1,18 +1,15 @@
-use std::collections::HashMap;
-
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::internal::client_fabric::ClientFabric;
 use crate::internal::client_table::{RetryOptions, TransactionOptions};
 use crate::internal::discovery::StaticDiscovery;
 use crate::internal::query::Query;
-use crate::internal::result::ResultSet;
-use crate::internal::session::Session;
 use crate::internal::test_helpers::CONNECTION_INFO;
 use crate::internal::transaction::Mode;
 use crate::internal::transaction::Mode::SerializableReadWrite;
 use crate::internal::transaction::Transaction;
 use crate::types::{YdbList, YdbStruct, YdbValue};
 use http::Uri;
+use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
@@ -250,7 +247,7 @@ async fn retry_test() -> YdbResult<()> {
 #[tokio::test]
 async fn scheme_query() -> YdbResult<()> {
     let client = create_client().await?;
-    let mut table_client = client.table_client();
+    let table_client = client.table_client();
 
     let time_now = time::SystemTime::now().duration_since(UNIX_EPOCH)?;
     let table_name = format!("test_table_{}", time_now.as_millis());
@@ -533,7 +530,7 @@ async fn stream_query() -> YdbResult<()> {
                 )?))
             }
 
-            let mut query = Query::new()
+            let query = Query::new()
                 .with_query(
                     "
 DECLARE $values AS List<Struct<

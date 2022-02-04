@@ -3,13 +3,8 @@ use crate::errors::{YdbError, YdbResult, YdbStatusError};
 use crate::internal::grpc::proto_issues_to_ydb_issues;
 use crate::types::YdbValue;
 use std::collections::HashMap;
-use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::task::Poll::Pending;
-use std::task::{Context, Poll};
 use std::vec::IntoIter;
-use tonic::Status;
 use ydb_protobuf::generated::ydb::status_ids::StatusCode;
 use ydb_protobuf::generated::ydb::table::{ExecuteQueryResult, ExecuteScanQueryPartialResponse};
 

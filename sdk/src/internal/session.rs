@@ -3,10 +3,8 @@ use crate::internal::client_table::{TableServiceChannelPool, TableServiceClientT
 use crate::internal::grpc::{grpc_read_operation_result, grpc_read_void_operation_result};
 use crate::internal::query::Query;
 use crate::internal::result::{QueryResult, StreamResult};
-use crate::internal::trait_operation;
 use crate::internal::trait_operation::Operation;
 use derivative::Derivative;
-use std::future::Future;
 use ydb_protobuf::generated::ydb::table::keep_alive_result::SessionStatus;
 use ydb_protobuf::generated::ydb::table::{
     execute_scan_query_request, CommitTransactionRequest, CommitTransactionResult,
@@ -113,7 +111,7 @@ impl Session {
                 ..ExecuteScanQueryRequest::default()
             })
             .await?;
-        let mut stream = resp.into_inner();
+        let stream = resp.into_inner();
         return Ok(StreamResult { results: stream });
     }
 

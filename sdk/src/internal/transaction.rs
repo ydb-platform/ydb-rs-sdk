@@ -1,20 +1,16 @@
 use crate::errors::{YdbError, YdbResult};
+use crate::internal::client_table::TableServiceChannelPool;
 use crate::internal::query::Query;
+use crate::internal::result::QueryResult;
+use crate::internal::session::Session;
 use crate::internal::session_pool::SessionPool;
 use async_trait::async_trait;
 use ydb_protobuf::generated::ydb::table::transaction_control::TxSelector;
 use ydb_protobuf::generated::ydb::table::transaction_settings::TxMode;
 use ydb_protobuf::generated::ydb::table::{
-    CommitTransactionRequest, CommitTransactionResult, ExecuteDataQueryRequest, ExecuteQueryResult,
-    OnlineModeSettings, RollbackTransactionRequest, SerializableModeSettings, TransactionControl,
+    ExecuteDataQueryRequest, OnlineModeSettings, SerializableModeSettings, TransactionControl,
     TransactionSettings,
 };
-
-use crate::errors::YdbError::Custom;
-use crate::internal::client_table::{TableServiceChannelPool, TableServiceClientType};
-use crate::internal::grpc::{grpc_read_operation_result, grpc_read_void_operation_result};
-use crate::internal::result::QueryResult;
-use crate::internal::session::Session;
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum Mode {

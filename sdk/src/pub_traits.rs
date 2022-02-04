@@ -1,9 +1,6 @@
 use crate::errors::YdbResult;
-use dyn_clone::DynClone;
-use std::any::Any;
 use std::fmt::{Debug, Formatter, Write};
 use std::ops::Add;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_TOKEN_RENEW_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour

@@ -1,9 +1,7 @@
 use crate::credentials::CredentialsRef;
 use crate::errors::YdbResult;
 use crate::pub_traits::{Credentials, TokenInfo};
-use std::ops::DerefMut;
-use std::sync::{Arc, Mutex, MutexGuard, RwLock};
-use std::thread;
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use tokio::sync::watch;
 
@@ -26,7 +24,7 @@ struct TokenCacheState {
 pub(crate) struct TokenCache(Arc<RwLock<TokenCacheState>>);
 
 impl TokenCache {
-    pub fn new(mut credentials: CredentialsRef) -> YdbResult<Self> {
+    pub fn new(credentials: CredentialsRef) -> YdbResult<Self> {
         let (token_received_sender, token_received) = watch::channel(false);
         let token_cache = TokenCache(Arc::new(RwLock::new(TokenCacheState {
             credentials,
@@ -67,7 +65,7 @@ impl TokenCache {
     }
 
     fn renew_token_blocking(self) {
-        let mut renew_arc = self.0.read().unwrap().token_renewing.clone();
+        let renew_arc = self.0.read().unwrap().token_renewing.clone();
         let _renew_lock = if let Ok(lock) = renew_arc.try_lock() {
             lock
         } else {
@@ -75,7 +73,7 @@ impl TokenCache {
             return;
         };
 
-        let mut cred = { self.0.write().unwrap().credentials.clone() };
+        let cred = { self.0.write().unwrap().credentials.clone() };
 
         let res = std::thread::spawn(move || cred.create_token())
             .join()

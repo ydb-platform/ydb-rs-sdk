@@ -1,18 +1,16 @@
 use crate::errors::*;
+use crate::internal::channel_pool::{ChannelPool, ChannelPoolImpl};
 use crate::internal::client_common::DBCredentials;
 use crate::internal::client_fabric::Middleware;
 use crate::internal::discovery::{Discovery, Service};
+use crate::internal::session::Session;
+use crate::internal::session_pool::SessionPool;
+use crate::internal::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 use num::pow;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
-use ydb_protobuf::generated::ydb::table::ExecuteSchemeQueryRequest;
-
-use crate::internal::channel_pool::{ChannelPool, ChannelPoolImpl};
-use crate::internal::session::Session;
-use crate::internal::session_pool::SessionPool;
-use crate::internal::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 use ydb_protobuf::generated::ydb::table::v1::table_service_client::TableServiceClient;
 
 const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -188,7 +186,7 @@ impl TableClient {
         let mut attempts: usize = 0;
         let start = Instant::now();
         loop {
-            let mut session = self.session_pool.session().await?;
+            let session = self.session_pool.session().await?;
             let res = callback(session).await;
 
             let err = if let Err(err) = res {

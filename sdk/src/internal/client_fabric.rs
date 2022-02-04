@@ -1,16 +1,13 @@
+use crate::credentials::CredentialsRef;
 use crate::errors::YdbResult;
 use crate::internal::client_common::{DBCredentials, TokenCache};
 use crate::internal::client_table::TableClient;
-use std::sync::Arc;
-
 use crate::internal::discovery::{Discovery, Service};
 use crate::internal::grpc;
+use crate::internal::grpc::create_grpc_client;
 use crate::internal::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::internal::middlewares::AuthService;
-
-use crate::credentials::CredentialsRef;
-use crate::internal::grpc::create_grpc_client;
-use crate::pub_traits::Credentials;
+use std::sync::Arc;
 use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_protobuf::generated::ydb::discovery::{
     ListEndpointsRequest, ListEndpointsResult, WhoAmIRequest, WhoAmIResult,

@@ -1,10 +1,6 @@
 use crate::errors::NeedRetry::IdempotentOnly;
 use std::fmt::{Debug, Display, Formatter};
-use std::string::FromUtf8Error;
 use std::sync::Arc;
-use std::time::SystemTimeError;
-use tokio::sync::AcquireError;
-use url::ParseError;
 
 pub type YdbResult<T> = std::result::Result<T, YdbError>;
 pub type YdbResultWithCustomerErr<T> = std::result::Result<T, YdbOrCustomerError>;

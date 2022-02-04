@@ -1,9 +1,9 @@
-use crate::errors::{YdbError, YdbResult};
+use crate::errors::{YdbResult};
 use crate::types::YdbValue;
 use std::collections::HashMap;
-use std::rc::Rc;
-use std::vec::IntoIter;
-use ydb_protobuf::generated::ydb::table::{ExecuteDataQueryRequest, ExecuteQueryResult};
+
+
+
 use ydb_protobuf::generated::ydb::TypedValue;
 
 pub struct Query {

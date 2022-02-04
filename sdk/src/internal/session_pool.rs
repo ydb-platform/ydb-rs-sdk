@@ -1,4 +1,4 @@
-use crate::errors::YdbError::Custom;
+
 use crate::errors::*;
 use crate::internal::client_table::TableServiceChannelPool;
 use crate::internal::grpc::grpc_read_operation_result;
@@ -9,7 +9,7 @@ use std::ops::Sub;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Semaphore;
 use ydb_protobuf::generated::ydb::table::{
-    CreateSessionRequest, CreateSessionResult, KeepAliveRequest, KeepAliveResult,
+    CreateSessionRequest, CreateSessionResult,
 };
 
 const DEFAULT_SIZE: usize = 1000;
@@ -101,7 +101,7 @@ impl SessionPool {
 }
 
 async fn sessions_pinger(
-    session_client: Arc<Box<dyn SessionClient>>,
+    _session_client: Arc<Box<dyn SessionClient>>,
     idle_sessions: Weak<Mutex<VecDeque<IdleSessionItem>>>,
     interval: std::time::Duration,
 ) {
@@ -152,7 +152,7 @@ mod test {
     use super::SessionClient;
     use crate::errors::{YdbError, YdbResult};
     use crate::internal::channel_pool::ChannelPool;
-    use crate::internal::client_table::{TableServiceChannelPool, TableServiceClientType};
+    use crate::internal::client_table::{TableServiceClientType};
     use crate::internal::session::Session;
     use crate::internal::session_pool::SessionPool;
     use async_trait::async_trait;
@@ -183,12 +183,12 @@ mod test {
 
     #[tokio::test]
     async fn max_active_session() -> YdbResult<()> {
-        let mut pool = SessionPool::new(Box::new(SessionClientMock {})).with_max_active_sessions(1);
+        let pool = SessionPool::new(Box::new(SessionClientMock {})).with_max_active_sessions(1);
         let first_session = pool.session().await?;
 
         let (thread_started_sender, thread_started_receiver) = oneshot::channel();
         let (second_session_got_sender, mut second_session_got_receiver) = oneshot::channel();
-        let mut cloned_pool = pool.clone();
+        let cloned_pool = pool.clone();
 
         tokio::spawn(async move {
             thread_started_sender.send(true).unwrap();

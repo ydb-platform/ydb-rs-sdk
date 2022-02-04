@@ -1,8 +1,7 @@
 use crate::errors::{YdbError, YdbResult};
 use crate::pub_traits::{Credentials, TokenInfo};
-use dyn_clone::DynClone;
 use serde::Deserialize;
-use std::fmt::{format, Debug};
+use std::fmt::Debug;
 use std::ops::Add;
 use std::process::Command;
 use std::sync::{Arc, Mutex, RwLock};

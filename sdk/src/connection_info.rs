@@ -1,14 +1,10 @@
-use std::collections::HashMap;
-
-use std::sync::{Arc, Mutex};
-
-use once_cell::sync::Lazy;
-
 use crate::credentials::{
     credencials_ref, CredentialsRef, GoogleComputeEngineMetadata, StaticToken,
 };
 use crate::errors::{YdbError, YdbResult};
-use crate::pub_traits::Credentials;
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 type ParamHandler = fn(&str, ConnectionInfo) -> YdbResult<ConnectionInfo>;
 
