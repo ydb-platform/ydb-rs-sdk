@@ -1,5 +1,4 @@
 use crate::errors::{YdbError, YdbResult};
-use crate::internal::client_table::TableServiceChannelPool;
 use crate::internal::query::Query;
 use crate::internal::result::QueryResult;
 use crate::internal::session::Session;
@@ -42,18 +41,12 @@ pub struct AutoCommit {
     mode: Mode,
     error_on_truncate_response: bool,
     session_pool: SessionPool,
-    channel_pool: TableServiceChannelPool,
 }
 
 impl AutoCommit {
-    pub(crate) fn new(
-        channel_pool: TableServiceChannelPool,
-        session_pool: SessionPool,
-        mode: Mode,
-    ) -> Self {
+    pub(crate) fn new(session_pool: SessionPool, mode: Mode) -> Self {
         return Self {
             mode,
-            channel_pool,
             session_pool,
             error_on_truncate_response: false,
         };
@@ -104,7 +97,6 @@ impl Transaction for AutoCommit {
 pub struct SerializableReadWriteTx {
     error_on_truncate_response: bool,
     session_pool: SessionPool,
-    channel_pool: TableServiceChannelPool,
 
     id: Option<String>,
     session: Option<Session>,
@@ -114,11 +106,10 @@ pub struct SerializableReadWriteTx {
 }
 
 impl SerializableReadWriteTx {
-    pub(crate) fn new(channel_pool: TableServiceChannelPool, session_pool: SessionPool) -> Self {
+    pub(crate) fn new(session_pool: SessionPool) -> Self {
         return Self {
             error_on_truncate_response: false,
             session_pool,
-            channel_pool,
 
             id: None,
             session: None,

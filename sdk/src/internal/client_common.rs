@@ -1,6 +1,6 @@
 use crate::credentials::CredentialsRef;
 use crate::errors::YdbResult;
-use crate::pub_traits::{Credentials, TokenInfo};
+use crate::pub_traits::TokenInfo;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use tokio::sync::watch;
@@ -85,7 +85,10 @@ impl TokenCache {
                 println!("token renewed");
                 let mut write = self.0.write().unwrap();
                 write.token_info = token_info;
-                write.token_received_sender.send(true);
+                if let Err(_) = write.token_received_sender.send(true) {
+                    println!("send token channel closed");
+                    return;
+                }
             }
             Err(err) => {
                 println!("renew token error: {}", err)

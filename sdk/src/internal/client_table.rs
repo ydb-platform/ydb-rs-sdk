@@ -60,11 +60,13 @@ impl RetryOptions {
         };
     }
 
+    #[allow(dead_code)]
     pub fn with_idempotent(mut self, idempotent: bool) -> Self {
         self.idempotent_operation = idempotent;
         return self;
     }
 
+    #[allow(dead_code)]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.retrier = Some(Arc::new(Box::new(TimeoutRetrier { timeout })));
         return self;
@@ -74,7 +76,6 @@ impl RetryOptions {
 pub(crate) struct TableClient {
     error_on_truncate: bool,
     session_pool: SessionPool,
-    channel_pool: TableServiceChannelPool,
     retrier: Arc<Box<dyn Retry>>,
 }
 
@@ -90,8 +91,7 @@ impl TableClient {
 
         return Self {
             error_on_truncate: false,
-            session_pool: SessionPool::new(Box::new(channel_pool.clone())),
-            channel_pool,
+            session_pool: SessionPool::new(Box::new(channel_pool)),
             retrier: Arc::new(Box::new(TimeoutRetrier::default())),
         };
     }
@@ -109,12 +109,12 @@ impl TableClient {
     }
 
     pub fn create_autocommit_transaction(&self, mode: Mode) -> impl Transaction {
-        AutoCommit::new(self.channel_pool.clone(), self.session_pool.clone(), mode)
+        AutoCommit::new(self.session_pool.clone(), mode)
             .with_error_on_truncate(self.error_on_truncate)
     }
 
     pub fn create_interactive_transaction(&self) -> impl Transaction {
-        SerializableReadWriteTx::new(self.channel_pool.clone(), self.session_pool.clone())
+        SerializableReadWriteTx::new(self.session_pool.clone())
             .with_error_on_truncate(self.error_on_truncate)
     }
 

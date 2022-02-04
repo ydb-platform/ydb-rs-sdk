@@ -1,5 +1,5 @@
 use crate::errors::YdbResult;
-use std::fmt::{Debug, Formatter, Write};
+use std::fmt::{Debug, Formatter};
 use std::ops::Add;
 use std::time::{Duration, Instant};
 
