@@ -6,7 +6,7 @@ use ydb_protobuf::generated::ydb::table::{
     RollbackTransactionResponse,
 };
 
-pub trait Operation {
+pub(crate) trait Operation {
     fn operation(self: &Self) -> Option<YdbOperation>;
 }
 

@@ -58,12 +58,15 @@ pub struct ValueStruct {
 }
 
 impl ValueStruct {
-    pub fn insert(&mut self, name: String, v: Value) {
+    pub(crate) fn insert(&mut self, name: String, v: Value) {
         self.fields_name.push(name);
         self.values.push(v);
     }
 
-    pub fn from_names_and_values(fields_name: Vec<String>, values: Vec<Value>) -> YdbResult<Self> {
+    pub(crate) fn from_names_and_values(
+        fields_name: Vec<String>,
+        values: Vec<Value>,
+    ) -> YdbResult<Self> {
         if fields_name.len() != values.len() {
             return Err(YdbError::Custom(format!("different len fields_name and values. fields_name len: {}, values len: {}. fields_name: {:?}, values: {:?}", fields_name.len(), values.len(), fields_name, values).into()));
         };
@@ -74,11 +77,11 @@ impl ValueStruct {
         });
     }
 
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         return Self::with_capacity(0);
     }
 
-    pub fn with_capacity(capacity: usize) -> Self {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
         return ValueStruct {
             fields_name: Vec::with_capacity(capacity),
             values: Vec::with_capacity(capacity),
@@ -94,8 +97,8 @@ impl Default for ValueStruct {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValueList {
-    pub t: Value,
-    pub values: Vec<Value>,
+    pub(crate) t: Value,
+    pub(crate) values: Vec<Value>,
 }
 
 impl Default for Box<ValueList> {
@@ -109,8 +112,8 @@ impl Default for Box<ValueList> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValueOptional {
-    pub t: Value,
-    pub value: Option<Value>,
+    pub(crate) t: Value,
+    pub(crate) value: Option<Value>,
 }
 
 impl Default for Box<ValueOptional> {
@@ -165,7 +168,7 @@ impl SignedInterval {
 }
 
 impl Value {
-    pub fn list_from(t: Value, values: Vec<Value>) -> YdbResult<Self> {
+    pub(crate) fn list_from(t: Value, values: Vec<Value>) -> YdbResult<Self> {
         for (index, value) in values.iter().enumerate() {
             if std::mem::discriminant(&t) != std::mem::discriminant(value) {
                 return Err(YdbError::Custom(format!("failed list_from: type and value has different enum-types. index: {}, type: '{:?}', value: '{:?}'", index, t, value)));
@@ -175,7 +178,7 @@ impl Value {
         return Ok(Value::List(Box::new(ValueList { t, values })));
     }
 
-    pub fn optional_from(t: Value, value: Option<Value>) -> YdbResult<Self> {
+    pub(crate) fn optional_from(t: Value, value: Option<Value>) -> YdbResult<Self> {
         if let Some(value) = &value {
             if std::mem::discriminant(&t) != std::mem::discriminant(value) {
                 return Err(YdbError::Custom(format!("failed optional_from: type and value has different enum-types. type: '{:?}', value: '{:?}'", t, value)));
@@ -514,8 +517,8 @@ impl Value {
 }
 
 #[derive(Debug)]
-pub struct Column {
-    pub name: String,
+pub(crate) struct Column {
+    pub(crate) name: String,
     pub(crate) v_type: Value,
 }
 

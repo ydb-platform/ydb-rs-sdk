@@ -15,12 +15,12 @@ pub(crate) fn credencials_ref<T: 'static + Credentials>(cred: T) -> CredentialsR
 
 #[derive(Debug, Clone)]
 pub struct StaticToken {
-    pub token: String,
+    pub(crate) token: String,
 }
 
 impl StaticToken {
     #[allow(unused)]
-    pub fn from(token: &str) -> Self {
+    pub(crate) fn from(token: &str) -> Self {
         return StaticToken {
             token: token.to_string(),
         };
@@ -52,7 +52,7 @@ pub struct CommandLineYcToken {
 
 impl CommandLineYcToken {
     #[allow(dead_code)]
-    pub fn from_string_cmd(cmd: &str) -> YdbResult<Self> {
+    pub(crate) fn from_string_cmd(cmd: &str) -> YdbResult<Self> {
         let cmd_parts: Vec<&str> = cmd.split_whitespace().collect();
 
         if cmd_parts.len() < 1 {
@@ -114,7 +114,7 @@ pub struct GoogleComputeEngineMetadata {
 }
 
 impl GoogleComputeEngineMetadata {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self{
             uri: "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token".parse().unwrap(),
         }

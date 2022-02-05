@@ -8,13 +8,13 @@ use tokio::sync::watch;
 
 #[derive(Clone, Debug)]
 pub(crate) struct DBCredentials {
-    pub database: String,
-    pub token_cache: TokenCache,
+    pub(crate) database: String,
+    pub(crate) token_cache: TokenCache,
 }
 
 #[derive(Debug)]
 struct TokenCacheState {
-    pub credentials: CredentialsRef,
+    pub(crate) credentials: CredentialsRef,
     token_info: TokenInfo,
     token_renewing: Arc<Mutex<()>>,
     token_received: watch::Receiver<bool>,
@@ -25,7 +25,7 @@ struct TokenCacheState {
 pub(crate) struct TokenCache(Arc<RwLock<TokenCacheState>>);
 
 impl TokenCache {
-    pub fn new(credentials: CredentialsRef) -> YdbResult<Self> {
+    pub(crate) fn new(credentials: CredentialsRef) -> YdbResult<Self> {
         let (token_received_sender, token_received) = watch::channel(false);
         let token_cache = TokenCache(Arc::new(RwLock::new(TokenCacheState {
             credentials,
@@ -39,7 +39,7 @@ impl TokenCache {
         return Ok(token_cache);
     }
 
-    pub fn token(&self) -> String {
+    pub(crate) fn token(&self) -> String {
         let now = Instant::now();
 
         let read = self.0.read().unwrap();

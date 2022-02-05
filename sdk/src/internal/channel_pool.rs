@@ -25,7 +25,7 @@ where
 }
 
 pub(crate) struct ChannelErrorInfo {
-    pub endpoint: Uri,
+    pub(crate) endpoint: Uri,
 }
 
 // TODO: implement Channel for Channel pool for drop-in replacements in grpc-clients
@@ -133,7 +133,7 @@ where
     }
 }
 
-pub struct ChannelProxyFuture {
+pub(crate) struct ChannelProxyFuture {
     endpoint: Uri,
     inner: <Channel as tower::Service<http::Request<BoxBody>>>::Future,
     error_event: Option<tokio::sync::mpsc::Sender<ChannelErrorInfo>>,
@@ -169,7 +169,7 @@ type ChannelResponse = <Channel as tower::Service<http::Request<BoxBody>>>::Resp
 type ChannelError = <Channel as tower::Service<http::Request<BoxBody>>>::Error;
 
 impl ChannelProxy {
-    pub fn new(endpoint: Uri, ch: Channel, error_sender: ChannelProxyErrorSender) -> Self {
+    pub(crate) fn new(endpoint: Uri, ch: Channel, error_sender: ChannelProxyErrorSender) -> Self {
         return ChannelProxy {
             endpoint,
             ch,

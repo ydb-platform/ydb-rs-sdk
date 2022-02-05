@@ -37,7 +37,7 @@ pub trait Transaction {
 
 // TODO: operations timeout
 
-pub struct AutoCommit {
+pub(crate) struct AutoCommit {
     mode: Mode,
     error_on_truncate_response: bool,
     session_pool: SessionPool,
@@ -52,7 +52,7 @@ impl AutoCommit {
         };
     }
 
-    pub fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
+    pub(crate) fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
         self.error_on_truncate_response = error_on_truncate;
         return self;
     }
@@ -94,7 +94,7 @@ impl Transaction for AutoCommit {
     }
 }
 
-pub struct SerializableReadWriteTx {
+pub(crate) struct SerializableReadWriteTx {
     error_on_truncate_response: bool,
     session_pool: SessionPool,
 
@@ -119,7 +119,7 @@ impl SerializableReadWriteTx {
         };
     }
 
-    pub fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
+    pub(crate) fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
         self.error_on_truncate_response = error_on_truncate;
         return self;
     }

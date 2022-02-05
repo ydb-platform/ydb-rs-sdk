@@ -60,7 +60,7 @@ pub struct ResultSet {
 
 impl ResultSet {
     #[allow(dead_code)]
-    pub fn columns(&self) -> &Vec<crate::types::Column> {
+    pub(crate) fn columns(&self) -> &Vec<crate::types::Column> {
         return &self.columns;
     }
 
@@ -73,7 +73,7 @@ impl ResultSet {
     }
 
     #[allow(dead_code)]
-    pub fn truncated(&self) -> bool {
+    pub(crate) fn truncated(&self) -> bool {
         self.pb.truncated
     }
 
@@ -124,7 +124,7 @@ impl Row {
         return Err(YdbError::Custom("field not found".into()));
     }
 
-    pub fn remove_field(&mut self, index: usize) -> errors::YdbResult<Value> {
+    pub(crate) fn remove_field(&mut self, index: usize) -> errors::YdbResult<Value> {
         match self.pb.remove(&index) {
             Some(val) => Value::from_proto(&self.columns[index].v_type, val),
             None => Err(YdbError::Custom("it has no the field".into())),
@@ -160,7 +160,7 @@ pub struct StreamResult {
 }
 
 impl StreamResult {
-    pub async fn next(&mut self) -> YdbResult<Option<ResultSet>> {
+    pub(crate) async fn next(&mut self) -> YdbResult<Option<ResultSet>> {
         let partial_response = if let Some(partial_response) = self.results.message().await? {
             partial_response
         } else {

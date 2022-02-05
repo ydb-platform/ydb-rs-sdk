@@ -42,8 +42,8 @@ pub(crate) enum Service {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DiscoveryState {
-    pub timestamp: std::time::Instant,
-    pub services: HashMap<Service, Vec<NodeInfo>>,
+    pub(crate) timestamp: std::time::Instant,
+    pub(crate) services: HashMap<Service, Vec<NodeInfo>>,
 
     pessimized_nodes: HashSet<Uri>,
     original_services: HashMap<Service, Vec<NodeInfo>>,

@@ -13,12 +13,12 @@ pub enum YdbOrCustomerError {
 
 impl YdbOrCustomerError {
     #[allow(dead_code)]
-    pub fn from_mess<T: Into<String>>(s: T) -> Self {
+    pub(crate) fn from_mess<T: Into<String>>(s: T) -> Self {
         return Self::Customer(Arc::new(Box::new(YdbError::Custom(s.into()))));
     }
 
     #[allow(dead_code)]
-    pub fn from_err<T: std::error::Error + 'static>(err: T) -> Self {
+    pub(crate) fn from_err<T: std::error::Error + 'static>(err: T) -> Self {
         return Self::Customer(Arc::new(Box::new(err)));
     }
 }
@@ -71,9 +71,9 @@ pub enum YdbError {
 #[non_exhaustive]
 pub struct YdbStatusError {
     #[allow(dead_code)]
-    pub message: String,
-    pub operation_status: i32,
-    pub issues: Vec<YdbIssue>,
+    pub(crate) message: String,
+    pub(crate) operation_status: i32,
+    pub(crate) issues: Vec<YdbIssue>,
 }
 
 #[derive(Clone, Debug)]
@@ -86,7 +86,7 @@ pub struct YdbIssue {
 
 impl YdbError {
     #[allow(dead_code)]
-    pub fn from_str(s: &str) -> YdbError {
+    pub(crate) fn from_str(s: &str) -> YdbError {
         return YdbError::Custom(s.to_string());
     }
     pub(crate) fn need_retry(&self) -> NeedRetry {

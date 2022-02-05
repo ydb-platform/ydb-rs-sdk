@@ -50,7 +50,7 @@ impl ClientBuilder {
         }
     }
 
-    pub fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
+    pub(crate) fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
         self.credentials = credencials_ref(cred);
         return self;
     }
@@ -60,12 +60,12 @@ impl ClientBuilder {
         return self;
     }
 
-    pub fn with_database(mut self, database: String) -> Self {
+    pub(crate) fn with_database(mut self, database: String) -> Self {
         self.database = database;
         return self;
     }
 
-    pub fn with_endpoint(mut self, endpoint: String) -> Self {
+    pub(crate) fn with_endpoint(mut self, endpoint: String) -> Self {
         self.endpoint = endpoint;
         return self;
     }
@@ -109,7 +109,7 @@ impl Client {
         grpc::grpc_read_operation_result(self.client_discovery().await?.list_endpoints(req).await?)
     }
 
-    pub async fn who_am_i(self: Self, req: WhoAmIRequest) -> YdbResult<WhoAmIResult> {
+    pub(crate) async fn who_am_i(self: Self, req: WhoAmIRequest) -> YdbResult<WhoAmIResult> {
         grpc::grpc_read_operation_result(self.client_discovery().await?.who_am_i(req).await?)
     }
 

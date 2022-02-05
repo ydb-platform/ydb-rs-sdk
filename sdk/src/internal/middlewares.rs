@@ -19,7 +19,7 @@ pub(crate) struct AuthService {
 }
 
 impl AuthService {
-    pub fn new(ch: ChannelProxy, cred: DBCredentials) -> Self {
+    pub(crate) fn new(ch: ChannelProxy, cred: DBCredentials) -> Self {
         return AuthService { ch, cred };
     }
 }

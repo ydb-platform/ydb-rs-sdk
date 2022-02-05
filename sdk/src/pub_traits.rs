@@ -4,7 +4,7 @@ use std::fmt::{Debug, Formatter};
 use std::ops::Add;
 use std::time::{Duration, Instant};
 
-pub const DEFAULT_TOKEN_RENEW_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour
+pub(crate) const DEFAULT_TOKEN_RENEW_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour
 
 #[derive(Debug, Clone)]
 pub struct TokenInfo {
@@ -13,14 +13,14 @@ pub struct TokenInfo {
 }
 
 impl TokenInfo {
-    pub fn token(token: String) -> Self {
+    pub(crate) fn token(token: String) -> Self {
         return Self {
             token,
             next_renew: Instant::now().add(DEFAULT_TOKEN_RENEW_INTERVAL),
         };
     }
 
-    pub fn with_renew(mut self, next_renew: Instant) -> Self {
+    pub(crate) fn with_renew(mut self, next_renew: Instant) -> Self {
         self.next_renew = next_renew;
         return self;
     }

@@ -19,10 +19,10 @@ static PARAM_HANDLERS: Lazy<Mutex<HashMap<String, ParamHandler>>> = Lazy::new(||
     })
 });
 
-pub struct ConnectionInfo {
-    pub discovery_endpoint: String, // scheme://host:port, scheme one of grpc/grpcs
-    pub database: String,
-    pub credentials: CredentialsRef,
+pub(crate) struct ConnectionInfo {
+    pub(crate) discovery_endpoint: String, // scheme://host:port, scheme one of grpc/grpcs
+    pub(crate) database: String,
+    pub(crate) credentials: CredentialsRef,
 }
 
 impl Default for ConnectionInfo {
@@ -36,7 +36,7 @@ impl Default for ConnectionInfo {
 }
 
 impl ConnectionInfo {
-    pub fn parse(uri: &str) -> YdbResult<ConnectionInfo> {
+    pub(crate) fn parse(uri: &str) -> YdbResult<ConnectionInfo> {
         let mut connection_info = ConnectionInfo::default();
 
         connection_info = Self::parse_endpoint(uri, connection_info)?;
@@ -66,7 +66,7 @@ impl ConnectionInfo {
 
 // TODO: ParamHandler to Fn trait
 #[allow(dead_code)]
-pub fn register(param_name: &str, handler: ParamHandler) -> YdbResult<()> {
+pub(crate) fn register(param_name: &str, handler: ParamHandler) -> YdbResult<()> {
     let mut lock = PARAM_HANDLERS.lock()?;
     if lock.contains_key(param_name) {
         return Err(YdbError::Custom(

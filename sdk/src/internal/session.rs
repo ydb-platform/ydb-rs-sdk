@@ -74,7 +74,7 @@ impl Session {
         return Ok(());
     }
 
-    pub async fn execute_schema_query(&mut self, query: String) -> YdbResult<()> {
+    pub(crate) async fn execute_schema_query(&mut self, query: String) -> YdbResult<()> {
         let resp = self
             .channel_pool
             .create_channel()

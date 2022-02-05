@@ -35,13 +35,13 @@ impl TransactionOptions {
     }
 
     #[allow(dead_code)]
-    pub fn with_mode(mut self, mode: Mode) -> Self {
+    pub(crate) fn with_mode(mut self, mode: Mode) -> Self {
         self.mode = mode;
         return self;
     }
 
     #[allow(dead_code)]
-    pub fn with_autocommit(mut self, autocommit: bool) -> Self {
+    pub(crate) fn with_autocommit(mut self, autocommit: bool) -> Self {
         self.autocommit = autocommit;
         return self;
     }
@@ -61,13 +61,13 @@ impl RetryOptions {
     }
 
     #[allow(dead_code)]
-    pub fn with_idempotent(mut self, idempotent: bool) -> Self {
+    pub(crate) fn with_idempotent(mut self, idempotent: bool) -> Self {
         self.idempotent_operation = idempotent;
         return self;
     }
 
     #[allow(dead_code)]
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    pub(crate) fn with_timeout(mut self, timeout: Duration) -> Self {
         self.retrier = Some(Arc::new(Box::new(TimeoutRetrier { timeout })));
         return self;
     }
@@ -103,17 +103,17 @@ impl TableClient {
     }
 
     #[allow(dead_code)]
-    pub fn with_retry_timeout(mut self, timeout: Duration) -> Self {
+    pub(crate) fn with_retry_timeout(mut self, timeout: Duration) -> Self {
         self.retrier = Arc::new(Box::new(TimeoutRetrier { timeout }));
         return self;
     }
 
-    pub fn create_autocommit_transaction(&self, mode: Mode) -> impl Transaction {
+    pub(crate) fn create_autocommit_transaction(&self, mode: Mode) -> impl Transaction {
         AutoCommit::new(self.session_pool.clone(), mode)
             .with_error_on_truncate(self.error_on_truncate)
     }
 
-    pub fn create_interactive_transaction(&self) -> impl Transaction {
+    pub(crate) fn create_interactive_transaction(&self) -> impl Transaction {
         SerializableReadWriteTx::new(self.session_pool.clone())
             .with_error_on_truncate(self.error_on_truncate)
     }
@@ -214,7 +214,7 @@ impl TableClient {
     }
 
     #[allow(dead_code)]
-    pub fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
+    pub(crate) fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
         self.error_on_truncate = error_on_truncate;
         return self;
     }
@@ -234,15 +234,15 @@ impl TableClient {
 }
 
 struct RetryParams {
-    pub attempt: usize,
-    pub time_from_start: Duration,
+    pub(crate) attempt: usize,
+    pub(crate) time_from_start: Duration,
 }
 
 // May be extend in feature
 #[derive(Default)]
 struct RetryDecision {
-    pub allow_retry: bool,
-    pub wait_timeout: Duration,
+    pub(crate) allow_retry: bool,
+    pub(crate) wait_timeout: Duration,
 }
 
 trait Retry {

@@ -10,19 +10,19 @@ pub struct Query {
 }
 
 impl Query {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Query {
             text: "".into(),
             parameters: HashMap::new(),
         }
     }
 
-    pub fn with_query(mut self: Self, query: String) -> Self {
+    pub(crate) fn with_query(mut self: Self, query: String) -> Self {
         self.text = query;
         return self;
     }
 
-    pub fn with_params(mut self, params: HashMap<String, Value>) -> Self {
+    pub(crate) fn with_params(mut self, params: HashMap<String, Value>) -> Self {
         self.parameters = params;
         return self;
     }

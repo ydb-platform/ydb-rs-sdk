@@ -8,7 +8,7 @@ mod types_converters;
 
 pub use crate::{
     credentials::{CommandLineYcToken, GoogleComputeEngineMetadata, StaticToken},
-    errors::{YdbError, YdbResult},
+    errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr},
     internal::{
         client_fabric::{Client, ClientBuilder},
         client_table::{RetryOptions, TransactionOptions},
