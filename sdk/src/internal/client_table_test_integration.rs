@@ -1,5 +1,5 @@
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
-use crate::internal::client_fabric::ClientFabric;
+use crate::internal::client_fabric::{Client, ClientBuilder};
 use crate::internal::client_table::{RetryOptions, TransactionOptions};
 use crate::internal::discovery::StaticDiscovery;
 use crate::internal::query::Query;
@@ -18,15 +18,15 @@ use std::time::{Duration, UNIX_EPOCH};
 use tonic::{Code, Status};
 use ydb_protobuf::generated::ydb::discovery::{ListEndpointsRequest, WhoAmIRequest};
 
-async fn create_client() -> YdbResult<ClientFabric> {
+async fn create_client() -> YdbResult<Client> {
     let _endpoint_uri = Uri::from_str(CONNECTION_INFO.discovery_endpoint.as_str())?;
-    let discovery = StaticDiscovery::from_str(CONNECTION_INFO.discovery_endpoint.as_str())?;
 
-    let client = ClientFabric::new(
-        CONNECTION_INFO.credentials.clone(),
-        CONNECTION_INFO.database.clone(),
-        Box::new(discovery),
-    )?;
+    let client = ClientBuilder::new()
+        .with_endpoint(CONNECTION_INFO.discovery_endpoint.clone())
+        .with_database(CONNECTION_INFO.database.clone())
+        .with_credentials(CONNECTION_INFO.credentials.clone())
+        .build()?;
+
     client.wait().await?;
     return Ok(client);
 }

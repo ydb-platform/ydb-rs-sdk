@@ -73,7 +73,7 @@ impl RetryOptions {
     }
 }
 
-pub(crate) struct TableClient {
+pub struct TableClient {
     error_on_truncate: bool,
     session_pool: SessionPool,
     retrier: Arc<Box<dyn Retry>>,
@@ -174,7 +174,7 @@ impl TableClient {
         }
     }
 
-    pub async fn retry_with_session<CallbackFuture, CallbackResult>(
+    pub(crate) async fn retry_with_session<CallbackFuture, CallbackResult>(
         &self,
         opts: RetryOptions,
         callback: impl Fn(Session) -> CallbackFuture,

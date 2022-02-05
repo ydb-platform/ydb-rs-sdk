@@ -1,6 +1,6 @@
 [package]
 publish=false
-name = "sdk"
+name = "ydb"
 version = "0.0.0"
 authors = ["rekby <timofey.koolin@gmail.com>"]
 edition = "2021"

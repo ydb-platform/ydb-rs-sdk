@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::fmt::Debug;
 use std::ops::Add;
 use std::process::Command;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub(crate) type CredentialsRef = Arc<Box<dyn Credentials>>;
@@ -89,7 +89,7 @@ impl Credentials for CommandLineYcToken {
         let token_describe: String = match self.create_token() {
             Ok(token_info) => {
                 let token = token_info.token;
-                let mut desc: String = if token.len() > 20 {
+                let desc: String = if token.len() > 20 {
                     format!(
                         "{}..{}",
                         &token.as_str()[0..3],

@@ -1,7 +1,7 @@
 mod channel_pool;
 mod client_common;
-mod client_fabric;
-mod client_table;
+pub(crate) mod client_fabric;
+pub(crate) mod client_table;
 
 #[cfg(test)]
 mod client_table_test_integration;
@@ -10,10 +10,11 @@ mod discovery;
 mod grpc;
 mod load_balancer;
 mod middlewares;
-mod query;
-mod result;
+pub(crate) mod query;
+pub(crate) mod result;
 mod session;
 mod session_pool;
 mod test_helpers;
 mod trait_operation;
-mod transaction;
+pub(crate) mod transaction;
+mod waiter;

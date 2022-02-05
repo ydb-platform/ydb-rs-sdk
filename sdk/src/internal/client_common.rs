@@ -1,5 +1,6 @@
 use crate::credentials::CredentialsRef;
 use crate::errors::YdbResult;
+use crate::internal::waiter::Waiter;
 use crate::pub_traits::TokenInfo;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
@@ -52,18 +53,6 @@ impl TokenCache {
         return read.token_info.token.clone();
     }
 
-    pub async fn wait_token(&self) -> YdbResult<()> {
-        let mut ch = self.0.read().unwrap().token_received.clone();
-        loop {
-            let received = *ch.borrow_and_update();
-            if received {
-                return Ok(());
-            }
-
-            ch.changed().await?;
-        }
-    }
-
     fn renew_token_blocking(self) {
         let renew_arc = self.0.read().unwrap().token_renewing.clone();
         let _renew_lock = if let Ok(lock) = renew_arc.try_lock() {
@@ -94,5 +83,20 @@ impl TokenCache {
                 println!("renew token error: {}", err)
             }
         };
+    }
+}
+
+#[async_trait::async_trait]
+impl Waiter for TokenCache {
+    async fn wait(&self) -> YdbResult<()> {
+        let mut ch = self.0.read().unwrap().token_received.clone();
+        loop {
+            let received = *ch.borrow_and_update();
+            if received {
+                return Ok(());
+            }
+
+            ch.changed().await?;
+        }
     }
 }

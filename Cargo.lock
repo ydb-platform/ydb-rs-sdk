@@ -1126,33 +1126,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sdk"
-version = "0.0.0"
-dependencies = [
- "async-trait",
- "chrono",
- "derivative",
- "dyn-clone",
- "http",
- "mockall",
- "num",
- "once_cell",
- "prost",
- "prost-types",
- "rand",
- "reqwest",
- "rust_decimal",
- "serde",
- "serde_json",
- "strum",
- "tokio",
- "tonic",
- "tower",
- "url",
- "ydb-protobuf",
-]
-
-[[package]]
 name = "security-framework"
 version = "2.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1225,6 +1198,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e51e73328dc4ac0c7ccbda3a494dfa03df1de2f46018127f60c693f2648455b0"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "simple-ping"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "ydb",
 ]
 
 [[package]]
@@ -1768,6 +1749,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0120db82e8a1e0b9fb3345a539c478767c0048d842860994d96113d5b667bd69"
 dependencies = [
  "winapi",
+]
+
+[[package]]
+name = "ydb"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "derivative",
+ "dyn-clone",
+ "http",
+ "mockall",
+ "num",
+ "once_cell",
+ "prost",
+ "prost-types",
+ "rand",
+ "reqwest",
+ "rust_decimal",
+ "serde",
+ "serde_json",
+ "strum",
+ "tokio",
+ "tonic",
+ "tower",
+ "url",
+ "ydb-protobuf",
 ]
 
 [[package]]

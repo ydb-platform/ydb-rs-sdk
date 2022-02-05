@@ -15,10 +15,11 @@ use ydb_protobuf::generated::ydb::discovery::{
 use crate::errors::YdbResult;
 use crate::internal::client_common::DBCredentials;
 use crate::internal::grpc::{create_grpc_client, grpc_read_operation_result};
+use crate::internal::waiter::Waiter;
 use std::iter::FromIterator;
 use std::time::Duration;
 use tokio::sync::watch::Receiver;
-use tokio::sync::Mutex;
+use tokio::sync::{watch, Mutex};
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Display, Debug, EnumIter, EnumString, Eq, Hash, PartialEq)]
@@ -122,7 +123,7 @@ impl NodeInfo {
 }
 
 #[async_trait]
-pub(crate) trait Discovery: Send + Sync {
+pub(crate) trait Discovery: Send + Sync + Waiter {
     fn pessimization(&self, uri: &Uri);
     fn subscribe(&self) -> tokio::sync::watch::Receiver<Arc<DiscoveryState>>;
     fn state(&self) -> Arc<DiscoveryState>;
@@ -170,6 +171,13 @@ impl Discovery for StaticDiscovery {
     }
 }
 
+#[async_trait]
+impl Waiter for StaticDiscovery {
+    async fn wait(&self) -> YdbResult<()> {
+        return Ok(());
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct TimerDiscovery {
     state: Arc<DiscoverySharedState>,
@@ -177,13 +185,8 @@ pub(crate) struct TimerDiscovery {
 
 impl TimerDiscovery {
     #[allow(dead_code)]
-    pub(crate) fn new(
-        cred: DBCredentials,
-        database: String,
-        endpoint: &str,
-        interval: Duration,
-    ) -> YdbResult<Self> {
-        let state = Arc::new(DiscoverySharedState::new(cred, database, endpoint)?);
+    pub(crate) fn new(cred: DBCredentials, endpoint: &str, interval: Duration) -> YdbResult<Self> {
+        let state = Arc::new(DiscoverySharedState::new(cred, endpoint)?);
         let state_weak = Arc::downgrade(&state);
         tokio::spawn(async move {
             DiscoverySharedState::background_discovery(state_weak, interval).await;
@@ -220,7 +223,7 @@ impl Discovery for TimerDiscovery {
     }
 
     fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
-        todo!()
+        return self.state.subscribe();
     }
 
     fn state(&self) -> Arc<DiscoveryState> {
@@ -228,31 +231,41 @@ impl Discovery for TimerDiscovery {
     }
 }
 
+#[async_trait::async_trait]
+impl Waiter for TimerDiscovery {
+    async fn wait(&self) -> YdbResult<()> {
+        return self.state.wait().await;
+    }
+}
+
 struct DiscoverySharedState {
     cred: DBCredentials,
     discovery_uri: Uri,
-    database: String,
     sender: tokio::sync::watch::Sender<Arc<DiscoveryState>>,
 
     discovery_process: Mutex<()>,
     discovery_state: RwLock<Arc<DiscoveryState>>,
+
+    state_received: watch::Receiver<bool>,
+    state_received_sender: watch::Sender<bool>,
 }
 
 impl DiscoverySharedState {
-    fn new(cred: DBCredentials, database: String, endpoint: &str) -> YdbResult<Self> {
+    fn new(cred: DBCredentials, endpoint: &str) -> YdbResult<Self> {
         let state = Arc::new(DiscoveryState::new(
             std::time::Instant::now(),
             HashMap::new(),
         ));
-        let (sender, _) = tokio::sync::watch::channel(state.clone());
-
+        let (sender, _) = watch::channel(state.clone());
+        let (state_received_sender, state_received) = watch::channel(false);
         return Ok(Self {
             cred,
-            database,
             discovery_uri: http::Uri::from_str(endpoint)?,
             sender,
             discovery_process: Mutex::new(()),
             discovery_state: RwLock::new(state),
+            state_received,
+            state_received_sender,
         });
     }
 
@@ -269,7 +282,7 @@ impl DiscoverySharedState {
 
         let resp = discovery_client
             .list_endpoints(ListEndpointsRequest {
-                database: self.database.clone(),
+                database: self.cred.database.clone(),
                 service: vec![],
             })
             .await?;
@@ -294,6 +307,7 @@ impl DiscoverySharedState {
     ) {
         *locked_state = new_state.clone();
         let _ = self.sender.send(new_state);
+        self.state_received_sender.send(true);
     }
 
     async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
@@ -370,6 +384,19 @@ impl Discovery for DiscoverySharedState {
     }
 }
 
+#[async_trait::async_trait]
+impl Waiter for DiscoverySharedState {
+    async fn wait(&self) -> YdbResult<()> {
+        let mut channel = self.state_received.clone();
+        loop {
+            if *channel.borrow_and_update() {
+                return Ok(());
+            }
+            channel.changed().await?
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::errors::YdbResult;
@@ -388,11 +415,8 @@ mod test {
             })
             .await??,
         };
-        let discovery_shared = DiscoverySharedState::new(
-            cred,
-            CONNECTION_INFO.database.clone(),
-            CONNECTION_INFO.discovery_endpoint.as_str(),
-        )?;
+        let discovery_shared =
+            DiscoverySharedState::new(cred, CONNECTION_INFO.discovery_endpoint.as_str())?;
 
         let state = Arc::new(discovery_shared);
         let mut rx = state.sender.subscribe();
