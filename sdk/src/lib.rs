@@ -6,6 +6,7 @@ mod pub_traits;
 mod types;
 mod types_converters;
 
+// full enum pub types
 pub use crate::{
     credentials::{CommandLineYcToken, GoogleComputeEngineMetadata, StaticToken},
     errors::{
