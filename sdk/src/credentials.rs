@@ -45,9 +45,8 @@ impl Credentials for StaticToken {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct CommandLineYcToken {
-    token: Arc<RwLock<String>>,
     command: Arc<Mutex<Command>>,
 }
 
@@ -66,7 +65,6 @@ impl CommandLineYcToken {
         command.args(&cmd_parts.as_slice()[1..]);
 
         return Ok(CommandLineYcToken {
-            token: Arc::new(RwLock::new("".to_string())),
             command: Arc::new(Mutex::new(command)),
         });
     }
@@ -74,43 +72,40 @@ impl CommandLineYcToken {
 
 impl Credentials for CommandLineYcToken {
     fn create_token(&self) -> YdbResult<TokenInfo> {
-        {
-            let token = self.token.read()?;
-            if token.as_str() != "" {
-                return Ok(TokenInfo::token(token.clone()));
-            }
+        let result = self.command.lock()?.output()?;
+        if !result.status.success() {
+            let err = String::from_utf8(result.stderr)?;
+            return Err(YdbError::Custom(format!(
+                "can't execute yc ({}): {}",
+                result.status.code().unwrap(),
+                err
+            )));
         }
-        {
-            let mut token = self.token.write()?;
-            if token.as_str() != "" {
-                return Ok(TokenInfo::token(token.clone()));
-            }
-            let result = self.command.lock()?.output()?;
-            if !result.status.success() {
-                let err = String::from_utf8(result.stderr)?;
-                return Err(YdbError::Custom(format!(
-                    "can't execute yc ({}): {}",
-                    result.status.code().unwrap(),
-                    err
-                )));
-            }
-            *token = String::from_utf8(result.stdout)?.trim().to_string();
-            return Ok(TokenInfo::token(token.clone()));
-        }
+        let token = String::from_utf8(result.stdout)?.trim().to_string();
+        return Ok(TokenInfo::token(token));
     }
 
     fn debug_string(&self) -> String {
-        let token = self.token.read().unwrap();
-        let (_begin, _end) = if token.len() > 20 {
-            (
-                &token.as_str()[0..3],
-                &token.as_str()[(token.len() - 3)..token.len()],
-            )
-        } else {
-            ("xxx", "xxx")
+        let token_describe: String = match self.create_token() {
+            Ok(token_info) => {
+                let token = token_info.token;
+                let mut desc: String = if token.len() > 20 {
+                    format!(
+                        "{}..{}",
+                        &token.as_str()[0..3],
+                        &token.as_str()[(token.len() - 3)..token.len()]
+                    )
+                } else {
+                    "short_token".to_string()
+                };
+                desc
+            }
+            Err(err) => {
+                format!("err: {}", err.to_string())
+            }
         };
 
-        return format!("{:?} ({_begin}..{_end})", self.command.lock().unwrap(),);
+        return token_describe;
     }
 }
 
