@@ -8,14 +8,16 @@ mod types_converters;
 
 pub use crate::{
     credentials::{CommandLineYcToken, GoogleComputeEngineMetadata, StaticToken},
-    errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr},
+    errors::{
+        YdbError, YdbIssue, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr, YdbStatusError,
+    },
     internal::{
         client_fabric::{Client, ClientBuilder},
-        client_table::{RetryOptions, TransactionOptions},
+        client_table::{RetryOptions, TableClient, TransactionOptions},
         query::Query,
         result::{QueryResult, ResultSet, ResultSetRowsIter, Row, StreamResult},
         transaction::{Mode, Transaction},
     },
     pub_traits::{Credentials, TokenInfo},
-    types::{Value, ValueList, ValueOptional, ValueStruct},
+    types::{Sign, SignedInterval, Value, ValueList, ValueOptional, ValueStruct},
 };
