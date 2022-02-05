@@ -1,5 +1,7 @@
+use ydb::YdbResult;
+
 #[tokio::main]
-async fn main() {
+async fn main() -> YdbResult<()> {
     let client: ydb::Client = ydb::ClientBuilder::new().build().unwrap();
     client.wait().await.unwrap();
     let table_client = client.table_client();
@@ -26,4 +28,5 @@ async fn main() {
         .await
         .unwrap();
     println!("sum: {}", res);
+    return Ok(());
 }
