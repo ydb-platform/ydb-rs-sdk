@@ -29,3 +29,6 @@ tonic = "0.5"
 tower = "0.4"
 url="2.2"
 ydb-protobuf = {path="../ydb-protobuf"}
+
+[[example]]
+name="simple-ping"

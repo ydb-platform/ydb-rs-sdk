@@ -16,7 +16,7 @@ const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 #[strum_discriminants(derive(IntoStaticStr))]
 #[allow(dead_code)]
 #[non_exhaustive]
-pub enum YdbValue {
+pub enum Value {
     Void,
     Bool(bool),
     Int8(i8),
@@ -39,39 +39,36 @@ pub enum YdbValue {
     Json(String),
     JsonDocument(String),
 
-    Optional(Box<YdbOptional>),
-    List(Box<YdbList>),
-    Struct(YdbStruct),
+    Optional(Box<ValueOptional>),
+    List(Box<ValueList>),
+    Struct(ValueStruct),
 }
 
-impl YdbValue {
+impl Value {
     pub(crate) fn kind_static(&self) -> &'static str {
-        let discriminant: YdbValueDiscriminants = self.into();
+        let discriminant: ValueDiscriminants = self.into();
         return discriminant.into();
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct YdbStruct {
+pub struct ValueStruct {
     fields_name: Vec<String>,
-    values: Vec<YdbValue>,
+    values: Vec<Value>,
 }
 
-impl YdbStruct {
-    pub fn insert(&mut self, name: String, v: YdbValue) {
+impl ValueStruct {
+    pub fn insert(&mut self, name: String, v: Value) {
         self.fields_name.push(name);
         self.values.push(v);
     }
 
-    pub fn from_names_and_values(
-        fields_name: Vec<String>,
-        values: Vec<YdbValue>,
-    ) -> YdbResult<Self> {
+    pub fn from_names_and_values(fields_name: Vec<String>, values: Vec<Value>) -> YdbResult<Self> {
         if fields_name.len() != values.len() {
             return Err(YdbError::Custom(format!("different len fields_name and values. fields_name len: {}, values len: {}. fields_name: {:?}, values: {:?}", fields_name.len(), values.len(), fields_name, values).into()));
         };
 
-        return Ok(YdbStruct {
+        return Ok(ValueStruct {
             fields_name,
             values,
         });
@@ -82,44 +79,44 @@ impl YdbStruct {
     }
 
     pub fn with_capacity(capacity: usize) -> Self {
-        return YdbStruct {
+        return ValueStruct {
             fields_name: Vec::with_capacity(capacity),
             values: Vec::with_capacity(capacity),
         };
     }
 }
 
-impl Default for YdbStruct {
+impl Default for ValueStruct {
     fn default() -> Self {
         return Self::new();
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct YdbList {
-    pub t: YdbValue,
-    pub values: Vec<YdbValue>,
+pub struct ValueList {
+    pub t: Value,
+    pub values: Vec<Value>,
 }
 
-impl Default for Box<YdbList> {
+impl Default for Box<ValueList> {
     fn default() -> Self {
-        Box::new(YdbList {
-            t: YdbValue::Bool(false),
+        Box::new(ValueList {
+            t: Value::Bool(false),
             values: Vec::default(),
         })
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct YdbOptional {
-    pub t: YdbValue,
-    pub value: Option<YdbValue>,
+pub struct ValueOptional {
+    pub t: Value,
+    pub value: Option<Value>,
 }
 
-impl Default for Box<YdbOptional> {
+impl Default for Box<ValueOptional> {
     fn default() -> Self {
-        Box::new(YdbOptional {
-            t: YdbValue::Bool(false),
+        Box::new(ValueOptional {
+            t: Value::Bool(false),
             value: None,
         })
     }
@@ -167,24 +164,24 @@ impl SignedInterval {
     }
 }
 
-impl YdbValue {
-    pub fn list_from(t: YdbValue, values: Vec<YdbValue>) -> YdbResult<Self> {
+impl Value {
+    pub fn list_from(t: Value, values: Vec<Value>) -> YdbResult<Self> {
         for (index, value) in values.iter().enumerate() {
             if std::mem::discriminant(&t) != std::mem::discriminant(value) {
                 return Err(YdbError::Custom(format!("failed list_from: type and value has different enum-types. index: {}, type: '{:?}', value: '{:?}'", index, t, value)));
             }
         }
 
-        return Ok(YdbValue::List(Box::new(YdbList { t, values })));
+        return Ok(Value::List(Box::new(ValueList { t, values })));
     }
 
-    pub fn optional_from(t: YdbValue, value: Option<YdbValue>) -> YdbResult<Self> {
+    pub fn optional_from(t: Value, value: Option<Value>) -> YdbResult<Self> {
         if let Some(value) = &value {
             if std::mem::discriminant(&t) != std::mem::discriminant(value) {
                 return Err(YdbError::Custom(format!("failed optional_from: type and value has different enum-types. type: '{:?}', value: '{:?}'", t, value)));
             }
         }
-        Ok(YdbValue::Optional(Box::new(YdbOptional { t, value })))
+        Ok(Value::Optional(Box::new(ValueOptional { t, value })))
     }
 
     // return empty value of requested type
@@ -220,7 +217,7 @@ impl YdbValue {
                     Some(P::JsonDocument) => Self::JsonDocument(String::default()),
                     _ => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
                 },
-                T::VoidType(_) => YdbValue::Void,
+                T::VoidType(_) => Value::Void,
                 T::OptionalType(val) => {
                     let t = if let Some(item) = &val.item {
                         Some(*item.clone())
@@ -235,13 +232,13 @@ impl YdbValue {
                     } else {
                         unimplemented!()
                     };
-                    Self::List(Box::new(YdbList {
+                    Self::List(Box::new(ValueList {
                         t: item,
                         values: Vec::default(),
                     }))
                 }
                 T::StructType(struct_type) => {
-                    let mut s = YdbStruct::with_capacity(struct_type.members.len());
+                    let mut s = ValueStruct::with_capacity(struct_type.members.len());
                     for field in &struct_type.members {
                         let t = Self::from_proto_type(&field.r#type)?;
                         s.insert(field.name.clone(), t);
@@ -257,28 +254,28 @@ impl YdbValue {
         return Ok(res);
     }
 
-    pub(crate) fn from_proto(t: &YdbValue, proto_value: ydb::Value) -> YdbResult<Self> {
+    pub(crate) fn from_proto(t: &Value, proto_value: ydb::Value) -> YdbResult<Self> {
         let res = match (t, proto_value) {
-            (YdbValue::Void, _) => YdbValue::Void,
+            (Value::Void, _) => Value::Void,
             (
                 t,
                 ydb::Value {
                     value: Some(val), ..
                 },
             ) => Self::from_proto_value(t, val)?,
-            (YdbValue::List(item_type_vec), ydb::Value { items, .. }) => {
+            (Value::List(item_type_vec), ydb::Value { items, .. }) => {
                 let items_type = &item_type_vec.t;
                 let mut values = Vec::with_capacity(items.len());
                 items.into_iter().try_for_each(|item| {
                     values.push(Self::from_proto(items_type, item)?);
                     YdbResult::<()>::Ok(())
                 })?;
-                YdbValue::List(Box::new(YdbList {
+                Value::List(Box::new(ValueList {
                     t: items_type.clone(),
                     values,
                 }))
             }
-            (YdbValue::Struct(struct_t), ydb::Value { items, .. }) => {
+            (Value::Struct(struct_t), ydb::Value { items, .. }) => {
                 Self::from_proto_struct(struct_t, items)?
             }
             (t, proto_value) => {
@@ -294,7 +291,7 @@ impl YdbValue {
         return Ok(res);
     }
 
-    fn from_proto_struct(t: &YdbStruct, items: Vec<ydb::Value>) -> YdbResult<YdbValue> {
+    fn from_proto_struct(t: &ValueStruct, items: Vec<ydb::Value>) -> YdbResult<Value> {
         if t.fields_name.len() != items.len() {
             return Err(YdbError::Custom(
                 format!(
@@ -305,50 +302,50 @@ impl YdbValue {
             ));
         };
 
-        let mut res = YdbStruct::with_capacity(t.fields_name.len());
+        let mut res = ValueStruct::with_capacity(t.fields_name.len());
         for (index, item) in items.into_iter().enumerate() {
-            let v = YdbValue::from_proto(&t.values[index], item)?;
+            let v = Value::from_proto(&t.values[index], item)?;
             res.insert(t.fields_name[index].clone(), v);
         }
-        return Ok(YdbValue::Struct(res));
+        return Ok(Value::Struct(res));
     }
 
     fn from_proto_value(
-        t: &YdbValue,
+        t: &Value,
         v: ydb_protobuf::generated::ydb::value::Value,
-    ) -> YdbResult<YdbValue> {
+    ) -> YdbResult<Value> {
         use ydb_protobuf::generated::ydb::value::Value as pv;
 
         let res = match (t, v) {
-            (YdbValue::Bool(_), pv::BoolValue(val)) => YdbValue::Bool(val),
-            (YdbValue::Int8(_), pv::Int32Value(val)) => YdbValue::Int8(val.try_into()?),
-            (YdbValue::Uint8(_), pv::Uint32Value(val)) => YdbValue::Uint8(val.try_into()?),
-            (YdbValue::Int16(_), pv::Int32Value(val)) => YdbValue::Int16(val.try_into()?),
-            (YdbValue::Uint16(_), pv::Uint32Value(val)) => YdbValue::Uint16(val.try_into()?),
-            (YdbValue::Int32(_), pv::Int32Value(val)) => YdbValue::Int32(val),
-            (YdbValue::Uint32(_), pv::Uint32Value(val)) => YdbValue::Uint32(val),
-            (YdbValue::Int64(_), pv::Int64Value(val)) => YdbValue::Int64(val),
-            (YdbValue::Uint64(_), pv::Uint64Value(val)) => YdbValue::Uint64(val),
-            (YdbValue::Float(_), pv::FloatValue(val)) => YdbValue::Float(val),
-            (YdbValue::Double(_), pv::DoubleValue(val)) => YdbValue::Double(val),
-            (YdbValue::Date(_), pv::Uint32Value(val)) => {
-                YdbValue::Date(std::time::Duration::from_secs(SECONDS_PER_DAY * val as u64))
+            (Value::Bool(_), pv::BoolValue(val)) => Value::Bool(val),
+            (Value::Int8(_), pv::Int32Value(val)) => Value::Int8(val.try_into()?),
+            (Value::Uint8(_), pv::Uint32Value(val)) => Value::Uint8(val.try_into()?),
+            (Value::Int16(_), pv::Int32Value(val)) => Value::Int16(val.try_into()?),
+            (Value::Uint16(_), pv::Uint32Value(val)) => Value::Uint16(val.try_into()?),
+            (Value::Int32(_), pv::Int32Value(val)) => Value::Int32(val),
+            (Value::Uint32(_), pv::Uint32Value(val)) => Value::Uint32(val),
+            (Value::Int64(_), pv::Int64Value(val)) => Value::Int64(val),
+            (Value::Uint64(_), pv::Uint64Value(val)) => Value::Uint64(val),
+            (Value::Float(_), pv::FloatValue(val)) => Value::Float(val),
+            (Value::Double(_), pv::DoubleValue(val)) => Value::Double(val),
+            (Value::Date(_), pv::Uint32Value(val)) => {
+                Value::Date(std::time::Duration::from_secs(SECONDS_PER_DAY * val as u64))
             }
-            (YdbValue::DateTime(_), pv::Uint32Value(val)) => {
-                YdbValue::DateTime(std::time::Duration::from_secs(val as u64))
+            (Value::DateTime(_), pv::Uint32Value(val)) => {
+                Value::DateTime(std::time::Duration::from_secs(val as u64))
             }
-            (YdbValue::Timestamp(_), pv::Uint64Value(val)) => {
-                YdbValue::Timestamp(Duration::from_micros(val))
+            (Value::Timestamp(_), pv::Uint64Value(val)) => {
+                Value::Timestamp(Duration::from_micros(val))
             }
-            (YdbValue::Interval(_), pv::Int64Value(val)) => {
-                YdbValue::Interval(SignedInterval::from_nanos(val))
+            (Value::Interval(_), pv::Int64Value(val)) => {
+                Value::Interval(SignedInterval::from_nanos(val))
             }
-            (YdbValue::String(_), pv::BytesValue(val)) => YdbValue::String(val),
-            (YdbValue::Utf8(_), pv::TextValue(val)) => YdbValue::Utf8(val),
-            (YdbValue::Yson(_), pv::TextValue(val)) => YdbValue::Yson(val),
-            (YdbValue::Json(_), pv::TextValue(val)) => YdbValue::Json(val),
-            (YdbValue::JsonDocument(_), pv::TextValue(val)) => YdbValue::JsonDocument(val),
-            (YdbValue::Optional(ydb_optional), val) => {
+            (Value::String(_), pv::BytesValue(val)) => Value::String(val),
+            (Value::Utf8(_), pv::TextValue(val)) => Value::Utf8(val),
+            (Value::Yson(_), pv::TextValue(val)) => Value::Yson(val),
+            (Value::Json(_), pv::TextValue(val)) => Value::Json(val),
+            (Value::JsonDocument(_), pv::TextValue(val)) => Value::JsonDocument(val),
+            (Value::Optional(ydb_optional), val) => {
                 Self::from_proto_value_optional(ydb_optional, val)?
             }
             (t, val) => {
@@ -362,7 +359,7 @@ impl YdbValue {
     }
 
     fn from_proto_value_optional(
-        t: &Box<YdbOptional>,
+        t: &Box<ValueOptional>,
         val: ydb_protobuf::generated::ydb::value::Value,
     ) -> YdbResult<Self> {
         use ydb_protobuf::generated::ydb::value::Value as pv;
@@ -434,13 +431,13 @@ impl YdbValue {
             Self::JsonDocument(val) => proto_typed_value(pt::JsonDocument, pv::TextValue(val)),
             Self::Optional(val) => Self::to_typed_optional(val)?,
             Self::List(items) => Self::to_typed_value_list(items)?,
-            YdbValue::Struct(s) => { Self::to_typed_struct(s) }?,
+            Value::Struct(s) => { Self::to_typed_struct(s) }?,
         };
         return Ok(res);
     }
 
-    fn to_typed_optional(optional: Box<YdbOptional>) -> YdbResult<ydb::TypedValue> {
-        if let YdbValue::Optional(_opt) = optional.t {
+    fn to_typed_optional(optional: Box<ValueOptional>) -> YdbResult<ydb::TypedValue> {
+        if let Value::Optional(_opt) = optional.t {
             unimplemented!("nested optional")
         }
 
@@ -463,7 +460,7 @@ impl YdbValue {
         })
     }
 
-    fn to_typed_struct(s: YdbStruct) -> YdbResult<ydb::TypedValue> {
+    fn to_typed_struct(s: ValueStruct) -> YdbResult<ydb::TypedValue> {
         let mut members: Vec<ydb::StructMember> = Vec::with_capacity(s.fields_name.len());
         let mut items: Vec<ydb::Value> = Vec::with_capacity(s.fields_name.len());
         for (index, v) in s.values.into_iter().enumerate() {
@@ -486,7 +483,7 @@ impl YdbValue {
         });
     }
 
-    fn to_typed_value_list(ydb_list: Box<YdbList>) -> YdbResult<ydb::TypedValue> {
+    fn to_typed_value_list(ydb_list: Box<ValueList>) -> YdbResult<ydb::TypedValue> {
         let ydb_list_type = ydb_list.t;
         let proto_items_result: Vec<YdbResult<ydb::TypedValue>> = ydb_list
             .values
@@ -519,13 +516,13 @@ impl YdbValue {
 #[derive(Debug)]
 pub struct Column {
     pub name: String,
-    pub(crate) v_type: YdbValue,
+    pub(crate) v_type: Value,
 }
 
 #[cfg(test)]
 mod test {
     use crate::errors::YdbResult;
-    use crate::types::{Sign, SignedInterval, YdbStruct, YdbValue};
+    use crate::types::{Sign, SignedInterval, Value, ValueStruct};
     use std::collections::HashSet;
 
     use std::time::Duration;
@@ -545,66 +542,61 @@ mod test {
 
         let mut discriminants = HashSet::new();
         let mut values = vec![
-            YdbValue::Bool(false),
-            YdbValue::Bool(true),
-            YdbValue::String(Vec::from("asd")),
-            YdbValue::Utf8("asd".into()),
-            YdbValue::Utf8("фыв".into()),
-            YdbValue::Json("{}".into()),
-            YdbValue::JsonDocument("{}".into()),
-            YdbValue::Yson("1;2;3;".into()),
+            Value::Bool(false),
+            Value::Bool(true),
+            Value::String(Vec::from("asd")),
+            Value::Utf8("asd".into()),
+            Value::Utf8("фыв".into()),
+            Value::Json("{}".into()),
+            Value::JsonDocument("{}".into()),
+            Value::Yson("1;2;3;".into()),
         ];
 
-        num_tests!(values, YdbValue::Int8, i8);
-        num_tests!(values, YdbValue::Uint8, u8);
-        num_tests!(values, YdbValue::Int16, i16);
-        num_tests!(values, YdbValue::Uint16, u16);
-        num_tests!(values, YdbValue::Int32, i32);
-        num_tests!(values, YdbValue::Uint32, u32);
-        num_tests!(values, YdbValue::Int64, i64);
-        num_tests!(values, YdbValue::Uint64, u64);
-        num_tests!(values, YdbValue::Float, f32);
-        num_tests!(values, YdbValue::Double, f64);
+        num_tests!(values, Value::Int8, i8);
+        num_tests!(values, Value::Uint8, u8);
+        num_tests!(values, Value::Int16, i16);
+        num_tests!(values, Value::Uint16, u16);
+        num_tests!(values, Value::Int32, i32);
+        num_tests!(values, Value::Uint32, u32);
+        num_tests!(values, Value::Int64, i64);
+        num_tests!(values, Value::Uint64, u64);
+        num_tests!(values, Value::Float, f32);
+        num_tests!(values, Value::Double, f64);
 
-        values.push(YdbValue::Void);
+        values.push(Value::Void);
 
-        values.push(YdbValue::Date(std::time::Duration::from_secs(1633996800))); //Tue Oct 12 00:00:00 UTC 2021
-        values.push(YdbValue::DateTime(std::time::Duration::from_secs(
-            1634000523,
-        ))); //Tue Oct 12 01:02:03 UTC 2021
+        values.push(Value::Date(std::time::Duration::from_secs(1633996800))); //Tue Oct 12 00:00:00 UTC 2021
+        values.push(Value::DateTime(std::time::Duration::from_secs(1634000523))); //Tue Oct 12 01:02:03 UTC 2021
 
-        values.push(YdbValue::Timestamp(std::time::Duration::from_micros(
+        values.push(Value::Timestamp(std::time::Duration::from_micros(
             16340005230000123,
         ))); //Tue Oct 12 00:00:00.000123 UTC 2021
 
-        values.push(YdbValue::Interval(SignedInterval {
+        values.push(Value::Interval(SignedInterval {
             sign: Sign::Plus,
             duration: Duration::from_secs(1),
         })); // 1 second interval
 
-        values.push(YdbValue::Interval(SignedInterval {
+        values.push(Value::Interval(SignedInterval {
             sign: Sign::Minus,
             duration: Duration::from_secs(1),
         })); // -1 second interval
 
-        values.push(YdbValue::optional_from(YdbValue::Int8(0), None)?);
-        values.push(YdbValue::optional_from(
-            YdbValue::Int8(0),
-            Some(YdbValue::Int8(1)),
+        values.push(Value::optional_from(Value::Int8(0), None)?);
+        values.push(Value::optional_from(Value::Int8(0), Some(Value::Int8(1)))?);
+
+        values.push(Value::list_from(
+            Value::Int8(0),
+            vec![Value::Int8(1), Value::Int8(2), Value::Int8(3)],
         )?);
 
-        values.push(YdbValue::list_from(
-            YdbValue::Int8(0),
-            vec![YdbValue::Int8(1), YdbValue::Int8(2), YdbValue::Int8(3)],
-        )?);
-
-        values.push(YdbValue::Struct(YdbStruct {
+        values.push(Value::Struct(ValueStruct {
             fields_name: vec!["a".into(), "b".into()],
             values: vec![
-                YdbValue::Int32(1),
-                YdbValue::list_from(
-                    YdbValue::Int32(0),
-                    vec![YdbValue::Int32(1), YdbValue::Int32(2), YdbValue::Int32(3)],
+                Value::Int32(1),
+                Value::list_from(
+                    Value::Int32(0),
+                    vec![Value::Int32(1), Value::Int32(2), Value::Int32(3)],
                 )?,
             ],
         }));
@@ -612,13 +604,13 @@ mod test {
         for v in values.into_iter() {
             discriminants.insert(std::mem::discriminant(&v));
             let proto = v.clone().to_typed_value()?;
-            let t = YdbValue::from_proto_type(&proto.r#type)?;
-            let v2 = YdbValue::from_proto(&t, proto.value.unwrap())?;
+            let t = Value::from_proto_type(&proto.r#type)?;
+            let v2 = Value::from_proto(&t, proto.value.unwrap())?;
             assert_eq!(&v, &v2);
         }
 
         let mut non_tested = Vec::new();
-        for v in YdbValue::iter() {
+        for v in Value::iter() {
             if !discriminants.contains(&std::mem::discriminant(&v)) {
                 non_tested.push(format!("{:?}", &v));
             }

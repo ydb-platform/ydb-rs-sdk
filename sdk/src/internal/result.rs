@@ -1,7 +1,7 @@
 use crate::errors;
 use crate::errors::{YdbError, YdbResult, YdbStatusError};
 use crate::internal::grpc::proto_issues_to_ydb_issues;
-use crate::types::YdbValue;
+use crate::types::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::vec::IntoIter;
@@ -84,7 +84,7 @@ impl ResultSet {
         for pb_col in pb.columns.iter() {
             columns.push(crate::types::Column {
                 name: pb_col.name.clone(),
-                v_type: YdbValue::from_proto_type(&pb_col.r#type)?,
+                v_type: Value::from_proto_type(&pb_col.r#type)?,
             })
         }
         let columns_by_name = columns
@@ -117,16 +117,16 @@ pub struct Row {
 }
 
 impl Row {
-    pub fn remove_field_by_name(&mut self, name: &str) -> errors::YdbResult<YdbValue> {
+    pub fn remove_field_by_name(&mut self, name: &str) -> errors::YdbResult<Value> {
         if let Some(&index) = self.columns_by_name.get(name) {
             return self.remove_field(index);
         }
         return Err(YdbError::Custom("field not found".into()));
     }
 
-    pub fn remove_field(&mut self, index: usize) -> errors::YdbResult<YdbValue> {
+    pub fn remove_field(&mut self, index: usize) -> errors::YdbResult<Value> {
         match self.pb.remove(&index) {
-            Some(val) => YdbValue::from_proto(&self.columns[index].v_type, val),
+            Some(val) => Value::from_proto(&self.columns[index].v_type, val),
             None => Err(YdbError::Custom("it has no the field".into())),
         }
     }

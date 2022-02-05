@@ -1,7 +1,6 @@
 [workspace]
 members = [
     "build-helpers",
-    "examples/simple-ping",
     "sdk",
     "ydb-protobuf",
 ]

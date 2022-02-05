@@ -1,14 +1,12 @@
-use crate::errors::{YdbResult};
-use crate::types::YdbValue;
+use crate::errors::YdbResult;
+use crate::types::Value;
 use std::collections::HashMap;
-
-
 
 use ydb_protobuf::generated::ydb::TypedValue;
 
 pub struct Query {
     text: String,
-    parameters: HashMap<String, YdbValue>,
+    parameters: HashMap<String, Value>,
 }
 
 impl Query {
@@ -24,7 +22,7 @@ impl Query {
         return self;
     }
 
-    pub fn with_params(mut self, params: HashMap<String, YdbValue>) -> Self {
+    pub fn with_params(mut self, params: HashMap<String, Value>) -> Self {
         self.parameters = params;
         return self;
     }

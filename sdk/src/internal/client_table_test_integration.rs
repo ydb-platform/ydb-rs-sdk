@@ -7,7 +7,7 @@ use crate::internal::test_helpers::CONNECTION_INFO;
 use crate::internal::transaction::Mode;
 use crate::internal::transaction::Mode::SerializableReadWrite;
 use crate::internal::transaction::Transaction;
-use crate::types::{YdbList, YdbStruct, YdbValue};
+use crate::types::{Value, ValueList, ValueStruct};
 use http::Uri;
 use std::collections::HashMap;
 use std::iter::FromIterator;
@@ -24,7 +24,7 @@ async fn create_client() -> YdbResult<Client> {
     let client = ClientBuilder::new()
         .with_endpoint(CONNECTION_INFO.discovery_endpoint.clone())
         .with_database(CONNECTION_INFO.database.clone())
-        .with_credentials(CONNECTION_INFO.credentials.clone())
+        .with_credentials_ref(CONNECTION_INFO.credentials.clone())
         .build()?;
 
     client.wait().await?;
@@ -61,7 +61,7 @@ async fn execute_data_query() -> YdbResult<()> {
     let res = transaction.query("SELECT 1+1".into()).await?;
     println!("result: {:?}", &res);
     assert_eq!(
-        YdbValue::Int32(2),
+        Value::Int32(2),
         res.first()
             .unwrap()
             .rows()
@@ -82,7 +82,7 @@ async fn execute_data_query_field_name() -> YdbResult<()> {
     let res = transaction.query("SELECT 1+1 as s".into()).await?;
     println!("result: {:?}", &res);
     assert_eq!(
-        YdbValue::Int32(2),
+        Value::Int32(2),
         res.first()
             .unwrap()
             .rows()
@@ -101,7 +101,7 @@ async fn execute_data_query_params() -> YdbResult<()> {
         .table_client()
         .create_autocommit_transaction(Mode::OnlineReadonly);
     let mut params = HashMap::new();
-    params.insert("$v".to_string(), YdbValue::Int32(3));
+    params.insert("$v".to_string(), Value::Int32(3));
     let res = transaction
         .query(
             Query::new()
@@ -117,7 +117,7 @@ async fn execute_data_query_params() -> YdbResult<()> {
         .await?;
     println!("result: {:?}", res);
     assert_eq!(
-        YdbValue::Int32(6),
+        Value::Int32(6),
         res.first()
             .unwrap()
             .rows()
@@ -166,8 +166,8 @@ async fn interactive_transaction() -> YdbResult<()> {
                 .into(),
             )
             .with_params(HashMap::from([
-                ("$key".into(), YdbValue::Int64(2)),
-                ("$val".into(), YdbValue::Int64(3)),
+                ("$key".into(), Value::Int64(2)),
+                ("$val".into(), Value::Int64(3)),
             ])),
     )
     .await?;
@@ -185,7 +185,7 @@ async fn interactive_transaction() -> YdbResult<()> {
         .query(Query::new().with_query("SELECT vInt64 FROM test_values WHERE id=1".into()))
         .await?;
     assert_eq!(
-        YdbValue::optional_from(YdbValue::Int64(0), Some(YdbValue::Int64(2)))?,
+        Value::optional_from(Value::Int64(0), Some(Value::Int64(2)))?,
         auto_res
             .first()
             .unwrap()
@@ -224,7 +224,7 @@ async fn retry_test() -> YdbResult<()> {
                 .remove_field_by_name("res")
                 .unwrap();
 
-            assert_eq!(YdbValue::Int32(2), res);
+            assert_eq!(Value::Int32(2), res);
 
             if *locked_res < 3 {
                 return Err(YdbOrCustomerError::YDB(YdbError::TransportGRPCStatus(
@@ -285,7 +285,7 @@ async fn scheme_query() -> YdbResult<()> {
 #[tokio::test]
 async fn select_int() -> YdbResult<()> {
     let client = create_client().await?;
-    let v = YdbValue::Int32(123);
+    let v = Value::Int32(123);
 
     let mut transaction = client
         .table_client()
@@ -331,7 +331,7 @@ SELECT $test AS test;
                 )
                 .with_params(HashMap::from_iter([(
                     "$test".into(),
-                    YdbValue::optional_from(YdbValue::Int32(0), Some(YdbValue::Int32(3)))?,
+                    Value::optional_from(Value::Int32(0), Some(Value::Int32(3)))?,
                 )])),
         )
         .await?;
@@ -339,7 +339,7 @@ SELECT $test AS test;
     let res = res.results.into_iter().next().unwrap();
     assert_eq!(1, res.columns().len());
     assert_eq!(
-        YdbValue::optional_from(YdbValue::Int32(0), Some(YdbValue::Int32(3)))?,
+        Value::optional_from(Value::Int32(0), Some(Value::Int32(3)))?,
         res.rows().next().unwrap().remove_field_by_name("test")?
     );
 
@@ -365,13 +365,9 @@ SELECT $l AS l;
                 )
                 .with_params(HashMap::from_iter([(
                     "$l".into(),
-                    YdbValue::List(Box::new(YdbList {
-                        t: YdbValue::Int32(0),
-                        values: Vec::from([
-                            YdbValue::Int32(1),
-                            YdbValue::Int32(2),
-                            YdbValue::Int32(3),
-                        ]),
+                    Value::List(Box::new(ValueList {
+                        t: Value::Int32(0),
+                        values: Vec::from([Value::Int32(1), Value::Int32(2), Value::Int32(3)]),
                     })),
                 )])),
         )
@@ -380,9 +376,9 @@ SELECT $l AS l;
     let res = res.results.into_iter().next().unwrap();
     assert_eq!(1, res.columns().len());
     assert_eq!(
-        YdbValue::list_from(
-            YdbValue::Int32(0),
-            vec![YdbValue::Int32(1), YdbValue::Int32(2), YdbValue::Int32(3)]
+        Value::list_from(
+            Value::Int32(0),
+            vec![Value::Int32(1), Value::Int32(2), Value::Int32(3)]
         )?,
         res.rows().next().unwrap().remove_field_by_name("l")?
     );
@@ -414,23 +410,23 @@ FROM
                 )
                 .with_params(HashMap::from_iter([(
                     "$l".into(),
-                    YdbValue::List(Box::new(YdbList {
-                        t: YdbValue::Struct(YdbStruct::from_names_and_values(
+                    Value::List(Box::new(ValueList {
+                        t: Value::Struct(ValueStruct::from_names_and_values(
                             vec!["a".into()],
-                            vec![YdbValue::Int64(0)],
+                            vec![Value::Int64(0)],
                         )?),
                         values: vec![
-                            YdbValue::Struct(YdbStruct::from_names_and_values(
+                            Value::Struct(ValueStruct::from_names_and_values(
                                 vec!["a".into()],
-                                vec![YdbValue::Int64(1)],
+                                vec![Value::Int64(1)],
                             )?),
-                            YdbValue::Struct(YdbStruct::from_names_and_values(
+                            Value::Struct(ValueStruct::from_names_and_values(
                                 vec!["a".into()],
-                                vec![YdbValue::Int64(2)],
+                                vec![Value::Int64(2)],
                             )?),
-                            YdbValue::Struct(YdbStruct::from_names_and_values(
+                            Value::Struct(ValueStruct::from_names_and_values(
                                 vec!["a".into()],
-                                vec![YdbValue::Int64(3)],
+                                vec![Value::Int64(3)],
                             )?),
                         ],
                     })),
@@ -442,7 +438,7 @@ FROM
     assert_eq!(1, res.columns().len());
 
     assert_eq!(
-        YdbValue::optional_from(YdbValue::Int64(0), Some(YdbValue::Int64(6)))?,
+        Value::optional_from(Value::Int64(0), Some(Value::Int64(6)))?,
         res.rows().next().unwrap().remove_field_by_name("s")?
     );
     Ok(())
@@ -470,7 +466,7 @@ SELECT CAST(NULL AS Optional<Int64>)
     assert_eq!(1, res.columns().len());
 
     assert_eq!(
-        YdbValue::optional_from(YdbValue::Int64(0), None)?,
+        Value::optional_from(Value::Int64(0), None)?,
         res.rows().next().unwrap().remove_field(0)?
     );
     Ok(())
@@ -498,7 +494,7 @@ SELECT NULL
     assert_eq!(1, res.columns().len());
 
     assert_eq!(
-        YdbValue::optional_from(YdbValue::Void, None)?,
+        Value::optional_from(Value::Void, None)?,
         res.rows().next().unwrap().remove_field(0)?
     );
     Ok(())
@@ -524,9 +520,9 @@ async fn stream_query() -> YdbResult<()> {
 
             let mut values = Vec::new();
             for i in 1..=generate_count {
-                values.push(YdbValue::Struct(YdbStruct::from_names_and_values(
+                values.push(Value::Struct(ValueStruct::from_names_and_values(
                     vec!["val".to_string()],
-                    vec![YdbValue::Int32(i)],
+                    vec![Value::Int32(i)],
                 )?))
             }
 
@@ -548,7 +544,7 @@ FROM
                 .with_params(
                     [(
                         "$values".to_string(),
-                        YdbValue::list_from(values[0].clone(), values)?,
+                        Value::list_from(values[0].clone(), values)?,
                     )]
                     .into_iter()
                     .collect(),
@@ -575,8 +571,8 @@ FROM
 
         for mut row in result_set.into_iter() {
             match row.remove_field(0)? {
-                YdbValue::Optional(boxed_val) => match boxed_val.value.unwrap() {
-                    YdbValue::Int32(val) => sum += val,
+                Value::Optional(boxed_val) => match boxed_val.value.unwrap() {
+                    Value::Int32(val) => sum += val,
                     val => panic!("unexpected ydb boxed_value type: {:?}", val),
                 },
                 val => panic!("unexpected ydb valye type: {:?}", val),

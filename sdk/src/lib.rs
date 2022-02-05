@@ -17,8 +17,5 @@ pub use crate::{
         transaction::{Mode, Transaction},
     },
     pub_traits::{Credentials, TokenInfo},
-    types::{
-        YdbList as ValueList, YdbOptional as ValueOptional, YdbStruct as ValueStruct,
-        YdbValue as Value,
-    },
+    types::{Value, ValueList, ValueOptional, ValueStruct},
 };
