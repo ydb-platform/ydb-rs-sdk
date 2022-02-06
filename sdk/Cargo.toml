@@ -30,5 +30,9 @@ tower = "0.4"
 url="2.2"
 ydb-protobuf = {path="../ydb-protobuf"}
 
+[dev-dependencies]
+async_once="0.2"
+lazy_static="1.4"
+
 [[example]]
 name="simple-ping"

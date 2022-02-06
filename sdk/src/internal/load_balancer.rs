@@ -5,11 +5,20 @@ use mockall;
 
 use std::sync::{Arc, RwLock};
 use tokio::sync::watch::Receiver;
+use crate::internal::waiter::{Waiter, WaiterImpl};
 
 #[mockall::automock]
-pub(crate) trait LoadBalancer: Send + Sync {
+pub(crate) trait LoadBalancer: Send + Sync + Waiter {
     fn endpoint(&self, service: Service) -> YdbResult<Uri>;
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()>;
+    fn waiter(&self)->Box<dyn Waiter>; // need for wait ready in without read lock
+}
+
+#[async_trait::async_trait]
+impl Waiter for MockLoadBalancer {
+    async fn wait(&self) -> YdbResult<()> {
+        return Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -51,6 +60,18 @@ impl LoadBalancer for SharedLoadBalancer {
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()> {
         self.inner.write()?.set_discovery_state(discovery_state)
     }
+
+    fn waiter(&self) -> Box<dyn Waiter> {
+        return self.inner.read().unwrap().waiter();
+    }
+}
+
+#[async_trait::async_trait]
+impl Waiter for SharedLoadBalancer {
+    async fn wait(&self) -> YdbResult<()> {
+        let waiter = self.inner.read()?.waiter();
+        return waiter.wait().await;
+    }
 }
 
 pub(crate) struct StaticLoadBalancer {
@@ -74,16 +95,31 @@ impl LoadBalancer for StaticLoadBalancer {
             "static balancer no way to update state".into(),
         ))
     }
+
+    fn waiter(&self) -> Box<dyn Waiter> {
+        let waiter = WaiterImpl::new();
+        waiter.set_received(Ok(()));
+        return Box::new(waiter);
+    }
+}
+
+#[async_trait::async_trait]
+impl Waiter for StaticLoadBalancer {
+    async fn wait(&self) -> YdbResult<()> {
+        return Ok(())
+    }
 }
 
 pub(crate) struct RandomLoadBalancer {
     discovery_state: Arc<DiscoveryState>,
+    waiter: Arc<WaiterImpl>,
 }
 
 impl RandomLoadBalancer {
     pub(crate) fn new() -> Self {
         Self {
             discovery_state: Arc::new(DiscoveryState::default()),
+            waiter: Arc::new(WaiterImpl::new()),
         }
     }
 }
@@ -111,7 +147,21 @@ impl LoadBalancer for RandomLoadBalancer {
 
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()> {
         self.discovery_state = discovery_state.clone();
+        if self.discovery_state.services.len() > 0 {
+            self.waiter.set_received(Ok(()))
+        }
         Ok(())
+    }
+
+    fn waiter(&self) -> Box<dyn Waiter> {
+        return Box::new(self.waiter.clone());
+    }
+}
+
+#[async_trait::async_trait]
+impl Waiter for RandomLoadBalancer {
+    async fn wait(&self) -> YdbResult<()> {
+        return self.waiter.wait().await
     }
 }
 
@@ -238,6 +288,7 @@ mod test {
                     .with_node_info(Table, NodeInfo::new(one.clone()))
                     .with_node_info(Table, NodeInfo::new(two.clone())),
             ),
+            waiter: Arc::new(WaiterImpl::new()),
         };
 
         let mut map = HashMap::new();

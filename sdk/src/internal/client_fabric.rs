@@ -95,6 +95,7 @@ impl Client {
     pub async fn wait(&self) -> YdbResult<()> {
         self.credentials.token_cache.wait().await?;
         self.discovery.wait().await?;
+        self.load_balancer.wait().await?;
         return Ok(());
     }
 
@@ -109,7 +110,7 @@ impl Client {
         grpc::grpc_read_operation_result(self.client_discovery().await?.list_endpoints(req).await?)
     }
 
-    pub(crate) async fn who_am_i(self: Self, req: WhoAmIRequest) -> YdbResult<WhoAmIResult> {
+    pub(crate) async fn who_am_i(&self, req: WhoAmIRequest) -> YdbResult<WhoAmIResult> {
         grpc::grpc_read_operation_result(self.client_discovery().await?.who_am_i(req).await?)
     }
 
