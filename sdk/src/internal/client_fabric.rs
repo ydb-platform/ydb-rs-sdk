@@ -83,6 +83,7 @@ impl Client {
         discovery: Box<dyn Discovery>,
     ) -> YdbResult<Self> {
         let discovery = Arc::new(discovery);
+
         return Ok(Client {
             credentials,
             load_balancer: SharedLoadBalancer::new(discovery.as_ref()),
@@ -93,8 +94,13 @@ impl Client {
     // wait about all background process get first succesfull result and client fully
     // available to work
     pub async fn wait(&self) -> YdbResult<()> {
+        println!("wait token");
         self.credentials.token_cache.wait().await?;
+
+        println!("wait discovery");
         self.discovery.wait().await?;
+
+        println!("wait balancer");
         self.load_balancer.wait().await?;
         return Ok(());
     }

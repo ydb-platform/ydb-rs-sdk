@@ -27,12 +27,14 @@ lazy_static! {
         let conn_info: ConnectionInfo = ConnectionInfo::parse(std::env::var("YDB_CONNECTION_STRING").unwrap().as_str()).unwrap();
         let _endpoint_uri: Uri = Uri::from_str(conn_info.discovery_endpoint.as_str()).unwrap();
 
+        println!("create client");
         let client: Client = ClientBuilder::new()
             .with_endpoint(conn_info.discovery_endpoint.clone())
             .with_database(conn_info.database.clone())
             .with_credentials_ref(conn_info.credentials.clone())
             .build().unwrap();
 
+        println!("start wait");
         client.wait().await.unwrap();
         return Arc::new(client);
     });
