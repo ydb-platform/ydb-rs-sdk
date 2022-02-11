@@ -11,6 +11,7 @@ use crate::internal::waiter::Waiter;
 use crate::{Credentials, StaticToken};
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::trace;
 use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_protobuf::generated::ydb::discovery::{
     ListEndpointsRequest, ListEndpointsResult, WhoAmIRequest, WhoAmIResult,
@@ -94,13 +95,12 @@ impl Client {
     // wait about all background process get first succesfull result and client fully
     // available to work
     pub async fn wait(&self) -> YdbResult<()> {
-        println!("wait token");
+        trace!("waiting_token");
         self.credentials.token_cache.wait().await?;
-
-        println!("wait discovery");
+        trace!("wait discovery");
         self.discovery.wait().await?;
 
-        println!("wait balancer");
+        trace!("wait balancer");
         self.load_balancer.wait().await?;
         return Ok(());
     }

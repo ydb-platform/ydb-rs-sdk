@@ -5,6 +5,7 @@ use crate::types::Value;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::vec::IntoIter;
+use tracing::trace;
 use ydb_protobuf::generated::ydb::status_ids::StatusCode;
 use ydb_protobuf::generated::ydb::table::{ExecuteQueryResult, ExecuteScanQueryPartialResponse};
 
@@ -19,7 +20,7 @@ impl QueryResult {
         proto_res: ExecuteQueryResult,
         error_on_truncate: bool,
     ) -> errors::YdbResult<Self> {
-        println!("proto_res: {:?}", proto_res);
+        trace!("proto_res: {:?}", proto_res);
         let mut results = Vec::with_capacity(proto_res.result_sets.len());
         for current_set in proto_res.result_sets.into_iter() {
             if error_on_truncate && current_set.truncated {

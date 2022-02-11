@@ -5,6 +5,7 @@ use crate::pub_traits::TokenInfo;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use tokio::sync::watch;
+use tracing::trace;
 
 #[derive(Clone, Debug)]
 pub(crate) struct DBCredentials {
@@ -71,16 +72,16 @@ impl TokenCache {
         // match cred.create_token() {
         match res {
             Ok(token_info) => {
-                println!("token renewed");
+                trace!("token renewed");
                 let mut write = self.0.write().unwrap();
                 write.token_info = token_info;
                 if let Err(_) = write.token_received_sender.send(true) {
-                    println!("send token channel closed");
+                    trace!("send token channel closed");
                     return;
                 }
             }
             Err(err) => {
-                println!("renew token error: {}", err)
+                trace!("renew token error: {}", err)
             }
         };
     }

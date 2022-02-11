@@ -190,6 +190,7 @@ mod test {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::time::Duration;
+    use tracing::trace;
 
     #[test]
     fn shared_load_balancer() -> YdbResult<()> {
@@ -237,7 +238,7 @@ mod test {
             .with(predicate::eq(original_discovery_state.clone()))
             .times(1)
             .returning(move |_| {
-                println!("first set");
+                trace!("first set");
                 first_update_sender.take().unwrap().send(()).unwrap();
                 return Ok(());
             });
@@ -247,7 +248,7 @@ mod test {
             .with(predicate::eq(new_discovery_state.clone()))
             .times(1)
             .returning(move |_| {
-                println!("second set");
+                trace!("second set");
                 second_update_sender.take().unwrap().send(()).unwrap();
                 return Ok(());
             });
@@ -255,9 +256,9 @@ mod test {
         let shared_lb = SharedLoadBalancer::new_with_balancer(Box::new(lb_mock));
 
         tokio::spawn(async move {
-            println!("updater start");
+            trace!("updater start");
             update_load_balancer(shared_lb, receiver).await;
-            println!("updater finished");
+            trace!("updater finished");
             updater_finished_sender.send(()).unwrap();
         });
 

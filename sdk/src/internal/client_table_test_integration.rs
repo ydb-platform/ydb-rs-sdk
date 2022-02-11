@@ -21,58 +21,65 @@ use ydb_protobuf::generated::ydb::discovery::{ListEndpointsRequest, WhoAmIReques
 use crate::connection_info::ConnectionInfo;
 use lazy_static::lazy_static;
 use async_once::AsyncOnce;
+use tracing::{info, trace, warn};
+use tracing_test::traced_test;
 
 lazy_static! {
     static ref TEST_CLIENT: AsyncOnce<Arc<Client>> = AsyncOnce::new(async {
         let conn_info: ConnectionInfo = ConnectionInfo::parse(std::env::var("YDB_CONNECTION_STRING").unwrap().as_str()).unwrap();
         let _endpoint_uri: Uri = Uri::from_str(conn_info.discovery_endpoint.as_str()).unwrap();
 
-        println!("create client");
+        trace!("create client");
         let client: Client = ClientBuilder::new()
             .with_endpoint(conn_info.discovery_endpoint.clone())
             .with_database(conn_info.database.clone())
             .with_credentials_ref(conn_info.credentials.clone())
             .build().unwrap();
 
-        println!("start wait");
+        trace!("start wait");
         client.wait().await.unwrap();
         return Arc::new(client);
     });
 }
 
+#[tracing::instrument]
 async fn create_client() -> YdbResult<Arc<Client>> {
+    trace!("create client");
     Ok(TEST_CLIENT.get().await.clone())
 }
 
 #[tokio::test]
+#[traced_test]
 async fn create_session() -> YdbResult<()> {
     let res = create_client()
         .await?
         .table_client()
         .create_session()
         .await?;
-    println!("session: {:?}", res);
+    trace!("session: {:?}", res);
     Ok(())
 }
 
 #[tokio::test]
+#[traced_test]
 async fn endpoints() -> YdbResult<()> {
     let _res = create_client()
         .await?
         .endpoints(ListEndpointsRequest::default())
         .await?;
-    println!("{:?}", _res);
+    trace!("{:?}", _res);
     Ok(())
 }
 
 #[tokio::test]
+#[traced_test]
 async fn execute_data_query() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
         .table_client()
         .create_autocommit_transaction(Mode::OnlineReadonly);
     let res = transaction.query("SELECT 1+1".into()).await?;
-    println!("result: {:?}", &res);
+    trace!("result: {:?}", &res);
     assert_eq!(
         Value::Int32(2),
         res.first()
@@ -87,13 +94,14 @@ async fn execute_data_query() -> YdbResult<()> {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn execute_data_query_field_name() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
         .table_client()
         .create_autocommit_transaction(Mode::OnlineReadonly);
     let res = transaction.query("SELECT 1+1 as s".into()).await?;
-    println!("result: {:?}", &res);
+    trace!("result: {:?}", &res);
     assert_eq!(
         Value::Int32(2),
         res.first()
@@ -108,6 +116,7 @@ async fn execute_data_query_field_name() -> YdbResult<()> {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn execute_data_query_params() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
@@ -128,7 +137,7 @@ async fn execute_data_query_params() -> YdbResult<()> {
                 .with_params(params),
         )
         .await?;
-    println!("result: {:?}", res);
+    trace!("result: {:?}", res);
     assert_eq!(
         Value::Int32(6),
         res.first()
@@ -143,6 +152,7 @@ async fn execute_data_query_params() -> YdbResult<()> {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn interactive_transaction() -> YdbResult<()> {
     let client = create_client().await?;
 
@@ -213,6 +223,7 @@ async fn interactive_transaction() -> YdbResult<()> {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn retry_test() -> YdbResult<()> {
     let client = create_client().await?;
 
@@ -258,6 +269,7 @@ async fn retry_test() -> YdbResult<()> {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn scheme_query() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
@@ -296,6 +308,7 @@ async fn scheme_query() -> YdbResult<()> {
 }
 
 #[tokio::test]
+#[traced_test]
 async fn select_int() -> YdbResult<()> {
     let client = create_client().await?;
     let v = Value::Int32(123);
@@ -326,6 +339,7 @@ SELECT $test AS test;
 }
 
 #[tokio::test]
+#[traced_test]
 async fn select_optional() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
@@ -360,6 +374,7 @@ SELECT $test AS test;
 }
 
 #[tokio::test]
+#[traced_test]
 async fn select_list() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
@@ -385,7 +400,7 @@ SELECT $l AS l;
                 )])),
         )
         .await?;
-    println!("{:?}", res);
+    trace!("{:?}", res);
     let res = res.results.into_iter().next().unwrap();
     assert_eq!(1, res.columns().len());
     assert_eq!(
@@ -399,6 +414,7 @@ SELECT $l AS l;
 }
 
 #[tokio::test]
+#[traced_test]
 async fn select_struct() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
@@ -446,7 +462,7 @@ FROM
                 )])),
         )
         .await?;
-    println!("{:?}", res);
+    trace!("{:?}", res);
     let res = res.results.into_iter().next().unwrap();
     assert_eq!(1, res.columns().len());
 
@@ -458,6 +474,7 @@ FROM
 }
 
 #[tokio::test]
+#[traced_test]
 async fn select_int64_null4() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
@@ -474,7 +491,7 @@ SELECT CAST(NULL AS Optional<Int64>)
             ),
         )
         .await?;
-    println!("{:?}", res);
+    trace!("{:?}", res);
     let res = res.results.into_iter().next().unwrap();
     assert_eq!(1, res.columns().len());
 
@@ -486,6 +503,7 @@ SELECT CAST(NULL AS Optional<Int64>)
 }
 
 #[tokio::test]
+#[traced_test]
 async fn select_void_null() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
@@ -502,7 +520,7 @@ SELECT NULL
             ),
         )
         .await?;
-    println!("{:?}", res);
+    trace!("{:?}", res);
     let res = res.results.into_iter().next().unwrap();
     assert_eq!(1, res.columns().len());
 
@@ -514,6 +532,7 @@ SELECT NULL
 }
 
 #[tokio::test]
+#[traced_test]
 async fn stream_query() -> YdbResult<()> {
     let mut client = create_client().await?.table_client();
     let mut session = client.create_session().await?;

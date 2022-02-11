@@ -8,6 +8,7 @@ use std::collections::vec_deque::VecDeque;
 use std::ops::Sub;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Semaphore;
+use tracing::trace;
 use ydb_protobuf::generated::ydb::table::{
     CreateSessionRequest, CreateSessionResult,
 };
@@ -78,17 +79,17 @@ impl SessionPool {
                 idle_sessions.lock()?.pop_front()
             };
             if let Some(idle_item) = idle_item {
-                println!("got session from pool: {}", &idle_item.session.id);
+                trace!("got session from pool: {}", &idle_item.session.id);
                 idle_item.session
             } else {
                 let session = self.create_session.create_session().await?;
-                println!("create session: {}", &session.id);
+                trace!("create session: {}", &session.id);
                 session
             }
         };
 
         session.on_drop(Box::new(move |s: &mut Session| {
-            println!("moved to pool: {}", s.id);
+            trace!("moved to pool: {}", s.id);
             let item = IdleSessionItem {
                 idle_since: std::time::Instant::now(),
                 session: s.clone_without_ondrop(),

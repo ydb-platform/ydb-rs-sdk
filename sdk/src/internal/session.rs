@@ -5,6 +5,7 @@ use crate::internal::query::Query;
 use crate::internal::result::{QueryResult, StreamResult};
 use crate::internal::trait_operation::Operation;
 use derivative::Derivative;
+use tracing::trace;
 use ydb_protobuf::generated::ydb::table::keep_alive_result::SessionStatus;
 use ydb_protobuf::generated::ydb::table::{
     execute_scan_query_request, CommitTransactionRequest, CommitTransactionResult,
@@ -185,7 +186,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        println!("drop session: {}", &self.id);
+        trace!("drop session: {}", &self.id);
         while let Some(on_drop) = self.on_drop_callbacks.pop() {
             on_drop(self)
         }

@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
 use tonic::body::BoxBody;
 use tonic::transport::Channel;
+use tracing::trace;
 
 #[async_trait]
 pub(crate) trait ChannelPool<T>: Send + Sync
@@ -81,7 +82,7 @@ where
 
     fn get_channel_from_pool(&self, endpoint: &Uri) -> Option<T> {
         return if let Some(ch) = self.shared_state.lock().ok()?.channels.get(endpoint) {
-            println!("got channel from pool for {}", endpoint);
+            trace!("got channel from pool for {}", endpoint);
             Some(ch.clone())
         } else {
             None

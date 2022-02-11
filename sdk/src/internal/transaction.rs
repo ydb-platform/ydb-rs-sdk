@@ -4,6 +4,7 @@ use crate::internal::result::QueryResult;
 use crate::internal::session::Session;
 use crate::internal::session_pool::SessionPool;
 use async_trait::async_trait;
+use tracing::trace;
 use ydb_protobuf::generated::ydb::table::transaction_control::TxSelector;
 use ydb_protobuf::generated::ydb::table::transaction_settings::TxMode;
 use ydb_protobuf::generated::ydb::table::{
@@ -145,16 +146,16 @@ impl Transaction for SerializableReadWriteTx {
             session
         } else {
             self.session = Some(self.session_pool.session().await?);
-            println!("create session from transaction");
+            trace!("create session from transaction");
             self.session.as_mut().unwrap()
         };
-        println!("session: {:#?}", session);
+        trace!("session: {:#?}", session);
 
         let tx_selector = if let Some(tx_id) = &self.id {
-            println!("tx_id: {}", tx_id);
+            trace!("tx_id: {}", tx_id);
             TxSelector::TxId(tx_id.clone())
         } else {
-            println!("start new transaction");
+            trace!("start new transaction");
             TxSelector::BeginTx(TransactionSettings {
                 tx_mode: Some(Mode::SerializableReadWrite.into()),
                 ..TransactionSettings::default()

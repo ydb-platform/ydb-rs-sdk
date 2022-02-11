@@ -20,6 +20,8 @@ use std::iter::FromIterator;
 use std::time::Duration;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{watch, Mutex};
+use tracing::{Level, span, trace};
+use tracing::Instrument;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Display, Debug, EnumIter, EnumString, Eq, Hash, PartialEq)]
@@ -238,6 +240,7 @@ impl Waiter for TimerDiscovery {
     }
 }
 
+#[derive(Debug)]
 struct DiscoverySharedState {
     cred: DBCredentials,
     discovery_uri: Uri,
@@ -288,7 +291,7 @@ impl DiscoverySharedState {
             .await?;
 
         let res: ListEndpointsResult = grpc_read_operation_result(resp)?;
-        println!("list endpoints: {:?}", res);
+        trace!("list endpoints: {:?}", res);
         let new_endpoints = Self::list_endpoints_to_services_map(res)?;
         self.set_discovery_state(
             self.discovery_state.write().unwrap(),
@@ -310,15 +313,23 @@ impl DiscoverySharedState {
         self.state_received_sender.send(true);
     }
 
+    #[tracing::instrument]
     async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
+        if let Some(state) = state.upgrade() {
+            // wait token before first discovery
+            trace!("start wait token");
+            state.cred.token_cache.wait().await.unwrap();
+            trace!("token ready");
+        }
+
         while let Some(state) = state.upgrade() {
-            println!("rekby-discovery");
+            trace!("rekby-discovery");
             let res = state.discovery_now().await;
-            println!("rekby-res: {:?}", res);
+            trace!("rekby-res: {:?}", res);
             // return;
             tokio::time::sleep(interval).await;
         }
-        println!("stop background_discovery");
+        trace!("stop background_discovery");
     }
 
     fn list_endpoints_to_services_map(
@@ -332,7 +343,7 @@ impl DiscoverySharedState {
                 let service = match Service::from_str(service_name.as_str()) {
                     Ok(service) => service,
                     Err(err) => {
-                        println!("can't match: '{}' ({})", service_name, err);
+                        trace!("can't match: '{}' ({})", service_name, err);
                         continue 'services;
                     }
                 };
