@@ -3,21 +3,21 @@ use crate::internal::discovery::{Discovery, DiscoveryState, Service};
 use http::Uri;
 use mockall;
 
+use crate::internal::waiter::{Waiter, WaiterImpl};
 use std::sync::{Arc, RwLock};
 use tokio::sync::watch::Receiver;
-use crate::internal::waiter::{Waiter, WaiterImpl};
 
 #[mockall::automock]
 pub(crate) trait LoadBalancer: Send + Sync + Waiter {
     fn endpoint(&self, service: Service) -> YdbResult<Uri>;
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()>;
-    fn waiter(&self)->Box<dyn Waiter>; // need for wait ready in without read lock
+    fn waiter(&self) -> Box<dyn Waiter>; // need for wait ready in without read lock
 }
 
 #[async_trait::async_trait]
 impl Waiter for MockLoadBalancer {
     async fn wait(&self) -> YdbResult<()> {
-        return Ok(())
+        return Ok(());
     }
 }
 
@@ -106,7 +106,7 @@ impl LoadBalancer for StaticLoadBalancer {
 #[async_trait::async_trait]
 impl Waiter for StaticLoadBalancer {
     async fn wait(&self) -> YdbResult<()> {
-        return Ok(())
+        return Ok(());
     }
 }
 
@@ -126,7 +126,7 @@ impl RandomLoadBalancer {
 
 impl LoadBalancer for RandomLoadBalancer {
     fn endpoint(&self, service: Service) -> YdbResult<Uri> {
-        let nodes = self.discovery_state.services.get(&service);
+        let nodes = self.discovery_state.get_nodes(&service);
         match nodes {
             None => Err(YdbError::Custom(
                 format!("no endpoints for service: '{}'", service).into(),
@@ -147,7 +147,7 @@ impl LoadBalancer for RandomLoadBalancer {
 
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()> {
         self.discovery_state = discovery_state.clone();
-        if self.discovery_state.services.len() > 0 {
+        if !self.discovery_state.is_empty() {
             self.waiter.set_received(Ok(()))
         }
         Ok(())
@@ -161,7 +161,7 @@ impl LoadBalancer for RandomLoadBalancer {
 #[async_trait::async_trait]
 impl Waiter for RandomLoadBalancer {
     async fn wait(&self) -> YdbResult<()> {
-        return self.waiter.wait().await
+        return self.waiter.wait().await;
     }
 }
 

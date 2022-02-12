@@ -20,8 +20,8 @@ use std::iter::FromIterator;
 use std::time::Duration;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{watch, Mutex};
-use tracing::{Level, span, trace};
 use tracing::Instrument;
+use tracing::{span, trace, Level};
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Display, Debug, EnumIter, EnumString, Eq, Hash, PartialEq)]
@@ -45,23 +45,45 @@ pub(crate) enum Service {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DiscoveryState {
     pub(crate) timestamp: std::time::Instant,
-    pub(crate) services: HashMap<Service, Vec<NodeInfo>>,
+    nodes: Vec<NodeInfo>,
 
     pessimized_nodes: HashSet<Uri>,
-    original_services: HashMap<Service, Vec<NodeInfo>>,
+    original_nodes: Vec<NodeInfo>,
 }
 
 impl DiscoveryState {
-    pub(crate) fn new(
-        timestamp: std::time::Instant,
-        services: HashMap<Service, Vec<NodeInfo>>,
-    ) -> Self {
-        return DiscoveryState {
+    pub(crate) fn new(timestamp: std::time::Instant, nodes: Vec<NodeInfo>) -> Self {
+        let mut state = DiscoveryState {
             timestamp,
-            services: services.clone(),
+            nodes: Vec::new(),
             pessimized_nodes: HashSet::new(),
-            original_services: services,
+            original_nodes: nodes,
         };
+        state.build_services();
+        return state;
+    }
+
+    fn build_services(&mut self) {
+        self.nodes.clear();
+
+        for origin_node in self.original_nodes.iter() {
+            if !self.pessimized_nodes.contains(&origin_node.uri) {
+                self.nodes.push(origin_node.clone())
+            }
+        }
+
+        // if all nodes pessimized - use full nodes set
+        if self.nodes.len() == 0 {
+            self.nodes.clone_from(&self.original_nodes)
+        }
+    }
+
+    pub(crate) fn get_nodes(&self, service: &Service) -> Option<&Vec<NodeInfo>> {
+        Some(&self.nodes)
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        return self.nodes.len() == 0;
     }
 
     // pessimize return true if state was changed
@@ -75,41 +97,17 @@ impl DiscoveryState {
         return true;
     }
 
-    fn build_services(&mut self) {
-        self.services.clear();
-
-        for (service, origin_nodes) in self.original_services.iter() {
-            let mut nodes = Vec::with_capacity(origin_nodes.len());
-
-            for origin_node in origin_nodes.iter() {
-                if !self.pessimized_nodes.contains(&origin_node.uri) {
-                    nodes.push(origin_node.clone())
-                }
-            }
-
-            // if all nodes pessimized - use full nodes set
-            if nodes.len() == 0 {
-                nodes.clone_from(origin_nodes)
-            }
-
-            self.services.insert(service.clone(), nodes);
-        }
-    }
-
     pub(crate) fn with_node_info(mut self, service: Service, node_info: NodeInfo) -> Self {
-        if !self.services.contains_key(&service) {
-            self.services.insert(service, Vec::new());
-        };
-
-        self.services.get_mut(&service).unwrap().push(node_info);
-
+        if !self.nodes.contains(&node_info) {
+            self.nodes.push(node_info);
+        }
         return self;
     }
 }
 
 impl Default for DiscoveryState {
     fn default() -> Self {
-        return DiscoveryState::new(std::time::Instant::now(), HashMap::default());
+        return DiscoveryState::new(std::time::Instant::now(), Vec::default());
     }
 }
 
@@ -139,16 +137,11 @@ pub(crate) struct StaticDiscovery {
 impl StaticDiscovery {
     pub(crate) fn from_str(endpoint: &str) -> YdbResult<Self> {
         let endpoint = Uri::from_str(endpoint)?;
-        let services = HashMap::from_iter(Service::iter().map(|service| {
-            (
-                service,
-                vec![NodeInfo {
-                    uri: endpoint.clone(),
-                }],
-            )
-        }));
+        let nodes = vec![NodeInfo {
+            uri: endpoint.clone(),
+        }];
 
-        let state = DiscoveryState::new(std::time::Instant::now(), services);
+        let state = DiscoveryState::new(std::time::Instant::now(), nodes);
         let state = Arc::new(state);
         let (sender, _) = tokio::sync::watch::channel(state.clone());
         return Ok(StaticDiscovery {
@@ -208,19 +201,18 @@ impl Discovery for TimerDiscovery {
 
         // check if need force discovery
         let state = self.state();
-        for (_service, origin_nodes) in state.original_services.iter() {
-            let pessimized_nodes = origin_nodes
-                .iter()
-                .filter(|node| state.pessimized_nodes.contains(&node.uri))
-                .count();
-            if pessimized_nodes > 0 && pessimized_nodes >= origin_nodes.len() / 2 {
-                let shared_state_for_discovery = Arc::downgrade(&self.state);
-                tokio::spawn(async move {
-                    if let Some(state) = shared_state_for_discovery.upgrade() {
-                        let _ = state.discovery_now();
-                    }
-                });
-            }
+        let pessimized_nodes_count = state
+            .original_nodes
+            .iter()
+            .filter(|node| state.pessimized_nodes.contains(&node.uri))
+            .count();
+        if pessimized_nodes_count > 0 && pessimized_nodes_count >= state.original_nodes.len() / 2 {
+            let shared_state_for_discovery = Arc::downgrade(&self.state);
+            tokio::spawn(async move {
+                if let Some(state) = shared_state_for_discovery.upgrade() {
+                    let _ = state.discovery_now();
+                }
+            });
         }
     }
 
@@ -255,10 +247,7 @@ struct DiscoverySharedState {
 
 impl DiscoverySharedState {
     fn new(cred: DBCredentials, endpoint: &str) -> YdbResult<Self> {
-        let state = Arc::new(DiscoveryState::new(
-            std::time::Instant::now(),
-            HashMap::new(),
-        ));
+        let state = Arc::new(DiscoveryState::new(std::time::Instant::now(), Vec::new()));
         let (sender, _) = watch::channel(state.clone());
         let (state_received_sender, state_received) = watch::channel(false);
         return Ok(Self {
@@ -292,7 +281,7 @@ impl DiscoverySharedState {
 
         let res: ListEndpointsResult = grpc_read_operation_result(resp)?;
         trace!("list endpoints: {:?}", res);
-        let new_endpoints = Self::list_endpoints_to_services_map(res)?;
+        let new_endpoints = Self::list_endpoints_to_node_infos(res)?;
         self.set_discovery_state(
             self.discovery_state.write().unwrap(),
             Arc::new(DiscoveryState::new(start, new_endpoints)),
@@ -332,32 +321,15 @@ impl DiscoverySharedState {
         trace!("stop background_discovery");
     }
 
-    fn list_endpoints_to_services_map(
-        mut list: ListEndpointsResult,
-    ) -> YdbResult<HashMap<Service, Vec<NodeInfo>>> {
-        let mut map = HashMap::new();
+    fn list_endpoints_to_node_infos(mut list: ListEndpointsResult) -> YdbResult<Vec<NodeInfo>> {
+        let mut nodes = Vec::new();
 
         while let Some(mut endpoint_info) = list.endpoints.pop() {
             let uri = Self::endpoint_info_to_uri(&endpoint_info)?;
-            'services: while let Some(service_name) = endpoint_info.service.pop() {
-                let service = match Service::from_str(service_name.as_str()) {
-                    Ok(service) => service,
-                    Err(err) => {
-                        trace!("can't match: '{}' ({})", service_name, err);
-                        continue 'services;
-                    }
-                };
-                let vec = if let Some(vec) = map.get_mut(&service) {
-                    vec
-                } else {
-                    map.insert(service, Vec::new());
-                    map.get_mut(&service).unwrap()
-                };
-                vec.push(NodeInfo { uri: uri.clone() });
-            }
+            nodes.push(NodeInfo { uri: uri.clone() });
         }
 
-        return Ok(map);
+        return Ok(nodes);
     }
 
     fn endpoint_info_to_uri(endpoint_info: &EndpointInfo) -> YdbResult<Uri> {
@@ -442,7 +414,7 @@ mod test {
         // wait two updates
         for _ in 0..2 {
             rx.changed().await.unwrap();
-            assert!(rx.borrow().services.len() > 1);
+            assert!(rx.borrow().nodes.len() > 1);
         }
 
         return Ok(());

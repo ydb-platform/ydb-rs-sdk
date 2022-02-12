@@ -27,6 +27,6 @@ async fn main() -> YdbResult<()> {
         )
         .await
         .unwrap();
-    trace!("sum: {}", res);
+    println!("sum: {}", res);
     return Ok(());
 }
