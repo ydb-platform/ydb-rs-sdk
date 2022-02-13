@@ -35,6 +35,7 @@ ydb-protobuf = {path="../ydb-protobuf"}
 [dev-dependencies]
 async_once="0.2"
 lazy_static="1.4"
+ntest="0.7"
 
 [[example]]
 name="simple-ping"

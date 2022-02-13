@@ -414,7 +414,7 @@ mod test {
         // wait two updates
         for _ in 0..2 {
             rx.changed().await.unwrap();
-            assert!(rx.borrow().nodes.len() > 1);
+            assert!(rx.borrow().nodes.len() >= 1);
         }
 
         return Ok(());

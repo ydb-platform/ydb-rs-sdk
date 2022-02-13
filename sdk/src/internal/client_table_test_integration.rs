@@ -43,6 +43,22 @@ lazy_static! {
         client.wait().await.unwrap();
         return Arc::new(client);
     });
+
+    static ref TEST_TIMEOUT: i32 = {
+        const default_timeout_ms: i32 = 3600 * 1000; // a hour - for manual tests
+        match std::env::var("TEST_TIMEOUT"){
+            Ok(timeout)=>{
+                if let(Ok(timeout)) = timeout.parse() {
+                    return timeout
+                } else {
+                    return default_timeout_ms
+                }
+            },
+            Err(_)=>{
+                return default_timeout_ms
+            }
+        }
+    };
 }
 
 #[tracing::instrument]
