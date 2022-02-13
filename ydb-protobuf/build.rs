@@ -8,6 +8,7 @@ const COMPILE_DIRS: &[(&str, &str)] = &[
     // src, dst
     ("../ydb-api-protos", "src/generated"),
 ];
+
 const INCLUDE_DIRS: &[&str] = &[
     "../ydb-api-protos",
     "../ydb-api-protos/protos",

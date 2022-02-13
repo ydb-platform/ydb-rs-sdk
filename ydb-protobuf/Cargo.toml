@@ -8,13 +8,13 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-prost = "0.8"
-prost-types = "0.8"
+prost = "0.9.0"
+prost-types = "0.9.0"
 
-tonic = {version = "0.5", features=["tls", "tls-roots", "tls-webpki-roots"]}
+tonic = {version = "0.6", features=["tls", "tls-roots", "tls-webpki-roots"]}
 
 [build-dependencies]
 build-helpers = {path="../build-helpers"}
-prost-build = "0.8"
-tonic-build = "0.5"
+prost-build = "0.9.0"
+tonic-build = "0.6"
 walkdir = "2"
