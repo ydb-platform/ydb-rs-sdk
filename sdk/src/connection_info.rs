@@ -4,6 +4,7 @@ use crate::credentials::{
 use crate::errors::{YdbError, YdbResult};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Mutex;
 
 type ParamHandler = fn(&str, ConnectionInfo) -> YdbResult<ConnectionInfo>;
@@ -25,6 +26,20 @@ pub(crate) struct ConnectionInfo {
     pub(crate) credentials: CredentialsRef,
 }
 
+impl ConnectionInfo {
+    fn parse_endpoint(s: &str, mut connection_info: ConnectionInfo) -> YdbResult<ConnectionInfo> {
+        let url = url::Url::parse(s)?;
+        connection_info.discovery_endpoint = format!(
+            "{}://{}:{}",
+            url.scheme(),
+            url.host().unwrap(),
+            url.port().unwrap()
+        )
+        .to_string();
+        return Ok(connection_info);
+    }
+}
+
 impl Default for ConnectionInfo {
     fn default() -> Self {
         return Self {
@@ -35,31 +50,21 @@ impl Default for ConnectionInfo {
     }
 }
 
-impl ConnectionInfo {
-    pub(crate) fn parse(uri: &str) -> YdbResult<ConnectionInfo> {
+impl FromStr for ConnectionInfo {
+    type Err = YdbError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut connection_info = ConnectionInfo::default();
 
-        connection_info = Self::parse_endpoint(uri, connection_info)?;
+        connection_info = Self::parse_endpoint(s, connection_info)?;
 
         let handlers = PARAM_HANDLERS.lock()?;
 
-        for (key, _) in url::Url::parse(uri)?.query_pairs() {
+        for (key, _) in url::Url::parse(s)?.query_pairs() {
             if let Some(handler) = handlers.get(key.as_ref()) {
-                connection_info = handler(uri, connection_info)?;
+                connection_info = handler(s, connection_info)?;
             }
         }
-        return Ok(connection_info);
-    }
-
-    fn parse_endpoint(s: &str, mut connection_info: ConnectionInfo) -> YdbResult<ConnectionInfo> {
-        let url = url::Url::parse(s)?;
-        connection_info.discovery_endpoint = format!(
-            "{}://{}:{}",
-            url.scheme(),
-            url.host().unwrap(),
-            url.port().unwrap()
-        )
-        .to_string();
         return Ok(connection_info);
     }
 }

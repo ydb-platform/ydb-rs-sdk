@@ -27,8 +27,7 @@ use ydb_protobuf::ydb_proto::discovery::{ListEndpointsRequest, WhoAmIRequest};
 lazy_static! {
     static ref TEST_CLIENT: AsyncOnce<Arc<Client>> = AsyncOnce::new(async {
         let conn_info: ConnectionInfo =
-            ConnectionInfo::parse(std::env::var("YDB_CONNECTION_STRING").unwrap().as_str())
-                .unwrap();
+            std::env::var("YDB_CONNECTION_STRING").unwrap().parse().unwrap();
         let _endpoint_uri: Uri = Uri::from_str(conn_info.discovery_endpoint.as_str()).unwrap();
 
         trace!("create client");
@@ -635,15 +634,4 @@ FROM
     assert_eq!(expected_sum, sum);
     assert!(result_set_count > 1); // ensure get multiply results
     return Ok(());
-}
-
-// #[tokio::test]
-#[tokio::test(flavor = "multi_thread", worker_threads = 10)]
-async fn who_am_i() -> YdbResult<()> {
-    return Ok(());
-    let client = create_client().await?;
-    // tokio::time::sleep(Duration::from_secs(1)).await;
-    let res = client.who_am_i(WhoAmIRequest::default()).await?;
-    assert!(res.user.len() > 0);
-    Ok(())
 }
