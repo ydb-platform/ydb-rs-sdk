@@ -27,8 +27,11 @@ pub(crate) struct ConnectionInfo {
 }
 
 impl ConnectionInfo {
-    fn parse_endpoint(s: &str, mut connection_info: ConnectionInfo) -> YdbResult<ConnectionInfo> {
+    fn parse_host_and_path(s: &str) -> YdbResult<ConnectionInfo> {
         let url = url::Url::parse(s)?;
+
+        let mut connection_info = ConnectionInfo::default();
+
         connection_info.discovery_endpoint = format!(
             "{}://{}:{}",
             url.scheme(),
@@ -36,6 +39,7 @@ impl ConnectionInfo {
             url.port().unwrap()
         )
         .to_string();
+        connection_info.database = url.path().to_string();
         return Ok(connection_info);
     }
 }
@@ -54,9 +58,7 @@ impl FromStr for ConnectionInfo {
     type Err = YdbError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut connection_info = ConnectionInfo::default();
-
-        connection_info = Self::parse_endpoint(s, connection_info)?;
+        let mut connection_info = Self::parse_host_and_path(s)?;
 
         let handlers = PARAM_HANDLERS.lock()?;
 
