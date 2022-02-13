@@ -66,10 +66,7 @@ async fn create_session() -> YdbResult<()> {
 #[tokio::test]
 #[traced_test]
 async fn endpoints() -> YdbResult<()> {
-    let _res = create_client()
-        .await?
-        .endpoints(ListEndpointsRequest::default())
-        .await?;
+    let _res = create_client().await?.endpoints().await?;
     trace!("{:?}", _res);
     Ok(())
 }

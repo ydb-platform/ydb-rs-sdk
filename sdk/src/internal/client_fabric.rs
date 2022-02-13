@@ -109,10 +109,11 @@ impl Client {
         return TableClient::new(self.credentials.clone(), self.discovery.clone());
     }
 
-    pub(crate) async fn endpoints(
-        self: &Self,
-        req: ListEndpointsRequest,
-    ) -> YdbResult<ListEndpointsResult> {
+    pub(crate) async fn endpoints(self: &Self) -> YdbResult<ListEndpointsResult> {
+        let req = ListEndpointsRequest {
+            database: self.credentials.database.clone(),
+            ..ListEndpointsRequest::default()
+        };
         grpc::grpc_read_operation_result(self.client_discovery().await?.list_endpoints(req).await?)
     }
 
