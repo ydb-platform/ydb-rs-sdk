@@ -12,8 +12,8 @@ use crate::{Credentials, StaticToken};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::trace;
-use ydb_protobuf::generated::ydb::discovery::v1::discovery_service_client::DiscoveryServiceClient;
-use ydb_protobuf::generated::ydb::discovery::{
+use ydb_protobuf::ydb_proto::discovery::v1::discovery_service_client::DiscoveryServiceClient;
+use ydb_protobuf::ydb_proto::discovery::{
     ListEndpointsRequest, ListEndpointsResult, WhoAmIRequest, WhoAmIResult,
 };
 

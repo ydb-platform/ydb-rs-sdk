@@ -22,7 +22,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use tonic::{Code, Status};
 use tracing::{info, trace, warn};
 use tracing_test::traced_test;
-use ydb_protobuf::generated::ydb::discovery::{ListEndpointsRequest, WhoAmIRequest};
+use ydb_protobuf::ydb_proto::discovery::{ListEndpointsRequest, WhoAmIRequest};
 
 lazy_static! {
     static ref TEST_CLIENT: AsyncOnce<Arc<Client>> = AsyncOnce::new(async {

@@ -2,7 +2,7 @@ use crate::errors::YdbResult;
 use crate::types::Value;
 use std::collections::HashMap;
 
-use ydb_protobuf::generated::ydb::TypedValue;
+use ydb_protobuf::ydb_proto::TypedValue;
 
 pub struct Query {
     text: String,
@@ -27,12 +27,12 @@ impl Query {
         return self;
     }
 
-    pub(crate) fn query_to_proto(&self) -> ydb_protobuf::generated::ydb::table::Query {
-        return ydb_protobuf::generated::ydb::table::Query {
-            query: Some(ydb_protobuf::generated::ydb::table::query::Query::YqlText(
+    pub(crate) fn query_to_proto(&self) -> ydb_protobuf::ydb_proto::table::Query {
+        return ydb_protobuf::ydb_proto::table::Query {
+            query: Some(ydb_protobuf::ydb_proto::table::query::Query::YqlText(
                 self.text.clone(),
             )),
-            ..ydb_protobuf::generated::ydb::table::Query::default()
+            ..ydb_protobuf::ydb_proto::table::Query::default()
         };
     }
 

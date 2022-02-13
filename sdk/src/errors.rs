@@ -107,7 +107,7 @@ impl YdbError {
                 }
             }
             Self::YdbStatusError(ydb_err) => {
-                use ydb_protobuf::generated::ydb::status_ids::StatusCode;
+                use ydb_protobuf::ydb_proto::status_ids::StatusCode;
                 if let Some(status) = StatusCode::from_i32(ydb_err.operation_status) {
                     match status {
                         StatusCode::Aborted

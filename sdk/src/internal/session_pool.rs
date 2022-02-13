@@ -1,4 +1,3 @@
-
 use crate::errors::*;
 use crate::internal::client_table::TableServiceChannelPool;
 use crate::internal::grpc::grpc_read_operation_result;
@@ -9,9 +8,7 @@ use std::ops::Sub;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Semaphore;
 use tracing::trace;
-use ydb_protobuf::generated::ydb::table::{
-    CreateSessionRequest, CreateSessionResult,
-};
+use ydb_protobuf::ydb_proto::table::{CreateSessionRequest, CreateSessionResult};
 
 const DEFAULT_SIZE: usize = 1000;
 
@@ -153,7 +150,7 @@ mod test {
     use super::SessionClient;
     use crate::errors::{YdbError, YdbResult};
     use crate::internal::channel_pool::ChannelPool;
-    use crate::internal::client_table::{TableServiceClientType};
+    use crate::internal::client_table::TableServiceClientType;
     use crate::internal::session::Session;
     use crate::internal::session_pool::SessionPool;
     use async_trait::async_trait;

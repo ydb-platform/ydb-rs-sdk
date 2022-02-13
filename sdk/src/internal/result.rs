@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::vec::IntoIter;
 use tracing::trace;
-use ydb_protobuf::generated::ydb::status_ids::StatusCode;
-use ydb_protobuf::generated::ydb::table::{ExecuteQueryResult, ExecuteScanQueryPartialResponse};
+use ydb_protobuf::ydb_proto::status_ids::StatusCode;
+use ydb_protobuf::ydb_proto::table::{ExecuteQueryResult, ExecuteScanQueryPartialResponse};
 
 #[derive(Debug)]
 pub struct QueryResult {
@@ -56,7 +56,7 @@ impl QueryResult {
 pub struct ResultSet {
     columns: Vec<crate::types::Column>,
     columns_by_name: HashMap<String, usize>,
-    pb: ydb_protobuf::generated::ydb::ResultSet,
+    pb: ydb_protobuf::ydb_proto::ResultSet,
 }
 
 impl ResultSet {
@@ -78,9 +78,7 @@ impl ResultSet {
         self.pb.truncated
     }
 
-    pub(crate) fn from_proto(
-        pb: ydb_protobuf::generated::ydb::ResultSet,
-    ) -> errors::YdbResult<Self> {
+    pub(crate) fn from_proto(pb: ydb_protobuf::ydb_proto::ResultSet) -> errors::YdbResult<Self> {
         let mut columns = Vec::with_capacity(pb.columns.len());
         for pb_col in pb.columns.iter() {
             columns.push(crate::types::Column {
@@ -114,7 +112,7 @@ impl IntoIterator for ResultSet {
 pub struct Row {
     columns: Rc<Vec<crate::types::Column>>,
     columns_by_name: Rc<HashMap<String, usize>>,
-    pb: HashMap<usize, ydb_protobuf::generated::ydb::Value>,
+    pb: HashMap<usize, ydb_protobuf::ydb_proto::Value>,
 }
 
 impl Row {
@@ -136,7 +134,7 @@ impl Row {
 pub struct ResultSetRowsIter {
     columns: Rc<Vec<crate::types::Column>>,
     columns_by_name: Rc<HashMap<String, usize>>,
-    row_iter: IntoIter<ydb_protobuf::generated::ydb::Value>,
+    row_iter: IntoIter<ydb_protobuf::ydb_proto::Value>,
 }
 
 impl Iterator for ResultSetRowsIter {

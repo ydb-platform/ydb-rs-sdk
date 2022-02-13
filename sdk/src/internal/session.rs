@@ -6,8 +6,8 @@ use crate::internal::result::{QueryResult, StreamResult};
 use crate::internal::trait_operation::Operation;
 use derivative::Derivative;
 use tracing::trace;
-use ydb_protobuf::generated::ydb::table::keep_alive_result::SessionStatus;
-use ydb_protobuf::generated::ydb::table::{
+use ydb_protobuf::ydb_proto::table::keep_alive_result::SessionStatus;
+use ydb_protobuf::ydb_proto::table::{
     execute_scan_query_request, CommitTransactionRequest, CommitTransactionResult,
     ExecuteDataQueryRequest, ExecuteQueryResult, ExecuteScanQueryRequest,
     ExecuteSchemeQueryRequest, KeepAliveRequest, KeepAliveResult, RollbackTransactionRequest,
@@ -39,7 +39,7 @@ impl Session {
 
     pub(crate) fn handle_error(&mut self, err: &YdbError) {
         if let YdbError::YdbStatusError(err) = err {
-            use ydb_protobuf::generated::ydb::status_ids::StatusCode;
+            use ydb_protobuf::ydb_proto::status_ids::StatusCode;
             if let Some(status) = StatusCode::from_i32(err.operation_status) {
                 if status == StatusCode::BadSession || status == StatusCode::SessionExpired {
                     self.can_pooled = false;

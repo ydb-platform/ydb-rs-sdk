@@ -5,9 +5,9 @@ use crate::internal::session::Session;
 use crate::internal::session_pool::SessionPool;
 use async_trait::async_trait;
 use tracing::trace;
-use ydb_protobuf::generated::ydb::table::transaction_control::TxSelector;
-use ydb_protobuf::generated::ydb::table::transaction_settings::TxMode;
-use ydb_protobuf::generated::ydb::table::{
+use ydb_protobuf::ydb_proto::table::transaction_control::TxSelector;
+use ydb_protobuf::ydb_proto::table::transaction_settings::TxMode;
+use ydb_protobuf::ydb_proto::table::{
     ExecuteDataQueryRequest, OnlineModeSettings, SerializableModeSettings, TransactionControl,
     TransactionSettings,
 };

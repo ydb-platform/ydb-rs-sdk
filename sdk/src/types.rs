@@ -5,7 +5,7 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use std::time::Duration;
 use strum::{EnumDiscriminants, EnumIter, IntoStaticStr};
-use ydb_protobuf::generated::ydb;
+use ydb_protobuf::ydb_proto;
 
 const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 
@@ -188,10 +188,10 @@ impl Value {
     }
 
     // return empty value of requested type
-    pub(crate) fn from_proto_type(proto_type: &Option<ydb::Type>) -> YdbResult<Self> {
-        use ydb::r#type::PrimitiveTypeId as P;
-        use ydb::r#type::Type as T;
-        let res = if let Some(ydb::Type {
+    pub(crate) fn from_proto_type(proto_type: &Option<ydb_proto::Type>) -> YdbResult<Self> {
+        use ydb_proto::r#type::PrimitiveTypeId as P;
+        use ydb_proto::r#type::Type as T;
+        let res = if let Some(ydb_proto::Type {
             r#type: Some(t_val),
         }) = proto_type
         {
@@ -257,16 +257,16 @@ impl Value {
         return Ok(res);
     }
 
-    pub(crate) fn from_proto(t: &Value, proto_value: ydb::Value) -> YdbResult<Self> {
+    pub(crate) fn from_proto(t: &Value, proto_value: ydb_proto::Value) -> YdbResult<Self> {
         let res = match (t, proto_value) {
             (Value::Void, _) => Value::Void,
             (
                 t,
-                ydb::Value {
+                ydb_proto::Value {
                     value: Some(val), ..
                 },
             ) => Self::from_proto_value(t, val)?,
-            (Value::List(item_type_vec), ydb::Value { items, .. }) => {
+            (Value::List(item_type_vec), ydb_proto::Value { items, .. }) => {
                 let items_type = &item_type_vec.t;
                 let mut values = Vec::with_capacity(items.len());
                 items.into_iter().try_for_each(|item| {
@@ -278,7 +278,7 @@ impl Value {
                     values,
                 }))
             }
-            (Value::Struct(struct_t), ydb::Value { items, .. }) => {
+            (Value::Struct(struct_t), ydb_proto::Value { items, .. }) => {
                 Self::from_proto_struct(struct_t, items)?
             }
             (t, proto_value) => {
@@ -294,7 +294,7 @@ impl Value {
         return Ok(res);
     }
 
-    fn from_proto_struct(t: &ValueStruct, items: Vec<ydb::Value>) -> YdbResult<Value> {
+    fn from_proto_struct(t: &ValueStruct, items: Vec<ydb_proto::Value>) -> YdbResult<Value> {
         if t.fields_name.len() != items.len() {
             return Err(YdbError::Custom(
                 format!(
@@ -313,11 +313,8 @@ impl Value {
         return Ok(Value::Struct(res));
     }
 
-    fn from_proto_value(
-        t: &Value,
-        v: ydb_protobuf::generated::ydb::value::Value,
-    ) -> YdbResult<Value> {
-        use ydb_protobuf::generated::ydb::value::Value as pv;
+    fn from_proto_value(t: &Value, v: ydb_proto::value::Value) -> YdbResult<Value> {
+        use ydb_proto::value::Value as pv;
 
         let res = match (t, v) {
             (Value::Bool(_), pv::BoolValue(val)) => Value::Bool(val),
@@ -363,9 +360,9 @@ impl Value {
 
     fn from_proto_value_optional(
         t: &Box<ValueOptional>,
-        val: ydb_protobuf::generated::ydb::value::Value,
+        val: ydb_proto::value::Value,
     ) -> YdbResult<Self> {
-        use ydb_protobuf::generated::ydb::value::Value as pv;
+        use ydb_proto::value::Value as pv;
 
         let res = match val {
             pv::NullFlagValue(_) => Self::optional_from(t.t.clone(), None)?,
@@ -374,35 +371,35 @@ impl Value {
         return Ok(res);
     }
 
-    pub(crate) fn to_typed_value(self) -> YdbResult<ydb::TypedValue> {
-        use ydb::r#type::PrimitiveTypeId as pt;
-        use ydb::value::Value as pv;
+    pub(crate) fn to_typed_value(self) -> YdbResult<ydb_proto::TypedValue> {
+        use ydb_proto::r#type::PrimitiveTypeId as pt;
+        use ydb_proto::value::Value as pv;
 
-        fn proto_typed_value(t: pt, v: pv) -> ydb::TypedValue {
-            ydb::TypedValue {
-                r#type: Some(ydb::Type {
-                    r#type: Some(ydb::r#type::Type::TypeId(t.into())),
+        fn proto_typed_value(t: pt, v: pv) -> ydb_proto::TypedValue {
+            ydb_proto::TypedValue {
+                r#type: Some(ydb_proto::Type {
+                    r#type: Some(ydb_proto::r#type::Type::TypeId(t.into())),
                 }),
-                value: Some(ydb::Value {
+                value: Some(ydb_proto::Value {
                     value: Some(v),
-                    ..ydb::Value::default()
+                    ..ydb_proto::Value::default()
                 }),
             }
         }
 
         #[allow(unreachable_patterns)]
         let res = match self {
-            Self::Void => ydb::TypedValue {
-                r#type: Some(ydb::Type {
-                    r#type: Some(ydb::r#type::Type::VoidType(
+            Self::Void => ydb_proto::TypedValue {
+                r#type: Some(ydb_proto::Type {
+                    r#type: Some(ydb_proto::r#type::Type::VoidType(
                         prost_types::NullValue::NullValue.into(),
                     )),
                 }),
-                value: Some(ydb::Value {
-                    value: Some(ydb::value::Value::NullFlagValue(
+                value: Some(ydb_proto::Value {
+                    value: Some(ydb_proto::value::Value::NullFlagValue(
                         prost_types::NullValue::NullValue.into(),
                     )),
-                    ..ydb::Value::default()
+                    ..ydb_proto::Value::default()
                 }),
             },
             Self::Bool(val) => proto_typed_value(pt::Bool, pv::BoolValue(val)),
@@ -439,22 +436,22 @@ impl Value {
         return Ok(res);
     }
 
-    fn to_typed_optional(optional: Box<ValueOptional>) -> YdbResult<ydb::TypedValue> {
+    fn to_typed_optional(optional: Box<ValueOptional>) -> YdbResult<ydb_proto::TypedValue> {
         if let Value::Optional(_opt) = optional.t {
             unimplemented!("nested optional")
         }
 
         let val = match optional.value {
             Some(val) => val.to_typed_value()?.value.unwrap(),
-            None => ydb::Value {
-                value: Some(ydb::value::Value::NullFlagValue(0)),
-                ..ydb::Value::default()
+            None => ydb_proto::Value {
+                value: Some(ydb_proto::value::Value::NullFlagValue(0)),
+                ..ydb_proto::Value::default()
             },
         };
-        Ok(ydb::TypedValue {
-            r#type: Some(ydb::Type {
-                r#type: Some(ydb::r#type::Type::OptionalType(Box::new(
-                    ydb::OptionalType {
+        Ok(ydb_proto::TypedValue {
+            r#type: Some(ydb_proto::Type {
+                r#type: Some(ydb_proto::r#type::Type::OptionalType(Box::new(
+                    ydb_proto::OptionalType {
                         item: Some(Box::new(optional.t.to_typed_value()?.r#type.unwrap())),
                     },
                 ))),
@@ -463,32 +460,34 @@ impl Value {
         })
     }
 
-    fn to_typed_struct(s: ValueStruct) -> YdbResult<ydb::TypedValue> {
-        let mut members: Vec<ydb::StructMember> = Vec::with_capacity(s.fields_name.len());
-        let mut items: Vec<ydb::Value> = Vec::with_capacity(s.fields_name.len());
+    fn to_typed_struct(s: ValueStruct) -> YdbResult<ydb_proto::TypedValue> {
+        let mut members: Vec<ydb_proto::StructMember> = Vec::with_capacity(s.fields_name.len());
+        let mut items: Vec<ydb_proto::Value> = Vec::with_capacity(s.fields_name.len());
         for (index, v) in s.values.into_iter().enumerate() {
             let typed_val = v.to_typed_value()?;
-            members.push(ydb::StructMember {
+            members.push(ydb_proto::StructMember {
                 name: s.fields_name[index].clone(),
                 r#type: typed_val.r#type,
             });
             items.push(typed_val.value.unwrap());
         }
 
-        return Ok(ydb::TypedValue {
-            r#type: Some(ydb::Type {
-                r#type: Some(ydb::r#type::Type::StructType(ydb::StructType { members })),
+        return Ok(ydb_proto::TypedValue {
+            r#type: Some(ydb_proto::Type {
+                r#type: Some(ydb_proto::r#type::Type::StructType(ydb_proto::StructType {
+                    members,
+                })),
             }),
-            value: Some(ydb::Value {
+            value: Some(ydb_proto::Value {
                 items,
-                ..ydb::Value::default()
+                ..ydb_proto::Value::default()
             }),
         });
     }
 
-    fn to_typed_value_list(ydb_list: Box<ValueList>) -> YdbResult<ydb::TypedValue> {
+    fn to_typed_value_list(ydb_list: Box<ValueList>) -> YdbResult<ydb_proto::TypedValue> {
         let ydb_list_type = ydb_list.t;
-        let proto_items_result: Vec<YdbResult<ydb::TypedValue>> = ydb_list
+        let proto_items_result: Vec<YdbResult<ydb_proto::TypedValue>> = ydb_list
             .values
             .into_iter()
             .map(|item| item.to_typed_value())
@@ -499,18 +498,20 @@ impl Value {
             proto_items.push(item?);
         }
 
-        Ok(ydb::TypedValue {
-            r#type: Some(ydb::Type {
-                r#type: Some(ydb::r#type::Type::ListType(Box::new(ydb::ListType {
-                    item: Some(Box::new(ydb_list_type.to_typed_value()?.r#type.unwrap())),
-                }))),
+        Ok(ydb_proto::TypedValue {
+            r#type: Some(ydb_proto::Type {
+                r#type: Some(ydb_proto::r#type::Type::ListType(Box::new(
+                    ydb_proto::ListType {
+                        item: Some(Box::new(ydb_list_type.to_typed_value()?.r#type.unwrap())),
+                    },
+                ))),
             }),
-            value: Some(ydb::Value {
+            value: Some(ydb_proto::Value {
                 items: proto_items
                     .into_iter()
                     .map(|item| item.value.unwrap())
                     .collect(),
-                ..ydb::Value::default()
+                ..ydb_proto::Value::default()
             }),
         })
     }

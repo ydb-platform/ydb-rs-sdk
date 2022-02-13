@@ -1,6 +1,6 @@
-use ydb_protobuf::generated::ydb::discovery::{ListEndpointsResponse, WhoAmIResponse};
-use ydb_protobuf::generated::ydb::operations::Operation as YdbOperation;
-use ydb_protobuf::generated::ydb::table::{
+use ydb_protobuf::ydb_proto::discovery::{ListEndpointsResponse, WhoAmIResponse};
+use ydb_protobuf::ydb_proto::operations::Operation as YdbOperation;
+use ydb_protobuf::ydb_proto::table::{
     CommitTransactionResponse, CreateSessionResponse, DeleteSessionResponse,
     ExecuteDataQueryResponse, ExecuteSchemeQueryResponse, KeepAliveResponse,
     RollbackTransactionResponse,
