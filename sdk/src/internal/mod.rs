@@ -1,12 +1,12 @@
 mod channel_pool;
-mod client_common;
+pub(crate) mod client_common;
 pub(crate) mod client_fabric;
 pub(crate) mod client_table;
 
 #[cfg(test)]
 mod client_table_test_integration;
 
-mod discovery;
+pub(crate) mod discovery;
 mod grpc;
 mod load_balancer;
 mod middlewares;

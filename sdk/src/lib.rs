@@ -1,4 +1,4 @@
-mod connection_info;
+mod client_builder;
 mod credentials;
 mod errors;
 mod internal;
@@ -7,13 +7,15 @@ mod types;
 mod types_converters;
 
 // full enum pub types
+pub use client_builder::ClientBuilder;
+// full enum pub types
 pub use crate::{
     credentials::{CommandLineYcToken, GoogleComputeEngineMetadata, StaticToken},
     errors::{
         YdbError, YdbIssue, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr, YdbStatusError,
     },
     internal::{
-        client_fabric::{Client, ClientBuilder},
+        client_fabric::Client,
         client_table::{RetryOptions, TableClient, TransactionOptions},
         query::Query,
         result::{QueryResult, ResultSet, ResultSetRowsIter, Row, StreamResult},

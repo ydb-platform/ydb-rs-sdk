@@ -1,7 +1,7 @@
-use crate::connection_info::ConnectionInfo;
+use crate::ClientBuilder;
 use once_cell::sync::Lazy;
 
-pub(crate) static CONNECTION_INFO: Lazy<ConnectionInfo> = Lazy::new(|| {
+pub(crate) static CONNECTION_INFO: Lazy<ClientBuilder> = Lazy::new(|| {
     std::env::var("YDB_CONNECTION_STRING")
         .unwrap()
         .as_str()

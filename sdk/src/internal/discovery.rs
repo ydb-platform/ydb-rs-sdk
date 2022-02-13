@@ -396,8 +396,7 @@ mod test {
             })
             .await??,
         };
-        let discovery_shared =
-            DiscoverySharedState::new(cred, CONNECTION_INFO.discovery_endpoint.as_str())?;
+        let discovery_shared = DiscoverySharedState::new(cred, CONNECTION_INFO.endpoint.as_str())?;
 
         let state = Arc::new(discovery_shared);
         let mut rx = state.sender.subscribe();

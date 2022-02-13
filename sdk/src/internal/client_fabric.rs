@@ -19,59 +19,6 @@ use ydb_protobuf::ydb_proto::discovery::{
 
 pub(crate) type Middleware = AuthService;
 
-pub struct ClientBuilder {
-    credentials: CredentialsRef,
-    database: String,
-    discovery_interval: Duration,
-    endpoint: String,
-}
-
-impl ClientBuilder {
-    pub fn build(self) -> YdbResult<Client> {
-        let db_cred = DBCredentials {
-            token_cache: TokenCache::new(self.credentials.clone())?,
-            database: self.database.clone(),
-        };
-
-        let discovery = TimerDiscovery::new(
-            db_cred.clone(),
-            self.endpoint.as_str(),
-            self.discovery_interval,
-        )?;
-
-        return Client::new_internal(db_cred, Box::new(discovery));
-    }
-
-    pub fn new() -> Self {
-        Self {
-            credentials: credencials_ref(StaticToken::from("")),
-            database: "/local".to_string(),
-            discovery_interval: Duration::from_secs(60),
-            endpoint: "grpc://localhost:2135".to_string(),
-        }
-    }
-
-    pub(crate) fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
-        self.credentials = credencials_ref(cred);
-        return self;
-    }
-
-    pub(crate) fn with_credentials_ref(mut self, cred: CredentialsRef) -> Self {
-        self.credentials = cred;
-        return self;
-    }
-
-    pub(crate) fn with_database(mut self, database: String) -> Self {
-        self.database = database;
-        return self;
-    }
-
-    pub(crate) fn with_endpoint(mut self, endpoint: String) -> Self {
-        self.endpoint = endpoint;
-        return self;
-    }
-}
-
 pub struct Client {
     credentials: DBCredentials,
     load_balancer: SharedLoadBalancer,

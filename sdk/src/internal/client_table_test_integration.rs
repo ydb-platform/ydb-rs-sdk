@@ -1,6 +1,6 @@
-use crate::connection_info::ConnectionInfo;
+use crate::client_builder::ClientBuilder;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
-use crate::internal::client_fabric::{Client, ClientBuilder};
+use crate::internal::client_fabric::Client;
 use crate::internal::client_table::{RetryOptions, TransactionOptions};
 use crate::internal::discovery::StaticDiscovery;
 use crate::internal::query::Query;
@@ -26,15 +26,11 @@ use ydb_protobuf::ydb_proto::discovery::{ListEndpointsRequest, WhoAmIRequest};
 
 lazy_static! {
     static ref TEST_CLIENT: AsyncOnce<Arc<Client>> = AsyncOnce::new(async {
-        let conn_info: ConnectionInfo =
+        let client_builder: ClientBuilder =
             std::env::var("YDB_CONNECTION_STRING").unwrap().parse().unwrap();
-        let _endpoint_uri: Uri = Uri::from_str(conn_info.discovery_endpoint.as_str()).unwrap();
 
         trace!("create client");
-        let client: Client = ClientBuilder::new()
-            .with_endpoint(conn_info.discovery_endpoint.clone())
-            .with_database(conn_info.database.clone())
-            .with_credentials_ref(conn_info.credentials.clone())
+        let client: Client = client_builder
             .build()
             .unwrap();
 
