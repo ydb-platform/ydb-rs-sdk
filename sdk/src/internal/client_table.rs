@@ -6,6 +6,7 @@ use crate::internal::discovery::{Discovery, Service};
 use crate::internal::session::Session;
 use crate::internal::session_pool::SessionPool;
 use crate::internal::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
+use dyn_clone::clone;
 use num::pow;
 use std::future::Future;
 use std::sync::Arc;
@@ -21,6 +22,7 @@ pub(crate) type TableServiceChannelPool = Arc<Box<dyn ChannelPool<TableServiceCl
 
 type TransactionArgType = Box<dyn Transaction>; // real type may be changed
 
+#[derive(Clone)]
 pub struct TransactionOptions {
     mode: Mode,
     autocommit: bool, // Commit transaction after every query. From DB side it visible as many small transactions
@@ -73,10 +75,13 @@ impl RetryOptions {
     }
 }
 
+#[derive(Clone)]
 pub struct TableClient {
     error_on_truncate: bool,
     session_pool: SessionPool,
     retrier: Arc<Box<dyn Retry>>,
+    transaction_options: TransactionOptions,
+    idempotent_operation: bool,
 }
 
 impl TableClient {
@@ -93,6 +98,8 @@ impl TableClient {
             error_on_truncate: false,
             session_pool: SessionPool::new(Box::new(channel_pool)),
             retrier: Arc::new(Box::new(TimeoutRetrier::default())),
+            transaction_options: TransactionOptions::new(),
+            idempotent_operation: false,
         };
     }
 
@@ -103,9 +110,19 @@ impl TableClient {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn with_retry_timeout(mut self, timeout: Duration) -> Self {
-        self.retrier = Arc::new(Box::new(TimeoutRetrier { timeout }));
-        return self;
+    pub(crate) fn clone_with_retry_timeout(&self, timeout: Duration) -> Self {
+        return Self {
+            retrier: Arc::new(Box::new(TimeoutRetrier { timeout })),
+            ..self.clone()
+        };
+    }
+
+    #[allow(dead_code)]
+    pub fn clone_with_idempotent_operations(&self, idempotent: bool) -> Self {
+        return Self {
+            idempotent_operation: idempotent,
+            ..self.clone()
+        };
     }
 
     pub(crate) fn create_autocommit_transaction(&self, mode: Mode) -> impl Transaction {
@@ -124,23 +141,18 @@ impl TableClient {
 
     pub async fn retry_transaction<CallbackFuture, CallbackResult>(
         &self,
-        transaction_options: TransactionOptions,
-        retry_options: RetryOptions,
         callback: impl Fn(TransactionArgType) -> CallbackFuture,
     ) -> YdbResultWithCustomerErr<CallbackResult>
     where
         CallbackFuture: Future<Output = YdbResultWithCustomerErr<CallbackResult>>,
     {
-        let retrier = retry_options
-            .retrier
-            .unwrap_or_else(|| self.retrier.clone());
         let mut attempts: usize = 0;
         let start = Instant::now();
         loop {
-            let transaction: Box<dyn Transaction> = if transaction_options.autocommit {
-                Box::new(self.create_autocommit_transaction(transaction_options.mode))
+            let transaction: Box<dyn Transaction> = if self.transaction_options.autocommit {
+                Box::new(self.create_autocommit_transaction(self.transaction_options.mode))
             } else {
-                if transaction_options.mode != Mode::SerializableReadWrite {
+                if self.transaction_options.mode != Mode::SerializableReadWrite {
                     return Err(YdbOrCustomerError::YDB(YdbError::Custom(
                         "only serializable rw transactions allow to interactive mode".into(),
                     )));
@@ -156,13 +168,13 @@ impl TableClient {
                 return res;
             };
 
-            if !Self::check_retry_error(retry_options.idempotent_operation, &err) {
+            if !Self::check_retry_error(self.idempotent_operation, &err) {
                 return Err(err);
             }
 
             let now = Instant::now();
             attempts += 1;
-            let loop_decision = retrier.wait_duration(RetryParams {
+            let loop_decision = self.retrier.wait_duration(RetryParams {
                 attempt: attempts,
                 time_from_start: now.duration_since(start),
             });

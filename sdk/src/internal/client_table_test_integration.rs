@@ -242,7 +242,7 @@ async fn retry_test() -> YdbResult<()> {
     let opts = RetryOptions::new().with_timeout(Duration::from_secs(15));
     let res = client
         .table_client()
-        .retry_transaction(TransactionOptions::new(), opts, |t| async {
+        .retry_transaction(|t| async {
             let mut t = t; // force borrow for lifetime of t inside closure
             let mut locked_res = attempt.lock().unwrap();
             *locked_res += 1;
@@ -558,7 +558,7 @@ async fn stream_query() -> YdbResult<()> {
 
     let generate_count = 20000;
     client
-        .retry_transaction(TransactionOptions::new(), RetryOptions::new(), |tr| async {
+        .retry_transaction(|tr| async {
             let mut tr = tr;
 
             let mut values = Vec::new();
