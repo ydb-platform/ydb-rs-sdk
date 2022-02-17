@@ -143,6 +143,7 @@ impl TableClient {
             .with_error_on_truncate(self.error_on_truncate)
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn create_session(&mut self) -> YdbResult<Session> {
         return self.session_pool.session().await;
     }
@@ -235,6 +236,7 @@ impl TableClient {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn retry_with_session<CallbackFuture, CallbackResult>(
         &self,
         opts: RetryOptions,

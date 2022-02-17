@@ -1,28 +1,22 @@
 use crate::client_builder::ClientBuilder;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::internal::client_fabric::Client;
-use crate::internal::client_table::{RetryOptions, TransactionOptions};
-use crate::internal::discovery::StaticDiscovery;
+use crate::internal::client_table::RetryOptions;
 use crate::internal::query::Query;
-use crate::internal::test_helpers::CONNECTION_INFO;
 use crate::internal::transaction::Mode;
 use crate::internal::transaction::Mode::SerializableReadWrite;
 use crate::internal::transaction::Transaction;
 use crate::types::{Value, ValueList, ValueStruct};
 use async_once::AsyncOnce;
-use http::Uri;
 use lazy_static::lazy_static;
-use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::iter::FromIterator;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 use tonic::{Code, Status};
-use tracing::{info, trace, warn};
+use tracing::trace;
 use tracing_test::traced_test;
-use ydb_protobuf::ydb_proto::discovery::{ListEndpointsRequest, WhoAmIRequest};
 
 lazy_static! {
     static ref TEST_CLIENT: AsyncOnce<Arc<Client>> = AsyncOnce::new(async {
@@ -40,17 +34,17 @@ lazy_static! {
     });
 
     static ref TEST_TIMEOUT: i32 = {
-        const default_timeout_ms: i32 = 3600 * 1000; // a hour - for manual tests
+        const DEFAULT_TIMEOUT_MS: i32 = 3600 * 1000; // a hour - for manual tests
         match std::env::var("TEST_TIMEOUT"){
             Ok(timeout)=>{
-                if let(Ok(timeout)) = timeout.parse() {
+                if let Ok(timeout) = timeout.parse() {
                     return timeout
                 } else {
-                    return default_timeout_ms
+                    return DEFAULT_TIMEOUT_MS
                 }
             },
             Err(_)=>{
-                return default_timeout_ms
+                return DEFAULT_TIMEOUT_MS
             }
         }
     };
@@ -71,14 +65,6 @@ async fn create_session() -> YdbResult<()> {
         .create_session()
         .await?;
     trace!("session: {:?}", res);
-    Ok(())
-}
-
-#[tokio::test]
-#[traced_test]
-async fn endpoints() -> YdbResult<()> {
-    let _res = create_client().await?.endpoints().await?;
-    trace!("{:?}", _res);
     Ok(())
 }
 
@@ -239,7 +225,6 @@ async fn retry_test() -> YdbResult<()> {
     let client = create_client().await?;
 
     let attempt = Arc::new(Mutex::new(0));
-    let opts = RetryOptions::new().with_timeout(Duration::from_secs(15));
     let res = client
         .table_client()
         .retry_transaction(|t| async {

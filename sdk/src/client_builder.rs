@@ -127,11 +127,6 @@ impl ClientBuilder {
         return self;
     }
 
-    pub(crate) fn with_credentials_ref(mut self, cred: CredentialsRef) -> Self {
-        self.credentials = cred;
-        return self;
-    }
-
     pub fn with_database<T: Into<String>>(mut self, database: T) -> Self {
         self.database = database.into();
         return self;

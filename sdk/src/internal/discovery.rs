@@ -1,4 +1,4 @@
-use std::collections::{HashSet};
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock, RwLockWriteGuard, Weak};
 
@@ -19,7 +19,7 @@ use std::time::Duration;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{watch, Mutex};
 
-use tracing::{trace};
+use tracing::trace;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Display, Debug, EnumIter, EnumString, Eq, Hash, PartialEq)]
@@ -297,7 +297,7 @@ impl DiscoverySharedState {
     ) {
         *locked_state = new_state.clone();
         let _ = self.sender.send(new_state);
-        self.state_received_sender.send(true);
+        let _ = self.state_received_sender.send(true);
     }
 
     #[tracing::instrument]

@@ -63,6 +63,7 @@ impl ValueStruct {
         self.values.push(v);
     }
 
+    #[allow(dead_code)]
     pub(crate) fn from_names_and_values(
         fields_name: Vec<String>,
         values: Vec<Value>,
@@ -168,6 +169,7 @@ impl SignedInterval {
 }
 
 impl Value {
+    #[allow(dead_code)]
     pub(crate) fn list_from(t: Value, values: Vec<Value>) -> YdbResult<Self> {
         for (index, value) in values.iter().enumerate() {
             if std::mem::discriminant(&t) != std::mem::discriminant(value) {

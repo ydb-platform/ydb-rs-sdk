@@ -1,5 +1,5 @@
 use crate::errors::NeedRetry::IdempotentOnly;
-use std::fmt::{Debug, Display, Formatter, Write};
+use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 
 pub type YdbResult<T> = std::result::Result<T, YdbError>;
@@ -72,15 +72,17 @@ pub enum YdbError {
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+// Combine with YdbIssue?
 pub struct YdbStatusError {
     #[allow(dead_code)]
-    pub(crate) message: String,
-    pub(crate) operation_status: i32,
-    pub(crate) issues: Vec<YdbIssue>,
+    pub message: String,
+    pub operation_status: i32,
+    pub issues: Vec<YdbIssue>,
 }
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+// Combine with YdbStatusError?
 pub struct YdbIssue {
     pub code: u32,
     pub message: String,
