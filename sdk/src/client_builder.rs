@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::Duration;
+use tracing::trace;
 
 type ParamHandler = fn(&str, ClientBuilder) -> YdbResult<ClientBuilder>;
 
@@ -56,7 +57,7 @@ fn token_cmd(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBu
         };
 
         client_builder.credentials = credencials_ref(
-            crate::credentials::CommandLineYcToken::from_string_cmd(value.as_ref())?,
+            crate::credentials::CommandLineYcToken::from_cmd(value.as_ref())?,
         );
     }
     return Ok(client_builder);

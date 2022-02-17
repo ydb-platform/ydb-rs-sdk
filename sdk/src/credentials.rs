@@ -52,7 +52,8 @@ pub struct CommandLineYcToken {
 
 impl CommandLineYcToken {
     #[allow(dead_code)]
-    pub(crate) fn from_string_cmd(cmd: &str) -> YdbResult<Self> {
+    pub fn from_cmd<T: Into<String>>(cmd: T) -> YdbResult<Self> {
+        let cmd = cmd.into();
         let cmd_parts: Vec<&str> = cmd.split_whitespace().collect();
 
         if cmd_parts.len() < 1 {

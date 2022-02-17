@@ -27,6 +27,7 @@ strum = { version = "0.21", features = ["derive"] }
 tokio = { version = "1", features = ["full"]}
 tracing = "0.1"
 tracing-test = "0.2.1"
+tracing-subscriber = "0.3"
 tonic = {version="0.6", features=["tls"]}
 tower = "0.4"
 url="2.2"
@@ -36,10 +37,3 @@ ydb-protobuf = {path="../ydb-protobuf"}
 async_once="0.2"
 lazy_static="1.4"
 ntest="0.7"
-
-[[example]]
-name="auth-token"
-
-[[example]]
-name="auth-ycloud-metadata"
-

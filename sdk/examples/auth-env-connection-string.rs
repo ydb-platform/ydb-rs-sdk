@@ -2,7 +2,7 @@ use ydb::{ClientBuilder, Query, YandexMetadata, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let client = ClientBuilder::from_str("grpc://localhost:2136?database=local")?
+    let client = ClientBuilder::from_str(std::env::var("YDB_CONNECTION_STRING")?)?
         .with_credentials(YandexMetadata::new())
         .client()?;
     client.wait().await?;

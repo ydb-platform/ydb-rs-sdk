@@ -1943,6 +1943,7 @@ dependencies = [
  "tonic",
  "tower",
  "tracing",
+ "tracing-subscriber",
  "tracing-test",
  "url",
  "ydb-protobuf",

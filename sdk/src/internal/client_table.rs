@@ -147,6 +147,47 @@ impl TableClient {
         return self.session_pool.session().await;
     }
 
+    async fn retry<CallbackFuture, CallbackResult>(
+        &self,
+        callback: impl Fn() -> CallbackFuture,
+    ) -> YdbResult<CallbackResult>
+    where
+        CallbackFuture: Future<Output = YdbResult<CallbackResult>>,
+    {
+        let mut attempt: usize = 0;
+        let start = Instant::now();
+        loop {
+            attempt += 1;
+            let last_err = match callback().await {
+                Ok(res) => return Ok(res),
+                Err(err) => match (err.need_retry(), self.idempotent_operation) {
+                    (NeedRetry::True, _) => err,
+                    (NeedRetry::IdempotentOnly, true) => err,
+                    _ => return Err(err),
+                },
+            };
+
+            let now = std::time::Instant::now();
+            let retry_decision = self.retrier.wait_duration(RetryParams {
+                attempt,
+                time_from_start: now.duration_since(start),
+            });
+            if !retry_decision.allow_retry {
+                return Err(last_err);
+            }
+            tokio::time::sleep(retry_decision.wait_timeout).await;
+        }
+    }
+
+    pub async fn retry_execute_scheme_query<T: Into<String>>(&self, query: T) -> YdbResult<()> {
+        let query = Arc::new(query.into());
+        self.retry(|| async {
+            let mut session = self.session_pool.session().await?;
+            return session.execute_schema_query(query.to_string()).await;
+        })
+        .await
+    }
+
     pub async fn retry_transaction<CallbackFuture, CallbackResult>(
         &self,
         callback: impl Fn(TransactionArgType) -> CallbackFuture,

@@ -2,9 +2,10 @@ use ydb::{ClientBuilder, Query, StaticToken, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let client = ClientBuilder::from_str("grpc://localhost:2135?database=local")?
+    let client = ClientBuilder::from_str("grpc://localhost:2136?database=local")?
         .with_credentials(StaticToken::from("asd"))
         .client()?;
+    client.wait().await?;
     let sum: i32 = client
         .table_client()
         .retry_transaction(|mut t| async move {
@@ -14,6 +15,6 @@ async fn main() -> YdbResult<()> {
         .await?
         .try_into()
         .unwrap();
-    println!("sun: {}", sum);
+    println!("sum: {}", sum);
     return Ok(());
 }

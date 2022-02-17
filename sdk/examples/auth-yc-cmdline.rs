@@ -1,9 +1,9 @@
-use ydb::{ClientBuilder, Query, YandexMetadata, YdbResult};
+use ydb::{ClientBuilder, CommandLineYcToken, Query, StaticToken, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
     let client = ClientBuilder::from_str("grpc://localhost:2136?database=local")?
-        .with_credentials(YandexMetadata::new())
+        .with_credentials(CommandLineYcToken::from_cmd("yc iam create-token")?)
         .client()?;
     client.wait().await?;
     let sum: i32 = client
