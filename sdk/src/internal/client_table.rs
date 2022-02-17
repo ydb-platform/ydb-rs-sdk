@@ -104,15 +104,23 @@ impl TableClient {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn with_max_active_session(mut self, size: usize) -> Self {
+    pub(crate) fn with_max_active_sessions(mut self, size: usize) -> Self {
         self.session_pool = self.session_pool.with_max_active_sessions(size);
         return self;
     }
 
     #[allow(dead_code)]
-    pub(crate) fn clone_with_retry_timeout(&self, timeout: Duration) -> Self {
+    pub fn clone_with_retry_timeout(&self, timeout: Duration) -> Self {
         return Self {
             retrier: Arc::new(Box::new(TimeoutRetrier { timeout })),
+            ..self.clone()
+        };
+    }
+
+    #[allow(dead_code)]
+    pub fn clone_with_no_retry(&self) -> Self {
+        return Self {
+            retrier: Arc::new(Box::new(NoRetrier {})),
             ..self.clone()
         };
     }
@@ -285,5 +293,16 @@ impl Retry for TimeoutRetrier {
         };
 
         return res;
+    }
+}
+
+struct NoRetrier {}
+
+impl Retry for NoRetrier {
+    fn wait_duration(&self, _: RetryParams) -> RetryDecision {
+        return RetryDecision {
+            allow_retry: false,
+            wait_timeout: Duration::default(),
+        };
     }
 }
