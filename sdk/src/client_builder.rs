@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::Duration;
-use tracing::trace;
 
 type ParamHandler = fn(&str, ClientBuilder) -> YdbResult<ClientBuilder>;
 
@@ -92,13 +91,20 @@ pub struct ClientBuilder {
 }
 
 impl ClientBuilder {
-    fn new() -> Self {
-        Self {
-            credentials: credencials_ref(StaticToken::from("")),
-            database: "/local".to_string(),
-            discovery_interval: Duration::from_secs(60),
-            endpoint: "grpc://localhost:2135".to_string(),
+    pub fn from_str<T: Into<String>>(s: T) -> Result<Self, YdbError> {
+        let s = s.into();
+        let s = s.as_str();
+        let mut client_builder = ClientBuilder::new();
+        client_builder.parse_host_and_path(s)?;
+
+        let handlers = PARAM_HANDLERS.lock()?;
+
+        for (key, _) in url::Url::parse(s)?.query_pairs() {
+            if let Some(handler) = handlers.get(key.as_ref()) {
+                client_builder = handler(s, client_builder)?;
+            }
         }
+        return Ok(client_builder);
     }
 
     pub fn client(self) -> YdbResult<Client> {
@@ -116,20 +122,33 @@ impl ClientBuilder {
         return Client::new_internal(db_cred, Box::new(discovery));
     }
 
-    pub fn from_str<T: Into<String>>(s: T) -> Result<Self, YdbError> {
-        let s = s.into();
-        let s = s.as_str();
-        let mut client_builder = ClientBuilder::new();
-        client_builder.parse_host_and_path(s)?;
+    pub fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
+        self.credentials = credencials_ref(cred);
+        return self;
+    }
 
-        let handlers = PARAM_HANDLERS.lock()?;
+    pub(crate) fn with_credentials_ref(mut self, cred: CredentialsRef) -> Self {
+        self.credentials = cred;
+        return self;
+    }
 
-        for (key, _) in url::Url::parse(s)?.query_pairs() {
-            if let Some(handler) = handlers.get(key.as_ref()) {
-                client_builder = handler(s, client_builder)?;
-            }
+    pub fn with_database<T: Into<String>>(mut self, database: T) -> Self {
+        self.database = database.into();
+        return self;
+    }
+
+    pub fn with_endpoint<T: Into<String>>(mut self, endpoint: T) -> Self {
+        self.endpoint = endpoint.into();
+        return self;
+    }
+
+    fn new() -> Self {
+        Self {
+            credentials: credencials_ref(StaticToken::from("")),
+            database: "/local".to_string(),
+            discovery_interval: Duration::from_secs(60),
+            endpoint: "grpc://localhost:2135".to_string(),
         }
-        return Ok(client_builder);
     }
 
     fn parse_host_and_path(&mut self, s: &str) -> YdbResult<()> {
@@ -145,28 +164,9 @@ impl ClientBuilder {
         self.database = url.path().to_string();
         return Ok(());
     }
-
-    pub fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
-        self.credentials = credencials_ref(cred);
-        return self;
-    }
-
-    pub(crate) fn with_credentials_ref(mut self, cred: CredentialsRef) -> Self {
-        self.credentials = cred;
-        return self;
-    }
-
-    pub(crate) fn with_database(mut self, database: String) -> Self {
-        self.database = database;
-        return self;
-    }
-
-    pub(crate) fn with_endpoint(mut self, endpoint: String) -> Self {
-        self.endpoint = endpoint;
-        return self;
-    }
 }
 
+// allow "asd".parse() for create builder
 impl FromStr for ClientBuilder {
     type Err = YdbError;
 
