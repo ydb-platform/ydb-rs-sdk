@@ -20,9 +20,9 @@ pub struct StaticToken {
 
 impl StaticToken {
     #[allow(unused)]
-    pub(crate) fn from(token: &str) -> Self {
+    pub fn from<T: Into<String>>(token: T) -> Self {
         return StaticToken {
-            token: token.to_string(),
+            token: token.into(),
         };
     }
 }
@@ -109,15 +109,21 @@ impl Credentials for CommandLineYcToken {
     }
 }
 
+pub type YandexMetadata = GoogleComputeEngineMetadata;
+
 pub struct GoogleComputeEngineMetadata {
     uri: String,
 }
 
 impl GoogleComputeEngineMetadata {
-    pub(crate) fn new() -> Self {
-        Self{
-            uri: "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token".parse().unwrap(),
-        }
+    pub fn new() -> Self {
+        return Self::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token").unwrap();
+    }
+
+    pub fn from_url<T: Into<String>>(url: T) -> YdbResult<Self> {
+        Ok(Self {
+            uri: url.into().parse()?,
+        })
     }
 }
 

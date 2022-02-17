@@ -31,7 +31,7 @@ lazy_static! {
 
         trace!("create client");
         let client: Client = client_builder
-            .build()
+            .client()
             .unwrap();
 
         trace!("start wait");
@@ -93,7 +93,7 @@ async fn execute_data_query() -> YdbResult<()> {
     trace!("result: {:?}", &res);
     assert_eq!(
         Value::Int32(2),
-        res.first()
+        res.into_only_result()
             .unwrap()
             .rows()
             .next()
@@ -115,7 +115,7 @@ async fn execute_data_query_field_name() -> YdbResult<()> {
     trace!("result: {:?}", &res);
     assert_eq!(
         Value::Int32(2),
-        res.first()
+        res.into_only_result()
             .unwrap()
             .rows()
             .next()
@@ -151,7 +151,7 @@ async fn execute_data_query_params() -> YdbResult<()> {
     trace!("result: {:?}", res);
     assert_eq!(
         Value::Int32(6),
-        res.first()
+        res.into_only_result()
             .unwrap()
             .rows()
             .next()
@@ -210,7 +210,7 @@ async fn interactive_transaction() -> YdbResult<()> {
     let auto_res = tx_auto
         .query(Query::new().with_query("SELECT vInt64 FROM test_values WHERE id=1".into()))
         .await?;
-    assert!(auto_res.first().unwrap().rows().next().is_none());
+    assert!(auto_res.into_only_result().unwrap().rows().next().is_none());
 
     tx.commit().await?;
 
@@ -221,7 +221,7 @@ async fn interactive_transaction() -> YdbResult<()> {
     assert_eq!(
         Value::optional_from(Value::Int64(0), Some(Value::Int64(2)))?,
         auto_res
-            .first()
+            .into_only_result()
             .unwrap()
             .rows()
             .next()
@@ -251,7 +251,7 @@ async fn retry_test() -> YdbResult<()> {
                 .query(Query::new().with_query("SELECT 1+1 as res".into()))
                 .await?;
             let res = res
-                .first()
+                .into_only_result()
                 .unwrap()
                 .rows()
                 .next()

@@ -1,5 +1,5 @@
 use crate::errors::NeedRetry::IdempotentOnly;
-use std::fmt::{Debug, Display, Formatter};
+use std::fmt::{Debug, Display, Formatter, Write};
 use std::sync::Arc;
 
 pub type YdbResult<T> = std::result::Result<T, YdbError>;
@@ -8,6 +8,7 @@ pub type YdbResultWithCustomerErr<T> = std::result::Result<T, YdbOrCustomerError
 #[derive(Clone)]
 pub enum YdbOrCustomerError {
     YDB(YdbError),
+    NoneInOption,
     Customer(Arc<Box<dyn std::error::Error>>),
 }
 
@@ -27,6 +28,7 @@ impl Debug for YdbOrCustomerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         return match self {
             Self::YDB(err) => Debug::fmt(err, f),
+            Self::NoneInOption => f.write_str("ydb: option field is none"),
             Self::Customer(err) => Debug::fmt(err, f),
         };
     }
@@ -36,6 +38,7 @@ impl Display for YdbOrCustomerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         return match self {
             Self::YDB(err) => Display::fmt(err, f),
+            Self::NoneInOption => f.write_str("ydb: option field is none"),
             Self::Customer(err) => Display::fmt(err, f),
         };
     }
@@ -86,8 +89,8 @@ pub struct YdbIssue {
 
 impl YdbError {
     #[allow(dead_code)]
-    pub(crate) fn from_str(s: &str) -> YdbError {
-        return YdbError::Custom(s.to_string());
+    pub(crate) fn from_str<T: Into<String>>(s: T) -> YdbError {
+        return YdbError::Custom(s.into());
     }
     pub(crate) fn need_retry(&self) -> NeedRetry {
         match self {
@@ -147,6 +150,8 @@ macro_rules! to_custom_ydb_err {
 impl std::error::Error for YdbError {}
 
 to_custom_ydb_err!(
+    YdbOrCustomerError,
+    std::convert::Infallible,
     http::Error,
     prost::DecodeError,
     reqwest::Error,

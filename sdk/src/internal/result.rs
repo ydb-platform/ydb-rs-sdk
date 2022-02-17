@@ -47,8 +47,33 @@ impl QueryResult {
         });
     }
 
-    pub fn first(self) -> Option<ResultSet> {
-        self.results.into_iter().next()
+    pub fn into_only_result(self) -> YdbResult<ResultSet> {
+        let mut iter = self.results.into_iter();
+        match iter.next() {
+            Some(result_set) => {
+                if iter.next().is_none() {
+                    Ok(result_set)
+                } else {
+                    Err(YdbError::from_str("more then one result set"))
+                }
+            }
+            None => Err(YdbError::from_str("no result set")),
+        }
+    }
+
+    pub fn into_only_row(self) -> YdbResult<Row> {
+        let mut result_set = self.into_only_result()?;
+        let mut rows = result_set.rows();
+        match rows.next() {
+            Some(first_row) => {
+                if rows.next().is_none() {
+                    Ok(first_row)
+                } else {
+                    Err(YdbError::from_str("result set has more then one row"))
+                }
+            }
+            None => Err(YdbError::from_str("result set has no rows")),
+        }
     }
 }
 

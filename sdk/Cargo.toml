@@ -38,4 +38,8 @@ lazy_static="1.4"
 ntest="0.7"
 
 [[example]]
-name="simple-ping"
+name="auth-token"
+
+[[example]]
+name="auth-ycloud-metadata"
+

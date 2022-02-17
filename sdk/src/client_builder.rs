@@ -91,7 +91,7 @@ pub struct ClientBuilder {
 }
 
 impl ClientBuilder {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             credentials: credencials_ref(StaticToken::from("")),
             database: "/local".to_string(),
@@ -100,7 +100,7 @@ impl ClientBuilder {
         }
     }
 
-    pub fn build(self) -> YdbResult<Client> {
+    pub fn client(self) -> YdbResult<Client> {
         let db_cred = DBCredentials {
             token_cache: TokenCache::new(self.credentials.clone())?,
             database: self.database.clone(),
@@ -113,6 +113,22 @@ impl ClientBuilder {
         )?;
 
         return Client::new_internal(db_cred, Box::new(discovery));
+    }
+
+    pub fn from_str<T: Into<String>>(s: T) -> Result<Self, YdbError> {
+        let s = s.into();
+        let s = s.as_str();
+        let mut client_builder = ClientBuilder::new();
+        client_builder.parse_host_and_path(s)?;
+
+        let handlers = PARAM_HANDLERS.lock()?;
+
+        for (key, _) in url::Url::parse(s)?.query_pairs() {
+            if let Some(handler) = handlers.get(key.as_ref()) {
+                client_builder = handler(s, client_builder)?;
+            }
+        }
+        return Ok(client_builder);
     }
 
     fn parse_host_and_path(&mut self, s: &str) -> YdbResult<()> {
@@ -129,7 +145,7 @@ impl ClientBuilder {
         return Ok(());
     }
 
-    pub(crate) fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
+    pub fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
         self.credentials = credencials_ref(cred);
         return self;
     }
@@ -154,16 +170,6 @@ impl FromStr for ClientBuilder {
     type Err = YdbError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut client_builder = ClientBuilder::new();
-        client_builder.parse_host_and_path(s)?;
-
-        let handlers = PARAM_HANDLERS.lock()?;
-
-        for (key, _) in url::Url::parse(s)?.query_pairs() {
-            if let Some(handler) = handlers.get(key.as_ref()) {
-                client_builder = handler(s, client_builder)?;
-            }
-        }
-        return Ok(client_builder);
+        ClientBuilder::from_str(s)
     }
 }

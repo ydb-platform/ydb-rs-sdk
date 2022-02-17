@@ -242,6 +242,7 @@ impl TableClient {
     fn check_retry_error(is_idempotent_operation: bool, err: &YdbOrCustomerError) -> bool {
         let ydb_err = match &err {
             YdbOrCustomerError::Customer(_) => return false,
+            YdbOrCustomerError::NoneInOption => return false,
             YdbOrCustomerError::YDB(err) => err,
         };
 

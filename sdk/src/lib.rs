@@ -10,7 +10,7 @@ mod types_converters;
 pub use client_builder::ClientBuilder;
 // full enum pub types
 pub use crate::{
-    credentials::{CommandLineYcToken, GoogleComputeEngineMetadata, StaticToken},
+    credentials::{CommandLineYcToken, GoogleComputeEngineMetadata, StaticToken, YandexMetadata},
     errors::{
         YdbError, YdbIssue, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr, YdbStatusError,
     },
