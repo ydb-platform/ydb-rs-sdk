@@ -6,7 +6,7 @@ use crate::internal::discovery::{Discovery, Service};
 use crate::internal::session::Session;
 use crate::internal::session_pool::SessionPool;
 use crate::internal::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
-use dyn_clone::clone;
+
 use num::pow;
 use std::future::Future;
 use std::sync::Arc;

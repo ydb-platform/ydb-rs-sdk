@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::watch;
 use crate::YdbResult;

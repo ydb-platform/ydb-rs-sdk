@@ -62,7 +62,7 @@ impl QueryResult {
     }
 
     pub fn into_only_row(self) -> YdbResult<Row> {
-        let mut result_set = self.into_only_result()?;
+        let result_set = self.into_only_result()?;
         let mut rows = result_set.rows();
         match rows.next() {
             Some(first_row) => {

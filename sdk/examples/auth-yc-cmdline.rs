@@ -1,4 +1,4 @@
-use ydb::{ClientBuilder, CommandLineYcToken, Query, StaticToken, YdbResult};
+use ydb::{ClientBuilder, CommandLineYcToken, Query, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {

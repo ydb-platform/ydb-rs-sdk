@@ -1,4 +1,4 @@
-use ydb::{ClientBuilder, YandexMetadata, YdbResult};
+use ydb::{ClientBuilder, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {

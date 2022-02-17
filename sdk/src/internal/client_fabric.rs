@@ -1,16 +1,16 @@
-use crate::credentials::{credencials_ref, CredentialsRef};
+
 use crate::errors::YdbResult;
-use crate::internal::client_common::{DBCredentials, TokenCache};
+use crate::internal::client_common::{DBCredentials};
 use crate::internal::client_table::TableClient;
-use crate::internal::discovery::{Discovery, Service, TimerDiscovery};
+use crate::internal::discovery::{Discovery, Service};
 use crate::internal::grpc;
 use crate::internal::grpc::create_grpc_client;
 use crate::internal::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::internal::middlewares::AuthService;
 use crate::internal::waiter::Waiter;
-use crate::{Credentials, StaticToken};
+
 use std::sync::Arc;
-use std::time::Duration;
+
 use tracing::trace;
 use ydb_protobuf::ydb_proto::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_protobuf::ydb_proto::discovery::{

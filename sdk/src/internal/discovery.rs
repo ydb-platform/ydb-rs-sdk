@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashSet};
 use std::str::FromStr;
 use std::sync::{Arc, RwLock, RwLockWriteGuard, Weak};
 
@@ -14,12 +14,12 @@ use crate::errors::YdbResult;
 use crate::internal::client_common::DBCredentials;
 use crate::internal::grpc::{create_grpc_client, grpc_read_operation_result};
 use crate::internal::waiter::Waiter;
-use std::iter::FromIterator;
+
 use std::time::Duration;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{watch, Mutex};
-use tracing::Instrument;
-use tracing::{span, trace, Level};
+
+use tracing::{trace};
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Display, Debug, EnumIter, EnumString, Eq, Hash, PartialEq)]
@@ -76,7 +76,7 @@ impl DiscoveryState {
         }
     }
 
-    pub(crate) fn get_nodes(&self, service: &Service) -> Option<&Vec<NodeInfo>> {
+    pub(crate) fn get_nodes(&self, _service: &Service) -> Option<&Vec<NodeInfo>> {
         Some(&self.nodes)
     }
 
@@ -95,7 +95,7 @@ impl DiscoveryState {
         return true;
     }
 
-    pub(crate) fn with_node_info(mut self, service: Service, node_info: NodeInfo) -> Self {
+    pub(crate) fn with_node_info(mut self, _service: Service, node_info: NodeInfo) -> Self {
         if !self.nodes.contains(&node_info) {
             self.nodes.push(node_info);
         }
@@ -322,7 +322,7 @@ impl DiscoverySharedState {
     fn list_endpoints_to_node_infos(mut list: ListEndpointsResult) -> YdbResult<Vec<NodeInfo>> {
         let mut nodes = Vec::new();
 
-        while let Some(mut endpoint_info) = list.endpoints.pop() {
+        while let Some(endpoint_info) = list.endpoints.pop() {
             let uri = Self::endpoint_info_to_uri(&endpoint_info)?;
             nodes.push(NodeInfo { uri: uri.clone() });
         }
