@@ -10,14 +10,14 @@ pub struct Query {
 }
 
 impl Query {
-    pub(crate) fn new() -> Self {
+    pub fn new<T: Into<String>>(query: T) -> Self {
         Query {
-            text: "".into(),
+            text: query.into(),
             parameters: HashMap::new(),
         }
     }
 
-    pub(crate) fn with_query(mut self: Self, query: String) -> Self {
+    pub fn with_query(mut self: Self, query: String) -> Self {
         self.text = query;
         return self;
     }
@@ -48,18 +48,18 @@ impl Query {
 
 impl Default for Query {
     fn default() -> Self {
-        Query::new()
+        Query::new("")
     }
 }
 
 impl From<&str> for Query {
     fn from(s: &str) -> Self {
-        Query::new().with_query(s.to_string())
+        Query::new(s)
     }
 }
 
 impl From<String> for Query {
     fn from(s: String) -> Self {
-        Query::new().with_query(s)
+        Query::new(s)
     }
 }

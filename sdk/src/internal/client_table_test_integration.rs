@@ -123,15 +123,13 @@ async fn execute_data_query_params() -> YdbResult<()> {
     params.insert("$v".to_string(), Value::Int32(3));
     let res = transaction
         .query(
-            Query::new()
-                .with_query(
-                    "
+            Query::new(
+                "
                 DECLARE $v AS Int32;
                 SELECT $v+$v
-        "
-                    .into(),
-                )
-                .with_params(params),
+",
+            )
+            .with_params(params),
         )
         .await?;
     trace!("result: {:?}", res);
@@ -167,34 +165,33 @@ async fn interactive_transaction() -> YdbResult<()> {
         .create_autocommit_transaction(SerializableReadWrite);
 
     let mut tx = client.table_client().create_interactive_transaction();
-    tx.query(Query::new().with_query("DELETE FROM test_values".into()))
-        .await?;
+    tx.query(Query::new("DELETE FROM test_values")).await?;
     tx.commit().await?;
 
     let mut tx = client.table_client().create_interactive_transaction();
-    tx.query(Query::new().with_query("UPSERT INTO test_values (id, vInt64) VALUES (1, 2)".into()))
-        .await?;
+    tx.query(Query::new(
+        "UPSERT INTO test_values (id, vInt64) VALUES (1, 2)",
+    ))
+    .await?;
     tx.query(
-        Query::new()
-            .with_query(
-                "
+        Query::new(
+            "
                 DECLARE $key AS Int64;
                 DECLARE $val AS Int64;
 
                 UPSERT INTO test_values (id, vInt64) VALUES ($key, $val)
-            "
-                .into(),
-            )
-            .with_params(HashMap::from([
-                ("$key".into(), Value::Int64(2)),
-                ("$val".into(), Value::Int64(3)),
-            ])),
+            ",
+        )
+        .with_params(HashMap::from([
+            ("$key".into(), Value::Int64(2)),
+            ("$val".into(), Value::Int64(3)),
+        ])),
     )
     .await?;
 
     // check table before commit
     let auto_res = tx_auto
-        .query(Query::new().with_query("SELECT vInt64 FROM test_values WHERE id=1".into()))
+        .query(Query::new("SELECT vInt64 FROM test_values WHERE id=1"))
         .await?;
     assert!(auto_res.into_only_result().unwrap().rows().next().is_none());
 
@@ -202,7 +199,7 @@ async fn interactive_transaction() -> YdbResult<()> {
 
     // check table after commit
     let auto_res = tx_auto
-        .query(Query::new().with_query("SELECT vInt64 FROM test_values WHERE id=1".into()))
+        .query(Query::new("SELECT vInt64 FROM test_values WHERE id=1"))
         .await?;
     assert_eq!(
         Value::optional_from(Value::Int64(0), Some(Value::Int64(2)))?,
@@ -232,9 +229,7 @@ async fn retry_test() -> YdbResult<()> {
             let mut locked_res = attempt.lock().unwrap();
             *locked_res += 1;
 
-            let res = t
-                .query(Query::new().with_query("SELECT 1+1 as res".into()))
-                .await?;
+            let res = t.query(Query::new("SELECT 1+1 as res")).await?;
             let res = res
                 .into_only_result()
                 .unwrap()
@@ -314,16 +309,14 @@ async fn select_int() -> YdbResult<()> {
         .create_autocommit_transaction(Mode::OnlineReadonly);
     let res = transaction
         .query(
-            Query::new()
-                .with_query(
-                    "
+            Query::new(
+                "
 DECLARE $test AS Int32;
 
 SELECT $test AS test;
-"
-                    .into(),
-                )
-                .with_params(HashMap::from_iter([("$test".into(), v.clone())])),
+",
+            )
+            .with_params(HashMap::from_iter([("$test".into(), v.clone())])),
         )
         .await?;
 
@@ -343,19 +336,17 @@ async fn select_optional() -> YdbResult<()> {
         .create_autocommit_transaction(Mode::OnlineReadonly);
     let res = transaction
         .query(
-            Query::new()
-                .with_query(
-                    "
+            Query::new(
+                "
 DECLARE $test AS Optional<Int32>;
 
 SELECT $test AS test;
-"
-                    .into(),
-                )
-                .with_params(HashMap::from_iter([(
-                    "$test".into(),
-                    Value::optional_from(Value::Int32(0), Some(Value::Int32(3)))?,
-                )])),
+",
+            )
+            .with_params(HashMap::from_iter([(
+                "$test".into(),
+                Value::optional_from(Value::Int32(0), Some(Value::Int32(3)))?,
+            )])),
         )
         .await?;
 
@@ -378,22 +369,20 @@ async fn select_list() -> YdbResult<()> {
         .create_autocommit_transaction(Mode::OnlineReadonly);
     let res = transaction
         .query(
-            Query::new()
-                .with_query(
-                    "
+            Query::new(
+                "
 DECLARE $l AS List<Int32>;
 
 SELECT $l AS l;
-"
-                    .into(),
-                )
-                .with_params(HashMap::from_iter([(
-                    "$l".into(),
-                    Value::List(Box::new(ValueList {
-                        t: Value::Int32(0),
-                        values: Vec::from([Value::Int32(1), Value::Int32(2), Value::Int32(3)]),
-                    })),
-                )])),
+",
+            )
+            .with_params(HashMap::from_iter([(
+                "$l".into(),
+                Value::List(Box::new(ValueList {
+                    t: Value::Int32(0),
+                    values: Vec::from([Value::Int32(1), Value::Int32(2), Value::Int32(3)]),
+                })),
+            )])),
         )
         .await?;
     trace!("{:?}", res);
@@ -418,9 +407,8 @@ async fn select_struct() -> YdbResult<()> {
         .create_autocommit_transaction(Mode::OnlineReadonly);
     let res = transaction
         .query(
-            Query::new()
-                .with_query(
-                    "
+            Query::new(
+                "
 DECLARE $l AS List<Struct<
     a: Int64
 >>;
@@ -430,32 +418,31 @@ SELECT
 FROM
     AS_TABLE($l);
 ;
-"
-                    .into(),
-                )
-                .with_params(HashMap::from_iter([(
-                    "$l".into(),
-                    Value::List(Box::new(ValueList {
-                        t: Value::Struct(ValueStruct::from_names_and_values(
+",
+            )
+            .with_params(HashMap::from_iter([(
+                "$l".into(),
+                Value::List(Box::new(ValueList {
+                    t: Value::Struct(ValueStruct::from_names_and_values(
+                        vec!["a".into()],
+                        vec![Value::Int64(0)],
+                    )?),
+                    values: vec![
+                        Value::Struct(ValueStruct::from_names_and_values(
                             vec!["a".into()],
-                            vec![Value::Int64(0)],
+                            vec![Value::Int64(1)],
                         )?),
-                        values: vec![
-                            Value::Struct(ValueStruct::from_names_and_values(
-                                vec!["a".into()],
-                                vec![Value::Int64(1)],
-                            )?),
-                            Value::Struct(ValueStruct::from_names_and_values(
-                                vec!["a".into()],
-                                vec![Value::Int64(2)],
-                            )?),
-                            Value::Struct(ValueStruct::from_names_and_values(
-                                vec!["a".into()],
-                                vec![Value::Int64(3)],
-                            )?),
-                        ],
-                    })),
-                )])),
+                        Value::Struct(ValueStruct::from_names_and_values(
+                            vec!["a".into()],
+                            vec![Value::Int64(2)],
+                        )?),
+                        Value::Struct(ValueStruct::from_names_and_values(
+                            vec!["a".into()],
+                            vec![Value::Int64(3)],
+                        )?),
+                    ],
+                })),
+            )])),
         )
         .await?;
     trace!("{:?}", res);
@@ -477,15 +464,12 @@ async fn select_int64_null4() -> YdbResult<()> {
         .table_client()
         .create_autocommit_transaction(Mode::OnlineReadonly);
     let res = transaction
-        .query(
-            Query::new().with_query(
-                "
+        .query(Query::new(
+            "
 SELECT CAST(NULL AS Optional<Int64>)
 ;
-"
-                .into(),
-            ),
-        )
+",
+        ))
         .await?;
     trace!("{:?}", res);
     let res = res.results.into_iter().next().unwrap();
@@ -506,15 +490,12 @@ async fn select_void_null() -> YdbResult<()> {
         .table_client()
         .create_autocommit_transaction(Mode::OnlineReadonly);
     let res = transaction
-        .query(
-            Query::new().with_query(
-                "
+        .query(Query::new(
+            "
 SELECT NULL
 ;
-"
-                .into(),
-            ),
-        )
+",
+        ))
         .await?;
     trace!("{:?}", res);
     let res = res.results.into_iter().next().unwrap();
@@ -554,9 +535,8 @@ async fn stream_query() -> YdbResult<()> {
                 )?))
             }
 
-            let query = Query::new()
-                .with_query(
-                    "
+            let query = Query::new(
+                "
 DECLARE $values AS List<Struct<
     val: Int32,
 > >;
@@ -567,16 +547,16 @@ SELECT
 FROM
     AS_TABLE($values);            
 "
-                    .to_string(),
-                )
-                .with_params(
-                    [(
-                        "$values".to_string(),
-                        Value::list_from(values[0].clone(), values)?,
-                    )]
-                    .into_iter()
-                    .collect(),
-                );
+                .to_string(),
+            )
+            .with_params(
+                [(
+                    "$values".to_string(),
+                    Value::list_from(values[0].clone(), values)?,
+                )]
+                .into_iter()
+                .collect(),
+            );
 
             tr.query(query).await?;
             tr.commit().await?;
@@ -585,7 +565,7 @@ FROM
         .await
         .unwrap();
 
-    let query = Query::new().with_query("SELECT val FROM stream_query".to_string());
+    let query = Query::new("SELECT val FROM stream_query".to_string());
     let mut res = session.execute_scan_query(query).await?;
     let mut sum = 0;
     let mut result_set_count = 0;
