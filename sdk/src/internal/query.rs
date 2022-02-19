@@ -22,7 +22,7 @@ impl Query {
         return self;
     }
 
-    pub(crate) fn with_params(mut self, params: HashMap<String, Value>) -> Self {
+    pub fn with_params(mut self, params: HashMap<String, Value>) -> Self {
         self.parameters = params;
         return self;
     }

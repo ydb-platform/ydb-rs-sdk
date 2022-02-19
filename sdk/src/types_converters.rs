@@ -1,5 +1,6 @@
 use crate::errors::YdbError;
 use crate::types::{Value, ValueOptional};
+use itertools::Itertools;
 use std::any::type_name;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -44,7 +45,10 @@ macro_rules! simple_convert_optional {
                         };
 
                         match opt_val.value {
-                            Some(val) => Ok(Some(val.try_into()?)),
+                            Some(val) => {
+                                let res_val: $native_type = val.try_into()?;
+                                Ok(Some(res_val))
+                            }
                             None => Ok(None),
                         }
                     }
@@ -68,6 +72,42 @@ macro_rules! simple_convert_optional {
             }
         }
     };
+}
+
+// convert to vector
+
+impl TryFrom<Value> for Vec<i32> {
+    type Error = YdbError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        let value = match value {
+            Value::List(inner) => inner,
+            value => {
+                return Err(YdbError::from_str(format!(
+                    "can't convert from {} to Vec",
+                    value.kind_static()
+                )));
+            }
+        };
+
+        // check list type compatible - for prevent false positive convert empty list
+        let list_item_type = value.t.kind_static();
+        if TryInto::<i32>::try_into(value.t).is_err() {
+            let vec_item_type = type_name::<i32>();
+            return Err(YdbError::from_str(format!(
+                "can't convert list item type '{}' to vec item type '{}'",
+                list_item_type, vec_item_type
+            )));
+        };
+
+        let res: Vec<i32> = value
+            .values
+            .into_iter()
+            .map(|item| item.try_into())
+            .try_collect()
+            .unwrap();
+        return Ok(res);
+    }
 }
 
 simple_convert!(i8, Value::Int8);

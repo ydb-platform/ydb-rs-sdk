@@ -1926,6 +1926,7 @@ dependencies = [
  "derivative",
  "dyn-clone",
  "http",
+ "itertools",
  "lazy_static",
  "mockall",
  "ntest",
