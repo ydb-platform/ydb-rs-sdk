@@ -1,8 +1,10 @@
 use crate::errors::YdbError;
 use crate::types::{Value, ValueOptional};
+use crate::ValueList;
 use itertools::Itertools;
 use std::any::type_name;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::vec::IntoIter;
 
 macro_rules! simple_convert {
     ($native_type:ty, $ydb_value_kind_first:path $(,$ydb_value_kind:path)* $(,)?) => {
@@ -29,11 +31,14 @@ macro_rules! simple_convert {
         }
 
         simple_convert_optional!($native_type, from_native);
+        list_convert!($native_type);
     };
 }
 
 macro_rules! simple_convert_optional {
     ($native_type:ty) => {
+        list_convert!(Option<$native_type>);
+
         impl TryFrom<Value> for Option<$native_type> {
             type Error = YdbError;
 
@@ -57,6 +62,7 @@ macro_rules! simple_convert_optional {
             }
         }
     };
+
     ($native_type:ty, from_native) => {
         simple_convert_optional!($native_type);
 
@@ -74,7 +80,19 @@ macro_rules! simple_convert_optional {
     };
 }
 
-// convert to vector
+macro_rules! list_convert {
+    ($native_type:ty) => {
+        // convert to vector
+    };
+}
+
+impl FromIterator<i32> for Value {
+    fn from_iter<T: IntoIterator<Item = i32>>(iter: T) -> Self {
+        let t: Value = <i32>::default().into();
+        let values: Vec<Value> = iter.into_iter().map(|item| item.into()).collect();
+        return Value::List(Box::new(ValueList { t, values }));
+    }
+}
 
 impl TryFrom<Value> for Vec<i32> {
     type Error = YdbError;
@@ -104,8 +122,7 @@ impl TryFrom<Value> for Vec<i32> {
             .values
             .into_iter()
             .map(|item| item.try_into())
-            .try_collect()
-            .unwrap();
+            .try_collect()?;
         return Ok(res);
     }
 }

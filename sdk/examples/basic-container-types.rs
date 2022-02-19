@@ -9,15 +9,30 @@ async fn main() -> YdbResult<()> {
     let table_client = client.table_client();
 
     // List
-    let _ = table_client
+    table_client
         .retry_transaction(|mut t| async move {
+            let source = vec![1 as i32, 2, 3];
+            let sourceValue = Value::from_iter(source.clone());
             let res: Vec<i32> = t
-                .query(Query::new("SELECT AsList(1,2,3) AS val"))
+                .query(
+                    Query::new(
+                        "
+                    DECLARE $val AS List<Int32>;
+
+                    SELECT $val AS val;
+                ",
+                    )
+                    .with_params(HashMap::from_iter(vec![(
+                        "$val".to_string(),
+                        sourceValue, //
+                    )])),
+                )
                 .await?
                 .into_only_row()?
                 .remove_field_by_name("val")?
                 .try_into()?;
-            println!("{:?}", res);
+
+            assert_eq!(vec![1, 2, 3], res);
             return Ok(());
         })
         .await?;
