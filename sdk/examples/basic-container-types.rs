@@ -12,7 +12,7 @@ async fn main() -> YdbResult<()> {
     table_client
         .retry_transaction(|mut t| async move {
             let source = vec![1 as i32, 2, 3];
-            let sourceValue = Value::from_iter(source.clone());
+            let source_value = Value::from_iter(source.clone());
             let res: Vec<i32> = t
                 .query(
                     Query::new(
@@ -24,7 +24,7 @@ async fn main() -> YdbResult<()> {
                     )
                     .with_params(HashMap::from_iter(vec![(
                         "$val".to_string(),
-                        sourceValue, //
+                        source_value, //
                     )])),
                 )
                 .await?
