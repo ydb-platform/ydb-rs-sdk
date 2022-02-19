@@ -171,7 +171,7 @@ simple_convert!(
 );
 simple_convert!(f32, Value::Float);
 simple_convert!(f64, Value::Double, Value::Float);
-simple_convert!(Duration, Value::Date, Value::DateTime, Value::Timestamp);
+simple_convert!(Duration, Value::Timestamp, Value::Date, Value::DateTime);
 
 impl TryFrom<Value> for SystemTime {
     type Error = YdbError;
@@ -199,12 +199,13 @@ impl TryFrom<Value> for SystemTime {
     }
 }
 
+// System Time converters
 impl TryFrom<SystemTime> for Value {
     type Error = YdbError;
 
     fn try_from(value: SystemTime) -> Result<Self, Self::Error> {
         let unix = value.duration_since(UNIX_EPOCH)?;
-        return Ok(unix.into());
+        return Ok(Value::Timestamp(unix));
     }
 }
 
@@ -214,11 +215,12 @@ impl TryFrom<Option<SystemTime>> for Value {
     type Error = YdbError;
 
     fn try_from(from_value: Option<SystemTime>) -> Result<Self, Self::Error> {
-        let duration = match from_value {
-            Some(val) => Some(val.duration_since(UNIX_EPOCH)?),
-            None => None,
+        return match from_value {
+            Some(time) => time.try_into(),
+            None => Ok(Value::optional_from(
+                Value::Timestamp(Duration::default()),
+                None,
+            )?),
         };
-
-        return Ok(duration.into());
     }
 }
