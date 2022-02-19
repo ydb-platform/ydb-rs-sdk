@@ -1,6 +1,6 @@
 use crate::errors::YdbError;
 use crate::types::{Bytes, Value, ValueOptional};
-use crate::ValueList;
+use crate::{ValueList, YdbResult};
 use itertools::Itertools;
 use std::any::type_name;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -8,6 +8,12 @@ use std::vec::IntoIter;
 
 macro_rules! simple_convert {
     ($native_type:ty, $ydb_value_kind_first:path $(,$ydb_value_kind:path)* $(,)?) => {
+        impl From<$native_type> for Value {
+            fn from(value: $native_type)->Self {
+                $ydb_value_kind_first(value)
+            }
+        }
+
         impl TryFrom<Value> for $native_type {
             type Error = YdbError;
 
@@ -24,24 +30,6 @@ macro_rules! simple_convert {
             }
         }
 
-        impl From<$native_type> for Value {
-            fn from(value: $native_type)->Self {
-                $ydb_value_kind_first(value)
-            }
-        }
-
-        impl ValueForEmpty for $native_type {
-            fn value_for_empty()->Value{
-                return <$native_type>::default().into()
-            }
-        }
-
-        simple_convert_optional!($native_type, from_native);
-    };
-}
-
-macro_rules! simple_convert_optional {
-    ($native_type:ty) => {
         impl TryFrom<Value> for Option<$native_type> {
             type Error = YdbError;
 
@@ -64,28 +52,25 @@ macro_rules! simple_convert_optional {
                 }
             }
         }
+
     };
+}
 
-    ($native_type:ty, from_native) => {
-        simple_convert_optional!($native_type);
+impl<T: Into<Value> + Default> From<Option<T>> for Value {
+    fn from(from_value: Option<T>) -> Self {
+        let t = T::default().into();
+        let value = match from_value {
+            Some(val) => Some(val.into()),
+            None => None,
+        };
 
-        impl From<Option<$native_type>> for Value {
-            fn from(from_value: Option<$native_type>) -> Self {
-                let t = <$native_type>::default().into();
-                let value = match from_value {
-                    Some(val) => Some(val.into()),
-                    None => None,
-                };
-
-                return Value::Optional(Box::new(ValueOptional { t, value }));
-            }
-        }
-    };
+        return Value::Optional(Box::new(ValueOptional { t, value }));
+    }
 }
 
 impl<T: Into<Value> + Default> FromIterator<T> for Value {
     fn from_iter<T2: IntoIterator<Item = T>>(iter: T2) -> Self {
-        let t: Value = <T>::default().into();
+        let t: Value = T::default().into();
         let values: Vec<Value> = iter.into_iter().map(|item| item.into()).collect();
         return Value::List(Box::new(ValueList { t, values }));
     }
@@ -175,59 +160,3 @@ simple_convert!(
 simple_convert!(f32, Value::Float);
 simple_convert!(f64, Value::Double, Value::Float);
 simple_convert!(Duration, Value::Timestamp, Value::Date, Value::DateTime);
-
-impl TryFrom<Value> for SystemTime {
-    type Error = YdbError;
-
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        fn duration_to_system_time(val: Duration) -> Result<SystemTime, YdbError> {
-            match SystemTime::UNIX_EPOCH.checked_add(val) {
-                Some(res) => Ok(res),
-                None => Err(YdbError::Convert(format!(
-                    "error while convert ydb duration to system time"
-                ))),
-            }
-        }
-
-        match value {
-            Value::Date(val) => duration_to_system_time(val),
-            Value::DateTime(val) => duration_to_system_time(val),
-            Value::Timestamp(val) => duration_to_system_time(val),
-            value => Err(YdbError::Convert(format!(
-                "failed to convert from {} to {}",
-                value.kind_static(),
-                type_name::<Self>(),
-            ))),
-        }
-    }
-}
-
-// System Time converters
-simple_convert_optional!(SystemTime);
-
-impl TryFrom<SystemTime> for Value {
-    type Error = YdbError;
-
-    fn try_from(value: SystemTime) -> Result<Self, Self::Error> {
-        let unix = value.duration_since(UNIX_EPOCH)?;
-        return Ok(Value::Timestamp(unix));
-    }
-}
-
-impl TryFrom<Option<SystemTime>> for Value {
-    type Error = YdbError;
-
-    fn try_from(from_value: Option<SystemTime>) -> Result<Self, Self::Error> {
-        return match from_value {
-            Some(time) => time.try_into(),
-            None => Ok(Value::optional_from(
-                Value::Timestamp(Duration::default()),
-                None,
-            )?),
-        };
-    }
-}
-
-pub trait ValueForEmpty {
-    fn value_for_empty() -> Value;
-}
