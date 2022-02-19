@@ -631,7 +631,7 @@ mod test {
 // Container fot bytes for prevent conflict Vec<u8> - List of values u8 or String type (bytes)
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Bytes {
-    pub vec: Vec<u8>,
+    vec: Vec<u8>,
 }
 
 impl From<Vec<u8>> for Bytes {

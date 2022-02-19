@@ -37,6 +37,17 @@ async fn main() -> YdbResult<()> {
         })
         .await?;
 
+    // Struct
+    table_client.retry_transaction(|mut t| async move {
+        let source: HashMap<String, Value> = HashMap::from_iter([
+            ("a".into(), (12 as i32).into()),
+            ("b".into(), "test".to_string().into()),
+            ("c".into(), (1.0 as f64).into()),
+        ]);
+
+        return Ok(());
+    });
+
     println!("done");
     return Ok(());
 }

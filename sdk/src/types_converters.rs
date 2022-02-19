@@ -1,8 +1,9 @@
 use crate::errors::YdbError;
 use crate::types::{Bytes, Value, ValueOptional};
-use crate::{ValueList, YdbResult};
+use crate::{ValueList, ValueStruct, YdbResult};
 use itertools::Itertools;
 use std::any::type_name;
+use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::vec::IntoIter;
 
@@ -55,6 +56,55 @@ macro_rules! simple_convert {
 
     };
 }
+
+simple_convert!(i8, Value::Int8);
+simple_convert!(u8, Value::Uint8);
+simple_convert!(i16, Value::Int16, Value::Int8, Value::Uint8);
+simple_convert!(u16, Value::Uint16, Value::Uint8);
+simple_convert!(
+    i32,
+    Value::Int32,
+    Value::Int16,
+    Value::Uint16,
+    Value::Int8,
+    Value::Uint8,
+);
+simple_convert!(u32, Value::Uint32, Value::Uint16, Value::Uint8);
+simple_convert!(
+    i64,
+    Value::Int64,
+    Value::Int32,
+    Value::Uint32,
+    Value::Int16,
+    Value::Uint16,
+    Value::Int8,
+    Value::Uint8,
+);
+simple_convert!(
+    u64,
+    Value::Uint64,
+    Value::Uint32,
+    Value::Uint16,
+    Value::Uint8,
+);
+simple_convert!(
+    String,
+    Value::Utf8,
+    Value::Json,
+    Value::JsonDocument,
+    Value::Yson
+);
+simple_convert!(
+    Bytes,
+    Value::String,
+    Value::Utf8,
+    Value::Json,
+    Value::JsonDocument,
+    Value::Yson
+);
+simple_convert!(f32, Value::Float);
+simple_convert!(f64, Value::Double, Value::Float);
+simple_convert!(Duration, Value::Timestamp, Value::Date, Value::DateTime);
 
 impl<T: Into<Value> + Default> From<Option<T>> for Value {
     fn from(from_value: Option<T>) -> Self {
@@ -111,52 +161,3 @@ where
         return Ok(res);
     }
 }
-
-simple_convert!(i8, Value::Int8);
-simple_convert!(u8, Value::Uint8);
-simple_convert!(i16, Value::Int16, Value::Int8, Value::Uint8);
-simple_convert!(u16, Value::Uint16, Value::Uint8);
-simple_convert!(
-    i32,
-    Value::Int32,
-    Value::Int16,
-    Value::Uint16,
-    Value::Int8,
-    Value::Uint8,
-);
-simple_convert!(u32, Value::Uint32, Value::Uint16, Value::Uint8);
-simple_convert!(
-    i64,
-    Value::Int64,
-    Value::Int32,
-    Value::Uint32,
-    Value::Int16,
-    Value::Uint16,
-    Value::Int8,
-    Value::Uint8,
-);
-simple_convert!(
-    u64,
-    Value::Uint64,
-    Value::Uint32,
-    Value::Uint16,
-    Value::Uint8,
-);
-simple_convert!(
-    String,
-    Value::Utf8,
-    Value::Json,
-    Value::JsonDocument,
-    Value::Yson
-);
-simple_convert!(
-    Bytes,
-    Value::String,
-    Value::Utf8,
-    Value::Json,
-    Value::JsonDocument,
-    Value::Yson
-);
-simple_convert!(f32, Value::Float);
-simple_convert!(f64, Value::Double, Value::Float);
-simple_convert!(Duration, Value::Timestamp, Value::Date, Value::DateTime);
