@@ -30,9 +30,13 @@ macro_rules! simple_convert {
             }
         }
 
+        impl ValueForEmpty for $native_type {
+            fn value_for_empty()->Value{
+                return <$native_type>::default().into()
+            }
+        }
+
         simple_convert_optional!($native_type, from_native);
-        list_convert!($native_type);
-        list_convert!(Option<$native_type>);
     };
 }
 
@@ -79,49 +83,48 @@ macro_rules! simple_convert_optional {
     };
 }
 
-macro_rules! list_convert {
-    ($native_type:ty) => {
-        impl FromIterator<$native_type> for Value {
-            fn from_iter<T: IntoIterator<Item = $native_type>>(iter: T) -> Self {
-                let t: Value = <$native_type>::default().into();
-                let values: Vec<Value> = iter.into_iter().map(|item| item.into()).collect();
-                return Value::List(Box::new(ValueList { t, values }));
+impl<T: Into<Value> + Default> FromIterator<T> for Value {
+    fn from_iter<T2: IntoIterator<Item = T>>(iter: T2) -> Self {
+        let t: Value = <T>::default().into();
+        let values: Vec<Value> = iter.into_iter().map(|item| item.into()).collect();
+        return Value::List(Box::new(ValueList { t, values }));
+    }
+}
+
+impl<T> TryFrom<Value> for Vec<T>
+where
+    T: TryFrom<Value, Error = YdbError>,
+{
+    type Error = YdbError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        let value = match value {
+            Value::List(inner) => inner,
+            value => {
+                return Err(YdbError::from_str(format!(
+                    "can't convert from {} to Vec",
+                    value.kind_static()
+                )));
             }
-        }
+        };
 
-        impl TryFrom<Value> for Vec<$native_type> {
-            type Error = YdbError;
+        // check list type compatible - for prevent false positive convert empty list
+        let list_item_type = value.t.kind_static();
+        if TryInto::<T>::try_into(value.t).is_err() {
+            let vec_item_type = type_name::<i32>();
+            return Err(YdbError::from_str(format!(
+                "can't convert list item type '{}' to vec item type '{}'",
+                list_item_type, vec_item_type
+            )));
+        };
 
-            fn try_from(value: Value) -> Result<Self, Self::Error> {
-                let value = match value {
-                    Value::List(inner) => inner,
-                    value => {
-                        return Err(YdbError::from_str(format!(
-                            "can't convert from {} to Vec",
-                            value.kind_static()
-                        )));
-                    }
-                };
-
-                // check list type compatible - for prevent false positive convert empty list
-                let list_item_type = value.t.kind_static();
-                if TryInto::<$native_type>::try_into(value.t).is_err() {
-                    let vec_item_type = type_name::<$native_type>();
-                    return Err(YdbError::from_str(format!(
-                        "can't convert list item type '{}' to vec item type '{}'",
-                        list_item_type, vec_item_type
-                    )));
-                };
-
-                let res: Vec<$native_type> = value
-                    .values
-                    .into_iter()
-                    .map(|item| item.try_into())
-                    .try_collect()?;
-                return Ok(res);
-            }
-        }
-    };
+        let res: Vec<T> = value
+            .values
+            .into_iter()
+            .map(|item| item.try_into())
+            .try_collect()?;
+        return Ok(res);
+    }
 }
 
 simple_convert!(i8, Value::Int8);
@@ -200,6 +203,8 @@ impl TryFrom<Value> for SystemTime {
 }
 
 // System Time converters
+simple_convert_optional!(SystemTime);
+
 impl TryFrom<SystemTime> for Value {
     type Error = YdbError;
 
@@ -208,8 +213,6 @@ impl TryFrom<SystemTime> for Value {
         return Ok(Value::Timestamp(unix));
     }
 }
-
-simple_convert_optional!(SystemTime);
 
 impl TryFrom<Option<SystemTime>> for Value {
     type Error = YdbError;
@@ -223,4 +226,8 @@ impl TryFrom<Option<SystemTime>> for Value {
             )?),
         };
     }
+}
+
+pub trait ValueForEmpty {
+    fn value_for_empty() -> Value;
 }

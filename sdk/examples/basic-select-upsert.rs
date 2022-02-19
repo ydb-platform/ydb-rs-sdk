@@ -47,11 +47,13 @@ async fn main() -> YdbResult<()> {
     // Select one row result
     let sum: Option<i64> = table_client
         .retry_transaction(|mut t| async move {
-            Ok(t.query(Query::new("SELECT SUM(id) AS sum FROM test"))
+            let value = t
+                .query(Query::new("SELECT SUM(id) AS sum FROM test"))
                 .await?
                 .into_only_row()?
-                .remove_field_by_name("sum")?
-                .try_into()?)
+                .remove_field_by_name("sum")?;
+            let res: YdbResult<Option<i64>> = value.try_into();
+            return Ok(res.unwrap());
         })
         .await?;
     println!("sum: {}", sum.unwrap_or(-1));
