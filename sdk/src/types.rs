@@ -33,7 +33,7 @@ pub enum Value {
     DateTime(std::time::Duration), // seconds from UNIX_EPOCH to start of day in UTC.
     Timestamp(std::time::Duration), // seconds from UNIX_EPOCH to start of day in UTC.
     Interval(SignedInterval),
-    String(Vec<u8>), // Bytes
+    String(Bytes), // Bytes
     Utf8(String),
     Yson(String),
     Json(String),
@@ -200,7 +200,7 @@ impl Value {
             match t_val {
                 T::TypeId(t_id) => match P::from_i32(*t_id) {
                     Some(P::Bool) => Self::Bool(false),
-                    Some(P::String) => Self::String(Vec::default()),
+                    Some(P::String) => Self::String(Bytes::default()),
                     Some(P::Utf8) => Self::Utf8(String::default()),
                     Some(P::Float) => Self::Float(0.0),
                     Some(P::Double) => Self::Double(0.0),
@@ -342,7 +342,7 @@ impl Value {
             (Value::Interval(_), pv::Int64Value(val)) => {
                 Value::Interval(SignedInterval::from_nanos(val))
             }
-            (Value::String(_), pv::BytesValue(val)) => Value::String(val),
+            (Value::String(_), pv::BytesValue(val)) => Value::String(val.into()),
             (Value::Utf8(_), pv::TextValue(val)) => Value::Utf8(val),
             (Value::Yson(_), pv::TextValue(val)) => Value::Yson(val),
             (Value::Json(_), pv::TextValue(val)) => Value::Json(val),
@@ -426,7 +426,7 @@ impl Value {
                 proto_typed_value(pt::Timestamp, pv::Uint64Value(val.as_micros().try_into()?))
             }
             Self::Interval(val) => proto_typed_value(pt::Interval, pv::Int64Value(val.as_nanos()?)),
-            Self::String(val) => proto_typed_value(pt::String, pv::BytesValue(val)),
+            Self::String(val) => proto_typed_value(pt::String, pv::BytesValue(val.into())),
             Self::Utf8(val) => proto_typed_value(pt::Utf8, pv::TextValue(val)),
             Self::Yson(val) => proto_typed_value(pt::Yson, pv::TextValue(val)),
             Self::Json(val) => proto_typed_value(pt::Json, pv::TextValue(val)),
@@ -528,7 +528,7 @@ pub(crate) struct Column {
 #[cfg(test)]
 mod test {
     use crate::errors::YdbResult;
-    use crate::types::{Sign, SignedInterval, Value, ValueStruct};
+    use crate::types::{Bytes, Sign, SignedInterval, Value, ValueStruct};
     use std::collections::HashSet;
 
     use std::time::Duration;
@@ -550,7 +550,7 @@ mod test {
         let mut values = vec![
             Value::Bool(false),
             Value::Bool(true),
-            Value::String(Vec::from("asd")),
+            Value::String(Bytes::from("asd".to_string())),
             Value::Utf8("asd".into()),
             Value::Utf8("фыв".into()),
             Value::Json("{}".into()),
@@ -625,5 +625,29 @@ mod test {
         assert_eq!(non_tested.len(), 0, "{:?}", non_tested);
 
         return Ok(());
+    }
+}
+
+// Container fot bytes for prevent conflict Vec<u8> - List of values u8 or String type (bytes)
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Bytes {
+    pub vec: Vec<u8>,
+}
+
+impl From<Vec<u8>> for Bytes {
+    fn from(vec: Vec<u8>) -> Self {
+        return Bytes { vec };
+    }
+}
+
+impl From<Bytes> for Vec<u8> {
+    fn from(val: Bytes) -> Self {
+        return val.vec;
+    }
+}
+
+impl From<String> for Bytes {
+    fn from(val: String) -> Self {
+        return Self { vec: val.into() };
     }
 }

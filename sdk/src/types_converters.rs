@@ -1,5 +1,5 @@
 use crate::errors::YdbError;
-use crate::types::{Value, ValueOptional};
+use crate::types::{Bytes, Value, ValueOptional};
 use crate::ValueList;
 use itertools::Itertools;
 use std::any::type_name;
@@ -32,13 +32,12 @@ macro_rules! simple_convert {
 
         simple_convert_optional!($native_type, from_native);
         list_convert!($native_type);
+        list_convert!(Option<$native_type>);
     };
 }
 
 macro_rules! simple_convert_optional {
     ($native_type:ty) => {
-        list_convert!(Option<$native_type>);
-
         impl TryFrom<Value> for Option<$native_type> {
             type Error = YdbError;
 
@@ -82,49 +81,47 @@ macro_rules! simple_convert_optional {
 
 macro_rules! list_convert {
     ($native_type:ty) => {
-        // convert to vector
-    };
-}
-
-impl FromIterator<i32> for Value {
-    fn from_iter<T: IntoIterator<Item = i32>>(iter: T) -> Self {
-        let t: Value = <i32>::default().into();
-        let values: Vec<Value> = iter.into_iter().map(|item| item.into()).collect();
-        return Value::List(Box::new(ValueList { t, values }));
-    }
-}
-
-impl TryFrom<Value> for Vec<i32> {
-    type Error = YdbError;
-
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        let value = match value {
-            Value::List(inner) => inner,
-            value => {
-                return Err(YdbError::from_str(format!(
-                    "can't convert from {} to Vec",
-                    value.kind_static()
-                )));
+        impl FromIterator<$native_type> for Value {
+            fn from_iter<T: IntoIterator<Item = $native_type>>(iter: T) -> Self {
+                let t: Value = <$native_type>::default().into();
+                let values: Vec<Value> = iter.into_iter().map(|item| item.into()).collect();
+                return Value::List(Box::new(ValueList { t, values }));
             }
-        };
+        }
 
-        // check list type compatible - for prevent false positive convert empty list
-        let list_item_type = value.t.kind_static();
-        if TryInto::<i32>::try_into(value.t).is_err() {
-            let vec_item_type = type_name::<i32>();
-            return Err(YdbError::from_str(format!(
-                "can't convert list item type '{}' to vec item type '{}'",
-                list_item_type, vec_item_type
-            )));
-        };
+        impl TryFrom<Value> for Vec<$native_type> {
+            type Error = YdbError;
 
-        let res: Vec<i32> = value
-            .values
-            .into_iter()
-            .map(|item| item.try_into())
-            .try_collect()?;
-        return Ok(res);
-    }
+            fn try_from(value: Value) -> Result<Self, Self::Error> {
+                let value = match value {
+                    Value::List(inner) => inner,
+                    value => {
+                        return Err(YdbError::from_str(format!(
+                            "can't convert from {} to Vec",
+                            value.kind_static()
+                        )));
+                    }
+                };
+
+                // check list type compatible - for prevent false positive convert empty list
+                let list_item_type = value.t.kind_static();
+                if TryInto::<$native_type>::try_into(value.t).is_err() {
+                    let vec_item_type = type_name::<$native_type>();
+                    return Err(YdbError::from_str(format!(
+                        "can't convert list item type '{}' to vec item type '{}'",
+                        list_item_type, vec_item_type
+                    )));
+                };
+
+                let res: Vec<$native_type> = value
+                    .values
+                    .into_iter()
+                    .map(|item| item.try_into())
+                    .try_collect()?;
+                return Ok(res);
+            }
+        }
+    };
 }
 
 simple_convert!(i8, Value::Int8);
@@ -165,7 +162,7 @@ simple_convert!(
     Value::Yson
 );
 simple_convert!(
-    Vec<u8>,
+    Bytes,
     Value::String,
     Value::Utf8,
     Value::Json,

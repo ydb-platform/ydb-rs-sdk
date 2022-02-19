@@ -22,5 +22,5 @@ pub use crate::{
         transaction::{Mode, Transaction},
     },
     pub_traits::{Credentials, TokenInfo},
-    types::{Sign, SignedInterval, Value, ValueList, ValueOptional, ValueStruct},
+    types::{Bytes, Sign, SignedInterval, Value, ValueList, ValueOptional, ValueStruct},
 };
