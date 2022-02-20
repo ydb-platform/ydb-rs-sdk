@@ -1,4 +1,5 @@
 use crate::errors::{YdbError, YdbResult};
+use std::collections::HashMap;
 
 use std::convert::TryInto;
 use std::fmt::Debug;
@@ -93,6 +94,17 @@ impl ValueStruct {
 impl Default for ValueStruct {
     fn default() -> Self {
         return Self::new();
+    }
+}
+
+impl From<ValueStruct> for HashMap<String, Value> {
+    fn from(mut from_value: ValueStruct) -> Self {
+        let mut map = HashMap::with_capacity(from_value.fields_name.len());
+        from_value.values.into_iter().rev().for_each(|val| {
+            let key = from_value.fields_name.pop().unwrap();
+            map.insert(key, val);
+        });
+        return map;
     }
 }
 

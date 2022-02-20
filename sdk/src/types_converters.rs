@@ -161,3 +161,33 @@ where
         return Ok(res);
     }
 }
+
+// From hashmap to Value::Struct
+impl From<HashMap<String, Value>> for Value {
+    fn from(from_val: HashMap<String, Value>) -> Self {
+        let mut value_struct = ValueStruct::with_capacity(from_val.len());
+        from_val
+            .into_iter()
+            .for_each(|(key, val)| value_struct.insert(key, val));
+        return Value::Struct(value_struct);
+    }
+}
+
+// From Value::Struct to Hashmap
+impl TryFrom<Value> for HashMap<String, Value> {
+    type Error = YdbError;
+
+    fn try_from(from_value: Value) -> Result<Self, Self::Error> {
+        let kind_name = from_value.kind_static();
+        let value_struct = match from_value {
+            Value::Struct(value_struct) => value_struct,
+            _ => {
+                return Err(YdbError::from_str(format!(
+                    "failed convert {} to HashMap",
+                    kind_name
+                )))
+            }
+        };
+        return Ok(value_struct.into());
+    }
+}

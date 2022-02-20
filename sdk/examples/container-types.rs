@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use ydb::{ClientBuilder, Query, Row, Value, YdbResult};
+use ydb::{ydb_params, ClientBuilder, Query, Row, Value, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -33,20 +33,45 @@ async fn main() -> YdbResult<()> {
                 .try_into()?;
 
             assert_eq!(vec![1, 2, 3], res);
+            println!("List: {:?}", res);
             return Ok(());
         })
         .await?;
 
     // Struct
-    table_client.retry_transaction(|mut t| async move {
-        let source: HashMap<String, Value> = HashMap::from_iter([
-            ("a".into(), (12 as i32).into()),
-            ("b".into(), "test".to_string().into()),
-            ("c".into(), (1.0 as f64).into()),
-        ]);
+    table_client
+        .retry_transaction(|mut t| async move {
+            let source: HashMap<String, Value> = HashMap::from_iter([
+                ("a".into(), (12 as i32).into()),
+                ("b".into(), "test".to_string().into()),
+                ("c".into(), (1.0 as f64).into()),
+            ]);
 
-        return Ok(());
-    });
+            let res: HashMap<String, Value> = t
+                .query(
+                    Query::new(
+                        "
+            DECLARE $val AS Struct<
+                a: Int32,
+                b: Utf8,
+                c: Double,
+            >;
+
+            SELECT $val AS res;
+        ",
+                    )
+                    .with_params(ydb_params!("$val" => source.clone())),
+                )
+                .await?
+                .into_only_row()?
+                .remove_field_by_name("res")?
+                .try_into()?;
+
+            assert_eq!(source, res);
+            println!("Struct: {:?}", res);
+            return Ok(());
+        })
+        .await;
 
     println!("done");
     return Ok(());

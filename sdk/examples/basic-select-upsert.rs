@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use ydb::{ClientBuilder, Query, Row, Value, YdbResult};
+use ydb::{ydb_params, ClientBuilder, Query, Row, Value, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -31,10 +31,10 @@ async fn main() -> YdbResult<()> {
                     UPSERT INTO test (id, val) VALUES ($id, $val)
                     ",
                     )
-                    .with_params(HashMap::from([
-                        ("$id".into(), Value::from(i as i64)),
-                        ("$val".into(), Value::from(format!("val: {}", i))),
-                    ])),
+                    .with_params(ydb_params!(
+                        "$id" => i as i64,
+                        "$val" => format!("val: {}", i)
+                    )),
                 )
                 .await?;
             }
