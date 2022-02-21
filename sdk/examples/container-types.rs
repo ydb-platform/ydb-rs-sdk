@@ -71,7 +71,7 @@ async fn main() -> YdbResult<()> {
             println!("Struct: {:?}", res);
             return Ok(());
         })
-        .await;
+        .await?;
 
     println!("done");
     return Ok(());

@@ -45,12 +45,23 @@ impl Credentials for StaticToken {
     }
 }
 
+/// Get from stdout of command
+///
+/// Example create token from yandex cloud command line utility:
+/// ```rust
+/// use ydb::CommandLineYcToken;
+///
+/// CommandLineYcToken::from_cmd("yc iam create-token")?;
+/// ```
 #[derive(Debug)]
 pub struct CommandLineYcToken {
     command: Arc<Mutex<Command>>,
 }
 
 impl CommandLineYcToken {
+    /// Command line for create token
+    ///
+    /// The command will be called every time when token needed (token cache by default and will call rare).
     #[allow(dead_code)]
     pub fn from_cmd<T: Into<String>>(cmd: T) -> YdbResult<Self> {
         let cmd = cmd.into();
@@ -110,17 +121,33 @@ impl Credentials for CommandLineYcToken {
     }
 }
 
-pub type YandexMetadata = GoogleComputeEngineMetadata;
+/// Get token of service account of instance
+///
+/// Yandex cloud support GCE token compatible. Use it.
+pub type YandexMetadata = GCEMetadata;
 
-pub struct GoogleComputeEngineMetadata {
+/// Get instance service account token from GCE instance
+///
+/// Get token from google cloud engine instance metadata.
+/// By default from url: http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token"
+///
+/// Example:
+/// ```
+/// use ydb::GCEMetadata;
+///
+/// GCEMetadata::new()?;
+/// ```
+pub struct GCEMetadata {
     uri: String,
 }
 
-impl GoogleComputeEngineMetadata {
+impl GCEMetadata {
+    /// Create GCEMetadata with default url for receive token
     pub fn new() -> Self {
         return Self::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token").unwrap();
     }
 
+    /// Create GCEMetadata with custom url (may need for debug or spec infrastructore with non standard metadata)
     pub fn from_url<T: Into<String>>(url: T) -> YdbResult<Self> {
         Ok(Self {
             uri: url.into().parse()?,
@@ -128,7 +155,7 @@ impl GoogleComputeEngineMetadata {
     }
 }
 
-impl Credentials for GoogleComputeEngineMetadata {
+impl Credentials for GCEMetadata {
     fn create_token(&self) -> YdbResult<TokenInfo> {
         http::Request::builder()
             .uri(self.uri.clone())

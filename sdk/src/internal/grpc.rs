@@ -123,9 +123,10 @@ pub(crate) fn proto_issues_to_ydb_issues(proto_issues: Vec<IssueMessage>) -> Vec
     proto_issues
         .into_iter()
         .map(|proto_issue| YdbIssue {
-            code: proto_issue.issue_code,
+            issue_code: proto_issue.issue_code,
             message: proto_issue.message,
             issues: proto_issues_to_ydb_issues(proto_issue.issues),
+            severity: proto_issue.severity,
         })
         .collect()
 }

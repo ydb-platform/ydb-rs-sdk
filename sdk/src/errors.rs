@@ -1,6 +1,7 @@
 use crate::errors::NeedRetry::IdempotentOnly;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
+use ydb_protobuf::ydb_proto::status_ids::StatusCode;
 
 pub type YdbResult<T> = std::result::Result<T, YdbError>;
 pub type YdbResultWithCustomerErr<T> = std::result::Result<T, YdbOrCustomerError>;
@@ -58,35 +59,142 @@ pub(crate) enum NeedRetry {
     False, // operation is completed or error is stable (for example yql syntaxt errror) and no need retry
 }
 
+/// Error which can be returned from the crate.
+///
+/// Now most of errors are simple Custom error with custom text.
+/// Please not parse the text - it can be change at any time without compile check.
+/// Write about error type you need or PR it.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum YdbError {
+    /// Common error
+    ///
+    /// Not parse text of error for detect error type.
+    /// It will change.
     Custom(String),
+
+    /// Errors of convert between native rust types and ydb value
     Convert(String),
+
+    /// Unexpected error. Write issue if it will happen.
     InternalError(String),
+
+    /// Error while dial to ydb server
     TransportDial(Arc<tonic::transport::Error>),
+
+    /// Error on transport level of request/response
     Transport(String),
+
+    /// Error from GRPC status code
     TransportGRPCStatus(Arc<tonic::Status>),
+
+    /// Error from operation status
     YdbStatusError(YdbStatusError),
 }
 
+/// Describe operation status from server
+///
+/// Messages and codes doesn't have stable gurantee. But codes more stable.
+/// If you want detect some errors prefer code over text parse. Messages for human usage only.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 // Combine with YdbIssue?
 pub struct YdbStatusError {
+    /// Human readable message described status
     #[allow(dead_code)]
     pub message: String,
+
+    /// Operation status code
+    ///
+    /// Struct field presended as i32 - for repr any of received value
+    /// For get typed status use fn YdbStatusError::operation_status()
+    ///
+    /// ```
+    /// # use ydb::YdbStatusError;
+    /// # use ydb_protobuf::ydb_proto::status_ids::StatusCode;
+    /// # let status = YdbStatusError{message: "test".to_string(), operation_status: StatusCode::AlreadyExists as i32, issues: Vec::new()};
+    /// #
+    /// assert_eq!(status.operation_status, 400130);
+    /// assert_eq!(status.operation_status(), StatusCode::AlreadyExists)
+    /// ```
     pub operation_status: i32,
+
+    /// Ydb issue from server for the message
+    ///
+    /// It describe internal errors, warnings, etc more detail then operation_status or message.
     pub issues: Vec<YdbIssue>,
 }
 
+impl YdbStatusError {
+    /// Got typed operation status or error
+    ///
+    /// ```
+    /// # use ydb::YdbStatusError;
+    /// # use ydb_protobuf::ydb_proto::status_ids::StatusCode;
+    /// # let status = YdbStatusError{message: "test".to_string(), operation_status: StatusCode::AlreadyExists as i32, issues: Vec::new()};
+    /// #
+    /// assert_eq!(status.operation_status, 400130);
+    /// assert_eq!(status.operation_status(), StatusCode::AlreadyExists)
+    /// ```
+    pub fn operation_status(&self) -> YdbResult<StatusCode> {
+        return StatusCode::from_i32(self.operation_status).ok_or(YdbError::InternalError(
+            format!("unknown status code: {}", self.operation_status),
+        ));
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+#[non_exhaustive]
+#[repr(u32)]
+pub enum YdbIssueSeverity {
+    Fatal = 0,
+    Error = 1,
+    Warning = 2,
+    Info = 3,
+}
+
+/// Describe issue from server
+///
+/// Messages and codes doesn't have stable gurantee. But codes more stable.
+/// If you want detect some errors prefer code over text parse. Messages for human usage only.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 // Combine with YdbStatusError?
 pub struct YdbIssue {
-    pub code: u32,
+    pub issue_code: u32,
     pub message: String,
     pub issues: Vec<YdbIssue>,
+
+    /// Severity of the issue
+    ///
+    /// The field conains raw u32 severity value.
+    /// For get types severity use severity fn
+    ///
+    /// ```
+    /// # use ydb::YdbIssue;
+    /// let issue = YdbIssue{issue_code: 1, message: "".to_string(), issues: Vec::new(), severity: 2};
+    /// assert_eq!(issue.severity, 2);
+    /// assert_eq!(issue.severity(), YdbIssueSeverity::Warning);
+    /// ```
+    pub severity: u32,
+}
+
+impl YdbIssue {
+    pub fn severity(&self) -> YdbResult<YdbIssueSeverity> {
+        let val = match self.severity {
+            0 => YdbIssueSeverity::Fatal,
+            1 => YdbIssueSeverity::Error,
+            2 => YdbIssueSeverity::Warning,
+            3 => YdbIssueSeverity::Info,
+            _ => {
+                return Err(YdbError::InternalError(format!(
+                    "unexpected issue severity: {}",
+                    self.severity
+                )))
+            }
+        };
+        return Ok(val);
+    }
 }
 
 impl YdbError {

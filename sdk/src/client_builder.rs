@@ -1,6 +1,4 @@
-use crate::credentials::{
-    credencials_ref, CredentialsRef, GoogleComputeEngineMetadata, StaticToken,
-};
+use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticToken};
 use crate::errors::{YdbError, YdbResult};
 use crate::internal::client_common::{DBCredentials, TokenCache};
 use crate::internal::discovery::TimerDiscovery;
@@ -69,9 +67,7 @@ fn token_metadata(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
         };
 
         match value.as_ref() {
-            "google" => {
-                client_builder.credentials = credencials_ref(GoogleComputeEngineMetadata::new())
-            }
+            "google" => client_builder.credentials = credencials_ref(GCEMetadata::new()),
             _ => {
                 return Err(YdbError::Custom(format!(
                     "unknown metadata format: '{}'",
