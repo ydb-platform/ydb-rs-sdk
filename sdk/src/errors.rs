@@ -171,7 +171,7 @@ pub struct YdbIssue {
     /// For get types severity use severity fn
     ///
     /// ```
-    /// # use ydb::YdbIssue;
+    /// # use ydb::{YdbIssue, YdbIssueSeverity};
     /// let issue = YdbIssue{issue_code: 1, message: "".to_string(), issues: Vec::new(), severity: 2};
     /// assert_eq!(issue.severity, 2);
     /// assert_eq!(issue.severity(), YdbIssueSeverity::Warning);

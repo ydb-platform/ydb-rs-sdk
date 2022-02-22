@@ -51,7 +51,7 @@ impl Credentials for StaticToken {
 /// ```rust
 /// use ydb::CommandLineYcToken;
 ///
-/// CommandLineYcToken::from_cmd("yc iam create-token")?;
+/// let cred = CommandLineYcToken::from_cmd("yc iam create-token").unwrap();
 /// ```
 #[derive(Debug)]
 pub struct CommandLineYcToken {
@@ -135,7 +135,7 @@ pub type YandexMetadata = GCEMetadata;
 /// ```
 /// use ydb::GCEMetadata;
 ///
-/// GCEMetadata::new()?;
+/// let cred = GCEMetadata::new().unwrap();
 /// ```
 pub struct GCEMetadata {
     uri: String,

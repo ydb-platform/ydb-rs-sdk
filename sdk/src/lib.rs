@@ -13,7 +13,8 @@ pub use client_builder::ClientBuilder;
 pub use crate::{
     credentials::{CommandLineYcToken, GCEMetadata, StaticToken, YandexMetadata},
     errors::{
-        YdbError, YdbIssue, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr, YdbStatusError,
+        YdbError, YdbIssue, YdbIssueSeverity, YdbOrCustomerError, YdbResult,
+        YdbResultWithCustomerErr, YdbStatusError,
     },
     internal::{
         client_fabric::Client,
