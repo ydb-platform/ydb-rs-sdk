@@ -1,15 +1,22 @@
 use crate::errors::NeedRetry::IdempotentOnly;
+use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use ydb_protobuf::ydb_proto::status_ids::StatusCode;
 
+/// T result or YdbError as Error
 pub type YdbResult<T> = std::result::Result<T, YdbError>;
+
+/// T result or YdbOrCustomerError as Error
 pub type YdbResultWithCustomerErr<T> = std::result::Result<T, YdbOrCustomerError>;
 
+/// Error for wrap user errors while return it from callback
 #[derive(Clone)]
 pub enum YdbOrCustomerError {
+    /// Usual YDB errors
     YDB(YdbError),
-    NoneInOption,
+
+    /// Wrap for customer error
     Customer(Arc<Box<dyn std::error::Error>>),
 }
 
@@ -29,7 +36,6 @@ impl Debug for YdbOrCustomerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         return match self {
             Self::YDB(err) => Debug::fmt(err, f),
-            Self::NoneInOption => f.write_str("ydb: option field is none"),
             Self::Customer(err) => Debug::fmt(err, f),
         };
     }
@@ -39,7 +45,6 @@ impl Display for YdbOrCustomerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         return match self {
             Self::YDB(err) => Display::fmt(err, f),
-            Self::NoneInOption => f.write_str("ydb: option field is none"),
             Self::Customer(err) => Display::fmt(err, f),
         };
     }
@@ -96,7 +101,7 @@ pub enum YdbError {
 ///
 /// Messages and codes doesn't have stable gurantee. But codes more stable.
 /// If you want detect some errors prefer code over text parse. Messages for human usage only.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 // Combine with YdbIssue?
 pub struct YdbStatusError {
@@ -110,12 +115,15 @@ pub struct YdbStatusError {
     /// For get typed status use fn YdbStatusError::operation_status()
     ///
     /// ```
-    /// # use ydb::YdbStatusError;
+    /// # use ydb::{YdbResult, YdbStatusError};
     /// # use ydb_protobuf::ydb_proto::status_ids::StatusCode;
-    /// # let status = YdbStatusError{message: "test".to_string(), operation_status: StatusCode::AlreadyExists as i32, issues: Vec::new()};
-    /// #
+    /// # fn main()->YdbResult<()>{
+    /// let mut status =YdbStatusError::default();
+    /// status.operation_status = StatusCode::AlreadyExists as i32;
     /// assert_eq!(status.operation_status, 400130);
-    /// assert_eq!(status.operation_status(), StatusCode::AlreadyExists)
+    /// assert_eq!(status.operation_status()?, StatusCode::AlreadyExists);
+    /// # return Ok(());
+    /// # }
     /// ```
     pub operation_status: i32,
 
@@ -129,12 +137,15 @@ impl YdbStatusError {
     /// Got typed operation status or error
     ///
     /// ```
-    /// # use ydb::YdbStatusError;
+    /// # use ydb::{YdbResult, YdbStatusError};
     /// # use ydb_protobuf::ydb_proto::status_ids::StatusCode;
-    /// # let status = YdbStatusError{message: "test".to_string(), operation_status: StatusCode::AlreadyExists as i32, issues: Vec::new()};
-    /// #
+    /// # fn main()->YdbResult<()>{
+    /// let mut status = YdbStatusError::default();
+    /// status.operation_status= StatusCode::AlreadyExists as i32;
     /// assert_eq!(status.operation_status, 400130);
-    /// assert_eq!(status.operation_status(), StatusCode::AlreadyExists)
+    /// assert_eq!(status.operation_status()?, StatusCode::AlreadyExists);
+    /// # return Ok(());
+    /// # }
     /// ```
     pub fn operation_status(&self) -> YdbResult<StatusCode> {
         return StatusCode::from_i32(self.operation_status).ok_or(YdbError::InternalError(
@@ -143,7 +154,8 @@ impl YdbStatusError {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+/// Severity of issue
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 #[repr(u32)]
 pub enum YdbIssueSeverity {
@@ -157,12 +169,14 @@ pub enum YdbIssueSeverity {
 ///
 /// Messages and codes doesn't have stable gurantee. But codes more stable.
 /// If you want detect some errors prefer code over text parse. Messages for human usage only.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 #[non_exhaustive]
 // Combine with YdbStatusError?
 pub struct YdbIssue {
     pub issue_code: u32,
     pub message: String,
+
+    /// Recursive issues, explained current problems
     pub issues: Vec<YdbIssue>,
 
     /// Severity of the issue
@@ -171,10 +185,15 @@ pub struct YdbIssue {
     /// For get types severity use severity fn
     ///
     /// ```
-    /// # use ydb::{YdbIssue, YdbIssueSeverity};
-    /// let issue = YdbIssue{issue_code: 1, message: "".to_string(), issues: Vec::new(), severity: 2};
+    /// # use ydb::{YdbIssue, YdbIssueSeverity, YdbResult};
+    /// # fn main()->YdbResult<()>{
+    /// let mut issue = YdbIssue::default();
+    /// issue.severity = 2;
     /// assert_eq!(issue.severity, 2);
-    /// assert_eq!(issue.severity(), YdbIssueSeverity::Warning);
+    /// assert_eq!(YdbIssueSeverity::Warning, YdbIssueSeverity::Warning);
+    /// assert_eq!(issue.severity()?, YdbIssueSeverity::Warning);
+    /// # return Ok(());
+    /// # }
     /// ```
     pub severity: u32,
 }

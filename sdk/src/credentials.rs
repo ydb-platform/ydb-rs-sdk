@@ -16,10 +16,9 @@ pub(crate) fn credencials_ref<T: 'static + Credentials>(cred: T) -> CredentialsR
 /// Credentials with static token without renewing
 ///
 /// Example:
-/// ```
-/// use ydb::YdbResult;
+/// ```no_run
+/// # use ydb::{ClientBuilder, StaticToken, YdbResult};
 /// # fn main()->YdbResult<()>{
-/// # use ydb::{ClientBuilder, StaticToken};
 /// let builder = ClientBuilder::from_str("grpc://localhost:2136?database=/local")?;
 /// let client = builder.with_credentials(StaticToken::from("asd")).client()?;
 /// # return Ok(());
@@ -31,7 +30,13 @@ pub struct StaticToken {
 }
 
 impl StaticToken {
-    #[allow(unused)]
+    /// Create static token from string
+    ///
+    /// Example:
+    /// ```
+    /// # use ydb::StaticToken;
+    /// StaticToken::from("asd");
+    /// ```
     pub fn from<T: Into<String>>(token: T) -> Self {
         return StaticToken {
             token: token.into(),
@@ -136,6 +141,11 @@ impl Credentials for CommandLineYcToken {
 /// Get token of service account of instance
 ///
 /// Yandex cloud support GCE token compatible. Use it.
+/// Example:
+/// ```
+/// use ydb::YandexMetadata;
+/// let cred = YandexMetadata::new();
+/// ```
 pub type YandexMetadata = GCEMetadata;
 
 /// Get instance service account token from GCE instance
@@ -147,7 +157,7 @@ pub type YandexMetadata = GCEMetadata;
 /// ```
 /// use ydb::GCEMetadata;
 ///
-/// let cred = GCEMetadata::new().unwrap();
+/// let cred = GCEMetadata::new();
 /// ```
 pub struct GCEMetadata {
     uri: String,
@@ -159,7 +169,17 @@ impl GCEMetadata {
         return Self::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token").unwrap();
     }
 
-    /// Create GCEMetadata with custom url (may need for debug or spec infrastructore with non standard metadata)
+    /// Create GCEMetadata with custom url (may need for debug or spec infrastructure with non standard metadata)
+    ///
+    /// Example:
+    /// ```
+    /// # use ydb::YdbResult;
+    /// # fn main()->YdbResult<()>{   
+    /// use ydb::GCEMetadata;
+    /// let cred = GCEMetadata::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")?;
+    /// # return Ok(());
+    /// # }
+    /// ```
     pub fn from_url<T: Into<String>>(url: T) -> YdbResult<Self> {
         Ok(Self {
             uri: url.into().parse()?,

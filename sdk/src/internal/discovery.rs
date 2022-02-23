@@ -19,7 +19,7 @@ use std::time::Duration;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{watch, Mutex};
 
-use tracing::{instrument, trace};
+use tracing::trace;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Display, Debug, EnumIter, EnumString, Eq, Hash, PartialEq)]
@@ -135,12 +135,13 @@ pub struct StaticDiscovery {
 /// Stub discovery pointed to one endpoint for all services.
 ///
 /// Example:
-/// ```
+/// ```no_run
 /// # use ydb::{ClientBuilder, StaticDiscovery, YdbResult};
 ///
 /// # fn main()->YdbResult<()>{
 /// let discovery = StaticDiscovery::from_str("grpc://localhost:2136")?;
 /// let client = ClientBuilder::from_str("grpc://localhost:2136/?database=/local")?.with_discovery(discovery).client()?;
+/// # return Ok(())
 /// # }
 /// ```
 impl StaticDiscovery {

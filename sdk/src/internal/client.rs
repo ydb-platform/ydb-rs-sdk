@@ -12,6 +12,7 @@ use tracing::trace;
 
 pub(crate) type Middleware = AuthService;
 
+/// YDB client
 pub struct Client {
     credentials: DBCredentials,
     load_balancer: SharedLoadBalancer,
@@ -19,7 +20,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub(crate) fn new_internal(
+    pub(crate) fn new(
         credentials: DBCredentials,
         discovery: Box<dyn Discovery>,
     ) -> YdbResult<Self> {
@@ -32,7 +33,7 @@ impl Client {
         });
     }
 
-    /// Create instance of table client
+    /// Create instance of client for table service
     pub fn table_client(&self) -> TableClient {
         return TableClient::new(self.credentials.clone(), self.discovery.clone());
     }
@@ -40,7 +41,7 @@ impl Client {
     /// Wait initialization completed
     ///
     /// Wait all background process get first successfully result and client fully
-    /// available to work
+    /// available to work.
     pub async fn wait(&self) -> YdbResult<()> {
         trace!("waiting_token");
         self.credentials.token_cache.wait().await?;

@@ -49,12 +49,17 @@ impl TransactionOptions {
     }
 }
 
+/// Retry options
 pub struct RetryOptions {
+    /// Operations under the option is idempotent. Repeat completed operation - safe.
     idempotent_operation: bool,
+
+    /// Algorithm for retry decision
     retrier: Option<Arc<Box<dyn Retry>>>,
 }
 
 impl RetryOptions {
+    /// Default option for no retries
     pub fn new() -> Self {
         return Self {
             idempotent_operation: false,
@@ -62,12 +67,14 @@ impl RetryOptions {
         };
     }
 
+    /// Operations under the options is safe for complete few times instead of one.
     #[allow(dead_code)]
     pub(crate) fn with_idempotent(mut self, idempotent: bool) -> Self {
         self.idempotent_operation = idempotent;
         return self;
     }
 
+    /// Set retry timeout
     #[allow(dead_code)]
     pub(crate) fn with_timeout(mut self, timeout: Duration) -> Self {
         self.retrier = Some(Arc::new(Box::new(TimeoutRetrier { timeout })));
@@ -285,7 +292,6 @@ impl TableClient {
     fn check_retry_error(is_idempotent_operation: bool, err: &YdbOrCustomerError) -> bool {
         let ydb_err = match &err {
             YdbOrCustomerError::Customer(_) => return false,
-            YdbOrCustomerError::NoneInOption => return false,
             YdbOrCustomerError::YDB(err) => err,
         };
 

@@ -119,7 +119,7 @@ impl ClientBuilder {
             )?),
         };
 
-        return Client::new_internal(db_cred, discovery);
+        return Client::new(db_cred, discovery);
     }
 
     pub fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
@@ -140,12 +140,13 @@ impl ClientBuilder {
     /// Set discovery implementation
     ///
     /// Example:
-    /// ```
+    /// ```no_run
     /// # use ydb::{ClientBuilder, StaticDiscovery, YdbResult};
     ///
     /// # fn main()->YdbResult<()>{
     /// let discovery = StaticDiscovery::from_str("grpc://localhost:2136")?;
     /// let client = ClientBuilder::from_str("grpc://localhost:2136/?database=/local")?.with_discovery(discovery).client()?;
+    /// # return Ok(())
     /// # }
     /// ```
     pub fn with_discovery<T: 'static + Discovery>(mut self, discovery: T) -> Self {
