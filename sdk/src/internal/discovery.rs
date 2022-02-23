@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock, RwLockWriteGuard, Weak};
 use async_trait::async_trait;
 use http::uri::Authority;
 use http::Uri;
-use strum::{Display, EnumIter, EnumString, IntoEnumIterator};
+use strum::{Display, EnumIter, EnumString};
 
 use ydb_protobuf::ydb_proto::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_protobuf::ydb_proto::discovery::{EndpointInfo, ListEndpointsRequest, ListEndpointsResult};
@@ -41,7 +41,7 @@ pub(crate) enum Service {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct DiscoveryState {
+pub struct DiscoveryState {
     pub(crate) timestamp: std::time::Instant,
     nodes: Vec<NodeInfo>,
 
@@ -121,20 +121,31 @@ impl NodeInfo {
 }
 
 #[async_trait]
-pub(crate) trait Discovery: Send + Sync + Waiter {
+pub trait Discovery: Send + Sync + Waiter {
     fn pessimization(&self, uri: &Uri);
     fn subscribe(&self) -> tokio::sync::watch::Receiver<Arc<DiscoveryState>>;
     fn state(&self) -> Arc<DiscoveryState>;
 }
 
-pub(crate) struct StaticDiscovery {
+pub struct StaticDiscovery {
     sender: tokio::sync::watch::Sender<Arc<DiscoveryState>>,
     discovery_state: Arc<DiscoveryState>,
 }
 
+/// Stub discovery pointed to one endpoint for all services.
+///
+/// Example:
+/// ```
+/// # use ydb::{ClientBuilder, StaticDiscovery, YdbResult};
+///
+/// # fn main()->YdbResult<()>{
+/// let discovery = StaticDiscovery::from_str("grpc://localhost:2136")?;
+/// let client = ClientBuilder::from_str("grpc://localhost:2136/?database=/local")?.with_discovery(discovery).client()?;
+/// # }
+/// ```
 impl StaticDiscovery {
-    pub(crate) fn from_str(endpoint: &str) -> YdbResult<Self> {
-        let endpoint = Uri::from_str(endpoint)?;
+    pub fn from_str<'a, T: Into<&'a str>>(endpoint: T) -> YdbResult<Self> {
+        let endpoint = Uri::from_str(endpoint.into())?;
         let nodes = vec![NodeInfo {
             uri: endpoint.clone(),
         }];

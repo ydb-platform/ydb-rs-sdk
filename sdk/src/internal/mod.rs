@@ -1,6 +1,6 @@
 mod channel_pool;
+pub(crate) mod client;
 pub(crate) mod client_common;
-pub(crate) mod client_fabric;
 pub(crate) mod client_table;
 
 #[cfg(test)]
@@ -17,4 +17,4 @@ mod session_pool;
 mod test_helpers;
 mod trait_operation;
 pub(crate) mod transaction;
-mod waiter;
+pub(crate) mod waiter;

@@ -1,6 +1,6 @@
 use crate::client_builder::ClientBuilder;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
-use crate::internal::client_fabric::Client;
+use crate::internal::client::Client;
 use crate::internal::client_table::RetryOptions;
 use crate::internal::query::Query;
 use crate::internal::transaction::Mode;

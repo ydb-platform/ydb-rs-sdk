@@ -32,8 +32,15 @@ impl Client {
         });
     }
 
-    // wait about all background process get first succesfull result and client fully
-    // available to work
+    /// Create instance of table client
+    pub fn table_client(&self) -> TableClient {
+        return TableClient::new(self.credentials.clone(), self.discovery.clone());
+    }
+
+    /// Wait initialization completed
+    ///
+    /// Wait all background process get first successfully result and client fully
+    /// available to work
     pub async fn wait(&self) -> YdbResult<()> {
         trace!("waiting_token");
         self.credentials.token_cache.wait().await?;
@@ -43,9 +50,5 @@ impl Client {
         trace!("wait balancer");
         self.load_balancer.wait().await?;
         return Ok(());
-    }
-
-    pub fn table_client(&self) -> TableClient {
-        return TableClient::new(self.credentials.clone(), self.discovery.clone());
     }
 }

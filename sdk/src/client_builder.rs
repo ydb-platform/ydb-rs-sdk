@@ -1,7 +1,7 @@
 use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticToken};
 use crate::errors::{YdbError, YdbResult};
 use crate::internal::client_common::{DBCredentials, TokenCache};
-use crate::internal::discovery::TimerDiscovery;
+use crate::internal::discovery::{Discovery, TimerDiscovery};
 use crate::{Client, Credentials};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -84,6 +84,7 @@ pub struct ClientBuilder {
     pub(crate) database: String,
     discovery_interval: Duration,
     pub(crate) endpoint: String,
+    discovery: Option<Box<dyn Discovery>>,
 }
 
 impl ClientBuilder {
@@ -109,13 +110,16 @@ impl ClientBuilder {
             database: self.database.clone(),
         };
 
-        let discovery = TimerDiscovery::new(
-            db_cred.clone(),
-            self.endpoint.as_str(),
-            self.discovery_interval,
-        )?;
+        let discovery = match self.discovery {
+            Some(discovery_box) => discovery_box,
+            None => Box::new(TimerDiscovery::new(
+                db_cred.clone(),
+                self.endpoint.as_str(),
+                self.discovery_interval,
+            )?),
+        };
 
-        return Client::new_internal(db_cred, Box::new(discovery));
+        return Client::new_internal(db_cred, discovery);
     }
 
     pub fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
@@ -133,12 +137,29 @@ impl ClientBuilder {
         return self;
     }
 
+    /// Set discovery implementation
+    ///
+    /// Example:
+    /// ```
+    /// # use ydb::{ClientBuilder, StaticDiscovery, YdbResult};
+    ///
+    /// # fn main()->YdbResult<()>{
+    /// let discovery = StaticDiscovery::from_str("grpc://localhost:2136")?;
+    /// let client = ClientBuilder::from_str("grpc://localhost:2136/?database=/local")?.with_discovery(discovery).client()?;
+    /// # }
+    /// ```
+    pub fn with_discovery<T: 'static + Discovery>(mut self, discovery: T) -> Self {
+        self.discovery = Some(Box::new(discovery));
+        return self;
+    }
+
     fn new() -> Self {
         Self {
             credentials: credencials_ref(StaticToken::from("")),
             database: "/local".to_string(),
             discovery_interval: Duration::from_secs(60),
             endpoint: "grpc://localhost:2135".to_string(),
+            discovery: None,
         }
     }
 

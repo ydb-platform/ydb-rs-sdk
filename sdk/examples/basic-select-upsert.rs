@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use ydb::{ydb_params, ClientBuilder, Query, Row, Value, YdbResult};
+use ydb::{ydb_params, ClientBuilder, Query, Row, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
