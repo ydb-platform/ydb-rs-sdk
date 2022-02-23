@@ -19,7 +19,7 @@ use std::time::Duration;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{watch, Mutex};
 
-use tracing::trace;
+use tracing::{instrument, trace};
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Display, Debug, EnumIter, EnumString, Eq, Hash, PartialEq)]
@@ -270,9 +270,12 @@ impl DiscoverySharedState {
         });
     }
 
+    #[tracing::instrument(skip(self))]
     async fn discovery_now(&self) -> YdbResult<()> {
+        trace!("discovery locking");
         let discovery_lock = self.discovery_process.lock().await;
 
+        trace!("creating grpc client");
         let start = std::time::Instant::now();
         let mut discovery_client = create_grpc_client(
             self.discovery_uri.clone(),
@@ -281,6 +284,7 @@ impl DiscoverySharedState {
         )
         .await?;
 
+        trace!("send grpc request ListEndpointsRequest");
         let resp = discovery_client
             .list_endpoints(ListEndpointsRequest {
                 database: self.cred.database.clone(),
@@ -311,7 +315,7 @@ impl DiscoverySharedState {
         let _ = self.state_received_sender.send(true);
     }
 
-    #[tracing::instrument]
+    #[tracing::instrument(skip(state))]
     async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
         if let Some(state) = state.upgrade() {
             // wait token before first discovery
@@ -379,9 +383,12 @@ impl Discovery for DiscoverySharedState {
 #[async_trait::async_trait]
 impl Waiter for DiscoverySharedState {
     async fn wait(&self) -> YdbResult<()> {
+        trace!("start discovery shared state");
         let mut channel = self.state_received.clone();
         loop {
+            trace!("loop");
             if *channel.borrow_and_update() {
+                trace!("return ok");
                 return Ok(());
             }
             channel.changed().await?

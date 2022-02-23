@@ -13,8 +13,10 @@ use tokio::sync::mpsc;
 use crate::internal::channel_pool::{ChannelErrorInfo, ChannelProxy, ChannelProxyErrorSender};
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tower::ServiceBuilder;
+use tracing::trace;
 use ydb_protobuf::ydb_proto::issue::IssueMessage;
 
+#[tracing::instrument(skip(new_func, cred))]
 pub(crate) async fn create_grpc_client<T, CB>(
     uri: Uri,
     cred: DBCredentials,
@@ -56,10 +58,12 @@ where
     return Ok(new_func(auth_ch));
 }
 
+#[tracing::instrument(skip(error_sender))]
 async fn create_grpc_channel(
     uri: Uri,
     error_sender: Option<mpsc::Sender<ChannelErrorInfo>>,
 ) -> YdbResult<ChannelProxy> {
+    trace!("start work");
     let tls = if let Some(scheme) = uri.scheme_str() {
         scheme == "https" || scheme == "grpcs"
     } else {
@@ -72,9 +76,14 @@ async fn create_grpc_channel(
     };
     endpoint = endpoint.tcp_keepalive(Some(Duration::from_secs(15))); // tcp keepalive similar to default in golang lib
 
+    trace!("endpoint: {:?}", endpoint);
     return match endpoint.connect().await {
-        Ok(channel) => Ok(ChannelProxy::new(uri, channel, error_sender)),
+        Ok(channel) => {
+            trace!("ok");
+            Ok(ChannelProxy::new(uri, channel, error_sender))
+        }
         Err(err) => {
+            trace!("error: {:?}", err);
             if let Some(sender) = error_sender {
                 // ignore notify error
                 let _ = sender.send(ChannelErrorInfo { endpoint: uri }).await;
@@ -84,6 +93,7 @@ async fn create_grpc_channel(
     };
 }
 
+#[tracing::instrument]
 pub(crate) fn grpc_read_operation_result<TOp, T>(resp: tonic::Response<TOp>) -> errors::YdbResult<T>
 where
     TOp: Operation,

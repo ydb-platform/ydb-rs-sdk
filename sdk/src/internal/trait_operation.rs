@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use ydb_protobuf::ydb_proto::discovery::{ListEndpointsResponse, WhoAmIResponse};
 use ydb_protobuf::ydb_proto::operations::Operation as YdbOperation;
 use ydb_protobuf::ydb_proto::table::{
@@ -6,7 +7,7 @@ use ydb_protobuf::ydb_proto::table::{
     RollbackTransactionResponse,
 };
 
-pub(crate) trait Operation {
+pub(crate) trait Operation: Debug {
     fn operation(self: &Self) -> Option<YdbOperation>;
 }
 

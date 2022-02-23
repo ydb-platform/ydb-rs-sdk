@@ -13,6 +13,18 @@ pub(crate) fn credencials_ref<T: 'static + Credentials>(cred: T) -> CredentialsR
     Arc::new(Box::new(cred))
 }
 
+/// Credentials with static token without renewing
+///
+/// Example:
+/// ```
+/// use ydb::YdbResult;
+/// # fn main()->YdbResult<()>{
+/// # use ydb::{ClientBuilder, StaticToken};
+/// let builder = ClientBuilder::from_str("grpc://localhost:2136?database=/local")?;
+/// let client = builder.with_credentials(StaticToken::from("asd")).client()?;
+/// # return Ok(());
+/// # }
+/// ```
 #[derive(Debug, Clone)]
 pub struct StaticToken {
     pub(crate) token: String,
