@@ -40,6 +40,7 @@ pub(crate) enum Service {
     Table,
 }
 
+/// Current discovery state
 #[derive(Clone, Debug, PartialEq)]
 pub struct DiscoveryState {
     pub(crate) timestamp: std::time::Instant,
@@ -120,13 +121,22 @@ impl NodeInfo {
     }
 }
 
+/// Discovery YDB endpoints
 #[async_trait]
 pub trait Discovery: Send + Sync + Waiter {
+    /// Pessimize the endpoint
     fn pessimization(&self, uri: &Uri);
+
+    /// Subscribe to discovery changes
     fn subscribe(&self) -> tokio::sync::watch::Receiver<Arc<DiscoveryState>>;
+
+    /// Get current discovery state
     fn state(&self) -> Arc<DiscoveryState>;
 }
 
+/// Always discovery once static node
+///
+/// Not used in prod, but may be good for tests
 pub struct StaticDiscovery {
     sender: tokio::sync::watch::Sender<Arc<DiscoveryState>>,
     discovery_state: Arc<DiscoveryState>,

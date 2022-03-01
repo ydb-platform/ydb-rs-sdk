@@ -22,6 +22,7 @@ pub(crate) type TableServiceChannelPool = Arc<Box<dyn ChannelPool<TableServiceCl
 
 type TransactionArgType = Box<dyn Transaction>; // real type may be changed
 
+/// Options for create transaction
 #[derive(Clone)]
 pub struct TransactionOptions {
     mode: Mode,
@@ -29,6 +30,9 @@ pub struct TransactionOptions {
 }
 
 impl TransactionOptions {
+    /// Create default transaction
+    ///
+    /// With Mode::SerializableReadWrite and no autocommit.
     pub fn new() -> Self {
         return Self {
             mode: Mode::SerializableReadWrite,
@@ -36,14 +40,14 @@ impl TransactionOptions {
         };
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn with_mode(mut self, mode: Mode) -> Self {
+    /// Set transaction [Mode]
+    pub fn with_mode(mut self, mode: Mode) -> Self {
         self.mode = mode;
         return self;
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn with_autocommit(mut self, autocommit: bool) -> Self {
+    /// Set autocommit mode
+    pub fn with_autocommit(mut self, autocommit: bool) -> Self {
         self.autocommit = autocommit;
         return self;
     }
@@ -82,6 +86,13 @@ impl RetryOptions {
     }
 }
 
+/// Client for YDB table service (SQL queries)
+///
+/// Table service used for work with data abd DB struct
+/// with SQL queries.
+///
+/// TableClient contains options for make queries.
+/// See [TableClient::retry_transaction] for examples.
 #[derive(Clone)]
 pub struct TableClient {
     error_on_truncate: bool,
@@ -116,6 +127,7 @@ impl TableClient {
         return self;
     }
 
+    /// Clone the table client and set new retry timeouts
     #[allow(dead_code)]
     pub fn clone_with_retry_timeout(&self, timeout: Duration) -> Self {
         return Self {
@@ -124,6 +136,7 @@ impl TableClient {
         };
     }
 
+    /// Clone the table client and deny retries
     #[allow(dead_code)]
     pub fn clone_with_no_retry(&self) -> Self {
         return Self {
@@ -132,6 +145,7 @@ impl TableClient {
         };
     }
 
+    /// Clone the table client and set feature operations as idempotent (can retry in more cases)
     #[allow(dead_code)]
     pub fn clone_with_idempotent_operations(&self, idempotent: bool) -> Self {
         return Self {
@@ -187,6 +201,7 @@ impl TableClient {
         }
     }
 
+    /// Execute scheme query with retry policy
     pub async fn retry_execute_scheme_query<T: Into<String>>(&self, query: T) -> YdbResult<()> {
         let query = Arc::new(query.into());
         self.retry(|| async {
@@ -196,6 +211,58 @@ impl TableClient {
         .await
     }
 
+    /// Retry callback in transaction
+    ///
+    /// retries callback as retry policy.
+    /// every call of callback will within new transaction
+    /// retry will call callback next time if:
+    /// 1. allow by retry policy
+    /// 2. callback return retriable error
+    ///
+    /// Example with move lambda args:
+    /// ```no_run
+    /// # use ydb::YdbResult;
+    /// #
+    /// # #[tokio::main]
+    /// # async fn main()->YdbResult<()>{
+    /// #   use ydb::{Query, Value};
+    /// #   let table_client = ydb::ClientBuilder::from_str("")?.client()?.table_client();
+    ///     let res: Option<i32> = table_client.retry_transaction(|mut t| async move {
+    ///         let value: Value = t.query(Query::new("SELECT 1 + 1 as sum")).await?
+    ///             .into_only_row()?
+    ///             .remove_field_by_name("sum")?;
+    ///         let res: Option<i32> = value.try_into()?;
+    ///         return Ok(res);
+    ///     }).await?;
+    ///     assert_eq!(Some(2), res);
+    /// #     return Ok(());
+    /// # }
+    /// ```
+    ///
+    /// Example without move lambda args - it allow to borrow external items:
+    /// ```no_run
+    /// # use ydb::YdbResult;
+    /// #
+    /// # #[tokio::main]
+    /// # async fn main()->YdbResult<()>{
+    /// #   use std::sync::atomic::{AtomicUsize, Ordering};
+    /// #   use ydb::{Query, Value};
+    /// #   let table_client = ydb::ClientBuilder::from_str("")?.client()?.table_client();
+    ///     let mut attempts: AtomicUsize = AtomicUsize::new(0);
+    ///     let res: Option<i32> = table_client.retry_transaction(|mut t| async {
+    ///         let mut t = t; // explicit move lambda argument inside async code block for borrow checker
+    ///         attempts.fetch_add(1, Ordering::Relaxed); // can borrow outer values istead of move
+    ///         let value: Value = t.query(Query::new("SELECT 1 + 1 as sum")).await?
+    ///             .into_only_row()?
+    ///             .remove_field_by_name("sum")?;
+    ///         let res: Option<i32> = value.try_into()?;
+    ///         return Ok(res);
+    ///     }).await?;
+    ///     assert_eq!(Some(2), res);
+    ///     assert_eq!(1, attempts.load(Ordering::Relaxed));
+    /// #   return Ok(());
+    /// # }
+    /// ```
     pub async fn retry_transaction<CallbackFuture, CallbackResult>(
         &self,
         callback: impl Fn(TransactionArgType) -> CallbackFuture,
