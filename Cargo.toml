@@ -3,4 +3,5 @@ members = [
     "build-helpers",
     "sdk",
     "ydb-protobuf",
+    "ydb-example-urlshortener"
 ]
