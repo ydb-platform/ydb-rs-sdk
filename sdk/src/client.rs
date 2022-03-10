@@ -1,10 +1,10 @@
 use crate::errors::YdbResult;
-use crate::internal::client_common::DBCredentials;
-use crate::internal::client_table::TableClient;
-use crate::internal::discovery::Discovery;
-use crate::internal::load_balancer::SharedLoadBalancer;
-use crate::internal::middlewares::AuthService;
-use crate::internal::waiter::Waiter;
+use crate::client_common::DBCredentials;
+use crate::client_table::TableClient;
+use crate::discovery::Discovery;
+use crate::load_balancer::SharedLoadBalancer;
+use crate::middlewares::AuthService;
+use crate::waiter::Waiter;
 
 use std::sync::Arc;
 

@@ -1,7 +1,7 @@
 use crate::errors::*;
-use crate::internal::client_table::TableServiceChannelPool;
-use crate::internal::grpc::grpc_read_operation_result;
-use crate::internal::session::Session;
+use crate::client_table::TableServiceChannelPool;
+use crate::grpc::grpc_read_operation_result;
+use crate::session::Session;
 use async_trait::async_trait;
 use std::collections::vec_deque::VecDeque;
 use std::ops::Sub;
@@ -149,10 +149,10 @@ async fn sessions_pinger(
 mod test {
     use super::SessionClient;
     use crate::errors::{YdbError, YdbResult};
-    use crate::internal::channel_pool::ChannelPool;
-    use crate::internal::client_table::TableServiceClientType;
-    use crate::internal::session::Session;
-    use crate::internal::session_pool::SessionPool;
+    use crate::channel_pool::ChannelPool;
+    use crate::client_table::TableServiceClientType;
+    use crate::session::Session;
+    use crate::session_pool::SessionPool;
     use async_trait::async_trait;
     use std::sync::Arc;
     use std::time::Duration;

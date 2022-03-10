@@ -1,7 +1,7 @@
 use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticToken};
 use crate::errors::{YdbError, YdbResult};
-use crate::internal::client_common::{DBCredentials, TokenCache};
-use crate::internal::discovery::{Discovery, TimerDiscovery};
+use crate::client_common::{DBCredentials, TokenCache};
+use crate::discovery::{Discovery, TimerDiscovery};
 use crate::{Client, Credentials};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;

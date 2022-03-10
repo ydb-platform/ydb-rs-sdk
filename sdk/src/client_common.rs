@@ -1,6 +1,6 @@
 use crate::credentials::CredentialsRef;
 use crate::errors::YdbResult;
-use crate::internal::waiter::Waiter;
+use crate::waiter::Waiter;
 use crate::pub_traits::TokenInfo;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;

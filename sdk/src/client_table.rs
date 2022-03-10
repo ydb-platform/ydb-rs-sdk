@@ -1,11 +1,11 @@
 use crate::errors::*;
-use crate::internal::channel_pool::{ChannelPool, ChannelPoolImpl};
-use crate::internal::client::Middleware;
-use crate::internal::client_common::DBCredentials;
-use crate::internal::discovery::{Discovery, Service};
-use crate::internal::session::Session;
-use crate::internal::session_pool::SessionPool;
-use crate::internal::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
+use crate::channel_pool::{ChannelPool, ChannelPoolImpl};
+use crate::client::Middleware;
+use crate::client_common::DBCredentials;
+use crate::discovery::{Discovery, Service};
+use crate::session::Session;
+use crate::session_pool::SessionPool;
+use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 
 use num::pow;
 use std::future::Future;

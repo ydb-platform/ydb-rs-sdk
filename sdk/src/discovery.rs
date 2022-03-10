@@ -11,9 +11,9 @@ use ydb_protobuf::ydb_proto::discovery::v1::discovery_service_client::DiscoveryS
 use ydb_protobuf::ydb_proto::discovery::{EndpointInfo, ListEndpointsRequest, ListEndpointsResult};
 
 use crate::errors::YdbResult;
-use crate::internal::client_common::DBCredentials;
-use crate::internal::grpc::{create_grpc_client, grpc_read_operation_result};
-use crate::internal::waiter::Waiter;
+use crate::client_common::DBCredentials;
+use crate::grpc::{create_grpc_client, grpc_read_operation_result};
+use crate::waiter::Waiter;
 
 use std::time::Duration;
 use tokio::sync::watch::Receiver;
@@ -410,9 +410,9 @@ impl Waiter for DiscoverySharedState {
 #[cfg(test)]
 mod test {
     use crate::errors::YdbResult;
-    use crate::internal::client_common::{DBCredentials, TokenCache};
-    use crate::internal::discovery::DiscoverySharedState;
-    use crate::internal::test_helpers::CONNECTION_INFO;
+    use crate::client_common::{DBCredentials, TokenCache};
+    use crate::discovery::DiscoverySharedState;
+    use crate::test_helpers::CONNECTION_INFO;
     use std::sync::Arc;
     use std::time::Duration;
 

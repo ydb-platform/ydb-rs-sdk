@@ -1,11 +1,11 @@
 use crate::client_builder::ClientBuilder;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
-use crate::internal::client::Client;
-use crate::internal::client_table::RetryOptions;
-use crate::internal::query::Query;
-use crate::internal::transaction::Mode;
-use crate::internal::transaction::Mode::SerializableReadWrite;
-use crate::internal::transaction::Transaction;
+use crate::client::Client;
+use crate::client_table::RetryOptions;
+use crate::query::Query;
+use crate::transaction::Mode;
+use crate::transaction::Mode::SerializableReadWrite;
+use crate::transaction::Transaction;
 use crate::types::{Value, ValueList, ValueStruct};
 use async_once::AsyncOnce;
 use lazy_static::lazy_static;

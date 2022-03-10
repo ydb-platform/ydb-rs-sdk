@@ -4,13 +4,13 @@ use ydb_protobuf::ydb_proto::status_ids::StatusCode;
 
 use crate::errors;
 use crate::errors::{YdbError, YdbIssue, YdbResult};
-use crate::internal::client_common::DBCredentials;
-use crate::internal::middlewares::AuthService;
-use crate::internal::trait_operation::Operation;
+use crate::client_common::DBCredentials;
+use crate::middlewares::AuthService;
+use crate::trait_operation::Operation;
 use http::Uri;
 use tokio::sync::mpsc;
 
-use crate::internal::channel_pool::{ChannelErrorInfo, ChannelProxy, ChannelProxyErrorSender};
+use crate::channel_pool::{ChannelErrorInfo, ChannelProxy, ChannelProxyErrorSender};
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tower::ServiceBuilder;
 use tracing::trace;

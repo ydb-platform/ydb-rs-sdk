@@ -1,9 +1,9 @@
 use crate::errors::{YdbError, YdbResult};
-use crate::internal::client_table::{TableServiceChannelPool, TableServiceClientType};
-use crate::internal::grpc::{grpc_read_operation_result, grpc_read_void_operation_result};
-use crate::internal::query::Query;
-use crate::internal::result::{QueryResult, StreamResult};
-use crate::internal::trait_operation::Operation;
+use crate::client_table::{TableServiceChannelPool, TableServiceClientType};
+use crate::grpc::{grpc_read_operation_result, grpc_read_void_operation_result};
+use crate::query::Query;
+use crate::result::{QueryResult, StreamResult};
+use crate::trait_operation::Operation;
 use derivative::Derivative;
 use tracing::trace;
 use ydb_protobuf::ydb_proto::table::keep_alive_result::SessionStatus;

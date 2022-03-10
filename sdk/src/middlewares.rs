@@ -1,7 +1,7 @@
 use std::task::{Context, Poll};
 use std::{future::Future, pin::Pin};
 
-use crate::internal::channel_pool::ChannelProxy;
+use crate::channel_pool::ChannelProxy;
 use http::{HeaderValue, Request, Response};
 use tonic::body::BoxBody;
 use tonic::metadata::AsciiMetadataValue;
@@ -10,7 +10,7 @@ use tonic::transport::Body;
 use tonic::{Code, Status};
 use tower::Service;
 
-use crate::internal::client_common::DBCredentials;
+use crate::client_common::DBCredentials;
 
 #[derive(Clone, Debug)]
 pub(crate) struct AuthService {

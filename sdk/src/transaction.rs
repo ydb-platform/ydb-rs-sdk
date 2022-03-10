@@ -1,8 +1,8 @@
 use crate::errors::{YdbError, YdbResult};
-use crate::internal::query::Query;
-use crate::internal::result::QueryResult;
-use crate::internal::session::Session;
-use crate::internal::session_pool::SessionPool;
+use crate::query::Query;
+use crate::result::QueryResult;
+use crate::session::Session;
+use crate::session_pool::SessionPool;
 use async_trait::async_trait;
 use tracing::trace;
 use ydb_protobuf::ydb_proto::table::transaction_control::TxSelector;

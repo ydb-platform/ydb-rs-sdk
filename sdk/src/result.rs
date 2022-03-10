@@ -1,6 +1,6 @@
 use crate::errors;
 use crate::errors::{YdbError, YdbResult, YdbStatusError};
-use crate::internal::grpc::proto_issues_to_ydb_issues;
+use crate::grpc::proto_issues_to_ydb_issues;
 use crate::types::Value;
 use std::collections::HashMap;
 use std::rc::Rc;

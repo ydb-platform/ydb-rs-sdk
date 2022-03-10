@@ -1,9 +1,9 @@
 use crate::errors::YdbResult;
-use crate::internal::client_common::DBCredentials;
-use crate::internal::discovery::{Discovery, Service};
-use crate::internal::grpc::create_grpc_client_with_error_sender;
-use crate::internal::load_balancer::{LoadBalancer, SharedLoadBalancer};
-use crate::internal::middlewares::AuthService;
+use crate::client_common::DBCredentials;
+use crate::discovery::{Discovery, Service};
+use crate::grpc::create_grpc_client_with_error_sender;
+use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
+use crate::middlewares::AuthService;
 use async_trait::async_trait;
 use http::{Request, Uri};
 use std::collections::HashMap;
