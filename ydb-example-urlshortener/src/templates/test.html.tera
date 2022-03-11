@@ -1,0 +1,6 @@
+{{ url }}
+<br />
+<form method="post">
+    Url for short: <input name="url"><br />
+    <button type="submit">Submit url</button>
+</form>
