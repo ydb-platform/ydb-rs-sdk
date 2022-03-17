@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -eux
+set -eu
 
 CRATE_DIR="$1"
 VERSION="$2"
