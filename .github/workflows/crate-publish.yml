@@ -1,0 +1,8 @@
+name: publish rust crate
+on: workflow_dispatch
+jobs:
+  testSecretAvailable:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          [ -z "$TEST_SECRET" ] && echo 1 || echo 2
