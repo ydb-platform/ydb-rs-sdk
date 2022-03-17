@@ -19,3 +19,6 @@ ydb-grpc-helpers = {version="0.0.2", path="../ydb-grpc-helpers"}
 prost-build = "0.9.0"
 tonic-build = "0.6"
 walkdir = "2"
+
+[features]
+regenerate-sources = []
