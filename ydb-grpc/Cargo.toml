@@ -1,7 +1,7 @@
 [package]
 publish = true
 name = "ydb-grpc"
-version="0.0.2"
+version="0.0.3"
 authors = ["rekby <timofey.koolin@gmail.com>"]
 edition = "2021"
 license = "Apache-2.0"
@@ -15,7 +15,7 @@ prost-types = "0.9.0"
 tonic = {version = "0.6", features=["tls", "tls-roots", "tls-webpki-roots"]}
 
 [build-dependencies]
-ydb-grpc-helpers = {version="0.0.2", path="../ydb-grpc-helpers"}
+ydb-grpc-helpers = {version="0.0.3", path="../ydb-grpc-helpers"}
 prost-build = "0.9.0"
 tonic-build = "0.6.2"
 walkdir = "2"

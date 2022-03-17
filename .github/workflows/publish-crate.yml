@@ -7,7 +7,7 @@ on:
         required: true
         type: choice
         options:
-#          - sdk
+          - sdk
           - ydb-grpc
           - ydb-grpc-helpers
       version:

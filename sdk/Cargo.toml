@@ -4,6 +4,9 @@ name = "ydb"
 version = "0.0.0"
 authors = ["rekby <timofey.koolin@gmail.com>"]
 edition = "2021"
+license = "Apache-2.0"
+description = "Crate contains generated low-level grpc code from YDB API protobuf, used as base for ydb crate"
+repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-grpc"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -32,7 +35,7 @@ tracing-subscriber = "0.3"
 tonic = {version="0.6", features=["tls"]}
 tower = "0.4"
 url="2.2"
-ydb-grpc = {version="0.0.2", path="../ydb-grpc"}
+ydb-grpc = {version="0.0.3", path="../ydb-grpc"}
 
 [dev-dependencies]
 async_once="0.2"

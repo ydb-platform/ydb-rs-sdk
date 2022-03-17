@@ -1,3 +1,6 @@
+//! Crate contain helpers for generate grpc imports in ydb-grpc crate.
+//! End customers should use crate ydb.
+
 use std::collections::HashMap;
 
 pub fn get_proto_package(s: &str) -> Option<&str> {
