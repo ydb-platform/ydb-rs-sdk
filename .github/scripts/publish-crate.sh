@@ -7,7 +7,7 @@ VERSION="$2"
 
 cd "${CRATE_DIR}"
 
-sed -i "s/publish=false/publish=true/; s/version=\"0.0.0\"/version=\"${VERSION}\"/" Cargo.toml
+sed -i "s/^publish *= *false/publish=true/; s/^version *= *\"0.0.0\"/version=\"${VERSION}\"/" Cargo.toml
 cat Cargo.toml
 
 echo
