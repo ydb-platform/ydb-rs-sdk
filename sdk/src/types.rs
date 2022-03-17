@@ -10,7 +10,8 @@ use ydb_grpc::ydb_proto;
 
 const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 
-/// Represent value, send or received from ydb
+/// Internal represent database value for send to or received from database.
+///
 /// That enum will be grow, when add support of new types
 #[derive(Clone, Debug, EnumDiscriminants, EnumIter, PartialEq)]
 #[strum_discriminants(vis())] // private
