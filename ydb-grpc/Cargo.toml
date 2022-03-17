@@ -1,12 +1,12 @@
 [package]
-publish=false
+publish = true
 name = "ydb-grpc"
 version="0.0.0"
 authors = ["rekby <timofey.koolin@gmail.com>"]
 edition = "2021"
 license = "Apache-2.0"
-description = "Crate contain helpers for generate grpc imports in ydb-grpc crate."
-repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-grpc-helpers"
+description = "Crate contains generated low-level grpc code from YDB API protobuf, used as base for ydb crate"
+repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-grpc"
 
 [dependencies]
 prost = "0.9.0"
@@ -17,7 +17,7 @@ tonic = {version = "0.6", features=["tls", "tls-roots", "tls-webpki-roots"]}
 [build-dependencies]
 ydb-grpc-helpers = {version="0.0.2", path="../ydb-grpc-helpers"}
 prost-build = "0.9.0"
-tonic-build = "0.6"
+tonic-build = "0.6.2"
 walkdir = "2"
 
 [features]
