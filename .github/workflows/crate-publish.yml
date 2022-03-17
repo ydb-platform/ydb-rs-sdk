@@ -3,12 +3,13 @@ on:
   workflow_dispatch:
     inputs:
       crate:
-        description: Select crate to publish
+        description: Publish crate to crates.io
         required: true
         type: choice
         options:
-          - sdk
-          - ydb-grpc
+#          - sdk
+#          - ydb-grpc
+          - build-helpers
       version:
         description: "Version of crate, numbers only. Example: 0.0.1"
         required: true

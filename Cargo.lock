@@ -151,10 +151,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "build-helpers"
-version = "0.1.0"
-
-[[package]]
 name = "bumpalo"
 version = "3.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3095,11 +3091,15 @@ dependencies = [
 name = "ydb-grpc"
 version = "0.0.0"
 dependencies = [
- "build-helpers",
  "prost",
  "prost-build",
  "prost-types",
  "tonic",
  "tonic-build",
  "walkdir",
+ "ydb-grpc-helpers",
 ]
+
+[[package]]
+name = "ydb-grpc-helpers"
+version = "0.0.0"
