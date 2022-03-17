@@ -3080,7 +3080,7 @@ dependencies = [
 
 [[package]]
 name = "ydb-example-urlshortener"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "rocket",
  "rocket_dyn_templates",
