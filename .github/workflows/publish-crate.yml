@@ -1,4 +1,4 @@
-name: publish rust crate
+name: Publish rust crate to crates.io
 on:
   workflow_dispatch:
     inputs:
