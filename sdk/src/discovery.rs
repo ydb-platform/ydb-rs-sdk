@@ -7,8 +7,8 @@ use http::uri::Authority;
 use http::Uri;
 use strum::{Display, EnumIter, EnumString};
 
-use ydb_protobuf::ydb_proto::discovery::v1::discovery_service_client::DiscoveryServiceClient;
-use ydb_protobuf::ydb_proto::discovery::{EndpointInfo, ListEndpointsRequest, ListEndpointsResult};
+use ydb_grpc::ydb_proto::discovery::v1::discovery_service_client::DiscoveryServiceClient;
+use ydb_grpc::ydb_proto::discovery::{EndpointInfo, ListEndpointsRequest, ListEndpointsResult};
 
 use crate::client_common::DBCredentials;
 use crate::errors::YdbResult;

@@ -1,7 +1,7 @@
 [package]
 publish=false
-name = "ydb-protobuf"
-version = "0.0.1"
+name = "ydb-grpc"
+version="0.0.0"
 authors = ["rekby <timofey.koolin@gmail.com>"]
 edition = "2021"
 
@@ -14,7 +14,7 @@ prost-types = "0.9.0"
 tonic = {version = "0.6", features=["tls", "tls-roots", "tls-webpki-roots"]}
 
 [build-dependencies]
-build-helpers = {path="../build-helpers"}
+ydb-grpc-helpers = {path="../ydb-grpc-helpers"}
 prost-build = "0.9.0"
 tonic-build = "0.6"
 walkdir = "2"

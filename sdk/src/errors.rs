@@ -2,7 +2,7 @@ use crate::errors::NeedRetry::IdempotentOnly;
 
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
-use ydb_protobuf::ydb_proto::status_ids::StatusCode;
+use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 /// T result or YdbError as Error
 pub type YdbResult<T> = std::result::Result<T, YdbError>;
@@ -116,7 +116,7 @@ pub struct YdbStatusError {
     ///
     /// ```
     /// # use ydb::{YdbResult, YdbStatusError};
-    /// # use ydb_protobuf::ydb_proto::status_ids::StatusCode;
+    /// # use ydb_grpc::ydb_proto::status_ids::StatusCode;
     /// # fn main()->YdbResult<()>{
     /// let mut status =YdbStatusError::default();
     /// status.operation_status = StatusCode::AlreadyExists as i32;
@@ -138,7 +138,7 @@ impl YdbStatusError {
     ///
     /// ```
     /// # use ydb::{YdbResult, YdbStatusError};
-    /// # use ydb_protobuf::ydb_proto::status_ids::StatusCode;
+    /// # use ydb_grpc::ydb_proto::status_ids::StatusCode;
     /// # fn main()->YdbResult<()>{
     /// let mut status = YdbStatusError::default();
     /// status.operation_status= StatusCode::AlreadyExists as i32;

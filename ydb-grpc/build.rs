@@ -1,4 +1,4 @@
-use build_helpers::ProtoModule;
+use ydb_grpc_helpers::ProtoModule;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fs;
@@ -80,7 +80,7 @@ fn compile_proto_dir(
         let mut f = fs::File::open(item.path())?;
         let mut f_content = String::new();
         f.read_to_string(&mut f_content)?;
-        if let Some(package_name) = build_helpers::get_proto_package(f_content.as_str()) {
+        if let Some(package_name) = ydb_grpc_helpers::get_proto_package(f_content.as_str()) {
             if let Some(vec) = files_for_compile.get_mut(package_name) {
                 vec.push(f_path.to_string());
             } else {

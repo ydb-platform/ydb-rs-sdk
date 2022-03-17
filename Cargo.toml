@@ -1,7 +1,7 @@
 [workspace]
 members = [
-    "build-helpers",
     "sdk",
-    "ydb-protobuf",
+    "ydb-grpc",
+    "ydb-grpc-helpers",
     "ydb-example-urlshortener"
 ]

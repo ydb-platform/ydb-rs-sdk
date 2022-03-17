@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
-use ydb_protobuf::ydb_proto::status_ids::StatusCode;
+use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::errors;
 use crate::errors::{YdbError, YdbIssue, YdbResult};
@@ -14,7 +14,7 @@ use crate::channel_pool::{ChannelErrorInfo, ChannelProxy, ChannelProxyErrorSende
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tower::ServiceBuilder;
 use tracing::trace;
-use ydb_protobuf::ydb_proto::issue::IssueMessage;
+use ydb_grpc::ydb_proto::issue::IssueMessage;
 
 #[tracing::instrument(skip(new_func, cred))]
 pub(crate) async fn create_grpc_client<T, CB>(
@@ -142,7 +142,7 @@ pub(crate) fn proto_issues_to_ydb_issues(proto_issues: Vec<IssueMessage>) -> Vec
 }
 
 pub(crate) fn create_operation_error(
-    op: ydb_protobuf::ydb_proto::operations::Operation,
+    op: ydb_grpc::ydb_proto::operations::Operation,
 ) -> YdbError {
     return YdbError::YdbStatusError(crate::errors::YdbStatusError {
         message: format!("{:?}", &op),

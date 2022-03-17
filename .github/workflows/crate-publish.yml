@@ -1,8 +1,34 @@
 name: publish rust crate
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      crate:
+        description: Publish crate to crates.io
+        required: true
+        type: choice
+        options:
+#          - sdk
+#          - ydb-grpc
+          - ydb-grpc-helpers
+      version:
+        description: "Version of crate, numbers only. Example: 0.0.1"
+        required: true
+        type: string
+
 jobs:
   testSecretAvailable:
     runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      TAG_VERSION: ${{ github.event.inputs.crate }}-${{ github.event.inputs.version }}
     steps:
       - run: |
-          [ -z "$TEST_SECRET" ] && echo 1 || echo 2
+          echo PUBLISH: "${TAG_VERSION}"
+          sleep 10
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+      - run: |
+          git tag "${TAG_VERSION}"
+          git push --tags
+      - run: bash .github/scripts/publish-crate.sh "${{ github.event.inputs.crate }}" "${{ github.event.inputs.version }}"

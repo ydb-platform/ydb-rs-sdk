@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use crate::YdbError;
-use ydb_protobuf::ydb_proto::TypedValue;
+use ydb_grpc::ydb_proto::TypedValue;
 
 /// Query object
 pub struct Query {
@@ -52,12 +52,12 @@ impl Query {
         return self;
     }
 
-    pub(crate) fn query_to_proto(&self) -> ydb_protobuf::ydb_proto::table::Query {
-        return ydb_protobuf::ydb_proto::table::Query {
-            query: Some(ydb_protobuf::ydb_proto::table::query::Query::YqlText(
+    pub(crate) fn query_to_proto(&self) -> ydb_grpc::ydb_proto::table::Query {
+        return ydb_grpc::ydb_proto::table::Query {
+            query: Some(ydb_grpc::ydb_proto::table::query::Query::YqlText(
                 self.text.clone(),
             )),
-            ..ydb_protobuf::ydb_proto::table::Query::default()
+            ..ydb_grpc::ydb_proto::table::Query::default()
         };
     }
 

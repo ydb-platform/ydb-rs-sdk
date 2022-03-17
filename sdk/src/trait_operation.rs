@@ -1,7 +1,7 @@
 use std::fmt::Debug;
-use ydb_protobuf::ydb_proto::discovery::{ListEndpointsResponse, WhoAmIResponse};
-use ydb_protobuf::ydb_proto::operations::Operation as YdbOperation;
-use ydb_protobuf::ydb_proto::table::{
+use ydb_grpc::ydb_proto::discovery::{ListEndpointsResponse, WhoAmIResponse};
+use ydb_grpc::ydb_proto::operations::Operation as YdbOperation;
+use ydb_grpc::ydb_proto::table::{
     CommitTransactionResponse, CreateSessionResponse, DeleteSessionResponse,
     ExecuteDataQueryResponse, ExecuteSchemeQueryResponse, KeepAliveResponse,
     RollbackTransactionResponse,
