@@ -30,7 +30,7 @@ impl From<Mode> for TxMode {
 }
 
 #[async_trait]
-pub trait Transaction {
+pub trait Transaction: Send + Sync {
     async fn query(&mut self, query: Query) -> YdbResult<QueryResult>;
     async fn commit(&mut self) -> YdbResult<()>;
     async fn rollback(&mut self) -> YdbResult<()>;
