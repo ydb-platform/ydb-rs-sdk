@@ -1,7 +1,7 @@
-use crate::client_builder::ClientBuilder;
-use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::client::Client;
+use crate::client_builder::ClientBuilder;
 use crate::client_table::RetryOptions;
+use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::query::Query;
 use crate::transaction::Mode;
 use crate::transaction::Mode::SerializableReadWrite;
@@ -58,6 +58,7 @@ async fn create_client() -> YdbResult<Arc<Client>> {
 
 #[tokio::test]
 #[traced_test]
+#[ignore] // need YDB access
 async fn create_session() -> YdbResult<()> {
     let res = create_client()
         .await?
@@ -70,6 +71,7 @@ async fn create_session() -> YdbResult<()> {
 
 #[tokio::test]
 #[traced_test]
+#[ignore] // need YDB access
 async fn execute_data_query() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
@@ -92,6 +94,7 @@ async fn execute_data_query() -> YdbResult<()> {
 
 #[tokio::test]
 #[traced_test]
+#[ignore] // need YDB access
 async fn execute_data_query_field_name() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
@@ -114,6 +117,7 @@ async fn execute_data_query_field_name() -> YdbResult<()> {
 
 #[tokio::test]
 #[traced_test]
+#[ignore] // need YDB access
 async fn execute_data_query_params() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
@@ -148,6 +152,7 @@ async fn execute_data_query_params() -> YdbResult<()> {
 
 #[tokio::test]
 #[traced_test]
+#[ignore] // need YDB access
 async fn interactive_transaction() -> YdbResult<()> {
     let client = create_client().await?;
 
@@ -218,6 +223,7 @@ async fn interactive_transaction() -> YdbResult<()> {
 
 #[tokio::test]
 #[traced_test]
+#[ignore] // need YDB access
 async fn retry_test() -> YdbResult<()> {
     let client = create_client().await?;
 
@@ -261,6 +267,7 @@ async fn retry_test() -> YdbResult<()> {
 
 #[tokio::test]
 #[traced_test]
+#[ignore] // need YDB access
 async fn scheme_query() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
@@ -300,6 +307,7 @@ async fn scheme_query() -> YdbResult<()> {
 
 #[tokio::test]
 #[traced_test]
+#[ignore] // need YDB access
 async fn select_int() -> YdbResult<()> {
     let client = create_client().await?;
     let v = Value::Int32(123);
@@ -329,6 +337,7 @@ SELECT $test AS test;
 
 #[tokio::test]
 #[traced_test]
+#[ignore] // need YDB access
 async fn select_optional() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
@@ -362,6 +371,7 @@ SELECT $test AS test;
 
 #[tokio::test]
 #[traced_test]
+#[ignore] // need YDB access
 async fn select_list() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
@@ -400,6 +410,7 @@ SELECT $l AS l;
 
 #[tokio::test]
 #[traced_test]
+#[ignore] // need YDB access
 async fn select_struct() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
@@ -458,6 +469,7 @@ FROM
 
 #[tokio::test]
 #[traced_test]
+#[ignore] // need YDB access
 async fn select_int64_null4() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
@@ -484,6 +496,7 @@ SELECT CAST(NULL AS Optional<Int64>)
 
 #[tokio::test]
 #[traced_test]
+#[ignore] // need YDB access
 async fn select_void_null() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
@@ -510,6 +523,7 @@ SELECT NULL
 
 #[tokio::test]
 #[traced_test]
+#[ignore] // need YDB access
 async fn stream_query() -> YdbResult<()> {
     let mut client = create_client().await?.table_client();
     let mut session = client.create_session().await?;

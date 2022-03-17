@@ -10,8 +10,8 @@ use strum::{Display, EnumIter, EnumString};
 use ydb_protobuf::ydb_proto::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_protobuf::ydb_proto::discovery::{EndpointInfo, ListEndpointsRequest, ListEndpointsResult};
 
-use crate::errors::YdbResult;
 use crate::client_common::DBCredentials;
+use crate::errors::YdbResult;
 use crate::grpc::{create_grpc_client, grpc_read_operation_result};
 use crate::waiter::Waiter;
 
@@ -409,14 +409,15 @@ impl Waiter for DiscoverySharedState {
 
 #[cfg(test)]
 mod test {
-    use crate::errors::YdbResult;
     use crate::client_common::{DBCredentials, TokenCache};
     use crate::discovery::DiscoverySharedState;
+    use crate::errors::YdbResult;
     use crate::test_helpers::CONNECTION_INFO;
     use std::sync::Arc;
     use std::time::Duration;
 
     #[tokio::test]
+    #[ignore] // need YDB access
     async fn test_background_discovery() -> YdbResult<()> {
         let cred = DBCredentials {
             database: CONNECTION_INFO.database.clone(),
