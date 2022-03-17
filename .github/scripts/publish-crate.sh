@@ -15,4 +15,4 @@ echo
 echo
 
 # Allow dirty because publish with changes Cargo.toml
-cargo publish --allow-dirty --dry-run
+cargo publish --allow-dirty
