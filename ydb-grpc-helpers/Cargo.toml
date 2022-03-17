@@ -1,5 +1,5 @@
 [package]
-publish = false
+publish = true
 version = "0.0.2"
 name = "ydb-grpc-helpers"
 authors = ["rekby <timofey.koolin@gmail.com>"]

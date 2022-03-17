@@ -6,17 +6,22 @@ use std::io::{Read, Write};
 
 const COMPILE_DIRS: &[(&str, &str)] = &[
     // src, dst
-    ("../ydb-api-protos", "src/generated"),
+    ("ydb-api-protos", "src/generated"),
 ];
 
 const INCLUDE_DIRS: &[&str] = &[
-    "../ydb-api-protos",
-    "../ydb-api-protos/protos",
-    "../ydb-api-protos/protos/validation",
+    "ydb-api-protos",
+    "ydb-api-protos/protos",
+    "ydb-api-protos/protos/validation",
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("cargo:rerun-if-changed=../ydb-api-protos");
+    println!("cargo:rerun-if-changed=ydb-api-protos");
+
+    if std::env::var("CARGO_FEATURE_REGENERATE_SOURCES").unwrap_or("0".into()) != "1" {
+        println!("skip regenerate sources");
+        return Ok(())
+    }
 
     for (src, dst) in COMPILE_DIRS {
         clean_dst_dir(dst)?;
