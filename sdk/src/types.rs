@@ -6,7 +6,7 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use std::time::Duration;
 use strum::{EnumDiscriminants, EnumIter, IntoStaticStr};
-use ydb_protobuf::ydb_proto;
+use ydb_grpc::ydb_proto;
 
 const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 

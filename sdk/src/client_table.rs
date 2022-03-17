@@ -12,7 +12,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
-use ydb_protobuf::ydb_proto::table::v1::table_service_client::TableServiceClient;
+use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 
 const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;

@@ -8,7 +8,7 @@ use std::ops::Sub;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Semaphore;
 use tracing::trace;
-use ydb_protobuf::ydb_proto::table::{CreateSessionRequest, CreateSessionResult};
+use ydb_grpc::ydb_proto::table::{CreateSessionRequest, CreateSessionResult};
 
 const DEFAULT_SIZE: usize = 1000;
 
