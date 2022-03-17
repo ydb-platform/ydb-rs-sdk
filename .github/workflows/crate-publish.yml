@@ -20,6 +20,9 @@ jobs:
     env:
       TEST_SECRET: ${{ secrets.TEST_SECRET }}
     steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
       - run: |
           [ -z "$TEST_SECRET" ] && echo empty || echo detected
           echo crate: ${{ github.event.inputs.crate }}:${{github.event.inputs.version}}
