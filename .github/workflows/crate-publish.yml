@@ -21,10 +21,9 @@ jobs:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
       - run: |
-          echo PUBLISH: "${{ github.event.inputs.crate }}"
-          echo VERSION: "${{ github.event.inputs.version }}"
+          echo PUBLISH: "${{ github.event.inputs.crate }}" "${{ github.event.inputs.version }}"
           sleep 10
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - run: bash scripts/publish-crate.sh "${{ github.event.inputs.crate }}" "${{ github.event.inputs.version }}"
+      - run: bash .github/scripts/publish-crate.sh "${{ github.event.inputs.crate }}" "${{ github.event.inputs.version }}"
