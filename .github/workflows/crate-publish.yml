@@ -24,4 +24,4 @@ jobs:
           [ -z "$TEST_SECRET" ] && echo empty || echo detected
           echo crate: ${{ github.event.inputs.crate }}:${{github.event.inputs.version}}
           pwd
-          ls
+          ls -la
