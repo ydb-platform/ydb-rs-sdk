@@ -1,8 +1,8 @@
-use crate::errors::*;
 use crate::channel_pool::{ChannelPool, ChannelPoolImpl};
 use crate::client::Middleware;
 use crate::client_common::DBCredentials;
 use crate::discovery::{Discovery, Service};
+use crate::errors::*;
 use crate::session::Session;
 use crate::session_pool::SessionPool;
 use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
@@ -382,7 +382,7 @@ struct RetryDecision {
     pub(crate) wait_timeout: Duration,
 }
 
-trait Retry {
+trait Retry: Send + Sync {
     fn wait_duration(&self, params: RetryParams) -> RetryDecision;
 }
 
