@@ -9,7 +9,7 @@ on:
         options:
 #          - sdk
 #          - ydb-grpc
-          - build-helpers
+          - ydb-grpc-helpers
       version:
         description: "Version of crate, numbers only. Example: 0.0.1"
         required: true
