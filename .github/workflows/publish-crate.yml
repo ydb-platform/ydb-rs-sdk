@@ -8,7 +8,7 @@ on:
         type: choice
         options:
 #          - sdk
-#          - ydb-grpc
+          - ydb-grpc
           - ydb-grpc-helpers
       version:
         description: "Version of crate, numbers only. Example: 0.0.1"
