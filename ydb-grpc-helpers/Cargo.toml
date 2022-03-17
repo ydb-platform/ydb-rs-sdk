@@ -4,7 +4,6 @@ version = "0.0.0"
 name = "ydb-grpc-helpers"
 authors = ["rekby <timofey.koolin@gmail.com>"]
 edition = "2018"
-license = "APACHE-2.0"
 license-file = "../LICENSE.txt"
 description = "Crate contain helpers for generate grpc imports in ydb-grpc crate."
 

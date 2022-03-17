@@ -16,7 +16,7 @@ on:
         type: string
 
 jobs:
-  testSecretAvailable:
+  publishCrate:
     runs-on: ubuntu-latest
     env:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
