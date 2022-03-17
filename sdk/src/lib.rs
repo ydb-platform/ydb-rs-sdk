@@ -1,3 +1,5 @@
+//! YDB SDK - client for Yandex database.
+
 mod client_builder;
 mod credentials;
 mod errors;

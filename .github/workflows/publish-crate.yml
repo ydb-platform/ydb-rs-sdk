@@ -7,13 +7,16 @@ on:
         required: true
         type: choice
         options:
-#          - sdk
+          - sdk
           - ydb-grpc
           - ydb-grpc-helpers
       version:
         description: "Version of crate, numbers only. Example: 0.0.1"
         required: true
         type: string
+
+permissions:
+  contents: write
 
 jobs:
   publishCrate:
