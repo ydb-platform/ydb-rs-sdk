@@ -1,5 +1,19 @@
 name: publish rust crate
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      crate:
+        description: Select crate to publish
+        required: true
+        type: choice
+        options:
+          - grpc-generated
+          - sdk
+      version:
+        description: "Version of crate, numbers only. Example: 0.0.1"
+        required: true
+        type: string
+
 jobs:
   testSecretAvailable:
     runs-on: ubuntu-latest
@@ -8,3 +22,4 @@ jobs:
     steps:
       - run: |
           [ -z "$TEST_SECRET" ] && echo empty || echo detected
+          echo crate: ${{ github.event.inputs.crate }}:${{github.event.inputs.version}}
