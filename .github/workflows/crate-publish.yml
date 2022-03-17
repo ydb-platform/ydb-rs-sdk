@@ -7,8 +7,8 @@ on:
         required: true
         type: choice
         options:
-          - grpc-generated
           - sdk
+          - ydb-grpc
       version:
         description: "Version of crate, numbers only. Example: 0.0.1"
         required: true
@@ -18,13 +18,13 @@ jobs:
   testSecretAvailable:
     runs-on: ubuntu-latest
     env:
-      TEST_SECRET: ${{ secrets.TEST_SECRET }}
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
+      - run: |
+          echo PUBLISH: "${{ github.event.inputs.crate }}"
+          echo VERSION: "${{ github.event.inputs.version }}"
+          sleep 10
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - run: |
-          [ -z "$TEST_SECRET" ] && echo empty || echo detected
-          echo crate: ${{ github.event.inputs.crate }}:${{github.event.inputs.version}}
-          pwd
-          ls -la
+      - run: bash scripts/publish-crate.sh "${{ github.event.inputs.crate }}" "${{ github.event.inputs.version }}"

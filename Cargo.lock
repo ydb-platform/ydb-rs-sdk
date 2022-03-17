@@ -3093,7 +3093,7 @@ dependencies = [
 
 [[package]]
 name = "ydb-grpc"
-version = "0.0.1"
+version = "0.0.0"
 dependencies = [
  "build-helpers",
  "prost",
