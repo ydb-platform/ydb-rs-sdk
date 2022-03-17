@@ -14,4 +14,5 @@ echo
 echo
 echo
 
-cargo publish --dry-run
+# Allow dirty because publish with changes Cargo.toml
+cargo publish --dry-run --allow-dirty
