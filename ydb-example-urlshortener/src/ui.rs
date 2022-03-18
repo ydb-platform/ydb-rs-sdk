@@ -1,27 +1,69 @@
 use crate::db;
-use rocket::http::{ContentType, Status};
-use rocket::request::{FromRequest, Outcome};
-use rocket::response::Redirect;
-use rocket::{form::Form, get, post, routes, uri, Build, FromForm, Request, Rocket};
-use rocket_dyn_templates::tera::Tera;
-use rocket_dyn_templates::Template;
+use serde::Deserialize;
 use std::collections::HashMap;
-use ydb::YdbError;
+use std::convert::Infallible;
+use std::str::FromStr;
+use warp::http::{Response, StatusCode, Uri};
+use warp::hyper::Body;
+use warp::{http, Filter, Reply};
+use ydb::{YdbError, YdbResult};
 
-#[get("/")]
-fn index_page() -> (Status, (ContentType, &'static str)) {
-    (Status::Ok, (ContentType::HTML, include_str!("index.html")))
+async fn index() -> Result<impl Reply, Infallible> {
+    Ok(warp::reply::html(include_str!("index.html")))
 }
 
-#[get("/?<url>")]
-async fn insert_url(url: &str) -> (Status, (ContentType, &'static str)) {
-    let hash = hashers::fnv::fnv1a32(url.as_bytes()).to_string();
-    (
-        Status::InternalServerError,
-        (ContentType::Text, "unimplemented"),
-    )
+#[derive(Deserialize)]
+struct GetUrl {
+    url: String,
 }
 
-pub fn build() -> Rocket<Build> {
-    rocket::build().mount("/", routes![index_page, insert_url])
+async fn get_url(params: GetUrl) -> Result<impl Reply, Infallible> {
+    let hash = hashers::fnv::fnv1a32(params.url.as_bytes()).to_string();
+
+    match db::insert(hash.clone(), params.url.clone()).await {
+        Ok(_) => Ok(warp::reply::with_status(hash, StatusCode::OK)),
+        Err(err) => Ok(warp::reply::with_status(
+            format!("failed create short url: {}", err),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )),
+    }
+}
+
+#[derive(Deserialize)]
+struct RedirectParams {
+    l: String,
+}
+async fn redirect(params: RedirectParams) -> Result<impl Reply, Infallible> {
+    let reply: Box<dyn Reply> = match db::get(params.l).await {
+        Ok(url) => match Uri::from_str(url.as_str()) {
+            Ok(uri) => Box::new(warp::redirect::redirect(uri).into_response()),
+            Err(err) => Box::new(warp::reply::with_status(
+                "failed parse long url",
+                StatusCode::NOT_FOUND,
+            )),
+        },
+        Err(YdbError::NoRows) => Box::new(warp::reply::with_status(
+            "short url not found",
+            StatusCode::NOT_FOUND,
+        )),
+        Err(err) => Box::new(warp::reply::with_status(
+            format!("error while check short url: {}", err),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        )),
+    };
+    return Ok(reply);
+}
+
+pub async fn run() -> Result<(), warp::Error> {
+    // GET /[?l=][?url=]
+    let index = warp::get().and_then(index);
+
+    let url = warp::get().and(warp::query()).and_then(get_url);
+
+    let redirect_page = warp::get().and(warp::query()).and_then(redirect);
+
+    warp::serve(url.or(redirect_page).or(index))
+        .run(([127, 0, 0, 1], 8000))
+        .await;
+    return Ok(());
 }

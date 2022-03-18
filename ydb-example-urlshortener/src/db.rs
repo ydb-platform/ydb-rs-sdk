@@ -1,9 +1,10 @@
 use async_once::AsyncOnce;
 use lazy_static::lazy_static;
-use ydb::{TableClient, ydb_params, YdbResult};
+use ydb::{ydb_params, Query, TableClient, YdbResult};
 
 lazy_static! {
-    static ref DB: AsyncOnce<ydb::YdbResult<ydb::Client>> = AsyncOnce::new(async { init_db().await });
+    static ref DB: AsyncOnce<ydb::YdbResult<ydb::Client>> =
+        AsyncOnce::new(async { init_db().await });
 }
 
 async fn init_db() -> ydb::YdbResult<ydb::Client> {
@@ -28,10 +29,15 @@ async fn init_db() -> ydb::YdbResult<ydb::Client> {
     return Ok(client);
 }
 
-async fn db()->YdbResult<TableClient>{
+pub async fn check() -> YdbResult<()> {
+    db().await?;
+    return Ok(());
+}
+
+async fn db() -> YdbResult<TableClient> {
     match DB.get().await {
-        Ok(client)=>Ok(client.table_client()),
-        Err(err)=>Err(err.clone())
+        Ok(client) => Ok(client.table_client()),
+        Err(err) => Err(err.clone()),
     }
 }
 
@@ -52,11 +58,43 @@ pub async fn insert(hash: String, long: String) -> ydb::YdbResult<()> {
 				    ($hash, $src);
 ",
                 )
-                .with_params(ydb_params!("hash" => hash.clone(), "src" => long.clone())),
+                .with_params(ydb_params!("$hash" => hash.clone(), "$src" => long.clone())),
             )
             .await?;
             return Ok(());
         })
         .await?;
     return Ok(());
+}
+
+pub async fn get(hash: String) -> YdbResult<String> {
+    let table_client = db().await?;
+    let src = table_client
+        .retry_transaction(|tx| async {
+            let mut tx = tx; // move tx lifetime into code block
+            let src: String = tx
+                .query(
+                    Query::from(
+                        "DECLARE $hash as Utf8;
+
+			    SELECT
+				    src
+			    FROM
+				    urls
+			    WHERE
+				    hash = $hash;
+",
+                    )
+                    .with_params(ydb_params!("$hash"=>hash.clone())),
+                )
+                .await?
+                .into_only_row()?
+                .remove_field_by_name("src")?
+                .try_into()?;
+
+            return Ok(src);
+        })
+        .await?;
+
+    return Ok(src);
 }
