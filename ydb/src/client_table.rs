@@ -1,5 +1,5 @@
 use crate::channel_pool::{ChannelPool, ChannelPoolImpl};
-use crate::client::Middleware;
+use crate::client::{Middleware, TimeoutSettings};
 use crate::client_common::DBCredentials;
 use crate::discovery::{Discovery, Service};
 use crate::errors::*;
@@ -100,10 +100,15 @@ pub struct TableClient {
     retrier: Arc<Box<dyn Retry>>,
     transaction_options: TransactionOptions,
     idempotent_operation: bool,
+    timeouts: TimeoutSettings,
 }
 
 impl TableClient {
-    pub(crate) fn new(credencials: DBCredentials, discovery: Arc<Box<dyn Discovery>>) -> Self {
+    pub(crate) fn new(
+        credencials: DBCredentials,
+        discovery: Arc<Box<dyn Discovery>>,
+        timeouts: TimeoutSettings,
+    ) -> Self {
         let channel_pool = ChannelPoolImpl::new::<TableServiceClientType>(
             discovery,
             credencials.clone(),
@@ -118,6 +123,7 @@ impl TableClient {
             retrier: Arc::new(Box::new(TimeoutRetrier::default())),
             transaction_options: TransactionOptions::new(),
             idempotent_operation: false,
+            timeouts,
         };
     }
 
@@ -125,6 +131,14 @@ impl TableClient {
     pub(crate) fn with_max_active_sessions(mut self, size: usize) -> Self {
         self.session_pool = self.session_pool.with_max_active_sessions(size);
         return self;
+    }
+
+    // Clone the table client and set new timeouts settings
+    pub fn clone_with_timeouts(&self, timeouts: TimeoutSettings) -> Self {
+        return Self {
+            timeouts,
+            ..self.clone()
+        };
     }
 
     /// Clone the table client and set new retry timeouts
@@ -162,18 +176,22 @@ impl TableClient {
     }
 
     pub(crate) fn create_autocommit_transaction(&self, mode: Mode) -> impl Transaction {
-        AutoCommit::new(self.session_pool.clone(), mode)
+        AutoCommit::new(self.session_pool.clone(), mode, self.timeouts)
             .with_error_on_truncate(self.error_on_truncate)
     }
 
     pub(crate) fn create_interactive_transaction(&self) -> impl Transaction {
-        SerializableReadWriteTx::new(self.session_pool.clone())
+        SerializableReadWriteTx::new(self.session_pool.clone(), self.timeouts)
             .with_error_on_truncate(self.error_on_truncate)
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn create_session(&mut self) -> YdbResult<Session> {
-        return self.session_pool.session().await;
+    pub(crate) async fn create_session(&self) -> YdbResult<Session> {
+        return Ok(self
+            .session_pool
+            .session()
+            .await?
+            .with_timeouts(self.timeouts));
     }
 
     async fn retry<CallbackFuture, CallbackResult>(
@@ -212,7 +230,7 @@ impl TableClient {
     pub async fn retry_execute_scheme_query<T: Into<String>>(&self, query: T) -> YdbResult<()> {
         let query = Arc::new(query.into());
         self.retry(|| async {
-            let mut session = self.session_pool.session().await?;
+            let mut session = self.create_session().await?;
             return session.execute_schema_query(query.to_string()).await;
         })
         .await
@@ -330,7 +348,7 @@ impl TableClient {
         let mut attempts: usize = 0;
         let start = Instant::now();
         loop {
-            let session = self.session_pool.session().await?;
+            let session = self.create_session().await?;
             let res = callback(session).await;
 
             let err = if let Err(err) = res {

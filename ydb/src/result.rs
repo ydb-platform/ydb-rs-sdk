@@ -184,7 +184,7 @@ pub struct StreamResult {
 }
 
 impl StreamResult {
-    pub(crate) async fn next(&mut self) -> YdbResult<Option<ResultSet>> {
+    pub async fn next(&mut self) -> YdbResult<Option<ResultSet>> {
         let partial_response = if let Some(partial_response) = self.results.message().await? {
             partial_response
         } else {

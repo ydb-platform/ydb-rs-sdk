@@ -2,9 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
+use crate::client_common::DBCredentials;
 use crate::errors;
 use crate::errors::{YdbError, YdbIssue, YdbResult};
-use crate::client_common::DBCredentials;
 use crate::middlewares::AuthService;
 use crate::trait_operation::Operation;
 use http::Uri;
@@ -15,6 +15,8 @@ use tonic::transport::{ClientTlsConfig, Endpoint};
 use tower::ServiceBuilder;
 use tracing::trace;
 use ydb_grpc::ydb_proto::issue::IssueMessage;
+use ydb_grpc::ydb_proto::operations::operation_params::OperationMode;
+use ydb_grpc::ydb_proto::operations::OperationParams;
 
 #[tracing::instrument(skip(new_func, cred))]
 pub(crate) async fn create_grpc_client<T, CB>(
@@ -141,12 +143,18 @@ pub(crate) fn proto_issues_to_ydb_issues(proto_issues: Vec<IssueMessage>) -> Vec
         .collect()
 }
 
-pub(crate) fn create_operation_error(
-    op: ydb_grpc::ydb_proto::operations::Operation,
-) -> YdbError {
+pub(crate) fn create_operation_error(op: ydb_grpc::ydb_proto::operations::Operation) -> YdbError {
     return YdbError::YdbStatusError(crate::errors::YdbStatusError {
         message: format!("{:?}", &op),
         operation_status: op.status,
         issues: proto_issues_to_ydb_issues(op.issues),
+    });
+}
+
+pub(crate) fn operation_params(timeout: Duration) -> Option<OperationParams> {
+    return Some(OperationParams {
+        operation_mode: OperationMode::Sync.into(),
+        operation_timeout: Some(timeout.into()),
+        ..OperationParams::default()
     });
 }

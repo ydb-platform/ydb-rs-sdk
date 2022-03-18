@@ -525,7 +525,7 @@ SELECT NULL
 #[traced_test]
 #[ignore] // need YDB access
 async fn stream_query() -> YdbResult<()> {
-    let mut client = create_client().await?.table_client();
+    let client = create_client().await?.table_client();
     let mut session = client.create_session().await?;
 
     let _ = session

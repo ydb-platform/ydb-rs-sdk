@@ -15,7 +15,7 @@ async fn init_db() -> ydb::YdbResult<ydb::Client> {
     client.wait().await?;
 
     let table_client = client.table_client();
-    let res = table_client
+    table_client
         .retry_execute_scheme_query(
             "CREATE TABLE urls (
                     src Utf8,
