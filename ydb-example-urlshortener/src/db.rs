@@ -1,6 +1,6 @@
 use async_once::AsyncOnce;
 use lazy_static::lazy_static;
-use ydb::{ydb_params, Query, TableClient, YdbResult};
+use ydb::{ydb_params, Query, TableClient, YdbError, YdbResult};
 
 lazy_static! {
     static ref DB: AsyncOnce<ydb::YdbResult<ydb::Client>> =
@@ -61,6 +61,7 @@ pub async fn insert(hash: String, long: String) -> ydb::YdbResult<()> {
                 .with_params(ydb_params!("$hash" => hash.clone(), "$src" => long.clone())),
             )
             .await?;
+            tx.commit().await?;
             return Ok(());
         })
         .await?;
@@ -68,11 +69,15 @@ pub async fn insert(hash: String, long: String) -> ydb::YdbResult<()> {
 }
 
 pub async fn get(hash: String) -> YdbResult<String> {
-    let table_client = db().await?;
-    let src = table_client
+    let table_client = db().await?.clone_wit_transaction_options(
+        ydb::TransactionOptions::new()
+            .with_autocommit(true)
+            .with_mode(ydb::Mode::OnlineReadonly),
+    );
+    let src: Option<String> = table_client
         .retry_transaction(|tx| async {
             let mut tx = tx; // move tx lifetime into code block
-            let src: String = tx
+            let src: Option<String> = tx
                 .query(
                     Query::from(
                         "DECLARE $hash as Utf8;
@@ -91,10 +96,13 @@ pub async fn get(hash: String) -> YdbResult<String> {
                 .into_only_row()?
                 .remove_field_by_name("src")?
                 .try_into()?;
-
             return Ok(src);
         })
         .await?;
 
-    return Ok(src);
+    if let (Some(url)) = src {
+        return Ok(url);
+    } else {
+        return Err(YdbError::Convert("can't convert null to string".into()));
+    }
 }
