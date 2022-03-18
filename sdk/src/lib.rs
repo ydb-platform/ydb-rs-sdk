@@ -38,6 +38,9 @@
 //! #    return Ok(());
 //! # }
 //! ```
+//!
+//! # More examples
+//! [https://github.com/ydb-platform/ydb-rs-sdk/tree/master/sdk/examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/sdk/examples)
 mod client_builder;
 mod credentials;
 mod errors;
