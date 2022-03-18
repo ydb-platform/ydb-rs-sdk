@@ -7,6 +7,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async_once="0.2.6"
+hashers="1.0"
+lazy_static = "1.4.0"
 rocket="0.5.0-rc.1"
 rocket_dyn_templates={version="0.1.0-rc.1", features=["tera"]}
 ydb={path="../sdk"}
