@@ -100,7 +100,7 @@ pub async fn get(hash: String) -> YdbResult<String> {
         })
         .await?;
 
-    if let (Some(url)) = src {
+    if let Some(url) = src {
         return Ok(url);
     } else {
         return Err(YdbError::Convert("can't convert null to string".into()));
