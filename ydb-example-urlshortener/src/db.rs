@@ -1,12 +1,12 @@
 use async_once::AsyncOnce;
 use lazy_static::lazy_static;
-use ydb::ydb_params;
+use ydb::{TableClient, ydb_params, YdbResult};
 
 lazy_static! {
-    static ref DB: AsyncOnce<ydb::Client> = AsyncOnce::new(async { init_db().await.unwrap() });
+    static ref DB: AsyncOnce<ydb::YdbResult<ydb::Client>> = AsyncOnce::new(async { init_db().await });
 }
 
-async fn init_db() -> Result<ydb::Client, ydb::YdbError> {
+async fn init_db() -> ydb::YdbResult<ydb::Client> {
     let conn_string = std::env::var("YDB_CONNECTION_STRING")
         .unwrap_or("grpc://localhost:2136?database=/local".to_string());
     let client = ydb::ClientBuilder::from_str(conn_string)?.client()?;
@@ -28,8 +28,15 @@ async fn init_db() -> Result<ydb::Client, ydb::YdbError> {
     return Ok(client);
 }
 
+async fn db()->YdbResult<TableClient>{
+    match DB.get().await {
+        Ok(client)=>Ok(client.table_client()),
+        Err(err)=>Err(err.clone())
+    }
+}
+
 pub async fn insert(hash: String, long: String) -> ydb::YdbResult<()> {
-    let table_client = DB.get().await.table_client();
+    let table_client = db().await?;
     table_client
         .retry_transaction(|tx| async {
             let mut tx = tx; // move tx lifetime into code block
