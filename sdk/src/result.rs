@@ -72,7 +72,7 @@ impl QueryResult {
                     Err(YdbError::from_str("result set has more then one row"))
                 }
             }
-            None => Err(YdbError::from_str("result set has no rows")),
+            None => Err(YdbError::NoRows),
         }
     }
 }

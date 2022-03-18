@@ -17,7 +17,7 @@ pub enum YdbOrCustomerError {
     YDB(YdbError),
 
     /// Wrap for customer error
-    Customer(Arc<Box<dyn std::error::Error>>),
+    Customer(Arc<Box<dyn std::error::Error + Send + Sync>>),
 }
 
 impl YdbOrCustomerError {
@@ -27,7 +27,7 @@ impl YdbOrCustomerError {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn from_err<T: std::error::Error + 'static>(err: T) -> Self {
+    pub(crate) fn from_err<T: std::error::Error + 'static + Send + Sync>(err: T) -> Self {
         return Self::Customer(Arc::new(Box::new(err)));
     }
 }
@@ -80,6 +80,9 @@ pub enum YdbError {
 
     /// Errors of convert between native rust types and ydb value
     Convert(String),
+
+    /// No rows in result set
+    NoRows,
 
     /// Unexpected error. Write issue if it will happen.
     InternalError(String),
@@ -226,6 +229,7 @@ impl YdbError {
             Self::Convert(_) => NeedRetry::False,
             Self::Custom(_) => NeedRetry::False,
             Self::InternalError(_) => NeedRetry::False,
+            Self::NoRows => NeedRetry::False,
             Self::TransportDial(_) => NeedRetry::True,
             Self::Transport(_) => IdempotentOnly, // TODO: check when transport error created
             Self::TransportGRPCStatus(status) => {

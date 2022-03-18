@@ -38,30 +38,36 @@
 //! #    return Ok(());
 //! # }
 //! ```
-mod client_builder;
-mod credentials;
-mod errors;
-mod pub_traits;
-mod sugar;
-mod types;
-mod types_converters;
+//!
+//! # More examples
+//! [Url shorneter application](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-example-urlshortener)
+//!
+//! [Many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/sdk/examples)
+//!
 mod channel_pool;
 pub(crate) mod client;
+mod client_builder;
 pub(crate) mod client_common;
 pub(crate) mod client_table;
 #[cfg(test)]
 mod client_table_test_integration;
+mod credentials;
 pub(crate) mod discovery;
+mod errors;
 mod grpc;
 mod load_balancer;
 mod middlewares;
+mod pub_traits;
 pub(crate) mod query;
 pub(crate) mod result;
 mod session;
 mod session_pool;
+mod sugar;
 mod test_helpers;
 mod trait_operation;
 pub(crate) mod transaction;
+mod types;
+mod types_converters;
 pub(crate) mod waiter;
 
 // full enum pub types

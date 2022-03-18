@@ -154,6 +154,13 @@ impl TableClient {
         };
     }
 
+    pub fn clone_wit_transaction_options(&self, opts: TransactionOptions) -> Self {
+        return Self {
+            transaction_options: opts,
+            ..self.clone()
+        };
+    }
+
     pub(crate) fn create_autocommit_transaction(&self, mode: Mode) -> impl Transaction {
         AutoCommit::new(self.session_pool.clone(), mode)
             .with_error_on_truncate(self.error_on_truncate)

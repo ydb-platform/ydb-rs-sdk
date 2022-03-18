@@ -42,8 +42,8 @@
                 contentType: "application/text; charset=utf-8",
                 traditional: true,
                 success: function(hash) {
-                    $shorten.html(window.location.protocol + '//' + window.location.host + window.location.pathname + '?' + hash);
-					$shorten.attr('href', window.location.protocol + '//' + window.location.host + window.location.pathname + '?' + hash);
+                    $shorten.html(window.location.protocol + '//' + window.location.host + window.location.pathname + '?l=' + hash);
+					$shorten.attr('href', window.location.protocol + '//' + window.location.host + window.location.pathname + '?l=' + hash);
                 },
                 error: function(data) {
                     $shorten.html('invalid url')
