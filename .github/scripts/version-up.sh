@@ -29,7 +29,17 @@ function publish_crate() {
     (
       cd "$CRATE_NAME"
 
-      cargo publish
+      local SUCCESS=0
+      for TRY_COUNTER in $(seq 0 10); do
+        [ "$TRY_COUNTER" != "0" ] && echo "retry count: $TRY_COUNTER" && sleep 60
+
+        if cargo publish; then
+          SUCCESS=1
+          break
+        fi
+
+      done
+      [ "$SUCCESS" != "1" ] && echo "Publish crate '$CRATE_NAME' failed." && return 1
     )
 }
 
