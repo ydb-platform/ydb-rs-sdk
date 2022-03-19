@@ -27,10 +27,11 @@ jobs:
   publishCrate:
     runs-on: ubuntu-latest
     env:
+      GIT_EMAIL: ${{ github.actor }}@users.noreply.github.com
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       TAG_VERSION: ${{ github.event.inputs.crate }}-${{ github.event.inputs.version }}
     steps:
       - uses: actions/checkout@v2
         with:
           submodules: true
-      - run: ./.github/scripts/version-up.sh "${{ github.event.inputs.crate }}" "${{ github.event.inputs.version-part }}"
+      - run: ./.github/scripts/version-up.sh "${{ github.event.inputs.crate }}" "${{ github.event.inputs.version-part }}" "$GIT_EMAIL"

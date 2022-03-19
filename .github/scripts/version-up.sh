@@ -4,13 +4,14 @@ set -eux
 
 CRATE_NAME="$1"
 VERSION_PART="$2"
+GIT_EMAIL="$3"
 
 declare -a GIT_TAGS
 declare -a CRATES
 
 function git_update(){
   git config user.name "robot"
-  git config user.email "robot@nohost"
+  git config user.email "$GIT_EMAIL"
 
   git commit -am "bump version for $CRATE_NAME, $VERSION_PART"
 
