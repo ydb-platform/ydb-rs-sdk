@@ -1,6 +1,7 @@
 # Rust YDB SDK 
 [![Latest Version](https://img.shields.io/crates/v/ydb.svg)](https://crates.io/crates/ydb) 
 [![Released API docs](https://docs.rs/ydb/badge.svg)](https://docs.rs/ydb)
+[![Unit tests](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-unit.yml/badge.svg)](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-unit.yml)
 
 Rust sdk for Yandex database.
 
