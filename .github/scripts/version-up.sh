@@ -37,9 +37,12 @@ function publish_crate() {
           SUCCESS=1
           break
         fi
-
       done
-      [ "$SUCCESS" != "1" ] && echo "Publish crate '$CRATE_NAME' failed." && return 1
+
+      if [ "$SUCCESS" == "0" ]; then
+        echo "Publish crate '$CRATE_NAME' failed."
+        return 1
+      fi
     )
 }
 
