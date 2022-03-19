@@ -1,4 +1,6 @@
+use crate::client::TimeoutSettings;
 use crate::errors::{YdbError, YdbResult};
+use crate::grpc::operation_params;
 use crate::query::Query;
 use crate::result::QueryResult;
 use crate::session::Session;
@@ -42,14 +44,16 @@ pub(crate) struct AutoCommit {
     mode: Mode,
     error_on_truncate_response: bool,
     session_pool: SessionPool,
+    timeouts: TimeoutSettings,
 }
 
 impl AutoCommit {
-    pub(crate) fn new(session_pool: SessionPool, mode: Mode) -> Self {
+    pub(crate) fn new(session_pool: SessionPool, mode: Mode, timeouts: TimeoutSettings) -> Self {
         return Self {
             mode,
             session_pool,
             error_on_truncate_response: false,
+            timeouts,
         };
     }
 
@@ -75,6 +79,7 @@ impl Transaction for AutoCommit {
             }),
             query: Some(query.query_to_proto()),
             parameters: query.params_to_proto()?,
+            operation_params: operation_params(self.timeouts.operation_timeout),
             ..ExecuteDataQueryRequest::default()
         };
 
@@ -104,10 +109,11 @@ pub(crate) struct SerializableReadWriteTx {
     comitted: bool,
     rollbacked: bool,
     finished: bool,
+    timeouts: TimeoutSettings,
 }
 
 impl SerializableReadWriteTx {
-    pub(crate) fn new(session_pool: SessionPool) -> Self {
+    pub(crate) fn new(session_pool: SessionPool, timeouts: TimeoutSettings) -> Self {
         return Self {
             error_on_truncate_response: false,
             session_pool,
@@ -117,6 +123,7 @@ impl SerializableReadWriteTx {
             comitted: false,
             rollbacked: false,
             finished: false,
+            timeouts,
         };
     }
 
@@ -170,6 +177,7 @@ impl Transaction for SerializableReadWriteTx {
             }),
             query: Some(query.query_to_proto()),
             parameters: query.params_to_proto()?,
+            operation_params: operation_params(self.timeouts.operation_timeout),
             ..ExecuteDataQueryRequest::default()
         };
         let query_result = session

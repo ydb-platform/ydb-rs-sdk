@@ -13,6 +13,45 @@ const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 /// Internal represent database value for send to or received from database.
 ///
 /// That enum will be grow, when add support of new types
+///
+/// ## Convert from Value to native types
+///
+/// ### Primitive values
+///
+/// #### From Value to native types
+/// Convert from Value to primitive rust types do by TryFrom trait
+/// Try need because Value can contain any DB value and it can' check at compile time.
+/// ```rust
+/// # use ydb::YdbResult;
+/// # fn main()->YdbResult<()> {
+/// # use ydb::{Value, YdbError, YdbResult};
+///
+/// // Simple convert to native type
+/// let v: i16 = Value::Int16(123).try_into()?;
+/// assert_eq!(123 as i16, v);
+///
+/// // Simple types can be extended while convert to native type
+/// let v: i32 = Value::Int16(123).try_into()?;
+/// assert_eq!(123 as i32, v);
+/// # return Ok(())
+/// # }
+/// ```
+///
+/// #### From native type to Value
+/// ```rust
+/// # use ydb::YdbResult;
+/// # fn main()->YdbResult<()> {
+/// # use ydb::{Value, YdbError, YdbResult};
+/// // while convert to Value - value internal type exact same as source type - without auto-extended
+/// // because real target type doesn't known in compile time
+/// let v: Value = (123 as i16).into();
+/// assert_eq!(Value::Int16(123), v);
+/// # return Ok(())
+/// # }
+/// ```
+///
+/// #### Possible native convertions
+///
 #[derive(Clone, Debug, EnumDiscriminants, EnumIter, PartialEq)]
 #[strum_discriminants(vis())] // private
 #[strum_discriminants(derive(IntoStaticStr))]
@@ -35,7 +74,12 @@ pub enum Value {
     DateTime(std::time::Duration), // seconds from UNIX_EPOCH to start of day in UTC.
     Timestamp(std::time::Duration), // seconds from UNIX_EPOCH to start of day in UTC.
     Interval(SignedInterval),
-    String(Bytes), // Bytes
+
+    /// Store native bytes array, similary to binary/blob in other databases. It named string by history reason only.
+    /// Use Utf8 type for store text.
+    String(Bytes),
+
+    /// Text data, encoded to valid utf8
     Utf8(String),
     Yson(String),
     Json(String),

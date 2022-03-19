@@ -1,5 +1,6 @@
-use crate::errors::*;
+use crate::client::TimeoutSettings;
 use crate::client_table::TableServiceChannelPool;
+use crate::errors::*;
 use crate::grpc::grpc_read_operation_result;
 use crate::session::Session;
 use async_trait::async_trait;
@@ -26,7 +27,11 @@ impl SessionClient for TableServiceChannelPool {
                 .create_session(CreateSessionRequest::default())
                 .await?,
         )?;
-        let session = Session::new(session_res.session_id, self.clone());
+        let session = Session::new(
+            session_res.session_id,
+            self.clone(),
+            TimeoutSettings::default(),
+        );
         return Ok(session);
     }
 }
@@ -94,6 +99,7 @@ impl SessionPool {
             idle_sessions.lock().unwrap().push_back(item);
             drop(active_session_permit);
         }));
+        session = session.with_timeouts(TimeoutSettings::default());
         return Ok(session);
     }
 }
@@ -148,9 +154,10 @@ async fn sessions_pinger(
 #[cfg(test)]
 mod test {
     use super::SessionClient;
-    use crate::errors::{YdbError, YdbResult};
     use crate::channel_pool::ChannelPool;
+    use crate::client::TimeoutSettings;
     use crate::client_table::TableServiceClientType;
+    use crate::errors::{YdbError, YdbResult};
     use crate::session::Session;
     use crate::session_pool::SessionPool;
     use async_trait::async_trait;
@@ -166,6 +173,7 @@ mod test {
             return Ok(Session::new(
                 "asd".into(),
                 Arc::new(Box::new(TableChannelPoolMock {})),
+                TimeoutSettings::default(),
             ));
         }
     }

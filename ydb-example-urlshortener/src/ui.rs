@@ -1,12 +1,10 @@
 use crate::db;
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::convert::Infallible;
 use std::str::FromStr;
-use warp::http::{Response, StatusCode, Uri};
-use warp::hyper::Body;
-use warp::{http, Filter, Reply};
-use ydb::{YdbError, YdbResult};
+use warp::http::{StatusCode, Uri};
+use warp::{Filter, Reply};
+use ydb::YdbError;
 
 async fn index() -> Result<impl Reply, Infallible> {
     Ok(warp::reply::html(include_str!("index.html")))
@@ -38,7 +36,7 @@ async fn redirect(params: RedirectParams) -> Result<impl Reply, Infallible> {
         Ok(url) => match Uri::from_str(url.as_str()) {
             Ok(uri) => Box::new(warp::redirect::redirect(uri).into_response()),
             Err(err) => Box::new(warp::reply::with_status(
-                "failed parse long url",
+                format!("failed parse long url: {}", err),
                 StatusCode::NOT_FOUND,
             )),
         },
