@@ -9,7 +9,7 @@ GIT_EMAIL="$3"
 declare -a GIT_TAGS
 declare -a CRATES
 
-function git_update(){
+function git_set_tags(){
   git config user.name "robot"
   git config user.email "$GIT_EMAIL"
 
@@ -19,9 +19,6 @@ function git_update(){
   for GIT_TAG in "${GIT_TAGS[@]}";  do
     git tag "$GIT_TAG"
   done
-
-  git push
-  git push --tags
 }
 
 function publish_crate() {
@@ -127,8 +124,14 @@ function bump_version() {
 
 bump_version "$CRATE_NAME" "$VERSION_PART"
 
-git_update
+git_set_tags
+
+# push tags before publish - for fix repository state if failed in middle of publish crates
+git push --tags
 
 for CRATE in "${CRATES[@]}"; do
   publish_crate "$CRATE"
 done
+
+# git push after publish crate - for run CI build check after all changed crates will published in crates repo
+git push
