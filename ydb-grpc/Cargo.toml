@@ -15,7 +15,7 @@ prost-types = "0.9.0"
 tonic = {version = "0.6", features=["tls", "tls-roots", "tls-webpki-roots"]}
 
 [build-dependencies]
-ydb-grpc-helpers =  { version = "0.0.4", path="../ydb-grpc-helpers"}
+ydb-grpc-helpers =  { version = "0.0.6", path="../ydb-grpc-helpers"}
 prost-build = "0.9.0"
 tonic-build = "0.6.2"
 walkdir = "2"

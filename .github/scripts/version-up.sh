@@ -91,7 +91,7 @@ function version_dep_set() {
   local DEP_NAME="$2"
   local VERSION="$3"
 
-  sed -i.bak -re "s/^$DEP_NAME *=(.*)version *=\"[0-9.]+\"(.*)\$/$DEP_NAME = \\1 version = \"$VERSION\"\\2/" "$CRATE_NAME/Cargo.toml"
+  sed -i.bak -e "s|^$DEP_NAME *=.*|$DEP_NAME = \\{ version = \"$VERSION\", path=\"../$DEP_NAME\"\\}|" "$CRATE_NAME/Cargo.toml"
 }
 
 function bump_version() {
