@@ -4,13 +4,14 @@ set -eux
 
 CRATE_NAME="$1"
 VERSION_PART="$2"
+GIT_EMAIL="$3"
 
 declare -a GIT_TAGS
 declare -a CRATES
 
-function git_update(){
+function git_set_tags(){
   git config user.name "robot"
-  git config user.email "robot@nohost"
+  git config user.email "$GIT_EMAIL"
 
   git commit -am "bump version for $CRATE_NAME, $VERSION_PART"
 
@@ -18,9 +19,6 @@ function git_update(){
   for GIT_TAG in "${GIT_TAGS[@]}";  do
     git tag "$GIT_TAG"
   done
-
-  git push
-  git push --tags
 }
 
 function publish_crate() {
@@ -28,7 +26,20 @@ function publish_crate() {
     (
       cd "$CRATE_NAME"
 
-      cargo publish
+      local SUCCESS=0
+      for TRY_COUNTER in $(seq 0 10); do
+        [ "$TRY_COUNTER" != "0" ] && echo "retry count: $TRY_COUNTER" && sleep 60
+
+        if cargo publish; then
+          SUCCESS=1
+          break
+        fi
+      done
+
+      if [ "$SUCCESS" == "0" ]; then
+        echo "Publish crate '$CRATE_NAME' failed."
+        return 1
+      fi
     )
 }
 
@@ -80,7 +91,7 @@ function version_dep_set() {
   local DEP_NAME="$2"
   local VERSION="$3"
 
-  sed -i "" -re "s/^$DEP_NAME *=(.*)version *=\"[0-9.]+\"(.*)\$/$DEP_NAME = \\1 version = \"$VERSION\"\\2/" "$CRATE_NAME/Cargo.toml"
+  sed -i.bak -e "s|^$DEP_NAME *=.*|$DEP_NAME = \\{ version = \"$VERSION\", path=\"../$DEP_NAME\"\\}|" "$CRATE_NAME/Cargo.toml"
 }
 
 function bump_version() {
@@ -113,8 +124,14 @@ function bump_version() {
 
 bump_version "$CRATE_NAME" "$VERSION_PART"
 
-git_update
+git_set_tags
+
+# push tags before publish - for fix repository state if failed in middle of publish crates
+git push --tags
 
 for CRATE in "${CRATES[@]}"; do
   publish_crate "$CRATE"
 done
+
+# git push after publish crate - for run CI build check after all changed crates will published in crates repo
+git push
