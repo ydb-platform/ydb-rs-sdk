@@ -1,4 +1,4 @@
-//! YDB SDK - client for Yandex database.
+//! YDB SDK - a client for YDB.
 //!
 //! # Example
 //!
