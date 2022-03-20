@@ -12,12 +12,15 @@ async fn main() {
         // sets this to be the default, global collector for this application.
         .init();
 
-    if let Err(err) = db::check().await {
-        println!("Failed ydb init: {}", &err);
-        exit(1)
+    let db = match db::init_db().await {
+        Ok(db) => db,
+        Err(err) => {
+            println!("Failed ydb init: {}", err);
+            exit(1)
+        }
     };
 
-    if let Err(err) = ui::run().await {
+    if let Err(err) = ui::run(db.table_client()).await {
         println!("Failed to start http server: {}", &err);
         exit(1)
     }

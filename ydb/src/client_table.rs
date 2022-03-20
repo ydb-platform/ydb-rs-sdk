@@ -168,7 +168,7 @@ impl TableClient {
         };
     }
 
-    pub fn clone_wit_transaction_options(&self, opts: TransactionOptions) -> Self {
+    pub fn clone_with_transaction_options(&self, opts: TransactionOptions) -> Self {
         return Self {
             transaction_options: opts,
             ..self.clone()

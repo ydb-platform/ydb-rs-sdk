@@ -2238,7 +2238,7 @@ dependencies = [
 
 [[package]]
 name = "ydb"
-version = "0.0.6"
+version = "0.0.7"
 dependencies = [
  "async-trait",
  "async_once",
@@ -2284,7 +2284,7 @@ dependencies = [
 
 [[package]]
 name = "ydb-grpc"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "prost",
  "prost-build",
@@ -2297,4 +2297,4 @@ dependencies = [
 
 [[package]]
 name = "ydb-grpc-helpers"
-version = "0.0.6"
+version = "0.0.7"
