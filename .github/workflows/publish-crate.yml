@@ -27,7 +27,6 @@ jobs:
   publishCrate:
     runs-on: ubuntu-latest
     env:
-      GITHUB_TOKEN: ${{ secrets.TEST_ROBOT_TOKEN }}
       GIT_EMAIL: ${{ github.actor }}@users.noreply.github.com
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
       TAG_VERSION: ${{ github.event.inputs.crate }}-${{ github.event.inputs.version }}
