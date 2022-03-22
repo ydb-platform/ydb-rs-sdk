@@ -42,7 +42,7 @@
 //! # More examples
 //! [Url shorneter application](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-example-urlshortener)
 //!
-//! [Many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/sdk/examples)
+//! [Many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
 //!
 mod channel_pool;
 pub(crate) mod client;
