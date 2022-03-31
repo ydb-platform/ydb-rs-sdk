@@ -51,7 +51,7 @@ async fn main() -> YdbResult<()> {
                 .await?
                 .into_only_row()?
                 .remove_field_by_name("sum")?;
-            let res: YdbResult<Option<i64>> = value.try_into();
+            let res = value.try_into(); // res: YdbResult<Option<i64>>
             return Ok(res.unwrap());
         })
         .await?;
