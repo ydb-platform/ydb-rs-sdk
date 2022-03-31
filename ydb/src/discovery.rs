@@ -230,7 +230,7 @@ impl Discovery for TimerDiscovery {
             let shared_state_for_discovery = Arc::downgrade(&self.state);
             tokio::spawn(async move {
                 if let Some(state) = shared_state_for_discovery.upgrade() {
-                    let _ = state.discovery_now();
+                    let _ = state.discovery_now().await;
                 }
             });
         }

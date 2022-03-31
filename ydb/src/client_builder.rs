@@ -1,7 +1,7 @@
-use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticToken};
-use crate::errors::{YdbError, YdbResult};
 use crate::client_common::{DBCredentials, TokenCache};
+use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticToken};
 use crate::discovery::{Discovery, TimerDiscovery};
+use crate::errors::{YdbError, YdbResult};
 use crate::{Client, Credentials};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -67,7 +67,9 @@ fn token_metadata(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
         };
 
         match value.as_ref() {
-            "google" => client_builder.credentials = credencials_ref(GCEMetadata::new()),
+            "google" | "yandex-cloud" => {
+                client_builder.credentials = credencials_ref(GCEMetadata::new())
+            }
             _ => {
                 return Err(YdbError::Custom(format!(
                     "unknown metadata format: '{}'",
