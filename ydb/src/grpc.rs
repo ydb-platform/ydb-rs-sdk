@@ -111,7 +111,7 @@ where
     let opres = op
         .result
         .ok_or(YdbError::Custom("no result data in operation".into()))?;
-    let res: T = T::decode(opres.value.as_slice())?;
+    let res: T = T::decode(opres.value)?;
     return Ok(res);
 }
 

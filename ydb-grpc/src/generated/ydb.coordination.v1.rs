@@ -1,4 +1,4 @@
-#[doc = r" Generated client implementations."]
+/// Generated client implementations.
 pub mod coordination_service_client {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
     use tonic::codegen::*;
@@ -7,7 +7,7 @@ pub mod coordination_service_client {
         inner: tonic::client::Grpc<T>,
     }
     impl CoordinationServiceClient<tonic::transport::Channel> {
-        #[doc = r" Attempt to create a new client by connecting to a given endpoint."]
+        /// Attempt to create a new client by connecting to a given endpoint.
         pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
         where
             D: std::convert::TryInto<tonic::transport::Endpoint>,
@@ -20,8 +20,8 @@ pub mod coordination_service_client {
     impl<T> CoordinationServiceClient<T>
     where
         T: tonic::client::GrpcService<tonic::body::BoxBody>,
-        T::ResponseBody: Body + Send + 'static,
         T::Error: Into<StdError>,
+        T::ResponseBody: Default + Body<Data = Bytes> + Send + 'static,
         <T::ResponseBody as Body>::Error: Into<StdError> + Send,
     {
         pub fn new(inner: T) -> Self {
@@ -40,115 +40,131 @@ pub mod coordination_service_client {
                     <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
                 >,
             >,
-            <T as tonic::codegen::Service<http::Request<tonic::body::BoxBody>>>::Error:
-                Into<StdError> + Send + Sync,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::BoxBody>,
+            >>::Error: Into<StdError> + Send + Sync,
         {
             CoordinationServiceClient::new(InterceptedService::new(inner, interceptor))
         }
-        #[doc = r" Compress requests with `gzip`."]
-        #[doc = r""]
-        #[doc = r" This requires the server to support it otherwise it might respond with an"]
-        #[doc = r" error."]
+        /// Compress requests with `gzip`.
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
         pub fn send_gzip(mut self) -> Self {
             self.inner = self.inner.send_gzip();
             self
         }
-        #[doc = r" Enable decompressing responses with `gzip`."]
+        /// Enable decompressing responses with `gzip`.
+        #[must_use]
         pub fn accept_gzip(mut self) -> Self {
             self.inner = self.inner.accept_gzip();
             self
         }
-        #[doc = "*"]
-        #[doc = " Bidirectional stream used to establish a session with a coordination node"]
-        #[doc = ""]
-        #[doc = " Relevant APIs for managing semaphores, distributed locking, creating or"]
-        #[doc = " restoring a previously established session are described using nested"]
-        #[doc = " messages in SessionRequest and SessionResponse. Session is established"]
-        #[doc = " with a specific coordination node (previously created using CreateNode"]
-        #[doc = " below) and semaphores are local to that coordination node."]
+        ///*
+        /// Bidirectional stream used to establish a session with a coordination node
+        /// Relevant APIs for managing semaphores, distributed locking, creating or
+        /// restoring a previously established session are described using nested
+        /// messages in SessionRequest and SessionResponse. Session is established
+        /// with a specific coordination node (previously created using CreateNode
+        /// below) and semaphores are local to that coordination node.
         pub async fn session(
             &mut self,
-            request: impl tonic::IntoStreamingRequest<Message = super::super::SessionRequest>,
+            request: impl tonic::IntoStreamingRequest<
+                Message = super::super::SessionRequest,
+            >,
         ) -> Result<
-            tonic::Response<tonic::codec::Streaming<super::super::SessionResponse>>,
-            tonic::Status,
-        > {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::new(
-                    tonic::Code::Unknown,
-                    format!("Service was not ready: {}", e.into()),
-                )
-            })?;
+                tonic::Response<tonic::codec::Streaming<super::super::SessionResponse>>,
+                tonic::Status,
+            > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/Ydb.Coordination.V1.CoordinationService/Session",
             );
-            self.inner
-                .streaming(request.into_streaming_request(), path, codec)
-                .await
+            self.inner.streaming(request.into_streaming_request(), path, codec).await
         }
-        #[doc = " Creates a new coordination node"]
+        /// Creates a new coordination node
         pub async fn create_node(
             &mut self,
             request: impl tonic::IntoRequest<super::super::CreateNodeRequest>,
         ) -> Result<tonic::Response<super::super::CreateNodeResponse>, tonic::Status> {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::new(
-                    tonic::Code::Unknown,
-                    format!("Service was not ready: {}", e.into()),
-                )
-            })?;
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/Ydb.Coordination.V1.CoordinationService/CreateNode",
             );
             self.inner.unary(request.into_request(), path, codec).await
         }
-        #[doc = " Modifies settings of a coordination node"]
+        /// Modifies settings of a coordination node
         pub async fn alter_node(
             &mut self,
             request: impl tonic::IntoRequest<super::super::AlterNodeRequest>,
         ) -> Result<tonic::Response<super::super::AlterNodeResponse>, tonic::Status> {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::new(
-                    tonic::Code::Unknown,
-                    format!("Service was not ready: {}", e.into()),
-                )
-            })?;
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/Ydb.Coordination.V1.CoordinationService/AlterNode",
             );
             self.inner.unary(request.into_request(), path, codec).await
         }
-        #[doc = " Drops a coordination node"]
+        /// Drops a coordination node
         pub async fn drop_node(
             &mut self,
             request: impl tonic::IntoRequest<super::super::DropNodeRequest>,
         ) -> Result<tonic::Response<super::super::DropNodeResponse>, tonic::Status> {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::new(
-                    tonic::Code::Unknown,
-                    format!("Service was not ready: {}", e.into()),
-                )
-            })?;
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/Ydb.Coordination.V1.CoordinationService/DropNode",
             );
             self.inner.unary(request.into_request(), path, codec).await
         }
-        #[doc = " Describes a coordination node"]
+        /// Describes a coordination node
         pub async fn describe_node(
             &mut self,
             request: impl tonic::IntoRequest<super::super::DescribeNodeRequest>,
         ) -> Result<tonic::Response<super::super::DescribeNodeResponse>, tonic::Status> {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::new(
-                    tonic::Code::Unknown,
-                    format!("Service was not ready: {}", e.into()),
-                )
-            })?;
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/Ydb.Coordination.V1.CoordinationService/DescribeNode",

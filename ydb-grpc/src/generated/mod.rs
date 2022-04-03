@@ -1,8 +1,3 @@
-pub mod google {
-  pub mod protobuf {
-    include!("google.protobuf.rs");
-  }
-}
 pub mod ydb {
   include!("ydb.rs");
   pub mod cms {
@@ -29,6 +24,9 @@ pub mod ydb {
       include!("ydb.export.v1.rs");
     }
   }
+  pub mod formats {
+    include!("ydb.formats.rs");
+  }
   pub mod import {
     include!("ydb.import.rs");
     pub mod v1 {
@@ -51,6 +49,14 @@ pub mod ydb {
   }
   pub mod operations {
     include!("ydb.operations.rs");
+  }
+  pub mod pers_queue {
+    pub mod cluster_discovery {
+      include!("ydb.pers_queue.cluster_discovery.rs");
+    }
+    pub mod v1 {
+      include!("ydb.pers_queue.v1.rs");
+    }
   }
   pub mod rate_limiter {
     include!("ydb.rate_limiter.rs");
