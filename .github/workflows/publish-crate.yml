@@ -34,4 +34,16 @@ jobs:
         with:
           token: ${{ secrets.YDB_PLATFORM_BOT_TOKEN_REPO }}
 
+      - name: Cache
+        uses: actions/cache@v3
+        with:
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/
+            ~/.cargo/git/db/
+            target/
+
       - run: ./.github/scripts/version-up.sh "${{ github.event.inputs.crate }}" "${{ github.event.inputs.version-part }}" "$GIT_EMAIL"
