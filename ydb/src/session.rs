@@ -6,13 +6,21 @@ use crate::query::Query;
 use crate::result::{QueryResult, StreamResult};
 use crate::trait_operation::Operation;
 use derivative::Derivative;
-use tracing::trace;
+use std::sync::atomic::{AtomicI64, Ordering};
+use tracing::field::debug;
+use tracing::{debug, trace};
 use ydb_grpc::ydb_proto::table::keep_alive_result::SessionStatus;
 use ydb_grpc::ydb_proto::table::{
     execute_scan_query_request, CommitTransactionRequest, CommitTransactionResult,
     ExecuteDataQueryRequest, ExecuteQueryResult, ExecuteScanQueryRequest,
     ExecuteSchemeQueryRequest, KeepAliveRequest, KeepAliveResult, RollbackTransactionRequest,
 };
+
+static request_number: AtomicI64 = AtomicI64::new(0);
+
+fn req_number() -> i64 {
+    request_number.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -100,6 +108,7 @@ impl Session {
         return grpc_read_void_operation_result(resp);
     }
 
+    #[tracing::instrument(skip(self, req), fields(req_number=req_number()))]
     pub(crate) async fn execute_data_query(
         &mut self,
         mut req: ExecuteDataQueryRequest,
@@ -109,22 +118,29 @@ impl Session {
         if req.operation_params.is_none() {
             req.operation_params = operation_params(self.timeouts.operation_timeout)
         }
+
+        debug!("request: {}", serde_json::to_string(&req)?);
+
         let mut channel = self.get_channel().await?;
         let response = channel.execute_data_query(req).await?;
         let operation_result: ExecuteQueryResult = self.handle_operation_result(response)?;
+
+        debug!("response: {}", serde_json::to_string(&operation_result)?);
+
         return QueryResult::from_proto(operation_result, error_on_truncated);
     }
 
+    #[tracing::instrument(skip(self, query), fields(req_number=req_number()))]
     pub async fn execute_scan_query(&mut self, query: Query) -> YdbResult<StreamResult> {
+        let req = ExecuteScanQueryRequest {
+            query: Some(query.query_to_proto()),
+            parameters: query.params_to_proto()?,
+            mode: execute_scan_query_request::Mode::Exec as i32,
+            ..ExecuteScanQueryRequest::default()
+        };
+        debug!("request: {}", serde_json::to_string(&req)?);
         let mut channel = self.channel_pool.create_channel().await?;
-        let resp = channel
-            .stream_execute_scan_query(ExecuteScanQueryRequest {
-                query: Some(query.query_to_proto()),
-                parameters: query.params_to_proto()?,
-                mode: execute_scan_query_request::Mode::Exec as i32,
-                ..ExecuteScanQueryRequest::default()
-            })
-            .await?;
+        let resp = channel.stream_execute_scan_query(req).await?;
         let stream = resp.into_inner();
         return Ok(StreamResult { results: stream });
     }

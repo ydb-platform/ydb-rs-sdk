@@ -287,6 +287,7 @@ to_custom_ydb_err!(
     http::Error,
     prost::DecodeError,
     reqwest::Error,
+    serde_json::Error,
     std::env::VarError,
     std::io::Error,
     std::num::TryFromIntError,
