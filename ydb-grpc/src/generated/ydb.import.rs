@@ -1,8 +1,11 @@
 //// Common
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ImportProgress {}
+pub struct ImportProgress {
+}
 /// Nested message and enum types in `ImportProgress`.
 pub mod import_progress {
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Progress {
@@ -15,40 +18,43 @@ pub mod import_progress {
         Cancelled = 6,
     }
 }
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImportItemProgress {
-    #[prost(uint32, tag = "1")]
+    #[prost(uint32, tag="1")]
     pub parts_total: u32,
-    #[prost(uint32, tag = "2")]
+    #[prost(uint32, tag="2")]
     pub parts_completed: u32,
-    #[prost(message, optional, tag = "3")]
-    pub start_time: ::core::option::Option<::prost_types::Timestamp>,
-    #[prost(message, optional, tag = "4")]
-    pub end_time: ::core::option::Option<::prost_types::Timestamp>,
+    #[prost(message, optional, tag="3")]
+    pub start_time: ::core::option::Option<::pbjson_types::Timestamp>,
+    #[prost(message, optional, tag="4")]
+    pub end_time: ::core::option::Option<::pbjson_types::Timestamp>,
 }
 //// S3
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImportFromS3Settings {
-    #[prost(string, tag = "1")]
+    #[prost(string, tag="1")]
     pub endpoint: ::prost::alloc::string::String,
     /// HTTPS if not specified
-    #[prost(enumeration = "import_from_s3_settings::Scheme", tag = "2")]
+    #[prost(enumeration="import_from_s3_settings::Scheme", tag="2")]
     pub scheme: i32,
-    #[prost(string, tag = "3")]
+    #[prost(string, tag="3")]
     pub bucket: ::prost::alloc::string::String,
-    #[prost(string, tag = "4")]
+    #[prost(string, tag="4")]
     pub access_key: ::prost::alloc::string::String,
-    #[prost(string, tag = "5")]
+    #[prost(string, tag="5")]
     pub secret_key: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag = "6")]
+    #[prost(message, repeated, tag="6")]
     pub items: ::prost::alloc::vec::Vec<import_from_s3_settings::Item>,
-    #[prost(string, tag = "7")]
+    #[prost(string, tag="7")]
     pub description: ::prost::alloc::string::String,
-    #[prost(uint32, tag = "8")]
+    #[prost(uint32, tag="8")]
     pub number_of_retries: u32,
 }
 /// Nested message and enum types in `ImportFromS3Settings`.
 pub mod import_from_s3_settings {
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Item {
         /// YDB tables in S3 are stored in one or more objects (see ydb_export.proto).
@@ -56,12 +62,13 @@ pub mod import_from_s3_settings {
         ///This prefix is followed by:
         /// '/data_PartNumber', where 'PartNumber' represents the index of the part, starting at zero;
         /// '/scheme.pb' - object with information about scheme, indexes, etc.
-        #[prost(string, tag = "1")]
+        #[prost(string, tag="1")]
         pub source_prefix: ::prost::alloc::string::String,
         /// Database path to a table to import to.
-        #[prost(string, tag = "2")]
+        #[prost(string, tag="2")]
         pub destination_path: ::prost::alloc::string::String,
     }
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Scheme {
@@ -70,68 +77,79 @@ pub mod import_from_s3_settings {
         Https = 2,
     }
 }
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ImportFromS3Result {}
+pub struct ImportFromS3Result {
+}
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImportFromS3Metadata {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub settings: ::core::option::Option<ImportFromS3Settings>,
-    #[prost(enumeration = "import_progress::Progress", tag = "2")]
+    #[prost(enumeration="import_progress::Progress", tag="2")]
     pub progress: i32,
-    #[prost(message, repeated, tag = "3")]
+    #[prost(message, repeated, tag="3")]
     pub items_progress: ::prost::alloc::vec::Vec<ImportItemProgress>,
 }
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImportFromS3Request {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub operation_params: ::core::option::Option<super::operations::OperationParams>,
-    #[prost(message, optional, tag = "2")]
+    #[prost(message, optional, tag="2")]
     pub settings: ::core::option::Option<ImportFromS3Settings>,
 }
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImportFromS3Response {
     /// operation.result = ImportFromS3Result
     /// operation.metadata = ImportFromS3Metadata
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub operation: ::core::option::Option<super::operations::Operation>,
 }
 //// Data
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct YdbDumpFormat {
-    #[prost(string, repeated, tag = "1")]
+    #[prost(string, repeated, tag="1")]
     pub columns: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ImportDataResult {}
+pub struct ImportDataResult {
+}
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImportDataRequest {
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub operation_params: ::core::option::Option<super::operations::OperationParams>,
     /// Full path to table
-    #[prost(string, tag = "2")]
+    #[prost(string, tag="2")]
     pub path: ::prost::alloc::string::String,
     /// Data serialized in the selected format. Restrictions:
     /// - sorted by primary key;
     /// - all keys must be from the same partition;
     /// - table has no global secondary indexes;
     /// - size of serialized data is limited to 8 MB.
-    #[prost(bytes = "vec", tag = "3")]
+    #[prost(bytes="vec", tag="3")]
     pub data: ::prost::alloc::vec::Vec<u8>,
-    #[prost(oneof = "import_data_request::Format", tags = "4")]
+    #[prost(oneof="import_data_request::Format", tags="4")]
     pub format: ::core::option::Option<import_data_request::Format>,
 }
 /// Nested message and enum types in `ImportDataRequest`.
 pub mod import_data_request {
+    #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Format {
         /// Result of `ydb tools dump`
-        #[prost(message, tag = "4")]
+        #[prost(message, tag="4")]
         YdbDump(super::YdbDumpFormat),
     }
 }
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImportDataResponse {
     /// operation.result = ImportDataResult
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag="1")]
     pub operation: ::core::option::Option<super::operations::Operation>,
 }
