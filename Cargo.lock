@@ -2426,7 +2426,7 @@ dependencies = [
 
 [[package]]
 name = "ydb"
-version = "0.0.15"
+version = "0.0.16"
 dependencies = [
  "async-trait",
  "async_once",
@@ -2472,7 +2472,7 @@ dependencies = [
 
 [[package]]
 name = "ydb-grpc"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "pbjson",
  "pbjson-build",
