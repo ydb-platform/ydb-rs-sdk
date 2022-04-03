@@ -69,6 +69,12 @@ pub struct Entry {
     pub effective_permissions: ::prost::alloc::vec::Vec<Permissions>,
     #[prost(message, repeated, tag="7")]
     pub permissions: ::prost::alloc::vec::Vec<Permissions>,
+    /// Size of entry in bytes. Currently filled for:
+    /// - TABLE;
+    /// - DATABASE.
+    /// Empty (zero) in other cases.
+    #[prost(uint64, tag="8")]
+    pub size_bytes: u64,
 }
 /// Nested message and enum types in `Entry`.
 pub mod entry {
@@ -84,6 +90,8 @@ pub mod entry {
         RtmrVolume = 5,
         BlockStoreVolume = 6,
         CoordinationNode = 7,
+        Sequence = 15,
+        Replication = 16,
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]

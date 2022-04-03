@@ -23,12 +23,16 @@ pub mod status_flag {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SelfCheckRequest {
+    /// basic operation params, including timeout
     #[prost(message, optional, tag="1")]
     pub operation_params: ::core::option::Option<super::operations::OperationParams>,
+    /// return detailed info about components checked with their statuses
     #[prost(bool, tag="2")]
     pub return_verbose_status: bool,
+    /// minimum status of issues to return
     #[prost(enumeration="status_flag::Status", tag="3")]
     pub minimum_status: i32,
+    /// maximum level of issues to return
     #[prost(uint32, tag="4")]
     pub maximum_level: u32,
 }

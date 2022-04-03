@@ -60,4 +60,8 @@ pub struct QueryStats {
     pub query_plan: ::prost::alloc::string::String,
     #[prost(string, tag="5")]
     pub query_ast: ::prost::alloc::string::String,
+    #[prost(uint64, tag="6")]
+    pub total_duration_us: u64,
+    #[prost(uint64, tag="7")]
+    pub total_cpu_time_us: u64,
 }

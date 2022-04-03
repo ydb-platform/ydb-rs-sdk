@@ -65,8 +65,16 @@ pub struct DictType {
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TaggedType {
+    #[prost(string, tag="1")]
+    pub tag: ::prost::alloc::string::String,
+    #[prost(message, optional, boxed, tag="2")]
+    pub r#type: ::core::option::Option<::prost::alloc::boxed::Box<Type>>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Type {
-    #[prost(oneof="r#type::Type", tags="1, 2, 101, 102, 103, 104, 105, 106, 201")]
+    #[prost(oneof="r#type::Type", tags="1, 2, 101, 102, 103, 104, 105, 106, 107, 201, 202, 203, 204")]
     pub r#type: ::core::option::Option<r#type::Type>,
 }
 /// Nested message and enum types in `Type`.
@@ -123,9 +131,17 @@ pub mod r#type {
         DictType(::prost::alloc::boxed::Box<super::DictType>),
         #[prost(message, tag="106")]
         VariantType(super::VariantType),
+        #[prost(message, tag="107")]
+        TaggedType(::prost::alloc::boxed::Box<super::TaggedType>),
         /// Special types 
         #[prost(enumeration="::pbjson_types::NullValue", tag="201")]
         VoidType(i32),
+        #[prost(enumeration="::pbjson_types::NullValue", tag="202")]
+        NullType(i32),
+        #[prost(enumeration="::pbjson_types::NullValue", tag="203")]
+        EmptyListType(i32),
+        #[prost(enumeration="::pbjson_types::NullValue", tag="204")]
+        EmptyDictType(i32),
     }
 }
 //*
@@ -267,28 +283,6 @@ pub mod status_ids {
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct FeatureFlag {
-}
-/// Nested message and enum types in `FeatureFlag`.
-pub mod feature_flag {
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum Status {
-        Unspecified = 0,
-        Enabled = 1,
-        Disabled = 2,
-    }
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CostInfo {
-    /// Total amount of request units (RU), consumed by the operation.
-    #[prost(double, tag="1")]
-    pub consumed_units: f64,
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Limit {
     #[prost(oneof="limit::Kind", tags="1, 2, 3, 4, 5, 6")]
     pub kind: ::core::option::Option<limit::Kind>,
@@ -327,4 +321,26 @@ pub struct MapKey {
     pub length: ::core::option::Option<Limit>,
     #[prost(string, tag="2")]
     pub value: ::prost::alloc::string::String,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FeatureFlag {
+}
+/// Nested message and enum types in `FeatureFlag`.
+pub mod feature_flag {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Status {
+        Unspecified = 0,
+        Enabled = 1,
+        Disabled = 2,
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CostInfo {
+    /// Total amount of request units (RU), consumed by the operation.
+    #[prost(double, tag="1")]
+    pub consumed_units: f64,
 }

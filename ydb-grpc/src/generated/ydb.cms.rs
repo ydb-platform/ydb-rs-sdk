@@ -74,14 +74,6 @@ pub struct DatabaseOptions {
     #[prost(uint32, tag="3")]
     pub plan_resolution: u32,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Attribute {
-    #[prost(string, tag="1")]
-    pub name: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
-    pub value: ::prost::alloc::string::String,
-}
 /// A set of quotas for schema operations
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -120,6 +112,13 @@ pub struct DatabaseQuotas {
     /// A maximum count of shards in all data streams.
     #[prost(uint64, tag="3")]
     pub data_stream_shards_quota: u64,
+    /// A maximum storage that will be reserved for all data stream shards.
+    #[prost(uint64, tag="5")]
+    pub data_stream_reserved_storage_quota: u64,
+    /// A minimum value of `TtlSettings.run_interval_seconds` that can be specified.
+    /// Default is 1800 (15 minutes).
+    #[prost(uint32, tag="4")]
+    pub ttl_min_run_internal_seconds: u32,
 }
 /// Request to create a new database. For successfull creation
 /// specified database shouldn't exist. At least one storage
@@ -136,8 +135,8 @@ pub struct CreateDatabaseRequest {
     #[prost(message, optional, tag="4")]
     pub options: ::core::option::Option<DatabaseOptions>,
     /// Attach attributes to database.
-    #[prost(message, repeated, tag="5")]
-    pub attributes: ::prost::alloc::vec::Vec<Attribute>,
+    #[prost(map="string, string", tag="5")]
+    pub attributes: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
     /// Optional quotas for schema operations
     #[prost(message, optional, tag="8")]
     pub schema_operation_quotas: ::core::option::Option<SchemaOperationQuotas>,
@@ -280,6 +279,9 @@ pub struct AlterDatabaseRequest {
     /// Change quotas for the database
     #[prost(message, optional, tag="11")]
     pub database_quotas: ::core::option::Option<DatabaseQuotas>,
+    /// Alter attributes. Leave the value blank to drop an attribute.
+    #[prost(map="string, string", tag="12")]
+    pub alter_attributes: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]

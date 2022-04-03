@@ -47,7 +47,6 @@ pub mod export_service_client {
             ExportServiceClient::new(InterceptedService::new(inner, interceptor))
         }
         /// Compress requests with `gzip`.
-        ///
         /// This requires the server to support it otherwise it might respond with an
         /// error.
         #[must_use]

@@ -88,6 +88,9 @@ pub struct TableIndexDescription {
     /// list of columns content to be copied in to index table
     #[prost(string, repeated, tag="6")]
     pub data_columns: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Size of index data in bytes
+    #[prost(uint64, tag="7")]
+    pub size_bytes: u64,
     /// Type of index
     #[prost(oneof="table_index_description::Type", tags="3, 5")]
     pub r#type: ::core::option::Option<table_index_description::Type>,
@@ -191,6 +194,8 @@ pub struct ColumnFamilyPolicy {
     pub data: ::core::option::Option<StoragePool>,
     #[prost(message, optional, tag="3")]
     pub external: ::core::option::Option<StoragePool>,
+    /// When enabled table data will be kept in memory
+    /// WARNING: DO NOT USE
     #[prost(enumeration="super::feature_flag::Status", tag="4")]
     pub keep_in_memory: i32,
     /// Optionally specify whether data should be compressed
@@ -312,7 +317,7 @@ pub struct ReplicationPolicy {
     #[prost(enumeration="super::feature_flag::Status", tag="3")]
     pub create_per_availability_zone: i32,
     /// If this feature in enabled then read-only replicas can be promoted
-    /// to master.
+    /// to leader.
     #[prost(enumeration="super::feature_flag::Status", tag="4")]
     pub allow_promotion: i32,
 }
@@ -401,6 +406,20 @@ pub mod value_since_unix_epoch_mode_settings {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TtlSettings {
+    // There is no guarantee that expired row will be deleted immediately upon
+    // expiration. There may be a delay between the time a row expires and the
+    // time that server deletes the row from the table.
+
+    // Ttl periodically runs background removal operations (BRO) on table's partitions.
+    // By default, there is:
+    // - no more than one BRO on the table;
+    // - BRO is started no more than once an hour on the same partition.
+    // Use options below to change that behavior.
+
+    /// How often to run BRO on the same partition.
+    /// BRO will not be started more often, but may be started less often.
+    #[prost(uint32, tag="3")]
+    pub run_interval_seconds: u32,
     #[prost(oneof="ttl_settings::Mode", tags="1, 2")]
     pub mode: ::core::option::Option<ttl_settings::Mode>,
 }
@@ -430,7 +449,8 @@ pub struct StorageSettings {
     #[prost(message, optional, tag="4")]
     pub external: ::core::option::Option<StoragePool>,
     /// Optionally store large values in "external blobs"
-    /// Don't use unless required, restrictions apply:
+    /// WARNING: DO NOT USE
+    /// This feature is experimental and should not be used, restrictions apply:
     /// * Table cannot split/merge when this is enabled
     /// * Table cannot be copied or backed up when this is enabled
     /// * This feature cannot be disabled once enabled for a table
@@ -450,7 +470,8 @@ pub struct ColumnFamily {
     /// Optionally specify how data should be compressed
     #[prost(enumeration="column_family::Compression", tag="3")]
     pub compression: i32,
-    /// When enabled keeps data pages in memory
+    /// When enabled table data will be kept in memory
+    /// WARNING: DO NOT USE
     #[prost(enumeration="super::feature_flag::Status", tag="4")]
     pub keep_in_memory: i32,
 }
@@ -1392,6 +1413,24 @@ pub struct BulkUpsertRequest {
     pub rows: ::core::option::Option<super::TypedValue>,
     #[prost(message, optional, tag="3")]
     pub operation_params: ::core::option::Option<super::operations::OperationParams>,
+    /// It's last in the definition to help with sidecar patterns
+    #[prost(bytes="vec", tag="1000")]
+    pub data: ::prost::alloc::vec::Vec<u8>,
+    /// You may set data_format + data instead of rows to insert data in serialized formats.
+    #[prost(oneof="bulk_upsert_request::DataFormat", tags="7, 8")]
+    pub data_format: ::core::option::Option<bulk_upsert_request::DataFormat>,
+}
+/// Nested message and enum types in `BulkUpsertRequest`.
+pub mod bulk_upsert_request {
+    /// You may set data_format + data instead of rows to insert data in serialized formats.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum DataFormat {
+        #[prost(message, tag="7")]
+        ArrowBatchSettings(super::super::formats::ArrowBatchSettings),
+        #[prost(message, tag="8")]
+        CsvSettings(super::super::formats::CsvSettings),
+    }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]

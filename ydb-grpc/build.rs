@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
-use std::{env, fs, io};
+use std::{fs, io};
 use walkdir::WalkDir;
 use ydb_grpc_helpers::ProtoModule;
 
@@ -69,10 +69,7 @@ fn compile_files(files: &[&str], include_dirs: &[&str], dst_dir: &str) {
     );
 
     let mut cfg = prost_build::Config::default();
-    cfg
-        .compile_well_known_types()
-        // copy from prost-wkt
-        .type_attribute("google.protobuf.Duration","#[derive(serde_derive::Serialize, serde_derive::Deserialize)] #[serde(default, rename_all=\"camelCase\")]")
+    cfg.compile_well_known_types()
         .type_attribute(".Ydb", "#[derive(serde::Serialize, serde::Deserialize)]")
         .extern_path(".google.protobuf", "::pbjson_types")
         .file_descriptor_set_path(&descriptor_file);
@@ -85,9 +82,6 @@ fn compile_files(files: &[&str], include_dirs: &[&str], dst_dir: &str) {
         .expect("failed to compile protobuf");
 
     let descriptor_bytes = std::fs::read(descriptor_file).unwrap();
-    // let mut descriptor = FileDescriptorSet::decode(&descriptor_bytes[..]).unwrap();
-    // descriptor = filter_descriptor_for_add_serde(descriptor);
-    // prost_wkt_build::add_serde(out, descriptor);
     pbjson_build::Builder::new()
         .out_dir(dst_dir)
         .register_descriptors(&descriptor_bytes)
@@ -96,29 +90,13 @@ fn compile_files(files: &[&str], include_dirs: &[&str], dst_dir: &str) {
         .unwrap();
 }
 
-// fn filter_descriptor_for_add_serde(mut descriptor: FileDescriptorSet) -> FileDescriptorSet {
-//     let empty_string = "".to_string();
-//
-//     descriptor.file = descriptor
-//         .file
-//         .into_iter()
-//         .filter(|item| {
-//             item.package
-//                 .as_ref()
-//                 .unwrap_or(&empty_string)
-//                 .starts_with("Ydb.")
-//         })
-//         .collect();
-//     descriptor
-// }
-
 fn rewrite_generated_file(fpath: &std::path::Path) -> io::Result<()> {
-    if fpath.ends_with(".rs") {
+    if fpath.as_os_str().to_str().unwrap_or("").ends_with(".rs") {
         println!("rewrite file: '{}'", fpath.to_str().unwrap_or("<empty>"));
     } else {
         println!(
             "skip rewrite file: '{}'",
-            fpath.to_str().unwrap_or("<empty>")
+            fpath.to_str().unwrap_or("<empty>"),
         );
         return Ok(());
     }
@@ -142,15 +120,10 @@ fn rewrite_generated_files(dir: &str) -> io::Result<()> {
     for item in WalkDir::new(dir) {
         let item = item?;
         let item_path = item.path().to_str().unwrap_or("<empty>");
-        if !item.path().ends_with(".rs") {
-            println!("skip rewrite file: '{}'", item_path)
-        }
         if !item.metadata()?.is_file() {
             println!("skip not file: '{}'", item_path);
             continue;
         }
-        println!("rewrite file '{}'", item_path);
-
         rewrite_generated_file(item.path())?;
     }
 

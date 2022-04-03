@@ -47,7 +47,6 @@ pub mod discovery_service_client {
             DiscoveryServiceClient::new(InterceptedService::new(inner, interceptor))
         }
         /// Compress requests with `gzip`.
-        ///
         /// This requires the server to support it otherwise it might respond with an
         /// error.
         #[must_use]

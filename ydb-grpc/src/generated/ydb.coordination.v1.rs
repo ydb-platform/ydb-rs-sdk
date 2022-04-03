@@ -47,7 +47,6 @@ pub mod coordination_service_client {
             CoordinationServiceClient::new(InterceptedService::new(inner, interceptor))
         }
         /// Compress requests with `gzip`.
-        ///
         /// This requires the server to support it otherwise it might respond with an
         /// error.
         #[must_use]
@@ -63,7 +62,6 @@ pub mod coordination_service_client {
         }
         ///*
         /// Bidirectional stream used to establish a session with a coordination node
-        ///
         /// Relevant APIs for managing semaphores, distributed locking, creating or
         /// restoring a previously established session are described using nested
         /// messages in SessionRequest and SessionResponse. Session is established

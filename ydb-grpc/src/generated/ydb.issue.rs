@@ -1,4 +1,4 @@
-/// IssueMessage is a transport format for yql/public/issue library
+/// IssueMessage is a transport format for ydb/library/yql/public/issue library
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct IssueMessage {
@@ -10,7 +10,7 @@ pub struct IssueMessage {
     pub end_position: ::core::option::Option<issue_message::Position>,
     #[prost(uint32, tag="4")]
     pub issue_code: u32,
-    /// Severity values from yql/public/issue/protos/issue_severity.proto
+    /// Severity values from ydb/library/yql/public/issue/protos/issue_severity.proto
     /// FATAL = 0;
     /// ERROR = 1;
     /// WARNING = 2;

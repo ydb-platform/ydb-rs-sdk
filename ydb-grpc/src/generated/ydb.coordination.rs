@@ -1,6 +1,5 @@
 ///*
 /// Stub for unsupported messages
-///
 /// Intentionally empty
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -17,7 +16,7 @@ pub struct Config {
     /// Period in milliseconds for self-checks (default 1 second)
     #[prost(uint32, tag="2")]
     pub self_check_period_millis: u32,
-    /// Grace period for sessions on master change (default 10 seconds)
+    /// Grace period for sessions on leader change (default 10 seconds)
     #[prost(uint32, tag="3")]
     pub session_grace_period_millis: u32,
     /// Concistency mode for read operations
@@ -143,7 +142,6 @@ pub mod session_request {
     }
     ///*
     /// Last message used to cleanly stop session before its timeout expires
-    ///
     /// nothing
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -151,9 +149,7 @@ pub mod session_request {
     }
     ///*
     /// Used to acquire a semaphore
-    ///
     /// WARNING: a single session cannot acquire the same semaphore multiple times
-    ///
     /// Later requests override previous operations with the same semaphore,
     /// e.g. to reduce acquired count, change timeout or attached data.
     #[derive(serde::Serialize, serde::Deserialize)]
@@ -182,9 +178,7 @@ pub mod session_request {
     }
     ///*
     /// Used to release a semaphore
-    ///
     /// WARNING: a single session cannot release the same semaphore multiple times
-    ///
     /// The release operation will either remove current session from waiters
     /// queue or release an already owned semaphore.
     #[derive(serde::Serialize, serde::Deserialize)]
@@ -199,7 +193,6 @@ pub mod session_request {
     }
     ///*
     /// Used to describe semaphores and watch them for changes
-    ///
     /// WARNING: a describe operation will cancel previous watches on the same semaphore
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -575,7 +568,7 @@ pub struct DescribeNodeResult {
 pub enum ConsistencyMode {
     /// The default or current value
     Unset = 0,
-    /// Strict mode makes sure operations may only complete on current master
+    /// Strict mode makes sure operations may only complete on current leader
     Strict = 1,
     /// Relaxed mode allows operations to complete on stale masters
     Relaxed = 2,

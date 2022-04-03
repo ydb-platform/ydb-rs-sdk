@@ -47,7 +47,6 @@ pub mod monitoring_service_client {
             MonitoringServiceClient::new(InterceptedService::new(inner, interceptor))
         }
         /// Compress requests with `gzip`.
-        ///
         /// This requires the server to support it otherwise it might respond with an
         /// error.
         #[must_use]
