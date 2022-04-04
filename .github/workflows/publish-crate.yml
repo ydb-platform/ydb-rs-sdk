@@ -45,7 +45,8 @@ jobs:
             ~/.cargo/.crates.toml
             ~/.cargo/.crates2.json
             ~/.cargo/.package-cache
-            ~/.cargo/registry/
+            ~/.cargo/registry/cache/
+            ~/.cargo/registry/index/
             ~/.cargo/git/db/
             target/
 
