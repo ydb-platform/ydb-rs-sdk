@@ -26,6 +26,9 @@ jobs:
           ${{ runner.os }}-cargo-
         path: |
           ~/.cargo/bin/
+          ~/.cargo/.crates.toml
+          ~/.cargo/.crates2.json
+          ~/.cargo/.package-cache
           ~/.cargo/registry/
           ~/.cargo/git/db/
           target/
