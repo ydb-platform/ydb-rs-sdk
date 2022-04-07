@@ -5,7 +5,7 @@ use crate::grpc::grpc_read_operation_result;
 use crate::session::Session;
 use async_trait::async_trait;
 use std::collections::vec_deque::VecDeque;
-use std::ops::Sub;
+use std::ops::{Add, Sub};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Semaphore;
 use tracing::trace;
@@ -46,7 +46,7 @@ pub(crate) struct SessionPool {
 }
 
 struct IdleSessionItem {
-    idle_since: std::time::Instant,
+    idle_since: tokio::time::Instant,
     session: Session,
 }
 
@@ -93,7 +93,7 @@ impl SessionPool {
         session.on_drop(Box::new(move |s: &mut Session| {
             trace!("moved to pool: {}", s.id);
             let item = IdleSessionItem {
-                idle_since: std::time::Instant::now(),
+                idle_since: tokio::time::Instant::now(),
                 session: s.clone_without_ondrop(),
             };
             idle_sessions.lock().unwrap().push_back(item);
@@ -109,10 +109,11 @@ async fn sessions_pinger(
     idle_sessions: Weak<Mutex<VecDeque<IdleSessionItem>>>,
     interval: std::time::Duration,
 ) {
-    let mut sleep_time = interval;
+    let mut sleep_until = tokio::time::Instant::now().add(interval);
     loop {
-        tokio::time::sleep(sleep_time).await;
-        let ping_since = std::time::Instant::now().sub(interval);
+        tokio::time::sleep_until(sleep_until).await;
+        let now = tokio::time::Instant::now();
+        let ping_since = now.sub(interval);
         {
             let idle_sessions = if let Some(idle_sessions) = idle_sessions.upgrade() {
                 idle_sessions
@@ -128,19 +129,19 @@ async fn sessions_pinger(
                             idle_sessions.pop_front().unwrap().session
                         } else {
                             // wait until front session need to ping
-                            sleep_time = ping_since.sub(idle_item.idle_since);
+                            sleep_until = idle_item.idle_since.add(interval);
                             break 'sessions;
                         }
                     } else {
                         // empty queue
-                        sleep_time = interval;
+                        sleep_until = now.add(interval);
                         break 'sessions;
                     }
                 };
                 if session.keepalive().await.is_ok() && session.can_pooled {
                     let mut idle_sessions = idle_sessions.lock().unwrap();
                     idle_sessions.push_back(IdleSessionItem {
-                        idle_since: std::time::Instant::now(),
+                        idle_since: tokio::time::Instant::now(),
                         session,
                     });
                 } else {
