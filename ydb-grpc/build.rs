@@ -19,12 +19,12 @@ const INCLUDE_DIRS: &[&str] = &[
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("cargo:rerun-if-changed=ydb-api-protos");
-
     if std::env::var("CARGO_FEATURE_REGENERATE_SOURCES").unwrap_or("0".into()) != "1" {
         println!("skip regenerate sources");
         return Ok(());
     }
+    
+    println!("cargo:rerun-if-changed=ydb-api-protos");
 
     for (src, dst) in COMPILE_DIRS {
         clean_dst_dir(dst)?;
