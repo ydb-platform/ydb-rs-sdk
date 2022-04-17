@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   publishCrate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-20.04
     env:
       GIT_EMAIL: ${{ github.actor }}@users.noreply.github.com
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
