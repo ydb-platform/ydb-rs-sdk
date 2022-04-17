@@ -4,7 +4,7 @@
 [![Unit tests](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-unit.yml/badge.svg)](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-unit.yml)
 
 Rust SDK for YDB.
-
+Supported rust: 1.56.0 and newer.
 
 Integration tests, with dependency from real YDB database marked as ignored.
 To run it:
