@@ -14,9 +14,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v2
+    - name: Checkout
+      uses: actions/checkout@v2
       with:
         submodules: true
+
+    - name: Install fixed rust version
+      uses: ATiltedTree/setup-rust@v1
+      with:
+        rust-version: 1.56.0
 
     - name: Cache
       uses: actions/cache@v3
@@ -35,5 +41,6 @@ jobs:
 
     - name: Build
       run: cargo build --verbose --workspace
+
     - name: Run tests
       run: cargo test --verbose --workspace
