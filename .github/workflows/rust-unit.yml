@@ -39,6 +39,11 @@ jobs:
           ~/.cargo/git/db/
           target/
 
+    - name: Rust check versions
+      run: |
+        cargo version
+        rustc --version
+
     - name: Build
       run: cargo build --verbose --workspace
 
