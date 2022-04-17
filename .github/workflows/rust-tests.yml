@@ -1,4 +1,4 @@
-name: Unit tests
+name: YDB tests
 
 on:
   push:

@@ -1,7 +1,7 @@
 # Rust YDB SDK 
 [![Latest Version](https://img.shields.io/crates/v/ydb.svg)](https://crates.io/crates/ydb) 
 [![Released API docs](https://docs.rs/ydb/badge.svg)](https://docs.rs/ydb)
-[![Unit tests](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-unit.yml/badge.svg)](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-unit.yml)
+![SDK tests](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-tests.yml/badge.svg?branch=master)
 
 Rust SDK for YDB.
 Supported rust: 1.56.0 and newer.
