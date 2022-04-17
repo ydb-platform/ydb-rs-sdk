@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.56.0
 
 jobs:
   build:
@@ -22,14 +23,14 @@ jobs:
     - name: Install fixed rust version
       uses: ATiltedTree/setup-rust@v1
       with:
-        rust-version: 1.56.0
+        rust-version: ${{env.RUST_VERSION}}
 
     - name: Cache
       uses: actions/cache@v3
       with:
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ runner.os }}-${{env.RUST_VERSION}}-cargo-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
-          ${{ runner.os }}-cargo-
+          ${{ runner.os }}-${{env.RUST_VERSION}}-cargo-
         path: |
           ~/.cargo/bin/
           ~/.cargo/.crates.toml
