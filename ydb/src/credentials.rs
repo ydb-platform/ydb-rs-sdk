@@ -58,7 +58,7 @@ impl Credentials for StaticToken {
         } else {
             ("xxx", "xxx")
         };
-        return format!("static token: {begin}...{end}");
+        return format!("static token: {}...{}", begin, end);
     }
 }
 
