@@ -11,8 +11,16 @@ env:
   RUST_VERSION: 1.56.0
 
 jobs:
-  build:
+  tests:
     runs-on: ubuntu-20.04
+    services:
+      ydb:
+        image: cr.yandex/yc/yandex-docker-local-ydb:latest
+        ports:
+          - 2136:2136
+        env:
+          YDB_USE_IN_MEMORY_PDISKS: true
+        options: '-h localhost'
 
     steps:
     - name: Install fixed rust version
@@ -48,5 +56,15 @@ jobs:
     - name: Build
       run: cargo build --verbose --workspace
 
+    - name: Wait database available
+      run: |
+        while ! docker run --network host cr.yandex/yc/yandex-docker-local-ydb:latest /ydb -e grpc://localhost:2136 -d /local scheme ls; do 
+          echo wait db...
+          sleep 3
+        done
+        echo DB available
+
     - name: Run tests
+      env:
+        YDB_CONNECTION_STRING: grpc://localhost:2136?database=/local
       run: cargo test --verbose --workspace
