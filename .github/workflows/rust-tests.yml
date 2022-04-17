@@ -67,4 +67,4 @@ jobs:
     - name: Run tests
       env:
         YDB_CONNECTION_STRING: grpc://localhost:2136?database=/local
-      run: cargo test --verbose --workspace
+      run: cargo test --verbose --workspace -- --include-ignored --nocapture
