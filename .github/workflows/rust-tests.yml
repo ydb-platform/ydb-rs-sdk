@@ -20,6 +20,7 @@ jobs:
           - 2136:2136
         env:
           YDB_USE_IN_MEMORY_PDISKS: true
+        options: '-h localhost'
 
     steps:
     - name: Install fixed rust version
@@ -57,7 +58,7 @@ jobs:
 
     - name: Wait database available
       run: |
-        while ! docker run --network host cr.yandex/yc/yandex-docker-local-ydb:latest /ydb -e grpc://localhost:2136 -d /local scheme ls 2>/dev/null >&2; do 
+        while ! docker run --network host cr.yandex/yc/yandex-docker-local-ydb:latest /ydb -e grpc://localhost:2136 -d /local scheme ls; do 
           echo wait db...
           sleep 3
         done
