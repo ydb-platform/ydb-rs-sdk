@@ -59,12 +59,7 @@ jobs:
       run: cargo build --verbose --workspace
 
     - name: Wait database available
-      run: |
-        while ! docker run --network host cr.yandex/yc/yandex-docker-local-ydb:latest /ydb -e grpc://localhost:2136 -d /local scheme ls; do 
-          echo wait db...
-          sleep 3
-        done
-        echo DB available
+      run: bash ./.github/scripts/wait-ydb-container.sh
 
     - name: Run tests
       env:
