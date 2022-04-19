@@ -123,10 +123,9 @@ impl Session {
 
         let mut channel = self.get_channel().await?;
         let response = channel.execute_data_query(req).await?;
+        debug!("response: {}", serde_json::to_string(&response.get_ref())?);
+
         let operation_result: ExecuteQueryResult = self.handle_operation_result(response)?;
-
-        debug!("response: {}", serde_json::to_string(&operation_result)?);
-
         return QueryResult::from_proto(operation_result, error_on_truncated);
     }
 
