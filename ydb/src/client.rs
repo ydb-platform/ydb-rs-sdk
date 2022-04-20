@@ -9,13 +9,14 @@ use crate::waiter::Waiter;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::grpc::GrpcClientFabric;
 use tracing::trace;
 
 pub(crate) type Middleware = AuthService;
 
 /// YDB client
 pub struct Client {
-    credentials: DBCredentials,
+    grpc_client_fabric: GrpcClientFabric,
     load_balancer: SharedLoadBalancer,
     discovery: Arc<Box<dyn Discovery>>,
     timeouts: TimeoutSettings,
@@ -23,13 +24,13 @@ pub struct Client {
 
 impl Client {
     pub(crate) fn new(
-        credentials: DBCredentials,
+        grpc_client_fabric: GrpcClientFabric,
         discovery: Box<dyn Discovery>,
     ) -> YdbResult<Self> {
         let discovery = Arc::new(discovery);
 
         return Ok(Client {
-            credentials,
+            grpc_client_fabric,
             load_balancer: SharedLoadBalancer::new(discovery.as_ref()),
             discovery,
             timeouts: TimeoutSettings::default(),
@@ -39,7 +40,7 @@ impl Client {
     /// Create instance of client for table service
     pub fn table_client(&self) -> TableClient {
         return TableClient::new(
-            self.credentials.clone(),
+            self.grpc_client_fabric.clone(),
             self.discovery.clone(),
             self.timeouts,
         );
@@ -55,8 +56,8 @@ impl Client {
     /// Wait all background process get first successfully result and client fully
     /// available to work.
     pub async fn wait(&self) -> YdbResult<()> {
-        trace!("waiting_token");
-        self.credentials.token_cache.wait().await?;
+        trace!("waiting grpc_client_fabric");
+        self.grpc_client_fabric.wait().await?;
         trace!("wait discovery");
         self.discovery.wait().await?;
 

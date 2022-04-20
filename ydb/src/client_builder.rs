@@ -2,12 +2,15 @@ use crate::client_common::{DBCredentials, TokenCache};
 use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticToken};
 use crate::discovery::{Discovery, TimerDiscovery};
 use crate::errors::{YdbError, YdbResult};
+use crate::grpc::GrpcClientFabric;
 use crate::{Client, Credentials};
+use http::Uri;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::Duration;
+use tonic::transport::{Certificate, ClientTlsConfig};
 
 type ParamHandler = fn(&str, ClientBuilder) -> YdbResult<ClientBuilder>;
 
@@ -82,6 +85,7 @@ fn token_metadata(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
 }
 
 pub struct ClientBuilder {
+    ca_cert: Option<Certificate>,
     pub(crate) credentials: CredentialsRef,
     pub(crate) database: String,
     discovery_interval: Duration,
@@ -112,16 +116,28 @@ impl ClientBuilder {
             database: self.database.clone(),
         };
 
+        let mut grpc_client_fabric = GrpcClientFabric::new(db_cred.clone());
+        if let Some(ca_cert) = self.ca_cert {
+            let tls_config = ClientTlsConfig::new().ca_certificate(ca_cert);
+            grpc_client_fabric = grpc_client_fabric.with_tls_config(tls_config);
+        }
+
         let discovery = match self.discovery {
             Some(discovery_box) => discovery_box,
             None => Box::new(TimerDiscovery::new(
-                db_cred.clone(),
-                self.endpoint.as_str(),
+                grpc_client_fabric.clone(),
+                Uri::from_str(self.endpoint.as_str())?,
+                self.database,
                 self.discovery_interval,
             )?),
         };
 
-        return Client::new(db_cred, discovery);
+        return Client::new(grpc_client_fabric, discovery);
+    }
+
+    pub fn with_ca_cert(mut self, ca_cert: Option<Certificate>) -> Self {
+        self.ca_cert = ca_cert;
+        return self;
     }
 
     pub fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
@@ -158,6 +174,7 @@ impl ClientBuilder {
 
     fn new() -> Self {
         Self {
+            ca_cert: None,
             credentials: credencials_ref(StaticToken::from("")),
             database: "/local".to_string(),
             discovery_interval: Duration::from_secs(60),

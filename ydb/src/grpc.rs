@@ -3,10 +3,10 @@ use std::time::Duration;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::client_common::DBCredentials;
-use crate::errors;
 use crate::errors::{YdbError, YdbIssue, YdbResult};
 use crate::middlewares::AuthService;
 use crate::trait_operation::Operation;
+use crate::{errors, Waiter};
 use http::Uri;
 use tokio::sync::mpsc;
 
@@ -18,34 +18,59 @@ use ydb_grpc::ydb_proto::issue::IssueMessage;
 use ydb_grpc::ydb_proto::operations::operation_params::OperationMode;
 use ydb_grpc::ydb_proto::operations::OperationParams;
 
-#[tracing::instrument(skip(new_func, cred))]
-pub(crate) async fn create_grpc_client<T, CB>(
-    uri: Uri,
-    cred: DBCredentials,
-    new_func: CB,
-) -> YdbResult<T>
-where
-    CB: FnOnce(AuthService) -> T,
-{
-    return create_grpc_client_with_error_sender(uri, cred, None, new_func).await;
-}
-
-pub(crate) async fn create_grpc_client_with_error_sender<T, CB>(
-    uri: Uri,
+#[derive(Clone, Debug)]
+pub(crate) struct GrpcClientFabric {
+    tls_config: ClientTlsConfig,
     cred: DBCredentials,
     error_sender: ChannelProxyErrorSender,
-    new_func: CB,
-) -> YdbResult<T>
-where
-    CB: FnOnce(AuthService) -> T,
-{
-    let channel = create_grpc_channel(uri, error_sender).await?;
-    return create_client_on_channel(channel, cred, new_func);
+}
+
+impl GrpcClientFabric {
+    pub(crate) fn new(cred: DBCredentials) -> Self {
+        return Self {
+            tls_config: ClientTlsConfig::new(),
+            cred,
+            error_sender: None,
+        };
+    }
+
+    pub(crate) fn with_tls_config(&self, tls_config: ClientTlsConfig) -> Self {
+        Self {
+            tls_config,
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn with_error_sender(&self, error_sender: ChannelProxyErrorSender) -> Self {
+        Self {
+            error_sender,
+            ..self.clone()
+        }
+    }
+
+    pub(crate) async fn create_client<ClientT, CreateFuncT>(
+        &self,
+        endpoint: Uri,
+        new_func: CreateFuncT,
+    ) -> YdbResult<ClientT>
+    where
+        CreateFuncT: FnOnce(AuthService) -> ClientT,
+    {
+        let channel = create_grpc_channel(endpoint, &self.error_sender, &self.tls_config).await?;
+        return create_client_on_channel(channel, &self.cred, new_func);
+    }
+}
+
+#[async_trait::async_trait]
+impl Waiter for GrpcClientFabric {
+    async fn wait(&self) -> YdbResult<()> {
+        return self.cred.wait().await;
+    }
 }
 
 fn create_client_on_channel<NewFuncT, ClientT>(
     channel: ChannelProxy,
-    cred: DBCredentials,
+    cred: &DBCredentials,
     new_func: NewFuncT,
 ) -> YdbResult<ClientT>
 where
@@ -63,7 +88,8 @@ where
 #[tracing::instrument(skip(error_sender))]
 async fn create_grpc_channel(
     uri: Uri,
-    error_sender: Option<mpsc::Sender<ChannelErrorInfo>>,
+    error_sender: &Option<mpsc::Sender<ChannelErrorInfo>>,
+    tls_config: &ClientTlsConfig,
 ) -> YdbResult<ChannelProxy> {
     trace!("start work");
     let tls = if let Some(scheme) = uri.scheme_str() {
@@ -74,7 +100,7 @@ async fn create_grpc_channel(
 
     let mut endpoint = Endpoint::from(uri.clone());
     if tls {
-        endpoint = endpoint.tls_config(ClientTlsConfig::new())?
+        endpoint = endpoint.tls_config(tls_config.clone())?
     };
     endpoint = endpoint.tcp_keepalive(Some(Duration::from_secs(15))); // tcp keepalive similar to default in golang lib
 
@@ -82,7 +108,7 @@ async fn create_grpc_channel(
     return match endpoint.connect().await {
         Ok(channel) => {
             trace!("ok");
-            Ok(ChannelProxy::new(uri, channel, error_sender))
+            Ok(ChannelProxy::new(uri, channel, error_sender.clone()))
         }
         Err(err) => {
             trace!("error: {:?}", err);

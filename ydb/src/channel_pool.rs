@@ -1,7 +1,7 @@
-use crate::errors::YdbResult;
 use crate::client_common::DBCredentials;
 use crate::discovery::{Discovery, Service};
-use crate::grpc::create_grpc_client_with_error_sender;
+use crate::errors::YdbResult;
+use crate::grpc::GrpcClientFabric;
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::middlewares::AuthService;
 use async_trait::async_trait;
@@ -36,7 +36,7 @@ where
     T: Clone,
 {
     create_new_channel_fn: fn(AuthService) -> T,
-    credentials: DBCredentials,
+    grpc_client_fabric: GrpcClientFabric,
     load_balancer: SharedLoadBalancer,
     service: Service,
     shared_state: Arc<Mutex<SharedState<T>>>,
@@ -61,7 +61,7 @@ where
 {
     pub(crate) fn new<CB>(
         discovery: Arc<Box<dyn Discovery>>,
-        credentials: DBCredentials,
+        mut grpc_client_fabric: GrpcClientFabric,
         service: Service,
         create_new_channel_fn: fn(AuthService) -> T,
     ) -> Self {
@@ -70,9 +70,12 @@ where
         tokio::spawn(async move {
             Self::node_pessimization_loop(discovery, channel_error_receiver).await;
         });
+        grpc_client_fabric =
+            grpc_client_fabric.with_error_sender(Some(channel_error_sender.clone()));
+
         return Self {
             create_new_channel_fn,
-            credentials,
+            grpc_client_fabric,
             load_balancer,
             service,
             shared_state: Arc::new(Mutex::new(SharedState::new())),
@@ -113,13 +116,10 @@ where
         return if let Some(ch) = self.get_channel_from_pool(&endpoint) {
             Ok(ch)
         } else {
-            match create_grpc_client_with_error_sender(
-                endpoint.clone(),
-                self.credentials.clone(),
-                Some(self.channel_error_sender.clone()),
-                self.create_new_channel_fn,
-            )
-            .await
+            match self
+                .grpc_client_fabric
+                .create_client(endpoint.clone(), self.create_new_channel_fn)
+                .await
             {
                 Ok(ch) => {
                     self.shared_state
