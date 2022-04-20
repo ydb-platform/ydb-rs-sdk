@@ -27,7 +27,7 @@ tokio = { version = "1.17", features = ["full"]}
 tracing = "0.1"
 tracing-test = "0.2.1"
 tracing-subscriber = "0.3"
-tonic = {version="0.7", features=["tls"]}
+tonic = {version="0.7", features=["tls", "tls-roots"]}
 tower = "0.4"
 url="2.2"
 ydb-grpc = { version = "0.0.7", path="../ydb-grpc"}
