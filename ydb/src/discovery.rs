@@ -38,6 +38,9 @@ pub(crate) enum Service {
 
     #[strum(serialize = "table_service")]
     Table,
+
+    #[strum(serialize = "scheme_service")]
+    Scheme,
 }
 
 /// Current discovery state
