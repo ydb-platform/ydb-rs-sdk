@@ -49,8 +49,13 @@ pub(crate) mod client;
 mod client_builder;
 pub(crate) mod client_common;
 pub(crate) mod client_table;
+pub(crate) mod client_directory;
 #[cfg(test)]
 mod client_table_test_integration;
+#[cfg(test)]
+mod client_directory_test_integration;
+#[cfg(test)]
+mod test_integration_helper;
 mod credentials;
 pub(crate) mod discovery;
 mod errors;
@@ -76,6 +81,8 @@ pub use client::Client;
 pub use client_builder::ClientBuilder;
 // full enum pub types
 pub use client_table::{RetryOptions, TableClient, TransactionOptions};
+// full enum pub types
+pub use client_directory::{DirectoryClient};
 // full enum pub types
 pub use discovery::{Discovery, DiscoveryState, StaticDiscovery};
 // full enum pub types

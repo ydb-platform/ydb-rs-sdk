@@ -1,60 +1,21 @@
-use crate::client::Client;
-use crate::client_builder::ClientBuilder;
-use crate::client_table::RetryOptions;
-use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
-use crate::query::Query;
-use crate::transaction::Mode;
-use crate::transaction::Mode::SerializableReadWrite;
-use crate::transaction::Transaction;
-use crate::types::{Value, ValueList, ValueStruct};
-use async_once::AsyncOnce;
-use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::UNIX_EPOCH;
+
 use tonic::{Code, Status};
 use tracing::trace;
 use tracing_test::traced_test;
 
-lazy_static! {
-    static ref TEST_CLIENT: AsyncOnce<Arc<Client>> = AsyncOnce::new(async {
-        let client_builder: ClientBuilder =
-            std::env::var("YDB_CONNECTION_STRING").unwrap().parse().unwrap();
-
-        trace!("create client");
-        let client: Client = client_builder
-            .client()
-            .unwrap();
-
-        trace!("start wait");
-        client.wait().await.unwrap();
-        return Arc::new(client);
-    });
-
-    static ref TEST_TIMEOUT: i32 = {
-        const DEFAULT_TIMEOUT_MS: i32 = 3600 * 1000; // a hour - for manual tests
-        match std::env::var("TEST_TIMEOUT"){
-            Ok(timeout)=>{
-                if let Ok(timeout) = timeout.parse() {
-                    return timeout
-                } else {
-                    return DEFAULT_TIMEOUT_MS
-                }
-            },
-            Err(_)=>{
-                return DEFAULT_TIMEOUT_MS
-            }
-        }
-    };
-}
-
-#[tracing::instrument]
-async fn create_client() -> YdbResult<Arc<Client>> {
-    trace!("create client");
-    Ok(TEST_CLIENT.get().await.clone())
-}
+use crate::client_table::RetryOptions;
+use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
+use crate::query::Query;
+use crate::test_integration_helper::create_client;
+use crate::transaction::Mode;
+use crate::transaction::Mode::SerializableReadWrite;
+use crate::transaction::Transaction;
+use crate::types::{Value, ValueList, ValueStruct};
 
 #[tokio::test]
 #[traced_test]
