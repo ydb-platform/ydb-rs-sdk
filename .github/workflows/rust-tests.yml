@@ -38,9 +38,7 @@ jobs:
     - name: Cache
       uses: actions/cache@v3
       with:
-        key: ${{ runner.os }}-${{env.RUST_VERSION}}-cargo-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-${{env.RUST_VERSION}}-cargo-
+        key: ${{ runner.os }}-${{env.RUST_VERSION}}-cargo-${{ hashFiles('**/Cargo.lock') }}-1
         path: |
           ~/.cargo/bin/
           ~/.cargo/.crates.toml
