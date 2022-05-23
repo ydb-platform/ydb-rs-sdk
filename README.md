@@ -53,3 +53,9 @@ async fn main() -> YdbResult<()> {
 [Url shorneter application](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-example-urlshortener)
 
 [Many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
+
+# Version policy
+
+Crates follow to server 2.0 https://semver.org/spec/v2.0.0.html.
+For version 0.X.Y: X increments for backwards incompatible changes, Y increments for any compatible changes (fixes, extend api without broke compatible).
+For incompatible changes creates github release with describe incompatibles.
