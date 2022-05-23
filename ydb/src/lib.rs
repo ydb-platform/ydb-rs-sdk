@@ -48,14 +48,12 @@ mod channel_pool;
 pub(crate) mod client;
 mod client_builder;
 pub(crate) mod client_common;
-pub(crate) mod client_table;
 pub(crate) mod client_directory;
 #[cfg(test)]
-mod client_table_test_integration;
-#[cfg(test)]
 mod client_directory_test_integration;
+pub(crate) mod client_table;
 #[cfg(test)]
-mod test_integration_helper;
+mod client_table_test_integration;
 mod credentials;
 pub(crate) mod discovery;
 mod errors;
@@ -69,6 +67,8 @@ mod session;
 mod session_pool;
 mod sugar;
 mod test_helpers;
+#[cfg(test)]
+mod test_integration_helper;
 mod trait_operation;
 pub(crate) mod transaction;
 mod types;
@@ -82,7 +82,7 @@ pub use client_builder::ClientBuilder;
 // full enum pub types
 pub use client_table::{RetryOptions, TableClient, TransactionOptions};
 // full enum pub types
-pub use client_directory::{DirectoryClient};
+pub use client_directory::SchemeClient;
 // full enum pub types
 pub use discovery::{Discovery, DiscoveryState, StaticDiscovery};
 // full enum pub types

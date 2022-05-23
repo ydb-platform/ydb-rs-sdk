@@ -11,7 +11,7 @@ use crate::test_integration_helper::create_client;
 #[ignore] // need YDB access
 async fn create_list_remove_directory() -> YdbResult<()> {
     let client = create_client().await?;
-    let mut scheme_client = client.directory_client();
+    let mut scheme_client = client.scheme_client();
     let time_now = time::SystemTime::now().duration_since(UNIX_EPOCH)?;
     let directory_name = format!("directory_{}", time_now.as_millis());
     let directory_path = format!("local/{}", directory_name.clone());
@@ -26,4 +26,3 @@ async fn create_list_remove_directory() -> YdbResult<()> {
 
     Ok(())
 }
-
