@@ -1,5 +1,5 @@
 use crate::client_common::DBCredentials;
-use crate::client_directory::DirectoryClient;
+use crate::client_directory::SchemeClient;
 use crate::client_table::TableClient;
 use crate::discovery::Discovery;
 use crate::errors::YdbResult;
@@ -47,8 +47,8 @@ impl Client {
     }
 
     /// Create instance of client for directory service
-    pub fn directory_client(&self) -> DirectoryClient {
-        DirectoryClient::new(
+    pub fn scheme_client(&self) -> SchemeClient {
+        SchemeClient::new(
             self.credentials.clone(),
             self.discovery.clone(),
             self.timeouts,

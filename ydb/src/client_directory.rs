@@ -1,25 +1,26 @@
 use std::sync::Arc;
 
-use ydb_grpc::ydb_proto::scheme::{Entry, ListDirectoryRequest, ListDirectoryResult, MakeDirectoryRequest, RemoveDirectoryRequest};
 use ydb_grpc::ydb_proto::scheme::v1::scheme_service_client::SchemeServiceClient;
+use ydb_grpc::ydb_proto::scheme::{
+    Entry, ListDirectoryRequest, ListDirectoryResult, MakeDirectoryRequest, RemoveDirectoryRequest,
+};
 
-use crate::{Discovery, YdbResult};
 use crate::channel_pool::{ChannelPool, ChannelPoolImpl};
 use crate::client::{Middleware, TimeoutSettings};
 use crate::client_common::DBCredentials;
 use crate::discovery::Service;
 use crate::grpc::{grpc_read_operation_result, grpc_read_void_operation_result, operation_params};
+use crate::{Discovery, YdbResult};
 
 pub(crate) type DirectoryServiceClientType = SchemeServiceClient<Middleware>;
 pub(crate) type DirectoryServiceChannelPool = Arc<Box<dyn ChannelPool<DirectoryServiceClientType>>>;
 
-
-pub struct DirectoryClient {
+pub struct SchemeClient {
     timeouts: TimeoutSettings,
     channel_pool: DirectoryServiceChannelPool,
 }
 
-impl DirectoryClient {
+impl SchemeClient {
     pub(crate) fn new(
         credentials: DBCredentials,
         discovery: Arc<Box<dyn Discovery>>,
@@ -46,7 +47,8 @@ impl DirectoryClient {
             .make_directory(MakeDirectoryRequest {
                 operation_params: operation_params(self.timeouts.operation_timeout),
                 path,
-            }).await?;
+            })
+            .await?;
 
         grpc_read_void_operation_result(resp)
     }
@@ -59,7 +61,8 @@ impl DirectoryClient {
             .list_directory(ListDirectoryRequest {
                 operation_params: operation_params(self.timeouts.operation_timeout),
                 path,
-            }).await?;
+            })
+            .await?;
 
         let result: ListDirectoryResult = grpc_read_operation_result(resp)?;
         Ok(result.children)
@@ -73,7 +76,8 @@ impl DirectoryClient {
             .remove_directory(RemoveDirectoryRequest {
                 operation_params: operation_params(self.timeouts.operation_timeout),
                 path,
-            }).await?;
+            })
+            .await?;
 
         grpc_read_void_operation_result(resp)
     }
