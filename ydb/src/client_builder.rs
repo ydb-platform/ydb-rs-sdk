@@ -2,12 +2,16 @@ use crate::client_common::{DBCredentials, TokenCache};
 use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticToken};
 use crate::discovery::{Discovery, TimerDiscovery};
 use crate::errors::{YdbError, YdbResult};
+use crate::grpc::GrpcClientFabric;
 use crate::{Client, Credentials};
+use http::Uri;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::Mutex;
 use std::time::Duration;
+use tonic::transport::{Certificate, ClientTlsConfig};
 
 type ParamHandler = fn(&str, ClientBuilder) -> YdbResult<ClientBuilder>;
 
@@ -15,6 +19,7 @@ static PARAM_HANDLERS: Lazy<Mutex<HashMap<String, ParamHandler>>> = Lazy::new(||
     Mutex::new({
         let mut m: HashMap<String, ParamHandler> = HashMap::new();
 
+        m.insert("ca_cert_file".to_string(), ca_cert_file);
         m.insert("database".to_string(), database);
         m.insert("token_cmd".to_string(), token_cmd);
         m.insert("token_metadata".to_string(), token_metadata);
@@ -34,6 +39,24 @@ pub(crate) fn register(param_name: &str, handler: ParamHandler) -> YdbResult<()>
 
     lock.insert(param_name.to_string(), handler);
     return Ok(());
+}
+
+fn ca_cert_file(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
+    for (key, value) in url::Url::parse(uri)?.query_pairs() {
+        if key != "ca_cert_file" {
+            continue;
+        };
+
+        let path = Path::new(value.as_ref());
+        if !path.exists() {
+            return Err(YdbError::from_str(format!(
+                "ca_cert_file doesn't exist: '{:?}'",
+                path.to_str()
+            )));
+        }
+        client_builder = client_builder.with_ca_cert_file(path)?;
+    }
+    return Ok(client_builder);
 }
 
 fn database(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
@@ -82,6 +105,7 @@ fn token_metadata(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
 }
 
 pub struct ClientBuilder {
+    ca_cert: Option<Certificate>,
     pub(crate) credentials: CredentialsRef,
     pub(crate) database: String,
     discovery_interval: Duration,
@@ -112,16 +136,34 @@ impl ClientBuilder {
             database: self.database.clone(),
         };
 
+        let mut grpc_client_fabric = GrpcClientFabric::new(db_cred.clone());
+        if let Some(ca_cert) = self.ca_cert {
+            let tls_config = ClientTlsConfig::new().ca_certificate(ca_cert);
+            grpc_client_fabric = grpc_client_fabric.with_tls_config(tls_config);
+        }
+
         let discovery = match self.discovery {
             Some(discovery_box) => discovery_box,
             None => Box::new(TimerDiscovery::new(
-                db_cred.clone(),
-                self.endpoint.as_str(),
+                grpc_client_fabric.clone(),
+                Uri::from_str(self.endpoint.as_str())?,
+                self.database,
                 self.discovery_interval,
             )?),
         };
 
-        return Client::new(db_cred, discovery);
+        return Client::new(grpc_client_fabric, discovery);
+    }
+
+    pub fn with_ca_cert(mut self, ca_cert: Option<Certificate>) -> Self {
+        self.ca_cert = ca_cert;
+        return self;
+    }
+
+    pub fn with_ca_cert_file<P: AsRef<Path>>(mut self, ca_path: P) -> YdbResult<Self> {
+        let cert = std::fs::read(ca_path)?;
+        let cert = Certificate::from_pem(cert);
+        return Ok(self.with_ca_cert(Some(cert)));
     }
 
     pub fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
@@ -158,6 +200,7 @@ impl ClientBuilder {
 
     fn new() -> Self {
         Self {
+            ca_cert: None,
             credentials: credencials_ref(StaticToken::from("")),
             database: "/local".to_string(),
             discovery_interval: Duration::from_secs(60),

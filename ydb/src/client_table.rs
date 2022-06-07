@@ -7,6 +7,7 @@ use crate::session::Session;
 use crate::session_pool::SessionPool;
 use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 
+use crate::grpc::GrpcClientFabric;
 use num::pow;
 use std::future::Future;
 use std::sync::Arc;
@@ -105,13 +106,13 @@ pub struct TableClient {
 
 impl TableClient {
     pub(crate) fn new(
-        credencials: DBCredentials,
+        grpc_client_fabric: GrpcClientFabric,
         discovery: Arc<Box<dyn Discovery>>,
         timeouts: TimeoutSettings,
     ) -> Self {
         let channel_pool = ChannelPoolImpl::new::<TableServiceClientType>(
             discovery,
-            credencials.clone(),
+            grpc_client_fabric,
             Service::Table,
             TableServiceClient::new,
         );

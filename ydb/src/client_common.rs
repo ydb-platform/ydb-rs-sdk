@@ -1,7 +1,7 @@
 use crate::credentials::CredentialsRef;
 use crate::errors::YdbResult;
-use crate::waiter::Waiter;
 use crate::pub_traits::TokenInfo;
+use crate::waiter::Waiter;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use tokio::sync::watch;
@@ -11,6 +11,13 @@ use tracing::trace;
 pub(crate) struct DBCredentials {
     pub(crate) database: String,
     pub(crate) token_cache: TokenCache,
+}
+
+#[async_trait::async_trait]
+impl Waiter for DBCredentials {
+    async fn wait(&self) -> YdbResult<()> {
+        return self.token_cache.wait().await;
+    }
 }
 
 #[derive(Debug)]
