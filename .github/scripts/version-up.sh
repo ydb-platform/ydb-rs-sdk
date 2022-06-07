@@ -110,11 +110,9 @@ function bump_version() {
       ;;
     ydb-grpc)
       version_dep_set "ydb" "ydb-grpc" "$VERSION"
-      bump_version "ydb" patch
       ;;
     ydb-grpc-helpers)
       version_dep_set "ydb-grpc" "ydb-grpc-helpers" "$VERSION"
-      bump_version "ydb-grpc" patch
       ;;
     *)
       echo "Unexpected crate name '$CRATE_NAME'"
