@@ -2375,7 +2375,7 @@ dependencies = [
 
 [[package]]
 name = "ydb-grpc"
-version = "0.0.7"
+version = "0.0.8"
 dependencies = [
  "pbjson",
  "pbjson-build",
