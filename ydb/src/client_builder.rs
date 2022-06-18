@@ -16,6 +16,7 @@ static PARAM_HANDLERS: Lazy<Mutex<HashMap<String, ParamHandler>>> = Lazy::new(||
         let mut m: HashMap<String, ParamHandler> = HashMap::new();
 
         m.insert("database".to_string(), database);
+        m.insert("token".to_string(), token);
         m.insert("token_cmd".to_string(), token_cmd);
         m.insert("token_metadata".to_string(), token_metadata);
         m
@@ -43,6 +44,18 @@ fn database(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBui
         };
 
         client_builder.database = value.to_string();
+    }
+    return Ok(client_builder);
+}
+
+fn token(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
+    for (key, value) in url::Url::parse(uri)?.query_pairs() {
+        if key != "token" {
+            continue;
+        };
+
+        client_builder.credentials =
+            credencials_ref(crate::credentials::StaticToken::from(value.as_ref()));
     }
     return Ok(client_builder);
 }
