@@ -37,6 +37,10 @@ impl Client {
         });
     }
 
+    pub(crate) fn database(&self) -> String {
+        return self.credentials.database.clone();
+    }
+
     /// Create instance of client for table service
     pub fn table_client(&self) -> TableClient {
         return TableClient::new(
