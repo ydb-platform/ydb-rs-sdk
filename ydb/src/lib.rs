@@ -58,6 +58,7 @@ mod credentials;
 pub(crate) mod discovery;
 mod errors;
 mod grpc;
+mod grpc_wrapper;
 mod load_balancer;
 mod middlewares;
 mod pub_traits;
