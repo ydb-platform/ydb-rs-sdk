@@ -7,18 +7,18 @@ use http::uri::Authority;
 use http::Uri;
 use strum::{Display, EnumIter, EnumString};
 
-use ydb_grpc::ydb_proto::discovery::v1::discovery_service_client::DiscoveryServiceClient;
-use ydb_grpc::ydb_proto::discovery::{EndpointInfo, ListEndpointsRequest, ListEndpointsResult};
-
 use crate::client_common::DBCredentials;
 use crate::errors::YdbResult;
 use crate::grpc::{create_grpc_client, grpc_read_operation_result};
 use crate::waiter::Waiter;
 
+use itertools::Itertools;
 use std::time::Duration;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{watch, Mutex};
 
+use crate::grpc_wrapper::channel::create_grpc_channel_with_auth;
+use crate::grpc_wrapper::grpc_discovery_client::{EndpointInfo, GrpcDiscoveryClient};
 use tracing::trace;
 
 #[allow(dead_code)]
@@ -291,23 +291,14 @@ impl DiscoverySharedState {
 
         trace!("creating grpc client");
         let start = std::time::Instant::now();
-        let mut discovery_client = create_grpc_client(
-            self.discovery_uri.clone(),
-            self.cred.clone(),
-            DiscoveryServiceClient::new,
-        )
-        .await?;
+        let mut discovery_channel =
+            create_grpc_channel_with_auth(self.discovery_uri.clone(), self.cred.clone()).await?;
 
-        trace!("send grpc request ListEndpointsRequest");
-        let resp = discovery_client
-            .list_endpoints(ListEndpointsRequest {
-                database: self.cred.database.clone(),
-                service: vec![],
-            })
+        let mut discovery_client = GrpcDiscoveryClient::new(discovery_channel);
+
+        let res = discovery_client
+            .list_endpoints(self.cred.database.clone())
             .await?;
-
-        let res: ListEndpointsResult = grpc_read_operation_result(resp)?;
-        trace!("list endpoints: {:?}", res);
         let new_endpoints = Self::list_endpoints_to_node_infos(res)?;
         self.set_discovery_state(
             self.discovery_state.write().unwrap(),
@@ -348,21 +339,19 @@ impl DiscoverySharedState {
         trace!("stop background_discovery");
     }
 
-    fn list_endpoints_to_node_infos(mut list: ListEndpointsResult) -> YdbResult<Vec<NodeInfo>> {
-        let mut nodes = Vec::new();
-
-        while let Some(endpoint_info) = list.endpoints.pop() {
-            let uri = Self::endpoint_info_to_uri(&endpoint_info)?;
-            nodes.push(NodeInfo { uri: uri.clone() });
-        }
-
-        return Ok(nodes);
+    fn list_endpoints_to_node_infos(mut list: Vec<EndpointInfo>) -> YdbResult<Vec<NodeInfo>> {
+        return list
+            .into_iter()
+            .map(|item| match Self::endpoint_info_to_uri(item) {
+                Ok(uri) => YdbResult::<NodeInfo>::Ok(NodeInfo { uri }),
+                Err(err) => YdbResult::<NodeInfo>::Err(err),
+            })
+            .try_collect();
     }
 
-    fn endpoint_info_to_uri(endpoint_info: &EndpointInfo) -> YdbResult<Uri> {
-        let authority: Authority = Authority::from_str(
-            format!("{}:{}", endpoint_info.address, endpoint_info.port).as_str(),
-        )?;
+    fn endpoint_info_to_uri(endpoint_info: EndpointInfo) -> YdbResult<Uri> {
+        let authority: Authority =
+            Authority::from_str(format!("{}:{}", endpoint_info.fqdn, endpoint_info.port).as_str())?;
 
         return Ok(Uri::builder()
             .scheme(if endpoint_info.ssl { "https" } else { "http" })
