@@ -23,7 +23,6 @@ impl GrpcDiscoveryClient {
     ) -> YdbResult<Vec<EndpointInfo>> {
         let req = ListEndpointsRequest {
             database,
-            service: vec![],
             ..ListEndpointsRequest::default()
         };
         let resp = self.service.list_endpoints(req).await?;
