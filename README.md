@@ -4,7 +4,7 @@
 [![YDB tests](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-tests.yml/badge.svg?branch=master&event=schedule)](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-tests.yml)
 
 Rust SDK for YDB.
-Supported rust: 1.56.0 and newer.
+Supported rust: 1.56.1 and newer.
 
 Integration tests, with dependency from real YDB database marked as ignored.
 To run it:
