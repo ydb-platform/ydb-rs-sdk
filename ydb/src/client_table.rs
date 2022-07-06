@@ -12,6 +12,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
+use tracing::{instrument, trace};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 
 const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -288,6 +289,7 @@ impl TableClient {
     /// #   return Ok(());
     /// # }
     /// ```
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn retry_transaction<CallbackFuture, CallbackResult>(
         &self,
         callback: impl Fn(TransactionArgType) -> CallbackFuture,
@@ -298,6 +300,8 @@ impl TableClient {
         let mut attempts: usize = 0;
         let start = Instant::now();
         loop {
+            attempts += 1;
+            trace!("attempt: {}", attempts);
             let transaction: Box<dyn Transaction> = if self.transaction_options.autocommit {
                 Box::new(self.create_autocommit_transaction(self.transaction_options.mode))
             } else {
@@ -314,6 +318,14 @@ impl TableClient {
             let err = if let Err(err) = res {
                 err
             } else {
+                match &res {
+                    Ok(_) => trace!("return successfully after '{}' attempts", attempts),
+                    Err(err) => trace!(
+                        "return with customer error after '{}' attempts: {:?}",
+                        attempts,
+                        err
+                    ),
+                };
                 return res;
             };
 
@@ -322,7 +334,6 @@ impl TableClient {
             }
 
             let now = Instant::now();
-            attempts += 1;
             let loop_decision = self.retrier.wait_duration(RetryParams {
                 attempt: attempts,
                 time_from_start: now.duration_since(start),
@@ -330,6 +341,11 @@ impl TableClient {
             if loop_decision.allow_retry {
                 sleep(loop_decision.wait_timeout).await;
             } else {
+                trace!(
+                    "return with ydb error after '{}' attempts by retry decision: {}",
+                    attempts,
+                    err
+                );
                 return Err(err);
             };
         }
@@ -381,6 +397,7 @@ impl TableClient {
         return self;
     }
 
+    #[instrument(level = "trace", ret)]
     fn check_retry_error(is_idempotent_operation: bool, err: &YdbOrCustomerError) -> bool {
         let ydb_err = match &err {
             YdbOrCustomerError::Customer(_) => return false,
@@ -395,13 +412,14 @@ impl TableClient {
     }
 }
 
+#[derive(Debug)]
 struct RetryParams {
     pub(crate) attempt: usize,
     pub(crate) time_from_start: Duration,
 }
 
 // May be extend in feature
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct RetryDecision {
     pub(crate) allow_retry: bool,
     pub(crate) wait_timeout: Duration,
@@ -411,6 +429,7 @@ trait Retry: Send + Sync {
     fn wait_duration(&self, params: RetryParams) -> RetryDecision;
 }
 
+#[derive(Debug)]
 struct TimeoutRetrier {
     timeout: Duration,
 }
@@ -424,6 +443,7 @@ impl Default for TimeoutRetrier {
 }
 
 impl Retry for TimeoutRetrier {
+    #[instrument(ret)]
     fn wait_duration(&self, params: RetryParams) -> RetryDecision {
         let mut res = RetryDecision::default();
         if params.time_from_start < self.timeout {
@@ -441,6 +461,7 @@ impl Retry for TimeoutRetrier {
 struct NoRetrier {}
 
 impl Retry for NoRetrier {
+    #[instrument(skip_all)]
     fn wait_duration(&self, _: RetryParams) -> RetryDecision {
         return RetryDecision {
             allow_retry: false,
