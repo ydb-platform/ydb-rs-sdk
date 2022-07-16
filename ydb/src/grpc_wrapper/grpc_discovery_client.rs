@@ -1,6 +1,6 @@
 use crate::grpc_wrapper::channel::ChannelWithAuth;
 use crate::grpc_wrapper::grpc::grpc_read_operation_result;
-use crate::grpc_wrapper::grpc_services::{GrpcDiscoveryService, Service};
+use crate::grpc_wrapper::grpc_services::{GrpcServiceForDiscovery, Service};
 use crate::YdbResult;
 use itertools::Itertools;
 use ydb_grpc::ydb_proto::discovery::v1::discovery_service_client::DiscoveryServiceClient;
@@ -47,7 +47,7 @@ pub(crate) struct EndpointInfo {
     pub(crate) ssl: bool,
 }
 
-impl GrpcDiscoveryService for GrpcDiscoveryClient {
+impl GrpcServiceForDiscovery for GrpcDiscoveryClient {
     fn get_grpc_discovery_service() -> Service {
         return Service::Discovery;
     }

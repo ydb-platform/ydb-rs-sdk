@@ -1,6 +1,6 @@
 use strum::{Display, EnumIter, EnumString};
 
-pub(crate) trait GrpcDiscoveryService {
+pub(crate) trait GrpcServiceForDiscovery {
     fn get_grpc_discovery_service() -> Service;
 }
 
