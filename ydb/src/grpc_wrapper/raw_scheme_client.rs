@@ -7,9 +7,7 @@ pub(crate) struct SchemeClient {
     service: SchemeServiceClient<ChannelWithAuth>,
 }
 
-impl SchemeClient {
-    pub(crate) async fn ListDirectory(req: ListDirectoryRequest)->
-}
+impl SchemeClient {}
 
 impl GrpcServiceForDiscovery for SchemeClient {
     fn get_grpc_discovery_service() -> Service {
@@ -37,16 +35,16 @@ pub(crate) struct Entry {
 }
 
 pub(crate) enum EntryType {
-    TypeUnspecified = 0,
-    Directory = 1,
-    Table = 2,
-    PersQueueGroup = 3,
-    Database = 4,
-    RtmrVolume = 5,
-    BlockStoreVolume = 6,
-    CoordinationNode = 7,
-    Sequence = 15,
-    Replication = 16,
+    TypeUnspecified,
+    Directory,
+    Table,
+    PersQueueGroup,
+    Database,
+    RtmrVolume,
+    BlockStoreVolume,
+    CoordinationNode,
+    Sequence,
+    Replication,
     Unknown(i32),
 }
 
