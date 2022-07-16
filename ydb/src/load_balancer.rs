@@ -3,7 +3,7 @@ use crate::errors::*;
 use http::Uri;
 use mockall;
 
-use crate::grpc_wrapper::grpc_services::Service;
+use crate::grpc_wrapper::raw_services::Service;
 use crate::waiter::{Waiter, WaiterImpl};
 use std::sync::{Arc, RwLock};
 use tokio::sync::watch::Receiver;
@@ -184,7 +184,7 @@ pub(crate) async fn update_load_balancer(
 mod test {
     use super::*;
     use crate::discovery::NodeInfo;
-    use crate::grpc_wrapper::grpc_services::Service::Table;
+    use crate::grpc_wrapper::raw_services::Service::Table;
     use mockall::predicate;
     use std::collections::HashMap;
     use std::str::FromStr;

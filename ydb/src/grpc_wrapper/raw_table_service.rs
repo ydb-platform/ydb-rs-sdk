@@ -1,5 +1,5 @@
 use crate::grpc_wrapper::channel::ChannelWithAuth;
-use crate::grpc_wrapper::ydb_operation::OperationParams;
+use crate::grpc_wrapper::raw_ydb_operation::OperationParams;
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 
 pub(crate) struct GrpcTableClient {

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 pub(crate) struct OperationParams {
     operation_mode: OperationMode,
-    operation_timeout: crate::grpc_wrapper::grpc_common_types::Duration,
-    cancel_after: crate::grpc_wrapper::grpc_common_types::Duration,
+    operation_timeout: crate::grpc_wrapper::raw_common_types::Duration,
+    cancel_after: crate::grpc_wrapper::raw_common_types::Duration,
     labels: HashMap<String, String>,
 }
 

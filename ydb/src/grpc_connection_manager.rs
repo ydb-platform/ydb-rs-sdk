@@ -2,7 +2,7 @@ use crate::client_common::DBCredentials;
 use crate::connection_pool::ConnectionPool;
 use crate::grpc_wrapper::auth::create_service_with_auth;
 use crate::grpc_wrapper::channel::ChannelWithAuth;
-use crate::grpc_wrapper::grpc_services::GrpcServiceForDiscovery;
+use crate::grpc_wrapper::raw_services::GrpcServiceForDiscovery;
 use crate::load_balancer::{LoadBalancer, RandomLoadBalancer};
 use crate::YdbResult;
 use http::Uri;
