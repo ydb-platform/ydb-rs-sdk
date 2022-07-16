@@ -59,6 +59,7 @@ mod credentials;
 pub(crate) mod discovery;
 mod errors;
 mod grpc;
+pub(crate) mod grpc_connection_manager;
 mod grpc_wrapper;
 mod load_balancer;
 mod middlewares;

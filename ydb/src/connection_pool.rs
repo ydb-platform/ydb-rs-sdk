@@ -5,11 +5,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 
+#[derive(Clone)]
 pub(crate) struct ConnectionPool {
     state: Arc<Mutex<ConnectionPoolState>>,
 }
-
-impl ConnectionPool {}
 
 impl ConnectionPool {
     pub(crate) fn new() -> Self {

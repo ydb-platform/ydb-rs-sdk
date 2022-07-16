@@ -1,12 +1,13 @@
 use crate::channel_pool::{ChannelPool, ChannelPoolImpl};
 use crate::client::{Middleware, TimeoutSettings};
 use crate::client_common::DBCredentials;
-use crate::discovery::{Discovery, Service};
+use crate::discovery::Discovery;
 use crate::errors::*;
 use crate::session::Session;
 use crate::session_pool::SessionPool;
 use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 
+use crate::grpc_wrapper::grpc_services::Service;
 use num::pow;
 use std::future::Future;
 use std::sync::Arc;
