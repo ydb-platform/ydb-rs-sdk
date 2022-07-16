@@ -2,5 +2,8 @@ pub(crate) mod auth;
 pub(crate) mod channel;
 pub(crate) mod client;
 pub(crate) mod grpc;
+pub(crate) mod grpc_common_types;
 pub(crate) mod grpc_discovery_client;
 pub(crate) mod grpc_services;
+pub(crate) mod grpc_table_service;
+pub(crate) mod ydb_operation;
