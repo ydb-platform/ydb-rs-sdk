@@ -2,7 +2,7 @@ use crate::client_common::DBCredentials;
 use crate::connection_pool::ConnectionPool;
 use crate::grpc_wrapper::auth::create_service_with_auth;
 use crate::grpc_wrapper::channel::ChannelWithAuth;
-use crate::grpc_wrapper::grpc_services::GrpcDiscoveryService;
+use crate::grpc_wrapper::raw_services::GrpcServiceForDiscovery;
 use crate::load_balancer::{LoadBalancer, RandomLoadBalancer};
 use crate::YdbResult;
 use http::Uri;
@@ -22,7 +22,7 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
     }
 
     pub(crate) async fn get_auth_service<
-        T: GrpcDiscoveryService,
+        T: GrpcServiceForDiscovery,
         F: FnOnce(ChannelWithAuth) -> T,
     >(
         &self,
@@ -36,7 +36,7 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
     }
 
     pub(crate) async fn get_auth_service_to_node<
-        T: GrpcDiscoveryService,
+        T: GrpcServiceForDiscovery,
         F: FnOnce(ChannelWithAuth) -> T,
     >(
         &self,

@@ -10,7 +10,7 @@ use crate::channel_pool::{ChannelPool, ChannelPoolImpl};
 use crate::client::{Middleware, TimeoutSettings};
 use crate::client_common::DBCredentials;
 use crate::grpc::{grpc_read_operation_result, grpc_read_void_operation_result, operation_params};
-use crate::grpc_wrapper::grpc_services::Service;
+use crate::grpc_wrapper::raw_services::Service;
 use crate::{Discovery, YdbResult};
 
 pub(crate) type DirectoryServiceClientType = SchemeServiceClient<Middleware>;

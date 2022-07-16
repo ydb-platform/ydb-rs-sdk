@@ -7,7 +7,7 @@ use crate::session::Session;
 use crate::session_pool::SessionPool;
 use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 
-use crate::grpc_wrapper::grpc_services::Service;
+use crate::grpc_wrapper::raw_services::Service;
 use num::pow;
 use std::future::Future;
 use std::sync::Arc;

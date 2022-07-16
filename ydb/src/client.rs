@@ -1,5 +1,5 @@
 use crate::client_common::DBCredentials;
-use crate::client_directory::SchemeClient;
+use crate::client_scheme::SchemeClient;
 use crate::client_table::TableClient;
 use crate::discovery::Discovery;
 use crate::errors::YdbResult;
