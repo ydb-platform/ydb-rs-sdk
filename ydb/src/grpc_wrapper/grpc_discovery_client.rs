@@ -1,5 +1,6 @@
 use crate::grpc_wrapper::channel::ChannelWithAuth;
 use crate::grpc_wrapper::grpc::grpc_read_operation_result;
+use crate::grpc_wrapper::grpc_services::{GrpcDiscoveryService, Service};
 use crate::YdbResult;
 use itertools::Itertools;
 use ydb_grpc::ydb_proto::discovery::v1::discovery_service_client::DiscoveryServiceClient;
@@ -23,7 +24,6 @@ impl GrpcDiscoveryClient {
     ) -> YdbResult<Vec<EndpointInfo>> {
         let req = ListEndpointsRequest {
             database,
-            service: vec![],
             ..ListEndpointsRequest::default()
         };
         let resp = self.service.list_endpoints(req).await?;
@@ -45,4 +45,10 @@ pub(crate) struct EndpointInfo {
     pub(crate) fqdn: String,
     pub(crate) port: u32,
     pub(crate) ssl: bool,
+}
+
+impl GrpcDiscoveryService for GrpcDiscoveryClient {
+    fn get_grpc_discovery_service() -> Service {
+        return Service::Discovery;
+    }
 }

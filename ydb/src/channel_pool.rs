@@ -1,7 +1,8 @@
-use crate::errors::YdbResult;
 use crate::client_common::DBCredentials;
-use crate::discovery::{Discovery, Service};
+use crate::discovery::Discovery;
+use crate::errors::YdbResult;
 use crate::grpc::create_grpc_client_with_error_sender;
+use crate::grpc_wrapper::grpc_services::Service;
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::middlewares::AuthService;
 use async_trait::async_trait;

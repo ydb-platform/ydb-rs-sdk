@@ -5,43 +5,23 @@ use std::sync::{Arc, RwLock, RwLockWriteGuard, Weak};
 use async_trait::async_trait;
 use http::uri::Authority;
 use http::Uri;
-use strum::{Display, EnumIter, EnumString};
 
 use crate::client_common::DBCredentials;
 use crate::errors::YdbResult;
 use crate::grpc::{create_grpc_client, grpc_read_operation_result};
 use crate::waiter::Waiter;
 
+use derivative::Derivative;
 use itertools::Itertools;
 use std::time::Duration;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{watch, Mutex};
 
+use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::channel::create_grpc_channel_with_auth;
 use crate::grpc_wrapper::grpc_discovery_client::{EndpointInfo, GrpcDiscoveryClient};
+use crate::grpc_wrapper::grpc_services::Service;
 use tracing::trace;
-
-#[allow(dead_code)]
-#[derive(Clone, Copy, Display, Debug, EnumIter, EnumString, Eq, Hash, PartialEq)]
-pub(crate) enum Service {
-    #[strum(serialize = "discovery")]
-    Discovery,
-
-    #[strum(serialize = "export")]
-    Export,
-
-    #[strum(serialize = "import")]
-    Import,
-
-    #[strum(serialize = "scripting")]
-    Scripting,
-
-    #[strum(serialize = "table_service")]
-    Table,
-
-    #[strum(serialize = "scheme_service")]
-    Scheme,
-}
 
 /// Current discovery state
 #[derive(Clone, Debug, PartialEq)]
@@ -203,8 +183,12 @@ pub(crate) struct TimerDiscovery {
 
 impl TimerDiscovery {
     #[allow(dead_code)]
-    pub(crate) fn new(cred: DBCredentials, endpoint: &str, interval: Duration) -> YdbResult<Self> {
-        let state = Arc::new(DiscoverySharedState::new(cred, endpoint)?);
+    pub(crate) fn new(
+        connection_manager: GrpcConnectionManager,
+        endpoint: &str,
+        interval: Duration,
+    ) -> YdbResult<Self> {
+        let state = Arc::new(DiscoverySharedState::new(connection_manager, endpoint)?);
         let state_weak = Arc::downgrade(&state);
         tokio::spawn(async move {
             DiscoverySharedState::background_discovery(state_weak, interval).await;
@@ -255,9 +239,11 @@ impl Waiter for TimerDiscovery {
     }
 }
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 struct DiscoverySharedState {
-    cred: DBCredentials,
+    #[derivative(Debug = "ignore")]
+    connection_manager: GrpcConnectionManager,
     discovery_uri: Uri,
     sender: tokio::sync::watch::Sender<Arc<DiscoveryState>>,
 
@@ -269,12 +255,12 @@ struct DiscoverySharedState {
 }
 
 impl DiscoverySharedState {
-    fn new(cred: DBCredentials, endpoint: &str) -> YdbResult<Self> {
+    fn new(connection_manager: GrpcConnectionManager, endpoint: &str) -> YdbResult<Self> {
         let state = Arc::new(DiscoveryState::new(std::time::Instant::now(), Vec::new()));
         let (sender, _) = watch::channel(state.clone());
         let (state_received_sender, state_received) = watch::channel(false);
         return Ok(Self {
-            cred,
+            connection_manager,
             discovery_uri: http::Uri::from_str(endpoint)?,
             sender,
             discovery_process: Mutex::new(()),
@@ -291,13 +277,13 @@ impl DiscoverySharedState {
 
         trace!("creating grpc client");
         let start = std::time::Instant::now();
-        let mut discovery_channel =
-            create_grpc_channel_with_auth(self.discovery_uri.clone(), self.cred.clone()).await?;
-
-        let mut discovery_client = GrpcDiscoveryClient::new(discovery_channel);
+        let mut discovery_client = self
+            .connection_manager
+            .get_auth_service_to_node(GrpcDiscoveryClient::new, &self.discovery_uri)
+            .await?;
 
         let res = discovery_client
-            .list_endpoints(self.cred.database.clone())
+            .list_endpoints(self.connection_manager.database().clone())
             .await?;
         let new_endpoints = Self::list_endpoints_to_node_infos(res)?;
         self.set_discovery_state(
@@ -322,13 +308,6 @@ impl DiscoverySharedState {
 
     #[tracing::instrument(skip(state))]
     async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
-        if let Some(state) = state.upgrade() {
-            // wait token before first discovery
-            trace!("start wait token");
-            state.cred.token_cache.wait().await.unwrap();
-            trace!("token ready");
-        }
-
         while let Some(state) = state.upgrade() {
             trace!("rekby-discovery");
             let res = state.discovery_now().await;
@@ -404,6 +383,8 @@ mod test {
     use crate::client_common::{DBCredentials, TokenCache};
     use crate::discovery::DiscoverySharedState;
     use crate::errors::YdbResult;
+    use crate::grpc_connection_manager::GrpcConnectionManager;
+    use crate::load_balancer::RandomLoadBalancer;
     use crate::test_helpers::CONNECTION_INFO;
     use std::sync::Arc;
     use std::time::Duration;
@@ -418,7 +399,12 @@ mod test {
             })
             .await??,
         };
-        let discovery_shared = DiscoverySharedState::new(cred, CONNECTION_INFO.endpoint.as_str())?;
+
+        let connection_manager =
+            GrpcConnectionManager::new(RandomLoadBalancer::new(), cred.clone());
+
+        let discovery_shared =
+            DiscoverySharedState::new(connection_manager, CONNECTION_INFO.endpoint.as_str())?;
 
         let state = Arc::new(discovery_shared);
         let mut rx = state.sender.subscribe();

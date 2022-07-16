@@ -2,6 +2,8 @@ use crate::client_common::{DBCredentials, TokenCache};
 use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticToken};
 use crate::discovery::{Discovery, TimerDiscovery};
 use crate::errors::{YdbError, YdbResult};
+use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::load_balancer::RandomLoadBalancer;
 use crate::{Client, Credentials};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -125,10 +127,13 @@ impl ClientBuilder {
             database: self.database.clone(),
         };
 
+        let connection_manager =
+            GrpcConnectionManager::new(RandomLoadBalancer::new(), db_cred.clone());
+
         let discovery = match self.discovery {
             Some(discovery_box) => discovery_box,
             None => Box::new(TimerDiscovery::new(
-                db_cred.clone(),
+                connection_manager,
                 self.endpoint.as_str(),
                 self.discovery_interval,
             )?),
