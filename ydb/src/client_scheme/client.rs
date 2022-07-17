@@ -2,14 +2,17 @@ use std::sync::Arc;
 use tracing::trace;
 
 use ydb_grpc::ydb_proto::scheme::v1::scheme_service_client::SchemeServiceClient;
-use ydb_grpc::ydb_proto::scheme::{Entry, MakeDirectoryRequest, RemoveDirectoryRequest};
+use ydb_grpc::ydb_proto::scheme::{MakeDirectoryRequest, RemoveDirectoryRequest};
 
 use crate::channel_pool::{ChannelPool, ChannelPoolImpl};
 use crate::client::{Middleware, TimeoutSettings};
 use crate::client_common::DBCredentials;
+use crate::client_scheme::list_types::SchemeEntry;
 use crate::grpc::{grpc_read_operation_result, grpc_read_void_operation_result, operation_params};
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::grpc_wrapper::raw_scheme_client::list_directory_types::ListDirectoryRequest;
+use crate::grpc_wrapper::raw_scheme_client::list_directory_types::{
+    RawEntry, RawListDirectoryRequest,
+};
 use crate::grpc_wrapper::raw_services::Service;
 use crate::grpc_wrapper::raw_ydb_operation::OperationParams;
 use crate::{grpc_wrapper, Discovery, YdbResult};
@@ -63,17 +66,23 @@ impl SchemeClient {
         grpc_read_void_operation_result(resp)
     }
 
-    pub async fn list_directory(&mut self, path: String) -> YdbResult<Vec<Entry>> {
-        let req = ListDirectoryRequest {
+    pub async fn list_directory(&mut self, path: String) -> YdbResult<Vec<SchemeEntry>> {
+        let req = RawListDirectoryRequest {
             operation_params: OperationParams::new_with_timeout(self.timeouts.operation_timeout),
             path,
         };
-        return Ok(self
+        let mut service = self
             .connection_manager
             .get_auth_service(grpc_wrapper::raw_scheme_client::client::SchemeClient::new)
-            .await?
-            .list_directory(req)?
-            .children);
+            .await?;
+
+        let res = service.list_directory(req).await?;
+
+        return Ok(res
+            .children
+            .into_iter()
+            .map(|item| SchemeEntry::from(item))
+            .collect());
     }
 
     pub async fn remove_directory(&mut self, path: String) -> YdbResult<()> {

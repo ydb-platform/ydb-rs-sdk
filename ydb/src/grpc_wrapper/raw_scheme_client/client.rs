@@ -2,7 +2,7 @@ use crate::grpc_wrapper::channel::ChannelWithAuth;
 use crate::grpc_wrapper::grpc::grpc_read_operation_result;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_scheme_client::list_directory_types::{
-    ListDirectoryRequest, ListDirectoryResult,
+    RawListDirectoryRequest, RawListDirectoryResult,
 };
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_ydb_operation::OperationParams;
@@ -15,15 +15,17 @@ pub(crate) struct SchemeClient {
 }
 
 impl SchemeClient {
-    pub fn new(service: SchemeServiceClient<ChannelWithAuth>) -> Self {
-        return Self { service };
+    pub fn new(service: ChannelWithAuth) -> Self {
+        return Self {
+            service: SchemeServiceClient::new(service),
+        };
     }
 
     #[instrument(skip(self), err, ret)]
     pub async fn list_directory(
         &mut self,
-        req: ListDirectoryRequest,
-    ) -> RawResult<ListDirectoryResult> {
+        req: RawListDirectoryRequest,
+    ) -> RawResult<RawListDirectoryResult> {
         let req = ydb_grpc::ydb_proto::scheme::ListDirectoryRequest::from(req);
         trace!(
             "list directory request: {}",
@@ -31,11 +33,6 @@ impl SchemeClient {
         );
 
         let response = self.service.list_directory(req).await?;
-        trace!(
-            "list directory response: {}",
-            serde_json::to_string(&response).unwrap_or("bad json".into())
-        );
-
         let result: ydb_grpc::ydb_proto::scheme::ListDirectoryResult =
             grpc_read_operation_result(response)?;
 
@@ -44,7 +41,7 @@ impl SchemeClient {
             serde_json::to_string(&result).unwrap_or("bad json".into())
         );
 
-        return ListDirectoryResult::try_from(result);
+        return RawListDirectoryResult::try_from(result);
     }
 }
 

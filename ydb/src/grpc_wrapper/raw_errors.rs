@@ -1,5 +1,8 @@
+use std::fmt::{Display, Formatter, Write};
+
 pub(crate) type RawResult<T> = std::result::Result<T, RawError>;
 
+#[derive(Debug)]
 pub(crate) enum RawError {
     Custom(String),
     ProtobufDecodeError(String),
@@ -18,3 +21,11 @@ impl From<prost::DecodeError> for RawError {
         Self::ProtobufDecodeError(e.to_string())
     }
 }
+
+impl Display for RawError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
+    }
+}
+
+impl std::error::Error for RawError {}

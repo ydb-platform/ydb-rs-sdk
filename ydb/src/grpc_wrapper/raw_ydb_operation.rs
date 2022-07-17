@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use tracing_subscriber::fmt::time;
 
+#[derive(Debug)]
 pub(crate) struct OperationParams {
     operation_mode: OperationMode,
     operation_timeout: crate::grpc_wrapper::raw_common_types::Duration,
@@ -38,6 +39,7 @@ impl From<OperationParams> for ydb_grpc::ydb_proto::operations::OperationParams 
     }
 }
 
+#[derive(Debug)]
 pub(crate) enum OperationMode {
     Unspecified,
     Sync,
