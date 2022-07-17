@@ -10,6 +10,7 @@ use crate::waiter::Waiter;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::grpc_connection_manager::GrpcConnectionManager;
 use tracing::trace;
 
 pub(crate) type Middleware = AuthService;
@@ -20,12 +21,14 @@ pub struct Client {
     load_balancer: SharedLoadBalancer,
     discovery: Arc<Box<dyn Discovery>>,
     timeouts: TimeoutSettings,
+    connection_manager: GrpcConnectionManager,
 }
 
 impl Client {
     pub(crate) fn new(
         credentials: DBCredentials,
         discovery: Box<dyn Discovery>,
+        connection_manager: GrpcConnectionManager,
     ) -> YdbResult<Self> {
         let discovery = Arc::new(discovery);
 
@@ -34,6 +37,7 @@ impl Client {
             load_balancer: SharedLoadBalancer::new(discovery.as_ref()),
             discovery,
             timeouts: TimeoutSettings::default(),
+            connection_manager,
         });
     }
 
@@ -56,6 +60,7 @@ impl Client {
             self.credentials.clone(),
             self.discovery.clone(),
             self.timeouts,
+            self.connection_manager.clone(),
         )
     }
 

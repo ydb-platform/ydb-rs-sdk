@@ -133,13 +133,13 @@ impl ClientBuilder {
         let discovery = match self.discovery {
             Some(discovery_box) => discovery_box,
             None => Box::new(TimerDiscovery::new(
-                connection_manager,
+                connection_manager.clone(),
                 self.endpoint.as_str(),
                 self.discovery_interval,
             )?),
         };
 
-        return Client::new(db_cred, discovery);
+        return Client::new(db_cred, discovery, connection_manager);
     }
 
     pub fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {

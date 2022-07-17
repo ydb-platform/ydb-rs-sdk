@@ -95,12 +95,12 @@ async fn create_grpc_channel(
     };
 }
 
-pub(crate) fn grpc_read_operation_result<TOp, T>(resp: tonic::Response<TOp>) -> errors::YdbResult<T>
+pub(crate) fn grpc_read_operation_result<TOp, T>(resp: tonic::Response<TOp>) -> YdbResult<T>
 where
     TOp: Operation,
     T: Default + prost::Message,
 {
-    return grpc_wrapper::grpc::grpc_read_operation_result(resp);
+    return Ok(grpc_wrapper::grpc::grpc_read_operation_result(resp)?);
 }
 
 pub(crate) fn grpc_read_void_operation_result<TOp>(
@@ -124,7 +124,7 @@ pub(crate) fn proto_issues_to_ydb_issues(proto_issues: Vec<IssueMessage>) -> Vec
 }
 
 pub(crate) fn create_operation_error(op: ydb_grpc::ydb_proto::operations::Operation) -> YdbError {
-    return grpc_wrapper::grpc::create_operation_error(op);
+    return grpc_wrapper::grpc::create_operation_error(op).into();
 }
 
 pub(crate) fn operation_params(timeout: Duration) -> Option<OperationParams> {

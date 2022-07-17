@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use tracing_subscriber::fmt::time;
 
 pub(crate) struct OperationParams {
     operation_mode: OperationMode,
@@ -8,7 +9,7 @@ pub(crate) struct OperationParams {
 }
 
 impl OperationParams {
-    fn new_with_timeouts(
+    pub fn new_with_timeouts(
         operation_timeout: std::time::Duration,
         cancel_after: std::time::Duration,
     ) -> Self {
@@ -19,6 +20,10 @@ impl OperationParams {
             labels: Default::default(),
         };
     }
+
+    pub fn new_with_timeout(timeout: std::time::Duration) -> Self {
+        return Self::new_with_timeouts(timeout, timeout);
+    }
 }
 
 impl From<OperationParams> for ydb_grpc::ydb_proto::operations::OperationParams {
@@ -28,7 +33,7 @@ impl From<OperationParams> for ydb_grpc::ydb_proto::operations::OperationParams 
             operation_timeout: None,
             cancel_after: None,
             labels: Default::default(),
-            ..Self::default()
+            report_cost_info: ydb_grpc::ydb_proto::feature_flag::Status::Unspecified.into(),
         }
     }
 }

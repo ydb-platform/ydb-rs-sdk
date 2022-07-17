@@ -44,6 +44,8 @@
 //!
 //! [Many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
 //!
+extern crate core;
+
 mod channel_pool;
 pub(crate) mod client;
 mod client_builder;
