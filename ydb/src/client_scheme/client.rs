@@ -10,9 +10,7 @@ use crate::client_common::DBCredentials;
 use crate::client_scheme::list_types::SchemeEntry;
 use crate::grpc::{grpc_read_operation_result, grpc_read_void_operation_result, operation_params};
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::grpc_wrapper::raw_scheme_client::list_directory_types::{
-    RawEntry, RawListDirectoryRequest,
-};
+use crate::grpc_wrapper::raw_scheme_client::list_directory_types::RawListDirectoryRequest;
 use crate::grpc_wrapper::raw_services::Service;
 use crate::grpc_wrapper::raw_ydb_operation::OperationParams;
 use crate::{grpc_wrapper, Discovery, YdbResult};
