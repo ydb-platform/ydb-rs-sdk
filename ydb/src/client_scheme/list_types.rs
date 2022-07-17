@@ -1,4 +1,5 @@
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct SchemeEntry {
     pub name: String,
     pub owner: String,
@@ -9,6 +10,7 @@ pub struct SchemeEntry {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum SchemeEntryType {
     Unspecified,
     Directory,
