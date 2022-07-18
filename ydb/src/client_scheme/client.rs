@@ -23,26 +23,15 @@ pub(crate) type DirectoryServiceChannelPool = Arc<Box<dyn ChannelPool<DirectoryS
 
 pub struct SchemeClient {
     timeouts: TimeoutSettings,
-    channel_pool: DirectoryServiceChannelPool,
     connection_manager: GrpcConnectionManager,
 }
 
 impl SchemeClient {
     pub(crate) fn new(
-        credentials: DBCredentials,
-        discovery: Arc<Box<dyn Discovery>>,
         timeouts: TimeoutSettings,
         connection_manager: GrpcConnectionManager,
     ) -> Self {
-        let channel_pool = ChannelPoolImpl::new::<DirectoryServiceClientType>(
-            discovery,
-            credentials.clone(),
-            Service::Scheme,
-            DirectoryServiceClientType::new,
-        );
-
         Self {
-            channel_pool: Arc::new(Box::new(channel_pool)),
             timeouts,
             connection_manager,
         }

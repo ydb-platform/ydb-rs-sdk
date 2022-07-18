@@ -56,12 +56,7 @@ impl Client {
 
     /// Create instance of client for directory service
     pub fn scheme_client(&self) -> SchemeClient {
-        SchemeClient::new(
-            self.credentials.clone(),
-            self.discovery.clone(),
-            self.timeouts,
-            self.connection_manager.clone(),
-        )
+        SchemeClient::new(self.timeouts, self.connection_manager.clone())
     }
 
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {
