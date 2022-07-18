@@ -5,7 +5,6 @@ pub(crate) mod raw_common_types;
 pub(crate) mod raw_discovery_client;
 pub(crate) mod raw_errors;
 pub(crate) mod raw_scheme_client;
-pub(crate) mod raw_scheme_client2;
 pub(crate) mod raw_services;
 pub(crate) mod raw_status;
 pub(crate) mod raw_table_service;

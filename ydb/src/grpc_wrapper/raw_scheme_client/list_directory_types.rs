@@ -1,10 +1,10 @@
 use crate::grpc_wrapper::raw_errors::RawError;
-use crate::grpc_wrapper::raw_ydb_operation::OperationParams;
+use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::{SchemeEntry, SchemeEntryType, SchemePermissions};
 
 #[derive(Debug)]
 pub(crate) struct RawListDirectoryRequest {
-    pub(crate) operation_params: OperationParams,
+    pub(crate) operation_params: RawOperationParams,
     pub(crate) path: String,
 }
 

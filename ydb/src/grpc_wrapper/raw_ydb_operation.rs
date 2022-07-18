@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use tracing_subscriber::fmt::time;
 
 #[derive(Debug)]
-pub(crate) struct OperationParams {
+pub(crate) struct RawOperationParams {
     operation_mode: OperationMode,
     operation_timeout: crate::grpc_wrapper::raw_common_types::Duration,
     cancel_after: crate::grpc_wrapper::raw_common_types::Duration,
     labels: HashMap<String, String>,
 }
 
-impl OperationParams {
+impl RawOperationParams {
     pub fn new_with_timeouts(
         operation_timeout: std::time::Duration,
         cancel_after: std::time::Duration,
@@ -27,8 +27,8 @@ impl OperationParams {
     }
 }
 
-impl From<OperationParams> for ydb_grpc::ydb_proto::operations::OperationParams {
-    fn from(params: OperationParams) -> Self {
+impl From<RawOperationParams> for ydb_grpc::ydb_proto::operations::OperationParams {
+    fn from(params: RawOperationParams) -> Self {
         Self {
             operation_mode: params.operation_mode.into(),
             operation_timeout: None,

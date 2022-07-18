@@ -24,6 +24,20 @@ where
     return Ok(res);
 }
 
+pub(crate) fn grpc_read_void_operation_result<TOp>(resp: tonic::Response<TOp>) -> RawResult<()>
+where
+    TOp: Operation,
+{
+    let resp_inner = resp.into_inner();
+    let op = resp_inner
+        .operation()
+        .ok_or(RawError::Custom("no operation object in result".into()))?;
+    if op.status() != StatusCode::Success {
+        return Err(create_operation_error(op));
+    }
+    return Ok(());
+}
+
 pub(crate) fn create_operation_error(op: ydb_grpc::ydb_proto::operations::Operation) -> RawError {
     return RawError::YdbStatus(crate::errors::YdbStatusError {
         message: format!("{:?}", &op),
