@@ -384,8 +384,10 @@ mod test {
     use crate::discovery::DiscoverySharedState;
     use crate::errors::YdbResult;
     use crate::grpc_connection_manager::GrpcConnectionManager;
-    use crate::load_balancer::RandomLoadBalancer;
+    use crate::load_balancer::{RandomLoadBalancer, SharedLoadBalancer, StaticLoadBalancer};
     use crate::test_helpers::CONNECTION_INFO;
+    use http::Uri;
+    use std::str::FromStr;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -400,8 +402,10 @@ mod test {
             .await??,
         };
 
-        let connection_manager =
-            GrpcConnectionManager::new(RandomLoadBalancer::new(), cred.clone());
+        let uri = Uri::from_str(CONNECTION_INFO.endpoint.as_str())?;
+        let load_balancer =
+            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(uri)));
+        let connection_manager = GrpcConnectionManager::new(load_balancer, cred.clone());
 
         let discovery_shared =
             DiscoverySharedState::new(connection_manager, CONNECTION_INFO.endpoint.as_str())?;

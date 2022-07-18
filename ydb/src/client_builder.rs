@@ -3,8 +3,9 @@ use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticTok
 use crate::discovery::{Discovery, TimerDiscovery};
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::load_balancer::RandomLoadBalancer;
+use crate::load_balancer::{RandomLoadBalancer, SharedLoadBalancer, StaticLoadBalancer};
 use crate::{Client, Credentials};
+use http::Uri;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -127,17 +128,24 @@ impl ClientBuilder {
             database: self.database.clone(),
         };
 
-        let connection_manager =
-            GrpcConnectionManager::new(RandomLoadBalancer::new(), db_cred.clone());
+        let endpoint: Uri = Uri::from_str(self.endpoint.as_str())?;
+        let static_balancer = StaticLoadBalancer::new(endpoint);
+        let discovery_connection_manager = GrpcConnectionManager::new(
+            SharedLoadBalancer::new_with_balancer(Box::new(static_balancer)),
+            db_cred.clone(),
+        );
 
         let discovery = match self.discovery {
             Some(discovery_box) => discovery_box,
             None => Box::new(TimerDiscovery::new(
-                connection_manager.clone(),
+                discovery_connection_manager,
                 self.endpoint.as_str(),
                 self.discovery_interval,
             )?),
         };
+
+        let load_balancer = SharedLoadBalancer::new(&discovery);
+        let connection_manager = GrpcConnectionManager::new(load_balancer, db_cred.clone());
 
         return Client::new(db_cred, discovery, connection_manager);
     }
