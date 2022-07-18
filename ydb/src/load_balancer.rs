@@ -111,6 +111,7 @@ impl Waiter for StaticLoadBalancer {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct RandomLoadBalancer {
     discovery_state: Arc<DiscoveryState>,
     waiter: Arc<WaiterImpl>,

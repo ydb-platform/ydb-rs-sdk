@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub(crate) struct Duration {
     val: std::time::Duration,
 }

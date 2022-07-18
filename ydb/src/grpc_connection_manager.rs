@@ -3,11 +3,11 @@ use crate::connection_pool::ConnectionPool;
 use crate::grpc_wrapper::auth::create_service_with_auth;
 use crate::grpc_wrapper::channel::ChannelWithAuth;
 use crate::grpc_wrapper::raw_services::GrpcServiceForDiscovery;
-use crate::load_balancer::{LoadBalancer, RandomLoadBalancer};
+use crate::load_balancer::{LoadBalancer, RandomLoadBalancer, SharedLoadBalancer};
 use crate::YdbResult;
 use http::Uri;
 
-pub(crate) type GrpcConnectionManager = GrpcConnectionManagerGeneric<RandomLoadBalancer>;
+pub(crate) type GrpcConnectionManager = GrpcConnectionManagerGeneric<SharedLoadBalancer>;
 
 #[derive(Clone)]
 pub(crate) struct GrpcConnectionManagerGeneric<TBalancer: LoadBalancer> {

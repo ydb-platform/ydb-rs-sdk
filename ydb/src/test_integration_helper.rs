@@ -1,16 +1,16 @@
-use std::sync::Arc;
-use async_once::AsyncOnce;
-use lazy_static::lazy_static;
-use tracing::trace;
 use crate::client::Client;
 use crate::client_builder::ClientBuilder;
 use crate::errors::YdbResult;
-
+use async_once::AsyncOnce;
+use lazy_static::lazy_static;
+use std::sync::Arc;
+use tracing::trace;
 
 lazy_static! {
     static ref TEST_CLIENT: AsyncOnce<Arc<Client>> = AsyncOnce::new(async {
         let client_builder: ClientBuilder =
-            std::env::var("YDB_CONNECTION_STRING").unwrap().parse().unwrap();
+            std::env::var("YDB_CONNECTION_STRING").unwrap_or(
+            "grpc://localhost:2136?database=/local".to_string()).parse().unwrap();
 
         trace!("create client");
         let client: Client = client_builder

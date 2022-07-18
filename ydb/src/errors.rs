@@ -1,5 +1,6 @@
 use crate::errors::NeedRetry::IdempotentOnly;
 
+use crate::grpc_wrapper::raw_errors::RawError;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
@@ -285,7 +286,6 @@ to_custom_ydb_err!(
     YdbOrCustomerError,
     std::convert::Infallible,
     http::Error,
-    prost::DecodeError,
     reqwest::Error,
     serde_json::Error,
     std::env::VarError,
@@ -319,5 +319,18 @@ impl<T> From<std::sync::PoisonError<T>> for YdbError {
 impl From<tonic::Status> for YdbError {
     fn from(e: tonic::Status) -> Self {
         return YdbError::TransportGRPCStatus(Arc::new(e));
+    }
+}
+
+impl From<RawError> for YdbError {
+    fn from(e: RawError) -> Self {
+        match e {
+            RawError::Custom(message) => YdbError::Custom(format!("raw custom error: {}", message)),
+            RawError::ProtobufDecodeError(message) => {
+                YdbError::Custom(format!("decode protobuf error: {}", message))
+            }
+            RawError::TonicStatus(s) => YdbError::TransportGRPCStatus(Arc::new(s)),
+            RawError::YdbStatus(status_error) => YdbError::YdbStatusError(status_error),
+        }
     }
 }

@@ -44,6 +44,8 @@
 //!
 //! [Many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
 //!
+extern crate core;
+
 mod channel_pool;
 pub(crate) mod client;
 mod client_builder;
@@ -84,8 +86,11 @@ pub use client::Client;
 pub use client_builder::ClientBuilder;
 // full enum pub types
 pub use client_table::{RetryOptions, TableClient, TransactionOptions};
+
 // full enum pub types
-pub use client_scheme::SchemeClient;
+pub use client_scheme::client::SchemeClient;
+pub use client_scheme::list_types::{SchemeEntry, SchemeEntryType, SchemePermissions};
+
 // full enum pub types
 pub use discovery::{Discovery, DiscoveryState, StaticDiscovery};
 // full enum pub types
