@@ -29,7 +29,7 @@ impl TryFrom<ydb_grpc::ydb_proto::scheme::ListDirectoryResult> for RawListDirect
     fn try_from(
         value: ydb_grpc::ydb_proto::scheme::ListDirectoryResult,
     ) -> Result<Self, Self::Error> {
-        let selfEntry = if let (Some(entry)) = value.self_ {
+        let self_entry = if let (Some(entry)) = value.self_ {
             from_grpc_to_scheme_entry(entry)
         } else {
             return Err(RawError::ProtobufDecodeError(format!(
@@ -38,7 +38,7 @@ impl TryFrom<ydb_grpc::ydb_proto::scheme::ListDirectoryResult> for RawListDirect
         };
 
         Ok(Self {
-            self_item: selfEntry,
+            self_item: self_entry,
             children: value
                 .children
                 .into_iter()
