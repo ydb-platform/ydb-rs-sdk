@@ -2392,4 +2392,4 @@ dependencies = [
 
 [[package]]
 name = "ydb-grpc-helpers"
-version = "0.0.8"
+version = "0.0.9"
