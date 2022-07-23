@@ -127,6 +127,8 @@ bump_version "$CRATE_NAME" "$VERSION_PART"
 # Force update Cargo.toml for new versions
 cargo check
 
+git diff
+
 git_set_tags
 
 # push tags before publish - for fix repository state if failed in middle of publish crates
