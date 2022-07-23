@@ -90,7 +90,7 @@ function version_dep_set() {
   local DEP_NAME="$1"
   local VERSION="$2"
 
-  for FILE in $(find . -name Cargo.toml -depth 2); do
+  for FILE in $(find . -mindepth 2 -maxdepth 2 -name Cargo.toml); do
     sed -i.bak -e "s|^$DEP_NAME *=.*|$DEP_NAME = \\{ version = \"$VERSION\", path=\"../$DEP_NAME\"\\}|" "$FILE"
   done
 }
