@@ -483,7 +483,7 @@ SELECT NULL
 }
 
 #[tokio::test]
-#[traced_test]
+// #[traced_test]
 #[ignore] // need YDB access
 async fn stream_query() -> YdbResult<()> {
     let client = create_client().await?.table_client();
