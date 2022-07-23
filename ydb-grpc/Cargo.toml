@@ -17,7 +17,7 @@ serde={version="1.0", features=["derive"]}
 tonic = {version = "0.7", features=["tls", "tls-roots", "tls-webpki-roots"]}
 
 [build-dependencies]
-ydb-grpc-helpers = { version = "0.0.7", path="../ydb-grpc-helpers"}
+ydb-grpc-helpers = { version = "0.0.8", path="../ydb-grpc-helpers"}
 prost-build = "0.10"
 pbjson-build="0.3"
 tonic-build = "0.7"
