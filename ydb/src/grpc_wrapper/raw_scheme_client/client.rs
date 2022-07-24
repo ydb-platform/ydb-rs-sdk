@@ -28,22 +28,11 @@ impl SchemeClient {
         &mut self,
         req: RawListDirectoryRequest,
     ) -> RawResult<RawListDirectoryResult> {
-        let req = ydb_grpc::ydb_proto::scheme::ListDirectoryRequest::from(req);
-        trace!(
-            "list directory request: {}",
-            serde_json::to_string(&req).unwrap_or("bad json".into())
+        request_with_result!(
+            self.service.list_directory,
+            req => ydb_grpc::ydb_proto::scheme::ListDirectoryRequest,
+            ydb_grpc::ydb_proto::scheme::ListDirectoryResult => RawListDirectoryResult
         );
-
-        let response = self.service.list_directory(req).await?;
-        let result: ydb_grpc::ydb_proto::scheme::ListDirectoryResult =
-            grpc_read_operation_result(response)?;
-
-        trace!(
-            "list directory result: {}",
-            serde_json::to_string(&result).unwrap_or("bad json".into())
-        );
-
-        return RawListDirectoryResult::try_from(result);
     }
 
     #[instrument(skip(self), err, ret)]
