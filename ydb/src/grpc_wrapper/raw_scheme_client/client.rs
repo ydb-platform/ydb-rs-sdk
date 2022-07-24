@@ -48,26 +48,18 @@ impl SchemeClient {
 
     #[instrument(skip(self), err, ret)]
     pub async fn make_directory(&mut self, req: RawMakeDirectoryRequest) -> RawResult<()> {
-        let req = MakeDirectoryRequest::from(req);
-        trace!(
-            "make directory request: {}",
-            serde_json::to_string(&req).unwrap_or("bad json".into())
+        request_without_result!(
+            self.service.make_directory,
+            req => ydb_grpc::ydb_proto::scheme::MakeDirectoryRequest
         );
-
-        let response = self.service.make_directory(req).await?;
-        return grpc_read_void_operation_result(response);
     }
 
     #[instrument(skip(self), err, ret)]
     pub async fn remove_directory(&mut self, req: RawRemoveDirectoryRequest) -> RawResult<()> {
-        let req = RemoveDirectoryRequest::from(req);
-        trace!(
-            "remove directory request: {}",
-            serde_json::to_string(&req).unwrap_or("bad json".into())
+        request_without_result!(
+            self.service.remove_directory,
+            req => ydb_grpc::ydb_proto::scheme::RemoveDirectoryRequest
         );
-
-        let response = self.service.remove_directory(req).await?;
-        return grpc_read_void_operation_result(response);
     }
 }
 

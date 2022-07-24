@@ -6,6 +6,16 @@ pub(crate) struct GrpcTableClient {
     service: TableServiceClient<ChannelWithAuth>,
 }
 
+impl GrpcTableClient {
+    pub fn new(service: ChannelWithAuth) -> Self {
+        return Self {
+            service: TableServiceClient::new(service),
+        };
+    }
+
+    pub async fn execute_scheme_request(req: ExecuteSchemeQueryRequest) {}
+}
+
 pub(crate) struct ExecuteSchemeQueryRequest {
     pub(crate) session_id: String,
     pub(crate) text: String,
