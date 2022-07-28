@@ -12,11 +12,11 @@ use ydb_grpc::ydb_proto::operations::OperationParams;
 use ydb_grpc::ydb_proto::scheme::v1::scheme_service_client::SchemeServiceClient;
 use ydb_grpc::ydb_proto::scheme::{MakeDirectoryRequest, RemoveDirectoryRequest};
 
-pub(crate) struct SchemeClient {
+pub(crate) struct RawSchemeClient {
     service: SchemeServiceClient<ChannelWithAuth>,
 }
 
-impl SchemeClient {
+impl RawSchemeClient {
     pub fn new(service: ChannelWithAuth) -> Self {
         return Self {
             service: SchemeServiceClient::new(service),
@@ -52,7 +52,7 @@ impl SchemeClient {
     }
 }
 
-impl GrpcServiceForDiscovery for SchemeClient {
+impl GrpcServiceForDiscovery for RawSchemeClient {
     fn get_grpc_discovery_service() -> Service {
         return Service::Scheme;
     }
