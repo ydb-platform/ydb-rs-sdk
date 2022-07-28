@@ -19,6 +19,10 @@ macro_rules! request_with_result {
         $RawRequest: ident => $GrpcRequestType: ty,
         $GrcpResultType: ty => $RawResultType: ty
     ) => {
+        use crate::grpc_wrapper::grpc::{
+            grpc_read_operation_result, grpc_read_void_operation_result,
+        };
+
         let req = <$GrpcRequestType>::from($RawRequest);
 
         trace!(
