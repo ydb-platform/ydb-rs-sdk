@@ -48,13 +48,13 @@ jobs:
           ~/.cargo/git/db/
           target/
 
-    - name: Build
-      run: cargo build --verbose --workspace --all-targets
-
     - name: Linter
-      if: ${{ matrix.rust_version }} != "1.56.0"
+      if: matrix.rust_version != "1.56.0"
       run: |
         cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+    - name: Build
+      run: cargo build --verbose --workspace --all-targets
 
     - name: Wait database available
       run: bash ./.github/scripts/start-ydb-container.sh
