@@ -9,7 +9,7 @@ impl From<std::time::Duration> for Duration {
     }
 }
 
-impl From<Duration> for prost_types::Duration {
+impl From<Duration> for pbjson_types::Duration {
     fn from(d: Duration) -> Self {
         Self {
             seconds: d.val.as_secs() as i64,

@@ -3,8 +3,8 @@ use std::collections::HashMap;
 #[derive(Debug)]
 pub(crate) struct RawOperationParams {
     operation_mode: OperationMode,
-    operation_timeout: crate::grpc_wrapper::raw_common_types::Duration,
-    cancel_after: crate::grpc_wrapper::raw_common_types::Duration,
+    operation_timeout: Option<crate::grpc_wrapper::raw_common_types::Duration>,
+    cancel_after: Option<crate::grpc_wrapper::raw_common_types::Duration>,
     labels: HashMap<String, String>,
 }
 
@@ -15,8 +15,8 @@ impl RawOperationParams {
     ) -> Self {
         Self {
             operation_mode: OperationMode::Sync,
-            operation_timeout: operation_timeout.into(),
-            cancel_after: cancel_after.into(),
+            operation_timeout: Some(operation_timeout.into()),
+            cancel_after: Some(cancel_after.into()),
             labels: Default::default(),
         }
     }
@@ -30,8 +30,8 @@ impl From<RawOperationParams> for ydb_grpc::ydb_proto::operations::OperationPara
     fn from(params: RawOperationParams) -> Self {
         Self {
             operation_mode: params.operation_mode.into(),
-            operation_timeout: None,
-            cancel_after: None,
+            operation_timeout: params.operation_timeout.map(|item| item.into()),
+            cancel_after: params.cancel_after.map(|item| item.into()),
             labels: params.labels,
             report_cost_info: ydb_grpc::ydb_proto::feature_flag::Status::Unspecified.into(),
         }

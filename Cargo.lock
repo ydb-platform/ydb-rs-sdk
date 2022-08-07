@@ -2341,6 +2341,7 @@ dependencies = [
  "ntest",
  "num",
  "once_cell",
+ "pbjson-types",
  "prost",
  "prost-types",
  "rand",
