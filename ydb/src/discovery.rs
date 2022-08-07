@@ -78,6 +78,8 @@ impl DiscoveryState {
         true
     }
 
+    // TODO: uncomment if need in read code or remove test
+    #[cfg(test)]
     pub(crate) fn with_node_info(mut self, _service: Service, node_info: NodeInfo) -> Self {
         if !self.nodes.contains(&node_info) {
             self.nodes.push(node_info);
@@ -139,7 +141,7 @@ pub struct StaticDiscovery {
 impl StaticDiscovery {
     pub fn new_from_str<'a, T: Into<&'a str>>(endpoint: T) -> YdbResult<Self> {
         let endpoint = Uri::from_str(endpoint.into())?;
-        let nodes = vec![NodeInfo { uri: endpoint }];
+        let nodes = vec![NodeInfo::new(endpoint)];
 
         let state = DiscoveryState::new(std::time::Instant::now(), nodes);
         let state = Arc::new(state);
@@ -318,7 +320,7 @@ impl DiscoverySharedState {
     fn list_endpoints_to_node_infos(list: Vec<EndpointInfo>) -> YdbResult<Vec<NodeInfo>> {
         list.into_iter()
             .map(|item| match Self::endpoint_info_to_uri(item) {
-                Ok(uri) => YdbResult::<NodeInfo>::Ok(NodeInfo { uri }),
+                Ok(uri) => YdbResult::<NodeInfo>::Ok(NodeInfo::new(uri)),
                 Err(err) => YdbResult::<NodeInfo>::Err(err),
             })
             .try_collect()

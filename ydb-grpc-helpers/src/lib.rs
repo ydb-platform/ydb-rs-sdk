@@ -2,6 +2,7 @@
 //! End customers should use crate ydb.
 
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 
 pub fn get_proto_package(s: &str) -> Option<&str> {
     for logic_line in s.split(';') {
@@ -40,10 +41,6 @@ impl ProtoModule {
         }
     }
 
-    pub fn to_string(&self) -> String {
-        self.to_string_with_indent("")
-    }
-
     fn to_string_with_indent(&self, indent: &str) -> String {
         let mut res = String::new();
 
@@ -66,6 +63,12 @@ impl ProtoModule {
         }
 
         res
+    }
+}
+
+impl Display for ProtoModule {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_string_with_indent(""))
     }
 }
 
@@ -96,9 +99,7 @@ mod tests {
         m.add_file("asd.rs");
         let asd = "asd".to_string();
         let mut expected_m = ProtoModule::default();
-        expected_m
-            .submodules
-            .insert(asd, ProtoModule::default());
+        expected_m.submodules.insert(asd, ProtoModule::default());
         expected_m.submodules.get_mut("asd").unwrap().file_name = Some("asd.rs".to_string());
         assert_eq!(m, expected_m);
 

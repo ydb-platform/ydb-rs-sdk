@@ -1,25 +1,12 @@
-use std::sync::Arc;
-
-
-use ydb_grpc::ydb_proto::scheme::v1::scheme_service_client::SchemeServiceClient;
-
-
-use crate::channel_pool::{ChannelPool};
-use crate::client::{Middleware, TimeoutSettings};
-
+use crate::client::TimeoutSettings;
 use crate::client_scheme::list_types::SchemeEntry;
-
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_scheme_client::client::{
     RawMakeDirectoryRequest, RawRemoveDirectoryRequest,
 };
 use crate::grpc_wrapper::raw_scheme_client::list_directory_types::RawListDirectoryRequest;
-
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::{grpc_wrapper, YdbResult};
-
-pub(crate) type DirectoryServiceClientType = SchemeServiceClient<Middleware>;
-pub(crate) type DirectoryServiceChannelPool = Arc<Box<dyn ChannelPool<DirectoryServiceClientType>>>;
 
 pub struct SchemeClient {
     timeouts: TimeoutSettings,
@@ -56,10 +43,7 @@ impl SchemeClient {
         let mut service = self.connection().await?;
         let res = service.list_directory(req).await?;
 
-        Ok(res
-            .children
-            .into_iter()
-            .collect())
+        Ok(res.children.into_iter().collect())
     }
 
     pub async fn remove_directory(&mut self, path: String) -> YdbResult<()> {

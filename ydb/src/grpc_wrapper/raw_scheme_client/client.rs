@@ -1,12 +1,11 @@
 use crate::grpc_wrapper::channel::ChannelWithAuth;
-use crate::grpc_wrapper::grpc::{grpc_read_operation_result, grpc_read_void_operation_result};
+use crate::grpc_wrapper::grpc::grpc_read_void_operation_result;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_scheme_client::list_directory_types::{
     RawListDirectoryRequest, RawListDirectoryResult,
 };
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-use crate::YdbResult;
 use tracing::{instrument, trace};
 use ydb_grpc::ydb_proto::operations::OperationParams;
 use ydb_grpc::ydb_proto::scheme::v1::scheme_service_client::SchemeServiceClient;

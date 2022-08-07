@@ -544,13 +544,8 @@ FROM
     let mut res = session.execute_scan_query(query).await?;
     let mut sum = 0;
     let mut result_set_count = 0;
-    loop {
-        let result_set = if let Some(result_set) = res.next().await? {
-            result_set_count += 1;
-            result_set
-        } else {
-            break;
-        };
+    while let Some(result_set) = res.next().await? {
+        result_set_count += 1;
 
         for mut row in result_set.into_iter() {
             match row.remove_field(0)? {
@@ -568,7 +563,7 @@ FROM
         expected_sum += i;
     }
     assert_eq!(expected_sum, sum);
-    // need improove for non flap in tests
-    // assert!(result_set_count > 1); // ensure get multiply results
+    // TODO: need improove for non flap in tests for will strong more then 1
+    assert!(result_set_count >= 1); // ensure get multiply results
     Ok(())
 }

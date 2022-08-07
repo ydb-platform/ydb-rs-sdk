@@ -19,7 +19,7 @@ impl From<RawListDirectoryRequest> for ydb_grpc::ydb_proto::scheme::ListDirector
 
 #[derive(Debug)]
 pub(crate) struct RawListDirectoryResult {
-    pub(crate) self_item: crate::SchemeEntry,
+    pub(crate) _self_item: crate::SchemeEntry,
     pub(crate) children: Vec<crate::SchemeEntry>,
 }
 
@@ -32,11 +32,13 @@ impl TryFrom<ydb_grpc::ydb_proto::scheme::ListDirectoryResult> for RawListDirect
         let self_entry = if let Some(entry) = value.self_ {
             from_grpc_to_scheme_entry(entry)
         } else {
-            return Err(RawError::ProtobufDecodeError("list directory self entry is empty".to_string()));
+            return Err(RawError::ProtobufDecodeError(
+                "list directory self entry is empty".to_string(),
+            ));
         };
 
         Ok(Self {
-            self_item: self_entry,
+            _self_item: self_entry,
             children: value
                 .children
                 .into_iter()

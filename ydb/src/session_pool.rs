@@ -2,14 +2,11 @@ use crate::client::TimeoutSettings;
 use crate::client_table::TableServiceChannelPool;
 use crate::errors::*;
 use crate::grpc::grpc_read_operation_result;
-use crate::grpc_wrapper::raw_table_service::client::RawTableClient;
 use crate::session::Session;
 use async_trait::async_trait;
-use std::borrow::BorrowMut;
 use std::collections::vec_deque::VecDeque;
 use std::ops::{Add, Sub};
 use std::sync::{Arc, Mutex, Weak};
-use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::Semaphore;
 use tracing::trace;
 use ydb_grpc::ydb_proto::table::{CreateSessionRequest, CreateSessionResult};
@@ -36,21 +33,6 @@ impl SessionClient for TableServiceChannelPool {
             TimeoutSettings::default(),
         );
         return Ok(session);
-    }
-}
-
-#[async_trait]
-impl SessionClient for Arc<TokioMutex<RawTableClient>> {
-    async fn create_session(&self) -> YdbResult<Session> {
-        let mut guard = self.lock().await;
-        let raw_client = guard.borrow_mut();
-        let res = raw_client.create_session().await?;
-        // let session = Session::new(
-        //     res,
-        //     self.clone(),
-        //     TimeoutSettings::default(),
-        // )
-        panic!("not implemented")
     }
 }
 

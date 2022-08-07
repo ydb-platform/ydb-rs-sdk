@@ -42,7 +42,7 @@ impl Client {
         })
     }
 
-    pub(crate) fn database(&self) -> String {
+    pub fn database(&self) -> String {
         self.credentials.database.clone()
     }
 

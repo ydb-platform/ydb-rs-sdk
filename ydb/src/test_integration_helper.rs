@@ -9,7 +9,7 @@ use tracing::trace;
 lazy_static! {
     static ref TEST_CLIENT: AsyncOnce<Arc<Client>> = AsyncOnce::new(async {
         let client_builder: ClientBuilder =
-            std::env::var("YDB_CONNECTION_STRING").unwrap_or(
+            std::env::var("YDB_CONNECTION_STRING").unwrap_or_else(|_|
             "grpc://localhost:2136?database=/local".to_string()).parse().unwrap();
 
         trace!("create client");

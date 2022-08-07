@@ -296,18 +296,20 @@ mod test {
         };
 
         let mut map = HashMap::new();
-        map.insert(one.clone(), 0);
-        map.insert(two.clone(), 0);
+        map.insert(one.to_string(), 0);
+        map.insert(two.to_string(), 0);
 
         for _ in 0..100 {
             let u = load_balancer.endpoint(Table)?;
-            let val = *map.get_mut(&u).unwrap();
-            map.insert(u.clone(), val + 1);
+            let val = *map.get_mut(u.to_string().as_str()).unwrap();
+            map.insert(u.to_string(), val + 1);
         }
 
+        let linter_test = 4;
+
         assert_eq!(map.len(), 2);
-        assert!(*map.get(&one).unwrap() > 30);
-        assert!(*map.get(&two).unwrap() > 30);
+        assert!(*map.get(one.to_string().as_str()).unwrap() > 30);
+        assert!(*map.get(two.to_string().as_str()).unwrap() > 30);
         Ok(())
     }
 }

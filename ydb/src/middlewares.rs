@@ -5,7 +5,6 @@ use crate::channel_pool::ChannelProxy;
 use http::{HeaderValue, Request, Response};
 use tonic::body::BoxBody;
 
-use tonic::service::Interceptor;
 use tonic::transport::Body;
 
 use tower::Service;
