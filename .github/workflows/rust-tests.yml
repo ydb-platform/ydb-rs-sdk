@@ -13,23 +13,10 @@ env:
   RUST_VERSION: 1.56.0
 
 jobs:
-  detect_rust_version:
-    runs-on: ubuntu-20.04
-    outputs:
-      rust_version: ${{ steps.rust_version_step.outputs.version }}
-    steps:
-    - name: Install fixed rust version
-      uses: ATiltedTree/setup-rust@v1
-      with:
-        rust-version: ${{ matrix.rust_version }}
-    - name: Rust version
-      id: rust_version_step
-      run: echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
-
   tests:
     strategy:
       matrix:
-        rust_version: [ "1.56.0", ${{ needs.detect_rust_version.outputs.rust_version }} ]
+        rust_version: [ "1.56.0", "stable" ]
 
     runs-on: ubuntu-20.04
 
@@ -45,10 +32,14 @@ jobs:
       with:
         submodules: true
 
+    - name: Rust version
+      id: rust_version_step
+      run: echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
+
     - name: Cache
       uses: actions/cache@v3
       with:
-        key: ${{ runner.os }}-${{ matrix.rust_version }}-cargo-${{ hashFiles('**/Cargo.lock') }}-1
+        key: ${{ runner.os }}-${{ steps.rust_version_step.outputs.version }}-cargo-${{ hashFiles('**/Cargo.lock') }}-1
         path: |
           ~/.cargo/bin/
           ~/.cargo/.crates.toml
@@ -57,11 +48,6 @@ jobs:
           ~/.cargo/registry/
           ~/.cargo/git/db/
           target/
-
-    - name: Rust check versions
-      run: |
-        cargo version
-        rustc --version
 
     - name: Build
       run: cargo build --verbose --workspace --all-targets
