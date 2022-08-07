@@ -1,9 +1,8 @@
 use ydb::{ydb_params, Query, TableClient, YdbError, YdbResult};
 
 pub async fn init_db() -> ydb::YdbResult<ydb::Client> {
-    #[allow(clippy::or_fun_call)]
     let conn_string = std::env::var("YDB_CONNECTION_STRING")
-        .unwrap_or("grpc://localhost:2136?database=/local".to_string());
+        .unwrap_or_else(|_| "grpc://localhost:2136?database=/local".to_string());
     let client = ydb::ClientBuilder::from_str(conn_string)?.client()?;
 
     client.wait().await?;

@@ -1,5 +1,5 @@
 pub(crate) enum StatusCode {
-    StatusCodeUnspecified,
+    Unspecified,
     Success,
     BadRequest,
     Unauthorized,

@@ -1,6 +1,6 @@
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::trait_operation::Operation;
-use crate::{YdbIssue};
+use crate::YdbIssue;
 use ydb_grpc::ydb_proto::issue::IssueMessage;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
@@ -13,13 +13,13 @@ where
     let resp_inner = resp.into_inner();
     let op = resp_inner
         .operation()
-        .ok_or(RawError::Custom("no operation object in result".into()))?;
+        .ok_or_else(|| RawError::Custom("no operation object in result".into()))?;
     if op.status() != StatusCode::Success {
         return Err(create_operation_error(op));
     }
     let opres = op
         .result
-        .ok_or(RawError::Custom("no result data in operation".into()))?;
+        .ok_or_else(|| RawError::Custom("no result data in operation".into()))?;
     let res: T = T::decode(opres.value)?;
     Ok(res)
 }
@@ -31,7 +31,7 @@ where
     let resp_inner = resp.into_inner();
     let op = resp_inner
         .operation()
-        .ok_or(RawError::Custom("no operation object in result".into()))?;
+        .ok_or_else(|| RawError::Custom("no operation object in result".into()))?;
     if op.status() != StatusCode::Success {
         return Err(create_operation_error(op));
     }

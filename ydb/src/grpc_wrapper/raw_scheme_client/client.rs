@@ -31,7 +31,7 @@ impl SchemeClient {
         let req = ydb_grpc::ydb_proto::scheme::ListDirectoryRequest::from(req);
         trace!(
             "list directory request: {}",
-            serde_json::to_string(&req).unwrap_or("bad json".into())
+            serde_json::to_string(&req).unwrap_or_else(|_| "bad json".into())
         );
 
         let response = self.service.list_directory(req).await?;
@@ -40,7 +40,7 @@ impl SchemeClient {
 
         trace!(
             "list directory result: {}",
-            serde_json::to_string(&result).unwrap_or("bad json".into())
+            serde_json::to_string(&result).unwrap_or_else(|_| "bad json".into())
         );
 
         RawListDirectoryResult::try_from(result)
@@ -51,7 +51,7 @@ impl SchemeClient {
         let req = MakeDirectoryRequest::from(req);
         trace!(
             "make directory request: {}",
-            serde_json::to_string(&req).unwrap_or("bad json".into())
+            serde_json::to_string(&req).unwrap_or_else(|_| "bad json".into())
         );
 
         let response = self.service.make_directory(req).await?;
@@ -63,7 +63,7 @@ impl SchemeClient {
         let req = RemoveDirectoryRequest::from(req);
         trace!(
             "remove directory request: {}",
-            serde_json::to_string(&req).unwrap_or("bad json".into())
+            serde_json::to_string(&req).unwrap_or_else(|_| "bad json".to_string())
         );
 
         let response = self.service.remove_directory(req).await?;

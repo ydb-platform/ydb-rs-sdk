@@ -42,7 +42,11 @@ jobs:
 
       - name: Clippy
         run: |
-          [ "" = "$(cargo clippy 2>&1)" ]
+          MESS="$(cargo clippy 2>&1)"
+          if [ "" != "$MESS" ]; then
+            echo "$MESS"
+            exit 1
+          fi
 
       - name: Build
         run: cargo build --verbose --workspace
