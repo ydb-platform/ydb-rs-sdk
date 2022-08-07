@@ -48,7 +48,9 @@ jobs:
 
       - name: Clippy
         run: |
-          MESS="$(cargo clippy 2>&1)"
+          cargo clippy 2>&1 | tee clippy.log
+          
+          MESS="$(cat clippy.log)"
           if [ "" != "$MESS" ]; then
             echo "$MESS"
             exit 1
