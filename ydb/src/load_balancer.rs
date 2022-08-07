@@ -305,6 +305,8 @@ mod test {
             map.insert(u.to_string(), val + 1);
         }
 
+        let test_linter = 4;
+
         assert_eq!(map.len(), 2);
         assert!(*map.get(one.to_string().as_str()).unwrap() > 30);
         assert!(*map.get(two.to_string().as_str()).unwrap() > 30);
