@@ -48,10 +48,4 @@ jobs:
 
       - name: Clippy
         run: |
-          cargo clippy 2>&1 | tee clippy.log
-          
-          MESS="$(cat clippy.log)"
-          if [ "" != "$MESS" ]; then
-            echo "$MESS"
-            exit 1
-          fi
+          cargo clippy --all-targets --all-features -- -D warnings
