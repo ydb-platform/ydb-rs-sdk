@@ -1,6 +1,9 @@
 pub(crate) mod auth;
 pub(crate) mod channel;
 pub(crate) mod grpc;
+
+#[macro_use]
+mod macroses;
 pub(crate) mod raw_common_types;
 pub(crate) mod raw_discovery_client;
 pub(crate) mod raw_errors;

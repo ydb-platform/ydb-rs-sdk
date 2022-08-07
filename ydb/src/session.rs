@@ -94,8 +94,7 @@ impl Session {
 
     pub(crate) async fn execute_schema_query(&mut self, query: String) -> YdbResult<()> {
         let resp = self
-            .channel_pool
-            .create_channel()
+            .get_channel()
             .await?
             .execute_scheme_query(ExecuteSchemeQueryRequest {
                 session_id: self.id.clone(),
@@ -139,7 +138,7 @@ impl Session {
             ..ExecuteScanQueryRequest::default()
         };
         debug!("request: {}", serde_json::to_string(&req)?);
-        let mut channel = self.channel_pool.create_channel().await?;
+        let mut channel = self.get_channel().await?;
         let resp = channel.stream_execute_scan_query(req).await?;
         let stream = resp.into_inner();
         return Ok(StreamResult { results: stream });
