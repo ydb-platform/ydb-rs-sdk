@@ -71,7 +71,10 @@ pub(crate) mod result;
 mod session;
 mod session_pool;
 mod sugar;
+
+#[cfg(test)]
 mod test_helpers;
+
 #[cfg(test)]
 mod test_integration_helper;
 mod trait_operation;

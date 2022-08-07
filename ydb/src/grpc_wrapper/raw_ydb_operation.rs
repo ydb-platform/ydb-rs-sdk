@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-
 #[derive(Debug)]
 pub(crate) struct RawOperationParams {
     operation_mode: OperationMode,
@@ -33,7 +32,7 @@ impl From<RawOperationParams> for ydb_grpc::ydb_proto::operations::OperationPara
             operation_mode: params.operation_mode.into(),
             operation_timeout: None,
             cancel_after: None,
-            labels: Default::default(),
+            labels: params.labels,
             report_cost_info: ydb_grpc::ydb_proto::feature_flag::Status::Unspecified.into(),
         }
     }
@@ -41,21 +40,19 @@ impl From<RawOperationParams> for ydb_grpc::ydb_proto::operations::OperationPara
 
 #[derive(Debug)]
 pub(crate) enum OperationMode {
-    Unspecified,
+    _Unspecified,
     Sync,
-    Async,
+    _Async,
 }
 
 use ydb_grpc::ydb_proto::operations::operation_params::OperationMode as GrpcOperationMode;
 impl From<OperationMode> for i32 {
     fn from(mode: OperationMode) -> Self {
         let val = match mode {
-            OperationMode::Unspecified => GrpcOperationMode::Unspecified,
+            OperationMode::_Unspecified => GrpcOperationMode::Unspecified,
             OperationMode::Sync => GrpcOperationMode::Sync,
-            OperationMode::Async => GrpcOperationMode::Async,
+            OperationMode::_Async => GrpcOperationMode::Async,
         };
         val as i32
     }
 }
-
-pub(crate) struct Operation {}
