@@ -21,6 +21,7 @@ jobs:
         uses: ATiltedTree/setup-rust@v1
         with:
           rust-version: ${{env.RUST_VERSION}}
+          components: clippy
 
       - name: Checkout
         uses: actions/checkout@v2
@@ -44,9 +45,6 @@ jobs:
         run: |
           cargo version
           rustc --version    
-
-      - name: Install clippy
-        run: rustup component add clippy
 
       - name: Clippy
         run: |
