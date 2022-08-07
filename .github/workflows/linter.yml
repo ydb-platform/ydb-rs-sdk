@@ -45,6 +45,9 @@ jobs:
           cargo version
           rustc --version    
 
+      - name: Install clippy
+        run: rustup component add clippy
+
       - name: Clippy
         run: |
           MESS="$(cargo clippy 2>&1)"
