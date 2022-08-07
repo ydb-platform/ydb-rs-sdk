@@ -14,6 +14,7 @@ env:
 jobs:
   tests:
     strategy:
+      fail-fast: false
       matrix:
         rust_version: [ "1.56.0", "1.62.1" ]
 
@@ -33,7 +34,10 @@ jobs:
 
     - name: Rust version
       id: rust_version_step
-      run: echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
+      run: |
+        rustc --version
+        cargo --version
+        echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
 
     - name: Cache
       uses: actions/cache@v3
