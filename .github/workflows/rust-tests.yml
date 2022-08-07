@@ -49,7 +49,7 @@ jobs:
           target/
 
     - name: Linter
-      if: matrix.rust_version != "1.56.0"
+      if: matrix.rust_version != '1.56.0'
       run: |
         cargo clippy --workspace --all-targets --all-features -- -D warnings
 
