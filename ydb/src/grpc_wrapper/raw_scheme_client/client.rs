@@ -6,21 +6,21 @@ use crate::grpc_wrapper::raw_scheme_client::list_directory_types::{
 };
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-
+use crate::YdbResult;
 use tracing::{instrument, trace};
 use ydb_grpc::ydb_proto::operations::OperationParams;
 use ydb_grpc::ydb_proto::scheme::v1::scheme_service_client::SchemeServiceClient;
 use ydb_grpc::ydb_proto::scheme::{MakeDirectoryRequest, RemoveDirectoryRequest};
 
-pub(crate) struct SchemeClient {
+pub(crate) struct RawSchemeClient {
     service: SchemeServiceClient<ChannelWithAuth>,
 }
 
-impl SchemeClient {
+impl RawSchemeClient {
     pub fn new(service: ChannelWithAuth) -> Self {
-        Self {
+        return Self {
             service: SchemeServiceClient::new(service),
-        }
+        };
     }
 
     #[instrument(skip(self), err, ret)]
@@ -28,52 +28,33 @@ impl SchemeClient {
         &mut self,
         req: RawListDirectoryRequest,
     ) -> RawResult<RawListDirectoryResult> {
-        let req = ydb_grpc::ydb_proto::scheme::ListDirectoryRequest::from(req);
-        trace!(
-            "list directory request: {}",
-            serde_json::to_string(&req).unwrap_or_else(|_| "bad json".into())
+        request_with_result!(
+            self.service.list_directory,
+            req => ydb_grpc::ydb_proto::scheme::ListDirectoryRequest,
+            ydb_grpc::ydb_proto::scheme::ListDirectoryResult => RawListDirectoryResult
         );
-
-        let response = self.service.list_directory(req).await?;
-        let result: ydb_grpc::ydb_proto::scheme::ListDirectoryResult =
-            grpc_read_operation_result(response)?;
-
-        trace!(
-            "list directory result: {}",
-            serde_json::to_string(&result).unwrap_or_else(|_| "bad json".into())
-        );
-
-        RawListDirectoryResult::try_from(result)
     }
 
     #[instrument(skip(self), err, ret)]
     pub async fn make_directory(&mut self, req: RawMakeDirectoryRequest) -> RawResult<()> {
-        let req = MakeDirectoryRequest::from(req);
-        trace!(
-            "make directory request: {}",
-            serde_json::to_string(&req).unwrap_or_else(|_| "bad json".into())
+        request_without_result!(
+            self.service.make_directory,
+            req => ydb_grpc::ydb_proto::scheme::MakeDirectoryRequest
         );
-
-        let response = self.service.make_directory(req).await?;
-        grpc_read_void_operation_result(response)
     }
 
     #[instrument(skip(self), err, ret)]
     pub async fn remove_directory(&mut self, req: RawRemoveDirectoryRequest) -> RawResult<()> {
-        let req = RemoveDirectoryRequest::from(req);
-        trace!(
-            "remove directory request: {}",
-            serde_json::to_string(&req).unwrap_or_else(|_| "bad json".to_string())
+        request_without_result!(
+            self.service.remove_directory,
+            req => ydb_grpc::ydb_proto::scheme::RemoveDirectoryRequest
         );
-
-        let response = self.service.remove_directory(req).await?;
-        grpc_read_void_operation_result(response)
     }
 }
 
-impl GrpcServiceForDiscovery for SchemeClient {
+impl GrpcServiceForDiscovery for RawSchemeClient {
     fn get_grpc_discovery_service() -> Service {
-        Service::Scheme
+        return Service::Scheme;
     }
 }
 
