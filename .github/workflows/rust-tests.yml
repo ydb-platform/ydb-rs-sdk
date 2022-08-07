@@ -38,6 +38,7 @@ jobs:
       uses: ATiltedTree/setup-rust@v1
       with:
         rust-version: ${{ matrix.rust_version }}
+        components: clippy
 
     - name: Checkout
       uses: actions/checkout@v2
