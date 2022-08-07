@@ -165,7 +165,6 @@ impl Transaction for SerializableReadWriteTx {
             trace!("start new transaction");
             TxSelector::BeginTx(TransactionSettings {
                 tx_mode: Some(Mode::SerializableReadWrite.into()),
-                ..TransactionSettings::default()
             })
         };
 
@@ -173,7 +172,6 @@ impl Transaction for SerializableReadWriteTx {
             tx_control: Some(TransactionControl {
                 commit_tx: false,
                 tx_selector: Some(tx_selector),
-                ..TransactionControl::default()
             }),
             query: Some(query.query_to_proto()),
             parameters: query.params_to_proto()?,
@@ -197,9 +195,10 @@ impl Transaction for SerializableReadWriteTx {
         }
 
         if self.finished {
-            return Err(YdbError::Custom(
-                format!("commit finished non comitted transaction: {:?}", &self.id),
-            ));
+            return Err(YdbError::Custom(format!(
+                "commit finished non comitted transaction: {:?}",
+                &self.id
+            )));
         }
         self.finished = true;
 
@@ -229,12 +228,10 @@ impl Transaction for SerializableReadWriteTx {
         }
 
         if self.finished {
-            return Err(YdbError::Custom(
-                format!(
-                    "rollback finished non rollbacked transaction: {:?}",
-                    &self.id
-                ),
-            ));
+            return Err(YdbError::Custom(format!(
+                "rollback finished non rollbacked transaction: {:?}",
+                &self.id
+            )));
         }
         self.finished = true;
 

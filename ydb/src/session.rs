@@ -16,10 +16,10 @@ use ydb_grpc::ydb_proto::table::{
     ExecuteSchemeQueryRequest, KeepAliveRequest, KeepAliveResult, RollbackTransactionRequest,
 };
 
-static request_number: AtomicI64 = AtomicI64::new(0);
+static REQUEST_NUMBER: AtomicI64 = AtomicI64::new(0);
 
 fn req_number() -> i64 {
-    request_number.fetch_add(1, Ordering::Relaxed)
+    REQUEST_NUMBER.fetch_add(1, Ordering::Relaxed)
 }
 
 #[derive(Derivative)]
@@ -101,7 +101,6 @@ impl Session {
                 session_id: self.id.clone(),
                 yql_text: query,
                 operation_params: operation_params(self.timeouts.operation_timeout),
-                ..ExecuteSchemeQueryRequest::default()
             })
             .await?;
 
@@ -154,7 +153,6 @@ impl Session {
                 session_id: self.id.clone(),
                 tx_id,
                 operation_params: operation_params(self.timeouts.operation_timeout),
-                ..RollbackTransactionRequest::default()
             })
             .await?;
         let res = grpc_read_void_operation_result(response);
@@ -174,7 +172,6 @@ impl Session {
                 .keep_alive(KeepAliveRequest {
                     session_id: self.id.clone(),
                     operation_params: operation_params(self.timeouts.operation_timeout),
-                    ..KeepAliveRequest::default()
                 })
                 .await?,
         );

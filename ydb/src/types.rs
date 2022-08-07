@@ -341,12 +341,10 @@ impl Value {
                 Self::from_proto_struct(struct_t, items)?
             }
             (t, proto_value) => {
-                return Err(YdbError::Custom(
-                    format!(
-                        "unsupported from_proto combination: t: '{:?}', proto_value: '{:?}'",
-                        t, proto_value
-                    ),
-                ))
+                return Err(YdbError::Custom(format!(
+                    "unsupported from_proto combination: t: '{:?}', proto_value: '{:?}'",
+                    t, proto_value
+                )))
             }
         };
         Ok(res)
@@ -354,12 +352,10 @@ impl Value {
 
     fn from_proto_struct(t: &ValueStruct, items: Vec<ydb_proto::Value>) -> YdbResult<Value> {
         if t.fields_name.len() != items.len() {
-            return Err(YdbError::Custom(
-                format!(
-                    "struct description and items has diferrent length. t: {:?}, items: {:?}",
-                    t, items
-                ),
-            ));
+            return Err(YdbError::Custom(format!(
+                "struct description and items has diferrent length. t: {:?}, items: {:?}",
+                t, items
+            )));
         };
 
         let mut res = ValueStruct::with_capacity(t.fields_name.len());
@@ -416,7 +412,7 @@ impl Value {
     }
 
     fn from_proto_value_optional(
-        t: &Box<ValueOptional>,
+        t: &ValueOptional,
         val: ydb_proto::value::Value,
     ) -> YdbResult<Self> {
         use ydb_proto::value::Value as pv;
@@ -428,6 +424,7 @@ impl Value {
         Ok(res)
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_typed_value(self) -> YdbResult<ydb_proto::TypedValue> {
         use ydb_proto::r#type::PrimitiveTypeId as pt;
         use ydb_proto::value::Value as pv;
@@ -486,14 +483,14 @@ impl Value {
             Self::Yson(val) => proto_typed_value(pt::Yson, pv::TextValue(val)),
             Self::Json(val) => proto_typed_value(pt::Json, pv::TextValue(val)),
             Self::JsonDocument(val) => proto_typed_value(pt::JsonDocument, pv::TextValue(val)),
-            Self::Optional(val) => Self::to_typed_optional(val)?,
-            Self::List(items) => Self::to_typed_value_list(items)?,
+            Self::Optional(val) => Self::to_typed_optional(*val)?,
+            Self::List(items) => Self::to_typed_value_list(*items)?,
             Value::Struct(s) => { Self::to_typed_struct(s) }?,
         };
         Ok(res)
     }
 
-    fn to_typed_optional(optional: Box<ValueOptional>) -> YdbResult<ydb_proto::TypedValue> {
+    fn to_typed_optional(optional: ValueOptional) -> YdbResult<ydb_proto::TypedValue> {
         if let Value::Optional(_opt) = optional.t {
             unimplemented!("nested optional")
         }
@@ -542,7 +539,8 @@ impl Value {
         })
     }
 
-    fn to_typed_value_list(ydb_list: Box<ValueList>) -> YdbResult<ydb_proto::TypedValue> {
+    #[allow(clippy::boxed_local)]
+    fn to_typed_value_list(ydb_list: ValueList) -> YdbResult<ydb_proto::TypedValue> {
         let ydb_list_type = ydb_list.t;
         let proto_items_result: Vec<YdbResult<ydb_proto::TypedValue>> = ydb_list
             .values

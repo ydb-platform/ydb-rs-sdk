@@ -57,7 +57,6 @@ impl Query {
             query: Some(ydb_grpc::ydb_proto::table::query::Query::YqlText(
                 self.text.clone(),
             )),
-            ..ydb_grpc::ydb_proto::table::Query::default()
         }
     }
 

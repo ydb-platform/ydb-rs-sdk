@@ -2,7 +2,6 @@ use crate::discovery::{Discovery, DiscoveryState};
 use crate::errors::*;
 use http::Uri;
 
-
 use crate::grpc_wrapper::raw_services::Service;
 use crate::waiter::{Waiter, WaiterImpl};
 use std::sync::{Arc, RwLock};
@@ -130,18 +129,20 @@ impl LoadBalancer for RandomLoadBalancer {
     fn endpoint(&self, service: Service) -> YdbResult<Uri> {
         let nodes = self.discovery_state.get_nodes(&service);
         match nodes {
-            None => Err(YdbError::Custom(
-                format!("no endpoints for service: '{}'", service),
-            )),
+            None => Err(YdbError::Custom(format!(
+                "no endpoints for service: '{}'",
+                service
+            ))),
             Some(nodes) => {
                 if !nodes.is_empty() {
                     let index = rand::random::<usize>() % nodes.len();
                     let node = &nodes[index % nodes.len()];
                     Ok(node.uri.clone())
                 } else {
-                    Err(YdbError::Custom(
-                        format!("empty endpoint list for service: {}", service),
-                    ))
+                    Err(YdbError::Custom(format!(
+                        "empty endpoint list for service: {}",
+                        service
+                    )))
                 }
             }
         }
