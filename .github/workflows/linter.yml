@@ -1,0 +1,51 @@
+name: Rust linter
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  schedule:
+    - cron: '18 4 * * *'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: 1.62
+
+jobs:
+  tests:
+    runs-on: ubuntu-20.04
+
+    steps:
+      - name: Install fixed rust version
+        uses: ATiltedTree/setup-rust@v1
+        with:
+          rust-version: ${{env.RUST_VERSION}}
+          components: clippy
+
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - name: Cache
+        uses: actions/cache@v3
+        with:
+          key: ${{ runner.os }}-${{env.RUST_VERSION}}-cargo-${{ hashFiles('**/Cargo.lock') }}-1
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+            ~/.cargo/.package-cache
+            ~/.cargo/registry/
+            ~/.cargo/git/db/
+            target/
+
+      - name: Rust check versions
+        run: |
+          cargo version
+          rustc --version    
+
+      - name: Clippy
+        run: |
+          cargo clippy --all-targets --all-features -- -D warnings

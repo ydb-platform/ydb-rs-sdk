@@ -1,12 +1,11 @@
 use crate::grpc_wrapper::channel::ChannelWithAuth;
-use crate::grpc_wrapper::grpc::{grpc_read_operation_result, grpc_read_void_operation_result};
+use crate::grpc_wrapper::grpc::grpc_read_void_operation_result;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_scheme_client::list_directory_types::{
     RawListDirectoryRequest, RawListDirectoryResult,
 };
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-use crate::YdbResult;
 use tracing::{instrument, trace};
 use ydb_grpc::ydb_proto::operations::OperationParams;
 use ydb_grpc::ydb_proto::scheme::v1::scheme_service_client::SchemeServiceClient;
@@ -18,9 +17,9 @@ pub(crate) struct RawSchemeClient {
 
 impl RawSchemeClient {
     pub fn new(service: ChannelWithAuth) -> Self {
-        return Self {
+        Self {
             service: SchemeServiceClient::new(service),
-        };
+        }
     }
 
     #[instrument(skip(self), err, ret)]
@@ -54,7 +53,7 @@ impl RawSchemeClient {
 
 impl GrpcServiceForDiscovery for RawSchemeClient {
     fn get_grpc_discovery_service() -> Service {
-        return Service::Scheme;
+        Service::Scheme
     }
 }
 

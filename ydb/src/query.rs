@@ -49,16 +49,15 @@ impl Query {
     /// ```
     pub fn with_params(mut self, params: HashMap<String, Value>) -> Self {
         self.parameters = params;
-        return self;
+        self
     }
 
     pub(crate) fn query_to_proto(&self) -> ydb_grpc::ydb_proto::table::Query {
-        return ydb_grpc::ydb_proto::table::Query {
+        ydb_grpc::ydb_proto::table::Query {
             query: Some(ydb_grpc::ydb_proto::table::query::Query::YqlText(
                 self.text.clone(),
             )),
-            ..ydb_grpc::ydb_proto::table::Query::default()
-        };
+        }
     }
 
     pub(crate) fn params_to_proto(self) -> YdbResult<HashMap<String, TypedValue>> {
@@ -67,7 +66,7 @@ impl Query {
         for (name, val) in self.parameters.into_iter() {
             params.insert(name, val.to_typed_value()?);
         }
-        return Ok(params);
+        Ok(params)
     }
 }
 
@@ -87,6 +86,6 @@ impl FromStr for Query {
     type Err = YdbError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        return Ok(Query::new(s));
+        Ok(Query::new(s))
     }
 }

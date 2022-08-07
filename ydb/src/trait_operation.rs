@@ -9,7 +9,7 @@ use ydb_grpc::ydb_proto::table::{
 };
 
 pub(crate) trait Operation: Debug {
-    fn operation(self: &Self) -> Option<YdbOperation>;
+    fn operation(&self) -> Option<YdbOperation>;
 }
 
 macro_rules! operation_impl_for {

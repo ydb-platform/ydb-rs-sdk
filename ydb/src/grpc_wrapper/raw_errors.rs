@@ -1,4 +1,4 @@
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Formatter};
 
 pub(crate) type RawResult<T> = std::result::Result<T, RawError>;
 

@@ -12,9 +12,9 @@ pub struct GrpcDiscoveryClient {
 
 impl GrpcDiscoveryClient {
     pub(crate) fn new(channel: ChannelWithAuth) -> Self {
-        return Self {
+        Self {
             service: DiscoveryServiceClient::new(channel),
-        };
+        }
     }
 
     #[tracing::instrument(skip(self))]
@@ -37,7 +37,7 @@ impl GrpcDiscoveryClient {
                 ssl: item.ssl,
             })
             .collect_vec();
-        return Ok(res);
+        Ok(res)
     }
 }
 
@@ -49,6 +49,6 @@ pub(crate) struct EndpointInfo {
 
 impl GrpcServiceForDiscovery for GrpcDiscoveryClient {
     fn get_grpc_discovery_service() -> Service {
-        return Service::Discovery;
+        Service::Discovery
     }
 }

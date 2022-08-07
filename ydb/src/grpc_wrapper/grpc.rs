@@ -1,6 +1,6 @@
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::trait_operation::Operation;
-use crate::{YdbError, YdbIssue, YdbResult};
+use crate::YdbIssue;
 use ydb_grpc::ydb_proto::issue::IssueMessage;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
@@ -13,15 +13,15 @@ where
     let resp_inner = resp.into_inner();
     let op = resp_inner
         .operation()
-        .ok_or(RawError::Custom("no operation object in result".into()))?;
+        .ok_or_else(|| RawError::Custom("no operation object in result".into()))?;
     if op.status() != StatusCode::Success {
         return Err(create_operation_error(op));
     }
     let opres = op
         .result
-        .ok_or(RawError::Custom("no result data in operation".into()))?;
+        .ok_or_else(|| RawError::Custom("no result data in operation".into()))?;
     let res: T = T::decode(opres.value)?;
-    return Ok(res);
+    Ok(res)
 }
 
 pub(crate) fn grpc_read_void_operation_result<TOp>(resp: tonic::Response<TOp>) -> RawResult<()>
@@ -31,11 +31,11 @@ where
     let resp_inner = resp.into_inner();
     let op = resp_inner
         .operation()
-        .ok_or(RawError::Custom("no operation object in result".into()))?;
+        .ok_or_else(|| RawError::Custom("no operation object in result".into()))?;
     if op.status() != StatusCode::Success {
         return Err(create_operation_error(op));
     }
-    return Ok(());
+    Ok(())
 }
 
 pub(crate) fn create_operation_error(op: ydb_grpc::ydb_proto::operations::Operation) -> RawError {

@@ -4,7 +4,7 @@ use crate::grpc_wrapper::raw_table_service::create_session::{
     RawCreateSessionRequest, RawCreateSessionResult,
 };
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-use tracing::{instrument, trace};
+use tracing::trace;
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 
 pub(crate) struct RawTableClient {
@@ -14,10 +14,10 @@ pub(crate) struct RawTableClient {
 
 impl RawTableClient {
     pub fn new(service: ChannelWithAuth, operation_timeout: std::time::Duration) -> Self {
-        return Self {
+        Self {
             service: TableServiceClient::new(service),
             operation_timeout,
-        };
+        }
     }
 
     pub async fn create_session(&mut self) -> RawResult<RawCreateSessionResult> {

@@ -19,11 +19,11 @@ const INCLUDE_DIRS: &[&str] = &[
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::var("CARGO_FEATURE_REGENERATE_SOURCES").unwrap_or("0".into()) != "1" {
+    if std::env::var("CARGO_FEATURE_REGENERATE_SOURCES").unwrap_or_else(|_| "0".into()) != "1" {
         println!("skip regenerate sources");
         return Ok(());
     }
-    
+
     println!("cargo:rerun-if-changed=ydb-api-protos");
 
     for (src, dst) in COMPILE_DIRS {
@@ -49,7 +49,7 @@ fn clean_dst_dir(dst: &str) -> Result<(), Box<dyn std::error::Error>> {
         fs::remove_file(fpath)?;
     }
 
-    return Ok(());
+    Ok(())
 }
 
 fn compile_files(files: &[&str], include_dirs: &[&str], dst_dir: &str) {
@@ -105,7 +105,7 @@ fn rewrite_generated_file(fpath: &std::path::Path) -> io::Result<()> {
     let _ = f.read_to_string(&mut contents).unwrap();
 
     let lines: Vec<&str> = contents
-        .split_terminator("\n")
+        .split_terminator('\n')
         .filter(|line| line.trim() != "///")
         .collect();
 
@@ -113,7 +113,7 @@ fn rewrite_generated_file(fpath: &std::path::Path) -> io::Result<()> {
     f.seek(SeekFrom::Start(0))?;
     f.set_len(0)?;
     f.write_all(contents.as_bytes())?;
-    return Ok(());
+    Ok(())
 }
 
 fn rewrite_generated_files(dir: &str) -> io::Result<()> {
@@ -127,7 +127,7 @@ fn rewrite_generated_files(dir: &str) -> io::Result<()> {
         rewrite_generated_file(item.path())?;
     }
 
-    return Ok(());
+    Ok(())
 }
 
 fn compile_proto_dir(
@@ -199,7 +199,7 @@ fn compile_proto_dir(
         compile_files(files.as_slice(), include_dirs, dst_dir);
     }
 
-    return Ok(());
+    Ok(())
 }
 
 fn generate_mod_file(dst_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -220,5 +220,5 @@ fn generate_mod_file(dst_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
     let mod_path = format!("{}/mod.rs", dst_dir);
     let mut mod_f = fs::File::create(mod_path)?;
     mod_f.write_all(pm.to_string().as_bytes())?;
-    return Ok(());
+    Ok(())
 }

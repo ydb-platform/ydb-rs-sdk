@@ -9,7 +9,7 @@ use tracing::trace;
 lazy_static! {
     static ref TEST_CLIENT: AsyncOnce<Arc<Client>> = AsyncOnce::new(async {
         let client_builder: ClientBuilder =
-            std::env::var("YDB_CONNECTION_STRING").unwrap_or(
+            std::env::var("YDB_CONNECTION_STRING").unwrap_or_else(|_|
             "grpc://localhost:2136?database=/local".to_string()).parse().unwrap();
 
         trace!("create client");
@@ -19,7 +19,7 @@ lazy_static! {
 
         trace!("start wait");
         client.wait().await.unwrap();
-        return Arc::new(client);
+        Arc::new(client)
     });
 
     pub static ref TEST_TIMEOUT: i32 = {
@@ -27,13 +27,13 @@ lazy_static! {
         match std::env::var("TEST_TIMEOUT"){
             Ok(timeout)=>{
                 if let Ok(timeout) = timeout.parse() {
-                    return timeout
+                    timeout
                 } else {
-                    return DEFAULT_TIMEOUT_MS
+                    DEFAULT_TIMEOUT_MS
                 }
             },
             Err(_)=>{
-                return DEFAULT_TIMEOUT_MS
+                DEFAULT_TIMEOUT_MS
             }
         }
     };

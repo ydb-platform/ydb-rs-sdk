@@ -2,14 +2,11 @@ use crate::client::TimeoutSettings;
 use crate::client_table::TableServiceChannelPool;
 use crate::errors::*;
 use crate::grpc::grpc_read_operation_result;
-use crate::grpc_wrapper::raw_table_service::client::RawTableClient;
 use crate::session::Session;
 use async_trait::async_trait;
-use std::borrow::BorrowMut;
 use std::collections::vec_deque::VecDeque;
 use std::ops::{Add, Sub};
 use std::sync::{Arc, Mutex, Weak};
-use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::Semaphore;
 use tracing::trace;
 use ydb_grpc::ydb_proto::table::{CreateSessionRequest, CreateSessionResult};
@@ -36,21 +33,6 @@ impl SessionClient for TableServiceChannelPool {
             TimeoutSettings::default(),
         );
         return Ok(session);
-    }
-}
-
-#[async_trait]
-impl SessionClient for Arc<TokioMutex<RawTableClient>> {
-    async fn create_session(&self) -> YdbResult<Session> {
-        let mut guard = self.lock().await;
-        let raw_client = guard.borrow_mut();
-        let res = raw_client.create_session().await?;
-        // let session = Session::new(
-        //     res,
-        //     self.clone(),
-        //     TimeoutSettings::default(),
-        // )
-        panic!("not implemented")
     }
 }
 
@@ -81,12 +63,12 @@ impl SessionPool {
             Arc::downgrade(&pool.idle_sessions),
             std::time::Duration::from_secs(60),
         ));
-        return pool;
+        pool
     }
 
     pub(crate) fn with_max_active_sessions(mut self, size: usize) -> Self {
         self.active_sessions = Arc::new(Semaphore::new(size));
-        return self;
+        self
     }
 
     pub(crate) async fn session(&self) -> YdbResult<Session> {
@@ -118,7 +100,7 @@ impl SessionPool {
             drop(active_session_permit);
         }));
         session = session.with_timeouts(TimeoutSettings::default());
-        return Ok(session);
+        Ok(session)
     }
 }
 
@@ -231,6 +213,6 @@ mod test {
 
         second_session_got_receiver.await?;
 
-        return Ok(());
+        Ok(())
     }
 }

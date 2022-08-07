@@ -32,7 +32,7 @@ fn normalize_url(mut url: String) -> String {
     if !url.contains("://") {
         url = "http://".to_string() + url.as_str();
     };
-    return url;
+    url
 }
 
 #[derive(Deserialize)]
@@ -60,7 +60,7 @@ async fn redirect(
             StatusCode::INTERNAL_SERVER_ERROR,
         )),
     };
-    return Ok(reply);
+    Ok(reply)
 }
 
 fn with_db(
@@ -86,5 +86,5 @@ pub async fn run(table_client: TableClient) -> Result<(), warp::Error> {
     warp::serve(url.or(redirect_page).or(index))
         .run(([127, 0, 0, 1], 8000))
         .await;
-    return Ok(());
+    Ok(())
 }

@@ -31,27 +31,28 @@ impl Client {
         connection_manager: GrpcConnectionManager,
     ) -> YdbResult<Self> {
         let discovery = Arc::new(discovery);
+        let discovery_ref = discovery.as_ref().as_ref();
 
-        return Ok(Client {
+        Ok(Client {
             credentials,
-            load_balancer: SharedLoadBalancer::new(discovery.as_ref()),
+            load_balancer: SharedLoadBalancer::new(discovery_ref),
             discovery,
             timeouts: TimeoutSettings::default(),
             connection_manager,
-        });
+        })
     }
 
-    pub(crate) fn database(&self) -> String {
-        return self.credentials.database.clone();
+    pub fn database(&self) -> String {
+        self.credentials.database.clone()
     }
 
     /// Create instance of client for table service
     pub fn table_client(&self) -> TableClient {
-        return TableClient::new(
+        TableClient::new(
             self.credentials.clone(),
             self.discovery.clone(),
             self.timeouts,
-        );
+        )
     }
 
     /// Create instance of client for directory service
@@ -61,7 +62,7 @@ impl Client {
 
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {
         self.timeouts = timeouts;
-        return self;
+        self
     }
 
     /// Wait initialization completed
@@ -76,7 +77,7 @@ impl Client {
 
         trace!("wait balancer");
         self.load_balancer.wait().await?;
-        return Ok(());
+        Ok(())
     }
 }
 
@@ -90,8 +91,8 @@ pub struct TimeoutSettings {
 
 impl Default for TimeoutSettings {
     fn default() -> Self {
-        return TimeoutSettings {
+        TimeoutSettings {
             operation_timeout: DEFAULT_OPERATION_TIMEOUT,
-        };
+        }
     }
 }

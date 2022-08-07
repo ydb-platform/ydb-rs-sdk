@@ -5,11 +5,11 @@ pub(crate) struct Duration {
 
 impl From<std::time::Duration> for Duration {
     fn from(val: std::time::Duration) -> Self {
-        return Self { val };
+        Self { val }
     }
 }
 
-impl From<Duration> for prost_types::Duration {
+impl From<Duration> for pbjson_types::Duration {
     fn from(d: Duration) -> Self {
         Self {
             seconds: d.val.as_secs() as i64,

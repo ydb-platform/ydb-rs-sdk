@@ -4,10 +4,9 @@ use std::{future::Future, pin::Pin};
 use crate::channel_pool::ChannelProxy;
 use http::{HeaderValue, Request, Response};
 use tonic::body::BoxBody;
-use tonic::metadata::AsciiMetadataValue;
-use tonic::service::Interceptor;
+
 use tonic::transport::Body;
-use tonic::{Code, Status};
+
 use tower::Service;
 
 use crate::client_common::DBCredentials;
@@ -20,7 +19,7 @@ pub(crate) struct AuthService {
 
 impl AuthService {
     pub(crate) fn new(ch: ChannelProxy, cred: DBCredentials) -> Self {
-        return AuthService { ch, cred };
+        AuthService { ch, cred }
     }
 }
 
