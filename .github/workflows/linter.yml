@@ -1,4 +1,4 @@
-name: YDB tests
+name: Rust linter
 
 on:
   push:
@@ -40,6 +40,11 @@ jobs:
             ~/.cargo/git/db/
             target/
 
+      - name: Rust check versions
+        run: |
+          cargo version
+          rustc --version    
+
       - name: Clippy
         run: |
           MESS="$(cargo clippy 2>&1)"
@@ -47,14 +52,3 @@ jobs:
             echo "$MESS"
             exit 1
           fi
-
-      - name: Build
-        run: cargo build --verbose --workspace
-
-      - name: Wait database available
-        run: bash ./.github/scripts/start-ydb-container.sh
-
-      - name: Run tests
-        env:
-          YDB_CONNECTION_STRING: grpc://localhost:2136?database=/local
-        run: cargo test --verbose --workspace -- --include-ignored --nocapture
