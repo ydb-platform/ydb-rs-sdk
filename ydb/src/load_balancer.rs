@@ -27,7 +27,7 @@ pub(crate) struct SharedLoadBalancer {
 }
 
 impl SharedLoadBalancer {
-    pub(crate) fn new(discovery: &Box<dyn Discovery>) -> Self {
+    pub(crate) fn new(discovery: &dyn Discovery) -> Self {
         Self::new_with_balancer_and_updater(Box::new(RandomLoadBalancer::new()), discovery)
     }
 
@@ -39,7 +39,7 @@ impl SharedLoadBalancer {
 
     pub(crate) fn new_with_balancer_and_updater(
         load_balancer: Box<dyn LoadBalancer>,
-        discovery: &Box<dyn Discovery>,
+        discovery: &dyn Discovery,
     ) -> Self {
         let mut shared_lb = Self::new_with_balancer(load_balancer);
         let shared_lb_updater = shared_lb.clone();

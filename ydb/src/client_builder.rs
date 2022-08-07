@@ -31,9 +31,10 @@ static PARAM_HANDLERS: Lazy<Mutex<HashMap<String, ParamHandler>>> = Lazy::new(||
 pub(crate) fn register(param_name: &str, handler: ParamHandler) -> YdbResult<()> {
     let mut lock = PARAM_HANDLERS.lock()?;
     if lock.contains_key(param_name) {
-        return Err(YdbError::Custom(
-            format!("param handler already exist for '{}'", param_name),
-        ));
+        return Err(YdbError::Custom(format!(
+            "param handler already exist for '{}'",
+            param_name
+        )));
     };
 
     lock.insert(param_name.to_string(), handler);
@@ -144,7 +145,7 @@ impl ClientBuilder {
             )?),
         };
 
-        let load_balancer = SharedLoadBalancer::new(&discovery);
+        let load_balancer = SharedLoadBalancer::new(discovery.as_ref());
         let connection_manager = GrpcConnectionManager::new(load_balancer, db_cred.clone());
 
         Client::new(db_cred, discovery, connection_manager)
@@ -200,8 +201,7 @@ impl ClientBuilder {
             url.scheme(),
             url.host().unwrap(),
             url.port().unwrap()
-        )
-        ;
+        );
         self.database = url.path().to_string();
         Ok(())
     }

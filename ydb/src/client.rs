@@ -31,10 +31,10 @@ impl Client {
         connection_manager: GrpcConnectionManager,
     ) -> YdbResult<Self> {
         let discovery = Arc::new(discovery);
-
+        let discovery_ref = discovery.as_ref().as_ref();
         return Ok(Client {
             credentials,
-            load_balancer: SharedLoadBalancer::new(discovery.as_ref()),
+            load_balancer: SharedLoadBalancer::new(discovery_ref),
             discovery,
             timeouts: TimeoutSettings::default(),
             connection_manager,

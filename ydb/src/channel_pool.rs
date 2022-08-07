@@ -66,7 +66,7 @@ where
         service: Service,
         create_new_channel_fn: fn(AuthService) -> T,
     ) -> Self {
-        let load_balancer = SharedLoadBalancer::new(discovery.as_ref());
+        let load_balancer = SharedLoadBalancer::new(discovery.as_ref().as_ref());
         let (channel_error_sender, channel_error_receiver) = mpsc::channel(1);
         tokio::spawn(async move {
             Self::node_pessimization_loop(discovery, channel_error_receiver).await;
