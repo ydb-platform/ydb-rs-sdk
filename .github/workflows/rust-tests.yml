@@ -14,13 +14,17 @@ env:
 
 jobs:
   tests:
+    strategy:
+      matrix:
+        rust_version: ["1.56.0", "1.62"]
+
     runs-on: ubuntu-20.04
 
     steps:
     - name: Install fixed rust version
       uses: ATiltedTree/setup-rust@v1
       with:
-        rust-version: ${{env.RUST_VERSION}}
+        rust-version: ${{ matrix.rust_version }}
 
     - name: Checkout
       uses: actions/checkout@v2
@@ -30,7 +34,7 @@ jobs:
     - name: Cache
       uses: actions/cache@v3
       with:
-        key: ${{ runner.os }}-${{env.RUST_VERSION}}-cargo-${{ hashFiles('**/Cargo.lock') }}-1
+        key: ${{ runner.os }}-${{ matrix.rust_version }}-cargo-${{ hashFiles('**/Cargo.lock') }}-1
         path: |
           ~/.cargo/bin/
           ~/.cargo/.crates.toml
@@ -46,7 +50,11 @@ jobs:
         rustc --version
 
     - name: Build
-      run: cargo build --verbose --workspace
+      run: cargo build --verbose --workspace --all-targets
+
+    - name: Linter
+      run: |
+        cargo clippy --workspace --all-targets --all-features -- -D warnings
 
     - name: Wait database available
       run: bash ./.github/scripts/start-ydb-container.sh
