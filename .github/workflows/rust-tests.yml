@@ -15,7 +15,7 @@ jobs:
   tests:
     strategy:
       matrix:
-        rust_version: [ "1.56.0", "stable" ]
+        rust_version: [ "1.56.0", "1.62.1" ]
 
     runs-on: ubuntu-20.04
 
@@ -52,6 +52,7 @@ jobs:
       run: cargo build --verbose --workspace --all-targets
 
     - name: Linter
+      if: ${{ matrix.rust_version }} != "1.56.0"
       run: |
         cargo clippy --workspace --all-targets --all-features -- -D warnings
 
