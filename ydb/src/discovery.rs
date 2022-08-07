@@ -6,9 +6,9 @@ use async_trait::async_trait;
 use http::uri::Authority;
 use http::Uri;
 
-use crate::client_common::DBCredentials;
+
 use crate::errors::YdbResult;
-use crate::grpc::{create_grpc_client, grpc_read_operation_result};
+
 use crate::waiter::Waiter;
 
 use derivative::Derivative;
@@ -18,7 +18,7 @@ use tokio::sync::watch::Receiver;
 use tokio::sync::{watch, Mutex};
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::grpc_wrapper::channel::create_grpc_channel_with_auth;
+
 use crate::grpc_wrapper::raw_discovery_client::{EndpointInfo, GrpcDiscoveryClient};
 use crate::grpc_wrapper::raw_services::Service;
 use tracing::trace;
@@ -42,7 +42,7 @@ impl DiscoveryState {
             original_nodes: nodes,
         };
         state.build_services();
-        return state;
+        state
     }
 
     fn build_services(&mut self) {
@@ -55,7 +55,7 @@ impl DiscoveryState {
         }
 
         // if all nodes pessimized - use full nodes set
-        if self.nodes.len() == 0 {
+        if self.nodes.is_empty() {
             self.nodes.clone_from(&self.original_nodes)
         }
     }
@@ -65,7 +65,7 @@ impl DiscoveryState {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        return self.nodes.len() == 0;
+        self.nodes.len() == 0
     }
 
     // pessimize return true if state was changed
@@ -76,20 +76,20 @@ impl DiscoveryState {
 
         self.pessimized_nodes.insert(uri.clone());
         self.build_services();
-        return true;
+        true
     }
 
     pub(crate) fn with_node_info(mut self, _service: Service, node_info: NodeInfo) -> Self {
         if !self.nodes.contains(&node_info) {
             self.nodes.push(node_info);
         }
-        return self;
+        self
     }
 }
 
 impl Default for DiscoveryState {
     fn default() -> Self {
-        return DiscoveryState::new(std::time::Instant::now(), Vec::default());
+        DiscoveryState::new(std::time::Instant::now(), Vec::default())
     }
 }
 
@@ -100,7 +100,7 @@ pub(crate) struct NodeInfo {
 
 impl NodeInfo {
     pub(crate) fn new(uri: Uri) -> Self {
-        return Self { uri };
+        Self { uri }
     }
 }
 
@@ -141,16 +141,16 @@ impl StaticDiscovery {
     pub fn from_str<'a, T: Into<&'a str>>(endpoint: T) -> YdbResult<Self> {
         let endpoint = Uri::from_str(endpoint.into())?;
         let nodes = vec![NodeInfo {
-            uri: endpoint.clone(),
+            uri: endpoint,
         }];
 
         let state = DiscoveryState::new(std::time::Instant::now(), nodes);
         let state = Arc::new(state);
         let (sender, _) = tokio::sync::watch::channel(state.clone());
-        return Ok(StaticDiscovery {
+        Ok(StaticDiscovery {
             sender,
             discovery_state: state,
-        });
+        })
     }
 }
 
@@ -161,11 +161,11 @@ impl Discovery for StaticDiscovery {
     }
 
     fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
-        return self.sender.subscribe();
+        self.sender.subscribe()
     }
 
     fn state(&self) -> Arc<DiscoveryState> {
-        return self.discovery_state.clone();
+        self.discovery_state.clone()
     }
 }
 
@@ -193,7 +193,7 @@ impl TimerDiscovery {
         tokio::spawn(async move {
             DiscoverySharedState::background_discovery(state_weak, interval).await;
         });
-        return Ok(TimerDiscovery { state });
+        Ok(TimerDiscovery { state })
     }
 
     #[allow(dead_code)]
@@ -224,11 +224,11 @@ impl Discovery for TimerDiscovery {
     }
 
     fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
-        return self.state.subscribe();
+        self.state.subscribe()
     }
 
     fn state(&self) -> Arc<DiscoveryState> {
-        return self.state.state();
+        self.state.state()
     }
 }
 
@@ -259,7 +259,7 @@ impl DiscoverySharedState {
         let state = Arc::new(DiscoveryState::new(std::time::Instant::now(), Vec::new()));
         let (sender, _) = watch::channel(state.clone());
         let (state_received_sender, state_received) = watch::channel(false);
-        return Ok(Self {
+        Ok(Self {
             connection_manager,
             discovery_uri: http::Uri::from_str(endpoint)?,
             sender,
@@ -267,7 +267,7 @@ impl DiscoverySharedState {
             discovery_state: RwLock::new(state),
             state_received,
             state_received_sender,
-        });
+        })
     }
 
     #[tracing::instrument(skip(self))]
@@ -293,7 +293,7 @@ impl DiscoverySharedState {
 
         // lock until exit
         drop(discovery_lock);
-        return Ok(());
+        Ok(())
     }
 
     fn set_discovery_state(
@@ -318,25 +318,25 @@ impl DiscoverySharedState {
         trace!("stop background_discovery");
     }
 
-    fn list_endpoints_to_node_infos(mut list: Vec<EndpointInfo>) -> YdbResult<Vec<NodeInfo>> {
-        return list
+    fn list_endpoints_to_node_infos(list: Vec<EndpointInfo>) -> YdbResult<Vec<NodeInfo>> {
+        list
             .into_iter()
             .map(|item| match Self::endpoint_info_to_uri(item) {
                 Ok(uri) => YdbResult::<NodeInfo>::Ok(NodeInfo { uri }),
                 Err(err) => YdbResult::<NodeInfo>::Err(err),
             })
-            .try_collect();
+            .try_collect()
     }
 
     fn endpoint_info_to_uri(endpoint_info: EndpointInfo) -> YdbResult<Uri> {
         let authority: Authority =
             Authority::from_str(format!("{}:{}", endpoint_info.fqdn, endpoint_info.port).as_str())?;
 
-        return Ok(Uri::builder()
+        Ok(Uri::builder()
             .scheme(if endpoint_info.ssl { "https" } else { "http" })
             .authority(authority)
             .path_and_query("")
-            .build()?);
+            .build()?)
     }
 }
 
@@ -354,7 +354,7 @@ impl Discovery for DiscoverySharedState {
     }
 
     fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
-        return self.sender.subscribe();
+        self.sender.subscribe()
     }
 
     fn state(&self) -> Arc<DiscoveryState> {
@@ -384,7 +384,7 @@ mod test {
     use crate::discovery::DiscoverySharedState;
     use crate::errors::YdbResult;
     use crate::grpc_connection_manager::GrpcConnectionManager;
-    use crate::load_balancer::{RandomLoadBalancer, SharedLoadBalancer, StaticLoadBalancer};
+    use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
     use crate::test_helpers::CONNECTION_INFO;
     use http::Uri;
     use std::str::FromStr;
@@ -423,9 +423,9 @@ mod test {
         // wait two updates
         for _ in 0..2 {
             rx.changed().await.unwrap();
-            assert!(rx.borrow().nodes.len() >= 1);
+            assert!(!rx.borrow().nodes.is_empty());
         }
 
-        return Ok(());
+        Ok(())
     }
 }

@@ -108,19 +108,16 @@ simple_convert!(Duration, Value::Timestamp, Value::Date, Value::DateTime);
 // Impl additional Value From
 impl From<&str> for Value {
     fn from(v: &str) -> Self {
-        return v.to_string().into();
+        v.to_string().into()
     }
 }
 
 impl<T: Into<Value> + Default> From<Option<T>> for Value {
     fn from(from_value: Option<T>) -> Self {
         let t = T::default().into();
-        let value = match from_value {
-            Some(val) => Some(val.into()),
-            None => None,
-        };
+        let value = from_value.map(|val| val.into());
 
-        return Value::Optional(Box::new(ValueOptional { t, value }));
+        Value::Optional(Box::new(ValueOptional { t, value }))
     }
 }
 
@@ -128,7 +125,7 @@ impl<T: Into<Value> + Default> FromIterator<T> for Value {
     fn from_iter<T2: IntoIterator<Item = T>>(iter: T2) -> Self {
         let t: Value = T::default().into();
         let values: Vec<Value> = iter.into_iter().map(|item| item.into()).collect();
-        return Value::List(Box::new(ValueList { t, values }));
+        Value::List(Box::new(ValueList { t, values }))
     }
 }
 
@@ -164,7 +161,7 @@ where
             .into_iter()
             .map(|item| item.try_into())
             .try_collect()?;
-        return Ok(res);
+        Ok(res)
     }
 }
 
@@ -175,7 +172,7 @@ impl From<HashMap<String, Value>> for Value {
         from_val
             .into_iter()
             .for_each(|(key, val)| value_struct.insert(key, val));
-        return Value::Struct(value_struct);
+        Value::Struct(value_struct)
     }
 }
 
@@ -194,6 +191,6 @@ impl TryFrom<Value> for HashMap<String, Value> {
                 )))
             }
         };
-        return Ok(value_struct.into());
+        Ok(value_struct.into())
     }
 }

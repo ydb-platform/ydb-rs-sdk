@@ -41,10 +41,10 @@ impl QueryResult {
             None
         };
 
-        return Ok(QueryResult {
+        Ok(QueryResult {
             session_id,
             results,
-        });
+        })
     }
 
     pub fn into_only_result(self) -> YdbResult<ResultSet> {
@@ -87,15 +87,15 @@ pub struct ResultSet {
 impl ResultSet {
     #[allow(dead_code)]
     pub(crate) fn columns(&self) -> &Vec<crate::types::Column> {
-        return &self.columns;
+        &self.columns
     }
 
     pub fn rows(self) -> ResultSetRowsIter {
-        return ResultSetRowsIter {
+        ResultSetRowsIter {
             columns: Rc::new(self.columns),
             columns_by_name: Rc::new(self.columns_by_name),
             row_iter: self.pb.rows.into_iter(),
-        };
+        }
     }
 
     #[allow(dead_code)]
@@ -145,7 +145,7 @@ impl Row {
         if let Some(&index) = self.columns_by_name.get(name) {
             return self.remove_field(index);
         }
-        return Err(YdbError::Custom("field not found".into()));
+        Err(YdbError::Custom("field not found".into()))
     }
 
     pub(crate) fn remove_field(&mut self, index: usize) -> errors::YdbResult<Value> {
@@ -169,7 +169,7 @@ impl Iterator for ResultSetRowsIter {
         match self.row_iter.next() {
             None => None,
             Some(row) => {
-                return Some(Row {
+                Some(Row {
                     columns: self.columns.clone(),
                     columns_by_name: self.columns_by_name.clone(),
                     pb: row.items.into_iter().enumerate().collect(),
@@ -207,6 +207,6 @@ impl StreamResult {
             return Err(YdbError::InternalError("unexpected empty result".into()));
         };
         let result_set = ResultSet::from_proto(proto_result_set)?;
-        return Ok(Some(result_set));
+        Ok(Some(result_set))
     }
 }

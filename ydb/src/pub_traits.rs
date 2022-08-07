@@ -14,15 +14,15 @@ pub struct TokenInfo {
 
 impl TokenInfo {
     pub(crate) fn token(token: String) -> Self {
-        return Self {
+        Self {
             token,
             next_renew: Instant::now().add(DEFAULT_TOKEN_RENEW_INTERVAL),
-        };
+        }
     }
 
     pub(crate) fn with_renew(mut self, next_renew: Instant) -> Self {
         self.next_renew = next_renew;
-        return self;
+        self
     }
 }
 
@@ -37,7 +37,7 @@ pub trait Credentials: Send + Sync {
     fn create_token(&self) -> YdbResult<TokenInfo>;
 
     fn debug_string(&self) -> String {
-        return "some credentials".to_string();
+        "some credentials".to_string()
     }
 }
 

@@ -117,7 +117,7 @@ async fn execute_data_query_params() -> YdbResult<()> {
 async fn interactive_transaction() -> YdbResult<()> {
     let client = create_client().await?;
 
-    let _ = client
+    client
         .table_client()
         .create_session()
         .await?
@@ -179,7 +179,7 @@ async fn interactive_transaction() -> YdbResult<()> {
             .unwrap()
     );
 
-    return Ok(());
+    Ok(())
 }
 
 #[tokio::test]
@@ -223,7 +223,7 @@ async fn retry_test() -> YdbResult<()> {
         Err(err) => panic!("retry test failed with error result: {:?}", err),
     }
 
-    return Ok(());
+    Ok(())
 }
 
 #[tokio::test]
@@ -246,7 +246,7 @@ async fn scheme_query() -> YdbResult<()> {
                 ))
                 .await?;
 
-            return Ok(());
+            Ok(())
         })
         .await
         .unwrap();
@@ -258,12 +258,12 @@ async fn scheme_query() -> YdbResult<()> {
                 .execute_schema_query(format!("DROP TABLE {}", table_name))
                 .await?;
 
-            return Ok(());
+            Ok(())
         })
         .await
         .unwrap();
 
-    return Ok(());
+    Ok(())
 }
 
 #[tokio::test]
@@ -293,7 +293,7 @@ SELECT $test AS test;
     assert_eq!(1, res.columns().len());
     assert_eq!(v, res.rows().next().unwrap().remove_field_by_name("test")?);
 
-    return Ok(());
+    Ok(())
 }
 
 #[tokio::test]
@@ -327,7 +327,7 @@ SELECT $test AS test;
         res.rows().next().unwrap().remove_field_by_name("test")?
     );
 
-    return Ok(());
+    Ok(())
 }
 
 #[tokio::test]
@@ -535,7 +535,7 @@ FROM
 
             tr.query(query).await?;
             tr.commit().await?;
-            return Ok(());
+            Ok(())
         })
         .await
         .unwrap();
@@ -570,5 +570,5 @@ FROM
     assert_eq!(expected_sum, sum);
     // need improove for non flap in tests
     // assert!(result_set_count > 1); // ensure get multiply results
-    return Ok(());
+    Ok(())
 }

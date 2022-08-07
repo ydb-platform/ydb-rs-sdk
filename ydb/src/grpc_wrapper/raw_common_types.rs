@@ -5,7 +5,7 @@ pub(crate) struct Duration {
 
 impl From<std::time::Duration> for Duration {
     fn from(val: std::time::Duration) -> Self {
-        return Self { val };
+        Self { val }
     }
 }
 

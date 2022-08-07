@@ -1,7 +1,7 @@
 use crate::discovery::{Discovery, DiscoveryState};
 use crate::errors::*;
 use http::Uri;
-use mockall;
+
 
 use crate::grpc_wrapper::raw_services::Service;
 use crate::waiter::{Waiter, WaiterImpl};
@@ -29,13 +29,13 @@ pub(crate) struct SharedLoadBalancer {
 
 impl SharedLoadBalancer {
     pub(crate) fn new(discovery: &Box<dyn Discovery>) -> Self {
-        return Self::new_with_balancer_and_updater(Box::new(RandomLoadBalancer::new()), discovery);
+        Self::new_with_balancer_and_updater(Box::new(RandomLoadBalancer::new()), discovery)
     }
 
     pub(crate) fn new_with_balancer(load_balancer: Box<dyn LoadBalancer>) -> Self {
-        return Self {
+        Self {
             inner: Arc::new(RwLock::new(load_balancer)),
-        };
+        }
     }
 
     pub(crate) fn new_with_balancer_and_updater(
@@ -49,7 +49,7 @@ impl SharedLoadBalancer {
         tokio::spawn(
             async move { update_load_balancer(shared_lb_updater, discovery_receiver).await },
         );
-        return shared_lb;
+        shared_lb
     }
 }
 
@@ -82,13 +82,13 @@ pub(crate) struct StaticLoadBalancer {
 impl StaticLoadBalancer {
     #[allow(dead_code)]
     pub(crate) fn new(endpoint: Uri) -> Self {
-        return Self { endpoint };
+        Self { endpoint }
     }
 }
 
 impl LoadBalancer for StaticLoadBalancer {
     fn endpoint(&self, _: Service) -> YdbResult<Uri> {
-        return Ok(self.endpoint.clone());
+        Ok(self.endpoint.clone())
     }
 
     fn set_discovery_state(&mut self, _: &Arc<DiscoveryState>) -> YdbResult<()> {
@@ -100,7 +100,7 @@ impl LoadBalancer for StaticLoadBalancer {
     fn waiter(&self) -> Box<dyn Waiter> {
         let waiter = WaiterImpl::new();
         waiter.set_received(Ok(()));
-        return Box::new(waiter);
+        Box::new(waiter)
     }
 }
 
@@ -131,16 +131,16 @@ impl LoadBalancer for RandomLoadBalancer {
         let nodes = self.discovery_state.get_nodes(&service);
         match nodes {
             None => Err(YdbError::Custom(
-                format!("no endpoints for service: '{}'", service).into(),
+                format!("no endpoints for service: '{}'", service),
             )),
             Some(nodes) => {
-                if nodes.len() > 0 {
+                if !nodes.is_empty() {
                     let index = rand::random::<usize>() % nodes.len();
                     let node = &nodes[index % nodes.len()];
-                    return Ok(node.uri.clone());
+                    Ok(node.uri.clone())
                 } else {
                     Err(YdbError::Custom(
-                        format!("empty endpoint list for service: {}", service).into(),
+                        format!("empty endpoint list for service: {}", service),
                     ))
                 }
             }
@@ -156,7 +156,7 @@ impl LoadBalancer for RandomLoadBalancer {
     }
 
     fn waiter(&self) -> Box<dyn Waiter> {
-        return Box::new(self.waiter.clone());
+        Box::new(self.waiter.clone())
     }
 }
 
@@ -205,7 +205,7 @@ mod test {
 
         lb_mock.expect_endpoint().returning(move |_service| {
             endpoint_counter_mock.fetch_add(1, Relaxed);
-            return Ok(test_uri_mock.clone());
+            Ok(test_uri_mock.clone())
         });
 
         let s1 = SharedLoadBalancer::new_with_balancer(Box::new(lb_mock));
@@ -214,7 +214,7 @@ mod test {
         assert_eq!(test_uri, s1.endpoint(Table)?);
         assert_eq!(test_uri, s2.endpoint(Table)?);
         assert_eq!(endpoint_counter.load(Relaxed), 2);
-        return Ok(());
+        Ok(())
     }
 
     #[tokio::test]
@@ -242,7 +242,7 @@ mod test {
             .returning(move |_| {
                 trace!("first set");
                 first_update_sender.take().unwrap().send(()).unwrap();
-                return Ok(());
+                Ok(())
             });
 
         lb_mock
@@ -252,7 +252,7 @@ mod test {
             .returning(move |_| {
                 trace!("second set");
                 second_update_sender.take().unwrap().send(()).unwrap();
-                return Ok(());
+                Ok(())
             });
 
         let shared_lb = SharedLoadBalancer::new_with_balancer(Box::new(lb_mock));
@@ -278,7 +278,7 @@ mod test {
             }
         }
         // updater_finished_receiver.await.unwrap();
-        return Ok(());
+        Ok(())
     }
 
     #[test]
@@ -307,6 +307,6 @@ mod test {
         assert_eq!(map.len(), 2);
         assert!(*map.get(&one).unwrap() > 30);
         assert!(*map.get(&two).unwrap() > 30);
-        return Ok(());
+        Ok(())
     }
 }

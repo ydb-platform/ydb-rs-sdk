@@ -19,7 +19,7 @@ pub async fn init_db() -> ydb::YdbResult<ydb::Client> {
         )
         .await?;
 
-    return Ok(client);
+    Ok(client)
 }
 
 pub async fn insert(table_client: &TableClient, hash: String, long: String) -> ydb::YdbResult<()> {
@@ -42,10 +42,10 @@ pub async fn insert(table_client: &TableClient, hash: String, long: String) -> y
             )
             .await?;
             tx.commit().await?;
-            return Ok(());
+            Ok(())
         })
         .await?;
-    return Ok(());
+    Ok(())
 }
 
 pub async fn get(table_client: &TableClient, hash: String) -> YdbResult<String> {
@@ -76,13 +76,13 @@ pub async fn get(table_client: &TableClient, hash: String) -> YdbResult<String> 
                 .into_only_row()?
                 .remove_field_by_name("src")?
                 .try_into()?;
-            return Ok(src);
+            Ok(src)
         })
         .await?;
 
     if let Some(url) = src {
-        return Ok(url);
+        Ok(url)
     } else {
-        return Err(YdbError::Convert("can't convert null to string".into()));
+        Err(YdbError::Convert("can't convert null to string".into()))
     }
 }

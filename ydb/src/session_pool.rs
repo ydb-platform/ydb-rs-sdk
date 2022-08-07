@@ -63,12 +63,12 @@ impl SessionPool {
             Arc::downgrade(&pool.idle_sessions),
             std::time::Duration::from_secs(60),
         ));
-        return pool;
+        pool
     }
 
     pub(crate) fn with_max_active_sessions(mut self, size: usize) -> Self {
         self.active_sessions = Arc::new(Semaphore::new(size));
-        return self;
+        self
     }
 
     pub(crate) async fn session(&self) -> YdbResult<Session> {
@@ -100,7 +100,7 @@ impl SessionPool {
             drop(active_session_permit);
         }));
         session = session.with_timeouts(TimeoutSettings::default());
-        return Ok(session);
+        Ok(session)
     }
 }
 
@@ -213,6 +213,6 @@ mod test {
 
         second_session_got_receiver.await?;
 
-        return Ok(());
+        Ok(())
     }
 }

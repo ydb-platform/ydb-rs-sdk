@@ -1,11 +1,11 @@
-use crate::channel_pool::ChannelErrorInfo;
+
 use crate::client_common::DBCredentials;
 use crate::grpc_wrapper::auth::{create_service_with_auth, ServiceWithAuth};
-use crate::middlewares::AuthService;
+
 use crate::YdbResult;
 use http::Uri;
 use std::time::Duration;
-use tokio::sync::mpsc;
+
 use tonic::transport::Channel;
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tracing::trace;
@@ -17,7 +17,7 @@ pub(crate) async fn create_grpc_channel_with_auth(
     cred: DBCredentials,
 ) -> YdbResult<ChannelWithAuth> {
     let channel = create_grpc_channel(uri).await?;
-    return Ok(create_service_with_auth(channel, cred));
+    Ok(create_service_with_auth(channel, cred))
 }
 
 #[tracing::instrument]

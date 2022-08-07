@@ -38,7 +38,7 @@ async fn main() -> YdbResult<()> {
                 .await?;
             }
             t.commit().await?;
-            return Ok(());
+            Ok(())
         })
         .await
         .unwrap();
@@ -52,7 +52,7 @@ async fn main() -> YdbResult<()> {
                 .into_only_row()?
                 .remove_field_by_name("sum")?;
             let res = value.try_into(); // res: YdbResult<Option<i64>>
-            return Ok(res.unwrap());
+            Ok(res.unwrap())
         })
         .await?;
     println!("sum: {}", sum.unwrap_or(-1));
@@ -75,5 +75,5 @@ async fn main() -> YdbResult<()> {
         let val: Option<String> = row.remove_field_by_name("val")?.try_into()?;
         println!("row id '{}' with value '{}'", id.unwrap(), val.unwrap())
     }
-    return Ok(());
+    Ok(())
 }

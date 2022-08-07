@@ -40,7 +40,7 @@ where
     CB: FnOnce(AuthService) -> T,
 {
     let channel = create_grpc_channel(uri, error_sender).await?;
-    return create_client_on_channel(channel, cred, new_func);
+    create_client_on_channel(channel, cred, new_func)
 }
 
 fn create_client_on_channel<NewFuncT, ClientT>(
@@ -52,12 +52,12 @@ where
     NewFuncT: FnOnce(AuthService) -> ClientT,
 {
     let auth_service_create = |ch| {
-        return AuthService::new(ch, cred.clone());
+        AuthService::new(ch, cred.clone())
     };
     let auth_ch = ServiceBuilder::new()
         .layer_fn(auth_service_create)
         .service(channel);
-    return Ok(new_func(auth_ch));
+    Ok(new_func(auth_ch))
 }
 
 #[tracing::instrument(skip(error_sender))]
@@ -100,7 +100,7 @@ where
     TOp: Operation,
     T: Default + prost::Message,
 {
-    return Ok(grpc_wrapper::grpc::grpc_read_operation_result(resp)?);
+    Ok(grpc_wrapper::grpc::grpc_read_operation_result(resp)?)
 }
 
 pub(crate) fn grpc_read_void_operation_result<TOp>(
@@ -116,21 +116,21 @@ where
     if op.status() != StatusCode::Success {
         return Err(create_operation_error(op));
     }
-    return Ok(());
+    Ok(())
 }
 
 pub(crate) fn proto_issues_to_ydb_issues(proto_issues: Vec<IssueMessage>) -> Vec<YdbIssue> {
-    return grpc_wrapper::grpc::proto_issues_to_ydb_issues(proto_issues);
+    grpc_wrapper::grpc::proto_issues_to_ydb_issues(proto_issues)
 }
 
 pub(crate) fn create_operation_error(op: ydb_grpc::ydb_proto::operations::Operation) -> YdbError {
-    return grpc_wrapper::grpc::create_operation_error(op).into();
+    grpc_wrapper::grpc::create_operation_error(op).into()
 }
 
 pub(crate) fn operation_params(timeout: Duration) -> Option<OperationParams> {
-    return Some(OperationParams {
+    Some(OperationParams {
         operation_mode: OperationMode::Sync.into(),
         operation_timeout: Some(timeout.into()),
         ..OperationParams::default()
-    });
+    })
 }

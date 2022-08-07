@@ -49,17 +49,17 @@ pub(crate) struct AutoCommit {
 
 impl AutoCommit {
     pub(crate) fn new(session_pool: SessionPool, mode: Mode, timeouts: TimeoutSettings) -> Self {
-        return Self {
+        Self {
             mode,
             session_pool,
             error_on_truncate_response: false,
             timeouts,
-        };
+        }
     }
 
     pub(crate) fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
         self.error_on_truncate_response = error_on_truncate;
-        return self;
+        self
     }
 }
 
@@ -114,7 +114,7 @@ pub(crate) struct SerializableReadWriteTx {
 
 impl SerializableReadWriteTx {
     pub(crate) fn new(session_pool: SessionPool, timeouts: TimeoutSettings) -> Self {
-        return Self {
+        Self {
             error_on_truncate_response: false,
             session_pool,
 
@@ -124,12 +124,12 @@ impl SerializableReadWriteTx {
             rollbacked: false,
             finished: false,
             timeouts,
-        };
+        }
     }
 
     pub(crate) fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
         self.error_on_truncate_response = error_on_truncate;
-        return self;
+        self
     }
 }
 
@@ -198,7 +198,7 @@ impl Transaction for SerializableReadWriteTx {
 
         if self.finished {
             return Err(YdbError::Custom(
-                format!("commit finished non comitted transaction: {:?}", &self.id).into(),
+                format!("commit finished non comitted transaction: {:?}", &self.id),
             ));
         }
         self.finished = true;
@@ -233,8 +233,7 @@ impl Transaction for SerializableReadWriteTx {
                 format!(
                     "rollback finished non rollbacked transaction: {:?}",
                     &self.id
-                )
-                .into(),
+                ),
             ));
         }
         self.finished = true;

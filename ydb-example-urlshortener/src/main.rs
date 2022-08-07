@@ -25,5 +25,5 @@ async fn main() {
         exit(1)
     }
 
-    return;
+    
 }

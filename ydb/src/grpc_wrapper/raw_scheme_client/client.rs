@@ -6,7 +6,7 @@ use crate::grpc_wrapper::raw_scheme_client::list_directory_types::{
 };
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-use crate::YdbResult;
+
 use tracing::{instrument, trace};
 use ydb_grpc::ydb_proto::operations::OperationParams;
 use ydb_grpc::ydb_proto::scheme::v1::scheme_service_client::SchemeServiceClient;
@@ -18,9 +18,9 @@ pub(crate) struct SchemeClient {
 
 impl SchemeClient {
     pub fn new(service: ChannelWithAuth) -> Self {
-        return Self {
+        Self {
             service: SchemeServiceClient::new(service),
-        };
+        }
     }
 
     #[instrument(skip(self), err, ret)]
@@ -43,7 +43,7 @@ impl SchemeClient {
             serde_json::to_string(&result).unwrap_or("bad json".into())
         );
 
-        return RawListDirectoryResult::try_from(result);
+        RawListDirectoryResult::try_from(result)
     }
 
     #[instrument(skip(self), err, ret)]
@@ -55,7 +55,7 @@ impl SchemeClient {
         );
 
         let response = self.service.make_directory(req).await?;
-        return grpc_read_void_operation_result(response);
+        grpc_read_void_operation_result(response)
     }
 
     #[instrument(skip(self), err, ret)]
@@ -67,13 +67,13 @@ impl SchemeClient {
         );
 
         let response = self.service.remove_directory(req).await?;
-        return grpc_read_void_operation_result(response);
+        grpc_read_void_operation_result(response)
     }
 }
 
 impl GrpcServiceForDiscovery for SchemeClient {
     fn get_grpc_discovery_service() -> Service {
-        return Service::Scheme;
+        Service::Scheme
     }
 }
 

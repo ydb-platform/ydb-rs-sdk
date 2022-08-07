@@ -38,15 +38,15 @@ impl StaticToken {
     /// StaticToken::from("asd");
     /// ```
     pub fn from<T: Into<String>>(token: T) -> Self {
-        return StaticToken {
+        StaticToken {
             token: token.into(),
-        };
+        }
     }
 }
 
 impl Credentials for StaticToken {
     fn create_token(&self) -> YdbResult<TokenInfo> {
-        return Ok(TokenInfo::token(self.token.clone()));
+        Ok(TokenInfo::token(self.token.clone()))
     }
 
     fn debug_string(&self) -> String {
@@ -84,18 +84,18 @@ impl CommandLineYcToken {
         let cmd = cmd.into();
         let cmd_parts: Vec<&str> = cmd.split_whitespace().collect();
 
-        if cmd_parts.len() < 1 {
+        if cmd_parts.is_empty() {
             return Err(YdbError::Custom(
-                format!("can't split get token command: '{}'", cmd).into(),
+                format!("can't split get token command: '{}'", cmd),
             ));
         }
 
         let mut command = Command::new(cmd_parts[0]);
         command.args(&cmd_parts.as_slice()[1..]);
 
-        return Ok(CommandLineYcToken {
+        Ok(CommandLineYcToken {
             command: Arc::new(Mutex::new(command)),
-        });
+        })
     }
 }
 
@@ -111,7 +111,7 @@ impl Credentials for CommandLineYcToken {
             )));
         }
         let token = String::from_utf8(result.stdout)?.trim().to_string();
-        return Ok(TokenInfo::token(token));
+        Ok(TokenInfo::token(token))
     }
 
     fn debug_string(&self) -> String {
@@ -130,11 +130,11 @@ impl Credentials for CommandLineYcToken {
                 desc
             }
             Err(err) => {
-                format!("err: {}", err.to_string())
+                format!("err: {}", err)
             }
         };
 
-        return token_describe;
+        token_describe
     }
 }
 
@@ -166,7 +166,7 @@ pub struct GCEMetadata {
 impl GCEMetadata {
     /// Create GCEMetadata with default url for receive token
     pub fn new() -> Self {
-        return Self::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token").unwrap();
+        Self::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token").unwrap()
     }
 
     /// Create GCEMetadata with custom url (may need for debug or spec infrastructure with non standard metadata)

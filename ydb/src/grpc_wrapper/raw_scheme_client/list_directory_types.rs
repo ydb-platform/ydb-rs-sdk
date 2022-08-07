@@ -10,10 +10,10 @@ pub(crate) struct RawListDirectoryRequest {
 
 impl From<RawListDirectoryRequest> for ydb_grpc::ydb_proto::scheme::ListDirectoryRequest {
     fn from(v: RawListDirectoryRequest) -> Self {
-        return Self {
+        Self {
             operation_params: Some(v.operation_params.into()),
             path: v.path,
-        };
+        }
     }
 }
 
@@ -29,12 +29,10 @@ impl TryFrom<ydb_grpc::ydb_proto::scheme::ListDirectoryResult> for RawListDirect
     fn try_from(
         value: ydb_grpc::ydb_proto::scheme::ListDirectoryResult,
     ) -> Result<Self, Self::Error> {
-        let self_entry = if let (Some(entry)) = value.self_ {
+        let self_entry = if let Some(entry) = value.self_ {
             from_grpc_to_scheme_entry(entry)
         } else {
-            return Err(RawError::ProtobufDecodeError(format!(
-                "list directory self entry is empty"
-            )));
+            return Err(RawError::ProtobufDecodeError("list directory self entry is empty".to_string()));
         };
 
         Ok(Self {
@@ -42,7 +40,7 @@ impl TryFrom<ydb_grpc::ydb_proto::scheme::ListDirectoryResult> for RawListDirect
             children: value
                 .children
                 .into_iter()
-                .map(|entry| from_grpc_to_scheme_entry(entry))
+                .map(from_grpc_to_scheme_entry)
                 .collect(),
         })
     }
@@ -56,12 +54,12 @@ fn from_grpc_to_scheme_entry(value: ydb_grpc::ydb_proto::scheme::Entry) -> Schem
         effective_permissions: value
             .effective_permissions
             .into_iter()
-            .map(|item| from_grpc_to_scheme_permissions(item))
+            .map(from_grpc_to_scheme_permissions)
             .collect(),
         permissions: value
             .permissions
             .into_iter()
-            .map(|item| from_grpc_to_scheme_permissions(item))
+            .map(from_grpc_to_scheme_permissions)
             .collect(),
         size_bytes: value.size_bytes,
     }

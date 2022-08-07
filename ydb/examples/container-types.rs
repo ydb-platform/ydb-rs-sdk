@@ -11,7 +11,7 @@ async fn main() -> YdbResult<()> {
     // List
     table_client
         .retry_transaction(|mut t| async move {
-            let source = vec![1 as i32, 2, 3];
+            let source = vec![1_i32, 2, 3];
             let source_value = Value::from_iter(source.clone());
             let res: Vec<i32> = t
                 .query(
@@ -34,7 +34,7 @@ async fn main() -> YdbResult<()> {
 
             assert_eq!(vec![1, 2, 3], res);
             println!("List: {:?}", res);
-            return Ok(());
+            Ok(())
         })
         .await?;
 
@@ -42,9 +42,9 @@ async fn main() -> YdbResult<()> {
     table_client
         .retry_transaction(|mut t| async move {
             let source: HashMap<String, Value> = HashMap::from_iter([
-                ("a".into(), (12 as i32).into()),
+                ("a".into(), 12_i32.into()),
                 ("b".into(), "test".to_string().into()),
-                ("c".into(), (1.0 as f64).into()),
+                ("c".into(), 1.0_f64.into()),
             ]);
 
             let res: HashMap<String, Value> = t
@@ -69,10 +69,10 @@ async fn main() -> YdbResult<()> {
 
             assert_eq!(source, res);
             println!("Struct: {:?}", res);
-            return Ok(());
+            Ok(())
         })
         .await?;
 
     println!("done");
-    return Ok(());
+    Ok(())
 }

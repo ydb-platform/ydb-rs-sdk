@@ -3,7 +3,7 @@ use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticTok
 use crate::discovery::{Discovery, TimerDiscovery};
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::load_balancer::{RandomLoadBalancer, SharedLoadBalancer, StaticLoadBalancer};
+use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 use crate::{Client, Credentials};
 use http::Uri;
 use once_cell::sync::Lazy;
@@ -32,12 +32,12 @@ pub(crate) fn register(param_name: &str, handler: ParamHandler) -> YdbResult<()>
     let mut lock = PARAM_HANDLERS.lock()?;
     if lock.contains_key(param_name) {
         return Err(YdbError::Custom(
-            format!("param handler already exist for '{}'", param_name).into(),
+            format!("param handler already exist for '{}'", param_name),
         ));
     };
 
     lock.insert(param_name.to_string(), handler);
-    return Ok(());
+    Ok(())
 }
 
 fn database(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
@@ -48,7 +48,7 @@ fn database(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBui
 
         client_builder.database = value.to_string();
     }
-    return Ok(client_builder);
+    Ok(client_builder)
 }
 
 fn token(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
@@ -60,7 +60,7 @@ fn token(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilde
         client_builder.credentials =
             credencials_ref(crate::credentials::StaticToken::from(value.as_ref()));
     }
-    return Ok(client_builder);
+    Ok(client_builder)
 }
 
 fn token_cmd(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
@@ -73,7 +73,7 @@ fn token_cmd(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBu
             crate::credentials::CommandLineYcToken::from_cmd(value.as_ref())?,
         );
     }
-    return Ok(client_builder);
+    Ok(client_builder)
 }
 
 fn token_metadata(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
@@ -94,7 +94,7 @@ fn token_metadata(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
             }
         }
     }
-    return Ok(client_builder);
+    Ok(client_builder)
 }
 
 pub struct ClientBuilder {
@@ -119,7 +119,7 @@ impl ClientBuilder {
                 client_builder = handler(s, client_builder)?;
             }
         }
-        return Ok(client_builder);
+        Ok(client_builder)
     }
 
     pub fn client(self) -> YdbResult<Client> {
@@ -147,22 +147,22 @@ impl ClientBuilder {
         let load_balancer = SharedLoadBalancer::new(&discovery);
         let connection_manager = GrpcConnectionManager::new(load_balancer, db_cred.clone());
 
-        return Client::new(db_cred, discovery, connection_manager);
+        Client::new(db_cred, discovery, connection_manager)
     }
 
     pub fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
         self.credentials = credencials_ref(cred);
-        return self;
+        self
     }
 
     pub fn with_database<T: Into<String>>(mut self, database: T) -> Self {
         self.database = database.into();
-        return self;
+        self
     }
 
     pub fn with_endpoint<T: Into<String>>(mut self, endpoint: T) -> Self {
         self.endpoint = endpoint.into();
-        return self;
+        self
     }
 
     /// Set discovery implementation
@@ -179,7 +179,7 @@ impl ClientBuilder {
     /// ```
     pub fn with_discovery<T: 'static + Discovery>(mut self, discovery: T) -> Self {
         self.discovery = Some(Box::new(discovery));
-        return self;
+        self
     }
 
     fn new() -> Self {
@@ -201,9 +201,9 @@ impl ClientBuilder {
             url.host().unwrap(),
             url.port().unwrap()
         )
-        .to_string();
+        ;
         self.database = url.path().to_string();
-        return Ok(());
+        Ok(())
     }
 }
 

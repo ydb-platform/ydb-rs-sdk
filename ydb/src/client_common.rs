@@ -37,7 +37,7 @@ impl TokenCache {
         })));
         let token_cache_clone = token_cache.clone();
         tokio::task::spawn_blocking(move || token_cache_clone.renew_token_blocking());
-        return Ok(token_cache);
+        Ok(token_cache)
     }
 
     pub(crate) fn token(&self) -> String {
@@ -51,7 +51,7 @@ impl TokenCache {
                 tokio::task::spawn_blocking(move || self_clone.renew_token_blocking());
             };
         };
-        return read.token_info.token.clone();
+        read.token_info.token.clone()
     }
 
     fn renew_token_blocking(self) {
@@ -77,7 +77,7 @@ impl TokenCache {
                 write.token_info = token_info;
                 if let Err(_) = write.token_received_sender.send(true) {
                     trace!("send token channel closed");
-                    return;
+                    
                 }
             }
             Err(err) => {

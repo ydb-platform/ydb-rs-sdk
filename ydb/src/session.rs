@@ -7,7 +7,7 @@ use crate::result::{QueryResult, StreamResult};
 use crate::trait_operation::Operation;
 use derivative::Derivative;
 use std::sync::atomic::{AtomicI64, Ordering};
-use tracing::field::debug;
+
 use tracing::{debug, trace};
 use ydb_grpc::ydb_proto::table::keep_alive_result::SessionStatus;
 use ydb_grpc::ydb_proto::table::{
@@ -44,13 +44,13 @@ impl Session {
         channel_pool: TableServiceChannelPool,
         timeouts: TimeoutSettings,
     ) -> Self {
-        return Self {
+        Self {
             id,
             can_pooled: true,
             on_drop_callbacks: Vec::new(),
             channel_pool,
             timeouts,
-        };
+        }
     }
 
     pub(crate) fn handle_error(&mut self, err: &YdbError) {
@@ -73,7 +73,7 @@ impl Session {
         if let Err(err) = &res {
             self.handle_error(err);
         }
-        return res;
+        res
     }
 
     pub(crate) async fn commit_transaction(&mut self, tx_id: String) -> YdbResult<()> {
@@ -89,7 +89,7 @@ impl Session {
             })
             .await?;
         let _: CommitTransactionResult = self.handle_operation_result(response)?;
-        return Ok(());
+        Ok(())
     }
 
     pub(crate) async fn execute_schema_query(&mut self, query: String) -> YdbResult<()> {
@@ -105,7 +105,7 @@ impl Session {
             })
             .await?;
 
-        return grpc_read_void_operation_result(resp);
+        grpc_read_void_operation_result(resp)
     }
 
     #[tracing::instrument(skip(self, req), fields(req_number=req_number()))]
@@ -127,7 +127,7 @@ impl Session {
 
         debug!("response: {}", serde_json::to_string(&operation_result)?);
 
-        return QueryResult::from_proto(operation_result, error_on_truncated);
+        QueryResult::from_proto(operation_result, error_on_truncated)
     }
 
     #[tracing::instrument(skip(self, query), fields(req_number=req_number()))]
@@ -142,7 +142,7 @@ impl Session {
         let mut channel = self.channel_pool.create_channel().await?;
         let resp = channel.stream_execute_scan_query(req).await?;
         let stream = resp.into_inner();
-        return Ok(StreamResult { results: stream });
+        Ok(StreamResult { results: stream })
     }
 
     pub(crate) async fn rollback_transaction(&mut self, tx_id: String) -> YdbResult<()> {
@@ -158,13 +158,13 @@ impl Session {
             })
             .await?;
         let res = grpc_read_void_operation_result(response);
-        return match res {
+        match res {
             Ok(()) => Ok(()),
             Err(err) => {
                 self.handle_error(&err);
-                return Err(err);
+                Err(err)
             }
-        };
+        }
     }
 
     pub(crate) async fn keepalive(&mut self) -> YdbResult<()> {
@@ -198,7 +198,7 @@ impl Session {
 
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {
         self.timeouts = timeouts;
-        return self;
+        self
     }
 
     async fn get_channel(&self) -> YdbResult<TableServiceClientType> {
@@ -211,13 +211,13 @@ impl Session {
     }
 
     pub(crate) fn clone_without_ondrop(&self) -> Self {
-        return Self {
+        Self {
             id: self.id.clone(),
             can_pooled: self.can_pooled,
             on_drop_callbacks: Vec::new(),
             channel_pool: self.channel_pool.clone(),
             timeouts: self.timeouts,
-        };
+        }
     }
 }
 

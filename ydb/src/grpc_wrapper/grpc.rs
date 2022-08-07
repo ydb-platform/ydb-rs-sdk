@@ -1,6 +1,6 @@
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::trait_operation::Operation;
-use crate::{YdbError, YdbIssue, YdbResult};
+use crate::{YdbIssue};
 use ydb_grpc::ydb_proto::issue::IssueMessage;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
@@ -21,7 +21,7 @@ where
         .result
         .ok_or(RawError::Custom("no result data in operation".into()))?;
     let res: T = T::decode(opres.value)?;
-    return Ok(res);
+    Ok(res)
 }
 
 pub(crate) fn grpc_read_void_operation_result<TOp>(resp: tonic::Response<TOp>) -> RawResult<()>
@@ -35,7 +35,7 @@ where
     if op.status() != StatusCode::Success {
         return Err(create_operation_error(op));
     }
-    return Ok(());
+    Ok(())
 }
 
 pub(crate) fn create_operation_error(op: ydb_grpc::ydb_proto::operations::Operation) -> RawError {

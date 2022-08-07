@@ -50,9 +50,9 @@ struct SharedState<T> {
 
 impl<T> SharedState<T> {
     fn new() -> Self {
-        return Self {
+        Self {
             channels: HashMap::new(),
-        };
+        }
     }
 }
 
@@ -71,14 +71,14 @@ where
         tokio::spawn(async move {
             Self::node_pessimization_loop(discovery, channel_error_receiver).await;
         });
-        return Self {
+        Self {
             create_new_channel_fn,
             credentials,
             load_balancer,
             service,
             shared_state: Arc::new(Mutex::new(SharedState::new())),
             channel_error_sender,
-        };
+        }
     }
 
     fn get_channel_from_pool(&self, endpoint: &Uri) -> Option<T> {
@@ -154,7 +154,7 @@ impl Future for ChannelProxyFuture {
                 sender.send(ChannelErrorInfo { endpoint }).await.ok();
             });
         }
-        return res;
+        res
     }
 }
 
@@ -172,11 +172,11 @@ type ChannelError = <Channel as tower::Service<http::Request<BoxBody>>>::Error;
 
 impl ChannelProxy {
     pub(crate) fn new(endpoint: Uri, ch: Channel, error_sender: ChannelProxyErrorSender) -> Self {
-        return ChannelProxy {
+        ChannelProxy {
             endpoint,
             ch,
             error_sender,
-        };
+        }
     }
 }
 
@@ -186,14 +186,14 @@ impl tower::Service<http::Request<BoxBody>> for ChannelProxy {
     type Future = ChannelProxyFuture;
 
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
-        return tower::Service::poll_ready(&mut self.ch, cx);
+        tower::Service::poll_ready(&mut self.ch, cx)
     }
 
     fn call(&mut self, req: Request<BoxBody>) -> Self::Future {
-        return ChannelProxyFuture {
+        ChannelProxyFuture {
             endpoint: self.endpoint.clone(),
             inner: tower::Service::call(&mut self.ch, req),
             error_event: self.error_sender.clone(),
-        };
+        }
     }
 }

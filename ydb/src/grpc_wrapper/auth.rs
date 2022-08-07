@@ -7,7 +7,7 @@ use tonic::{Code, Status};
 pub(crate) type ServiceWithAuth<S> = InterceptedService<S, AuthInterceptor>;
 
 pub(crate) fn create_service_with_auth<S>(service: S, cred: DBCredentials) -> ServiceWithAuth<S> {
-    return ServiceWithAuth::new(service, AuthInterceptor { cred });
+    ServiceWithAuth::new(service, AuthInterceptor { cred })
 }
 
 pub(crate) struct AuthInterceptor {
@@ -41,6 +41,6 @@ impl Interceptor for AuthInterceptor {
             "x-ydb-sdk-build-info",
             AsciiMetadataValue::from_str("ydb-go-sdk/0.0.0").unwrap(),
         );
-        return Ok(request);
+        Ok(request)
     }
 }

@@ -24,30 +24,30 @@ pub enum YdbOrCustomerError {
 impl YdbOrCustomerError {
     #[allow(dead_code)]
     pub(crate) fn from_mess<T: Into<String>>(s: T) -> Self {
-        return Self::Customer(Arc::new(Box::new(YdbError::Custom(s.into()))));
+        Self::Customer(Arc::new(Box::new(YdbError::Custom(s.into()))))
     }
 
     #[allow(dead_code)]
     pub(crate) fn from_err<T: std::error::Error + 'static + Send + Sync>(err: T) -> Self {
-        return Self::Customer(Arc::new(Box::new(err)));
+        Self::Customer(Arc::new(Box::new(err)))
     }
 }
 
 impl Debug for YdbOrCustomerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        return match self {
+        match self {
             Self::YDB(err) => Debug::fmt(err, f),
             Self::Customer(err) => Debug::fmt(err, f),
-        };
+        }
     }
 }
 
 impl Display for YdbOrCustomerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        return match self {
+        match self {
             Self::YDB(err) => Display::fmt(err, f),
             Self::Customer(err) => Display::fmt(err, f),
-        };
+        }
     }
 }
 
@@ -55,7 +55,7 @@ impl std::error::Error for YdbOrCustomerError {}
 
 impl From<YdbError> for YdbOrCustomerError {
     fn from(e: YdbError) -> Self {
-        return Self::YDB(e);
+        Self::YDB(e)
     }
 }
 
@@ -216,14 +216,14 @@ impl YdbIssue {
                 )))
             }
         };
-        return Ok(val);
+        Ok(val)
     }
 }
 
 impl YdbError {
     #[allow(dead_code)]
     pub(crate) fn from_str<T: Into<String>>(s: T) -> YdbError {
-        return YdbError::Custom(s.into());
+        YdbError::Custom(s.into())
     }
     pub(crate) fn need_retry(&self) -> NeedRetry {
         match self {
@@ -312,13 +312,13 @@ impl From<Box<dyn std::any::Any + Send>> for YdbError {
 
 impl<T> From<std::sync::PoisonError<T>> for YdbError {
     fn from(e: std::sync::PoisonError<T>) -> Self {
-        return YdbError::Custom(e.to_string());
+        YdbError::Custom(e.to_string())
     }
 }
 
 impl From<tonic::Status> for YdbError {
     fn from(e: tonic::Status) -> Self {
-        return YdbError::TransportGRPCStatus(Arc::new(e));
+        YdbError::TransportGRPCStatus(Arc::new(e))
     }
 }
 

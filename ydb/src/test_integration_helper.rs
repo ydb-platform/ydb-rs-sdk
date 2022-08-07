@@ -19,7 +19,7 @@ lazy_static! {
 
         trace!("start wait");
         client.wait().await.unwrap();
-        return Arc::new(client);
+        Arc::new(client)
     });
 
     pub static ref TEST_TIMEOUT: i32 = {
@@ -27,13 +27,13 @@ lazy_static! {
         match std::env::var("TEST_TIMEOUT"){
             Ok(timeout)=>{
                 if let Ok(timeout) = timeout.parse() {
-                    return timeout
+                    timeout
                 } else {
-                    return DEFAULT_TIMEOUT_MS
+                    DEFAULT_TIMEOUT_MS
                 }
             },
             Err(_)=>{
-                return DEFAULT_TIMEOUT_MS
+                DEFAULT_TIMEOUT_MS
             }
         }
     };

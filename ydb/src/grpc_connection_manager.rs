@@ -3,7 +3,7 @@ use crate::connection_pool::ConnectionPool;
 use crate::grpc_wrapper::auth::create_service_with_auth;
 use crate::grpc_wrapper::channel::ChannelWithAuth;
 use crate::grpc_wrapper::raw_services::GrpcServiceForDiscovery;
-use crate::load_balancer::{LoadBalancer, RandomLoadBalancer, SharedLoadBalancer};
+use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::YdbResult;
 use http::Uri;
 
@@ -16,9 +16,9 @@ pub(crate) struct GrpcConnectionManagerGeneric<TBalancer: LoadBalancer> {
 
 impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
     pub(crate) fn new(balancer: TBalancer, cred: DBCredentials) -> Self {
-        return GrpcConnectionManagerGeneric {
+        GrpcConnectionManagerGeneric {
             state: State::new(balancer, cred),
-        };
+        }
     }
 
     pub(crate) async fn get_auth_service<
@@ -45,11 +45,11 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
     ) -> YdbResult<T> {
         let channel = self.state.connections_pool.connection(uri).await?;
         let auth_channel = create_service_with_auth(channel, self.state.cred.clone());
-        return Ok(new(auth_channel));
+        Ok(new(auth_channel))
     }
 
     pub(crate) fn database(&self) -> &String {
-        return &self.state.cred.database;
+        &self.state.cred.database
     }
 }
 
@@ -62,10 +62,10 @@ struct State<TBalancer: LoadBalancer> {
 
 impl<TBalancer: LoadBalancer> State<TBalancer> {
     fn new(balancer: TBalancer, cred: DBCredentials) -> Self {
-        return State {
+        State {
             balancer,
             connections_pool: ConnectionPool::new(),
             cred,
-        };
+        }
     }
 }

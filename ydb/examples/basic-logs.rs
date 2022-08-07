@@ -12,5 +12,5 @@ async fn main() -> YdbResult<()> {
     let client = ClientBuilder::from_str("grpc://localhost:2136?database=local")?.client()?;
     client.wait().await?;
     println!("done");
-    return Ok(());
+    Ok(())
 }

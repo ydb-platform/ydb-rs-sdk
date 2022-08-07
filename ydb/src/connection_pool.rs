@@ -1,7 +1,7 @@
 use crate::YdbResult;
 use http::Uri;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 
@@ -20,7 +20,7 @@ impl ConnectionPool {
     pub(crate) async fn connection(&self, uri: &Uri) -> YdbResult<Channel> {
         let now = Instant::now();
         let mut lock = self.state.lock().unwrap();
-        if let Some(ci) = lock.connections.get_mut(&uri) {
+        if let Some(ci) = lock.connections.get_mut(uri) {
             ci.last_usage = now;
             return Ok(ci.channel.clone());
         };
@@ -32,7 +32,7 @@ impl ConnectionPool {
             channel: channel.clone(),
         };
         lock.connections.insert(uri.clone(), ci);
-        return Ok(channel);
+        Ok(channel)
     }
 }
 
@@ -42,9 +42,9 @@ struct ConnectionPoolState {
 
 impl ConnectionPoolState {
     fn new() -> Self {
-        return Self {
+        Self {
             connections: HashMap::new(),
-        };
+        }
     }
 }
 
@@ -66,5 +66,5 @@ fn connect_lazy(uri: Uri) -> YdbResult<Channel> {
     };
     endpoint = endpoint.tcp_keepalive(Some(Duration::from_secs(15))); // tcp keepalive similar to default in golang lib
 
-    return Ok(endpoint.connect_lazy());
+    Ok(endpoint.connect_lazy())
 }

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use tracing_subscriber::fmt::time;
+
 
 #[derive(Debug)]
 pub(crate) struct RawOperationParams {
@@ -14,16 +14,16 @@ impl RawOperationParams {
         operation_timeout: std::time::Duration,
         cancel_after: std::time::Duration,
     ) -> Self {
-        return Self {
+        Self {
             operation_mode: OperationMode::Sync,
             operation_timeout: operation_timeout.into(),
             cancel_after: cancel_after.into(),
             labels: Default::default(),
-        };
+        }
     }
 
     pub fn new_with_timeout(timeout: std::time::Duration) -> Self {
-        return Self::new_with_timeouts(timeout, timeout);
+        Self::new_with_timeouts(timeout, timeout)
     }
 }
 
@@ -54,7 +54,7 @@ impl From<OperationMode> for i32 {
             OperationMode::Sync => GrpcOperationMode::Sync,
             OperationMode::Async => GrpcOperationMode::Async,
         };
-        return val as i32;
+        val as i32
     }
 }
 
