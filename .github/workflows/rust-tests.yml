@@ -13,10 +13,23 @@ env:
   RUST_VERSION: 1.56.0
 
 jobs:
+  detect_rust_version:
+    runs-on: ubuntu-20.04
+    outputs:
+      rust_version: ${{ steps.rust_version_step.outputs.version }}
+    steps:
+    - name: Install fixed rust version
+      uses: ATiltedTree/setup-rust@v1
+      with:
+        rust-version: ${{ matrix.rust_version }}
+    - name: Rust version
+      id: rust_version_step
+      run: echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
+
   tests:
     strategy:
       matrix:
-        rust_version: ["1.56.0", "stable"]
+        rust_version: [ "1.56.0", ${{ needs.detect_rust_version.outputs.rust_version }} ]
 
     runs-on: ubuntu-20.04
 
