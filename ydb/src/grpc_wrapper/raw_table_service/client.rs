@@ -14,10 +14,10 @@ pub(crate) struct RawTableClient {
 
 impl RawTableClient {
     pub fn new(service: ChannelWithAuth, operation_timeout: std::time::Duration) -> Self {
-        return Self {
+        Self {
             service: TableServiceClient::new(service),
             operation_timeout,
-        };
+        }
     }
 
     pub async fn create_session(&mut self) -> RawResult<RawCreateSessionResult> {

@@ -55,6 +55,12 @@ impl TransactionOptions {
     }
 }
 
+impl Default for TransactionOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Retry options
 pub struct RetryOptions {
     /// Operations under the option is idempotent. Repeat completed operation - safe.
@@ -85,6 +91,12 @@ impl RetryOptions {
     pub(crate) fn with_timeout(mut self, timeout: Duration) -> Self {
         self.retrier = Some(Arc::new(Box::new(TimeoutRetrier { timeout })));
         self
+    }
+}
+
+impl Default for RetryOptions {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -253,7 +265,7 @@ impl TableClient {
     /// # #[tokio::main]
     /// # async fn main()->YdbResult<()>{
     /// #   use ydb::{Query, Value};
-    /// #   let table_client = ydb::ClientBuilder::from_str("")?.client()?.table_client();
+    /// #   let table_client = ydb::ClientBuilder::new_from_connection_string("")?.client()?.table_client();
     ///     let res: Option<i32> = table_client.retry_transaction(|mut t| async move {
     ///         let value: Value = t.query(Query::new("SELECT 1 + 1 as sum")).await?
     ///             .into_only_row()?
@@ -274,7 +286,7 @@ impl TableClient {
     /// # async fn main()->YdbResult<()>{
     /// #   use std::sync::atomic::{AtomicUsize, Ordering};
     /// #   use ydb::{Query, Value};
-    /// #   let table_client = ydb::ClientBuilder::from_str("")?.client()?.table_client();
+    /// #   let table_client = ydb::ClientBuilder::new_from_connection_string("")?.client()?.table_client();
     ///     let mut attempts: AtomicUsize = AtomicUsize::new(0);
     ///     let res: Option<i32> = table_client.retry_transaction(|mut t| async {
     ///         let mut t = t; // explicit move lambda argument inside async code block for borrow checker

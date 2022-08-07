@@ -2,9 +2,10 @@ use ydb::{ClientBuilder, Query, YandexMetadata, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let client = ClientBuilder::from_str(std::env::var("YDB_CONNECTION_STRING")?)?
-        .with_credentials(YandexMetadata::new())
-        .client()?;
+    let client =
+        ClientBuilder::new_from_connection_string(std::env::var("YDB_CONNECTION_STRING")?)?
+            .with_credentials(YandexMetadata::new())
+            .client()?;
     client.wait().await?;
     let sum: i32 = client
         .table_client()

@@ -107,7 +107,7 @@ pub struct ClientBuilder {
 }
 
 impl ClientBuilder {
-    pub fn from_str<T: Into<String>>(s: T) -> Result<Self, YdbError> {
+    pub fn new_from_connection_string<T: Into<String>>(s: T) -> Result<Self, YdbError> {
         let s = s.into();
         let s = s.as_str();
         let mut client_builder = ClientBuilder::new();
@@ -173,9 +173,9 @@ impl ClientBuilder {
     /// # use ydb::{ClientBuilder, StaticDiscovery, YdbResult};
     ///
     /// # fn main()->YdbResult<()>{
-    /// let discovery = StaticDiscovery::from_str("grpc://localhost:2136")?;
-    /// let client = ClientBuilder::from_str("grpc://localhost:2136/?database=/local")?.with_discovery(discovery).client()?;
-    /// # return Ok(())
+    /// let discovery = StaticDiscovery::new_from_str("grpc://localhost:2136")?;
+    /// let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/?database=/local")?.with_discovery(discovery).client()?;
+    /// # return Ok(());
     /// # }
     /// ```
     pub fn with_discovery<T: 'static + Discovery>(mut self, discovery: T) -> Self {
@@ -212,6 +212,6 @@ impl FromStr for ClientBuilder {
     type Err = YdbError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        ClientBuilder::from_str(s)
+        ClientBuilder::new_from_connection_string(s)
     }
 }

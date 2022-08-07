@@ -152,9 +152,9 @@ impl YdbStatusError {
     /// # }
     /// ```
     pub fn operation_status(&self) -> YdbResult<StatusCode> {
-        return StatusCode::from_i32(self.operation_status).ok_or(YdbError::InternalError(
-            format!("unknown status code: {}", self.operation_status),
-        ));
+        StatusCode::from_i32(self.operation_status).ok_or_else(|| {
+            YdbError::InternalError(format!("unknown status code: {}", self.operation_status))
+        })
     }
 }
 

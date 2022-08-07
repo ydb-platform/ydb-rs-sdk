@@ -19,7 +19,7 @@ pub(crate) fn credencials_ref<T: 'static + Credentials>(cred: T) -> CredentialsR
 /// ```no_run
 /// # use ydb::{ClientBuilder, StaticToken, YdbResult};
 /// # fn main()->YdbResult<()>{
-/// let builder = ClientBuilder::from_str("grpc://localhost:2136?database=/local")?;
+/// let builder = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=/local")?;
 /// let client = builder.with_credentials(StaticToken::from("asd")).client()?;
 /// # return Ok(());
 /// # }
@@ -85,9 +85,10 @@ impl CommandLineYcToken {
         let cmd_parts: Vec<&str> = cmd.split_whitespace().collect();
 
         if cmd_parts.is_empty() {
-            return Err(YdbError::Custom(
-                format!("can't split get token command: '{}'", cmd),
-            ));
+            return Err(YdbError::Custom(format!(
+                "can't split get token command: '{}'",
+                cmd
+            )));
         }
 
         let mut command = Command::new(cmd_parts[0]);
@@ -184,6 +185,12 @@ impl GCEMetadata {
         Ok(Self {
             uri: url.into().parse()?,
         })
+    }
+}
+
+impl Default for GCEMetadata {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -18,9 +18,9 @@ pub(crate) struct RawSchemeClient {
 
 impl RawSchemeClient {
     pub fn new(service: ChannelWithAuth) -> Self {
-        return Self {
+        Self {
             service: SchemeServiceClient::new(service),
-        };
+        }
     }
 
     #[instrument(skip(self), err, ret)]
@@ -54,7 +54,7 @@ impl RawSchemeClient {
 
 impl GrpcServiceForDiscovery for RawSchemeClient {
     fn get_grpc_discovery_service() -> Service {
-        return Service::Scheme;
+        Service::Scheme
     }
 }
 

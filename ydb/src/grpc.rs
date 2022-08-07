@@ -51,9 +51,7 @@ fn create_client_on_channel<NewFuncT, ClientT>(
 where
     NewFuncT: FnOnce(AuthService) -> ClientT,
 {
-    let auth_service_create = |ch| {
-        AuthService::new(ch, cred.clone())
-    };
+    let auth_service_create = |ch| AuthService::new(ch, cred.clone());
     let auth_ch = ServiceBuilder::new()
         .layer_fn(auth_service_create)
         .service(channel);
@@ -112,7 +110,7 @@ where
     let resp_inner = resp.into_inner();
     let op = resp_inner
         .operation()
-        .ok_or(YdbError::Custom("no operation object in result".into()))?;
+        .ok_or_else(|| YdbError::Custom("no operation object in result".into()))?;
     if op.status() != StatusCode::Success {
         return Err(create_operation_error(op));
     }

@@ -32,13 +32,14 @@ impl Client {
     ) -> YdbResult<Self> {
         let discovery = Arc::new(discovery);
         let discovery_ref = discovery.as_ref().as_ref();
-        return Ok(Client {
+
+        Ok(Client {
             credentials,
             load_balancer: SharedLoadBalancer::new(discovery_ref),
             discovery,
             timeouts: TimeoutSettings::default(),
             connection_manager,
-        });
+        })
     }
 
     pub(crate) fn database(&self) -> String {

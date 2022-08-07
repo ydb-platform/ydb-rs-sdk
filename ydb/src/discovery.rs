@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use http::uri::Authority;
 use http::Uri;
 
-
 use crate::errors::YdbResult;
 
 use crate::waiter::Waiter;
@@ -132,17 +131,15 @@ pub struct StaticDiscovery {
 /// # use ydb::{ClientBuilder, StaticDiscovery, YdbResult};
 ///
 /// # fn main()->YdbResult<()>{
-/// let discovery = StaticDiscovery::from_str("grpc://localhost:2136")?;
-/// let client = ClientBuilder::from_str("grpc://localhost:2136/?database=/local")?.with_discovery(discovery).client()?;
-/// # return Ok(())
+/// let discovery = StaticDiscovery::new_from_str("grpc://localhost:2136")?;
+/// let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/?database=/local")?.with_discovery(discovery).client()?;
+/// # return Ok(());
 /// # }
 /// ```
 impl StaticDiscovery {
-    pub fn from_str<'a, T: Into<&'a str>>(endpoint: T) -> YdbResult<Self> {
+    pub fn new_from_str<'a, T: Into<&'a str>>(endpoint: T) -> YdbResult<Self> {
         let endpoint = Uri::from_str(endpoint.into())?;
-        let nodes = vec![NodeInfo {
-            uri: endpoint,
-        }];
+        let nodes = vec![NodeInfo { uri: endpoint }];
 
         let state = DiscoveryState::new(std::time::Instant::now(), nodes);
         let state = Arc::new(state);
@@ -319,8 +316,7 @@ impl DiscoverySharedState {
     }
 
     fn list_endpoints_to_node_infos(list: Vec<EndpointInfo>) -> YdbResult<Vec<NodeInfo>> {
-        list
-            .into_iter()
+        list.into_iter()
             .map(|item| match Self::endpoint_info_to_uri(item) {
                 Ok(uri) => YdbResult::<NodeInfo>::Ok(NodeInfo { uri }),
                 Err(err) => YdbResult::<NodeInfo>::Err(err),
