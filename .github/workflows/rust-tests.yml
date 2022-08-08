@@ -10,27 +10,39 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RUST_VERSION: 1.56.0
 
 jobs:
   tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        rust_version: [ "1.56.0", "1.62.1" ]
+
     runs-on: ubuntu-20.04
 
     steps:
     - name: Install fixed rust version
       uses: ATiltedTree/setup-rust@v1
       with:
-        rust-version: ${{env.RUST_VERSION}}
+        rust-version: ${{ matrix.rust_version }}
+        components: clippy
 
     - name: Checkout
       uses: actions/checkout@v2
       with:
         submodules: true
 
+    - name: Rust version
+      id: rust_version_step
+      run: |
+        rustc --version
+        cargo --version
+        echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
+
     - name: Cache
       uses: actions/cache@v3
       with:
-        key: ${{ runner.os }}-${{env.RUST_VERSION}}-cargo-${{ hashFiles('**/Cargo.lock') }}-1
+        key: ${{ runner.os }}-${{ steps.rust_version_step.outputs.version }}-cargo-${{ hashFiles('**/Cargo.lock') }}-1
         path: |
           ~/.cargo/bin/
           ~/.cargo/.crates.toml
@@ -40,13 +52,13 @@ jobs:
           ~/.cargo/git/db/
           target/
 
-    - name: Rust check versions
-      run: |
-        cargo version
-        rustc --version
-
     - name: Build
-      run: cargo build --verbose --workspace
+      run: cargo build --verbose --workspace --all-targets
+
+    - name: Linter
+      if: matrix.rust_version != '1.56.0'
+      run: |
+        cargo clippy --workspace --all-targets --all-features -- -D warnings
 
     - name: Wait database available
       run: bash ./.github/scripts/start-ydb-container.sh
