@@ -77,6 +77,7 @@ mod test_helpers;
 
 #[cfg(test)]
 mod test_integration_helper;
+mod trace_helpers;
 mod trait_operation;
 pub(crate) mod transaction;
 mod types;

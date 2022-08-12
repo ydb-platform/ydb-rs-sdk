@@ -484,7 +484,7 @@ SELECT NULL
 }
 
 #[tokio::test]
-// #[traced_test]
+#[traced_test]
 #[ignore] // need YDB access
 async fn stream_query() -> YdbResult<()> {
     let client = create_client().await?.table_client();
@@ -621,5 +621,6 @@ FROM
 
     // TODO: need improove for non flap in tests for will strong more then 1
     assert!(result_set_count > 1); // ensure get multiply results
+    assert!(false);
     Ok(())
 }
