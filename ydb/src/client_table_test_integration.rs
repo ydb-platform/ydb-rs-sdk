@@ -621,6 +621,5 @@ FROM
 
     // TODO: need improove for non flap in tests for will strong more then 1
     assert!(result_set_count > 1); // ensure get multiply results
-    assert!(false);
     Ok(())
 }
