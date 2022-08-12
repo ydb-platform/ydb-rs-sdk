@@ -39,7 +39,7 @@ jobs:
         cargo --version
         echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
 
-    - name: rust cache
+    - name: Rust cache
       uses: Swatinem/rust-cache@v2
 
     - name: Build
