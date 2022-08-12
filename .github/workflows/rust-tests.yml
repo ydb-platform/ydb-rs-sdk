@@ -39,18 +39,8 @@ jobs:
         cargo --version
         echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
 
-    - name: Cache
-      uses: actions/cache@v3
-      with:
-        key: ${{ runner.os }}-${{ steps.rust_version_step.outputs.version }}-cargo-${{ hashFiles('**/Cargo.lock') }}-1
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/.crates.toml
-          ~/.cargo/.crates2.json
-          ~/.cargo/.package-cache
-          ~/.cargo/registry/
-          ~/.cargo/git/db/
-          target/
+    - name: rust cache
+      uses: Swatinem/rust-cache@v2
 
     - name: Build
       run: cargo build --verbose --workspace --all-targets
