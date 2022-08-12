@@ -23,6 +23,8 @@ fn req_number() -> i64 {
     REQUEST_NUMBER.fetch_add(1, Ordering::Relaxed)
 }
 
+type DropSessionCallback = dyn FnOnce(&mut Session) + Send + Sync;
+
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub(crate) struct Session {
@@ -31,7 +33,7 @@ pub(crate) struct Session {
     pub(crate) can_pooled: bool,
 
     #[derivative(Debug = "ignore")]
-    on_drop_callbacks: Vec<Box<dyn FnOnce(&mut Self) + Send + Sync>>,
+    on_drop_callbacks: Vec<Box<DropSessionCallback>>,
 
     #[derivative(Debug = "ignore")]
     channel_pool: TableServiceChannelPool,
@@ -193,10 +195,11 @@ impl Session {
         if SessionStatus::from_i32(keepalive_res.session_status) == Some(SessionStatus::Ready) {
             return Ok(());
         }
-        return Err(YdbError::Custom(format!(
+
+        Err(YdbError::Custom(format!(
             "bad status while session ping: {:?}",
             keepalive_res
-        )));
+        )))
     }
 
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {
@@ -205,7 +208,7 @@ impl Session {
     }
 
     async fn get_channel(&self) -> YdbResult<TableServiceClientType> {
-        return self.channel_pool.create_channel().await;
+        self.channel_pool.create_channel().await
     }
 
     #[allow(dead_code)]

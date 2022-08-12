@@ -306,7 +306,7 @@ to_custom_ydb_err!(
 
 impl From<Box<dyn std::any::Any + Send>> for YdbError {
     fn from(e: Box<dyn std::any::Any + Send>) -> Self {
-        return YdbError::Custom(format!("{:?}", e));
+        YdbError::Custom(format!("{:?}", e))
     }
 }
 

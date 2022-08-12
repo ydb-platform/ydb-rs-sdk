@@ -27,7 +27,7 @@ pub(crate) async fn create_grpc_client<T, CB>(
 where
     CB: FnOnce(AuthService) -> T,
 {
-    return create_grpc_client_with_error_sender(uri, cred, None, new_func).await;
+    create_grpc_client_with_error_sender(uri, cred, None, new_func).await
 }
 
 pub(crate) async fn create_grpc_client_with_error_sender<T, CB>(
@@ -77,7 +77,7 @@ async fn create_grpc_channel(
     endpoint = endpoint.tcp_keepalive(Some(Duration::from_secs(15))); // tcp keepalive similar to default in golang lib
 
     trace!("endpoint: {:?}", endpoint);
-    return match endpoint.connect().await {
+    match endpoint.connect().await {
         Ok(channel) => {
             trace!("ok");
             Ok(ChannelProxy::new(uri, channel, error_sender))
@@ -90,7 +90,7 @@ async fn create_grpc_channel(
             };
             Err(YdbError::TransportDial(Arc::new(err)))
         }
-    };
+    }
 }
 
 pub(crate) fn grpc_read_operation_result<TOp, T>(resp: tonic::Response<TOp>) -> YdbResult<T>

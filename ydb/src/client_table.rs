@@ -201,11 +201,11 @@ impl TableClient {
 
     #[allow(dead_code)]
     pub(crate) async fn create_session(&self) -> YdbResult<Session> {
-        return Ok(self
+        Ok(self
             .session_pool
             .session()
             .await?
-            .with_timeouts(self.timeouts));
+            .with_timeouts(self.timeouts))
     }
 
     async fn retry<CallbackFuture, CallbackResult>(
@@ -245,7 +245,7 @@ impl TableClient {
         let query = Arc::new(query.into());
         self.retry(|| async {
             let mut session = self.create_session().await?;
-            return session.execute_schema_query(query.to_string()).await;
+            session.execute_schema_query(query.to_string()).await
         })
         .await
     }
