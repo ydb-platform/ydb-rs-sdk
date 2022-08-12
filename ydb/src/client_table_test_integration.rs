@@ -2,13 +2,12 @@ use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::sync::{Arc, Mutex};
 use std::time;
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use tonic::{Code, Status};
 use tracing::trace;
 use tracing_test::traced_test;
 
-use crate::client::TimeoutSettings;
 use crate::client_table::RetryOptions;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::query::Query;
@@ -520,9 +519,6 @@ async fn stream_query() -> YdbResult<()> {
 
     async fn insert_values(client: &TableClient, ids: Vec<i64>) -> YdbResult<()> {
         client
-            .clone_with_timeouts(TimeoutSettings {
-                operation_timeout: Duration::from_secs(10),
-            })
             .retry_transaction(|tr| async {
                 let mut ydb_values: Vec<Value> = Vec::with_capacity(ids.len());
                 for v in ids.iter() {
@@ -584,7 +580,8 @@ FROM
     }
     let expected_item_count = last_item_value;
 
-    let query = Query::new("SELECT * FROM stream_query".to_string());
+    let mut expected_id: i64 = 1;
+    let query = Query::new("SELECT * FROM stream_query ORDER BY id".to_string());
     let mut res = session.execute_scan_query(query).await?;
     let mut sum: i64 = 0;
     let mut item_count = 0;
@@ -595,12 +592,27 @@ FROM
         for mut row in result_set.into_iter() {
             item_count += 1;
             match row.remove_field_by_name("id")? {
-                Value::Optional(boxed_val) => match boxed_val.value.unwrap() {
-                    Value::Int64(val) => sum += val,
-                    val => panic!("unexpected ydb boxed_value type: {:?}", val),
+                Value::Optional(boxed_id) => match boxed_id.value.unwrap() {
+                    Value::Int64(id) => {
+                        assert_eq!(id, expected_id);
+                        sum += id
+                    }
+                    id => panic!("unexpected ydb boxed_id type: {:?}", id),
                 },
-                val => panic!("unexpected ydb value type: {:?}", val),
+                id => panic!("unexpected ydb id type: {:?}", id),
             };
+
+            match row.remove_field_by_name("val")? {
+                Value::Optional(boxed_val) => match boxed_val.value.unwrap() {
+                    Value::String(content) => {
+                        assert_eq!(gen_value_by_id(expected_id), Vec::<u8>::from(content))
+                    }
+                    val => panic!("unexpected ydb id type: {:?}", val),
+                },
+                val => panic!("unexpected ydb boxed_id type: {:?}", val),
+            };
+
+            expected_id += 1;
         }
     }
 

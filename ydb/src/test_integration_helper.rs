@@ -1,5 +1,5 @@
 use crate::client::Client;
-use crate::client_builder::ClientBuilder;
+use crate::client::TimeoutSettings;
 use crate::errors::YdbResult;
 use crate::test_helpers::test_client_builder;
 use async_once::AsyncOnce;
@@ -12,7 +12,9 @@ lazy_static! {
         trace!("create client");
         let client: Client = test_client_builder()
             .client()
-            .unwrap();
+            .unwrap()
+        .with_timeouts(TimeoutSettings{operation_timeout: std::time::Duration::from_secs(1)})
+        ;
 
         trace!("start wait");
         client.wait().await.unwrap();
