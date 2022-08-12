@@ -174,7 +174,7 @@ impl ClientBuilder {
     ///
     /// # fn main()->YdbResult<()>{
     /// let discovery = StaticDiscovery::new_from_str("grpc://localhost:2136")?;
-    /// let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/?database=/local")?.with_discovery(discovery).client()?;
+    /// let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.with_discovery(discovery).client()?;
     /// # return Ok(());
     /// # }
     /// ```
@@ -213,5 +213,24 @@ impl FromStr for ClientBuilder {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         ClientBuilder::new_from_connection_string(s)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{ClientBuilder, YdbResult};
+
+    #[test]
+    fn database_from_path() -> YdbResult<()> {
+        let builder = ClientBuilder::new_from_connection_string("http://asd:222/qwe1")?;
+        assert_eq!(builder.database, "/qwe1".to_string());
+        Ok(())
+    }
+
+    #[test]
+    fn database_from_arg() -> YdbResult<()> {
+        let builder = ClientBuilder::new_from_connection_string("http://asd:222/?database=/qwe2")?;
+        assert_eq!(builder.database, "/qwe2".to_string());
+        Ok(())
     }
 }
