@@ -554,11 +554,11 @@ FROM
                 let mut tr = tr;
                 tr.query(query).await?;
                 tr.commit().await?;
-                return Ok(());
+                Ok(())
             })
             .await?;
 
-        return Ok(());
+        Ok(())
     }
 
     // need send/receive more then 50MB
