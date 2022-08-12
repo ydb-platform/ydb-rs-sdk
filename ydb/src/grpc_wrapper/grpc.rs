@@ -39,11 +39,11 @@ where
 }
 
 pub(crate) fn create_operation_error(op: ydb_grpc::ydb_proto::operations::Operation) -> RawError {
-    return RawError::YdbStatus(crate::errors::YdbStatusError {
+    RawError::YdbStatus(crate::errors::YdbStatusError {
         message: format!("{:?}", &op),
         operation_status: op.status,
         issues: proto_issues_to_ydb_issues(op.issues),
-    });
+    })
 }
 
 pub(crate) fn proto_issues_to_ydb_issues(proto_issues: Vec<IssueMessage>) -> Vec<YdbIssue> {

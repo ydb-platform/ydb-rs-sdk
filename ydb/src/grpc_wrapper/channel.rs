@@ -27,5 +27,5 @@ async fn create_grpc_channel(uri: Uri) -> YdbResult<Channel> {
 
     trace!("endpoint: {:?}", endpoint);
 
-    return Ok(endpoint.connect().await?);
+    Ok(endpoint.connect().await?)
 }

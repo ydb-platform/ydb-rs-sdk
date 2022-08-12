@@ -54,7 +54,7 @@ impl SharedLoadBalancer {
 
 impl LoadBalancer for SharedLoadBalancer {
     fn endpoint(&self, service: Service) -> YdbResult<Uri> {
-        return self.inner.read()?.endpoint(service);
+        self.inner.read()?.endpoint(service)
     }
 
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()> {

@@ -59,9 +59,9 @@ impl SchemeClient {
     async fn connection(
         &self,
     ) -> YdbResult<grpc_wrapper::raw_scheme_client::client::RawSchemeClient> {
-        return self
+        self
             .connection_manager
             .get_auth_service(grpc_wrapper::raw_scheme_client::client::RawSchemeClient::new)
-            .await;
+            .await
     }
 }

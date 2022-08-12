@@ -197,7 +197,7 @@ impl TimerDiscovery {
 
     #[allow(dead_code)]
     async fn discovery_now(&self) -> YdbResult<()> {
-        return self.state.discovery_now().await;
+        self.state.discovery_now().await
     }
 }
 

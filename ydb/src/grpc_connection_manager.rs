@@ -32,7 +32,7 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
             .state
             .balancer
             .endpoint(T::get_grpc_discovery_service())?;
-        return self.get_auth_service_to_node(new, &uri).await;
+        self.get_auth_service_to_node(new, &uri).await
     }
 
     pub(crate) async fn get_auth_service_to_node<

@@ -183,7 +183,7 @@ impl Default for Box<ValueOptional> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Sign {
     Plus,
     Minus,
@@ -195,7 +195,7 @@ impl Default for Sign {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, PartialEq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct SignedInterval {
     pub sign: Sign,
     pub duration: Duration,

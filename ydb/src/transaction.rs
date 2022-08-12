@@ -14,7 +14,7 @@ use ydb_grpc::ydb_proto::table::{
     TransactionSettings,
 };
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Mode {
     OnlineReadonly,
     SerializableReadWrite,

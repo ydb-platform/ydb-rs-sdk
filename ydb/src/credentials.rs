@@ -58,7 +58,7 @@ impl Credentials for StaticToken {
         } else {
             ("xxx", "xxx")
         };
-        return format!("static token: {}...{}", begin, end);
+        format!("static token: {}...{}", begin, end)
     }
 }
 
@@ -218,13 +218,13 @@ impl Credentials for GCEMetadata {
             .header("Metadata-Flavor", "Google")
             .send()?
             .json()?;
-        return Ok(
+        Ok(
             TokenInfo::token(format!("{} {}", res.token_type, res.access_token))
                 .with_renew(Instant::now().add(Duration::from_secs(res.expires_in))),
-        );
+        )
     }
 
     fn debug_string(&self) -> String {
-        return format!("GoogleComputeEngineMetadata from {}", self.uri.as_str());
+        format!("GoogleComputeEngineMetadata from {}", self.uri.as_str())
     }
 }
