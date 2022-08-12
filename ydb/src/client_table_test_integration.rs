@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::sync::{Arc, Mutex};
 use std::time;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 use tonic::{Code, Status};
 use tracing::trace;
 use tracing_test::traced_test;
 
+use crate::client::TimeoutSettings;
 use crate::client_table::RetryOptions;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::query::Query;
@@ -16,6 +17,7 @@ use crate::transaction::Mode;
 use crate::transaction::Mode::SerializableReadWrite;
 use crate::transaction::Transaction;
 use crate::types::{Value, ValueList, ValueStruct};
+use crate::{ydb_params, Bytes, TableClient};
 
 #[tokio::test]
 #[traced_test]
@@ -494,76 +496,118 @@ async fn stream_query() -> YdbResult<()> {
         .await;
 
     session
-        .execute_schema_query("CREATE TABLE stream_query (val Int32, PRIMARY KEY (val))".into())
+        .execute_schema_query(
+            "CREATE TABLE stream_query (id Int64, val Bytes, PRIMARY KEY (val))".into(),
+        )
         .await?;
 
-    let generate_count = 20000;
-    client
-        .retry_transaction(|tr| async {
-            let mut tr = tr;
+    const ONE_ROW_SIZE_BYTES: usize = 1024 * 1024;
+    const KEY_SIZE_BYTES: usize = 8;
 
-            let mut values = Vec::new();
-            for i in 1..=generate_count {
-                values.push(Value::Struct(ValueStruct::from_names_and_values(
-                    vec!["val".to_string()],
-                    vec![Value::Int32(i)],
-                )?))
-            }
+    fn gen_value_by_id(id: i64) -> Vec<u8> {
+        const VECTOR_SIZE: usize = ONE_ROW_SIZE_BYTES - KEY_SIZE_BYTES;
 
-            let query = Query::new(
-                "
+        let mut res: Vec<u8> = Vec::with_capacity(VECTOR_SIZE);
+        let mut last_byte: u8 = (id % 256) as u8;
+
+        for _ in 0..VECTOR_SIZE {
+            res.push(last_byte);
+            last_byte = last_byte.wrapping_add(1);
+        }
+
+        res
+    }
+
+    async fn insert_values(client: &TableClient, ids: Vec<i64>) -> YdbResult<()> {
+        client
+            .clone_with_timeouts(TimeoutSettings {
+                operation_timeout: Duration::from_secs(10),
+            })
+            .retry_transaction(|tr| async {
+                let mut ydb_values: Vec<Value> = Vec::with_capacity(ids.len());
+                for v in ids.iter() {
+                    ydb_values.push(Value::Struct(ValueStruct::from_names_and_values(
+                        vec!["id".to_string(), "val".to_string()],
+                        vec![
+                            Value::Int64(*v),
+                            Value::String(Bytes::from(gen_value_by_id(*v))),
+                        ],
+                    )?))
+                }
+
+                let ydb_values = Value::list_from(ydb_values[0].clone(), ydb_values)?;
+
+                let query = Query::new(
+                    "
 DECLARE $values AS List<Struct<
-    val: Int32,
+    id: Int64,
+    val: Bytes,
 > >;
 
 UPSERT INTO stream_query
 SELECT
-    val 
+    * 
 FROM
-    AS_TABLE($values);            
-"
-                .to_string(),
-            )
-            .with_params(
-                [(
-                    "$values".to_string(),
-                    Value::list_from(values[0].clone(), values)?,
-                )]
-                .into_iter()
-                .collect(),
-            );
+    AS_TABLE($values);
+",
+                )
+                .with_params(ydb_params!(
+                    "$values" => ydb_values
+                ));
 
-            tr.query(query).await?;
-            tr.commit().await?;
-            Ok(())
-        })
-        .await
-        .unwrap();
+                let mut tr = tr;
+                tr.query(query).await?;
+                tr.commit().await?;
+                return Ok(());
+            })
+            .await?;
 
-    let query = Query::new("SELECT val FROM stream_query".to_string());
+        return Ok(());
+    }
+
+    // need send/receive more then 50MB
+    let min_target_bytes = (60 * 1024 * 1024) as usize;
+    let target_row_count = min_target_bytes / ONE_ROW_SIZE_BYTES + 1;
+    let target_batch_count = 10;
+    let target_batch_size = target_row_count / target_batch_count;
+    let mut expected_sum: i64 = 0;
+
+    let mut last_item_value = 0;
+    for _ in 0..target_batch_count {
+        let mut values = Vec::with_capacity(target_batch_size);
+        for _ in 0..target_batch_size {
+            last_item_value += 1;
+            expected_sum += last_item_value;
+            values.push(last_item_value);
+        }
+        insert_values(&client, values).await?;
+    }
+    let expected_item_count = last_item_value;
+
+    let query = Query::new("SELECT * FROM stream_query".to_string());
     let mut res = session.execute_scan_query(query).await?;
-    let mut sum = 0;
+    let mut sum: i64 = 0;
+    let mut item_count = 0;
     let mut result_set_count = 0;
     while let Some(result_set) = res.next().await? {
         result_set_count += 1;
 
         for mut row in result_set.into_iter() {
-            match row.remove_field(0)? {
+            item_count += 1;
+            match row.remove_field_by_name("id")? {
                 Value::Optional(boxed_val) => match boxed_val.value.unwrap() {
-                    Value::Int32(val) => sum += val,
+                    Value::Int64(val) => sum += val,
                     val => panic!("unexpected ydb boxed_value type: {:?}", val),
                 },
-                val => panic!("unexpected ydb valye type: {:?}", val),
+                val => panic!("unexpected ydb value type: {:?}", val),
             };
         }
     }
 
-    let mut expected_sum = 0;
-    for i in 1..=generate_count {
-        expected_sum += i;
-    }
+    assert_eq!(expected_item_count, item_count);
     assert_eq!(expected_sum, sum);
+
     // TODO: need improove for non flap in tests for will strong more then 1
-    assert!(result_set_count >= 1); // ensure get multiply results
+    assert!(result_set_count > 1); // ensure get multiply results
     Ok(())
 }
