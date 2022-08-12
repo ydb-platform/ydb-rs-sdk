@@ -383,7 +383,7 @@ mod test {
     use crate::errors::YdbResult;
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-    use crate::test_helpers::CONNECTION_INFO;
+    use crate::test_helpers::test_client_builder;
     use http::Uri;
     use std::str::FromStr;
     use std::sync::Arc;
@@ -393,20 +393,20 @@ mod test {
     #[ignore] // need YDB access
     async fn test_background_discovery() -> YdbResult<()> {
         let cred = DBCredentials {
-            database: CONNECTION_INFO.database.clone(),
+            database: test_client_builder().database.clone(),
             token_cache: tokio::task::spawn_blocking(|| {
-                TokenCache::new(CONNECTION_INFO.credentials.clone())
+                TokenCache::new(test_client_builder().credentials.clone())
             })
             .await??,
         };
 
-        let uri = Uri::from_str(CONNECTION_INFO.endpoint.as_str())?;
+        let uri = Uri::from_str(test_client_builder().endpoint.as_str())?;
         let load_balancer =
             SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(uri)));
         let connection_manager = GrpcConnectionManager::new(load_balancer, cred.clone());
 
         let discovery_shared =
-            DiscoverySharedState::new(connection_manager, CONNECTION_INFO.endpoint.as_str())?;
+            DiscoverySharedState::new(connection_manager, test_client_builder().endpoint.as_str())?;
 
         let state = Arc::new(discovery_shared);
         let mut rx = state.sender.subscribe();

@@ -1,6 +1,7 @@
 use crate::client::Client;
-use crate::client_builder::ClientBuilder;
+use crate::client::TimeoutSettings;
 use crate::errors::YdbResult;
+use crate::test_helpers::test_client_builder;
 use async_once::AsyncOnce;
 use lazy_static::lazy_static;
 use std::sync::Arc;
@@ -8,14 +9,12 @@ use tracing::trace;
 
 lazy_static! {
     static ref TEST_CLIENT: AsyncOnce<Arc<Client>> = AsyncOnce::new(async {
-        let client_builder: ClientBuilder =
-            std::env::var("YDB_CONNECTION_STRING").unwrap_or_else(|_|
-            "grpc://localhost:2136?database=/local".to_string()).parse().unwrap();
-
         trace!("create client");
-        let client: Client = client_builder
+        let client: Client = test_client_builder()
             .client()
-            .unwrap();
+            .unwrap()
+        .with_timeouts(TimeoutSettings{operation_timeout: std::time::Duration::from_secs(1)})
+        ;
 
         trace!("start wait");
         client.wait().await.unwrap();

@@ -8,6 +8,7 @@ use crate::trait_operation::Operation;
 use derivative::Derivative;
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use crate::trace_helpers::ensure_len_string;
 use tracing::{debug, trace};
 use ydb_grpc::ydb_proto::table::keep_alive_result::SessionStatus;
 use ydb_grpc::ydb_proto::table::{
@@ -117,13 +118,19 @@ impl Session {
             req.operation_params = operation_params(self.timeouts.operation_timeout)
         }
 
-        debug!("request: {}", serde_json::to_string(&req)?);
+        trace!(
+            "request: {}",
+            ensure_len_string(serde_json::to_string(&req)?)
+        );
 
         let mut channel = self.get_channel().await?;
         let response = channel.execute_data_query(req).await?;
         let operation_result: ExecuteQueryResult = self.handle_operation_result(response)?;
 
-        debug!("response: {}", serde_json::to_string(&operation_result)?);
+        trace!(
+            "response: {}",
+            ensure_len_string(serde_json::to_string(&operation_result)?)
+        );
 
         QueryResult::from_proto(operation_result, error_on_truncated)
     }
