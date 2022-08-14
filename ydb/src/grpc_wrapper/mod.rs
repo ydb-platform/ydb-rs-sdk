@@ -19,3 +19,4 @@ pub(crate) mod raw_status;
 pub(crate) mod raw_table_service;
 
 pub(crate) mod raw_ydb_operation;
+pub(crate) mod runtime_interceptors;
