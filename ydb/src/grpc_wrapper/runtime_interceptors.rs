@@ -1,19 +1,20 @@
-use http::Request;
 use std::fmt::{write, Debug, Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
-use tonic::body::BoxBody;
 use tonic::transport::Channel;
 
-type InterceptorResult<T> = std::result::Result<T, InterceptorError>;
+pub(crate) type InterceptorResult<T> = std::result::Result<T, InterceptorError>;
+pub(crate) type InterceptorRequest = http::Request<tonic::body::BoxBody>;
 
 struct ServiceWithMultiInterceptor {
     inner: Channel,
     interceptors: Vec<Interceptor>,
 }
 
-impl tower::Service<http::Request<BoxBody>> for ServiceWithMultiInterceptor {
+impl ServiceWithMultiInterceptor {}
+
+impl tower::Service<InterceptorRequest> for ServiceWithMultiInterceptor {
     type Response = ChannelResponse;
     type Error = InterceptorError;
     type Future = ChannelFuture;
@@ -24,7 +25,7 @@ impl tower::Service<http::Request<BoxBody>> for ServiceWithMultiInterceptor {
             .map_err(|err| InterceptorError::Transport(err))
     }
 
-    fn call(&mut self, mut req: Request<BoxBody>) -> Self::Future {
+    fn call(&mut self, mut req: InterceptorRequest) -> Self::Future {
         for interceptor in self.interceptors.iter() {
             if let Some(interceptor) = &interceptor.on_call {
                 req = match interceptor(req) {
@@ -38,11 +39,11 @@ impl tower::Service<http::Request<BoxBody>> for ServiceWithMultiInterceptor {
     }
 }
 
-type ChannelResponse = <Channel as tower::Service<http::Request<BoxBody>>>::Response;
+type ChannelResponse = <Channel as tower::Service<InterceptorRequest>>::Response;
 
 enum ChannelFuture {
     Error(Option<InterceptorError>),
-    Future(<Channel as tower::Service<http::Request<BoxBody>>>::Future),
+    Future(<Channel as tower::Service<InterceptorRequest>>::Future),
 }
 
 impl Future for ChannelFuture {
@@ -74,20 +75,17 @@ struct Interceptor {
     on_call: Option<Box<OnCallInterceptor>>,
 }
 
-type OnCallInterceptor = dyn Fn(Request<BoxBody>) -> InterceptorResult<Request<BoxBody>>;
+type OnCallInterceptor = dyn Fn(InterceptorRequest) -> InterceptorResult<InterceptorRequest>;
 
 struct MultiInterceptor {
     interceptors: Vec<Interceptor>,
 }
 
 impl MultiInterceptor {
-    fn on_call(&self, mut req: Request<BoxBody>) -> InterceptorResult<Request<BoxBody>> {
+    fn on_call(&self, mut req: InterceptorRequest) -> InterceptorResult<InterceptorRequest> {
         for interceptor in self.interceptors.iter() {
             if let Some(interceptor) = &interceptor.on_call {
-                req = match interceptor(req) {
-                    Ok(res) => res,
-                    Err(err) => return Err(err),
-                }
+                req = interceptor(req)?
             }
         }
 
@@ -95,18 +93,18 @@ impl MultiInterceptor {
     }
 }
 
-enum InterceptorError {
+pub(crate) enum InterceptorError {
     Custom(String),
     Internal(String),
     Transport(tonic::transport::Error),
 }
 
 impl InterceptorError {
-    fn custom<S: Into<String>>(text: S) -> Self {
+    pub fn custom<S: Into<String>>(text: S) -> Self {
         InterceptorError::Custom(text.into())
     }
 
-    fn internal<S: Into<String>>(text: S) -> Self {
+    pub fn internal<S: Into<String>>(text: S) -> Self {
         InterceptorError::Internal(text.into())
     }
 }

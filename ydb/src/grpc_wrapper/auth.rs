@@ -1,4 +1,9 @@
 use crate::client_common::DBCredentials;
+use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
+use crate::grpc_wrapper::runtime_interceptors::{
+    InterceptorError, InterceptorRequest, InterceptorResult,
+};
+use http::HeaderValue;
 use tonic::codegen::InterceptedService;
 use tonic::metadata::AsciiMetadataValue;
 use tonic::service::Interceptor;
@@ -8,6 +13,32 @@ pub(crate) type ServiceWithAuth<S> = InterceptedService<S, AuthInterceptor>;
 
 pub(crate) fn create_service_with_auth<S>(service: S, cred: DBCredentials) -> ServiceWithAuth<S> {
     ServiceWithAuth::new(service, AuthInterceptor { cred })
+}
+
+fn create_auth_interceptor(
+    cred: DBCredentials,
+) -> RawResult<impl Fn(InterceptorRequest) -> InterceptorResult<InterceptorRequest>> {
+    let db_name = HeaderValue::from_str(cred.database.as_str()).map_err(|err| {
+        RawError::custom(format!(
+            "bad db name for set in headers '{}': {}",
+            cred.database.as_str(),
+            err
+        ))
+    })?;
+
+    let build_info = HeaderValue::from_str("ydb-rs-sdk/0.0.0").unwrap();
+    return Ok(move |mut req: InterceptorRequest| {
+        let token = cred.token_cache.token();
+        let token = HeaderValue::from_str(token.as_str()).map_err(|err| {
+            InterceptorError::custom(format!("received bad token (len={}): {}", token.len(), err))
+        })?;
+
+        req.headers_mut().insert("x-ydb-database", db_name.clone());
+        req.headers_mut()
+            .insert("x-ydb-sdk-build-info", build_info.clone());
+        req.headers_mut().insert("x-ydb-auth-ticket", token);
+        Ok(req)
+    });
 }
 
 pub(crate) struct AuthInterceptor {
