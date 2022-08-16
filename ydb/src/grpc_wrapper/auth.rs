@@ -4,6 +4,8 @@ use tonic::metadata::AsciiMetadataValue;
 use tonic::service::Interceptor;
 use tonic::{Code, Status};
 
+const VERSION_LABEL: &str = concat!("ydb-rust-sdk/", env!("CARGO_PKG_VERSION"));
+
 pub(crate) type ServiceWithAuth<S> = InterceptedService<S, AuthInterceptor>;
 
 pub(crate) fn create_service_with_auth<S>(service: S, cred: DBCredentials) -> ServiceWithAuth<S> {
@@ -39,7 +41,7 @@ impl Interceptor for AuthInterceptor {
         request.metadata_mut().insert("x-ydb-auth-ticket", token);
         request.metadata_mut().insert(
             "x-ydb-sdk-build-info",
-            AsciiMetadataValue::from_str("ydb-go-sdk/0.0.0").unwrap(),
+            AsciiMetadataValue::from_str(VERSION_LABEL).unwrap(),
         );
         Ok(request)
     }
