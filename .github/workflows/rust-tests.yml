@@ -11,6 +11,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  CACHE_VERSION: 1
 
 jobs:
   tests:
@@ -44,9 +45,9 @@ jobs:
     - name: Cache
       uses: actions/cache@v3
       with:
-        key: ${{ secrets.CACHE_VERSION }}-${{ runner.os }}-${{ steps.rust_version_step.outputs.version }}-cargo-${{ hashFiles('**/Cargo.lock') }}-1
+        key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ steps.rust_version_step.outputs.version }}-cargo-${{ hashFiles('**/Cargo.lock') }}-1
         restore-keys: |
-          ${{ secrets.CACHE_VERSION }}-${{ runner.os }}-${{ steps.rust_version_step.outputs.version }}
+          ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ steps.rust_version_step.outputs.version }}
         path: |
           ~/.cargo/bin/
           ~/.cargo/.crates.toml
