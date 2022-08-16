@@ -38,14 +38,15 @@ jobs:
       run: |
         rustc --version
         cargo --version
+        echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
         echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
 
     - name: Cache
       uses: actions/cache@v3
       with:
-        key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ steps.rust_version_step.outputs.version }}-cargo-${{ hashFiles('**/Cargo.lock') }}-1
+        key: ${{ secrets.CACHE_VERSION }}-${{ runner.os }}-${{ steps.rust_version_step.outputs.version }}-cargo-${{ hashFiles('**/Cargo.lock') }}-1
         restore-keys: |
-          ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ steps.rust_version_step.outputs.version }}
+          ${{ secrets.CACHE_VERSION }}-${{ runner.os }}-${{ steps.rust_version_step.outputs.version }}
         path: |
           ~/.cargo/bin/
           ~/.cargo/.crates.toml
