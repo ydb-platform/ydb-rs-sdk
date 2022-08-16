@@ -15,7 +15,7 @@ pub(crate) fn create_service_with_auth<S>(service: S, cred: DBCredentials) -> Se
     ServiceWithAuth::new(service, AuthInterceptor { cred })
 }
 
-fn create_auth_interceptor(
+pub(crate) fn create_auth_interceptor(
     cred: DBCredentials,
 ) -> RawResult<impl Fn(InterceptorRequest) -> InterceptorResult<InterceptorRequest>> {
     let db_name = HeaderValue::from_str(cred.database.as_str()).map_err(|err| {

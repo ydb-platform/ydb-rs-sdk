@@ -75,13 +75,25 @@ struct Interceptor {
     on_call: Option<Box<OnCallInterceptor>>,
 }
 
-type OnCallInterceptor = dyn Fn(InterceptorRequest) -> InterceptorResult<InterceptorRequest>;
+type OnCallInterceptor =
+    dyn Fn(InterceptorRequest) -> InterceptorResult<InterceptorRequest> + Send + Sync;
 
-struct MultiInterceptor {
+pub(crate) struct MultiInterceptor {
     interceptors: Vec<Interceptor>,
 }
 
 impl MultiInterceptor {
+    pub fn new() -> Self {
+        Self {
+            interceptors: Vec::new(),
+        }
+    }
+
+    pub fn with_interceptor(mut self, interceptor: Interceptor) -> Self {
+        self.interceptors.push(interceptor);
+        self
+    }
+
     fn on_call(&self, mut req: InterceptorRequest) -> InterceptorResult<InterceptorRequest> {
         for interceptor in self.interceptors.iter() {
             if let Some(interceptor) = &interceptor.on_call {
