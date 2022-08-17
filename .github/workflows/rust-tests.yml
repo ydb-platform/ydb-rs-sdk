@@ -41,6 +41,8 @@ jobs:
 
     - name: Rust cache
       uses: Swatinem/rust-cache@v2.0.0
+      with:
+        shared-key: asdf
 
     - name: Build
       run: cargo build --verbose --workspace --all-targets
