@@ -1,6 +1,7 @@
 use std::fmt::{write, Debug, Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use tonic::transport::Channel;
 
@@ -9,7 +10,7 @@ pub(crate) type InterceptorRequest = http::Request<tonic::body::BoxBody>;
 
 struct ServiceWithMultiInterceptor {
     inner: Channel,
-    interceptors: Vec<Interceptor>,
+    interceptors: Vec<Box<dyn GrpcInterceptor>>,
 }
 
 impl ServiceWithMultiInterceptor {}
@@ -27,11 +28,9 @@ impl tower::Service<InterceptorRequest> for ServiceWithMultiInterceptor {
 
     fn call(&mut self, mut req: InterceptorRequest) -> Self::Future {
         for interceptor in self.interceptors.iter() {
-            if let Some(interceptor) = &interceptor.on_call {
-                req = match interceptor(req) {
-                    Ok(res) => res,
-                    Err(err) => return ChannelFuture::Error(Some(err)),
-                }
+            req = match interceptor.on_call(req) {
+                Ok(res) => res,
+                Err(err) => return ChannelFuture::Error(Some(err)),
             }
         }
 
@@ -49,7 +48,7 @@ enum ChannelFuture {
 impl Future for ChannelFuture {
     type Output = std::result::Result<ChannelResponse, InterceptorError>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let res: Poll<Self::Output> = match self.get_mut() {
             ChannelFuture::Error(None) => Poll::Ready(Err(InterceptorError::internal(
                 "interceptor error is empty",
@@ -71,15 +70,15 @@ impl Future for ChannelFuture {
     }
 }
 
-struct Interceptor {
-    on_call: Option<Box<OnCallInterceptor>>,
+pub(crate) trait GrpcInterceptor: Send + Sync {
+    fn on_call(&self, req: InterceptorRequest) -> InterceptorResult<InterceptorRequest> {
+        return Ok(req);
+    }
 }
 
-type OnCallInterceptor =
-    dyn Fn(InterceptorRequest) -> InterceptorResult<InterceptorRequest> + Send + Sync;
-
+#[derive(Clone)]
 pub(crate) struct MultiInterceptor {
-    interceptors: Vec<Interceptor>,
+    interceptors: Vec<Arc<Box<dyn GrpcInterceptor>>>,
 }
 
 impl MultiInterceptor {
@@ -89,16 +88,16 @@ impl MultiInterceptor {
         }
     }
 
-    pub fn with_interceptor(mut self, interceptor: Interceptor) -> Self {
-        self.interceptors.push(interceptor);
+    pub fn with_interceptor<T: GrpcInterceptor + 'static>(mut self, interceptor: T) -> Self {
+        let boxed_interceptor: Box<dyn GrpcInterceptor> = Box::new(interceptor);
+        let arc_boxed_interceptor = Arc::new(boxed_interceptor);
+        self.interceptors.push(arc_boxed_interceptor);
         self
     }
 
-    fn on_call(&self, mut req: InterceptorRequest) -> InterceptorResult<InterceptorRequest> {
+    pub fn on_call(&self, mut req: InterceptorRequest) -> InterceptorResult<InterceptorRequest> {
         for interceptor in self.interceptors.iter() {
-            if let Some(interceptor) = &interceptor.on_call {
-                req = interceptor(req)?
-            }
+            req = interceptor.on_call(req)?;
         }
 
         Ok(req)

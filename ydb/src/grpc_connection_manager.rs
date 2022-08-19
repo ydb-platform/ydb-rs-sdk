@@ -1,6 +1,6 @@
 use crate::client_common::DBCredentials;
 use crate::connection_pool::ConnectionPool;
-use crate::grpc_wrapper::auth::{create_auth_interceptor, create_service_with_auth};
+use crate::grpc_wrapper::auth::{create_service_with_auth, AuthGrpcInterceptor};
 use crate::grpc_wrapper::channel::ChannelWithAuth;
 use crate::grpc_wrapper::raw_services::GrpcServiceForDiscovery;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
@@ -69,7 +69,7 @@ impl<TBalancer: LoadBalancer> State<TBalancer> {
             connections_pool: ConnectionPool::new(),
             cred: cred.clone(),
             interceptors: MultiInterceptor::new()
-                .with_interceptor(create_auth_interceptor(cred).unwrap()),
+                .with_interceptor(AuthGrpcInterceptor::new(cred).unwrap()),
         }
     }
 }
