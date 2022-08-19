@@ -8,12 +8,19 @@ use tonic::transport::Channel;
 pub(crate) type InterceptorResult<T> = std::result::Result<T, InterceptorError>;
 pub(crate) type InterceptorRequest = http::Request<tonic::body::BoxBody>;
 
-struct ServiceWithMultiInterceptor {
+pub(crate) struct ServiceWithMultiInterceptor {
     inner: Channel,
-    interceptors: Vec<Box<dyn GrpcInterceptor>>,
+    interceptor: MultiInterceptor,
 }
 
-impl ServiceWithMultiInterceptor {}
+impl ServiceWithMultiInterceptor {
+    pub fn new(channel: Channel, interceptor: MultiInterceptor) -> Self {
+        return Self {
+            inner: channel,
+            interceptor,
+        };
+    }
+}
 
 impl tower::Service<InterceptorRequest> for ServiceWithMultiInterceptor {
     type Response = ChannelResponse;
@@ -27,12 +34,10 @@ impl tower::Service<InterceptorRequest> for ServiceWithMultiInterceptor {
     }
 
     fn call(&mut self, mut req: InterceptorRequest) -> Self::Future {
-        for interceptor in self.interceptors.iter() {
-            req = match interceptor.on_call(req) {
-                Ok(res) => res,
-                Err(err) => return ChannelFuture::Error(Some(err)),
-            }
-        }
+        req = match self.interceptor.on_call(req) {
+            Ok(res) => res,
+            Err(err) => return ChannelFuture::Error(Some(err)),
+        };
 
         ChannelFuture::Future(self.inner.call(req))
     }
@@ -40,7 +45,7 @@ impl tower::Service<InterceptorRequest> for ServiceWithMultiInterceptor {
 
 type ChannelResponse = <Channel as tower::Service<InterceptorRequest>>::Response;
 
-enum ChannelFuture {
+pub(crate) enum ChannelFuture {
     Error(Option<InterceptorError>),
     Future(<Channel as tower::Service<InterceptorRequest>>::Future),
 }
