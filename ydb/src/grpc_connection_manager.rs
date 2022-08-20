@@ -1,9 +1,8 @@
 use crate::client_common::DBCredentials;
 use crate::connection_pool::ConnectionPool;
-use crate::grpc_wrapper::auth::{create_service_with_auth, AuthGrpcInterceptor};
-use crate::grpc_wrapper::channel::ChannelWithAuth;
+use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
 use crate::grpc_wrapper::raw_services::GrpcServiceForDiscovery;
-use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::YdbResult;
 use http::Uri;
@@ -24,7 +23,7 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
 
     pub(crate) async fn get_auth_service<
         T: GrpcServiceForDiscovery,
-        F: FnOnce(ChannelWithAuth) -> T,
+        F: FnOnce(InterceptedChannel) -> T,
     >(
         &self,
         new: F,
@@ -38,15 +37,16 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
 
     pub(crate) async fn get_auth_service_to_node<
         T: GrpcServiceForDiscovery,
-        F: FnOnce(ChannelWithAuth) -> T,
+        F: FnOnce(InterceptedChannel) -> T,
     >(
         &self,
         new: F,
         uri: &Uri,
     ) -> YdbResult<T> {
         let channel = self.state.connections_pool.connection(uri).await?;
-        let auth_channel = create_service_with_auth(channel, self.state.cred.clone());
-        Ok(new(auth_channel))
+
+        let intercepted_channel = InterceptedChannel::new(channel, self.state.interceptor.clone());
+        Ok(new(intercepted_channel))
     }
 
     pub(crate) fn database(&self) -> &String {
@@ -59,7 +59,7 @@ struct State<TBalancer: LoadBalancer> {
     balancer: TBalancer,
     connections_pool: ConnectionPool,
     cred: DBCredentials,
-    interceptors: MultiInterceptor,
+    interceptor: MultiInterceptor,
 }
 
 impl<TBalancer: LoadBalancer> State<TBalancer> {
@@ -68,7 +68,7 @@ impl<TBalancer: LoadBalancer> State<TBalancer> {
             balancer,
             connections_pool: ConnectionPool::new(),
             cred: cred.clone(),
-            interceptors: MultiInterceptor::new()
+            interceptor: MultiInterceptor::new()
                 .with_interceptor(AuthGrpcInterceptor::new(cred).unwrap()),
         }
     }

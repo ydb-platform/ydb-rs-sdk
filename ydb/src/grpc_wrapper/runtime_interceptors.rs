@@ -1,4 +1,4 @@
-use std::fmt::{write, Debug, Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -8,6 +8,7 @@ use tonic::transport::Channel;
 pub(crate) type InterceptorResult<T> = std::result::Result<T, InterceptorError>;
 pub(crate) type InterceptorRequest = http::Request<tonic::body::BoxBody>;
 
+#[derive(Clone)]
 pub(crate) struct InterceptedChannel {
     inner: Channel,
     interceptor: MultiInterceptor,
@@ -19,6 +20,12 @@ impl InterceptedChannel {
             inner: channel,
             interceptor,
         };
+    }
+
+    pub fn add_interceptor<T: GrpcInterceptor + 'static>(&self, interceptor: T) -> Self {
+        let mut res = self.clone();
+        res.interceptor = res.interceptor.with_interceptor(interceptor);
+        res
     }
 }
 
