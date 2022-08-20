@@ -3,6 +3,7 @@ use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::grpc::create_grpc_client_with_error_sender;
 use crate::grpc_wrapper::raw_services::Service;
+use crate::grpc_wrapper::runtime_interceptors::{GrpcInterceptor, InterceptorError};
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::middlewares::AuthService;
 use async_trait::async_trait;
@@ -192,5 +193,24 @@ impl tower::Service<http::Request<BoxBody>> for ChannelProxy {
             inner: tower::Service::call(&mut self.ch, req),
             error_event: self.error_sender.clone(),
         }
+    }
+}
+
+struct SendErrorInterceptor {
+    uri: Uri,
+    sender: mpsc::UnboundedSender<ChannelErrorInfo>,
+}
+
+impl GrpcInterceptor for SendErrorInterceptor {
+    fn on_feature_poll_ready(
+        &self,
+        res: Result<crate::grpc_wrapper::runtime_interceptors::ChannelResponse, InterceptorError>,
+    ) -> Result<crate::grpc_wrapper::runtime_interceptors::ChannelResponse, InterceptorError> {
+        if res.is_err() {
+            let _ignore_send_error = self.sender.send(ChannelErrorInfo {
+                endpoint: self.uri.clone(),
+            });
+        };
+        res
     }
 }

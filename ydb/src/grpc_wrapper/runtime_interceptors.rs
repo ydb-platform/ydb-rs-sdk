@@ -46,7 +46,7 @@ impl tower::Service<InterceptorRequest> for InterceptedChannel {
     }
 }
 
-type ChannelResponse = <Channel as tower::Service<InterceptorRequest>>::Response;
+pub(crate) type ChannelResponse = <Channel as tower::Service<InterceptorRequest>>::Response;
 
 pub(crate) enum ChannelFuture {
     Error(Option<InterceptorError>),
