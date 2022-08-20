@@ -8,12 +8,12 @@ use tonic::transport::Channel;
 pub(crate) type InterceptorResult<T> = std::result::Result<T, InterceptorError>;
 pub(crate) type InterceptorRequest = http::Request<tonic::body::BoxBody>;
 
-pub(crate) struct ServiceWithMultiInterceptor {
+pub(crate) struct InterceptedChannel {
     inner: Channel,
     interceptor: MultiInterceptor,
 }
 
-impl ServiceWithMultiInterceptor {
+impl InterceptedChannel {
     pub fn new(channel: Channel, interceptor: MultiInterceptor) -> Self {
         return Self {
             inner: channel,
@@ -22,7 +22,7 @@ impl ServiceWithMultiInterceptor {
     }
 }
 
-impl tower::Service<InterceptorRequest> for ServiceWithMultiInterceptor {
+impl tower::Service<InterceptorRequest> for InterceptedChannel {
     type Response = ChannelResponse;
     type Error = InterceptorError;
     type Future = ChannelFuture;
@@ -39,7 +39,10 @@ impl tower::Service<InterceptorRequest> for ServiceWithMultiInterceptor {
             Err(err) => return ChannelFuture::Error(Some(err)),
         };
 
-        ChannelFuture::Future(self.inner.call(req))
+        ChannelFuture::Future(ChannelFutureState {
+            channel_future: self.inner.call(req),
+            interceptor: self.interceptor.clone(),
+        })
     }
 }
 
@@ -47,7 +50,12 @@ type ChannelResponse = <Channel as tower::Service<InterceptorRequest>>::Response
 
 pub(crate) enum ChannelFuture {
     Error(Option<InterceptorError>),
-    Future(<Channel as tower::Service<InterceptorRequest>>::Future),
+    Future(ChannelFutureState),
+}
+
+pub(crate) struct ChannelFutureState {
+    channel_future: <Channel as tower::Service<InterceptorRequest>>::Future,
+    interceptor: MultiInterceptor,
 }
 
 impl Future for ChannelFuture {
@@ -66,9 +74,17 @@ impl Future for ChannelFuture {
                 )));
                 Poll::Ready(Err(err_content))
             }
-            ChannelFuture::Future(future) => {
-                let res = Future::poll(Pin::new(future), cx);
-                res.map_err(|err| InterceptorError::Transport(err))
+            ChannelFuture::Future(state) => {
+                let poll_res = Future::poll(Pin::new(&mut state.channel_future), cx);
+
+                match poll_res {
+                    Poll::Ready(res) => {
+                        let mut res = res.map_err(|err| InterceptorError::Transport(err)).into();
+                        res = state.interceptor.on_feature_poll_ready(res);
+                        res.into()
+                    }
+                    Poll::Pending => Poll::Pending,
+                }
             }
         };
         res
@@ -78,6 +94,13 @@ impl Future for ChannelFuture {
 pub(crate) trait GrpcInterceptor: Send + Sync {
     fn on_call(&self, req: InterceptorRequest) -> InterceptorResult<InterceptorRequest> {
         return Ok(req);
+    }
+
+    fn on_feature_poll_ready(
+        &self,
+        res: Result<ChannelResponse, InterceptorError>,
+    ) -> Result<ChannelResponse, InterceptorError> {
+        return res;
     }
 }
 
@@ -99,13 +122,22 @@ impl MultiInterceptor {
         self.interceptors.push(arc_boxed_interceptor);
         self
     }
+}
 
-    pub fn on_call(&self, mut req: InterceptorRequest) -> InterceptorResult<InterceptorRequest> {
+impl GrpcInterceptor for MultiInterceptor {
+    fn on_call(&self, mut req: InterceptorRequest) -> InterceptorResult<InterceptorRequest> {
         for interceptor in self.interceptors.iter() {
             req = interceptor.on_call(req)?;
         }
 
         Ok(req)
+    }
+
+    fn on_feature_poll_ready(
+        &self,
+        res: Result<ChannelResponse, InterceptorError>,
+    ) -> Result<ChannelResponse, InterceptorError> {
+        return res;
     }
 }
 
