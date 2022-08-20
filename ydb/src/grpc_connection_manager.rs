@@ -1,6 +1,4 @@
-use crate::client_common::DBCredentials;
 use crate::connection_pool::ConnectionPool;
-use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
 use crate::grpc_wrapper::raw_services::GrpcServiceForDiscovery;
 use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
@@ -15,9 +13,13 @@ pub(crate) struct GrpcConnectionManagerGeneric<TBalancer: LoadBalancer> {
 }
 
 impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
-    pub(crate) fn new(balancer: TBalancer, cred: DBCredentials) -> Self {
+    pub(crate) fn new(
+        balancer: TBalancer,
+        database: String,
+        interceptor: MultiInterceptor,
+    ) -> Self {
         GrpcConnectionManagerGeneric {
-            state: State::new(balancer, cred),
+            state: State::new(balancer, database, interceptor),
         }
     }
 
@@ -50,7 +52,7 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
     }
 
     pub(crate) fn database(&self) -> &String {
-        &self.state.cred.database
+        &self.state.database
     }
 }
 
@@ -58,18 +60,17 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
 struct State<TBalancer: LoadBalancer> {
     balancer: TBalancer,
     connections_pool: ConnectionPool,
-    cred: DBCredentials,
     interceptor: MultiInterceptor,
+    database: String,
 }
 
 impl<TBalancer: LoadBalancer> State<TBalancer> {
-    fn new(balancer: TBalancer, cred: DBCredentials) -> Self {
+    fn new(balancer: TBalancer, database: String, interceptor: MultiInterceptor) -> Self {
         State {
             balancer,
             connections_pool: ConnectionPool::new(),
-            cred: cred.clone(),
-            interceptor: MultiInterceptor::new()
-                .with_interceptor(AuthGrpcInterceptor::new(cred).unwrap()),
+            interceptor,
+            database,
         }
     }
 }

@@ -382,6 +382,8 @@ mod test {
     use crate::discovery::DiscoverySharedState;
     use crate::errors::YdbResult;
     use crate::grpc_connection_manager::GrpcConnectionManager;
+    use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
+    use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
     use crate::test_helpers::test_client_builder;
     use http::Uri;
@@ -403,7 +405,12 @@ mod test {
         let uri = Uri::from_str(test_client_builder().endpoint.as_str())?;
         let load_balancer =
             SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(uri)));
-        let connection_manager = GrpcConnectionManager::new(load_balancer, cred.clone());
+
+        let interceptor =
+            MultiInterceptor::new().with_interceptor(AuthGrpcInterceptor::new(cred.clone())?);
+
+        let connection_manager =
+            GrpcConnectionManager::new(load_balancer, cred.database, interceptor);
 
         let discovery_shared =
             DiscoverySharedState::new(connection_manager, test_client_builder().endpoint.as_str())?;
