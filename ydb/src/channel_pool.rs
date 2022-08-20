@@ -16,10 +16,11 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tonic::body::BoxBody;
 use tonic::transport::Channel;
-use tracing::trace;
+use tracing::{instrument, trace};
 
 #[async_trait]
 pub(crate) trait ChannelPool<T>: Send + Sync
@@ -199,7 +200,6 @@ impl tower::Service<http::Request<BoxBody>> for ChannelProxy {
 }
 
 struct SendErrorInterceptor {
-    uri: Uri,
     sender: mpsc::UnboundedSender<ChannelErrorInfo>,
 }
 
@@ -213,20 +213,36 @@ impl GrpcInterceptor for SendErrorInterceptor {
         Ok(req)
     }
 
+    #[instrument(skip_all)]
     fn on_feature_poll_ready(
         &self,
         metadata: &mut RequestMetadata,
         res: Result<crate::grpc_wrapper::runtime_interceptors::ChannelResponse, InterceptorError>,
     ) -> Result<crate::grpc_wrapper::runtime_interceptors::ChannelResponse, InterceptorError> {
         if res.is_err() {
-            let _ignore_send_error = self.sender.send(ChannelErrorInfo {
-                endpoint: metadata
-                    .as_mut()
-                    .unwrap()
-                    .downcast_mut::<Uri>()
-                    .unwrap()
-                    .clone(),
+            let uri = metadata
+                .as_mut()
+                .unwrap()
+                .downcast_mut::<Uri>()
+                .unwrap()
+                .clone();
+
+            fn result_to_str(res: Result<(), SendError<ChannelErrorInfo>>) -> &'static str {
+                if res.is_ok() {
+                    "OK"
+                } else {
+                    "receiver closed"
+                }
+            }
+
+            let send_result = self.sender.send(ChannelErrorInfo {
+                endpoint: uri.clone(),
             });
+            trace!(
+                "GrpcInterceptor sent error for uri: '{}' with result: {:?}",
+                &uri,
+                result_to_str(send_result)
+            );
         };
         res
     }
