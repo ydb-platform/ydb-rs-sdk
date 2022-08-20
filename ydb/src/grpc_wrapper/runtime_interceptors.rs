@@ -1,3 +1,5 @@
+use itertools::enumerate;
+use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
@@ -40,15 +42,16 @@ impl tower::Service<InterceptorRequest> for InterceptedChannel {
             .map_err(|err| InterceptorError::Transport(err))
     }
 
-    fn call(&mut self, mut req: InterceptorRequest) -> Self::Future {
-        req = match self.interceptor.on_call(req) {
+    fn call(&mut self, req: InterceptorRequest) -> Self::Future {
+        let req_with_meta = match self.interceptor.on_call(req) {
             Ok(res) => res,
             Err(err) => return ChannelFuture::Error(Some(err)),
         };
 
         ChannelFuture::Future(ChannelFutureState {
-            channel_future: self.inner.call(req),
+            channel_future: self.inner.call(req_with_meta.request),
             interceptor: self.interceptor.clone(),
+            metadata: req_with_meta.metadata,
         })
     }
 }
@@ -63,6 +66,7 @@ pub(crate) enum ChannelFuture {
 pub(crate) struct ChannelFutureState {
     channel_future: <Channel as tower::Service<InterceptorRequest>>::Future,
     interceptor: MultiInterceptor,
+    metadata: RequestMetadata,
 }
 
 impl Future for ChannelFuture {
@@ -87,7 +91,9 @@ impl Future for ChannelFuture {
                 match poll_res {
                     Poll::Ready(res) => {
                         let mut res = res.map_err(|err| InterceptorError::Transport(err)).into();
-                        res = state.interceptor.on_feature_poll_ready(res);
+                        res = state
+                            .interceptor
+                            .on_feature_poll_ready(&mut state.metadata, res);
                         res.into()
                     }
                     Poll::Pending => Poll::Pending,
@@ -99,12 +105,19 @@ impl Future for ChannelFuture {
 }
 
 pub(crate) trait GrpcInterceptor: Send + Sync {
-    fn on_call(&self, req: InterceptorRequest) -> InterceptorResult<InterceptorRequest> {
-        return Ok(req);
+    fn on_call(
+        &self,
+        req: InterceptorRequest,
+    ) -> InterceptorResult<GrpcInterceptorRequestWithMeta> {
+        return Ok(GrpcInterceptorRequestWithMeta {
+            request: req,
+            metadata: None,
+        });
     }
 
     fn on_feature_poll_ready(
         &self,
+        _metadata: &mut RequestMetadata,
         res: Result<ChannelResponse, InterceptorError>,
     ) -> Result<ChannelResponse, InterceptorError> {
         return res;
@@ -132,21 +145,48 @@ impl MultiInterceptor {
 }
 
 impl GrpcInterceptor for MultiInterceptor {
-    fn on_call(&self, mut req: InterceptorRequest) -> InterceptorResult<InterceptorRequest> {
+    fn on_call(
+        &self,
+        mut req: InterceptorRequest,
+    ) -> InterceptorResult<GrpcInterceptorRequestWithMeta> {
+        let mut metadatas: Vec<RequestMetadata> = Vec::with_capacity(self.interceptors.len());
         for interceptor in self.interceptors.iter() {
-            req = interceptor.on_call(req)?;
+            let res = interceptor.on_call(req)?;
+            req = res.request;
+            metadatas.push(res.metadata)
         }
 
-        Ok(req)
+        Ok(GrpcInterceptorRequestWithMeta {
+            request: req,
+            metadata: Some(Box::new(metadatas)),
+        })
     }
 
     fn on_feature_poll_ready(
         &self,
-        res: Result<ChannelResponse, InterceptorError>,
+        metadata: &mut RequestMetadata,
+        mut res: Result<ChannelResponse, InterceptorError>,
     ) -> Result<ChannelResponse, InterceptorError> {
+        let metadata = metadata
+            .as_mut()
+            .unwrap()
+            .downcast_mut::<Vec<RequestMetadata>>()
+            .unwrap();
+
+        for (index, interceptor) in enumerate(self.interceptors.iter()) {
+            let item_meta = &mut metadata[index];
+            res = interceptor.on_feature_poll_ready(item_meta, res)
+        }
         return res;
     }
 }
+
+pub(crate) struct GrpcInterceptorRequestWithMeta {
+    pub request: InterceptorRequest,
+    pub metadata: RequestMetadata,
+}
+
+pub(crate) type RequestMetadata = Option<Box<dyn Any + Send>>;
 
 pub(crate) enum InterceptorError {
     Custom(String),

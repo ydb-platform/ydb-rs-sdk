@@ -75,6 +75,7 @@ mod sugar;
 #[cfg(test)]
 mod test_helpers;
 
+pub(crate) mod dicovery_pessimization_interceptor;
 #[cfg(test)]
 mod test_integration_helper;
 mod trace_helpers;

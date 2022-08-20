@@ -3,7 +3,10 @@ use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::grpc::create_grpc_client_with_error_sender;
 use crate::grpc_wrapper::raw_services::Service;
-use crate::grpc_wrapper::runtime_interceptors::{GrpcInterceptor, InterceptorError};
+use crate::grpc_wrapper::runtime_interceptors::{
+    GrpcInterceptor, GrpcInterceptorRequestWithMeta, InterceptorError, InterceptorRequest,
+    InterceptorResult, RequestMetadata,
+};
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::middlewares::AuthService;
 use async_trait::async_trait;
@@ -202,13 +205,29 @@ struct SendErrorInterceptor {
 }
 
 impl GrpcInterceptor for SendErrorInterceptor {
+    fn on_call(
+        &self,
+        req: InterceptorRequest,
+    ) -> InterceptorResult<GrpcInterceptorRequestWithMeta> {
+        Ok(GrpcInterceptorRequestWithMeta {
+            metadata: Some(Box::new(req.uri().clone())),
+            request: req,
+        })
+    }
+
     fn on_feature_poll_ready(
         &self,
+        metadata: &mut RequestMetadata,
         res: Result<crate::grpc_wrapper::runtime_interceptors::ChannelResponse, InterceptorError>,
     ) -> Result<crate::grpc_wrapper::runtime_interceptors::ChannelResponse, InterceptorError> {
         if res.is_err() {
             let _ignore_send_error = self.sender.send(ChannelErrorInfo {
-                endpoint: self.uri.clone(),
+                endpoint: metadata
+                    .as_mut()
+                    .unwrap()
+                    .downcast_mut::<Uri>()
+                    .unwrap()
+                    .clone(),
             });
         };
         res
