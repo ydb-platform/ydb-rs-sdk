@@ -61,7 +61,7 @@ where
 #[tracing::instrument(skip(error_sender))]
 async fn create_grpc_channel(
     uri: Uri,
-    error_sender: Option<mpsc::Sender<ChannelErrorInfo>>,
+    error_sender: Option<mpsc::UnboundedSender<ChannelErrorInfo>>,
 ) -> YdbResult<ChannelProxy> {
     trace!("start work");
     let tls = if let Some(scheme) = uri.scheme_str() {
@@ -86,7 +86,7 @@ async fn create_grpc_channel(
             trace!("error: {:?}", err);
             if let Some(sender) = error_sender {
                 // ignore notify error
-                let _ = sender.send(ChannelErrorInfo { endpoint: uri }).await;
+                let _ = sender.send(ChannelErrorInfo { endpoint: uri });
             };
             Err(YdbError::TransportDial(Arc::new(err)))
         }
