@@ -4,8 +4,7 @@ use crate::errors::YdbResult;
 use crate::grpc::create_grpc_client_with_error_sender;
 use crate::grpc_wrapper::raw_services::Service;
 use crate::grpc_wrapper::runtime_interceptors::{
-    GrpcInterceptor, GrpcInterceptorRequestWithMeta, InterceptorError, InterceptorRequest,
-    InterceptorResult, RequestMetadata,
+    GrpcInterceptor, InterceptorError, InterceptorRequest, InterceptorResult, RequestMetadata,
 };
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::middlewares::AuthService;
@@ -207,12 +206,11 @@ struct SendErrorInterceptor {
 impl GrpcInterceptor for SendErrorInterceptor {
     fn on_call(
         &self,
+        metadata: &mut RequestMetadata,
         req: InterceptorRequest,
-    ) -> InterceptorResult<GrpcInterceptorRequestWithMeta> {
-        Ok(GrpcInterceptorRequestWithMeta {
-            metadata: Some(Box::new(req.uri().clone())),
-            request: req,
-        })
+    ) -> InterceptorResult<InterceptorRequest> {
+        *metadata = Some(Box::new(req.uri().clone()));
+        Ok(req)
     }
 
     fn on_feature_poll_ready(

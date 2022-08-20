@@ -42,16 +42,17 @@ impl tower::Service<InterceptorRequest> for InterceptedChannel {
             .map_err(|err| InterceptorError::Transport(err))
     }
 
-    fn call(&mut self, req: InterceptorRequest) -> Self::Future {
-        let req_with_meta = match self.interceptor.on_call(req) {
+    fn call(&mut self, mut req: InterceptorRequest) -> Self::Future {
+        let mut metadata: RequestMetadata = None;
+        req = match self.interceptor.on_call(&mut metadata, req) {
             Ok(res) => res,
             Err(err) => return ChannelFuture::Error(Some(err)),
         };
 
         ChannelFuture::Future(ChannelFutureState {
-            channel_future: self.inner.call(req_with_meta.request),
+            channel_future: self.inner.call(req),
             interceptor: self.interceptor.clone(),
-            metadata: req_with_meta.metadata,
+            metadata,
         })
     }
 }
@@ -107,12 +108,10 @@ impl Future for ChannelFuture {
 pub(crate) trait GrpcInterceptor: Send + Sync {
     fn on_call(
         &self,
+        metadata: &mut RequestMetadata,
         req: InterceptorRequest,
-    ) -> InterceptorResult<GrpcInterceptorRequestWithMeta> {
-        return Ok(GrpcInterceptorRequestWithMeta {
-            request: req,
-            metadata: None,
-        });
+    ) -> InterceptorResult<InterceptorRequest> {
+        return Ok(req);
     }
 
     fn on_feature_poll_ready(
@@ -147,19 +146,16 @@ impl MultiInterceptor {
 impl GrpcInterceptor for MultiInterceptor {
     fn on_call(
         &self,
+        metadata: &mut RequestMetadata,
         mut req: InterceptorRequest,
-    ) -> InterceptorResult<GrpcInterceptorRequestWithMeta> {
-        let mut metadatas: Vec<RequestMetadata> = Vec::with_capacity(self.interceptors.len());
-        for interceptor in self.interceptors.iter() {
-            let res = interceptor.on_call(req)?;
-            req = res.request;
-            metadatas.push(res.metadata)
+    ) -> InterceptorResult<InterceptorRequest> {
+        let mut metadatas: Vec<RequestMetadata> = Vec::new();
+        metadatas.resize_with(self.interceptors.len(), || None);
+        for (index, interceptor) in enumerate(self.interceptors.iter()) {
+            req = interceptor.on_call(&mut metadatas[index], req)?;
         }
-
-        Ok(GrpcInterceptorRequestWithMeta {
-            request: req,
-            metadata: Some(Box::new(metadatas)),
-        })
+        *metadata = Some(Box::new(metadatas));
+        Ok(req)
     }
 
     fn on_feature_poll_ready(
@@ -179,11 +175,6 @@ impl GrpcInterceptor for MultiInterceptor {
         }
         return res;
     }
-}
-
-pub(crate) struct GrpcInterceptorRequestWithMeta {
-    pub request: InterceptorRequest,
-    pub metadata: RequestMetadata,
 }
 
 pub(crate) type RequestMetadata = Option<Box<dyn Any + Send>>;

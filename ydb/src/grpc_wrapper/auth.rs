@@ -1,8 +1,7 @@
 use crate::client_common::{DBCredentials, TokenCache};
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::grpc_wrapper::runtime_interceptors::{
-    GrpcInterceptor, GrpcInterceptorRequestWithMeta, InterceptorError, InterceptorRequest,
-    InterceptorResult,
+    GrpcInterceptor, InterceptorError, InterceptorRequest, InterceptorResult, RequestMetadata,
 };
 use http::HeaderValue;
 
@@ -31,8 +30,9 @@ impl AuthGrpcInterceptor {
 impl GrpcInterceptor for AuthGrpcInterceptor {
     fn on_call(
         &self,
+        metadata: &mut RequestMetadata,
         mut req: InterceptorRequest,
-    ) -> InterceptorResult<GrpcInterceptorRequestWithMeta> {
+    ) -> InterceptorResult<InterceptorRequest> {
         let token = self.token_cache.token();
         let token = HeaderValue::from_str(token.as_str()).map_err(|err| {
             InterceptorError::custom(format!("received bad token (len={}): {}", token.len(), err))
@@ -45,9 +45,6 @@ impl GrpcInterceptor for AuthGrpcInterceptor {
             HeaderValue::from_str("ydb-go-sdk/0.0.0").unwrap(),
         );
         req.headers_mut().insert("x-ydb-auth-ticket", token);
-        Ok(GrpcInterceptorRequestWithMeta {
-            request: req,
-            metadata: None,
-        })
+        Ok(req)
     }
 }
