@@ -1,5 +1,6 @@
 use crate::client_common::{DBCredentials, TokenCache};
 use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticToken};
+use crate::dicovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
 use crate::discovery::{Discovery, TimerDiscovery};
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -11,7 +12,7 @@ use http::Uri;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 type ParamHandler = fn(&str, ClientBuilder) -> YdbResult<ClientBuilder>;
@@ -152,7 +153,12 @@ impl ClientBuilder {
             )?),
         };
 
-        let load_balancer = SharedLoadBalancer::new(discovery.as_ref());
+        let discovery = Arc::new(discovery);
+
+        let interceptor =
+            interceptor.with_interceptor(DiscoveryPessimizationInterceptor::new(discovery.clone()));
+
+        let load_balancer = SharedLoadBalancer::new(discovery.as_ref().as_ref());
         let connection_manager =
             GrpcConnectionManager::new(load_balancer, db_cred.database.clone(), interceptor);
 

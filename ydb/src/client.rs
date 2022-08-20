@@ -27,10 +27,9 @@ pub struct Client {
 impl Client {
     pub(crate) fn new(
         credentials: DBCredentials,
-        discovery: Box<dyn Discovery>,
+        discovery: Arc<Box<dyn Discovery>>,
         connection_manager: GrpcConnectionManager,
     ) -> YdbResult<Self> {
-        let discovery = Arc::new(discovery);
         let discovery_ref = discovery.as_ref().as_ref();
 
         Ok(Client {
