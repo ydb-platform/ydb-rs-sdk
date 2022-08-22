@@ -4,18 +4,15 @@ use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::client_common::DBCredentials;
 use crate::errors::{YdbError, YdbIssue, YdbResult};
-use crate::middlewares::AuthService;
 use crate::trait_operation::Operation;
 use crate::{errors, grpc_wrapper};
 use http::Uri;
 use tokio::sync::mpsc;
 
 use crate::channel_pool::{ChannelErrorInfo, ChannelProxy, ChannelProxyErrorSender};
-use crate::grpc_wrapper::runtime_interceptors::{
-    InterceptedChannel, InterceptedChannel_new, MultiInterceptor,
-};
+use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
+use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
 use tonic::transport::{ClientTlsConfig, Endpoint};
-use tower::ServiceBuilder;
 use tracing::trace;
 use ydb_grpc::ydb_proto::issue::IssueMessage;
 use ydb_grpc::ydb_proto::operations::operation_params::OperationMode;
@@ -54,7 +51,10 @@ fn create_client_on_channel<NewFuncT, ClientT>(
 where
     NewFuncT: FnOnce(InterceptedChannel) -> ClientT,
 {
-    let auth_ch = InterceptedChannel_new(channel.ch, MultiInterceptor::new());
+    let auth_ch = InterceptedChannel::new(
+        channel.ch,
+        MultiInterceptor::new().with_interceptor(AuthGrpcInterceptor::new(cred)?),
+    );
     Ok(new_func(auth_ch))
 }
 

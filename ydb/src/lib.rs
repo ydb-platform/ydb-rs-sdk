@@ -64,7 +64,6 @@ mod grpc;
 pub(crate) mod grpc_connection_manager;
 mod grpc_wrapper;
 mod load_balancer;
-mod middlewares;
 mod pub_traits;
 pub(crate) mod query;
 pub(crate) mod result;

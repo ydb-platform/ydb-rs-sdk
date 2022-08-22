@@ -8,7 +8,6 @@ use crate::grpc_wrapper::runtime_interceptors::{
     RequestMetadata,
 };
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
-use crate::middlewares::AuthService;
 use async_trait::async_trait;
 use http::{Request, Uri};
 use std::collections::HashMap;

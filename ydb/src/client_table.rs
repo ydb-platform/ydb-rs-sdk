@@ -1,5 +1,5 @@
 use crate::channel_pool::{ChannelPool, ChannelPoolImpl};
-use crate::client::{Middleware, TimeoutSettings};
+use crate::client::TimeoutSettings;
 use crate::client_common::DBCredentials;
 use crate::discovery::Discovery;
 use crate::errors::*;

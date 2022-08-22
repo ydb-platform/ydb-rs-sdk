@@ -30,7 +30,7 @@ impl AuthGrpcInterceptor {
 impl GrpcInterceptor for AuthGrpcInterceptor {
     fn on_call(
         &self,
-        metadata: &mut RequestMetadata,
+        _metadata: &mut RequestMetadata,
         mut req: InterceptorRequest,
     ) -> InterceptorResult<InterceptorRequest> {
         let token = self.token_cache.token();

@@ -2,9 +2,7 @@ use crate::channel_pool::ChannelProxy;
 use crate::client_common::{DBCredentials, TokenCache};
 use crate::credentials::credencials_ref;
 use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
-use crate::middlewares::AuthService;
 use crate::StaticToken;
-use http::Uri;
 use itertools::enumerate;
 use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
@@ -13,97 +11,26 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tonic::transport::Channel;
-use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 
 pub(crate) type InterceptorResult<T> = std::result::Result<T, InterceptorError>;
 pub(crate) type InterceptorRequest = http::Request<tonic::body::BoxBody>;
 
-pub(crate) type InterceptedChannel = InterceptedChannel_off;
-// pub(crate) type InterceptedChannel = AuthService;
-// pub(crate) type InterceptedChannel = Channel;
-
-// #[derive(Clone)]
-// pub(crate) struct InterceptedChannel {
-//     inner: Channel,
-// }
-//
-// impl InterceptedChannel {
-//     pub fn new(channel: Channel, _interceptor: MultiInterceptor) -> Self {
-//         return Self { inner: channel };
-//     }
-// }
-//
-// impl tower::Service<InterceptorRequest> for InterceptedChannel {
-//     type Response = <Channel as tower::Service<InterceptorRequest>>::Response;
-//     type Error = <Channel as tower::Service<InterceptorRequest>>::Error;
-//     type Future = <Channel as tower::Service<InterceptorRequest>>::Future;
-//
-//     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-//         return self.inner.poll_ready(cx);
-//     }
-//
-//     fn call(&mut self, req: InterceptorRequest) -> Self::Future {
-//         return self.inner.call(req);
-//     }
-// }
-
-pub(crate) fn InterceptedChannel_new(
-    channel: Channel,
-    _interceptor: MultiInterceptor,
-) -> InterceptedChannel {
-    InterceptedChannel_off::new(
-        channel,
-        MultiInterceptor::new().with_interceptor(
-            AuthGrpcInterceptor::new(DBCredentials {
-                database: "/local".to_string(),
-                token_cache: TokenCache::new(credencials_ref(StaticToken::from("asd"))).unwrap(),
-            })
-            .unwrap(),
-        ),
-    )
-
-    // AuthService::new(
-    //     InterceptedChannel_off::new(
-    //         channel,
-    //         MultiInterceptor::new().with_interceptor(
-    //             AuthGrpcInterceptor::new(DBCredentials {
-    //                 database: "/local".to_string(),
-    //                 token_cache: TokenCache::new(credencials_ref(StaticToken::from("asd")))
-    //                     .unwrap(),
-    //             })
-    //             .unwrap(),
-    //         ),
-    //     ),
-    //     DBCredentials {
-    //         database: "/local".to_string(),
-    //         token_cache: TokenCache::new(credencials_ref(StaticToken::from("asd"))).unwrap(),
-    //     },
-    // )
-    // return channel;
-}
-
 #[derive(Clone)]
-pub(crate) struct InterceptedChannel_off {
+pub(crate) struct InterceptedChannel {
     inner: Channel,
     interceptor: MultiInterceptor,
 }
 
-impl InterceptedChannel_off {
+impl InterceptedChannel {
     pub fn new(channel: Channel, interceptor: MultiInterceptor) -> Self {
         return Self {
             inner: channel,
             interceptor,
         };
     }
-
-    pub fn add_interceptor<T: GrpcInterceptor + 'static>(&self, interceptor: T) -> Self {
-        let mut res = self.clone();
-        res.interceptor = res.interceptor.with_interceptor(interceptor);
-        res
-    }
 }
 
-impl tower::Service<InterceptorRequest> for InterceptedChannel_off {
+impl tower::Service<InterceptorRequest> for InterceptedChannel {
     type Response = ChannelResponse;
     type Error = InterceptorError;
     type Future = ChannelFuture;
@@ -129,7 +56,7 @@ impl tower::Service<InterceptorRequest> for InterceptedChannel_off {
     }
 }
 
-impl Debug for InterceptedChannel_off {
+impl Debug for InterceptedChannel {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,

@@ -1,8 +1,6 @@
 use crate::connection_pool::ConnectionPool;
 use crate::grpc_wrapper::raw_services::GrpcServiceForDiscovery;
-use crate::grpc_wrapper::runtime_interceptors::{
-    InterceptedChannel, InterceptedChannel_new, MultiInterceptor,
-};
+use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::YdbResult;
 use http::Uri;
@@ -49,7 +47,7 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
     ) -> YdbResult<T> {
         let channel = self.state.connections_pool.connection(uri).await?;
 
-        let intercepted_channel = InterceptedChannel_new(channel, self.state.interceptor.clone());
+        let intercepted_channel = InterceptedChannel::new(channel, self.state.interceptor.clone());
         Ok(new(intercepted_channel))
     }
 
