@@ -1,6 +1,7 @@
 use crate::channel_pool::ChannelProxy;
 use crate::client_common::{DBCredentials, TokenCache};
 use crate::credentials::credencials_ref;
+use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
 use crate::middlewares::AuthService;
 use crate::StaticToken;
 use http::Uri;
@@ -17,7 +18,8 @@ use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 pub(crate) type InterceptorResult<T> = std::result::Result<T, InterceptorError>;
 pub(crate) type InterceptorRequest = http::Request<tonic::body::BoxBody>;
 
-pub(crate) type InterceptedChannel = AuthService;
+pub(crate) type InterceptedChannel = InterceptedChannel_off;
+// pub(crate) type InterceptedChannel = AuthService;
 // pub(crate) type InterceptedChannel = Channel;
 
 // #[derive(Clone)]
@@ -49,13 +51,34 @@ pub(crate) fn InterceptedChannel_new(
     channel: Channel,
     _interceptor: MultiInterceptor,
 ) -> InterceptedChannel {
-    AuthService::new(
-        InterceptedChannel_off::new(channel, MultiInterceptor::new()),
-        DBCredentials {
-            database: "/local".to_string(),
-            token_cache: TokenCache::new(credencials_ref(StaticToken::from("asd"))).unwrap(),
-        },
+    InterceptedChannel_off::new(
+        channel,
+        MultiInterceptor::new().with_interceptor(
+            AuthGrpcInterceptor::new(DBCredentials {
+                database: "/local".to_string(),
+                token_cache: TokenCache::new(credencials_ref(StaticToken::from("asd"))).unwrap(),
+            })
+            .unwrap(),
+        ),
     )
+
+    // AuthService::new(
+    //     InterceptedChannel_off::new(
+    //         channel,
+    //         MultiInterceptor::new().with_interceptor(
+    //             AuthGrpcInterceptor::new(DBCredentials {
+    //                 database: "/local".to_string(),
+    //                 token_cache: TokenCache::new(credencials_ref(StaticToken::from("asd")))
+    //                     .unwrap(),
+    //             })
+    //             .unwrap(),
+    //         ),
+    //     ),
+    //     DBCredentials {
+    //         database: "/local".to_string(),
+    //         token_cache: TokenCache::new(credencials_ref(StaticToken::from("asd"))).unwrap(),
+    //     },
+    // )
     // return channel;
 }
 
