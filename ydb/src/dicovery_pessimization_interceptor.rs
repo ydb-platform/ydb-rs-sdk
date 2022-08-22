@@ -27,6 +27,10 @@ impl DiscoveryPessimizationInterceptor {
         }
     }
 
+    pub fn new_with_sender(sender: UnboundedSender<ChannelErrorInfo>) -> Self {
+        Self { sender }
+    }
+
     async fn node_pessimization_loop(
         discovery: Arc<Box<dyn Discovery>>,
         mut errors: UnboundedReceiver<ChannelErrorInfo>,

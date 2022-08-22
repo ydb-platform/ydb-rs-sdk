@@ -10,6 +10,7 @@ use http::Uri;
 use tokio::sync::mpsc;
 
 use crate::channel_pool::{ChannelErrorInfo, ChannelProxy, ChannelProxyErrorSender};
+use crate::dicovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
 use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
 use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
 use tonic::transport::{ClientTlsConfig, Endpoint};
@@ -51,10 +52,14 @@ fn create_client_on_channel<NewFuncT, ClientT>(
 where
     NewFuncT: FnOnce(InterceptedChannel) -> ClientT,
 {
-    let auth_ch = InterceptedChannel::new(
-        channel.ch,
-        MultiInterceptor::new().with_interceptor(AuthGrpcInterceptor::new(cred)?),
-    );
+    let mut interceptor = MultiInterceptor::new().with_interceptor(AuthGrpcInterceptor::new(cred)?);
+
+    if let Some(sender) = channel.error_sender {
+        interceptor =
+            interceptor.with_interceptor(DiscoveryPessimizationInterceptor::new_with_sender(sender))
+    };
+
+    let auth_ch = InterceptedChannel::new(channel.ch, interceptor);
     Ok(new_func(auth_ch))
 }
 

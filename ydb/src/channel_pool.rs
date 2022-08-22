@@ -3,9 +3,7 @@ use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::grpc::create_grpc_client_with_error_sender;
 use crate::grpc_wrapper::raw_services::Service;
-use crate::grpc_wrapper::runtime_interceptors::{
-    InterceptedChannel,
-};
+use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use async_trait::async_trait;
 use http::{Request, Uri};
@@ -19,7 +17,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tonic::body::BoxBody;
 use tonic::transport::Channel;
-use tracing::{trace};
+use tracing::trace;
 
 #[async_trait]
 pub(crate) trait ChannelPool<T>: Send + Sync
@@ -164,7 +162,7 @@ pub(crate) type ChannelProxyErrorSender =
 pub(crate) struct ChannelProxy {
     endpoint: Uri,
     pub(crate) ch: Channel,
-    error_sender: ChannelProxyErrorSender,
+    pub(crate) error_sender: ChannelProxyErrorSender,
 }
 
 type ChannelResponse = <Channel as tower::Service<http::Request<BoxBody>>>::Response;
