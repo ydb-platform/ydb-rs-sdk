@@ -20,10 +20,10 @@ impl AuthGrpcInterceptor {
             ))
         })?;
 
-        return Ok(AuthGrpcInterceptor {
+        Ok(AuthGrpcInterceptor {
             db_name,
             token_cache: cred.token_cache,
-        });
+        })
     }
 }
 

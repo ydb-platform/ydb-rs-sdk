@@ -12,7 +12,7 @@ pub(crate) enum RawError {
 
 impl RawError {
     pub fn custom<S: Into<String>>(text: S) -> Self {
-        return RawError::Custom(text.into());
+        RawError::Custom(text.into())
     }
 }
 

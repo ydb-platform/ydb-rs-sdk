@@ -1,8 +1,8 @@
-use crate::channel_pool::ChannelProxy;
-use crate::client_common::{DBCredentials, TokenCache};
-use crate::credentials::credencials_ref;
-use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
-use crate::StaticToken;
+
+
+
+
+
 use itertools::enumerate;
 use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};
@@ -23,10 +23,10 @@ pub(crate) struct InterceptedChannel {
 
 impl InterceptedChannel {
     pub fn new(channel: Channel, interceptor: MultiInterceptor) -> Self {
-        return Self {
+        Self {
             inner: channel,
             interceptor,
-        };
+        }
     }
 }
 
@@ -38,7 +38,7 @@ impl tower::Service<InterceptorRequest> for InterceptedChannel {
     fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
         self.inner
             .poll_ready(cx)
-            .map_err(|err| InterceptorError::Transport(err))
+            .map_err(InterceptorError::Transport)
     }
 
     fn call(&mut self, mut req: InterceptorRequest) -> Self::Future {
@@ -101,7 +101,7 @@ impl Future for ChannelFuture {
 
                 match poll_res {
                     Poll::Ready(res) => {
-                        let mut res = res.map_err(|err| InterceptorError::Transport(err)).into();
+                        let mut res = res.map_err(InterceptorError::Transport);
                         res = state
                             .interceptor
                             .on_feature_poll_ready(&mut state.metadata, res);
@@ -118,10 +118,10 @@ impl Future for ChannelFuture {
 pub(crate) trait GrpcInterceptor: Send + Sync {
     fn on_call(
         &self,
-        metadata: &mut RequestMetadata,
+        _metadata: &mut RequestMetadata,
         req: InterceptorRequest,
     ) -> InterceptorResult<InterceptorRequest> {
-        return Ok(req);
+        Ok(req)
     }
 
     fn on_feature_poll_ready(
@@ -129,7 +129,7 @@ pub(crate) trait GrpcInterceptor: Send + Sync {
         _metadata: &mut RequestMetadata,
         res: Result<ChannelResponse, InterceptorError>,
     ) -> Result<ChannelResponse, InterceptorError> {
-        return res;
+        res
     }
 }
 
@@ -183,7 +183,7 @@ impl GrpcInterceptor for MultiInterceptor {
             let item_meta = &mut metadata[index];
             res = interceptor.on_feature_poll_ready(item_meta, res)
         }
-        return res;
+        res
     }
 }
 

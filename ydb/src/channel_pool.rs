@@ -4,8 +4,7 @@ use crate::errors::YdbResult;
 use crate::grpc::create_grpc_client_with_error_sender;
 use crate::grpc_wrapper::raw_services::Service;
 use crate::grpc_wrapper::runtime_interceptors::{
-    GrpcInterceptor, InterceptedChannel, InterceptorError, InterceptorRequest, InterceptorResult,
-    RequestMetadata,
+    InterceptedChannel,
 };
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use async_trait::async_trait;
@@ -16,11 +15,11 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::SendError;
+
 use tokio::sync::mpsc::UnboundedReceiver;
 use tonic::body::BoxBody;
 use tonic::transport::Channel;
-use tracing::{instrument, trace};
+use tracing::{trace};
 
 #[async_trait]
 pub(crate) trait ChannelPool<T>: Send + Sync
