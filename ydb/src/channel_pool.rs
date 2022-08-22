@@ -4,7 +4,8 @@ use crate::errors::YdbResult;
 use crate::grpc::create_grpc_client_with_error_sender;
 use crate::grpc_wrapper::raw_services::Service;
 use crate::grpc_wrapper::runtime_interceptors::{
-    GrpcInterceptor, InterceptorError, InterceptorRequest, InterceptorResult, RequestMetadata,
+    GrpcInterceptor, InterceptedChannel, InterceptorError, InterceptorRequest, InterceptorResult,
+    RequestMetadata,
 };
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::middlewares::AuthService;
@@ -40,7 +41,7 @@ pub(crate) struct ChannelPoolImpl<T>
 where
     T: Clone,
 {
-    create_new_channel_fn: fn(AuthService) -> T,
+    create_new_channel_fn: fn(InterceptedChannel) -> T,
     credentials: DBCredentials,
     load_balancer: SharedLoadBalancer,
     service: Service,
@@ -68,7 +69,7 @@ where
         discovery: Arc<Box<dyn Discovery>>,
         credentials: DBCredentials,
         service: Service,
-        create_new_channel_fn: fn(AuthService) -> T,
+        create_new_channel_fn: fn(InterceptedChannel) -> T,
     ) -> Self {
         let load_balancer = SharedLoadBalancer::new(discovery.as_ref().as_ref());
         let (channel_error_sender, channel_error_receiver) = mpsc::unbounded_channel();
@@ -164,7 +165,7 @@ pub(crate) type ChannelProxyErrorSender =
 #[derive(Clone, Debug)]
 pub(crate) struct ChannelProxy {
     endpoint: Uri,
-    ch: Channel,
+    pub(crate) ch: Channel,
     error_sender: ChannelProxyErrorSender,
 }
 

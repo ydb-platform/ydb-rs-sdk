@@ -8,6 +8,7 @@ use crate::session_pool::SessionPool;
 use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 
 use crate::grpc_wrapper::raw_services::Service;
+use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use num::pow;
 use std::future::Future;
 use std::sync::Arc;
@@ -19,7 +20,7 @@ use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
 
-pub(crate) type TableServiceClientType = TableServiceClient<Middleware>;
+pub(crate) type TableServiceClientType = TableServiceClient<InterceptedChannel>;
 pub(crate) type TableServiceChannelPool = Arc<Box<dyn ChannelPool<TableServiceClientType>>>;
 
 type TransactionArgType = Box<dyn Transaction>; // real type may be changed

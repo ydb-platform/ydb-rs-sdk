@@ -5,20 +5,21 @@ use crate::channel_pool::ChannelProxy;
 use http::{HeaderValue, Request, Response};
 use tonic::body::BoxBody;
 
-use tonic::transport::Body;
+use tonic::transport::{Body, Channel};
 
 use tower::Service;
 
 use crate::client_common::DBCredentials;
+use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, InterceptedChannel_off};
 
 #[derive(Clone, Debug)]
 pub(crate) struct AuthService {
-    ch: ChannelProxy,
+    ch: InterceptedChannel_off,
     cred: DBCredentials,
 }
 
 impl AuthService {
-    pub(crate) fn new(ch: ChannelProxy, cred: DBCredentials) -> Self {
+    pub(crate) fn new(ch: InterceptedChannel_off, cred: DBCredentials) -> Self {
         AuthService { ch, cred }
     }
 }

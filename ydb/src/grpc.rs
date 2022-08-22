@@ -11,6 +11,9 @@ use http::Uri;
 use tokio::sync::mpsc;
 
 use crate::channel_pool::{ChannelErrorInfo, ChannelProxy, ChannelProxyErrorSender};
+use crate::grpc_wrapper::runtime_interceptors::{
+    InterceptedChannel, InterceptedChannel_new, MultiInterceptor,
+};
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tower::ServiceBuilder;
 use tracing::trace;
@@ -25,7 +28,7 @@ pub(crate) async fn create_grpc_client<T, CB>(
     new_func: CB,
 ) -> YdbResult<T>
 where
-    CB: FnOnce(AuthService) -> T,
+    CB: FnOnce(InterceptedChannel) -> T,
 {
     create_grpc_client_with_error_sender(uri, cred, None, new_func).await
 }
@@ -37,7 +40,7 @@ pub(crate) async fn create_grpc_client_with_error_sender<T, CB>(
     new_func: CB,
 ) -> YdbResult<T>
 where
-    CB: FnOnce(AuthService) -> T,
+    CB: FnOnce(InterceptedChannel) -> T,
 {
     let channel = create_grpc_channel(uri, error_sender).await?;
     create_client_on_channel(channel, cred, new_func)
@@ -49,12 +52,9 @@ fn create_client_on_channel<NewFuncT, ClientT>(
     new_func: NewFuncT,
 ) -> YdbResult<ClientT>
 where
-    NewFuncT: FnOnce(AuthService) -> ClientT,
+    NewFuncT: FnOnce(InterceptedChannel) -> ClientT,
 {
-    let auth_service_create = |ch| AuthService::new(ch, cred.clone());
-    let auth_ch = ServiceBuilder::new()
-        .layer_fn(auth_service_create)
-        .service(channel);
+    let auth_ch = InterceptedChannel_new(channel.ch, MultiInterceptor::new());
     Ok(new_func(auth_ch))
 }
 
