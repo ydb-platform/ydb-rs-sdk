@@ -9,6 +9,7 @@ pub(crate) struct AuthGrpcInterceptor {
     db_name: HeaderValue,
     token_cache: TokenCache,
 }
+const VERSION_LABEL: &str = concat!("ydb-rust-sdk/", env!("CARGO_PKG_VERSION"));
 
 impl AuthGrpcInterceptor {
     pub fn new(cred: DBCredentials) -> RawResult<AuthGrpcInterceptor> {
@@ -42,7 +43,7 @@ impl GrpcInterceptor for AuthGrpcInterceptor {
             .insert("x-ydb-database", self.db_name.clone());
         req.headers_mut().insert(
             "x-ydb-sdk-build-info",
-            HeaderValue::from_str("ydb-go-sdk/0.0.0").unwrap(),
+            HeaderValue::from_str(VERSION_LABEL).unwrap(),
         );
         req.headers_mut().insert("x-ydb-auth-ticket", token);
         Ok(req)
