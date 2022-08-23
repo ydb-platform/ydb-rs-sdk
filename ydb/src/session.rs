@@ -1,5 +1,5 @@
 use crate::client::TimeoutSettings;
-use crate::client_table::{TableServiceChannelPool, TableServiceClientType};
+use crate::client_table::TableServiceClientType;
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc::{grpc_read_operation_result, grpc_read_void_operation_result, operation_params};
 use crate::query::Query;
@@ -7,10 +7,16 @@ use crate::result::{QueryResult, StreamResult};
 use crate::trait_operation::Operation;
 use derivative::Derivative;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::Duration;
+
+use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::grpc_wrapper::raw_table_service::client::RawTableClient;
+use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
 use crate::trace_helpers::ensure_len_string;
 use tracing::{debug, trace};
 use ydb_grpc::ydb_proto::table::keep_alive_result::SessionStatus;
+use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 use ydb_grpc::ydb_proto::table::{
     execute_scan_query_request, CommitTransactionRequest, CommitTransactionResult,
     ExecuteDataQueryRequest, ExecuteQueryResult, ExecuteScanQueryRequest,
@@ -36,22 +42,22 @@ pub(crate) struct Session {
     on_drop_callbacks: Vec<Box<DropSessionCallback>>,
 
     #[derivative(Debug = "ignore")]
-    channel_pool: TableServiceChannelPool,
+    channel_pool: Box<dyn CreateTableClient>,
 
     timeouts: TimeoutSettings,
 }
 
 impl Session {
-    pub(crate) fn new(
+    pub(crate) fn new<CT: CreateTableClient + 'static>(
         id: String,
-        channel_pool: TableServiceChannelPool,
+        channel_pool: CT,
         timeouts: TimeoutSettings,
     ) -> Self {
         Self {
             id,
             can_pooled: true,
             on_drop_callbacks: Vec::new(),
-            channel_pool,
+            channel_pool: Box::new(channel_pool),
             timeouts,
         }
     }
@@ -208,7 +214,7 @@ impl Session {
     }
 
     async fn get_channel(&self) -> YdbResult<TableServiceClientType> {
-        self.channel_pool.create_channel().await
+        self.channel_pool.create_grpc_table_client().await
     }
 
     #[allow(dead_code)]
@@ -221,7 +227,7 @@ impl Session {
             id: self.id.clone(),
             can_pooled: self.can_pooled,
             on_drop_callbacks: Vec::new(),
-            channel_pool: self.channel_pool.clone(),
+            channel_pool: self.channel_pool.clone_box(),
             timeouts: self.timeouts,
         }
     }
@@ -233,5 +239,30 @@ impl Drop for Session {
         while let Some(on_drop) = self.on_drop_callbacks.pop() {
             on_drop(self)
         }
+    }
+}
+
+#[async_trait::async_trait]
+pub(crate) trait CreateTableClient: Send + Sync {
+    async fn create_grpc_table_client(&self) -> YdbResult<TableServiceClient<InterceptedChannel>>;
+    async fn create_table_client(&self, operation_timeout: Duration) -> YdbResult<RawTableClient>;
+    fn clone_box(&self) -> Box<dyn CreateTableClient>;
+}
+
+#[async_trait::async_trait]
+impl CreateTableClient for GrpcConnectionManager {
+    async fn create_grpc_table_client(&self) -> YdbResult<TableServiceClient<InterceptedChannel>> {
+        self.get_auth_service(TableServiceClient::<InterceptedChannel>::new)
+            .await
+    }
+
+    async fn create_table_client(&self, operation_timeout: Duration) -> YdbResult<RawTableClient> {
+        self.get_auth_service(RawTableClient::new)
+            .await
+            .map(|item| item.with_timeout(operation_timeout))
+    }
+
+    fn clone_box(&self) -> Box<dyn CreateTableClient> {
+        Box::new(self.clone())
     }
 }

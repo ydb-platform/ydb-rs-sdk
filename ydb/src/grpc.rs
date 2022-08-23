@@ -2,76 +2,16 @@ use std::sync::Arc;
 use std::time::Duration;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
-use crate::client_common::DBCredentials;
 use crate::errors::{YdbError, YdbIssue, YdbResult};
 use crate::trait_operation::Operation;
 use crate::{errors, grpc_wrapper};
 use http::Uri;
 
-
-use crate::channel_pool::{ChannelErrorInfo, ChannelErrorSender};
-use crate::dicovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
-use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
-use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tracing::trace;
 use ydb_grpc::ydb_proto::issue::IssueMessage;
 use ydb_grpc::ydb_proto::operations::operation_params::OperationMode;
 use ydb_grpc::ydb_proto::operations::OperationParams;
-
-#[tracing::instrument(skip(new_func, cred))]
-pub(crate) async fn create_grpc_client<T, CB>(
-    uri: Uri,
-    cred: DBCredentials,
-    new_func: CB,
-) -> YdbResult<T>
-where
-    CB: FnOnce(InterceptedChannel) -> T,
-{
-    create_grpc_client_with_error_sender(uri, cred, None, new_func).await
-}
-
-pub(crate) async fn create_grpc_client_with_error_sender<T, CB>(
-    uri: Uri,
-    cred: DBCredentials,
-    error_sender: ChannelErrorSender,
-    new_func: CB,
-) -> YdbResult<T>
-where
-    CB: FnOnce(InterceptedChannel) -> T,
-{
-    match create_grpc_channel(uri.clone()).await {
-        Ok(channel) => create_client_on_channel(channel, cred, error_sender, new_func),
-        Err(err) => {
-            if let Some(sender) = error_sender {
-                let _ = sender.send(ChannelErrorInfo {
-                    endpoint: uri.clone(),
-                });
-            };
-            Err(err)
-        }
-    }
-}
-
-fn create_client_on_channel<NewFuncT, ClientT>(
-    channel: Channel,
-    cred: DBCredentials,
-    error_sender: ChannelErrorSender,
-    new_func: NewFuncT,
-) -> YdbResult<ClientT>
-where
-    NewFuncT: FnOnce(InterceptedChannel) -> ClientT,
-{
-    let mut interceptor = MultiInterceptor::new().with_interceptor(AuthGrpcInterceptor::new(cred)?);
-
-    if let Some(sender) = error_sender {
-        interceptor =
-            interceptor.with_interceptor(DiscoveryPessimizationInterceptor::new_with_sender(sender))
-    };
-
-    let auth_ch = InterceptedChannel::new(channel, interceptor);
-    Ok(new_func(auth_ch))
-}
 
 #[tracing::instrument()]
 async fn create_grpc_channel(uri: Uri) -> YdbResult<Channel> {

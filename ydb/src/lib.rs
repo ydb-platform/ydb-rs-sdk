@@ -46,7 +46,6 @@
 //!
 extern crate core;
 
-mod channel_pool;
 pub(crate) mod client;
 mod client_builder;
 pub(crate) mod client_common;

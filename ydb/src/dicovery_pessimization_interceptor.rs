@@ -1,4 +1,3 @@
-use crate::channel_pool::ChannelErrorInfo;
 use crate::grpc_wrapper::runtime_interceptors::{
     ChannelResponse, GrpcInterceptor, InterceptorError, InterceptorRequest, InterceptorResult,
     RequestMetadata,
@@ -11,6 +10,10 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tracing::trace;
+
+pub(crate) struct ChannelErrorInfo {
+    pub(crate) endpoint: Uri,
+}
 
 pub(crate) struct DiscoveryPessimizationInterceptor {
     sender: UnboundedSender<ChannelErrorInfo>,
@@ -25,10 +28,6 @@ impl DiscoveryPessimizationInterceptor {
         Self {
             sender: channel_error_sender,
         }
-    }
-
-    pub fn new_with_sender(sender: UnboundedSender<ChannelErrorInfo>) -> Self {
-        Self { sender }
     }
 
     async fn node_pessimization_loop(
