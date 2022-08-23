@@ -43,7 +43,7 @@ impl GrpcInterceptor for AuthGrpcInterceptor {
             .insert("x-ydb-database", self.db_name.clone());
         req.headers_mut().insert(
             "x-ydb-sdk-build-info",
-            HeaderValue::from_str(VERSION_LABEL).unwrap(),
+            HeaderValue::from_static(VERSION_LABEL),
         );
         req.headers_mut().insert("x-ydb-auth-ticket", token);
         Ok(req)
