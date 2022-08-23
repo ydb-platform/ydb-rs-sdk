@@ -5,7 +5,7 @@ use crate::test_helpers::test_client_builder;
 use async_once::AsyncOnce;
 use lazy_static::lazy_static;
 use std::sync::Arc;
-use tokio::runtime::Handle;
+
 use tracing::trace;
 
 lazy_static! {
