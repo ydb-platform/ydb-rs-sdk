@@ -1,8 +1,6 @@
-use crate::client_common::DBCredentials;
 use crate::connection_pool::ConnectionPool;
-use crate::grpc_wrapper::auth::create_service_with_auth;
-use crate::grpc_wrapper::channel::ChannelWithAuth;
 use crate::grpc_wrapper::raw_services::GrpcServiceForDiscovery;
+use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::YdbResult;
 use http::Uri;
@@ -15,15 +13,19 @@ pub(crate) struct GrpcConnectionManagerGeneric<TBalancer: LoadBalancer> {
 }
 
 impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
-    pub(crate) fn new(balancer: TBalancer, cred: DBCredentials) -> Self {
+    pub(crate) fn new(
+        balancer: TBalancer,
+        database: String,
+        interceptor: MultiInterceptor,
+    ) -> Self {
         GrpcConnectionManagerGeneric {
-            state: State::new(balancer, cred),
+            state: State::new(balancer, database, interceptor),
         }
     }
 
     pub(crate) async fn get_auth_service<
         T: GrpcServiceForDiscovery,
-        F: FnOnce(ChannelWithAuth) -> T,
+        F: FnOnce(InterceptedChannel) -> T,
     >(
         &self,
         new: F,
@@ -37,19 +39,20 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
 
     pub(crate) async fn get_auth_service_to_node<
         T: GrpcServiceForDiscovery,
-        F: FnOnce(ChannelWithAuth) -> T,
+        F: FnOnce(InterceptedChannel) -> T,
     >(
         &self,
         new: F,
         uri: &Uri,
     ) -> YdbResult<T> {
         let channel = self.state.connections_pool.connection(uri).await?;
-        let auth_channel = create_service_with_auth(channel, self.state.cred.clone());
-        Ok(new(auth_channel))
+
+        let intercepted_channel = InterceptedChannel::new(channel, self.state.interceptor.clone());
+        Ok(new(intercepted_channel))
     }
 
     pub(crate) fn database(&self) -> &String {
-        &self.state.cred.database
+        &self.state.database
     }
 }
 
@@ -57,15 +60,17 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
 struct State<TBalancer: LoadBalancer> {
     balancer: TBalancer,
     connections_pool: ConnectionPool,
-    cred: DBCredentials,
+    interceptor: MultiInterceptor,
+    database: String,
 }
 
 impl<TBalancer: LoadBalancer> State<TBalancer> {
-    fn new(balancer: TBalancer, cred: DBCredentials) -> Self {
+    fn new(balancer: TBalancer, database: String, interceptor: MultiInterceptor) -> Self {
         State {
             balancer,
             connections_pool: ConnectionPool::new(),
-            cred,
+            interceptor,
+            database,
         }
     }
 }

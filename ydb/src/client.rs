@@ -4,7 +4,6 @@ use crate::client_table::TableClient;
 use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::load_balancer::SharedLoadBalancer;
-use crate::middlewares::AuthService;
 use crate::waiter::Waiter;
 
 use std::sync::Arc;
@@ -12,8 +11,6 @@ use std::time::Duration;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use tracing::trace;
-
-pub(crate) type Middleware = AuthService;
 
 /// YDB client
 pub struct Client {
@@ -27,10 +24,9 @@ pub struct Client {
 impl Client {
     pub(crate) fn new(
         credentials: DBCredentials,
-        discovery: Box<dyn Discovery>,
+        discovery: Arc<Box<dyn Discovery>>,
         connection_manager: GrpcConnectionManager,
     ) -> YdbResult<Self> {
-        let discovery = Arc::new(discovery);
         let discovery_ref = discovery.as_ref().as_ref();
 
         Ok(Client {

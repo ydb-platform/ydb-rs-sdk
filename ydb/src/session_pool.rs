@@ -14,12 +14,12 @@ use ydb_grpc::ydb_proto::table::{CreateSessionRequest, CreateSessionResult};
 const DEFAULT_SIZE: usize = 1000;
 
 #[async_trait]
-pub(crate) trait SessionClient: Send + Sync {
+pub(crate) trait SessionFabric: Send + Sync {
     async fn create_session(&self) -> YdbResult<Session>;
 }
 
 #[async_trait]
-impl SessionClient for TableServiceChannelPool {
+impl SessionFabric for TableServiceChannelPool {
     async fn create_session(&self) -> YdbResult<Session> {
         let mut channel = self.create_channel().await?;
         let session_res: CreateSessionResult = grpc_read_operation_result(
@@ -41,7 +41,7 @@ type IdleSessions = Arc<Mutex<VecDeque<IdleSessionItem>>>;
 #[derive(Clone)]
 pub(crate) struct SessionPool {
     active_sessions: Arc<Semaphore>,
-    create_session: Arc<Box<dyn SessionClient>>,
+    create_session: Arc<Box<dyn SessionFabric>>,
     idle_sessions: IdleSessions,
 }
 
@@ -51,7 +51,7 @@ struct IdleSessionItem {
 }
 
 impl SessionPool {
-    pub(crate) fn new(session_client: Box<dyn SessionClient>) -> Self {
+    pub(crate) fn new(session_client: Box<dyn SessionFabric>) -> Self {
         let pool = Self {
             active_sessions: Arc::new(Semaphore::new(DEFAULT_SIZE)),
             create_session: Arc::new(session_client),
@@ -105,7 +105,7 @@ impl SessionPool {
 }
 
 async fn sessions_pinger(
-    _session_client: Arc<Box<dyn SessionClient>>,
+    _session_client: Arc<Box<dyn SessionFabric>>,
     idle_sessions: Weak<Mutex<VecDeque<IdleSessionItem>>>,
     interval: std::time::Duration,
 ) {
@@ -154,7 +154,7 @@ async fn sessions_pinger(
 
 #[cfg(test)]
 mod test {
-    use super::SessionClient;
+    use super::SessionFabric;
     use crate::channel_pool::ChannelPool;
     use crate::client::TimeoutSettings;
     use crate::client_table::TableServiceClientType;
@@ -169,7 +169,7 @@ mod test {
     struct SessionClientMock {}
 
     #[async_trait]
-    impl SessionClient for SessionClientMock {
+    impl SessionFabric for SessionClientMock {
         async fn create_session(&self) -> YdbResult<Session> {
             return Ok(Session::new(
                 "asd".into(),

@@ -1,5 +1,3 @@
-use crate::grpc_wrapper::auth::ServiceWithAuth;
-
 use crate::YdbResult;
 use http::Uri;
 use std::time::Duration;
@@ -7,8 +5,6 @@ use std::time::Duration;
 use tonic::transport::Channel;
 use tonic::transport::{ClientTlsConfig, Endpoint};
 use tracing::trace;
-
-pub(crate) type ChannelWithAuth = ServiceWithAuth<Channel>;
 
 #[tracing::instrument]
 async fn create_grpc_channel(uri: Uri) -> YdbResult<Channel> {

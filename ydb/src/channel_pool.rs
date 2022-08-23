@@ -3,19 +3,20 @@ use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::grpc::create_grpc_client_with_error_sender;
 use crate::grpc_wrapper::raw_services::Service;
+use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
-use crate::middlewares::AuthService;
 use async_trait::async_trait;
-use http::{Request, Uri};
+use http::{Uri};
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
+
+
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
+
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::Receiver;
-use tonic::body::BoxBody;
-use tonic::transport::Channel;
+
+use tokio::sync::mpsc::UnboundedReceiver;
+
+
 use tracing::trace;
 
 #[async_trait]
@@ -36,12 +37,12 @@ pub(crate) struct ChannelPoolImpl<T>
 where
     T: Clone,
 {
-    create_new_channel_fn: fn(AuthService) -> T,
+    create_new_channel_fn: fn(InterceptedChannel) -> T,
     credentials: DBCredentials,
     load_balancer: SharedLoadBalancer,
     service: Service,
     shared_state: Arc<Mutex<SharedState<T>>>,
-    channel_error_sender: mpsc::Sender<ChannelErrorInfo>,
+    channel_error_sender: mpsc::UnboundedSender<ChannelErrorInfo>,
 }
 
 struct SharedState<T> {
@@ -64,10 +65,10 @@ where
         discovery: Arc<Box<dyn Discovery>>,
         credentials: DBCredentials,
         service: Service,
-        create_new_channel_fn: fn(AuthService) -> T,
+        create_new_channel_fn: fn(InterceptedChannel) -> T,
     ) -> Self {
         let load_balancer = SharedLoadBalancer::new(discovery.as_ref().as_ref());
-        let (channel_error_sender, channel_error_receiver) = mpsc::channel(1);
+        let (channel_error_sender, channel_error_receiver) = mpsc::unbounded_channel();
         tokio::spawn(async move {
             Self::node_pessimization_loop(discovery, channel_error_receiver).await;
         });
@@ -92,7 +93,7 @@ where
 
     async fn node_pessimization_loop(
         discovery: Arc<Box<dyn Discovery>>,
-        mut errors: Receiver<ChannelErrorInfo>,
+        mut errors: UnboundedReceiver<ChannelErrorInfo>,
     ) {
         loop {
             if let Some(err) = errors.recv().await {
@@ -135,65 +136,4 @@ where
     }
 }
 
-pub(crate) struct ChannelProxyFuture {
-    endpoint: Uri,
-    inner: <Channel as tower::Service<http::Request<BoxBody>>>::Future,
-    error_event: Option<tokio::sync::mpsc::Sender<ChannelErrorInfo>>,
-}
-
-impl Future for ChannelProxyFuture {
-    type Output = std::result::Result<ChannelResponse, ChannelError>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let res = Future::poll(Pin::new(&mut self.inner), cx);
-        if let (Poll::Ready(Err(_)), Some(sender)) = (&res, self.error_event.clone()) {
-            let endpoint = self.endpoint.clone();
-            tokio::spawn(async move {
-                // TODO: tokio spawn - is workaround.
-                // ideal way - async send message to sender and wait it here
-                sender.send(ChannelErrorInfo { endpoint }).await.ok();
-            });
-        }
-        res
-    }
-}
-
-pub(crate) type ChannelProxyErrorSender = Option<tokio::sync::mpsc::Sender<ChannelErrorInfo>>;
-
-#[derive(Clone, Debug)]
-pub(crate) struct ChannelProxy {
-    endpoint: Uri,
-    ch: Channel,
-    error_sender: ChannelProxyErrorSender,
-}
-
-type ChannelResponse = <Channel as tower::Service<http::Request<BoxBody>>>::Response;
-type ChannelError = <Channel as tower::Service<http::Request<BoxBody>>>::Error;
-
-impl ChannelProxy {
-    pub(crate) fn new(endpoint: Uri, ch: Channel, error_sender: ChannelProxyErrorSender) -> Self {
-        ChannelProxy {
-            endpoint,
-            ch,
-            error_sender,
-        }
-    }
-}
-
-impl tower::Service<http::Request<BoxBody>> for ChannelProxy {
-    type Response = ChannelResponse;
-    type Error = ChannelError;
-    type Future = ChannelProxyFuture;
-
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<std::result::Result<(), Self::Error>> {
-        tower::Service::poll_ready(&mut self.ch, cx)
-    }
-
-    fn call(&mut self, req: Request<BoxBody>) -> Self::Future {
-        ChannelProxyFuture {
-            endpoint: self.endpoint.clone(),
-            inner: tower::Service::call(&mut self.ch, req),
-            error_event: self.error_sender.clone(),
-        }
-    }
-}
+pub(crate) type ChannelErrorSender = Option<tokio::sync::mpsc::UnboundedSender<ChannelErrorInfo>>;
