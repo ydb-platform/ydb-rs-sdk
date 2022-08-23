@@ -1,13 +1,13 @@
-use crate::channel_pool::{ChannelPool, ChannelPoolImpl};
 use crate::client::TimeoutSettings;
-use crate::client_common::DBCredentials;
-use crate::discovery::Discovery;
+
+
 use crate::errors::*;
 use crate::session::Session;
 use crate::session_pool::SessionPool;
 use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 
-use crate::grpc_wrapper::raw_services::Service;
+use crate::grpc_connection_manager::GrpcConnectionManager;
+
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use num::pow;
 use std::future::Future;
@@ -21,7 +21,6 @@ const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
 
 pub(crate) type TableServiceClientType = TableServiceClient<InterceptedChannel>;
-pub(crate) type TableServiceChannelPool = Arc<Box<dyn ChannelPool<TableServiceClientType>>>;
 
 type TransactionArgType = Box<dyn Transaction>; // real type may be changed
 
@@ -120,21 +119,12 @@ pub struct TableClient {
 
 impl TableClient {
     pub(crate) fn new(
-        credencials: DBCredentials,
-        discovery: Arc<Box<dyn Discovery>>,
+        connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
     ) -> Self {
-        let channel_pool = ChannelPoolImpl::new::<TableServiceClientType>(
-            discovery,
-            credencials,
-            Service::Table,
-            TableServiceClient::new,
-        );
-        let channel_pool: TableServiceChannelPool = Arc::new(Box::new(channel_pool));
-
         Self {
             error_on_truncate: false,
-            session_pool: SessionPool::new(Box::new(channel_pool)),
+            session_pool: SessionPool::new(Box::new(connection_manager)),
             retrier: Arc::new(Box::new(TimeoutRetrier::default())),
             transaction_options: TransactionOptions::new(),
             idempotent_operation: false,

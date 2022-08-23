@@ -44,11 +44,7 @@ impl Client {
 
     /// Create instance of client for table service
     pub fn table_client(&self) -> TableClient {
-        TableClient::new(
-            self.credentials.clone(),
-            self.discovery.clone(),
-            self.timeouts,
-        )
+        TableClient::new(self.connection_manager.clone(), self.timeouts)
     }
 
     /// Create instance of client for directory service

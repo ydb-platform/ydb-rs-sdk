@@ -1,4 +1,6 @@
+use crate::client::TimeoutSettings;
 use crate::grpc_wrapper::raw_errors::RawResult;
+use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_table_service::create_session::{
     RawCreateSessionRequest, RawCreateSessionResult,
 };
@@ -13,11 +15,16 @@ pub(crate) struct RawTableClient {
 }
 
 impl RawTableClient {
-    pub fn new(service: InterceptedChannel, operation_timeout: std::time::Duration) -> Self {
+    pub fn new(service: InterceptedChannel) -> Self {
         Self {
             service: TableServiceClient::new(service),
-            operation_timeout,
+            operation_timeout: TimeoutSettings::default().operation_timeout,
         }
+    }
+
+    pub fn with_timeout(mut self, operation_timeout: std::time::Duration) -> Self {
+        self.operation_timeout = operation_timeout;
+        self
     }
 
     pub async fn create_session(&mut self) -> RawResult<RawCreateSessionResult> {
@@ -30,5 +37,11 @@ impl RawTableClient {
             req => ydb_grpc::ydb_proto::table::CreateSessionRequest,
             ydb_grpc::ydb_proto::table::CreateSessionResult => RawCreateSessionResult
         );
+    }
+}
+
+impl GrpcServiceForDiscovery for RawTableClient {
+    fn get_grpc_discovery_service() -> Service {
+        Service::Table
     }
 }
