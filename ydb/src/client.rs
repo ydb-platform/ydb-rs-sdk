@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use tracing::trace;
 
 /// YDB client
@@ -79,6 +80,12 @@ const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(1);
 #[derive(Copy, Clone, Debug)]
 pub struct TimeoutSettings {
     pub operation_timeout: Duration,
+}
+
+impl TimeoutSettings {
+    pub(crate) fn operation_params(&self) -> RawOperationParams {
+        RawOperationParams::new_with_timeouts(self.operation_timeout, self.operation_timeout)
+    }
 }
 
 impl Default for TimeoutSettings {

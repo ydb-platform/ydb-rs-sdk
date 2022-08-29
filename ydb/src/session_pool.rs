@@ -1,7 +1,7 @@
 use crate::client::TimeoutSettings;
 use crate::errors::*;
-use crate::grpc::grpc_read_operation_result;
 use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::grpc_wrapper::raw_table_service::client::RawTableClient;
 use crate::session::Session;
 use async_trait::async_trait;
 use std::collections::vec_deque::VecDeque;
@@ -9,31 +9,24 @@ use std::ops::{Add, Sub};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Semaphore;
 use tracing::trace;
-use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
-use ydb_grpc::ydb_proto::table::{CreateSessionRequest, CreateSessionResult};
 
 const DEFAULT_SIZE: usize = 1000;
 
 #[async_trait]
 pub(crate) trait SessionFabric: Send + Sync {
-    async fn create_session(&self) -> YdbResult<Session>;
+    async fn create_session(&self, timeouts: TimeoutSettings) -> YdbResult<Session>;
     fn clone_box(&self) -> Box<dyn SessionFabric>;
 }
 
 #[async_trait]
 impl SessionFabric for GrpcConnectionManager {
-    async fn create_session(&self) -> YdbResult<Session> {
-        let mut channel = self.get_auth_service(TableServiceClient::new).await?;
-        let session_res: CreateSessionResult = grpc_read_operation_result(
-            channel
-                .create_session(CreateSessionRequest::default())
-                .await?,
-        )?;
-        let session = Session::new(
-            session_res.session_id,
-            self.clone(),
-            TimeoutSettings::default(),
-        );
+    async fn create_session(&self, timeouts: TimeoutSettings) -> YdbResult<Session> {
+        let mut table = self
+            .get_auth_service(RawTableClient::new)
+            .await?
+            .with_timeout(timeouts);
+        let session_res = table.create_session().await?;
+        let session = Session::new(session_res.id, self.clone(), TimeoutSettings::default());
         return Ok(session);
     }
     fn clone_box(&self) -> Box<dyn SessionFabric> {
@@ -48,19 +41,16 @@ pub(crate) struct SessionPool {
     active_sessions: Arc<Semaphore>,
     create_session: Arc<Box<dyn SessionFabric>>,
     idle_sessions: IdleSessions,
-}
-
-struct IdleSessionItem {
-    idle_since: tokio::time::Instant,
-    session: Session,
+    timeouts: TimeoutSettings,
 }
 
 impl SessionPool {
-    pub(crate) fn new(session_client: Box<dyn SessionFabric>) -> Self {
+    pub(crate) fn new(session_client: Box<dyn SessionFabric>, timeouts: TimeoutSettings) -> Self {
         let pool = Self {
             active_sessions: Arc::new(Semaphore::new(DEFAULT_SIZE)),
             create_session: Arc::new(session_client),
             idle_sessions: Arc::new(Mutex::new(VecDeque::new())),
+            timeouts,
         };
 
         tokio::spawn(sessions_pinger(
@@ -89,7 +79,7 @@ impl SessionPool {
                 trace!("got session from pool: {}", &idle_item.session.id);
                 idle_item.session
             } else {
-                let session = self.create_session.create_session().await?;
+                let session = self.create_session.create_session(self.timeouts).await?;
                 trace!("create session: {}", &session.id);
                 session
             }
@@ -107,6 +97,11 @@ impl SessionPool {
         session = session.with_timeouts(TimeoutSettings::default());
         Ok(session)
     }
+}
+
+struct IdleSessionItem {
+    idle_since: tokio::time::Instant,
+    session: Session,
 }
 
 async fn sessions_pinger(
@@ -161,14 +156,14 @@ async fn sessions_pinger(
 mod test {
     use super::SessionFabric;
     use crate::client::TimeoutSettings;
-    
+
     use crate::errors::{YdbError, YdbResult};
     use crate::grpc_wrapper::raw_table_service::client::RawTableClient;
     use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
     use crate::session::{CreateTableClient, Session};
     use crate::session_pool::SessionPool;
     use async_trait::async_trait;
-    
+
     use std::time::Duration;
     use tokio::sync::oneshot;
     use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
@@ -177,11 +172,11 @@ mod test {
 
     #[async_trait]
     impl SessionFabric for SessionClientMock {
-        async fn create_session(&self) -> YdbResult<Session> {
+        async fn create_session(&self, timeouts: TimeoutSettings) -> YdbResult<Session> {
             return Ok(Session::new(
                 "asd".into(),
                 TableChannelPoolMock {},
-                TimeoutSettings::default(),
+                timeouts,
             ));
         }
 
@@ -202,7 +197,7 @@ mod test {
 
         async fn create_table_client(
             &self,
-            _operation_timeout: Duration,
+            _timeouts: TimeoutSettings,
         ) -> YdbResult<RawTableClient> {
             return Err(YdbError::Custom("test".into()));
         }
@@ -214,7 +209,8 @@ mod test {
 
     #[tokio::test]
     async fn max_active_session() -> YdbResult<()> {
-        let pool = SessionPool::new(Box::new(SessionClientMock {})).with_max_active_sessions(1);
+        let pool = SessionPool::new(Box::new(SessionClientMock {}), TimeoutSettings::default())
+            .with_max_active_sessions(1);
         let first_session = pool.session().await?;
 
         let (thread_started_sender, thread_started_receiver) = oneshot::channel();

@@ -221,10 +221,10 @@ impl YdbIssue {
 }
 
 impl YdbError {
-    #[allow(dead_code)]
     pub(crate) fn from_str<T: Into<String>>(s: T) -> YdbError {
         YdbError::Custom(s.into())
     }
+
     pub(crate) fn need_retry(&self) -> NeedRetry {
         match self {
             Self::Convert(_) => NeedRetry::False,

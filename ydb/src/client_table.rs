@@ -1,6 +1,5 @@
 use crate::client::TimeoutSettings;
 
-
 use crate::errors::*;
 use crate::session::Session;
 use crate::session_pool::SessionPool;
@@ -124,7 +123,7 @@ impl TableClient {
     ) -> Self {
         Self {
             error_on_truncate: false,
-            session_pool: SessionPool::new(Box::new(connection_manager)),
+            session_pool: SessionPool::new(Box::new(connection_manager), timeouts),
             retrier: Arc::new(Box::new(TimeoutRetrier::default())),
             transaction_options: TransactionOptions::new(),
             idempotent_operation: false,
