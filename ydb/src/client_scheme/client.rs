@@ -5,7 +5,6 @@ use crate::grpc_wrapper::raw_scheme_client::client::{
     RawMakeDirectoryRequest, RawRemoveDirectoryRequest,
 };
 use crate::grpc_wrapper::raw_scheme_client::list_directory_types::RawListDirectoryRequest;
-use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::{grpc_wrapper, YdbResult};
 
 pub struct SchemeClient {
@@ -26,7 +25,7 @@ impl SchemeClient {
 
     pub async fn make_directory(&mut self, path: String) -> YdbResult<()> {
         let req = RawMakeDirectoryRequest {
-            operation_params: RawOperationParams::new_with_timeout(self.timeouts.operation_timeout),
+            operation_params: self.timeouts.operation_params(),
             path,
         };
         let mut service = self.connection().await?;
@@ -36,7 +35,7 @@ impl SchemeClient {
 
     pub async fn list_directory(&mut self, path: String) -> YdbResult<Vec<SchemeEntry>> {
         let req = RawListDirectoryRequest {
-            operation_params: RawOperationParams::new_with_timeout(self.timeouts.operation_timeout),
+            operation_params: self.timeouts.operation_params(),
             path,
         };
 
@@ -48,7 +47,7 @@ impl SchemeClient {
 
     pub async fn remove_directory(&mut self, path: String) -> YdbResult<()> {
         let req = RawRemoveDirectoryRequest {
-            operation_params: RawOperationParams::new_with_timeout(self.timeouts.operation_timeout),
+            operation_params: self.timeouts.operation_params(),
             path,
         };
         let mut service = self.connection().await?;
@@ -59,8 +58,7 @@ impl SchemeClient {
     async fn connection(
         &self,
     ) -> YdbResult<grpc_wrapper::raw_scheme_client::client::RawSchemeClient> {
-        self
-            .connection_manager
+        self.connection_manager
             .get_auth_service(grpc_wrapper::raw_scheme_client::client::RawSchemeClient::new)
             .await
     }

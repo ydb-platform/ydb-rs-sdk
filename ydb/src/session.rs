@@ -9,17 +9,18 @@ use derivative::Derivative;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::grpc_wrapper::raw_table_service::client::RawTableClient;
+use crate::grpc_wrapper::raw_table_service::client::{
+    RawKeepAliveRequest, RawTableClient, SessionStatus,
+};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
 use crate::trace_helpers::ensure_len_string;
 use tracing::{debug, trace};
-use ydb_grpc::ydb_proto::table::keep_alive_result::SessionStatus;
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 use ydb_grpc::ydb_proto::table::{
     execute_scan_query_request, CommitTransactionRequest, CommitTransactionResult,
     ExecuteDataQueryRequest, ExecuteQueryResult, ExecuteScanQueryRequest,
-    ExecuteSchemeQueryRequest, KeepAliveRequest, KeepAliveResult, RollbackTransactionRequest,
+    ExecuteSchemeQueryRequest, RollbackTransactionRequest,
 };
 
 static REQUEST_NUMBER: AtomicI64 = AtomicI64::new(0);
@@ -179,32 +180,22 @@ impl Session {
     }
 
     pub(crate) async fn keepalive(&mut self) -> YdbResult<()> {
-        let mut channel = self.get_channel().await?;
-        let res: YdbResult<KeepAliveResult> = grpc_read_operation_result(
-            channel
-                .keep_alive(KeepAliveRequest {
-                    session_id: self.id.clone(),
-                    operation_params: operation_params(self.timeouts.operation_timeout),
-                })
-                .await?,
-        );
+        let mut table = self.get_table_client().await?;
+        let res = table
+            .keep_alive(RawKeepAliveRequest {
+                operation_params: self.timeouts.operation_params(),
+                session_id: self.id.clone(),
+            })
+            .await?;
 
-        let keepalive_res = match res {
-            Err(err) => {
-                self.handle_error(&err);
-                return Err(err);
-            }
-            Ok(res) => res,
-        };
-
-        if SessionStatus::from_i32(keepalive_res.session_status) == Some(SessionStatus::Ready) {
-            return Ok(());
+        if let SessionStatus::Ready = res.session_status {
+            Ok(())
+        } else {
+            Err(YdbError::from_str(format!(
+                "bad status while session ping: {:?}",
+                res
+            )))
         }
-
-        Err(YdbError::Custom(format!(
-            "bad status while session ping: {:?}",
-            keepalive_res
-        )))
     }
 
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {
@@ -214,6 +205,10 @@ impl Session {
 
     async fn get_channel(&self) -> YdbResult<TableServiceClientType> {
         self.channel_pool.create_grpc_table_client().await
+    }
+
+    async fn get_table_client(&self) -> YdbResult<RawTableClient> {
+        self.channel_pool.create_table_client(self.timeouts).await
     }
 
     #[allow(dead_code)]
