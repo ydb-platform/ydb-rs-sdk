@@ -1,7 +1,7 @@
 use crate::client::TimeoutSettings;
 use crate::errors::*;
-use crate::grpc::grpc_read_operation_result;
 use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::grpc_wrapper::raw_table_service::client::RawTableClient;
 use crate::session::Session;
 use async_trait::async_trait;
 use std::collections::vec_deque::VecDeque;
@@ -9,8 +9,6 @@ use std::ops::{Add, Sub};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Semaphore;
 use tracing::trace;
-use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
-use ydb_grpc::ydb_proto::table::{CreateSessionRequest, CreateSessionResult};
 
 const DEFAULT_SIZE: usize = 1000;
 
@@ -23,17 +21,9 @@ pub(crate) trait SessionFabric: Send + Sync {
 #[async_trait]
 impl SessionFabric for GrpcConnectionManager {
     async fn create_session(&self) -> YdbResult<Session> {
-        let mut channel = self.get_auth_service(TableServiceClient::new).await?;
-        let session_res: CreateSessionResult = grpc_read_operation_result(
-            channel
-                .create_session(CreateSessionRequest::default())
-                .await?,
-        )?;
-        let session = Session::new(
-            session_res.session_id,
-            self.clone(),
-            TimeoutSettings::default(),
-        );
+        let mut table = self.get_auth_service(RawTableClient::new).await?;
+        let session_res = table.create_session().await?;
+        let session = Session::new(session_res.id, self.clone(), TimeoutSettings::default());
         return Ok(session);
     }
     fn clone_box(&self) -> Box<dyn SessionFabric> {
@@ -161,14 +151,14 @@ async fn sessions_pinger(
 mod test {
     use super::SessionFabric;
     use crate::client::TimeoutSettings;
-    
+
     use crate::errors::{YdbError, YdbResult};
     use crate::grpc_wrapper::raw_table_service::client::RawTableClient;
     use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
     use crate::session::{CreateTableClient, Session};
     use crate::session_pool::SessionPool;
     use async_trait::async_trait;
-    
+
     use std::time::Duration;
     use tokio::sync::oneshot;
     use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
