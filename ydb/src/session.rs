@@ -7,7 +7,6 @@ use crate::result::{QueryResult, StreamResult};
 use crate::trait_operation::Operation;
 use derivative::Derivative;
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::time::Duration;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_table_service::client::RawTableClient;
@@ -245,7 +244,7 @@ impl Drop for Session {
 #[async_trait::async_trait]
 pub(crate) trait CreateTableClient: Send + Sync {
     async fn create_grpc_table_client(&self) -> YdbResult<TableServiceClient<InterceptedChannel>>;
-    async fn create_table_client(&self, operation_timeout: Duration) -> YdbResult<RawTableClient>;
+    async fn create_table_client(&self, timeouts: TimeoutSettings) -> YdbResult<RawTableClient>;
     fn clone_box(&self) -> Box<dyn CreateTableClient>;
 }
 
@@ -256,10 +255,10 @@ impl CreateTableClient for GrpcConnectionManager {
             .await
     }
 
-    async fn create_table_client(&self, operation_timeout: Duration) -> YdbResult<RawTableClient> {
+    async fn create_table_client(&self, timeouts: TimeoutSettings) -> YdbResult<RawTableClient> {
         self.get_auth_service(RawTableClient::new)
             .await
-            .map(|item| item.with_timeout(operation_timeout))
+            .map(|item| item.with_timeout(timeouts))
     }
 
     fn clone_box(&self) -> Box<dyn CreateTableClient> {
