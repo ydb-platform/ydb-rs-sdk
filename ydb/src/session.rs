@@ -78,7 +78,7 @@ impl Session {
     }
 
     fn handle_raw_result<T>(&mut self, res: RawResult<T>) -> YdbResult<T> {
-        let res = res.map_err(|err| YdbError::from(err));
+        let res = res.map_err(YdbError::from);
         if let Err(err) = &res {
             self.handle_error(err);
         }
@@ -104,7 +104,7 @@ impl Session {
                 session_id: self.id.clone(),
                 tx_id,
                 operation_params: self.timeouts.operation_params(),
-                collect_stats: DEFAULT_COLLECT_STAT_MODE.into(),
+                collect_stats: DEFAULT_COLLECT_STAT_MODE,
             })
             .await;
         self.handle_raw_result(res)?;
