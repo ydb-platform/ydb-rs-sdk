@@ -10,20 +10,24 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_table_service::client::{
-    RawKeepAliveRequest, RawTableClient, SessionStatus,
+    CollectStatsMode, RawTableClient, SessionStatus,
 };
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
+use crate::grpc_wrapper::raw_errors::RawResult;
+use crate::grpc_wrapper::raw_table_service::commit_transaction::RawCommitTransactionRequest;
+use crate::grpc_wrapper::raw_table_service::keepalive::RawKeepAliveRequest;
+use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::trace_helpers::ensure_len_string;
 use tracing::{debug, trace};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 use ydb_grpc::ydb_proto::table::{
-    execute_scan_query_request, CommitTransactionRequest, CommitTransactionResult,
-    ExecuteDataQueryRequest, ExecuteQueryResult, ExecuteScanQueryRequest,
-    ExecuteSchemeQueryRequest, RollbackTransactionRequest,
+    execute_scan_query_request, ExecuteDataQueryRequest, ExecuteQueryResult,
+    ExecuteScanQueryRequest, ExecuteSchemeQueryRequest,
 };
 
 static REQUEST_NUMBER: AtomicI64 = AtomicI64::new(0);
+static DEFAULT_COLLECT_STAT_MODE: CollectStatsMode = CollectStatsMode::None;
 
 fn req_number() -> i64 {
     REQUEST_NUMBER.fetch_add(1, Ordering::Relaxed)
@@ -73,6 +77,14 @@ impl Session {
         }
     }
 
+    fn handle_raw_result<T>(&mut self, res: RawResult<T>) -> YdbResult<T> {
+        let res = res.map_err(YdbError::from);
+        if let Err(err) = &res {
+            self.handle_error(err);
+        }
+        res
+    }
+
     fn handle_operation_result<TOp, T>(&mut self, response: tonic::Response<TOp>) -> YdbResult<T>
     where
         TOp: Operation,
@@ -86,18 +98,16 @@ impl Session {
     }
 
     pub(crate) async fn commit_transaction(&mut self, tx_id: String) -> YdbResult<()> {
-        let mut channel = self.get_channel().await?;
-
-        // todo: retry commit always idempotent
-        let response = channel
-            .commit_transaction(CommitTransactionRequest {
+        let mut table = self.get_table_client().await?;
+        let res = table
+            .commit_transaction(RawCommitTransactionRequest {
                 session_id: self.id.clone(),
                 tx_id,
-                operation_params: operation_params(self.timeouts.operation_timeout),
-                ..CommitTransactionRequest::default()
+                operation_params: self.timeouts.operation_params(),
+                collect_stats: DEFAULT_COLLECT_STAT_MODE,
             })
-            .await?;
-        let _: CommitTransactionResult = self.handle_operation_result(response)?;
+            .await;
+        self.handle_raw_result(res)?;
         Ok(())
     }
 
@@ -159,24 +169,16 @@ impl Session {
     }
 
     pub(crate) async fn rollback_transaction(&mut self, tx_id: String) -> YdbResult<()> {
-        let mut channel = self.get_channel().await?;
-
-        // todo: retry commit always idempotent
-        let response = channel
-            .rollback_transaction(RollbackTransactionRequest {
+        let mut table = self.get_table_client().await?;
+        let res = table
+            .rollback_transaction(RawRollbackTransactionRequest {
                 session_id: self.id.clone(),
                 tx_id,
-                operation_params: operation_params(self.timeouts.operation_timeout),
+                operation_params: self.timeouts.operation_params(),
             })
-            .await?;
-        let res = grpc_read_void_operation_result(response);
-        match res {
-            Ok(()) => Ok(()),
-            Err(err) => {
-                self.handle_error(&err);
-                Err(err)
-            }
-        }
+            .await;
+
+        self.handle_raw_result(res)
     }
 
     pub(crate) async fn keepalive(&mut self) -> YdbResult<()> {
@@ -186,15 +188,16 @@ impl Session {
                 operation_params: self.timeouts.operation_params(),
                 session_id: self.id.clone(),
             })
-            .await?;
+            .await;
+
+        let res = self.handle_raw_result(res)?;
 
         if let SessionStatus::Ready = res.session_status {
             Ok(())
         } else {
-            Err(YdbError::from_str(format!(
-                "bad status while session ping: {:?}",
-                res
-            )))
+            let err = YdbError::from_str(format!("bad status while session ping: {:?}", res));
+            self.handle_error(&err);
+            Err(err)
         }
     }
 
@@ -203,6 +206,7 @@ impl Session {
         self
     }
 
+    // deprecated, use get_table_client instead
     async fn get_channel(&self) -> YdbResult<TableServiceClientType> {
         self.channel_pool.create_grpc_table_client().await
     }

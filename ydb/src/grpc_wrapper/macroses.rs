@@ -9,7 +9,7 @@ macro_rules! request_without_result {
         );
 
         let response = $self.service.$method(req).await?;
-        return grpc_read_void_operation_result(response);
+        return crate::grpc_wrapper::grpc::grpc_read_void_operation_result(response);
     };
 }
 
@@ -19,8 +19,6 @@ macro_rules! request_with_result {
         $RawRequest: ident => $GrpcRequestType: ty,
         $GrcpResultType: ty => $RawResultType: ty
     ) => {
-        use crate::grpc_wrapper::grpc::grpc_read_operation_result;
-
         let req = <$GrpcRequestType>::from($RawRequest);
 
         trace!(
@@ -30,7 +28,8 @@ macro_rules! request_with_result {
         );
 
         let response = $self.service.$method(req).await?;
-        let result: $GrcpResultType = grpc_read_operation_result(response)?;
+        let result: $GrcpResultType =
+            crate::grpc_wrapper::grpc::grpc_read_operation_result(response)?;
 
         trace!(
             "{} result: {}",
