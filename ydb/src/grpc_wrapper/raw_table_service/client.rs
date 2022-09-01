@@ -4,6 +4,7 @@ use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_table_service::create_session::{
     RawCreateSessionRequest, RawCreateSessionResult,
 };
+use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use tracing::trace;
@@ -45,6 +46,16 @@ impl RawTableClient {
             self.service.keep_alive,
             req => ydb_grpc::ydb_proto::table::KeepAliveRequest,
             ydb_grpc::ydb_proto::table::KeepAliveResult => RawKeepAliveResult
+        );
+    }
+
+    pub async fn rollback_transaction(
+        &mut self,
+        req: RawRollbackTransactionRequest,
+    ) -> RawResult<()> {
+        request_without_result!(
+            self.service.rollback_transaction,
+            req => ydb_grpc::ydb_proto::table::RollbackTransactionRequest
         );
     }
 }

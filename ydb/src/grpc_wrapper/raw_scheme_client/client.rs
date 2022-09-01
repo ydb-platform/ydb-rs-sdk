@@ -1,4 +1,3 @@
-use crate::grpc_wrapper::grpc::grpc_read_void_operation_result;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_scheme_client::list_directory_types::{
     RawListDirectoryRequest, RawListDirectoryResult,

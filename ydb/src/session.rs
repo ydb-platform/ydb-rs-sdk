@@ -14,13 +14,14 @@ use crate::grpc_wrapper::raw_table_service::client::{
 };
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
+use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::trace_helpers::ensure_len_string;
 use tracing::{debug, trace};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 use ydb_grpc::ydb_proto::table::{
     execute_scan_query_request, CommitTransactionRequest, CommitTransactionResult,
     ExecuteDataQueryRequest, ExecuteQueryResult, ExecuteScanQueryRequest,
-    ExecuteSchemeQueryRequest, RollbackTransactionRequest,
+    ExecuteSchemeQueryRequest,
 };
 
 static REQUEST_NUMBER: AtomicI64 = AtomicI64::new(0);
@@ -159,24 +160,15 @@ impl Session {
     }
 
     pub(crate) async fn rollback_transaction(&mut self, tx_id: String) -> YdbResult<()> {
-        let mut channel = self.get_channel().await?;
-
-        // todo: retry commit always idempotent
-        let response = channel
-            .rollback_transaction(RollbackTransactionRequest {
+        let mut table = self.get_table_client().await?;
+        table
+            .rollback_transaction(RawRollbackTransactionRequest {
                 session_id: self.id.clone(),
                 tx_id,
-                operation_params: operation_params(self.timeouts.operation_timeout),
+                operation_params: self.timeouts.operation_params(),
             })
             .await?;
-        let res = grpc_read_void_operation_result(response);
-        match res {
-            Ok(()) => Ok(()),
-            Err(err) => {
-                self.handle_error(&err);
-                Err(err)
-            }
-        }
+        Ok(())
     }
 
     pub(crate) async fn keepalive(&mut self) -> YdbResult<()> {
@@ -203,6 +195,7 @@ impl Session {
         self
     }
 
+    // deprecated, use get_table_client instead
     async fn get_channel(&self) -> YdbResult<TableServiceClientType> {
         self.channel_pool.create_grpc_table_client().await
     }
