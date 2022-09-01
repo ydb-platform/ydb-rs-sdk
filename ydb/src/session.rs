@@ -9,11 +9,10 @@ use derivative::Derivative;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::grpc_wrapper::raw_table_service::client::{
-    RawKeepAliveRequest, RawTableClient, SessionStatus,
-};
+use crate::grpc_wrapper::raw_table_service::client::{RawTableClient, SessionStatus};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
+use crate::grpc_wrapper::raw_table_service::keepalive::RawKeepAliveRequest;
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::trace_helpers::ensure_len_string;
 use tracing::{debug, trace};

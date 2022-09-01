@@ -1,14 +1,13 @@
 use crate::client::TimeoutSettings;
-use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
+use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_table_service::create_session::{
     RawCreateSessionRequest, RawCreateSessionResult,
 };
+use crate::grpc_wrapper::raw_table_service::keepalive::{RawKeepAliveRequest, RawKeepAliveResult};
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
-use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use tracing::trace;
-use ydb_grpc::ydb_proto::operations::OperationParams;
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 
 pub(crate) struct RawTableClient {
@@ -63,35 +62,6 @@ impl RawTableClient {
 impl GrpcServiceForDiscovery for RawTableClient {
     fn get_grpc_discovery_service() -> Service {
         Service::Table
-    }
-}
-
-pub(crate) struct RawKeepAliveRequest {
-    pub operation_params: RawOperationParams,
-    pub session_id: String,
-}
-
-impl From<RawKeepAliveRequest> for ydb_grpc::ydb_proto::table::KeepAliveRequest {
-    fn from(r: RawKeepAliveRequest) -> Self {
-        Self {
-            session_id: r.session_id,
-            operation_params: Some(OperationParams::from(r.operation_params)),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct RawKeepAliveResult {
-    pub session_status: SessionStatus,
-}
-
-impl TryFrom<ydb_grpc::ydb_proto::table::KeepAliveResult> for RawKeepAliveResult {
-    type Error = RawError;
-
-    fn try_from(value: ydb_grpc::ydb_proto::table::KeepAliveResult) -> Result<Self, Self::Error> {
-        Ok(Self {
-            session_status: SessionStatus::from(value.session_status),
-        })
     }
 }
 
