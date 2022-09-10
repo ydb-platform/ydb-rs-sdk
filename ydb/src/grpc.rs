@@ -1,10 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
-use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::errors::{YdbError, YdbIssue, YdbResult};
+use crate::grpc_wrapper;
 use crate::trait_operation::Operation;
-use crate::{errors, grpc_wrapper};
 use http::Uri;
 
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
@@ -49,28 +48,8 @@ where
     Ok(grpc_wrapper::grpc::grpc_read_operation_result(resp)?)
 }
 
-pub(crate) fn grpc_read_void_operation_result<TOp>(
-    resp: tonic::Response<TOp>,
-) -> errors::YdbResult<()>
-where
-    TOp: Operation,
-{
-    let resp_inner = resp.into_inner();
-    let op = resp_inner
-        .operation()
-        .ok_or_else(|| YdbError::Custom("no operation object in result".into()))?;
-    if op.status() != StatusCode::Success {
-        return Err(create_operation_error(op));
-    }
-    Ok(())
-}
-
 pub(crate) fn proto_issues_to_ydb_issues(proto_issues: Vec<IssueMessage>) -> Vec<YdbIssue> {
     grpc_wrapper::grpc::proto_issues_to_ydb_issues(proto_issues)
-}
-
-pub(crate) fn create_operation_error(op: ydb_grpc::ydb_proto::operations::Operation) -> YdbError {
-    grpc_wrapper::grpc::create_operation_error(op).into()
 }
 
 pub(crate) fn operation_params(timeout: Duration) -> Option<OperationParams> {

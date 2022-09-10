@@ -1,7 +1,7 @@
 use crate::client::TimeoutSettings;
 use crate::client_table::TableServiceClientType;
 use crate::errors::{YdbError, YdbResult};
-use crate::grpc::{grpc_read_operation_result, grpc_read_void_operation_result, operation_params};
+use crate::grpc::{grpc_read_operation_result, operation_params};
 use crate::query::Query;
 use crate::result::{QueryResult, StreamResult};
 use crate::trait_operation::Operation;
@@ -16,6 +16,7 @@ use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_table_service::commit_transaction::RawCommitTransactionRequest;
+use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
 use crate::grpc_wrapper::raw_table_service::keepalive::RawKeepAliveRequest;
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::trace_helpers::ensure_len_string;
@@ -23,7 +24,7 @@ use tracing::{debug, trace};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 use ydb_grpc::ydb_proto::table::{
     execute_scan_query_request, ExecuteDataQueryRequest, ExecuteQueryResult,
-    ExecuteScanQueryRequest, ExecuteSchemeQueryRequest,
+    ExecuteScanQueryRequest,
 };
 
 static REQUEST_NUMBER: AtomicI64 = AtomicI64::new(0);
@@ -112,17 +113,17 @@ impl Session {
     }
 
     pub(crate) async fn execute_schema_query(&mut self, query: String) -> YdbResult<()> {
-        let resp = self
-            .get_channel()
+        let res = self
+            .get_table_client()
             .await?
-            .execute_scheme_query(ExecuteSchemeQueryRequest {
+            .execute_scheme_query(RawExecuteSchemeQueryRequest {
                 session_id: self.id.clone(),
                 yql_text: query,
-                operation_params: operation_params(self.timeouts.operation_timeout),
+                operation_params: self.timeouts.operation_params(),
             })
-            .await?;
-
-        grpc_read_void_operation_result(resp)
+            .await;
+        self.handle_raw_result(res)?;
+        Ok(())
     }
 
     #[tracing::instrument(skip(self, req), fields(req_number=req_number()))]

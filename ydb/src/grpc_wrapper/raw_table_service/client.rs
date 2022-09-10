@@ -7,6 +7,7 @@ use crate::grpc_wrapper::raw_table_service::commit_transaction::{
 use crate::grpc_wrapper::raw_table_service::create_session::{
     RawCreateSessionRequest, RawCreateSessionResult,
 };
+use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
 use crate::grpc_wrapper::raw_table_service::keepalive::{RawKeepAliveRequest, RawKeepAliveResult};
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
@@ -51,6 +52,16 @@ impl RawTableClient {
             self.service.create_session,
             req => ydb_grpc::ydb_proto::table::CreateSessionRequest,
             ydb_grpc::ydb_proto::table::CreateSessionResult => RawCreateSessionResult
+        );
+    }
+
+    pub async fn execute_scheme_query(
+        &mut self,
+        req: RawExecuteSchemeQueryRequest,
+    ) -> RawResult<()> {
+        request_without_result!(
+            self.service.execute_scheme_query,
+            req => ydb_grpc::ydb_proto::table::ExecuteSchemeQueryRequest
         );
     }
 
