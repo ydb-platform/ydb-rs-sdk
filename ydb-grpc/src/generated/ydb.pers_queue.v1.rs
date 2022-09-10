@@ -4,7 +4,7 @@ pub struct SessionMetaValue {
     #[prost(map="string, string", tag="1")]
     pub value: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
 }
-///*
+/// *
 /// Represents range [start_offset, end_offset).
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -14,11 +14,11 @@ pub struct OffsetsRange {
     #[prost(int64, tag="2")]
     pub end_offset: i64,
 }
-///*
+/// *
 /// Request for write session. Contains one of:
-///      InitRequest - handshake request.
-///      WriteRequest - portion of data to be written.
-///      UpdateTokenRequest - user credentials if update is needed.
+///       InitRequest - handshake request.
+///       WriteRequest - portion of data to be written.
+///       UpdateTokenRequest - user credentials if update is needed.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StreamingWriteClientMessage {
@@ -124,11 +124,11 @@ pub mod streaming_write_client_message {
         UpdateTokenRequest(UpdateTokenRequest),
     }
 }
-///*
+/// *
 /// Response for write session. Contains one of:
-///      InitResponse - correct handshake response.
-///      BatchWriteResponse - acknowledgment of storing client messages.
-///      UpdateTokenResponse - acknowledgment of reauthentication and reauthorization.
+///       InitResponse - correct handshake response.
+///       BatchWriteResponse - acknowledgment of storing client messages.
+///       UpdateTokenResponse - acknowledgment of reauthentication and reauthorization.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StreamingWriteServerMessage {
@@ -249,7 +249,7 @@ pub struct KeyValue {
     #[prost(string, tag="2")]
     pub value: ::prost::alloc::string::String,
 }
-///*
+/// *
 /// Single read parameters for server.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -261,7 +261,7 @@ pub struct ReadParams {
     #[prost(uint32, tag="2")]
     pub max_read_size: u32,
 }
-///*
+/// *
 /// Message that is used for addressing read for commiting.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -285,15 +285,15 @@ pub struct CommitOffsetRange {
 }
 // TODO: replace with it actual protocol client message
 
-///*
+/// *
 /// Request for read session. Contains one of:
-///      InitRequest - handshake request.
-///      ReadRequest - request for data.
-///      CommitRequest - request for commit of some read data.
-///      CreatePartitionStreamResponse - signal for server that client is ready to get data from partition.
-///      DestroyPartitionStreamResponse - signal for server that client finished working with partition. Must be sent only after corresponding Release request from server.
-///      StopReadRequest - signal for server that client is not ready to get more data from this partition.
-///      ResumeReadRequest - signal for server that client is ready to get more data from this partition.
+///       InitRequest - handshake request.
+///       ReadRequest - request for data.
+///       CommitRequest - request for commit of some read data.
+///       CreatePartitionStreamResponse - signal for server that client is ready to get data from partition.
+///       DestroyPartitionStreamResponse - signal for server that client finished working with partition. Must be sent only after corresponding Release request from server.
+///       StopReadRequest - signal for server that client is not ready to get more data from this partition.
+///       ResumeReadRequest - signal for server that client is ready to get more data from this partition.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StreamingReadClientMessageNew {
@@ -390,6 +390,20 @@ pub mod streaming_read_client_message_new {
                     Reading = 3,
                     /// Client sent StopReadRequest for this partition stream.
                     Stopped = 4,
+                }
+                impl Status {
+                    /// String value of the enum field names used in the ProtoBuf definition.
+                    /// The values are not transformed in any way and thus are considered stable
+                    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+                    pub fn as_str_name(&self) -> &'static str {
+                        match self {
+                            Status::Unspecified => "STATUS_UNSPECIFIED",
+                            Status::Creating => "CREATING",
+                            Status::Destroying => "DESTROYING",
+                            Status::Reading => "READING",
+                            Status::Stopped => "STOPPED",
+                        }
+                    }
                 }
             }
         }
@@ -498,7 +512,7 @@ pub mod streaming_read_client_message_new {
         #[prost(int64, tag="3")]
         pub start_from_written_at_ms: i64,
     }
-    ///*
+    /// *
     /// Message that is used for describing commit.
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -537,13 +551,13 @@ pub mod streaming_read_client_message_new {
 }
 // TODO: replace with it actual protocol server message
 
-///*
+/// *
 /// Response for read session. Contains one of :
-///      InitResponse - handshake response from server.
-///      BatchReadResponse - portion of data.
-///      CommitResponse - acknowledgment for commit.
-///      CreatePartitionStreamRequest - command from server to create a partition partition stream.
-///      DestroyPartitionStreamRequest - command from server to destroy a partition partition stream.
+///       InitResponse - handshake response from server.
+///       BatchReadResponse - portion of data.
+///       CommitResponse - acknowledgment for commit.
+///       CreatePartitionStreamRequest - command from server to create a partition partition stream.
+///       DestroyPartitionStreamRequest - command from server to destroy a partition partition stream.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StreamingReadServerMessageNew {
@@ -673,21 +687,21 @@ pub mod streaming_read_server_message_new {
             /// Negative values (-X) means - put first not used messageGroupId from message_group_ids on index X in cache and use it for this client message.
             /// Positive values (X) means -use element by index X from cache for this client message. Do not change state of cache.
             /// Assumptions:
-            ///      - Server will use positive values only for proposed before indexes.
-            ///      - Each value is from 1 to max_meta_cache_size by abs.
-            ///      - Do not make assumptions about choosing algorihm.
-            ///      - There is separate caches of size max_meta_cache_size for different partition and different metadata fileds - message_group_id, ip and session_meta_data.
-            ///      - Number of negative values in message_group_id_indexes vector is the same as length of message_group_ids vector.
+            ///       - Server will use positive values only for proposed before indexes.
+            ///       - Each value is from 1 to max_meta_cache_size by abs.
+            ///       - Do not make assumptions about choosing algorihm.
+            ///       - There is separate caches of size max_meta_cache_size for different partition and different metadata fileds - message_group_id, ip and session_meta_data.
+            ///       - Number of negative values in message_group_id_indexes vector is the same as length of message_group_ids vector.
             /// Example:
-            ///                max_meta_cache_size :  2
-            ///                      Cache indexes :  1  2
-            ///      Cache state before processing :  s0,? // ? means not set yet.
-            ///                  message_group_ids :  s1 s2 s3 s1
-            ///           message_group_id_indexes :  -1    -2    1     2     1     1     -1    2     -2
-            ///                        cache state :  s1,?  s1,s2 s1,s2 s1,s2 s1,s2 s1,s2 s3,s2 s3,s2 s3,s1
-            ///             real message group ids :  s1    s2    s1    s2    s1    s1    s3    s2    s1
-            ///                      Cache indexes :  1  2
-            ///       Cache state after processing :  s3,s1
+            ///                 max_meta_cache_size :  2
+            ///                       Cache indexes :  1  2
+            ///       Cache state before processing :  s0,? // ? means not set yet.
+            ///                   message_group_ids :  s1 s2 s3 s1
+            ///            message_group_id_indexes :  -1    -2    1     2     1     1     -1    2     -2
+            ///                         cache state :  s1,?  s1,s2 s1,s2 s1,s2 s1,s2 s1,s2 s3,s2 s3,s2 s3,s1
+            ///              real message group ids :  s1    s2    s1    s2    s1    s1    s3    s2    s1
+            ///                       Cache indexes :  1  2
+            ///        Cache state after processing :  s3,s1
             #[prost(sint64, repeated, tag="7")]
             pub message_group_id_indexes: ::prost::alloc::vec::Vec<i64>,
             /// New ips for updating ip cache.
@@ -824,7 +838,7 @@ pub mod streaming_read_server_message_new {
         RemoveTopicResponse(RemoveTopicResponse),
     }
 }
-///*
+/// *
 /// Message that represens concrete partition partition stream.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -848,13 +862,13 @@ pub struct PartitionStream {
     #[prost(bytes="vec", tag="7")]
     pub connection_meta: ::prost::alloc::vec::Vec<u8>,
 }
-//*
+// *
 // Request for read session. Contains one of :
-//      Init - handshake request.
-//      Read - request for data.
-//      Commit - request for commit of some read data.
-//      Start_read - signal for server that client is ready to get data from partition.
-//      Released - signal for server that client finished working with partition. Must be sent only after corresponding Release request from server.
+//       Init - handshake request.
+//       Read - request for data.
+//       Commit - request for commit of some read data.
+//       Start_read - signal for server that client is ready to get data from partition.
+//       Released - signal for server that client finished working with partition. Must be sent only after corresponding Release request from server.
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -922,12 +936,12 @@ pub mod migration_streaming_read_client_message {
         pub state: ::core::option::Option<init_request::State>,
         #[prost(int64, tag="200")]
         pub idle_timeout_ms: i64,
-        /////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        /// //////////////////////////////////////////////////////////////////////////////////////////////////////////
         /// TODO: remove after refactoring
         /// Single read request params.
         #[prost(message, optional, tag="42")]
         pub read_params: ::core::option::Option<super::ReadParams>,
-        /////////////////////////////////////////////////////////////////////////////////////////////////////////////
+        /// //////////////////////////////////////////////////////////////////////////////////////////////////////////
         #[prost(bool, tag="442")]
         pub ranges_mode: bool,
     }
@@ -975,6 +989,20 @@ pub mod migration_streaming_read_client_message {
                     /// Client sent StopReadRequest for this partition stream.
                     Stopped = 4,
                 }
+                impl Status {
+                    /// String value of the enum field names used in the ProtoBuf definition.
+                    /// The values are not transformed in any way and thus are considered stable
+                    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+                    pub fn as_str_name(&self) -> &'static str {
+                        match self {
+                            Status::Unspecified => "STATUS_UNSPECIFIED",
+                            Status::Creating => "CREATING",
+                            Status::Destroying => "DESTROYING",
+                            Status::Reading => "READING",
+                            Status::Stopped => "STOPPED",
+                        }
+                    }
+                }
             }
         }
     }
@@ -1010,7 +1038,7 @@ pub mod migration_streaming_read_client_message {
         /// This option will enable sanity check on server for read_offset. Server will verify that read_offset is no less that actual committed offset.
         /// If verification will fail then server will kill this read session and client will find out error in reading logic.
         /// If client is not setting read_offset, sanity check will fail so do not set verify_read_offset if you not setting correct read_offset.
-        ///if true then check that committed position is <= ReadOffset; otherwise it means error in client logic
+        /// if true then check that committed position is <= ReadOffset; otherwise it means error in client logic
         #[prost(bool, tag="8")]
         pub verify_read_offset: bool,
     }
@@ -1075,13 +1103,13 @@ pub mod migration_streaming_read_client_message {
         Status(Status),
     }
 }
-//*
+// *
 // Response for read session. Contains one of :
-//      Inited - handshake response from server.
-//      Batched_data - result of single read.
-//      Committed - acknowledgment for commit.
-//      Assigned - signal from server for assigning of partition.
-//      Release - signal from server for releasing of partition.
+//       Inited - handshake response from server.
+//       Batched_data - result of single read.
+//       Committed - acknowledgment for commit.
+//       Assigned - signal from server for assigning of partition.
+//       Release - signal from server for releasing of partition.
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1182,7 +1210,7 @@ pub mod migration_streaming_read_server_message {
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct MessageData {
             /// Partition offset in partition that assigned for message.
-            ///unique value for clientside deduplication - Topic:Cluster:Partition:Offset
+            /// unique value for clientside deduplication - Topic:Cluster:Partition:Offset
             #[prost(uint64, tag="1")]
             pub offset: u64,
             /// Sequence number that provided with message on write from client.
@@ -1290,7 +1318,7 @@ pub mod migration_streaming_read_server_message {
         PartitionStatus(PartitionStatus),
     }
 }
-//*
+// *
 // Reading information request sent from client to server.
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1308,7 +1336,7 @@ pub struct ReadInfoRequest {
     #[prost(message, optional, tag="4")]
     pub consumer: ::core::option::Option<Path>,
 }
-//*
+// *
 // Reading information response sent from server to client.
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1318,7 +1346,7 @@ pub struct ReadInfoResponse {
     #[prost(message, optional, tag="1")]
     pub operation: ::core::option::Option<super::super::operations::Operation>,
 }
-//*
+// *
 // Reading information message that will be inside ReadInfoResponse.operation.
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1415,7 +1443,7 @@ pub mod read_info_result {
         }
     }
 }
-//*
+// *
 // Drop topic request sent from client to server.
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1427,7 +1455,7 @@ pub struct DropTopicRequest {
     #[prost(string, tag="2")]
     pub path: ::prost::alloc::string::String,
 }
-//*
+// *
 // Drop topic response sent from server to client. If topic is not existed then response status will be "SCHEME_ERROR".
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1437,14 +1465,14 @@ pub struct DropTopicResponse {
     #[prost(message, optional, tag="1")]
     pub operation: ::core::option::Option<super::super::operations::Operation>,
 }
-//*
+// *
 // Drop topic result message that will be inside DropTopicResponse.operation.
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DropTopicResult {
 }
-//*
+// *
 // Credentials settings
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1474,7 +1502,7 @@ pub mod credentials {
         Iam(Iam),
     }
 }
-//*
+// *
 // Message for describing topic internals.
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1583,8 +1611,19 @@ pub mod topic_settings {
         Unspecified = 0,
         Base = 1,
     }
+    impl Format {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Format::Unspecified => "FORMAT_UNSPECIFIED",
+                Format::Base => "FORMAT_BASE",
+            }
+        }
+    }
 }
-//*
+// *
 // Create topic request sent from client to server.
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1599,7 +1638,7 @@ pub struct CreateTopicRequest {
     #[prost(message, optional, tag="4")]
     pub settings: ::core::option::Option<TopicSettings>,
 }
-//*
+// *
 // Create topic response sent from server to client. If topic is already exists then response status will be "ALREADY_EXISTS".
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1609,14 +1648,14 @@ pub struct CreateTopicResponse {
     #[prost(message, optional, tag="1")]
     pub operation: ::core::option::Option<super::super::operations::Operation>,
 }
-//*
+// *
 // Create topic result message that will be inside CreateTopicResponse.operation.
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateTopicResult {
 }
-//*
+// *
 // Update existing topic request sent from client to server.
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1631,7 +1670,7 @@ pub struct AlterTopicRequest {
     #[prost(message, optional, tag="4")]
     pub settings: ::core::option::Option<TopicSettings>,
 }
-//*
+// *
 // Update topic response sent from server to client.
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1641,13 +1680,13 @@ pub struct AlterTopicResponse {
     #[prost(message, optional, tag="1")]
     pub operation: ::core::option::Option<super::super::operations::Operation>,
 }
-///*
+/// *
 /// Update topic result message that will be inside UpdateTopicResponse.operation.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AlterTopicResult {
 }
-///*
+/// *
 /// Add read rules for existing topic request.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1661,7 +1700,7 @@ pub struct AddReadRuleRequest {
     #[prost(message, optional, tag="3")]
     pub read_rule: ::core::option::Option<topic_settings::ReadRule>,
 }
-///*
+/// *
 /// Add read rules for existing topic response.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1670,13 +1709,13 @@ pub struct AddReadRuleResponse {
     #[prost(message, optional, tag="1")]
     pub operation: ::core::option::Option<super::super::operations::Operation>,
 }
-///*
+/// *
 /// Add read rules result message that will be inside AddReadRuleReponse.operation.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AddReadRuleResult {
 }
-///*
+/// *
 /// Remove read rules request for existing topic.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1690,7 +1729,7 @@ pub struct RemoveReadRuleRequest {
     #[prost(string, tag="3")]
     pub consumer_name: ::prost::alloc::string::String,
 }
-///*
+/// *
 /// Remove read rules response for existing topic.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1699,13 +1738,13 @@ pub struct RemoveReadRuleResponse {
     #[prost(message, optional, tag="1")]
     pub operation: ::core::option::Option<super::super::operations::Operation>,
 }
-///*
+/// *
 /// Remove read rules result message that will be inside RemoveReadRuleReponse.operation.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RemoveReadRuleResult {
 }
-//*
+// *
 // Describe topic request sent from client to server.
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1717,7 +1756,7 @@ pub struct DescribeTopicRequest {
     #[prost(string, tag="2")]
     pub path: ::prost::alloc::string::String,
 }
-//*
+// *
 // Describe topic response sent from server to client. If topic is not existed then response status will be "SCHEME_ERROR".
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1727,7 +1766,7 @@ pub struct DescribeTopicResponse {
     #[prost(message, optional, tag="1")]
     pub operation: ::core::option::Option<super::super::operations::Operation>,
 }
-//*
+// *
 // Describe topic result message that will be inside DescribeTopicResponse.operation.
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1755,10 +1794,25 @@ pub enum Codec {
     Lzop = 3,
     Zstd = 4,
 }
+impl Codec {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Codec::Unspecified => "CODEC_UNSPECIFIED",
+            Codec::Raw => "CODEC_RAW",
+            Codec::Gzip => "CODEC_GZIP",
+            Codec::Lzop => "CODEC_LZOP",
+            Codec::Zstd => "CODEC_ZSTD",
+        }
+    }
+}
 /// Generated client implementations.
 pub mod pers_queue_service_client {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
     use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
     #[derive(Debug, Clone)]
     pub struct PersQueueServiceClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -1778,11 +1832,15 @@ pub mod pers_queue_service_client {
     where
         T: tonic::client::GrpcService<tonic::body::BoxBody>,
         T::Error: Into<StdError>,
-        T::ResponseBody: Default + Body<Data = Bytes> + Send + 'static,
+        T::ResponseBody: Body<Data = Bytes> + Send + 'static,
         <T::ResponseBody as Body>::Error: Into<StdError> + Send,
     {
         pub fn new(inner: T) -> Self {
             let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
             Self { inner }
         }
         pub fn with_interceptor<F>(
@@ -1791,6 +1849,7 @@ pub mod pers_queue_service_client {
         ) -> PersQueueServiceClient<InterceptedService<T, F>>
         where
             F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
             T: tonic::codegen::Service<
                 http::Request<tonic::body::BoxBody>,
                 Response = http::Response<
@@ -1803,18 +1862,18 @@ pub mod pers_queue_service_client {
         {
             PersQueueServiceClient::new(InterceptedService::new(inner, interceptor))
         }
-        /// Compress requests with `gzip`.
+        /// Compress requests with the given encoding.
         /// This requires the server to support it otherwise it might respond with an
         /// error.
         #[must_use]
-        pub fn send_gzip(mut self) -> Self {
-            self.inner = self.inner.send_gzip();
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
             self
         }
-        /// Enable decompressing responses with `gzip`.
+        /// Enable decompressing responses.
         #[must_use]
-        pub fn accept_gzip(mut self) -> Self {
-            self.inner = self.inner.accept_gzip();
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
             self
         }
         pub async fn streaming_write(
@@ -2047,6 +2106,7 @@ pub mod pers_queue_service_client {
 pub mod cluster_discovery_service_client {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
     use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
     #[derive(Debug, Clone)]
     pub struct ClusterDiscoveryServiceClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -2066,11 +2126,15 @@ pub mod cluster_discovery_service_client {
     where
         T: tonic::client::GrpcService<tonic::body::BoxBody>,
         T::Error: Into<StdError>,
-        T::ResponseBody: Default + Body<Data = Bytes> + Send + 'static,
+        T::ResponseBody: Body<Data = Bytes> + Send + 'static,
         <T::ResponseBody as Body>::Error: Into<StdError> + Send,
     {
         pub fn new(inner: T) -> Self {
             let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
             Self { inner }
         }
         pub fn with_interceptor<F>(
@@ -2079,6 +2143,7 @@ pub mod cluster_discovery_service_client {
         ) -> ClusterDiscoveryServiceClient<InterceptedService<T, F>>
         where
             F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
             T: tonic::codegen::Service<
                 http::Request<tonic::body::BoxBody>,
                 Response = http::Response<
@@ -2093,18 +2158,18 @@ pub mod cluster_discovery_service_client {
                 InterceptedService::new(inner, interceptor),
             )
         }
-        /// Compress requests with `gzip`.
+        /// Compress requests with the given encoding.
         /// This requires the server to support it otherwise it might respond with an
         /// error.
         #[must_use]
-        pub fn send_gzip(mut self) -> Self {
-            self.inner = self.inner.send_gzip();
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
             self
         }
-        /// Enable decompressing responses with `gzip`.
+        /// Enable decompressing responses.
         #[must_use]
-        pub fn accept_gzip(mut self) -> Self {
-            self.inner = self.inner.accept_gzip();
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
             self
         }
         /// Get PQ clusters which are eligible for the specified Write or Read Sessions

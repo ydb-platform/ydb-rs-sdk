@@ -19,6 +19,22 @@ pub mod status_flag {
         Orange = 5,
         Red = 6,
     }
+    impl Status {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Status::Unspecified => "UNSPECIFIED",
+                Status::Grey => "GREY",
+                Status::Green => "GREEN",
+                Status::Blue => "BLUE",
+                Status::Yellow => "YELLOW",
+                Status::Orange => "ORANGE",
+                Status::Red => "RED",
+            }
+        }
+    }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -59,6 +75,20 @@ pub mod self_check {
         Degraded = 2,
         MaintenanceRequired = 3,
         Emergency = 4,
+    }
+    impl Result {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Result::Unspecified => "UNSPECIFIED",
+                Result::Good => "GOOD",
+                Result::Degraded => "DEGRADED",
+                Result::MaintenanceRequired => "MAINTENANCE_REQUIRED",
+                Result::Emergency => "EMERGENCY",
+            }
+        }
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]

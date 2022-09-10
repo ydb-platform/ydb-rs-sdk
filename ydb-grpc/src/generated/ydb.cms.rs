@@ -230,6 +230,21 @@ pub mod get_database_status_result {
         PendingResources = 4,
         Configuring = 5,
     }
+    impl State {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                State::Unspecified => "STATE_UNSPECIFIED",
+                State::Creating => "CREATING",
+                State::Running => "RUNNING",
+                State::Removing => "REMOVING",
+                State::PendingResources => "PENDING_RESOURCES",
+                State::Configuring => "CONFIGURING",
+            }
+        }
+    }
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum ResourcesKind {

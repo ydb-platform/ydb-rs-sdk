@@ -1,4 +1,4 @@
-//// Common
+/// / Common
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImportProgress {
@@ -17,6 +17,22 @@ pub mod import_progress {
         Cancellation = 5,
         Cancelled = 6,
     }
+    impl Progress {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Progress::Unspecified => "PROGRESS_UNSPECIFIED",
+                Progress::Preparing => "PROGRESS_PREPARING",
+                Progress::TransferData => "PROGRESS_TRANSFER_DATA",
+                Progress::BuildIndexes => "PROGRESS_BUILD_INDEXES",
+                Progress::Done => "PROGRESS_DONE",
+                Progress::Cancellation => "PROGRESS_CANCELLATION",
+                Progress::Cancelled => "PROGRESS_CANCELLED",
+            }
+        }
+    }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -30,7 +46,7 @@ pub struct ImportItemProgress {
     #[prost(message, optional, tag="4")]
     pub end_time: ::core::option::Option<::pbjson_types::Timestamp>,
 }
-//// S3
+/// / S3
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImportFromS3Settings {
@@ -58,8 +74,8 @@ pub mod import_from_s3_settings {
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Item {
         /// YDB tables in S3 are stored in one or more objects (see ydb_export.proto).
-        ///The object name begins with 'source_prefix'.
-        ///This prefix is followed by:
+        /// The object name begins with 'source_prefix'.
+        /// This prefix is followed by:
         /// '/data_PartNumber', where 'PartNumber' represents the index of the part, starting at zero;
         /// '/scheme.pb' - object with information about scheme, indexes, etc.
         #[prost(string, tag="1")]
@@ -75,6 +91,18 @@ pub mod import_from_s3_settings {
         Unspecified = 0,
         Http = 1,
         Https = 2,
+    }
+    impl Scheme {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Scheme::Unspecified => "UNSPECIFIED",
+                Scheme::Http => "HTTP",
+                Scheme::Https => "HTTPS",
+            }
+        }
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -107,7 +135,7 @@ pub struct ImportFromS3Response {
     #[prost(message, optional, tag="1")]
     pub operation: ::core::option::Option<super::operations::Operation>,
 }
-//// Data
+/// / Data
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct YdbDumpFormat {

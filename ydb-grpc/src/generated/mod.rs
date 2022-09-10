@@ -1,3 +1,8 @@
+pub mod google {
+  pub mod protobuf {
+    include!("google.protobuf.rs");
+  }
+}
 pub mod ydb {
   include!("ydb.rs");
   pub mod cms {

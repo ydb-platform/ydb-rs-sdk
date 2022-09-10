@@ -1,11 +1,11 @@
-///*
+/// *
 /// Stub for unsupported messages
 /// Intentionally empty
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Unsupported {
 }
-///*
+/// *
 /// Configuration settings for a coordination node
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -29,7 +29,7 @@ pub struct Config {
     #[prost(enumeration="RateLimiterCountersMode", tag="6")]
     pub rate_limiter_counters_mode: i32,
 }
-///*
+/// *
 /// Describes an active client session
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -47,7 +47,7 @@ pub struct SessionDescription {
     #[prost(bool, tag="4")]
     pub attached: bool,
 }
-///*
+/// *
 /// Describes an owner or a waiter of this semaphore
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -68,7 +68,7 @@ pub struct SemaphoreSession {
     #[prost(bytes="vec", tag="4")]
     pub data: ::prost::alloc::vec::Vec<u8>,
 }
-///*
+/// *
 /// Describes the state of a semaphore
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -95,7 +95,7 @@ pub struct SemaphoreDescription {
     #[prost(message, repeated, tag="6")]
     pub waiters: ::prost::alloc::vec::Vec<SemaphoreSession>,
 }
-///*
+/// *
 /// Session request message sent from client to server
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -105,7 +105,7 @@ pub struct SessionRequest {
 }
 /// Nested message and enum types in `SessionRequest`.
 pub mod session_request {
-    ///*
+    /// *
     /// Used for checking liveness of the connection
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -114,7 +114,7 @@ pub mod session_request {
         #[prost(uint64, tag="1")]
         pub opaque: u64,
     }
-    ///*
+    /// *
     /// First message used to start/restore a session
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -140,14 +140,14 @@ pub mod session_request {
         #[prost(bytes="vec", tag="6")]
         pub protection_key: ::prost::alloc::vec::Vec<u8>,
     }
-    ///*
+    /// *
     /// Last message used to cleanly stop session before its timeout expires
     /// nothing
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct SessionStop {
     }
-    ///*
+    /// *
     /// Used to acquire a semaphore
     /// WARNING: a single session cannot acquire the same semaphore multiple times
     /// Later requests override previous operations with the same semaphore,
@@ -176,7 +176,7 @@ pub mod session_request {
         #[prost(bool, tag="6")]
         pub ephemeral: bool,
     }
-    ///*
+    /// *
     /// Used to release a semaphore
     /// WARNING: a single session cannot release the same semaphore multiple times
     /// The release operation will either remove current session from waiters
@@ -191,7 +191,7 @@ pub mod session_request {
         #[prost(string, tag="2")]
         pub name: ::prost::alloc::string::String,
     }
-    ///*
+    /// *
     /// Used to describe semaphores and watch them for changes
     /// WARNING: a describe operation will cancel previous watches on the same semaphore
     #[derive(serde::Serialize, serde::Deserialize)]
@@ -216,7 +216,7 @@ pub mod session_request {
         #[prost(bool, tag="6")]
         pub watch_owners: bool,
     }
-    ///*
+    /// *
     /// Used to create a new semaphore
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -234,7 +234,7 @@ pub mod session_request {
         #[prost(bytes="vec", tag="4")]
         pub data: ::prost::alloc::vec::Vec<u8>,
     }
-    ///*
+    /// *
     /// Used to change semaphore data
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -249,7 +249,7 @@ pub mod session_request {
         #[prost(bytes="vec", tag="3")]
         pub data: ::prost::alloc::vec::Vec<u8>,
     }
-    ///*
+    /// *
     /// Used to delete an existing semaphore
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -299,7 +299,7 @@ pub mod session_request {
         Unsupported15(super::Unsupported),
     }
 }
-///*
+/// *
 /// Session response message sent from server to client
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -309,7 +309,7 @@ pub struct SessionResponse {
 }
 /// Nested message and enum types in `SessionResponse`.
 pub mod session_response {
-    ///*
+    /// *
     /// Used for checking liveness of the connection
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -318,7 +318,7 @@ pub mod session_response {
         #[prost(uint64, tag="1")]
         pub opaque: u64,
     }
-    ///*
+    /// *
     /// Used to report connection and session level failures
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -328,7 +328,7 @@ pub mod session_response {
         #[prost(message, repeated, tag="2")]
         pub issues: ::prost::alloc::vec::Vec<super::super::issue::IssueMessage>,
     }
-    ///*
+    /// *
     /// Used to report a successful session create/restore operation
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -340,7 +340,7 @@ pub mod session_response {
         #[prost(uint64, tag="2")]
         pub timeout_millis: u64,
     }
-    ///*
+    /// *
     /// Used to report a successful graceful termination of the session
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -348,7 +348,7 @@ pub mod session_response {
         #[prost(uint64, tag="1")]
         pub session_id: u64,
     }
-    ///*
+    /// *
     /// Used by the server to report when an acquire operation is added to the waiters queue
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -356,7 +356,7 @@ pub mod session_response {
         #[prost(uint64, tag="1")]
         pub req_id: u64,
     }
-    ///*
+    /// *
     /// Used by the server to report the result of an acquire operation
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -371,7 +371,7 @@ pub mod session_response {
         #[prost(bool, tag="4")]
         pub acquired: bool,
     }
-    ///*
+    /// *
     /// Used by the server to report the result of a release operation
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -386,7 +386,7 @@ pub mod session_response {
         #[prost(bool, tag="4")]
         pub released: bool,
     }
-    ///*
+    /// *
     /// The result of the describe operation
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -403,7 +403,7 @@ pub mod session_response {
         #[prost(bool, tag="5")]
         pub watch_added: bool,
     }
-    ///*
+    /// *
     /// Used to report a change in the watched semaphore
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -415,7 +415,7 @@ pub mod session_response {
         #[prost(bool, tag="3")]
         pub owners_changed: bool,
     }
-    ///*
+    /// *
     /// The result of semaphore creation
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -427,7 +427,7 @@ pub mod session_response {
         #[prost(message, repeated, tag="3")]
         pub issues: ::prost::alloc::vec::Vec<super::super::issue::IssueMessage>,
     }
-    ///*
+    /// *
     /// The result of semaphore update
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -439,7 +439,7 @@ pub mod session_response {
         #[prost(message, repeated, tag="3")]
         pub issues: ::prost::alloc::vec::Vec<super::super::issue::IssueMessage>,
     }
-    ///*
+    /// *
     /// The result of semaphore deletion
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -560,7 +560,7 @@ pub struct DescribeNodeResult {
     #[prost(message, optional, tag="2")]
     pub config: ::core::option::Option<Config>,
 }
-///*
+/// *
 /// Consistency mode
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -573,7 +573,19 @@ pub enum ConsistencyMode {
     /// Relaxed mode allows operations to complete on stale masters
     Relaxed = 2,
 }
-///*
+impl ConsistencyMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            ConsistencyMode::Unset => "CONSISTENCY_MODE_UNSET",
+            ConsistencyMode::Strict => "CONSISTENCY_MODE_STRICT",
+            ConsistencyMode::Relaxed => "CONSISTENCY_MODE_RELAXED",
+        }
+    }
+}
+/// *
 /// Counters mode
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -585,4 +597,16 @@ pub enum RateLimiterCountersMode {
     Aggregated = 1,
     /// Counters on every resource
     Detailed = 2,
+}
+impl RateLimiterCountersMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            RateLimiterCountersMode::Unset => "RATE_LIMITER_COUNTERS_MODE_UNSET",
+            RateLimiterCountersMode::Aggregated => "RATE_LIMITER_COUNTERS_MODE_AGGREGATED",
+            RateLimiterCountersMode::Detailed => "RATE_LIMITER_COUNTERS_MODE_DETAILED",
+        }
+    }
 }

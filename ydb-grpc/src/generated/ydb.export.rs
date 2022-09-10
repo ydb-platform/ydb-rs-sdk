@@ -1,4 +1,4 @@
-//// Common
+/// / Common
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ExportProgress {
@@ -16,6 +16,21 @@ pub mod export_progress {
         Cancellation = 4,
         Cancelled = 5,
     }
+    impl Progress {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Progress::Unspecified => "PROGRESS_UNSPECIFIED",
+                Progress::Preparing => "PROGRESS_PREPARING",
+                Progress::TransferData => "PROGRESS_TRANSFER_DATA",
+                Progress::Done => "PROGRESS_DONE",
+                Progress::Cancellation => "PROGRESS_CANCELLATION",
+                Progress::Cancelled => "PROGRESS_CANCELLED",
+            }
+        }
+    }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -29,7 +44,7 @@ pub struct ExportItemProgress {
     #[prost(message, optional, tag="4")]
     pub end_time: ::core::option::Option<::pbjson_types::Timestamp>,
 }
-//// YT
+/// / YT
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ExportToYtSettings {
@@ -90,7 +105,7 @@ pub struct ExportToYtResponse {
     #[prost(message, optional, tag="1")]
     pub operation: ::core::option::Option<super::operations::Operation>,
 }
-//// S3
+/// / S3
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ExportToS3Settings {
@@ -123,9 +138,9 @@ pub mod export_to_s3_settings {
         #[prost(string, tag="1")]
         pub source_path: ::prost::alloc::string::String,
         /// Tables are exported to one or more S3 objects.
-        ///The object name begins with 'destination_prefix'.
-        ///This prefix will be followed by '/data_PartNumber', where 'PartNumber'
-        ///represents the index of the part, starting at zero.
+        /// The object name begins with 'destination_prefix'.
+        /// This prefix will be followed by '/data_PartNumber', where 'PartNumber'
+        /// represents the index of the part, starting at zero.
         #[prost(string, tag="2")]
         pub destination_prefix: ::prost::alloc::string::String,
     }
@@ -136,6 +151,18 @@ pub mod export_to_s3_settings {
         Unspecified = 0,
         Http = 1,
         Https = 2,
+    }
+    impl Scheme {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Scheme::Unspecified => "UNSPECIFIED",
+                Scheme::Http => "HTTP",
+                Scheme::Https => "HTTPS",
+            }
+        }
     }
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -150,6 +177,24 @@ pub mod export_to_s3_settings {
         Glacier = 6,
         DeepArchive = 7,
         Outposts = 8,
+    }
+    impl StorageClass {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                StorageClass::Unspecified => "STORAGE_CLASS_UNSPECIFIED",
+                StorageClass::Standard => "STANDARD",
+                StorageClass::ReducedRedundancy => "REDUCED_REDUNDANCY",
+                StorageClass::StandardIa => "STANDARD_IA",
+                StorageClass::OnezoneIa => "ONEZONE_IA",
+                StorageClass::IntelligentTiering => "INTELLIGENT_TIERING",
+                StorageClass::Glacier => "GLACIER",
+                StorageClass::DeepArchive => "DEEP_ARCHIVE",
+                StorageClass::Outposts => "OUTPOSTS",
+            }
+        }
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]

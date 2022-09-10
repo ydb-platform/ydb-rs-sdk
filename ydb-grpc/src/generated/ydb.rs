@@ -110,6 +110,41 @@ pub mod r#type {
         JsonDocument = 4612,
         Dynumber = 4866,
     }
+    impl PrimitiveTypeId {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                PrimitiveTypeId::Unspecified => "PRIMITIVE_TYPE_ID_UNSPECIFIED",
+                PrimitiveTypeId::Bool => "BOOL",
+                PrimitiveTypeId::Int8 => "INT8",
+                PrimitiveTypeId::Uint8 => "UINT8",
+                PrimitiveTypeId::Int16 => "INT16",
+                PrimitiveTypeId::Uint16 => "UINT16",
+                PrimitiveTypeId::Int32 => "INT32",
+                PrimitiveTypeId::Uint32 => "UINT32",
+                PrimitiveTypeId::Int64 => "INT64",
+                PrimitiveTypeId::Uint64 => "UINT64",
+                PrimitiveTypeId::Float => "FLOAT",
+                PrimitiveTypeId::Double => "DOUBLE",
+                PrimitiveTypeId::Date => "DATE",
+                PrimitiveTypeId::Datetime => "DATETIME",
+                PrimitiveTypeId::Timestamp => "TIMESTAMP",
+                PrimitiveTypeId::Interval => "INTERVAL",
+                PrimitiveTypeId::TzDate => "TZ_DATE",
+                PrimitiveTypeId::TzDatetime => "TZ_DATETIME",
+                PrimitiveTypeId::TzTimestamp => "TZ_TIMESTAMP",
+                PrimitiveTypeId::String => "STRING",
+                PrimitiveTypeId::Utf8 => "UTF8",
+                PrimitiveTypeId::Yson => "YSON",
+                PrimitiveTypeId::Json => "JSON",
+                PrimitiveTypeId::Uuid => "UUID",
+                PrimitiveTypeId::JsonDocument => "JSON_DOCUMENT",
+                PrimitiveTypeId::Dynumber => "DYNUMBER",
+            }
+        }
+    }
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Type {
@@ -144,7 +179,7 @@ pub mod r#type {
         EmptyDictType(i32),
     }
 }
-//*
+// *
 // Holds a pair to represent Dict type
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -155,7 +190,7 @@ pub struct ValuePair {
     #[prost(message, optional, tag="2")]
     pub payload: ::core::option::Option<Value>,
 }
-//*
+// *
 // This message represents any of the supported by transport value types.
 // Note, this is not actually a Ydb types. See NYql.NProto.TypeIds for Ydb types.
 //
@@ -280,6 +315,35 @@ pub mod status_ids {
         Unsupported = 400180,
         SessionBusy = 400190,
     }
+    impl StatusCode {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                StatusCode::Unspecified => "STATUS_CODE_UNSPECIFIED",
+                StatusCode::Success => "SUCCESS",
+                StatusCode::BadRequest => "BAD_REQUEST",
+                StatusCode::Unauthorized => "UNAUTHORIZED",
+                StatusCode::InternalError => "INTERNAL_ERROR",
+                StatusCode::Aborted => "ABORTED",
+                StatusCode::Unavailable => "UNAVAILABLE",
+                StatusCode::Overloaded => "OVERLOADED",
+                StatusCode::SchemeError => "SCHEME_ERROR",
+                StatusCode::GenericError => "GENERIC_ERROR",
+                StatusCode::Timeout => "TIMEOUT",
+                StatusCode::BadSession => "BAD_SESSION",
+                StatusCode::PreconditionFailed => "PRECONDITION_FAILED",
+                StatusCode::AlreadyExists => "ALREADY_EXISTS",
+                StatusCode::NotFound => "NOT_FOUND",
+                StatusCode::SessionExpired => "SESSION_EXPIRED",
+                StatusCode::Cancelled => "CANCELLED",
+                StatusCode::Undetermined => "UNDETERMINED",
+                StatusCode::Unsupported => "UNSUPPORTED",
+                StatusCode::SessionBusy => "SESSION_BUSY",
+            }
+        }
+    }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -335,6 +399,18 @@ pub mod feature_flag {
         Unspecified = 0,
         Enabled = 1,
         Disabled = 2,
+    }
+    impl Status {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Status::Unspecified => "STATUS_UNSPECIFIED",
+                Status::Enabled => "ENABLED",
+                Status::Disabled => "DISABLED",
+            }
+        }
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]

@@ -107,6 +107,18 @@ pub mod table_index_description {
         /// index is being built
         Building = 2,
     }
+    impl Status {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Status::Unspecified => "STATUS_UNSPECIFIED",
+                Status::Ready => "STATUS_READY",
+                Status::Building => "STATUS_BUILDING",
+            }
+        }
+    }
     /// Type of index
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
@@ -137,6 +149,24 @@ pub mod index_build_state {
         Cancelled = 6,
         Rejection = 7,
         Rejected = 8,
+    }
+    impl State {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                State::Unspecified => "STATE_UNSPECIFIED",
+                State::Preparing => "STATE_PREPARING",
+                State::TransferingData => "STATE_TRANSFERING_DATA",
+                State::Applying => "STATE_APPLYING",
+                State::Done => "STATE_DONE",
+                State::Cancellation => "STATE_CANCELLATION",
+                State::Cancelled => "STATE_CANCELLED",
+                State::Rejection => "STATE_REJECTION",
+                State::Rejected => "STATE_REJECTED",
+            }
+        }
     }
 }
 /// Description of index building operation
@@ -212,6 +242,18 @@ pub mod column_family_policy {
         Uncompressed = 1,
         Compressed = 2,
     }
+    impl Compression {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Compression::Unspecified => "COMPRESSION_UNSPECIFIED",
+                Compression::Uncompressed => "UNCOMPRESSED",
+                Compression::Compressed => "COMPRESSED",
+            }
+        }
+    }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -282,6 +324,19 @@ pub mod partitioning_policy {
         Disabled = 1,
         AutoSplit = 2,
         AutoSplitMerge = 3,
+    }
+    impl AutoPartitioningPolicy {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                AutoPartitioningPolicy::Unspecified => "AUTO_PARTITIONING_POLICY_UNSPECIFIED",
+                AutoPartitioningPolicy::Disabled => "DISABLED",
+                AutoPartitioningPolicy::AutoSplit => "AUTO_SPLIT",
+                AutoPartitioningPolicy::AutoSplitMerge => "AUTO_SPLIT_MERGE",
+            }
+        }
     }
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
@@ -402,6 +457,20 @@ pub mod value_since_unix_epoch_mode_settings {
         Microseconds = 3,
         Nanoseconds = 4,
     }
+    impl Unit {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Unit::Unspecified => "UNIT_UNSPECIFIED",
+                Unit::Seconds => "UNIT_SECONDS",
+                Unit::Milliseconds => "UNIT_MILLISECONDS",
+                Unit::Microseconds => "UNIT_MICROSECONDS",
+                Unit::Nanoseconds => "UNIT_NANOSECONDS",
+            }
+        }
+    }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -484,6 +553,18 @@ pub mod column_family {
         Unspecified = 0,
         None = 1,
         Lz4 = 2,
+    }
+    impl Compression {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Compression::Unspecified => "COMPRESSION_UNSPECIFIED",
+                Compression::None => "COMPRESSION_NONE",
+                Compression::Lz4 => "COMPRESSION_LZ4",
+            }
+        }
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -962,6 +1043,19 @@ pub mod query_stats_collection {
         /// Add execution stats and plan on top of STATS_COLLECTION_BASIC
         StatsCollectionFull = 3,
     }
+    impl Mode {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Mode::StatsCollectionUnspecified => "STATS_COLLECTION_UNSPECIFIED",
+                Mode::StatsCollectionNone => "STATS_COLLECTION_NONE",
+                Mode::StatsCollectionBasic => "STATS_COLLECTION_BASIC",
+                Mode::StatsCollectionFull => "STATS_COLLECTION_FULL",
+            }
+        }
+    }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1132,6 +1226,18 @@ pub mod keep_alive_result {
         Unspecified = 0,
         Ready = 1,
         Busy = 2,
+    }
+    impl SessionStatus {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                SessionStatus::Unspecified => "SESSION_STATUS_UNSPECIFIED",
+                SessionStatus::Ready => "SESSION_STATUS_READY",
+                SessionStatus::Busy => "SESSION_STATUS_BUSY",
+            }
+        }
     }
 }
 /// Begin transaction on given session with given settings
@@ -1464,6 +1570,18 @@ pub mod execute_scan_query_request {
         Explain = 1,
         /// MODE_PREPARE = 2;
         Exec = 3,
+    }
+    impl Mode {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Mode::Unspecified => "MODE_UNSPECIFIED",
+                Mode::Explain => "MODE_EXPLAIN",
+                Mode::Exec => "MODE_EXEC",
+            }
+        }
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]

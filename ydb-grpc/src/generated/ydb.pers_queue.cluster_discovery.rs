@@ -70,6 +70,19 @@ pub mod write_session_clusters {
         ClientLocation = 2,
         ConsistentDistribution = 3,
     }
+    impl SelectionReason {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                SelectionReason::Unspecified => "SELECTION_REASON_UNSPECIFIED",
+                SelectionReason::ClientPreference => "CLIENT_PREFERENCE",
+                SelectionReason::ClientLocation => "CLIENT_LOCATION",
+                SelectionReason::ConsistentDistribution => "CONSISTENT_DISTRIBUTION",
+            }
+        }
+    }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
