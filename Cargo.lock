@@ -2379,9 +2379,4 @@ dependencies = [
  "tonic",
  "tonic-build",
  "walkdir",
- "ydb-grpc-helpers",
 ]
-
-[[package]]
-name = "ydb-grpc-helpers"
-version = "0.0.10"

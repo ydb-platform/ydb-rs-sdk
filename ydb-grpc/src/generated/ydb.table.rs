@@ -190,6 +190,121 @@ pub struct IndexBuildMetadata {
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChangefeedMode {
+}
+/// Nested message and enum types in `ChangefeedMode`.
+pub mod changefeed_mode {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Mode {
+        Unspecified = 0,
+        /// Only the key component of the modified row
+        KeysOnly = 1,
+        /// Updated columns
+        Updates = 2,
+        /// The entire row, as it appears after it was modified
+        NewImage = 3,
+        /// The entire row, as it appeared before it was modified
+        OldImage = 4,
+        /// Both new and old images of the row
+        NewAndOldImages = 5,
+    }
+    impl Mode {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Mode::Unspecified => "MODE_UNSPECIFIED",
+                Mode::KeysOnly => "MODE_KEYS_ONLY",
+                Mode::Updates => "MODE_UPDATES",
+                Mode::NewImage => "MODE_NEW_IMAGE",
+                Mode::OldImage => "MODE_OLD_IMAGE",
+                Mode::NewAndOldImages => "MODE_NEW_AND_OLD_IMAGES",
+            }
+        }
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChangefeedFormat {
+}
+/// Nested message and enum types in `ChangefeedFormat`.
+pub mod changefeed_format {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Format {
+        Unspecified = 0,
+        Json = 1,
+    }
+    impl Format {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Format::Unspecified => "FORMAT_UNSPECIFIED",
+                Format::Json => "FORMAT_JSON",
+            }
+        }
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Changefeed {
+    /// Name of the feed
+    #[prost(string, tag="1")]
+    pub name: ::prost::alloc::string::String,
+    /// Mode specifies the information that will be written to the feed
+    #[prost(enumeration="changefeed_mode::Mode", tag="2")]
+    pub mode: i32,
+    /// Format of the data
+    #[prost(enumeration="changefeed_format::Format", tag="3")]
+    pub format: i32,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChangefeedDescription {
+    /// Name of the feed
+    #[prost(string, tag="1")]
+    pub name: ::prost::alloc::string::String,
+    /// Mode specifies the information that will be written to the feed
+    #[prost(enumeration="changefeed_mode::Mode", tag="2")]
+    pub mode: i32,
+    /// Format of the data
+    #[prost(enumeration="changefeed_format::Format", tag="3")]
+    pub format: i32,
+    /// State of the feed
+    #[prost(enumeration="changefeed_description::State", tag="4")]
+    pub state: i32,
+}
+/// Nested message and enum types in `ChangefeedDescription`.
+pub mod changefeed_description {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum State {
+        Unspecified = 0,
+        Enabled = 1,
+        Disabled = 2,
+    }
+    impl State {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                State::Unspecified => "STATE_UNSPECIFIED",
+                State::Enabled => "STATE_ENABLED",
+                State::Disabled => "STATE_DISABLED",
+            }
+        }
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StoragePool {
     #[prost(string, tag="1")]
     pub media: ::prost::alloc::string::String,
@@ -713,6 +828,19 @@ pub struct DropTableResponse {
     #[prost(message, optional, tag="1")]
     pub operation: ::core::option::Option<super::operations::Operation>,
 }
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RenameIndexItem {
+    /// Index name to rename
+    #[prost(string, tag="1")]
+    pub source_name: ::prost::alloc::string::String,
+    /// Target index name
+    #[prost(string, tag="2")]
+    pub destination_name: ::prost::alloc::string::String,
+    /// Move options
+    #[prost(bool, tag="3")]
+    pub replace_destination: bool,
+}
 /// Alter table with given path
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -765,6 +893,15 @@ pub struct AlterTableRequest {
     /// Set read replicas settings for table
     #[prost(message, optional, tag="18")]
     pub set_read_replicas_settings: ::core::option::Option<ReadReplicasSettings>,
+    /// Add change feeds
+    #[prost(message, repeated, tag="19")]
+    pub add_changefeeds: ::prost::alloc::vec::Vec<Changefeed>,
+    /// Remove change feeds (by its names)
+    #[prost(string, repeated, tag="20")]
+    pub drop_changefeeds: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Rename existed index
+    #[prost(message, repeated, tag="21")]
+    pub rename_indexes: ::prost::alloc::vec::Vec<RenameIndexItem>,
     /// Setup or remove time to live settings
     #[prost(oneof="alter_table_request::TtlAction", tags="7, 8")]
     pub ttl_action: ::core::option::Option<alter_table_request::TtlAction>,
@@ -944,6 +1081,9 @@ pub struct DescribeTableResult {
     /// Read replicas settings for table
     #[prost(message, optional, tag="14")]
     pub read_replicas_settings: ::core::option::Option<ReadReplicasSettings>,
+    /// List of changefeeds
+    #[prost(message, repeated, tag="15")]
+    pub changefeeds: ::prost::alloc::vec::Vec<ChangefeedDescription>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1042,6 +1182,8 @@ pub mod query_stats_collection {
         StatsCollectionBasic = 2,
         /// Add execution stats and plan on top of STATS_COLLECTION_BASIC
         StatsCollectionFull = 3,
+        /// Detailed execution stats including stats for individual tasks and channels
+        StatsCollectionProfile = 4,
     }
     impl Mode {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -1053,6 +1195,7 @@ pub mod query_stats_collection {
                 Mode::StatsCollectionNone => "STATS_COLLECTION_NONE",
                 Mode::StatsCollectionBasic => "STATS_COLLECTION_BASIC",
                 Mode::StatsCollectionFull => "STATS_COLLECTION_FULL",
+                Mode::StatsCollectionProfile => "STATS_COLLECTION_PROFILE",
             }
         }
     }

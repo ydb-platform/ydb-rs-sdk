@@ -1,5 +1,142 @@
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Limit {
+    #[prost(oneof="limit::Kind", tags="1, 2, 3, 4, 5, 6")]
+    pub kind: ::core::option::Option<limit::Kind>,
+}
+/// Nested message and enum types in `Limit`.
+pub mod limit {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Range {
+        #[prost(uint32, tag="1")]
+        pub min: u32,
+        #[prost(uint32, tag="2")]
+        pub max: u32,
+    }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Kind {
+        #[prost(message, tag="1")]
+        Range(Range),
+        #[prost(uint32, tag="2")]
+        Lt(u32),
+        #[prost(uint32, tag="3")]
+        Le(u32),
+        #[prost(uint32, tag="4")]
+        Eq(u32),
+        #[prost(uint32, tag="5")]
+        Ge(u32),
+        #[prost(uint32, tag="6")]
+        Gt(u32),
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MapKey {
+    #[prost(message, optional, tag="1")]
+    pub length: ::core::option::Option<Limit>,
+    #[prost(string, tag="2")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FeatureFlag {
+}
+/// Nested message and enum types in `FeatureFlag`.
+pub mod feature_flag {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Status {
+        Unspecified = 0,
+        Enabled = 1,
+        Disabled = 2,
+    }
+    impl Status {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Status::Unspecified => "STATUS_UNSPECIFIED",
+                Status::Enabled => "ENABLED",
+                Status::Disabled => "DISABLED",
+            }
+        }
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CostInfo {
+    /// Total amount of request units (RU), consumed by the operation.
+    #[prost(double, tag="1")]
+    pub consumed_units: f64,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StatusIds {
+}
+/// Nested message and enum types in `StatusIds`.
+pub mod status_ids {
+    /// reserved range [400000, 400999]
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum StatusCode {
+        Unspecified = 0,
+        Success = 400000,
+        BadRequest = 400010,
+        Unauthorized = 400020,
+        InternalError = 400030,
+        Aborted = 400040,
+        Unavailable = 400050,
+        Overloaded = 400060,
+        SchemeError = 400070,
+        GenericError = 400080,
+        Timeout = 400090,
+        BadSession = 400100,
+        PreconditionFailed = 400120,
+        AlreadyExists = 400130,
+        NotFound = 400140,
+        SessionExpired = 400150,
+        Cancelled = 400160,
+        Undetermined = 400170,
+        Unsupported = 400180,
+        SessionBusy = 400190,
+    }
+    impl StatusCode {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                StatusCode::Unspecified => "STATUS_CODE_UNSPECIFIED",
+                StatusCode::Success => "SUCCESS",
+                StatusCode::BadRequest => "BAD_REQUEST",
+                StatusCode::Unauthorized => "UNAUTHORIZED",
+                StatusCode::InternalError => "INTERNAL_ERROR",
+                StatusCode::Aborted => "ABORTED",
+                StatusCode::Unavailable => "UNAVAILABLE",
+                StatusCode::Overloaded => "OVERLOADED",
+                StatusCode::SchemeError => "SCHEME_ERROR",
+                StatusCode::GenericError => "GENERIC_ERROR",
+                StatusCode::Timeout => "TIMEOUT",
+                StatusCode::BadSession => "BAD_SESSION",
+                StatusCode::PreconditionFailed => "PRECONDITION_FAILED",
+                StatusCode::AlreadyExists => "ALREADY_EXISTS",
+                StatusCode::NotFound => "NOT_FOUND",
+                StatusCode::SessionExpired => "SESSION_EXPIRED",
+                StatusCode::Cancelled => "CANCELLED",
+                StatusCode::Undetermined => "UNDETERMINED",
+                StatusCode::Unsupported => "UNSUPPORTED",
+                StatusCode::SessionBusy => "SESSION_BUSY",
+            }
+        }
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DecimalType {
     #[prost(uint32, tag="1")]
     pub precision: u32,
@@ -282,141 +419,4 @@ pub struct ResultSet {
     /// Flag indicates the result was truncated
     #[prost(bool, tag="3")]
     pub truncated: bool,
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct StatusIds {
-}
-/// Nested message and enum types in `StatusIds`.
-pub mod status_ids {
-    /// reserved range [400000, 400999]
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum StatusCode {
-        Unspecified = 0,
-        Success = 400000,
-        BadRequest = 400010,
-        Unauthorized = 400020,
-        InternalError = 400030,
-        Aborted = 400040,
-        Unavailable = 400050,
-        Overloaded = 400060,
-        SchemeError = 400070,
-        GenericError = 400080,
-        Timeout = 400090,
-        BadSession = 400100,
-        PreconditionFailed = 400120,
-        AlreadyExists = 400130,
-        NotFound = 400140,
-        SessionExpired = 400150,
-        Cancelled = 400160,
-        Undetermined = 400170,
-        Unsupported = 400180,
-        SessionBusy = 400190,
-    }
-    impl StatusCode {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                StatusCode::Unspecified => "STATUS_CODE_UNSPECIFIED",
-                StatusCode::Success => "SUCCESS",
-                StatusCode::BadRequest => "BAD_REQUEST",
-                StatusCode::Unauthorized => "UNAUTHORIZED",
-                StatusCode::InternalError => "INTERNAL_ERROR",
-                StatusCode::Aborted => "ABORTED",
-                StatusCode::Unavailable => "UNAVAILABLE",
-                StatusCode::Overloaded => "OVERLOADED",
-                StatusCode::SchemeError => "SCHEME_ERROR",
-                StatusCode::GenericError => "GENERIC_ERROR",
-                StatusCode::Timeout => "TIMEOUT",
-                StatusCode::BadSession => "BAD_SESSION",
-                StatusCode::PreconditionFailed => "PRECONDITION_FAILED",
-                StatusCode::AlreadyExists => "ALREADY_EXISTS",
-                StatusCode::NotFound => "NOT_FOUND",
-                StatusCode::SessionExpired => "SESSION_EXPIRED",
-                StatusCode::Cancelled => "CANCELLED",
-                StatusCode::Undetermined => "UNDETERMINED",
-                StatusCode::Unsupported => "UNSUPPORTED",
-                StatusCode::SessionBusy => "SESSION_BUSY",
-            }
-        }
-    }
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Limit {
-    #[prost(oneof="limit::Kind", tags="1, 2, 3, 4, 5, 6")]
-    pub kind: ::core::option::Option<limit::Kind>,
-}
-/// Nested message and enum types in `Limit`.
-pub mod limit {
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Range {
-        #[prost(uint32, tag="1")]
-        pub min: u32,
-        #[prost(uint32, tag="2")]
-        pub max: u32,
-    }
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum Kind {
-        #[prost(message, tag="1")]
-        Range(Range),
-        #[prost(uint32, tag="2")]
-        Lt(u32),
-        #[prost(uint32, tag="3")]
-        Le(u32),
-        #[prost(uint32, tag="4")]
-        Eq(u32),
-        #[prost(uint32, tag="5")]
-        Ge(u32),
-        #[prost(uint32, tag="6")]
-        Gt(u32),
-    }
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct MapKey {
-    #[prost(message, optional, tag="1")]
-    pub length: ::core::option::Option<Limit>,
-    #[prost(string, tag="2")]
-    pub value: ::prost::alloc::string::String,
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct FeatureFlag {
-}
-/// Nested message and enum types in `FeatureFlag`.
-pub mod feature_flag {
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum Status {
-        Unspecified = 0,
-        Enabled = 1,
-        Disabled = 2,
-    }
-    impl Status {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Status::Unspecified => "STATUS_UNSPECIFIED",
-                Status::Enabled => "ENABLED",
-                Status::Disabled => "DISABLED",
-            }
-        }
-    }
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct CostInfo {
-    /// Total amount of request units (RU), consumed by the operation.
-    #[prost(double, tag="1")]
-    pub consumed_units: f64,
 }
