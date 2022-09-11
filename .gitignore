@@ -3,4 +3,3 @@ Cargo.toml.bak
 /.idea
 /target
 /.run/
-/ydb-grpc/src/generated/descriptors.bin

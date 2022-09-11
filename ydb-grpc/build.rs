@@ -1,6 +1,7 @@
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::{fs, io};
+use std::path::PathBuf;
 use walkdir::WalkDir;
 
 const DST_FOLDER: &str="src/generated";
@@ -24,16 +25,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     clean_dst_dir(DST_FOLDER)?;
 
+    let descriptor_file = PathBuf::from(DST_FOLDER).join("descriptors.bin");
+
     let mut cfg = prost_build::Config::default();
     cfg.compile_well_known_types()
         .type_attribute(".Ydb", "#[derive(serde::Serialize, serde::Deserialize)]")
         .extern_path(".google.protobuf", "::pbjson_types")
+        .file_descriptor_set_path(&descriptor_file)
     ;
 
     tonic_build::configure()
         .build_server(false)
         .build_client(true)
-        .out_dir("src/generated")
+        .out_dir(DST_FOLDER)
         .include_file("mod.rs")
         .compile_with_config(
             cfg,

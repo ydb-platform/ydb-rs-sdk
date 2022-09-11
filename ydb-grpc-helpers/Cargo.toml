@@ -6,7 +6,7 @@ authors = ["rekby <timofey.koolin@gmail.com>"]
 edition = "2018"
 license = "Apache-2.0"
 description = "Deprecated, not used now. Crate contain helpers for generate grpc imports in ydb-grpc crate."
-repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-grpc-helpers"
+repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/ydb-grpc-helpers-0.0.11/ydb-grpc-helpers"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
