@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     clean_dst_dir(DST_FOLDER)?;
 
-    let descriptor_file = PathBuf::from(DST_FOLDER).join("descriptors.bin");
+    let descriptor_file = PathBuf::from(DST_FOLDER).join("../descriptors.bin");
 
     let mut cfg = prost_build::Config::default();
     cfg.compile_well_known_types()

@@ -5,14 +5,14 @@ pub mod ydb {
         }
         include!("ydb.scheme.rs");
     }
-    pub mod table_stats {
-        include!("ydb.table_stats.rs");
+    pub mod discovery {
+        pub mod v1 {
+            include!("ydb.discovery.v1.rs");
+        }
+        include!("ydb.discovery.rs");
     }
     pub mod formats {
         include!("ydb.formats.rs");
-    }
-    pub mod issue {
-        include!("ydb.issue.rs");
     }
     pub mod table {
         pub mod v1 {
@@ -20,14 +20,14 @@ pub mod ydb {
         }
         include!("ydb.table.rs");
     }
+    pub mod issue {
+        include!("ydb.issue.rs");
+    }
+    pub mod table_stats {
+        include!("ydb.table_stats.rs");
+    }
     pub mod operations {
         include!("ydb.operations.rs");
-    }
-    pub mod discovery {
-        pub mod v1 {
-            include!("ydb.discovery.v1.rs");
-        }
-        include!("ydb.discovery.rs");
     }
     include!("ydb.rs");
 }
