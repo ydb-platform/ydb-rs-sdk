@@ -21,9 +21,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("skip regenerate sources");
         return Ok(());
     };
-    println!("cargo:rerun-if-changed=ydb-api-protos");
+    // println!("cargo:rerun-if-changed=ydb-api-protos");
 
-    clean_dst_dir(DST_FOLDER)?;
+    // clean_dst_dir(DST_FOLDER)?;
 
     let descriptor_file = PathBuf::from(DST_FOLDER).join("../descriptors.bin");
 
