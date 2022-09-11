@@ -45,6 +45,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             INCLUDE_DIRS,
         )?;
 
+    let descriptor_bytes = std::fs::read(descriptor_file).unwrap();
+    pbjson_build::Builder::new()
+        .out_dir(DST_FOLDER)
+        .register_descriptors(&descriptor_bytes)
+        .unwrap()
+        .build(&[".google", ".ydb"])
+        .unwrap();
+
     fix_generated_files("src/generated")?;
     Ok(())
 }
