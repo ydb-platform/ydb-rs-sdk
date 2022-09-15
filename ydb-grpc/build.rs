@@ -21,16 +21,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("skip regenerate sources");
         return Ok(());
     };
-    // println!("cargo:rerun-if-changed=ydb-api-protos");
-
-    // clean_dst_dir(DST_FOLDER)?;
+    println!("cargo:rerun-if-changed=ydb-api-protos");
+    clean_dst_dir(DST_FOLDER)?;
 
     let descriptor_file = PathBuf::from(DST_FOLDER).join("../descriptors.bin");
 
     let mut cfg = prost_build::Config::default();
     cfg.compile_well_known_types()
         .type_attribute(".Ydb", "#[derive(serde::Serialize, serde::Deserialize)]")
-        .extern_path(".google.protobuf", "::pbjson_types")
+        // .extern_path(".google.protobuf", "::pbjson_types")
         .file_descriptor_set_path(&descriptor_file)
     ;
 
@@ -39,20 +38,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build_client(true)
         .out_dir(DST_FOLDER)
         .include_file("mod.rs")
+        .compile_well_known_types(true)
         .compile_with_config(
             cfg,
             COMPILE_FILES,
             INCLUDE_DIRS,
         )?;
 
-    let descriptor_bytes = std::fs::read(descriptor_file).unwrap();
-    pbjson_build::Builder::new()
-        .out_dir(DST_FOLDER)
-        .register_descriptors(&descriptor_bytes)
-        .unwrap()
-        .build(&[".google", ".ydb"])
-        .unwrap();
-
+    // let descriptor_bytes = std::fs::read(descriptor_file).unwrap();
+    // pbjson_build::Builder::new()
+    //     .out_dir(DST_FOLDER)
+    //     .register_descriptors(&descriptor_bytes)
+    //     .unwrap()
+    //     .build(&[".google", ".ydb"])
+    //     .unwrap();
+    //
     fix_generated_files("src/generated")?;
     Ok(())
 }

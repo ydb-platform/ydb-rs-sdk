@@ -12,7 +12,7 @@ repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-grpc"
 prost = "0.11.0"
 prost-types = "0.11.1"
 pbjson = "0.4.0"
-pbjson-types = "0.4.0"
+pbjson-types ={version= "0.4.0", path="/Users/rekby/projects/other/influxdata-pbjson/pbjson-types"}
 serde={version="1.0", features=["derive"]}
 tonic = {version = "0.8.0", features=["tls", "tls-roots", "tls-webpki-roots"]}
 

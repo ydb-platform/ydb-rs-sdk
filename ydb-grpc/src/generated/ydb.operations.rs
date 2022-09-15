@@ -10,14 +10,14 @@ pub struct OperationParams {
     /// Timeout of operation does not tell anything about its result, it might be completed successfully
     /// or cancelled on server.
     #[prost(message, optional, tag="2")]
-    pub operation_timeout: ::core::option::Option<::pbjson_types::Duration>,
+    pub operation_timeout: ::core::option::Option<super::super::google::protobuf::Duration>,
     /// Server will try to cancel the operation after the specified duration starting from the time
     /// the operation arrives at server.
     /// In case of successful cancellation operation will receive CANCELLED status code, which will be
     /// sent back to client if it was waiting for the operation result.
     /// In case when cancellation isn't possible, no action will be performed.
     #[prost(message, optional, tag="3")]
-    pub cancel_after: ::core::option::Option<::pbjson_types::Duration>,
+    pub cancel_after: ::core::option::Option<super::super::google::protobuf::Duration>,
     /// User-defined labels of operation.
     #[prost(map="string, string", tag="4")]
     pub labels: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
@@ -131,9 +131,9 @@ pub struct Operation {
     pub issues: ::prost::alloc::vec::Vec<super::issue::IssueMessage>,
     /// Result data
     #[prost(message, optional, tag="5")]
-    pub result: ::core::option::Option<::pbjson_types::Any>,
+    pub result: ::core::option::Option<super::super::google::protobuf::Any>,
     #[prost(message, optional, tag="6")]
-    pub metadata: ::core::option::Option<::pbjson_types::Any>,
+    pub metadata: ::core::option::Option<super::super::google::protobuf::Any>,
     /// Contains information about the cost of the operation.
     /// For completed operations, it shows the final cost of the operation.
     /// For operations in progress, it might indicate the current cost of the operation (if supported).

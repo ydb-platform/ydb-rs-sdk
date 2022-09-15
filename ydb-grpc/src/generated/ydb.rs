@@ -306,13 +306,13 @@ pub mod r#type {
         #[prost(message, tag="107")]
         TaggedType(::prost::alloc::boxed::Box<super::TaggedType>),
         /// Special types 
-        #[prost(enumeration="::pbjson_types::NullValue", tag="201")]
+        #[prost(enumeration="super::super::google::protobuf::NullValue", tag="201")]
         VoidType(i32),
-        #[prost(enumeration="::pbjson_types::NullValue", tag="202")]
+        #[prost(enumeration="super::super::google::protobuf::NullValue", tag="202")]
         NullType(i32),
-        #[prost(enumeration="::pbjson_types::NullValue", tag="203")]
+        #[prost(enumeration="super::super::google::protobuf::NullValue", tag="203")]
         EmptyListType(i32),
-        #[prost(enumeration="::pbjson_types::NullValue", tag="204")]
+        #[prost(enumeration="super::super::google::protobuf::NullValue", tag="204")]
         EmptyDictType(i32),
     }
 }
@@ -379,7 +379,7 @@ pub mod value {
         #[prost(string, tag="9")]
         TextValue(::prost::alloc::string::String),
         /// Set if current TValue is terminal Null
-        #[prost(enumeration="::pbjson_types::NullValue", tag="10")]
+        #[prost(enumeration="super::super::google::protobuf::NullValue", tag="10")]
         NullFlagValue(i32),
         /// Represents nested TValue for Optional<Optional<T>>(Null), or Variant<T> types
         #[prost(message, tag="11")]

@@ -414,10 +414,10 @@ pub struct TableStats {
     pub partitions: u64,
     /// Timestamp of table creation
     #[prost(message, optional, tag="5")]
-    pub creation_time: ::core::option::Option<::pbjson_types::Timestamp>,
+    pub creation_time: ::core::option::Option<super::super::google::protobuf::Timestamp>,
     /// Timestamp of last modification
     #[prost(message, optional, tag="6")]
-    pub modification_time: ::core::option::Option<::pbjson_types::Timestamp>,
+    pub modification_time: ::core::option::Option<super::super::google::protobuf::Timestamp>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -915,7 +915,7 @@ pub mod alter_table_request {
         #[prost(message, tag="7")]
         SetTtlSettings(super::TtlSettings),
         #[prost(message, tag="8")]
-        DropTtlSettings(::pbjson_types::Empty),
+        DropTtlSettings(super::super::super::google::protobuf::Empty),
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
