@@ -59,6 +59,7 @@ const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 #[non_exhaustive]
 pub enum Value {
     Void,
+    Null,
     Bool(bool),
     Int8(i8),
     Uint8(u8),
@@ -280,6 +281,7 @@ impl Value {
                     _ => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
                 },
                 T::VoidType(_) => Value::Void,
+                T::NullType(_) => Value::Null,
                 T::OptionalType(val) => {
                     let t = if let Some(item) = &val.item {
                         Some(*item.clone())
@@ -319,6 +321,7 @@ impl Value {
     pub(crate) fn from_proto(t: &Value, proto_value: ydb_proto::Value) -> YdbResult<Self> {
         let res = match (t, proto_value) {
             (Value::Void, _) => Value::Void,
+            (Value::Null, _) => Value::Null,
             (
                 t,
                 ydb_proto::Value {
@@ -455,6 +458,21 @@ impl Value {
                     )),
                     ..ydb_proto::Value::default()
                 }),
+            },
+            Self::Null => ydb_proto::TypedValue {
+                r#type: Some(ydb_proto::Type {
+                    r#type: Some(ydb_proto::r#type::Type::NullType(
+                        prost_types::NullValue::NullValue.into(),
+                    )),
+                    ..ydb_proto::Type::default()
+                }),
+                value: Some(ydb_proto::Value {
+                    value: Some(ydb_proto::value::Value::NullFlagValue(
+                        prost_types::NullValue::NullValue.into(),
+                    )),
+                    ..ydb_proto::Value::default()
+                }),
+                ..ydb_proto::TypedValue::default()
             },
             Self::Bool(val) => proto_typed_value(pt::Bool, pv::BoolValue(val)),
             Self::Int8(val) => proto_typed_value(pt::Int8, pv::Int32Value(val.into())),
@@ -623,6 +641,7 @@ mod test {
         num_tests!(values, Value::Double, f64);
 
         values.push(Value::Void);
+        values.push(Value::Null);
 
         values.push(Value::Date(std::time::Duration::from_secs(1633996800))); //Tue Oct 12 00:00:00 UTC 2021
         values.push(Value::DateTime(std::time::Duration::from_secs(1634000523))); //Tue Oct 12 01:02:03 UTC 2021

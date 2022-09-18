@@ -299,6 +299,40 @@ SELECT $test AS test;
 
 #[tokio::test]
 #[traced_test]
+// #[ignore]
+async fn send_null_value_as_nullable_param() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let res: Option<i32> = table_client
+        .retry_transaction(|tx| async {
+            let mut tx = tx;
+            let param = Value::Null;
+
+            let res = tx
+                .query(
+                    Query::from(
+                        "
+            DECLARE $res AS Int32?;
+
+            SELECT $res AS res;
+        ",
+                    )
+                        .with_params(ydb_params!("$res" => param)),
+                )
+                .await?;
+            let mut row = res.into_only_row()?;
+            return Ok(row.remove_field_by_name("res")?);
+        })
+        .await?
+        .try_into()?;
+
+    assert_eq!(None, res);
+
+    return Ok(());
+}
+
+#[tokio::test]
+#[traced_test]
 #[ignore] // need YDB access
 async fn select_optional() -> YdbResult<()> {
     let client = create_client().await?;
@@ -542,7 +576,7 @@ DECLARE $values AS List<Struct<
 
 UPSERT INTO stream_query
 SELECT
-    * 
+    *
 FROM
     AS_TABLE($values);
 ",
