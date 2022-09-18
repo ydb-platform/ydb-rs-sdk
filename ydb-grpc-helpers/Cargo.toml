@@ -1,6 +1,6 @@
 [package]
 publish = true
-version = "0.0.7"
+version = "0.0.10"
 name = "ydb-grpc-helpers"
 authors = ["rekby <timofey.koolin@gmail.com>"]
 edition = "2018"

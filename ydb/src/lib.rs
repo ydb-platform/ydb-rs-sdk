@@ -9,7 +9,7 @@
 //! # async fn main() -> YdbResult<()> {
 //!
 //!  // create driver
-//!  let client = ClientBuilder::from_str("grpc://localhost:2136?database=local")?
+//!  let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
 //!     .with_credentials(StaticToken::from("asd"))
 //!     .client()?;
 //!
@@ -44,26 +44,39 @@
 //!
 //! [Many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
 //!
-mod channel_pool;
+extern crate core;
+
 pub(crate) mod client;
 mod client_builder;
 pub(crate) mod client_common;
+#[cfg(test)]
+mod client_directory_test_integration;
+pub(crate) mod client_scheme;
 pub(crate) mod client_table;
 #[cfg(test)]
 mod client_table_test_integration;
+pub(crate) mod connection_pool;
 mod credentials;
 pub(crate) mod discovery;
 mod errors;
 mod grpc;
+pub(crate) mod grpc_connection_manager;
+mod grpc_wrapper;
 mod load_balancer;
-mod middlewares;
 mod pub_traits;
 pub(crate) mod query;
 pub(crate) mod result;
 mod session;
 mod session_pool;
 mod sugar;
+
+#[cfg(test)]
 mod test_helpers;
+
+pub(crate) mod dicovery_pessimization_interceptor;
+#[cfg(test)]
+mod test_integration_helper;
+mod trace_helpers;
 mod trait_operation;
 pub(crate) mod transaction;
 mod types;
@@ -76,6 +89,11 @@ pub use client::Client;
 pub use client_builder::ClientBuilder;
 // full enum pub types
 pub use client_table::{RetryOptions, TableClient, TransactionOptions};
+
+// full enum pub types
+pub use client_scheme::client::SchemeClient;
+pub use client_scheme::list_types::{SchemeEntry, SchemeEntryType, SchemePermissions};
+
 // full enum pub types
 pub use discovery::{Discovery, DiscoveryState, StaticDiscovery};
 // full enum pub types

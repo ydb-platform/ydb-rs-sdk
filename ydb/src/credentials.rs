@@ -19,7 +19,7 @@ pub(crate) fn credencials_ref<T: 'static + Credentials>(cred: T) -> CredentialsR
 /// ```no_run
 /// # use ydb::{ClientBuilder, StaticToken, YdbResult};
 /// # fn main()->YdbResult<()>{
-/// let builder = ClientBuilder::from_str("grpc://localhost:2136?database=/local")?;
+/// let builder = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=/local")?;
 /// let client = builder.with_credentials(StaticToken::from("asd")).client()?;
 /// # return Ok(());
 /// # }
@@ -38,15 +38,15 @@ impl StaticToken {
     /// StaticToken::from("asd");
     /// ```
     pub fn from<T: Into<String>>(token: T) -> Self {
-        return StaticToken {
+        StaticToken {
             token: token.into(),
-        };
+        }
     }
 }
 
 impl Credentials for StaticToken {
     fn create_token(&self) -> YdbResult<TokenInfo> {
-        return Ok(TokenInfo::token(self.token.clone()));
+        Ok(TokenInfo::token(self.token.clone()))
     }
 
     fn debug_string(&self) -> String {
@@ -58,7 +58,7 @@ impl Credentials for StaticToken {
         } else {
             ("xxx", "xxx")
         };
-        return format!("static token: {begin}...{end}");
+        format!("static token: {}...{}", begin, end)
     }
 }
 
@@ -84,18 +84,19 @@ impl CommandLineYcToken {
         let cmd = cmd.into();
         let cmd_parts: Vec<&str> = cmd.split_whitespace().collect();
 
-        if cmd_parts.len() < 1 {
-            return Err(YdbError::Custom(
-                format!("can't split get token command: '{}'", cmd).into(),
-            ));
+        if cmd_parts.is_empty() {
+            return Err(YdbError::Custom(format!(
+                "can't split get token command: '{}'",
+                cmd
+            )));
         }
 
         let mut command = Command::new(cmd_parts[0]);
         command.args(&cmd_parts.as_slice()[1..]);
 
-        return Ok(CommandLineYcToken {
+        Ok(CommandLineYcToken {
             command: Arc::new(Mutex::new(command)),
-        });
+        })
     }
 }
 
@@ -111,7 +112,7 @@ impl Credentials for CommandLineYcToken {
             )));
         }
         let token = String::from_utf8(result.stdout)?.trim().to_string();
-        return Ok(TokenInfo::token(token));
+        Ok(TokenInfo::token(token))
     }
 
     fn debug_string(&self) -> String {
@@ -130,11 +131,11 @@ impl Credentials for CommandLineYcToken {
                 desc
             }
             Err(err) => {
-                format!("err: {}", err.to_string())
+                format!("err: {}", err)
             }
         };
 
-        return token_describe;
+        token_describe
     }
 }
 
@@ -166,7 +167,7 @@ pub struct GCEMetadata {
 impl GCEMetadata {
     /// Create GCEMetadata with default url for receive token
     pub fn new() -> Self {
-        return Self::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token").unwrap();
+        Self::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token").unwrap()
     }
 
     /// Create GCEMetadata with custom url (may need for debug or spec infrastructure with non standard metadata)
@@ -184,6 +185,12 @@ impl GCEMetadata {
         Ok(Self {
             uri: url.into().parse()?,
         })
+    }
+}
+
+impl Default for GCEMetadata {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -211,13 +218,13 @@ impl Credentials for GCEMetadata {
             .header("Metadata-Flavor", "Google")
             .send()?
             .json()?;
-        return Ok(
+        Ok(
             TokenInfo::token(format!("{} {}", res.token_type, res.access_token))
                 .with_renew(Instant::now().add(Duration::from_secs(res.expires_in))),
-        );
+        )
     }
 
     fn debug_string(&self) -> String {
-        return format!("GoogleComputeEngineMetadata from {}", self.uri.as_str());
+        format!("GoogleComputeEngineMetadata from {}", self.uri.as_str())
     }
 }

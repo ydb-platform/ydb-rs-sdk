@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use ydb_grpc::ydb_proto::discovery::{ListEndpointsResponse, WhoAmIResponse};
 use ydb_grpc::ydb_proto::operations::Operation as YdbOperation;
+use ydb_grpc::ydb_proto::scheme::{ListDirectoryResponse, MakeDirectoryResponse, RemoveDirectoryResponse};
 use ydb_grpc::ydb_proto::table::{
     CommitTransactionResponse, CreateSessionResponse, DeleteSessionResponse,
     ExecuteDataQueryResponse, ExecuteSchemeQueryResponse, KeepAliveResponse,
@@ -8,7 +9,7 @@ use ydb_grpc::ydb_proto::table::{
 };
 
 pub(crate) trait Operation: Debug {
-    fn operation(self: &Self) -> Option<YdbOperation>;
+    fn operation(&self) -> Option<YdbOperation>;
 }
 
 macro_rules! operation_impl_for {
@@ -30,3 +31,6 @@ operation_impl_for!(KeepAliveResponse);
 operation_impl_for!(ListEndpointsResponse);
 operation_impl_for!(RollbackTransactionResponse);
 operation_impl_for!(WhoAmIResponse);
+operation_impl_for!(MakeDirectoryResponse);
+operation_impl_for!(ListDirectoryResponse);
+operation_impl_for!(RemoveDirectoryResponse);

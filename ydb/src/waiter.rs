@@ -17,11 +17,11 @@ pub(crate) struct WaiterImpl {
 impl WaiterImpl {
     pub fn new() -> Self {
         let (sender, receiver) = watch::channel(YdbResult::Ok(false));
-        return WaiterImpl {
+        WaiterImpl {
             received_succesfull: AtomicBool::new(false),
             sender,
             receiver,
-        };
+        }
     }
 
     pub fn set_received(&self, res: YdbResult<()>) {

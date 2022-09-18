@@ -16,15 +16,23 @@ struct GetUrl {
 }
 
 async fn get_url(table_client: TableClient, params: GetUrl) -> Result<impl Reply, Infallible> {
-    let hash = hashers::fnv::fnv1a32(params.url.as_bytes()).to_string();
+    let url = normalize_url(params.url);
+    let hash = hashers::fnv::fnv1a32(url.as_bytes()).to_string();
 
-    match db::insert(&table_client, hash.clone(), params.url.clone()).await {
+    match db::insert(&table_client, hash.clone(), url).await {
         Ok(_) => Ok(warp::reply::with_status(hash, StatusCode::OK)),
         Err(err) => Ok(warp::reply::with_status(
             format!("failed create short url: {}", err),
             StatusCode::INTERNAL_SERVER_ERROR,
         )),
     }
+}
+
+fn normalize_url(mut url: String) -> String {
+    if !url.contains("://") {
+        url = "http://".to_string() + url.as_str();
+    };
+    url
 }
 
 #[derive(Deserialize)]
@@ -52,7 +60,7 @@ async fn redirect(
             StatusCode::INTERNAL_SERVER_ERROR,
         )),
     };
-    return Ok(reply);
+    Ok(reply)
 }
 
 fn with_db(
@@ -78,5 +86,5 @@ pub async fn run(table_client: TableClient) -> Result<(), warp::Error> {
     warp::serve(url.or(redirect_page).or(index))
         .run(([127, 0, 0, 1], 8000))
         .await;
-    return Ok(());
+    Ok(())
 }

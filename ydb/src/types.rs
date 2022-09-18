@@ -94,7 +94,7 @@ pub enum Value {
 impl Value {
     pub(crate) fn kind_static(&self) -> &'static str {
         let discriminant: ValueDiscriminants = self.into();
-        return discriminant.into();
+        discriminant.into()
     }
 }
 
@@ -116,30 +116,30 @@ impl ValueStruct {
         values: Vec<Value>,
     ) -> YdbResult<Self> {
         if fields_name.len() != values.len() {
-            return Err(YdbError::Custom(format!("different len fields_name and values. fields_name len: {}, values len: {}. fields_name: {:?}, values: {:?}", fields_name.len(), values.len(), fields_name, values).into()));
+            return Err(YdbError::Custom(format!("different len fields_name and values. fields_name len: {}, values len: {}. fields_name: {:?}, values: {:?}", fields_name.len(), values.len(), fields_name, values)));
         };
 
-        return Ok(ValueStruct {
+        Ok(ValueStruct {
             fields_name,
             values,
-        });
+        })
     }
 
     pub(crate) fn new() -> Self {
-        return Self::with_capacity(0);
+        Self::with_capacity(0)
     }
 
     pub(crate) fn with_capacity(capacity: usize) -> Self {
-        return ValueStruct {
+        ValueStruct {
             fields_name: Vec::with_capacity(capacity),
             values: Vec::with_capacity(capacity),
-        };
+        }
     }
 }
 
 impl Default for ValueStruct {
     fn default() -> Self {
-        return Self::new();
+        Self::new()
     }
 }
 
@@ -150,7 +150,7 @@ impl From<ValueStruct> for HashMap<String, Value> {
             let key = from_value.fields_name.pop().unwrap();
             map.insert(key, val);
         });
-        return map;
+        map
     }
 }
 
@@ -184,7 +184,7 @@ impl Default for Box<ValueOptional> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Sign {
     Plus,
     Minus,
@@ -192,11 +192,11 @@ pub enum Sign {
 
 impl Default for Sign {
     fn default() -> Self {
-        return Sign::Plus;
+        Sign::Plus
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, PartialEq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct SignedInterval {
     pub sign: Sign,
     pub duration: Duration,
@@ -209,7 +209,7 @@ impl SignedInterval {
             Sign::Plus => nanos,
             Sign::Minus => -nanos,
         };
-        return Ok(res);
+        Ok(res)
     }
 
     pub(crate) fn from_nanos(nanos: i64) -> Self {
@@ -219,10 +219,10 @@ impl SignedInterval {
             (Sign::Minus, (-nanos) as u64)
         };
 
-        return Self {
+        Self {
             sign,
             duration: Duration::from_nanos(nanos),
-        };
+        }
     }
 }
 
@@ -235,7 +235,7 @@ impl Value {
             }
         }
 
-        return Ok(Value::List(Box::new(ValueList { t, values })));
+        Ok(Value::List(Box::new(ValueList { t, values })))
     }
 
     pub(crate) fn optional_from(t: Value, value: Option<Value>) -> YdbResult<Self> {
@@ -315,7 +315,7 @@ impl Value {
         } else {
             return Err(YdbError::Custom("column type is None".into()));
         };
-        return Ok(res);
+        Ok(res)
     }
 
     pub(crate) fn from_proto(t: &Value, proto_value: ydb_proto::Value) -> YdbResult<Self> {
@@ -344,27 +344,21 @@ impl Value {
                 Self::from_proto_struct(struct_t, items)?
             }
             (t, proto_value) => {
-                return Err(YdbError::Custom(
-                    format!(
-                        "unsupported from_proto combination: t: '{:?}', proto_value: '{:?}'",
-                        t, proto_value
-                    )
-                    .into(),
-                ))
+                return Err(YdbError::Custom(format!(
+                    "unsupported from_proto combination: t: '{:?}', proto_value: '{:?}'",
+                    t, proto_value
+                )))
             }
         };
-        return Ok(res);
+        Ok(res)
     }
 
     fn from_proto_struct(t: &ValueStruct, items: Vec<ydb_proto::Value>) -> YdbResult<Value> {
         if t.fields_name.len() != items.len() {
-            return Err(YdbError::Custom(
-                format!(
-                    "struct description and items has diferrent length. t: {:?}, items: {:?}",
-                    t, items
-                )
-                .into(),
-            ));
+            return Err(YdbError::Custom(format!(
+                "struct description and items has diferrent length. t: {:?}, items: {:?}",
+                t, items
+            )));
         };
 
         let mut res = ValueStruct::with_capacity(t.fields_name.len());
@@ -372,7 +366,7 @@ impl Value {
             let v = Value::from_proto(&t.values[index], item)?;
             res.insert(t.fields_name[index].clone(), v);
         }
-        return Ok(Value::Struct(res));
+        Ok(Value::Struct(res))
     }
 
     fn from_proto_value(t: &Value, v: ydb_proto::value::Value) -> YdbResult<Value> {
@@ -417,11 +411,11 @@ impl Value {
                 )))
             }
         };
-        return Ok(res);
+        Ok(res)
     }
 
     fn from_proto_value_optional(
-        t: &Box<ValueOptional>,
+        t: &ValueOptional,
         val: ydb_proto::value::Value,
     ) -> YdbResult<Self> {
         use ydb_proto::value::Value as pv;
@@ -430,9 +424,10 @@ impl Value {
             pv::NullFlagValue(_) => Self::optional_from(t.t.clone(), None)?,
             val => Self::optional_from(t.t.clone(), Some(Self::from_proto_value(&t.t, val)?))?,
         };
-        return Ok(res);
+        Ok(res)
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_typed_value(self) -> YdbResult<ydb_proto::TypedValue> {
         use ydb_proto::r#type::PrimitiveTypeId as pt;
         use ydb_proto::value::Value as pv;
@@ -506,14 +501,14 @@ impl Value {
             Self::Yson(val) => proto_typed_value(pt::Yson, pv::TextValue(val)),
             Self::Json(val) => proto_typed_value(pt::Json, pv::TextValue(val)),
             Self::JsonDocument(val) => proto_typed_value(pt::JsonDocument, pv::TextValue(val)),
-            Self::Optional(val) => Self::to_typed_optional(val)?,
-            Self::List(items) => Self::to_typed_value_list(items)?,
+            Self::Optional(val) => Self::to_typed_optional(*val)?,
+            Self::List(items) => Self::to_typed_value_list(*items)?,
             Value::Struct(s) => { Self::to_typed_struct(s) }?,
         };
-        return Ok(res);
+        Ok(res)
     }
 
-    fn to_typed_optional(optional: Box<ValueOptional>) -> YdbResult<ydb_proto::TypedValue> {
+    fn to_typed_optional(optional: ValueOptional) -> YdbResult<ydb_proto::TypedValue> {
         if let Value::Optional(_opt) = optional.t {
             unimplemented!("nested optional")
         }
@@ -549,7 +544,7 @@ impl Value {
             items.push(typed_val.value.unwrap());
         }
 
-        return Ok(ydb_proto::TypedValue {
+        Ok(ydb_proto::TypedValue {
             r#type: Some(ydb_proto::Type {
                 r#type: Some(ydb_proto::r#type::Type::StructType(ydb_proto::StructType {
                     members,
@@ -559,10 +554,11 @@ impl Value {
                 items,
                 ..ydb_proto::Value::default()
             }),
-        });
+        })
     }
 
-    fn to_typed_value_list(ydb_list: Box<ValueList>) -> YdbResult<ydb_proto::TypedValue> {
+    #[allow(clippy::boxed_local)]
+    fn to_typed_value_list(ydb_list: ValueList) -> YdbResult<ydb_proto::TypedValue> {
         let ydb_list_type = ydb_list.t;
         let proto_items_result: Vec<YdbResult<ydb_proto::TypedValue>> = ydb_list
             .values
@@ -700,7 +696,7 @@ mod test {
 
         assert_eq!(non_tested.len(), 0, "{:?}", non_tested);
 
-        return Ok(());
+        Ok(())
     }
 }
 
@@ -712,18 +708,18 @@ pub struct Bytes {
 
 impl From<Vec<u8>> for Bytes {
     fn from(vec: Vec<u8>) -> Self {
-        return Bytes { vec };
+        Bytes { vec }
     }
 }
 
 impl From<Bytes> for Vec<u8> {
     fn from(val: Bytes) -> Self {
-        return val.vec;
+        val.vec
     }
 }
 
 impl From<String> for Bytes {
     fn from(val: String) -> Self {
-        return Self { vec: val.into() };
+        Self { vec: val.into() }
     }
 }

@@ -1,24 +1,25 @@
-use crate::channel_pool::{ChannelPool, ChannelPoolImpl};
-use crate::client::{Middleware, TimeoutSettings};
-use crate::client_common::DBCredentials;
-use crate::discovery::{Discovery, Service};
+use crate::client::TimeoutSettings;
+
 use crate::errors::*;
 use crate::session::Session;
 use crate::session_pool::SessionPool;
 use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 
+use crate::grpc_connection_manager::GrpcConnectionManager;
+
+use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use num::pow;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
+use tracing::{instrument, trace};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 
 const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
 
-pub(crate) type TableServiceClientType = TableServiceClient<Middleware>;
-pub(crate) type TableServiceChannelPool = Arc<Box<dyn ChannelPool<TableServiceClientType>>>;
+pub(crate) type TableServiceClientType = TableServiceClient<InterceptedChannel>;
 
 type TransactionArgType = Box<dyn Transaction>; // real type may be changed
 
@@ -34,22 +35,28 @@ impl TransactionOptions {
     ///
     /// With Mode::SerializableReadWrite and no autocommit.
     pub fn new() -> Self {
-        return Self {
+        Self {
             mode: Mode::SerializableReadWrite,
             autocommit: false,
-        };
+        }
     }
 
     /// Set transaction [Mode]
     pub fn with_mode(mut self, mode: Mode) -> Self {
         self.mode = mode;
-        return self;
+        self
     }
 
     /// Set autocommit mode
     pub fn with_autocommit(mut self, autocommit: bool) -> Self {
         self.autocommit = autocommit;
-        return self;
+        self
+    }
+}
+
+impl Default for TransactionOptions {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -65,24 +72,30 @@ pub struct RetryOptions {
 impl RetryOptions {
     /// Default option for no retries
     pub fn new() -> Self {
-        return Self {
+        Self {
             idempotent_operation: false,
             retrier: None,
-        };
+        }
     }
 
     /// Operations under the options is safe for complete few times instead of one.
     #[allow(dead_code)]
     pub(crate) fn with_idempotent(mut self, idempotent: bool) -> Self {
         self.idempotent_operation = idempotent;
-        return self;
+        self
     }
 
     /// Set retry timeout
     #[allow(dead_code)]
     pub(crate) fn with_timeout(mut self, timeout: Duration) -> Self {
         self.retrier = Some(Arc::new(Box::new(TimeoutRetrier { timeout })));
-        return self;
+        self
+    }
+}
+
+impl Default for RetryOptions {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -105,74 +118,65 @@ pub struct TableClient {
 
 impl TableClient {
     pub(crate) fn new(
-        credencials: DBCredentials,
-        discovery: Arc<Box<dyn Discovery>>,
+        connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
     ) -> Self {
-        let channel_pool = ChannelPoolImpl::new::<TableServiceClientType>(
-            discovery,
-            credencials.clone(),
-            Service::Table,
-            TableServiceClient::new,
-        );
-        let channel_pool: TableServiceChannelPool = Arc::new(Box::new(channel_pool));
-
-        return Self {
+        Self {
             error_on_truncate: false,
-            session_pool: SessionPool::new(Box::new(channel_pool)),
+            session_pool: SessionPool::new(Box::new(connection_manager), timeouts),
             retrier: Arc::new(Box::new(TimeoutRetrier::default())),
             transaction_options: TransactionOptions::new(),
             idempotent_operation: false,
             timeouts,
-        };
+        }
     }
 
     #[allow(dead_code)]
     pub(crate) fn with_max_active_sessions(mut self, size: usize) -> Self {
         self.session_pool = self.session_pool.with_max_active_sessions(size);
-        return self;
+        self
     }
 
     // Clone the table client and set new timeouts settings
     pub fn clone_with_timeouts(&self, timeouts: TimeoutSettings) -> Self {
-        return Self {
+        Self {
             timeouts,
             ..self.clone()
-        };
+        }
     }
 
     /// Clone the table client and set new retry timeouts
     #[allow(dead_code)]
     pub fn clone_with_retry_timeout(&self, timeout: Duration) -> Self {
-        return Self {
+        Self {
             retrier: Arc::new(Box::new(TimeoutRetrier { timeout })),
             ..self.clone()
-        };
+        }
     }
 
     /// Clone the table client and deny retries
     #[allow(dead_code)]
     pub fn clone_with_no_retry(&self) -> Self {
-        return Self {
+        Self {
             retrier: Arc::new(Box::new(NoRetrier {})),
             ..self.clone()
-        };
+        }
     }
 
     /// Clone the table client and set feature operations as idempotent (can retry in more cases)
     #[allow(dead_code)]
     pub fn clone_with_idempotent_operations(&self, idempotent: bool) -> Self {
-        return Self {
+        Self {
             idempotent_operation: idempotent,
             ..self.clone()
-        };
+        }
     }
 
     pub fn clone_with_transaction_options(&self, opts: TransactionOptions) -> Self {
-        return Self {
+        Self {
             transaction_options: opts,
             ..self.clone()
-        };
+        }
     }
 
     pub(crate) fn create_autocommit_transaction(&self, mode: Mode) -> impl Transaction {
@@ -187,11 +191,11 @@ impl TableClient {
 
     #[allow(dead_code)]
     pub(crate) async fn create_session(&self) -> YdbResult<Session> {
-        return Ok(self
+        Ok(self
             .session_pool
             .session()
             .await?
-            .with_timeouts(self.timeouts));
+            .with_timeouts(self.timeouts))
     }
 
     async fn retry<CallbackFuture, CallbackResult>(
@@ -231,7 +235,7 @@ impl TableClient {
         let query = Arc::new(query.into());
         self.retry(|| async {
             let mut session = self.create_session().await?;
-            return session.execute_schema_query(query.to_string()).await;
+            session.execute_schema_query(query.to_string()).await
         })
         .await
     }
@@ -251,7 +255,7 @@ impl TableClient {
     /// # #[tokio::main]
     /// # async fn main()->YdbResult<()>{
     /// #   use ydb::{Query, Value};
-    /// #   let table_client = ydb::ClientBuilder::from_str("")?.client()?.table_client();
+    /// #   let table_client = ydb::ClientBuilder::new_from_connection_string("")?.client()?.table_client();
     ///     let res: Option<i32> = table_client.retry_transaction(|mut t| async move {
     ///         let value: Value = t.query(Query::new("SELECT 1 + 1 as sum")).await?
     ///             .into_only_row()?
@@ -272,7 +276,7 @@ impl TableClient {
     /// # async fn main()->YdbResult<()>{
     /// #   use std::sync::atomic::{AtomicUsize, Ordering};
     /// #   use ydb::{Query, Value};
-    /// #   let table_client = ydb::ClientBuilder::from_str("")?.client()?.table_client();
+    /// #   let table_client = ydb::ClientBuilder::new_from_connection_string("")?.client()?.table_client();
     ///     let mut attempts: AtomicUsize = AtomicUsize::new(0);
     ///     let res: Option<i32> = table_client.retry_transaction(|mut t| async {
     ///         let mut t = t; // explicit move lambda argument inside async code block for borrow checker
@@ -288,6 +292,7 @@ impl TableClient {
     /// #   return Ok(());
     /// # }
     /// ```
+    #[instrument(level = "trace", skip_all, err)]
     pub async fn retry_transaction<CallbackFuture, CallbackResult>(
         &self,
         callback: impl Fn(TransactionArgType) -> CallbackFuture,
@@ -298,6 +303,8 @@ impl TableClient {
         let mut attempts: usize = 0;
         let start = Instant::now();
         loop {
+            attempts += 1;
+            trace!("attempt: {}", attempts);
             let transaction: Box<dyn Transaction> = if self.transaction_options.autocommit {
                 Box::new(self.create_autocommit_transaction(self.transaction_options.mode))
             } else {
@@ -314,6 +321,14 @@ impl TableClient {
             let err = if let Err(err) = res {
                 err
             } else {
+                match &res {
+                    Ok(_) => trace!("return successfully after '{}' attempts", attempts),
+                    Err(err) => trace!(
+                        "return with customer error after '{}' attempts: {:?}",
+                        attempts,
+                        err
+                    ),
+                };
                 return res;
             };
 
@@ -322,7 +337,6 @@ impl TableClient {
             }
 
             let now = Instant::now();
-            attempts += 1;
             let loop_decision = self.retrier.wait_duration(RetryParams {
                 attempt: attempts,
                 time_from_start: now.duration_since(start),
@@ -330,6 +344,11 @@ impl TableClient {
             if loop_decision.allow_retry {
                 sleep(loop_decision.wait_timeout).await;
             } else {
+                trace!(
+                    "return with ydb error after '{}' attempts by retry decision: {}",
+                    attempts,
+                    err
+                );
                 return Err(err);
             };
         }
@@ -378,30 +397,32 @@ impl TableClient {
     #[allow(dead_code)]
     pub(crate) fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
         self.error_on_truncate = error_on_truncate;
-        return self;
+        self
     }
 
+    #[instrument(level = "trace", ret)]
     fn check_retry_error(is_idempotent_operation: bool, err: &YdbOrCustomerError) -> bool {
         let ydb_err = match &err {
             YdbOrCustomerError::Customer(_) => return false,
             YdbOrCustomerError::YDB(err) => err,
         };
 
-        return match ydb_err.need_retry() {
+        match ydb_err.need_retry() {
             NeedRetry::True => true,
             NeedRetry::IdempotentOnly => is_idempotent_operation,
             NeedRetry::False => false,
-        };
+        }
     }
 }
 
+#[derive(Debug)]
 struct RetryParams {
     pub(crate) attempt: usize,
     pub(crate) time_from_start: Duration,
 }
 
 // May be extend in feature
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct RetryDecision {
     pub(crate) allow_retry: bool,
     pub(crate) wait_timeout: Duration,
@@ -411,19 +432,21 @@ trait Retry: Send + Sync {
     fn wait_duration(&self, params: RetryParams) -> RetryDecision;
 }
 
+#[derive(Debug)]
 struct TimeoutRetrier {
     timeout: Duration,
 }
 
 impl Default for TimeoutRetrier {
     fn default() -> Self {
-        return Self {
+        Self {
             timeout: DEFAULT_RETRY_TIMEOUT,
-        };
+        }
     }
 }
 
 impl Retry for TimeoutRetrier {
+    #[instrument(ret)]
     fn wait_duration(&self, params: RetryParams) -> RetryDecision {
         let mut res = RetryDecision::default();
         if params.time_from_start < self.timeout {
@@ -434,17 +457,18 @@ impl Retry for TimeoutRetrier {
             res.allow_retry = (params.time_from_start + res.wait_timeout) < self.timeout;
         };
 
-        return res;
+        res
     }
 }
 
 struct NoRetrier {}
 
 impl Retry for NoRetrier {
+    #[instrument(skip_all)]
     fn wait_duration(&self, _: RetryParams) -> RetryDecision {
-        return RetryDecision {
+        RetryDecision {
             allow_retry: false,
             wait_timeout: Duration::default(),
-        };
+        }
     }
 }

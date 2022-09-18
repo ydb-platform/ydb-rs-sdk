@@ -5,40 +5,22 @@ use std::sync::{Arc, RwLock, RwLockWriteGuard, Weak};
 use async_trait::async_trait;
 use http::uri::Authority;
 use http::Uri;
-use strum::{Display, EnumIter, EnumString};
 
-use ydb_grpc::ydb_proto::discovery::v1::discovery_service_client::DiscoveryServiceClient;
-use ydb_grpc::ydb_proto::discovery::{EndpointInfo, ListEndpointsRequest, ListEndpointsResult};
-
-use crate::client_common::DBCredentials;
 use crate::errors::YdbResult;
-use crate::grpc::{create_grpc_client, grpc_read_operation_result};
+
 use crate::waiter::Waiter;
 
+use derivative::Derivative;
+use itertools::Itertools;
 use std::time::Duration;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{watch, Mutex};
 
+use crate::grpc_connection_manager::GrpcConnectionManager;
+
+use crate::grpc_wrapper::raw_discovery_client::{EndpointInfo, GrpcDiscoveryClient};
+use crate::grpc_wrapper::raw_services::Service;
 use tracing::trace;
-
-#[allow(dead_code)]
-#[derive(Clone, Copy, Display, Debug, EnumIter, EnumString, Eq, Hash, PartialEq)]
-pub(crate) enum Service {
-    #[strum(serialize = "discovery")]
-    Discovery,
-
-    #[strum(serialize = "export")]
-    Export,
-
-    #[strum(serialize = "import")]
-    Import,
-
-    #[strum(serialize = "scripting")]
-    Scripting,
-
-    #[strum(serialize = "table_service")]
-    Table,
-}
 
 /// Current discovery state
 #[derive(Clone, Debug, PartialEq)]
@@ -59,7 +41,7 @@ impl DiscoveryState {
             original_nodes: nodes,
         };
         state.build_services();
-        return state;
+        state
     }
 
     fn build_services(&mut self) {
@@ -72,7 +54,7 @@ impl DiscoveryState {
         }
 
         // if all nodes pessimized - use full nodes set
-        if self.nodes.len() == 0 {
+        if self.nodes.is_empty() {
             self.nodes.clone_from(&self.original_nodes)
         }
     }
@@ -82,7 +64,7 @@ impl DiscoveryState {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        return self.nodes.len() == 0;
+        self.nodes.len() == 0
     }
 
     // pessimize return true if state was changed
@@ -93,20 +75,22 @@ impl DiscoveryState {
 
         self.pessimized_nodes.insert(uri.clone());
         self.build_services();
-        return true;
+        true
     }
 
+    // TODO: uncomment if need in read code or remove test
+    #[cfg(test)]
     pub(crate) fn with_node_info(mut self, _service: Service, node_info: NodeInfo) -> Self {
         if !self.nodes.contains(&node_info) {
             self.nodes.push(node_info);
         }
-        return self;
+        self
     }
 }
 
 impl Default for DiscoveryState {
     fn default() -> Self {
-        return DiscoveryState::new(std::time::Instant::now(), Vec::default());
+        DiscoveryState::new(std::time::Instant::now(), Vec::default())
     }
 }
 
@@ -117,7 +101,7 @@ pub(crate) struct NodeInfo {
 
 impl NodeInfo {
     pub(crate) fn new(uri: Uri) -> Self {
-        return Self { uri };
+        Self { uri }
     }
 }
 
@@ -149,25 +133,23 @@ pub struct StaticDiscovery {
 /// # use ydb::{ClientBuilder, StaticDiscovery, YdbResult};
 ///
 /// # fn main()->YdbResult<()>{
-/// let discovery = StaticDiscovery::from_str("grpc://localhost:2136")?;
-/// let client = ClientBuilder::from_str("grpc://localhost:2136/?database=/local")?.with_discovery(discovery).client()?;
-/// # return Ok(())
+/// let discovery = StaticDiscovery::new_from_str("grpc://localhost:2136")?;
+/// let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/?database=/local")?.with_discovery(discovery).client()?;
+/// # return Ok(());
 /// # }
 /// ```
 impl StaticDiscovery {
-    pub fn from_str<'a, T: Into<&'a str>>(endpoint: T) -> YdbResult<Self> {
+    pub fn new_from_str<'a, T: Into<&'a str>>(endpoint: T) -> YdbResult<Self> {
         let endpoint = Uri::from_str(endpoint.into())?;
-        let nodes = vec![NodeInfo {
-            uri: endpoint.clone(),
-        }];
+        let nodes = vec![NodeInfo::new(endpoint)];
 
         let state = DiscoveryState::new(std::time::Instant::now(), nodes);
         let state = Arc::new(state);
         let (sender, _) = tokio::sync::watch::channel(state.clone());
-        return Ok(StaticDiscovery {
+        Ok(StaticDiscovery {
             sender,
             discovery_state: state,
-        });
+        })
     }
 }
 
@@ -178,11 +160,11 @@ impl Discovery for StaticDiscovery {
     }
 
     fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
-        return self.sender.subscribe();
+        self.sender.subscribe()
     }
 
     fn state(&self) -> Arc<DiscoveryState> {
-        return self.discovery_state.clone();
+        self.discovery_state.clone()
     }
 }
 
@@ -200,18 +182,22 @@ pub(crate) struct TimerDiscovery {
 
 impl TimerDiscovery {
     #[allow(dead_code)]
-    pub(crate) fn new(cred: DBCredentials, endpoint: &str, interval: Duration) -> YdbResult<Self> {
-        let state = Arc::new(DiscoverySharedState::new(cred, endpoint)?);
+    pub(crate) fn new(
+        connection_manager: GrpcConnectionManager,
+        endpoint: &str,
+        interval: Duration,
+    ) -> YdbResult<Self> {
+        let state = Arc::new(DiscoverySharedState::new(connection_manager, endpoint)?);
         let state_weak = Arc::downgrade(&state);
         tokio::spawn(async move {
             DiscoverySharedState::background_discovery(state_weak, interval).await;
         });
-        return Ok(TimerDiscovery { state });
+        Ok(TimerDiscovery { state })
     }
 
     #[allow(dead_code)]
     async fn discovery_now(&self) -> YdbResult<()> {
-        return self.state.discovery_now().await;
+        self.state.discovery_now().await
     }
 }
 
@@ -237,11 +223,11 @@ impl Discovery for TimerDiscovery {
     }
 
     fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
-        return self.state.subscribe();
+        self.state.subscribe()
     }
 
     fn state(&self) -> Arc<DiscoveryState> {
-        return self.state.state();
+        self.state.state()
     }
 }
 
@@ -252,9 +238,11 @@ impl Waiter for TimerDiscovery {
     }
 }
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 struct DiscoverySharedState {
-    cred: DBCredentials,
+    #[derivative(Debug = "ignore")]
+    connection_manager: GrpcConnectionManager,
     discovery_uri: Uri,
     sender: tokio::sync::watch::Sender<Arc<DiscoveryState>>,
 
@@ -266,19 +254,19 @@ struct DiscoverySharedState {
 }
 
 impl DiscoverySharedState {
-    fn new(cred: DBCredentials, endpoint: &str) -> YdbResult<Self> {
+    fn new(connection_manager: GrpcConnectionManager, endpoint: &str) -> YdbResult<Self> {
         let state = Arc::new(DiscoveryState::new(std::time::Instant::now(), Vec::new()));
         let (sender, _) = watch::channel(state.clone());
         let (state_received_sender, state_received) = watch::channel(false);
-        return Ok(Self {
-            cred,
+        Ok(Self {
+            connection_manager,
             discovery_uri: http::Uri::from_str(endpoint)?,
             sender,
             discovery_process: Mutex::new(()),
             discovery_state: RwLock::new(state),
             state_received,
             state_received_sender,
-        });
+        })
     }
 
     #[tracing::instrument(skip(self))]
@@ -288,23 +276,14 @@ impl DiscoverySharedState {
 
         trace!("creating grpc client");
         let start = std::time::Instant::now();
-        let mut discovery_client = create_grpc_client(
-            self.discovery_uri.clone(),
-            self.cred.clone(),
-            DiscoveryServiceClient::new,
-        )
-        .await?;
-
-        trace!("send grpc request ListEndpointsRequest");
-        let resp = discovery_client
-            .list_endpoints(ListEndpointsRequest {
-                database: self.cred.database.clone(),
-                service: vec![],
-            })
+        let mut discovery_client = self
+            .connection_manager
+            .get_auth_service_to_node(GrpcDiscoveryClient::new, &self.discovery_uri)
             .await?;
 
-        let res: ListEndpointsResult = grpc_read_operation_result(resp)?;
-        trace!("list endpoints: {:?}", res);
+        let res = discovery_client
+            .list_endpoints(self.connection_manager.database().clone())
+            .await?;
         let new_endpoints = Self::list_endpoints_to_node_infos(res)?;
         self.set_discovery_state(
             self.discovery_state.write().unwrap(),
@@ -313,7 +292,7 @@ impl DiscoverySharedState {
 
         // lock until exit
         drop(discovery_lock);
-        return Ok(());
+        Ok(())
     }
 
     fn set_discovery_state(
@@ -328,13 +307,6 @@ impl DiscoverySharedState {
 
     #[tracing::instrument(skip(state))]
     async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
-        if let Some(state) = state.upgrade() {
-            // wait token before first discovery
-            trace!("start wait token");
-            state.cred.token_cache.wait().await.unwrap();
-            trace!("token ready");
-        }
-
         while let Some(state) = state.upgrade() {
             trace!("rekby-discovery");
             let res = state.discovery_now().await;
@@ -345,27 +317,24 @@ impl DiscoverySharedState {
         trace!("stop background_discovery");
     }
 
-    fn list_endpoints_to_node_infos(mut list: ListEndpointsResult) -> YdbResult<Vec<NodeInfo>> {
-        let mut nodes = Vec::new();
-
-        while let Some(endpoint_info) = list.endpoints.pop() {
-            let uri = Self::endpoint_info_to_uri(&endpoint_info)?;
-            nodes.push(NodeInfo { uri: uri.clone() });
-        }
-
-        return Ok(nodes);
+    fn list_endpoints_to_node_infos(list: Vec<EndpointInfo>) -> YdbResult<Vec<NodeInfo>> {
+        list.into_iter()
+            .map(|item| match Self::endpoint_info_to_uri(item) {
+                Ok(uri) => YdbResult::<NodeInfo>::Ok(NodeInfo::new(uri)),
+                Err(err) => YdbResult::<NodeInfo>::Err(err),
+            })
+            .try_collect()
     }
 
-    fn endpoint_info_to_uri(endpoint_info: &EndpointInfo) -> YdbResult<Uri> {
-        let authority: Authority = Authority::from_str(
-            format!("{}:{}", endpoint_info.address, endpoint_info.port).as_str(),
-        )?;
+    fn endpoint_info_to_uri(endpoint_info: EndpointInfo) -> YdbResult<Uri> {
+        let authority: Authority =
+            Authority::from_str(format!("{}:{}", endpoint_info.fqdn, endpoint_info.port).as_str())?;
 
-        return Ok(Uri::builder()
+        Ok(Uri::builder()
             .scheme(if endpoint_info.ssl { "https" } else { "http" })
             .authority(authority)
             .path_and_query("")
-            .build()?);
+            .build()?)
     }
 }
 
@@ -383,7 +352,7 @@ impl Discovery for DiscoverySharedState {
     }
 
     fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
-        return self.sender.subscribe();
+        self.sender.subscribe()
     }
 
     fn state(&self) -> Arc<DiscoveryState> {
@@ -412,7 +381,13 @@ mod test {
     use crate::client_common::{DBCredentials, TokenCache};
     use crate::discovery::DiscoverySharedState;
     use crate::errors::YdbResult;
-    use crate::test_helpers::CONNECTION_INFO;
+    use crate::grpc_connection_manager::GrpcConnectionManager;
+    use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
+    use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+    use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+    use crate::test_helpers::test_client_builder;
+    use http::Uri;
+    use std::str::FromStr;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -420,13 +395,25 @@ mod test {
     #[ignore] // need YDB access
     async fn test_background_discovery() -> YdbResult<()> {
         let cred = DBCredentials {
-            database: CONNECTION_INFO.database.clone(),
+            database: test_client_builder().database.clone(),
             token_cache: tokio::task::spawn_blocking(|| {
-                TokenCache::new(CONNECTION_INFO.credentials.clone())
+                TokenCache::new(test_client_builder().credentials.clone())
             })
             .await??,
         };
-        let discovery_shared = DiscoverySharedState::new(cred, CONNECTION_INFO.endpoint.as_str())?;
+
+        let uri = Uri::from_str(test_client_builder().endpoint.as_str())?;
+        let load_balancer =
+            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(uri)));
+
+        let interceptor =
+            MultiInterceptor::new().with_interceptor(AuthGrpcInterceptor::new(cred.clone())?);
+
+        let connection_manager =
+            GrpcConnectionManager::new(load_balancer, cred.database, interceptor);
+
+        let discovery_shared =
+            DiscoverySharedState::new(connection_manager, test_client_builder().endpoint.as_str())?;
 
         let state = Arc::new(discovery_shared);
         let mut rx = state.sender.subscribe();
@@ -441,9 +428,9 @@ mod test {
         // wait two updates
         for _ in 0..2 {
             rx.changed().await.unwrap();
-            assert!(rx.borrow().nodes.len() >= 1);
+            assert!(!rx.borrow().nodes.is_empty());
         }
 
-        return Ok(());
+        Ok(())
     }
 }

@@ -87,11 +87,12 @@ function version_set() {
 }
 
 function version_dep_set() {
-  local CRATE_NAME="$1"
-  local DEP_NAME="$2"
-  local VERSION="$3"
+  local DEP_NAME="$1"
+  local VERSION="$2"
 
-  sed -i.bak -e "s|^$DEP_NAME *=.*|$DEP_NAME = \\{ version = \"$VERSION\", path=\"../$DEP_NAME\"\\}|" "$CRATE_NAME/Cargo.toml"
+  for FILE in $(find . -mindepth 2 -maxdepth 2 -name Cargo.toml); do
+    sed -i.bak -e "s|^$DEP_NAME *=.*|$DEP_NAME = \\{ version = \"$VERSION\", path=\"../$DEP_NAME\"\\}|" "$FILE"
+  done
 }
 
 function bump_version() {
@@ -107,14 +108,13 @@ function bump_version() {
 
   case "$CRATE_NAME" in
     ydb)
+      version_dep_set "ydb" "$VERSION"
       ;;
     ydb-grpc)
-      version_dep_set "ydb" "ydb-grpc" "$VERSION"
-      bump_version "ydb" patch
+      version_dep_set "ydb-grpc" "$VERSION"
       ;;
     ydb-grpc-helpers)
-      version_dep_set "ydb-grpc" "ydb-grpc-helpers" "$VERSION"
-      bump_version "ydb-grpc" patch
+      version_dep_set "ydb-grpc-helpers" "$VERSION"
       ;;
     *)
       echo "Unexpected crate name '$CRATE_NAME'"
@@ -123,6 +123,11 @@ function bump_version() {
 }
 
 bump_version "$CRATE_NAME" "$VERSION_PART"
+
+# Force update Cargo.toml for new versions
+cargo check
+
+git diff
 
 git_set_tags
 

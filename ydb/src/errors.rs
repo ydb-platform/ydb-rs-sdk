@@ -1,5 +1,6 @@
 use crate::errors::NeedRetry::IdempotentOnly;
 
+use crate::grpc_wrapper::raw_errors::RawError;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
@@ -23,30 +24,30 @@ pub enum YdbOrCustomerError {
 impl YdbOrCustomerError {
     #[allow(dead_code)]
     pub(crate) fn from_mess<T: Into<String>>(s: T) -> Self {
-        return Self::Customer(Arc::new(Box::new(YdbError::Custom(s.into()))));
+        Self::Customer(Arc::new(Box::new(YdbError::Custom(s.into()))))
     }
 
     #[allow(dead_code)]
     pub(crate) fn from_err<T: std::error::Error + 'static + Send + Sync>(err: T) -> Self {
-        return Self::Customer(Arc::new(Box::new(err)));
+        Self::Customer(Arc::new(Box::new(err)))
     }
 }
 
 impl Debug for YdbOrCustomerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        return match self {
+        match self {
             Self::YDB(err) => Debug::fmt(err, f),
             Self::Customer(err) => Debug::fmt(err, f),
-        };
+        }
     }
 }
 
 impl Display for YdbOrCustomerError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        return match self {
+        match self {
             Self::YDB(err) => Display::fmt(err, f),
             Self::Customer(err) => Display::fmt(err, f),
-        };
+        }
     }
 }
 
@@ -54,7 +55,7 @@ impl std::error::Error for YdbOrCustomerError {}
 
 impl From<YdbError> for YdbOrCustomerError {
     fn from(e: YdbError) -> Self {
-        return Self::YDB(e);
+        Self::YDB(e)
     }
 }
 
@@ -151,9 +152,9 @@ impl YdbStatusError {
     /// # }
     /// ```
     pub fn operation_status(&self) -> YdbResult<StatusCode> {
-        return StatusCode::from_i32(self.operation_status).ok_or(YdbError::InternalError(
-            format!("unknown status code: {}", self.operation_status),
-        ));
+        StatusCode::from_i32(self.operation_status).ok_or_else(|| {
+            YdbError::InternalError(format!("unknown status code: {}", self.operation_status))
+        })
     }
 }
 
@@ -215,15 +216,15 @@ impl YdbIssue {
                 )))
             }
         };
-        return Ok(val);
+        Ok(val)
     }
 }
 
 impl YdbError {
-    #[allow(dead_code)]
     pub(crate) fn from_str<T: Into<String>>(s: T) -> YdbError {
-        return YdbError::Custom(s.into());
+        YdbError::Custom(s.into())
     }
+
     pub(crate) fn need_retry(&self) -> NeedRetry {
         match self {
             Self::Convert(_) => NeedRetry::False,
@@ -285,7 +286,6 @@ to_custom_ydb_err!(
     YdbOrCustomerError,
     std::convert::Infallible,
     http::Error,
-    prost::DecodeError,
     reqwest::Error,
     serde_json::Error,
     std::env::VarError,
@@ -306,18 +306,31 @@ to_custom_ydb_err!(
 
 impl From<Box<dyn std::any::Any + Send>> for YdbError {
     fn from(e: Box<dyn std::any::Any + Send>) -> Self {
-        return YdbError::Custom(format!("{:?}", e));
+        YdbError::Custom(format!("{:?}", e))
     }
 }
 
 impl<T> From<std::sync::PoisonError<T>> for YdbError {
     fn from(e: std::sync::PoisonError<T>) -> Self {
-        return YdbError::Custom(e.to_string());
+        YdbError::Custom(e.to_string())
     }
 }
 
 impl From<tonic::Status> for YdbError {
     fn from(e: tonic::Status) -> Self {
-        return YdbError::TransportGRPCStatus(Arc::new(e));
+        YdbError::TransportGRPCStatus(Arc::new(e))
+    }
+}
+
+impl From<RawError> for YdbError {
+    fn from(e: RawError) -> Self {
+        match e {
+            RawError::Custom(message) => YdbError::Custom(format!("raw custom error: {}", message)),
+            RawError::ProtobufDecodeError(message) => {
+                YdbError::Custom(format!("decode protobuf error: {}", message))
+            }
+            RawError::TonicStatus(s) => YdbError::TransportGRPCStatus(Arc::new(s)),
+            RawError::YdbStatus(status_error) => YdbError::YdbStatusError(status_error),
+        }
     }
 }

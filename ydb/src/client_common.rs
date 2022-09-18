@@ -1,7 +1,7 @@
 use crate::credentials::CredentialsRef;
 use crate::errors::YdbResult;
-use crate::waiter::Waiter;
 use crate::pub_traits::TokenInfo;
+use crate::waiter::Waiter;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use tokio::sync::watch;
@@ -37,7 +37,7 @@ impl TokenCache {
         })));
         let token_cache_clone = token_cache.clone();
         tokio::task::spawn_blocking(move || token_cache_clone.renew_token_blocking());
-        return Ok(token_cache);
+        Ok(token_cache)
     }
 
     pub(crate) fn token(&self) -> String {
@@ -46,12 +46,12 @@ impl TokenCache {
         let read = self.0.read().unwrap();
         if now > read.token_info.next_renew {
             // if need renew and no renew background in process
-            if let Ok(_) = read.token_renewing.try_lock() {
+            if read.token_renewing.try_lock().is_ok() {
                 let self_clone = self.clone();
                 tokio::task::spawn_blocking(move || self_clone.renew_token_blocking());
             };
         };
-        return read.token_info.token.clone();
+        read.token_info.token.clone()
     }
 
     fn renew_token_blocking(self) {
@@ -75,9 +75,8 @@ impl TokenCache {
                 trace!("token renewed");
                 let mut write = self.0.write().unwrap();
                 write.token_info = token_info;
-                if let Err(_) = write.token_received_sender.send(true) {
+                if write.token_received_sender.send(true).is_err() {
                     trace!("send token channel closed");
-                    return;
                 }
             }
             Err(err) => {

@@ -2,9 +2,10 @@
 //! End customers should use crate ydb.
 
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 
 pub fn get_proto_package(s: &str) -> Option<&str> {
-    for logic_line in s.split(";") {
+    for logic_line in s.split(';') {
         let line = logic_line.trim();
         if !line.to_lowercase().starts_with("package ") {
             continue;
@@ -12,7 +13,7 @@ pub fn get_proto_package(s: &str) -> Option<&str> {
         let package_name = line["package ".len()..].trim();
         return Some(package_name);
     }
-    return None;
+    None
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -22,8 +23,8 @@ pub struct ProtoModule {
 }
 
 impl ProtoModule {
-    pub fn add_file(self: &mut Self, fname: &str) {
-        let parts: Vec<_> = fname.split(".").collect();
+    pub fn add_file(&mut self, fname: &str) {
+        let parts: Vec<_> = fname.split('.').collect();
         let mut current = self;
         for (i, part) in parts.iter().enumerate() {
             if i == parts.len() - 1 {
@@ -40,11 +41,7 @@ impl ProtoModule {
         }
     }
 
-    pub fn to_string(self: &Self) -> String {
-        return self.to_string_with_indent("");
-    }
-
-    fn to_string_with_indent(self: &Self, indent: &str) -> String {
+    fn to_string_with_indent(&self, indent: &str) -> String {
         let mut res = String::new();
 
         if let Some(file_name) = &self.file_name {
@@ -65,7 +62,13 @@ impl ProtoModule {
             res += format!("{}}}\n", indent).as_str()
         }
 
-        return res;
+        res
+    }
+}
+
+impl Display for ProtoModule {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_string_with_indent(""))
     }
 }
 
@@ -96,9 +99,7 @@ mod tests {
         m.add_file("asd.rs");
         let asd = "asd".to_string();
         let mut expected_m = ProtoModule::default();
-        expected_m
-            .submodules
-            .insert(asd.clone(), ProtoModule::default());
+        expected_m.submodules.insert(asd, ProtoModule::default());
         expected_m.submodules.get_mut("asd").unwrap().file_name = Some("asd.rs".to_string());
         assert_eq!(m, expected_m);
 

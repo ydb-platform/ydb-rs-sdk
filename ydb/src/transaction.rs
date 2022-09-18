@@ -14,7 +14,7 @@ use ydb_grpc::ydb_proto::table::{
     TransactionSettings,
 };
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Mode {
     OnlineReadonly,
     SerializableReadWrite,
@@ -49,17 +49,17 @@ pub(crate) struct AutoCommit {
 
 impl AutoCommit {
     pub(crate) fn new(session_pool: SessionPool, mode: Mode, timeouts: TimeoutSettings) -> Self {
-        return Self {
+        Self {
             mode,
             session_pool,
             error_on_truncate_response: false,
             timeouts,
-        };
+        }
     }
 
     pub(crate) fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
         self.error_on_truncate_response = error_on_truncate;
-        return self;
+        self
     }
 }
 
@@ -114,7 +114,7 @@ pub(crate) struct SerializableReadWriteTx {
 
 impl SerializableReadWriteTx {
     pub(crate) fn new(session_pool: SessionPool, timeouts: TimeoutSettings) -> Self {
-        return Self {
+        Self {
             error_on_truncate_response: false,
             session_pool,
 
@@ -124,12 +124,12 @@ impl SerializableReadWriteTx {
             rollbacked: false,
             finished: false,
             timeouts,
-        };
+        }
     }
 
     pub(crate) fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
         self.error_on_truncate_response = error_on_truncate;
-        return self;
+        self
     }
 }
 
@@ -165,7 +165,6 @@ impl Transaction for SerializableReadWriteTx {
             trace!("start new transaction");
             TxSelector::BeginTx(TransactionSettings {
                 tx_mode: Some(Mode::SerializableReadWrite.into()),
-                ..TransactionSettings::default()
             })
         };
 
@@ -173,7 +172,6 @@ impl Transaction for SerializableReadWriteTx {
             tx_control: Some(TransactionControl {
                 commit_tx: false,
                 tx_selector: Some(tx_selector),
-                ..TransactionControl::default()
             }),
             query: Some(query.query_to_proto()),
             parameters: query.params_to_proto()?,
@@ -197,9 +195,10 @@ impl Transaction for SerializableReadWriteTx {
         }
 
         if self.finished {
-            return Err(YdbError::Custom(
-                format!("commit finished non comitted transaction: {:?}", &self.id).into(),
-            ));
+            return Err(YdbError::Custom(format!(
+                "commit finished non comitted transaction: {:?}",
+                &self.id
+            )));
         }
         self.finished = true;
 
@@ -229,13 +228,10 @@ impl Transaction for SerializableReadWriteTx {
         }
 
         if self.finished {
-            return Err(YdbError::Custom(
-                format!(
-                    "rollback finished non rollbacked transaction: {:?}",
-                    &self.id
-                )
-                .into(),
-            ));
+            return Err(YdbError::Custom(format!(
+                "rollback finished non rollbacked transaction: {:?}",
+                &self.id
+            )));
         }
         self.finished = true;
 
