@@ -3,9 +3,9 @@ use ydb_grpc::ydb_proto::r#type::{PrimitiveTypeId, Type as ProtoType};
 
 #[cfg(test)]
 #[path = "value_type_test.rs"]
-mod test;
+mod value_type_test;
 
-#[derive(Clone, Debug, PartialEq, strum::EnumCount)]
+#[derive(Clone, Debug, Eq, PartialEq, strum::EnumCount)]
 pub(crate) enum Type {
     // Unspecified, skip unspecified type into internal code
     Bool,
@@ -47,41 +47,41 @@ pub(crate) enum Type {
     EmptyDict,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DecimalType {
     pub precision: u32,
     pub scale: u32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TupleType {
     pub elements: Vec<Type>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StructType {
     pub members: Vec<StructMember>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StructMember {
     pub name: String,
     pub member_type: Type,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DictType {
     pub key: Type,
     pub payload: Type,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum VariantType {
     Tuple(TupleType),
     Struct(StructType),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TaggedType {
     pub tag: String,
     pub item_type: Type,
