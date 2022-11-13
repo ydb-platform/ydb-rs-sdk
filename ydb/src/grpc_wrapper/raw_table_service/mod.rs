@@ -6,6 +6,3 @@ pub(crate) mod keepalive;
 pub(crate) mod rollback_transaction;
 pub(crate) mod value;
 pub(crate) mod value_type;
-
-#[cfg(test)]
-mod value_type_test;

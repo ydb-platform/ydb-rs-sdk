@@ -1,18 +1,94 @@
-use crate::grpc_wrapper::raw_errors::RawResult;
-use strum::IntoEnumIterator;
+use super::*;
+use std::collections::HashSet;
+use strum::EnumCount;
 
 #[test]
-fn test_primitive_types() -> RawResult<()> {
-    let primitive_id_iterator = ydb_grpc::ydb_proto::r#type::PrimitiveTypeId::iter();
-    for type_id in primitive_id_iterator {
-        let proto_type = ydb_grpc::ydb_proto::Type {
-            r#type: Some(ydb_grpc::ydb_proto::r#type::Type::TypeId(type_id as i32)),
-        };
-        let internal_type: crate::grpc_wrapper::raw_table_service::value_type::Type =
-            proto_type.clone().try_into()?;
-        let reverse_proto: ydb_grpc::ydb_proto::Type = internal_type.into();
-        assert_eq!(proto_type, reverse_proto);
+fn consistent_conversion() -> RawResult<()> {
+    use Type::*;
+
+    let values = vec![
+        Bool,
+        Int8,
+        Uint8,
+        Int16,
+        Uint16,
+        Int32,
+        Uint32,
+        Int64,
+        Uint64,
+        Float,
+        Double,
+        Date,
+        DateTime,
+        Timestamp,
+        Interval,
+        TzDate,
+        TzDatetime,
+        TzTimestamp,
+        Bytes, // String
+        UTF8,
+        YSON,
+        JSON,
+        UUID,
+        JSONDocument,
+        DyNumber,
+        Void,
+        Null,
+        EmptyList,
+        EmptyDict,
+        Decimal(DecimalType {
+            precision: 5,
+            scale: 19,
+        }),
+        Optional(Box::new(Bytes)),
+        Optional(Box::new(Optional(Box::new(List(Box::new(JSONDocument)))))),
+        List(Box::new(UTF8)),
+        List(Box::new(List(Box::new(UUID)))),
+        Tuple(TupleType { elements: vec![] }),
+        Tuple(TupleType {
+            elements: vec![List(Box::new(Bytes)), Int64],
+        }),
+        Struct(StructType { members: vec![] }),
+        Struct(StructType {
+            members: vec![
+                StructMember {
+                    name: "qwe".to_string(),
+                    member_type: Bool,
+                },
+                StructMember {
+                    name: "dfg".to_string(),
+                    member_type: Int32,
+                },
+            ],
+        }),
+        Dict(Box::new(DictType {
+            key: Int32,
+            payload: Bytes,
+        })),
+        Variant(VariantType::Tuple(TupleType {
+            elements: vec![Bool, Int8],
+        })),
+        Variant(VariantType::Struct(StructType {
+            members: vec![StructMember {
+                name: "field".to_string(),
+                member_type: Bytes,
+            }],
+        })),
+        Tagged(Box::new(TaggedType {
+            tag: "tag_name".to_string(),
+            item_type: Uint32,
+        })),
+    ];
+    let mut discriminants = HashSet::new();
+
+    for v in values.into_iter() {
+        let proto: ydb_grpc::ydb_proto::Type = v.clone().into();
+        let reverse_internal: Type = proto.try_into()?;
+        assert_eq!(v, reverse_internal);
+        discriminants.insert(std::mem::discriminant(&v));
     }
+
+    assert_eq!(discriminants.len(), Type::COUNT);
 
     Ok(())
 }

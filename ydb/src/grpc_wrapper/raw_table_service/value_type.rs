@@ -1,6 +1,11 @@
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use ydb_grpc::ydb_proto::r#type::{PrimitiveTypeId, Type as ProtoType};
 
+#[cfg(test)]
+#[path = "value_type_test.rs"]
+mod test;
+
+#[derive(Clone, Debug, PartialEq, strum::EnumCount)]
 pub(crate) enum Type {
     // Unspecified,
     Bool,
@@ -42,37 +47,44 @@ pub(crate) enum Type {
     EmptyDict,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DecimalType {
-    precision: u32,
-    scale: u32,
+    pub precision: u32,
+    pub scale: u32,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TupleType {
-    elements: Vec<Type>,
+    pub elements: Vec<Type>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct StructType {
-    members: Vec<StructMember>,
+    pub members: Vec<StructMember>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct StructMember {
-    name: String,
-    member_type: Type,
+    pub name: String,
+    pub member_type: Type,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DictType {
-    key: Type,
-    payload: Type,
+    pub key: Type,
+    pub payload: Type,
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum VariantType {
     Tuple(TupleType),
     Struct(StructType),
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TaggedType {
-    tag: String,
-    item_type: Type,
+    pub tag: String,
+    pub item_type: Type,
 }
 
 impl Type {
@@ -144,7 +156,7 @@ impl TryFrom<ydb_grpc::ydb_proto::Type> for Type {
             }),
             ProtoType::OptionalType(optional_type) => {
                 if let Some(item) = optional_type.item {
-                    Type::List(Box::new(Type::try_from(*item)?))
+                    Type::Optional(Box::new(Type::try_from(*item)?))
                 } else {
                     return decode_err("empty optional type");
                 }
