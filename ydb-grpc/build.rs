@@ -72,7 +72,6 @@ fn compile_files(files: &[&str], include_dirs: &[&str], dst_dir: &str) {
     cfg.compile_well_known_types()
         .type_attribute(".Ydb", "#[derive(serde::Serialize, serde::Deserialize)]")
         .extern_path(".google.protobuf", "::pbjson_types")
-        .type_attribute("Ydb.Type.PrimitiveTypeId", "#[derive(strum::EnumIter)]")
         .file_descriptor_set_path(&descriptor_file);
 
     tonic_build::configure()

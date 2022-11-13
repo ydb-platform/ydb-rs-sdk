@@ -2387,7 +2387,6 @@ dependencies = [
  "prost-build",
  "prost-types",
  "serde",
- "strum",
  "tonic",
  "tonic-build",
  "walkdir",
