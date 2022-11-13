@@ -14,6 +14,9 @@ impl RawError {
     pub fn custom<S: Into<String>>(text: S) -> Self {
         RawError::Custom(text.into())
     }
+    pub fn decode_error<S: Into<String>>(text: S) -> Self {
+        RawError::ProtobufDecodeError(text.into())
+    }
 }
 
 impl From<tonic::Status> for RawError {
