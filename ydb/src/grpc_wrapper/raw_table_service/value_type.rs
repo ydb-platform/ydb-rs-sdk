@@ -7,7 +7,7 @@ mod test;
 
 #[derive(Clone, Debug, PartialEq, strum::EnumCount)]
 pub(crate) enum Type {
-    // Unspecified,
+    // Unspecified, skip unspecified type into internal code
     Bool,
     Int8,
     Uint8,
