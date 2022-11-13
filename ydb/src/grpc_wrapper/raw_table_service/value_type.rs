@@ -1,7 +1,4 @@
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
-use ::prost::Enumeration;
-use std::any::Any;
-use ydb_grpc::ydb_proto::pers_queue::v1::Codec::Raw;
 use ydb_grpc::ydb_proto::r#type::{PrimitiveTypeId, Type as ProtoType};
 
 pub(crate) enum Type {
@@ -110,7 +107,7 @@ impl Type {
             PrimitiveTypeId::Timestamp => Type::Timestamp,
             PrimitiveTypeId::Interval => Type::Interval,
             PrimitiveTypeId::TzDate => Type::TzDate,
-            PrimitiveTypeId::TzDateTime => Type::TzDatetime,
+            PrimitiveTypeId::TzDatetime => Type::TzDatetime,
             PrimitiveTypeId::TzTimestamp => Type::TzTimestamp,
             PrimitiveTypeId::String => Type::Bytes,
             PrimitiveTypeId::Utf8 => Type::UTF8,
@@ -286,7 +283,7 @@ impl From<Type> for ydb_grpc::ydb_proto::Type {
             Type::Timestamp => ProtoType::TypeId(PrimitiveTypeId::Timestamp as i32),
             Type::Interval => ProtoType::TypeId(PrimitiveTypeId::Interval as i32),
             Type::TzDate => ProtoType::TypeId(PrimitiveTypeId::TzDate as i32),
-            Type::TzDatetime => ProtoType::TypeId(PrimitiveTypeId::TzDateTime as i32),
+            Type::TzDatetime => ProtoType::TypeId(PrimitiveTypeId::TzDatetime as i32),
             Type::TzTimestamp => ProtoType::TypeId(PrimitiveTypeId::TzTimestamp as i32),
             Type::Bytes => ProtoType::TypeId(PrimitiveTypeId::String as i32),
             Type::UTF8 => ProtoType::TypeId(PrimitiveTypeId::Utf8 as i32),
