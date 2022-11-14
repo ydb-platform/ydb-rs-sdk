@@ -8,6 +8,7 @@ use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction}
 use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
+use crate::{Query, StreamResult};
 use num::pow;
 use std::future::Future;
 use std::sync::Arc;
@@ -228,6 +229,16 @@ impl TableClient {
             }
             tokio::time::sleep(retry_decision.wait_timeout).await;
         }
+    }
+
+    /// Execute scan query. The method will auto-retry errors while start query execution,
+    /// but no retries after server start streaming result.
+    pub async fn retry_execute_scan_query(&self, query: Query) -> YdbResult<StreamResult> {
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            session.execute_scan_query(query.clone()).await
+        })
+        .await
     }
 
     /// Execute scheme query with retry policy

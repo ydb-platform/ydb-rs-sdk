@@ -7,6 +7,7 @@ use crate::YdbError;
 use ydb_grpc::ydb_proto::TypedValue;
 
 /// Query object
+#[derive(Clone)]
 pub struct Query {
     text: String,
     parameters: HashMap<String, Value>,
