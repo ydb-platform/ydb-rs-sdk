@@ -1,5 +1,4 @@
 pub(crate) mod auth;
-pub(crate) mod channel;
 pub(crate) mod grpc;
 
 #[macro_use]

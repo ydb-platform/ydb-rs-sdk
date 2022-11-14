@@ -36,9 +36,7 @@ macro_rules! simple_convert {
             fn try_from(value: Value) -> Result<Self, Self::Error> {
                 match value {
                     Value::Optional(opt_val) => {
-                        if let Err(err) = <$native_type as TryFrom<Value>>::try_from(opt_val.t) {
-                            return Err(err);
-                        };
+                        <$native_type as TryFrom<Value>>::try_from(opt_val.t)?;
 
                         match opt_val.value {
                             Some(val) => {
