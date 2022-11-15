@@ -1,6 +1,5 @@
 use super::*;
 use crate::grpc_wrapper::raw_errors::RawResult;
-use crate::grpc_wrapper::raw_table_service::value_type::Type::Null;
 use std::collections::HashSet;
 use strum::EnumCount;
 
@@ -25,7 +24,6 @@ fn consistent_conversions() -> RawResult<()> {
         Text("".to_string()),
         Text("asd".to_string()),
         NullFlag,
-        NestedValue(Box::new(NestedValue(Box::new(Int64(123))))),
         Items(vec![Bool(true), Int32(9)]),
         Pairs(vec![ValuePair {
             key: Int32(2),

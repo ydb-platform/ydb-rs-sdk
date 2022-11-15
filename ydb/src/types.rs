@@ -80,7 +80,7 @@ pub enum Value {
     String(Bytes),
 
     /// Text data, encoded to valid utf8
-    Utf8(String),
+    Text(String),
     Yson(String),
     Json(String),
     JsonDocument(String),
@@ -258,7 +258,7 @@ impl Value {
                 T::TypeId(t_id) => match P::from_i32(*t_id) {
                     Some(P::Bool) => Self::Bool(false),
                     Some(P::String) => Self::String(Bytes::default()),
-                    Some(P::Utf8) => Self::Utf8(String::default()),
+                    Some(P::Utf8) => Self::Text(String::default()),
                     Some(P::Float) => Self::Float(0.0),
                     Some(P::Double) => Self::Double(0.0),
                     Some(P::Int8) => Self::Int8(0),
@@ -394,7 +394,7 @@ impl Value {
                 Value::Interval(SignedInterval::from_nanos(val))
             }
             (Value::String(_), pv::BytesValue(val)) => Value::String(val.into()),
-            (Value::Utf8(_), pv::TextValue(val)) => Value::Utf8(val),
+            (Value::Text(_), pv::TextValue(val)) => Value::Text(val),
             (Value::Yson(_), pv::TextValue(val)) => Value::Yson(val),
             (Value::Json(_), pv::TextValue(val)) => Value::Json(val),
             (Value::JsonDocument(_), pv::TextValue(val)) => Value::JsonDocument(val),
@@ -479,7 +479,7 @@ impl Value {
             }
             Self::Interval(val) => proto_typed_value(pt::Interval, pv::Int64Value(val.as_nanos()?)),
             Self::String(val) => proto_typed_value(pt::String, pv::BytesValue(val.into())),
-            Self::Utf8(val) => proto_typed_value(pt::Utf8, pv::TextValue(val)),
+            Self::Text(val) => proto_typed_value(pt::Utf8, pv::TextValue(val)),
             Self::Yson(val) => proto_typed_value(pt::Yson, pv::TextValue(val)),
             Self::Json(val) => proto_typed_value(pt::Json, pv::TextValue(val)),
             Self::JsonDocument(val) => proto_typed_value(pt::JsonDocument, pv::TextValue(val)),
@@ -604,8 +604,8 @@ mod test {
             Value::Bool(false),
             Value::Bool(true),
             Value::String(Bytes::from("asd".to_string())),
-            Value::Utf8("asd".into()),
-            Value::Utf8("фыв".into()),
+            Value::Text("asd".into()),
+            Value::Text("фыв".into()),
             Value::Json("{}".into()),
             Value::JsonDocument("{}".into()),
             Value::Yson("1;2;3;".into()),

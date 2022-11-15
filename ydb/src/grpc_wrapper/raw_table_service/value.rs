@@ -1,5 +1,5 @@
 use crate::grpc_wrapper::raw_errors::RawError;
-use crate::grpc_wrapper::raw_table_service::value_type::Type;
+use crate::grpc_wrapper::raw_table_service::value_type::{decode_err, Type};
 use ydb_grpc::ydb_proto::value::Value as Primitive;
 use ydb_grpc::ydb_proto::Value as ProtoValue;
 
@@ -26,7 +26,7 @@ pub(crate) enum Value {
     Bytes(Vec<u8>),
     Text(String),
     NullFlag,
-    NestedValue(Box<Value>),
+    // NestedValue(Box<Value>), return as Variant with 0 index
     Items(Vec<Value>),
     Pairs(Vec<ValuePair>),
     Variant(Box<VariantValue>),
@@ -48,7 +48,73 @@ impl TryFrom<ProtoValue> for Value {
     type Error = RawError;
 
     fn try_from(value: ProtoValue) -> Result<Self, Self::Error> {
-        todo!()
+        use Value::*;
+
+        if let Some(simple) = value.value {
+            let res = match simple {
+                ydb_grpc::ydb_proto::value::Value::BoolValue(v) => Bool(v),
+                ydb_grpc::ydb_proto::value::Value::Int32Value(v) => Int32(v),
+                ydb_grpc::ydb_proto::value::Value::Uint32Value(v) => UInt32(v),
+                ydb_grpc::ydb_proto::value::Value::Int64Value(v) => Int64(v),
+                ydb_grpc::ydb_proto::value::Value::Uint64Value(v) => UInt64(v),
+                ydb_grpc::ydb_proto::value::Value::FloatValue(v) => Float(v),
+                ydb_grpc::ydb_proto::value::Value::DoubleValue(v) => Double(v),
+                ydb_grpc::ydb_proto::value::Value::BytesValue(v) => Bytes(v),
+                ydb_grpc::ydb_proto::value::Value::TextValue(v) => Text(v),
+                ydb_grpc::ydb_proto::value::Value::NullFlagValue(_) => NullFlag,
+                ydb_grpc::ydb_proto::value::Value::NestedValue(v) => {
+                    Variant(Box::new(VariantValue {
+                        value: (*v).try_into()?,
+                        index: value.variant_index,
+                    }))
+                }
+                ydb_grpc::ydb_proto::value::Value::Low128(v) => HighLow128(value.high_128, v),
+            };
+            return Ok(res);
+        };
+
+        if value.items.len() > 0 {
+            let items: Result<_, _> = value
+                .items
+                .into_iter()
+                .map(|item| item.try_into())
+                .collect();
+            return Ok(Items(items?));
+        };
+
+        if value.pairs.len() > 0 {
+            let pairs: Result<_, _> = value
+                .pairs
+                .into_iter()
+                .map(|item| item.try_into())
+                .collect();
+            return Ok(Pairs(pairs?));
+        };
+
+        decode_err("empty value item")
+    }
+}
+
+impl TryFrom<ydb_grpc::ydb_proto::ValuePair> for ValuePair {
+    type Error = RawError;
+
+    fn try_from(value: ydb_grpc::ydb_proto::ValuePair) -> Result<Self, Self::Error> {
+        let key = if let Some(k) = value.key {
+            k
+        } else {
+            return decode_err("empty key value in proto pair");
+        };
+
+        let payload = if let Some(p) = value.payload {
+            p
+        } else {
+            return decode_err("empty payload value in proto pair");
+        };
+
+        Ok(ValuePair {
+            key: key.try_into()?,
+            payload: payload.try_into()?,
+        })
     }
 }
 
@@ -104,10 +170,6 @@ impl From<Value> for ProtoValue {
                 value: Some(Primitive::NullFlagValue(0)),
                 ..ProtoValue::default()
             },
-            Value::NestedValue(v) => ProtoValue {
-                value: Some(Primitive::NestedValue(Box::new((*v).into()))),
-                ..ProtoValue::default()
-            },
             Value::Items(v) => ProtoValue {
                 items: v.into_iter().map(|item| item.into()).collect(),
                 ..ProtoValue::default()
@@ -117,7 +179,9 @@ impl From<Value> for ProtoValue {
                 ..ProtoValue::default()
             },
             Value::Variant(v) => ProtoValue {
-                value: Some(v.value.into()),
+                value: Some(ydb_grpc::ydb_proto::value::Value::NestedValue(Box::new(
+                    v.value.into(),
+                ))),
                 variant_index: v.index,
                 ..ProtoValue::default()
             },

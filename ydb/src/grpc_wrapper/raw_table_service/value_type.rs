@@ -375,6 +375,6 @@ impl From<StructMember> for ydb_grpc::ydb_proto::StructMember {
     }
 }
 
-fn decode_err<S: Into<String>, V>(text: S) -> Result<V, RawError> {
+pub(super) fn decode_err<S: Into<String>, V>(text: S) -> Result<V, RawError> {
     Err(RawError::decode_error(text))
 }

@@ -86,7 +86,7 @@ simple_convert!(
 );
 simple_convert!(
     String,
-    Value::Utf8,
+    Value::Text,
     Value::Json,
     Value::JsonDocument,
     Value::Yson
@@ -94,7 +94,7 @@ simple_convert!(
 simple_convert!(
     Bytes,
     Value::String,
-    Value::Utf8,
+    Value::Text,
     Value::Json,
     Value::JsonDocument,
     Value::Yson
