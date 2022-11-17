@@ -63,6 +63,7 @@
 ///        "@type": "type.googleapis.com/google.protobuf.Duration",
 ///        "value": "1.212s"
 ///      }
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Any {
     /// A URL/resource name that uniquely identifies the type of the serialized
@@ -139,6 +140,7 @@ pub struct Any {
 /// encoded in JSON format as "3s", while 3 seconds and 1 nanosecond should
 /// be expressed in JSON format as "3.000000001s", and 3 seconds and 1
 /// microsecond should be expressed in JSON format as "3.000001s".
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Duration {
     /// Signed seconds of the span of time. Must be from -315,576,000,000
@@ -1215,6 +1217,7 @@ impl NullValue {
 ///      service Foo {
 ///        rpc Bar(google.protobuf.Empty) returns (google.protobuf.Empty);
 ///      }
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Empty {
 }
@@ -1284,6 +1287,7 @@ pub struct Empty {
 /// the Joda Time's \[`ISODateTimeFormat.dateTime()`\](
 /// <http://www.joda.org/joda-time/apidocs/org/joda/time/format/ISODateTimeFormat.html#dateTime%2D%2D>
 /// ) to obtain a formatter capable of generating timestamps in this format.
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Timestamp {
     /// Represents seconds of UTC time since Unix epoch

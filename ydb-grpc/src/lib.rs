@@ -2,5 +2,8 @@
 //! End customers should use crate ydb.
 
 #[allow(clippy::derive_partial_eq_without_eq)]
-mod generated;
+pub mod generated;
+mod manual_workarounds;
+
+pub use generated::google as google_proto_workaround;
 pub use generated::ydb as ydb_proto;

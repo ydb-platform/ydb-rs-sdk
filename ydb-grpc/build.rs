@@ -1,10 +1,10 @@
 use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::{fs, io};
 use std::path::PathBuf;
+use std::{fs, io};
 use walkdir::WalkDir;
 
-const DST_FOLDER: &str="src/generated";
+const DST_FOLDER: &str = "src/generated";
 
 const COMPILE_FILES: &[&str] = &[
     "ydb_scheme_v1.proto",
@@ -12,9 +12,7 @@ const COMPILE_FILES: &[&str] = &[
     "ydb_table_v1.proto",
 ];
 
-const INCLUDE_DIRS: &[&str] = &[
-    "ydb-api-protos",
-];
+const INCLUDE_DIRS: &[&str] = &["ydb-api-protos"];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var("CARGO_FEATURE_REGENERATE_SOURCES").unwrap_or_else(|_| "0".into()) != "1" {
@@ -30,8 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     cfg.compile_well_known_types()
         .type_attribute(".Ydb", "#[derive(serde::Serialize, serde::Deserialize)]")
         // .extern_path(".google.protobuf", "::pbjson_types")
-        .file_descriptor_set_path(&descriptor_file)
-    ;
+        .file_descriptor_set_path(&descriptor_file);
 
     tonic_build::configure()
         .build_server(false)
@@ -39,11 +36,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .out_dir(DST_FOLDER)
         .include_file("mod.rs")
         .compile_well_known_types(true)
-        .compile_with_config(
-            cfg,
-            COMPILE_FILES,
-            INCLUDE_DIRS,
-        )?;
+        // the serialize attributes is workaround
+        // in future need to find/write good serialization for the types
+        .type_attribute(
+            "google.protobuf.Timestamp",
+            "#[derive(serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "google.protobuf.Empty",
+            "#[derive(serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "google.protobuf.Duration",
+            "#[derive(serde::Serialize, serde::Deserialize)]",
+        )
+        .type_attribute(
+            "google.protobuf.Any",
+            "#[derive(serde::Serialize, serde::Deserialize)]",
+        )
+        .compile_with_config(cfg, COMPILE_FILES, INCLUDE_DIRS)?;
 
     // let descriptor_bytes = std::fs::read(descriptor_file).unwrap();
     // pbjson_build::Builder::new()

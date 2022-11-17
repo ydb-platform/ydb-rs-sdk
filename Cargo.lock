@@ -72,9 +72,9 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
 name = "axum"
-version = "0.5.1"
+version = "0.5.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47594e438a243791dba58124b6669561f5baa14cb12046641d8008bf035e5a25"
+checksum = "acee9fd5073ab6b045a275b3e709c163dd36c90685219cb21804a147b58dba43"
 dependencies = [
  "async-trait",
  "axum-core",
@@ -101,9 +101,9 @@ dependencies = [
 
 [[package]]
 name = "axum-core"
-version = "0.2.1"
+version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a671c9ae99531afdd5d3ee8340b8da547779430689947144c140fc74a740244"
+checksum = "37e5939e02c56fecd5c017c37df4238c0a839fa76b7f97acdd7efb804fd181cc"
 dependencies = [
  "async-trait",
  "bytes",
@@ -111,6 +111,8 @@ dependencies = [
  "http",
  "http-body",
  "mime",
+ "tower-layer",
+ "tower-service",
 ]
 
 [[package]]
@@ -498,9 +500,9 @@ dependencies = [
 
 [[package]]
 name = "http"
-version = "0.2.6"
+version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31f4c6746584866f0feabcc69893c5b51beef3831656a968ed7ae254cdc4fd03"
+checksum = "75f43d41e26995c17e71ee126451dd3941010b0514a81a9d11f3b341debc2399"
 dependencies = [
  "bytes",
  "fnv",
@@ -509,9 +511,9 @@ dependencies = [
 
 [[package]]
 name = "http-body"
-version = "0.4.4"
+version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ff4f84919677303da5f147645dbea6b1881f368d03ac84e1dc09031ebd7b2c6"
+checksum = "d5f38f16d184e36f2408a55281cd658ecbd3ca05cce6d6510a176eca393e26d1"
 dependencies = [
  "bytes",
  "http",
@@ -965,14 +967,6 @@ dependencies = [
 [[package]]
 name = "pbjson"
 version = "0.4.0"
-dependencies = [
- "base64",
- "serde",
-]
-
-[[package]]
-name = "pbjson"
-version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "599fe9aefc2ca0df4a96179b3075faee2cacb89d4cf947a00b9a89152dfffc9d"
 dependencies = [
@@ -981,13 +975,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "pbjson-build"
-version = "0.4.0"
+name = "pbjson"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "048f9ac93c1eab514f9470c4bc8d97ca2a0a236b84f45cc19d69a59fc11467f6"
 dependencies = [
- "heck 0.4.0",
- "itertools",
- "prost",
- "prost-types",
+ "base64",
+ "serde",
 ]
 
 [[package]]
@@ -1003,8 +997,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "pbjson-build"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdbb7b706f2afc610f3853550cdbbf6372fd324824a087806bd4480ea4996e24"
+dependencies = [
+ "heck 0.4.0",
+ "itertools",
+ "prost",
+ "prost-types",
+]
+
+[[package]]
 name = "pbjson-types"
 version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "588ae4a372e9fa9c20524dacd39e666b6abd29ff2830b9ebec5437e41634067d"
 dependencies = [
  "bytes",
  "chrono",
@@ -1017,14 +1025,14 @@ dependencies = [
 
 [[package]]
 name = "pbjson-types"
-version = "0.4.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "588ae4a372e9fa9c20524dacd39e666b6abd29ff2830b9ebec5437e41634067d"
+checksum = "4a88c8d87f99a4ac14325e7a4c24af190fca261956e3b82dd7ed67e77e6c7043"
 dependencies = [
  "bytes",
  "chrono",
- "pbjson 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "pbjson-build 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "pbjson 0.5.1",
+ "pbjson-build 0.5.1",
  "prost",
  "prost-build",
  "serde",
@@ -1790,9 +1798,9 @@ dependencies = [
 
 [[package]]
 name = "tonic"
-version = "0.8.1"
+version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11cd56bdb54ef93935a6a79dbd1d91f1ebd4c64150fd61654031fd6b8b775c91"
+checksum = "55b9af819e54b8f33d453655bef9b9acc171568fb49523078d0cc4e7484200ec"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -1839,9 +1847,9 @@ dependencies = [
 
 [[package]]
 name = "tower"
-version = "0.4.11"
+version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5651b5f6860a99bd1adb59dbfe1db8beb433e73709d9032b413a77e2fb7c066a"
+checksum = "b8fa9be0de6cf49e536ce1851f987bd21a43b771b09473c3549a6c853db37c1c"
 dependencies = [
  "futures-core",
  "futures-util",
@@ -1851,8 +1859,7 @@ dependencies = [
  "rand",
  "slab",
  "tokio",
- "tokio-stream",
- "tokio-util 0.6.9",
+ "tokio-util 0.7.1",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -1860,9 +1867,9 @@ dependencies = [
 
 [[package]]
 name = "tower-http"
-version = "0.2.5"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aba3f3efabf7fb41fae8534fc20a817013dd1c12cb45441efb6c82e6556b4cd8"
+checksum = "3c530c8675c1dbf98facee631536fa116b5fb6382d7dd6dc1b118d970eafe3ba"
 dependencies = [
  "bitflags",
  "bytes",
@@ -2363,7 +2370,7 @@ dependencies = [
  "ntest",
  "num",
  "once_cell",
- "pbjson-types 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "pbjson-types 0.4.0",
  "prost",
  "prost-types",
  "rand",
@@ -2400,9 +2407,9 @@ dependencies = [
 name = "ydb-grpc"
 version = "0.0.8"
 dependencies = [
- "pbjson 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "pbjson-build 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "pbjson-types 0.4.0",
+ "pbjson 0.5.1",
+ "pbjson-build 0.5.1",
+ "pbjson-types 0.5.1",
  "prost",
  "prost-build",
  "prost-types",
