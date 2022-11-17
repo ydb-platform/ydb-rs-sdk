@@ -20,7 +20,7 @@ where
     let opres = op
         .result
         .ok_or_else(|| RawError::Custom("no result data in operation".into()))?;
-    let res: T = T::decode(opres.value)?;
+    let res: T = T::decode(opres.value.as_slice())?;
     Ok(res)
 }
 
