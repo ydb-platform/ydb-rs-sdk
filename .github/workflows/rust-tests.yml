@@ -63,7 +63,7 @@ jobs:
     - name: Linter
       if: matrix.rust_version != '1.56.0'
       run: |
-        cargo clippy --workspace --all-targets --all-features -- -D warnings
+        cargo clippy --workspace --all-targets -- -D warnings
 
     - name: Wait database available
       run: bash ./.github/scripts/start-ydb-container.sh
