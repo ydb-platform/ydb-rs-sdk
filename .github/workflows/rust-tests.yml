@@ -42,20 +42,8 @@ jobs:
         echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
         echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
 
-    - name: Cache
-      uses: actions/cache@v3
-      with:
-        key: ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ steps.rust_version_step.outputs.version }}-cargo-${{ hashFiles('**/Cargo.lock') }}-1
-        restore-keys: |
-          ${{ env.CACHE_VERSION }}-${{ runner.os }}-${{ steps.rust_version_step.outputs.version }}
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/.crates.toml
-          ~/.cargo/.crates2.json
-          ~/.cargo/.package-cache
-          ~/.cargo/registry/
-          ~/.cargo/git/db/
-          target/
+    - name: Rust cache
+      uses: Swatinem/rust-cache@v2.0.0
 
     - name: Build
       run: cargo build --verbose --workspace --all-targets
