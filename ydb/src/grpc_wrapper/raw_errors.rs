@@ -10,6 +10,12 @@ pub(crate) enum RawError {
     TonicStatus(tonic::Status),
 }
 
+impl RawError {
+    pub fn custom<S: Into<String>>(text: S) -> Self {
+        RawError::Custom(text.into())
+    }
+}
+
 impl From<tonic::Status> for RawError {
     fn from(s: tonic::Status) -> Self {
         Self::TonicStatus(s)

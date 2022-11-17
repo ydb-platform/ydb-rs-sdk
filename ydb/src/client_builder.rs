@@ -1,15 +1,18 @@
 use crate::client_common::{DBCredentials, TokenCache};
 use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticToken};
+use crate::dicovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
 use crate::discovery::{Discovery, TimerDiscovery};
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
+use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 use crate::{Client, Credentials};
 use http::Uri;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 type ParamHandler = fn(&str, ClientBuilder) -> YdbResult<ClientBuilder>;
@@ -131,9 +134,14 @@ impl ClientBuilder {
 
         let endpoint: Uri = Uri::from_str(self.endpoint.as_str())?;
         let static_balancer = StaticLoadBalancer::new(endpoint);
+
+        let interceptor =
+            MultiInterceptor::new().with_interceptor(AuthGrpcInterceptor::new(db_cred.clone())?);
+
         let discovery_connection_manager = GrpcConnectionManager::new(
             SharedLoadBalancer::new_with_balancer(Box::new(static_balancer)),
-            db_cred.clone(),
+            db_cred.database.clone(),
+            interceptor.clone(),
         );
 
         let discovery = match self.discovery {
@@ -145,8 +153,14 @@ impl ClientBuilder {
             )?),
         };
 
-        let load_balancer = SharedLoadBalancer::new(discovery.as_ref());
-        let connection_manager = GrpcConnectionManager::new(load_balancer, db_cred.clone());
+        let discovery = Arc::new(discovery);
+
+        let interceptor =
+            interceptor.with_interceptor(DiscoveryPessimizationInterceptor::new(discovery.clone()));
+
+        let load_balancer = SharedLoadBalancer::new(discovery.as_ref().as_ref());
+        let connection_manager =
+            GrpcConnectionManager::new(load_balancer, db_cred.database.clone(), interceptor);
 
         Client::new(db_cred, discovery, connection_manager)
     }
@@ -174,7 +188,7 @@ impl ClientBuilder {
     ///
     /// # fn main()->YdbResult<()>{
     /// let discovery = StaticDiscovery::new_from_str("grpc://localhost:2136")?;
-    /// let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/?database=/local")?.with_discovery(discovery).client()?;
+    /// let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.with_discovery(discovery).client()?;
     /// # return Ok(());
     /// # }
     /// ```
@@ -213,5 +227,24 @@ impl FromStr for ClientBuilder {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         ClientBuilder::new_from_connection_string(s)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{ClientBuilder, YdbResult};
+
+    #[test]
+    fn database_from_path() -> YdbResult<()> {
+        let builder = ClientBuilder::new_from_connection_string("http://asd:222/qwe1")?;
+        assert_eq!(builder.database, "/qwe1".to_string());
+        Ok(())
+    }
+
+    #[test]
+    fn database_from_arg() -> YdbResult<()> {
+        let builder = ClientBuilder::new_from_connection_string("http://asd:222/?database=/qwe2")?;
+        assert_eq!(builder.database, "/qwe2".to_string());
+        Ok(())
     }
 }

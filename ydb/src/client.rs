@@ -4,16 +4,14 @@ use crate::client_table::TableClient;
 use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::load_balancer::SharedLoadBalancer;
-use crate::middlewares::AuthService;
 use crate::waiter::Waiter;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use tracing::trace;
-
-pub(crate) type Middleware = AuthService;
 
 /// YDB client
 pub struct Client {
@@ -27,10 +25,9 @@ pub struct Client {
 impl Client {
     pub(crate) fn new(
         credentials: DBCredentials,
-        discovery: Box<dyn Discovery>,
+        discovery: Arc<Box<dyn Discovery>>,
         connection_manager: GrpcConnectionManager,
     ) -> YdbResult<Self> {
-        let discovery = Arc::new(discovery);
         let discovery_ref = discovery.as_ref().as_ref();
 
         Ok(Client {
@@ -48,11 +45,7 @@ impl Client {
 
     /// Create instance of client for table service
     pub fn table_client(&self) -> TableClient {
-        TableClient::new(
-            self.credentials.clone(),
-            self.discovery.clone(),
-            self.timeouts,
-        )
+        TableClient::new(self.connection_manager.clone(), self.timeouts)
     }
 
     /// Create instance of client for directory service
@@ -87,6 +80,12 @@ const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(1);
 #[derive(Copy, Clone, Debug)]
 pub struct TimeoutSettings {
     pub operation_timeout: Duration,
+}
+
+impl TimeoutSettings {
+    pub(crate) fn operation_params(&self) -> RawOperationParams {
+        RawOperationParams::new_with_timeouts(self.operation_timeout, self.operation_timeout)
+    }
 }
 
 impl Default for TimeoutSettings {

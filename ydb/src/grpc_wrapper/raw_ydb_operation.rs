@@ -20,10 +20,6 @@ impl RawOperationParams {
             labels: Default::default(),
         }
     }
-
-    pub fn new_with_timeout(timeout: std::time::Duration) -> Self {
-        Self::new_with_timeouts(timeout, timeout)
-    }
 }
 
 impl From<RawOperationParams> for ydb_grpc::ydb_proto::operations::OperationParams {

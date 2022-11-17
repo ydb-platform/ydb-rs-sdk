@@ -46,7 +46,6 @@
 //!
 extern crate core;
 
-mod channel_pool;
 pub(crate) mod client;
 mod client_builder;
 pub(crate) mod client_common;
@@ -64,7 +63,6 @@ mod grpc;
 pub(crate) mod grpc_connection_manager;
 mod grpc_wrapper;
 mod load_balancer;
-mod middlewares;
 mod pub_traits;
 pub(crate) mod query;
 pub(crate) mod result;
@@ -75,6 +73,7 @@ mod sugar;
 #[cfg(test)]
 mod test_helpers;
 
+pub(crate) mod dicovery_pessimization_interceptor;
 #[cfg(test)]
 mod test_integration_helper;
 mod trace_helpers;

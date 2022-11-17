@@ -1,13 +1,14 @@
-use crate::channel_pool::{ChannelPool, ChannelPoolImpl};
-use crate::client::{Middleware, TimeoutSettings};
-use crate::client_common::DBCredentials;
-use crate::discovery::Discovery;
+use crate::client::TimeoutSettings;
+
 use crate::errors::*;
 use crate::session::Session;
 use crate::session_pool::SessionPool;
 use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 
-use crate::grpc_wrapper::raw_services::Service;
+use crate::grpc_connection_manager::GrpcConnectionManager;
+
+use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
+use crate::{Query, StreamResult};
 use num::pow;
 use std::future::Future;
 use std::sync::Arc;
@@ -19,8 +20,7 @@ use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
 
-pub(crate) type TableServiceClientType = TableServiceClient<Middleware>;
-pub(crate) type TableServiceChannelPool = Arc<Box<dyn ChannelPool<TableServiceClientType>>>;
+pub(crate) type TableServiceClientType = TableServiceClient<InterceptedChannel>;
 
 type TransactionArgType = Box<dyn Transaction>; // real type may be changed
 
@@ -119,21 +119,12 @@ pub struct TableClient {
 
 impl TableClient {
     pub(crate) fn new(
-        credencials: DBCredentials,
-        discovery: Arc<Box<dyn Discovery>>,
+        connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
     ) -> Self {
-        let channel_pool = ChannelPoolImpl::new::<TableServiceClientType>(
-            discovery,
-            credencials,
-            Service::Table,
-            TableServiceClient::new,
-        );
-        let channel_pool: TableServiceChannelPool = Arc::new(Box::new(channel_pool));
-
         Self {
             error_on_truncate: false,
-            session_pool: SessionPool::new(Box::new(channel_pool)),
+            session_pool: SessionPool::new(Box::new(connection_manager), timeouts),
             retrier: Arc::new(Box::new(TimeoutRetrier::default())),
             transaction_options: TransactionOptions::new(),
             idempotent_operation: false,
@@ -238,6 +229,16 @@ impl TableClient {
             }
             tokio::time::sleep(retry_decision.wait_timeout).await;
         }
+    }
+
+    /// Execute scan query. The method will auto-retry errors while start query execution,
+    /// but no retries after server start streaming result.
+    pub async fn retry_execute_scan_query(&self, query: Query) -> YdbResult<StreamResult> {
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            session.execute_scan_query(query.clone()).await
+        })
+        .await
     }
 
     /// Execute scheme query with retry policy

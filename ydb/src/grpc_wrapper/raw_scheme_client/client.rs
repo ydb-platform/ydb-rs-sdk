@@ -1,22 +1,21 @@
-use crate::grpc_wrapper::channel::ChannelWithAuth;
-use crate::grpc_wrapper::grpc::grpc_read_void_operation_result;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_scheme_client::list_directory_types::{
     RawListDirectoryRequest, RawListDirectoryResult,
 };
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
+use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use tracing::{instrument, trace};
 use ydb_grpc::ydb_proto::operations::OperationParams;
 use ydb_grpc::ydb_proto::scheme::v1::scheme_service_client::SchemeServiceClient;
 use ydb_grpc::ydb_proto::scheme::{MakeDirectoryRequest, RemoveDirectoryRequest};
 
 pub(crate) struct RawSchemeClient {
-    service: SchemeServiceClient<ChannelWithAuth>,
+    service: SchemeServiceClient<InterceptedChannel>,
 }
 
 impl RawSchemeClient {
-    pub fn new(service: ChannelWithAuth) -> Self {
+    pub fn new(service: InterceptedChannel) -> Self {
         Self {
             service: SchemeServiceClient::new(service),
         }

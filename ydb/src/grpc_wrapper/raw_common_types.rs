@@ -17,3 +17,9 @@ impl From<Duration> for pbjson_types::Duration {
         }
     }
 }
+
+impl From<Duration> for ydb_grpc::google_proto_workaround::protobuf::Duration {
+    fn from(d: Duration) -> Self {
+        d.val.into()
+    }
+}

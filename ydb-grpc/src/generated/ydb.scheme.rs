@@ -93,6 +93,25 @@ pub mod entry {
         Sequence = 15,
         Replication = 16,
     }
+    impl Type {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Type::Unspecified => "TYPE_UNSPECIFIED",
+                Type::Directory => "DIRECTORY",
+                Type::Table => "TABLE",
+                Type::PersQueueGroup => "PERS_QUEUE_GROUP",
+                Type::Database => "DATABASE",
+                Type::RtmrVolume => "RTMR_VOLUME",
+                Type::BlockStoreVolume => "BLOCK_STORE_VOLUME",
+                Type::CoordinationNode => "COORDINATION_NODE",
+                Type::Sequence => "SEQUENCE",
+                Type::Replication => "REPLICATION",
+            }
+        }
+    }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
