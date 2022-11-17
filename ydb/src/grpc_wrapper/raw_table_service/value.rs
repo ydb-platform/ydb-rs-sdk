@@ -197,3 +197,12 @@ impl From<ValuePair> for ydb_grpc::ydb_proto::ValuePair {
         }
     }
 }
+
+impl From<TypedValue> for ydb_grpc::ydb_proto::TypedValue {
+    fn from(v: TypedValue) -> Self {
+        Self {
+            r#type: Some(v.r#type.into()),
+            value: Some(v.value.into()),
+        }
+    }
+}
