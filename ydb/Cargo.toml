@@ -31,7 +31,7 @@ tracing-subscriber = "0.3"
 tonic = {version= "0.8.1", features=["tls"]}
 tower = "0.4"
 url="2.2"
-ydb-grpc = { version = "0.0.8", path="../ydb-grpc"}
+ydb-grpc = { version = "0.0.9", path="../ydb-grpc"}
 
 [dev-dependencies]
 async_once="0.2"
