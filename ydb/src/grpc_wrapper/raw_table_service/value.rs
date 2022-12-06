@@ -8,13 +8,13 @@ use ydb_grpc::ydb_proto::Value as ProtoValue;
 mod value_test;
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct TypedValue {
+pub(crate) struct RawTypedValue {
     pub r#type: Type,
-    pub value: Value,
+    pub value: RawValue,
 }
 
 #[derive(Clone, Debug, PartialEq, strum::EnumCount)]
-pub(crate) enum Value {
+pub(crate) enum RawValue {
     Bool(bool),
     Int32(i32),
     UInt32(u32),
@@ -27,28 +27,28 @@ pub(crate) enum Value {
     Text(String),
     NullFlag,
     // NestedValue(Box<Value>), return as Variant with 0 index
-    Items(Vec<Value>),
-    Pairs(Vec<ValuePair>),
-    Variant(Box<VariantValue>),
+    Items(Vec<RawValue>),
+    Pairs(Vec<RawValuePair>),
+    Variant(Box<RawVariantValue>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ValuePair {
-    key: Value,
-    payload: Value,
+pub(crate) struct RawValuePair {
+    key: RawValue,
+    payload: RawValue,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct VariantValue {
-    value: Value,
+pub(crate) struct RawVariantValue {
+    value: RawValue,
     index: u32,
 }
 
-impl TryFrom<ProtoValue> for Value {
+impl TryFrom<ProtoValue> for RawValue {
     type Error = RawError;
 
     fn try_from(value: ProtoValue) -> Result<Self, Self::Error> {
-        use Value::*;
+        use RawValue::*;
 
         if let Some(simple) = value.value {
             let res = match simple {
@@ -63,7 +63,7 @@ impl TryFrom<ProtoValue> for Value {
                 ydb_grpc::ydb_proto::value::Value::TextValue(v) => Text(v),
                 ydb_grpc::ydb_proto::value::Value::NullFlagValue(_) => NullFlag,
                 ydb_grpc::ydb_proto::value::Value::NestedValue(v) => {
-                    Variant(Box::new(VariantValue {
+                    Variant(Box::new(RawVariantValue {
                         value: (*v).try_into()?,
                         index: value.variant_index,
                     }))
@@ -95,7 +95,7 @@ impl TryFrom<ProtoValue> for Value {
     }
 }
 
-impl TryFrom<ydb_grpc::ydb_proto::ValuePair> for ValuePair {
+impl TryFrom<ydb_grpc::ydb_proto::ValuePair> for RawValuePair {
     type Error = RawError;
 
     fn try_from(value: ydb_grpc::ydb_proto::ValuePair) -> Result<Self, Self::Error> {
@@ -111,7 +111,7 @@ impl TryFrom<ydb_grpc::ydb_proto::ValuePair> for ValuePair {
             return decode_err("empty payload value in proto pair");
         };
 
-        Ok(ValuePair {
+        Ok(RawValuePair {
             key: key.try_into()?,
             payload: payload.try_into()?,
         })
@@ -122,63 +122,63 @@ impl TryFrom<ydb_grpc::ydb_proto::ValuePair> for ValuePair {
 // internal to protobuf
 //
 
-impl From<Value> for ProtoValue {
-    fn from(v: Value) -> Self {
+impl From<RawValue> for ProtoValue {
+    fn from(v: RawValue) -> Self {
         match v {
-            Value::Bool(v) => ProtoValue {
+            RawValue::Bool(v) => ProtoValue {
                 value: Some(Primitive::BoolValue(v)),
                 ..ProtoValue::default()
             },
-            Value::Int32(v) => ProtoValue {
+            RawValue::Int32(v) => ProtoValue {
                 value: Some(Primitive::Int32Value(v)),
                 ..ProtoValue::default()
             },
-            Value::UInt32(v) => ProtoValue {
+            RawValue::UInt32(v) => ProtoValue {
                 value: Some(Primitive::Uint32Value(v)),
                 ..ProtoValue::default()
             },
-            Value::Int64(v) => ProtoValue {
+            RawValue::Int64(v) => ProtoValue {
                 value: Some(Primitive::Int64Value(v)),
                 ..ProtoValue::default()
             },
-            Value::UInt64(v) => ProtoValue {
+            RawValue::UInt64(v) => ProtoValue {
                 value: Some(Primitive::Uint64Value(v)),
                 ..ProtoValue::default()
             },
-            Value::HighLow128(h, l) => ProtoValue {
+            RawValue::HighLow128(h, l) => ProtoValue {
                 value: Some(Primitive::Low128(l)),
                 high_128: h,
                 ..ProtoValue::default()
             },
-            Value::Float(v) => ProtoValue {
+            RawValue::Float(v) => ProtoValue {
                 value: Some(Primitive::FloatValue(v)),
                 ..ProtoValue::default()
             },
-            Value::Double(v) => ProtoValue {
+            RawValue::Double(v) => ProtoValue {
                 value: Some(Primitive::DoubleValue(v)),
                 ..ProtoValue::default()
             },
-            Value::Bytes(v) => ProtoValue {
+            RawValue::Bytes(v) => ProtoValue {
                 value: Some(Primitive::BytesValue(v)),
                 ..ProtoValue::default()
             },
-            Value::Text(v) => ProtoValue {
+            RawValue::Text(v) => ProtoValue {
                 value: Some(Primitive::TextValue(v)),
                 ..ProtoValue::default()
             },
-            Value::NullFlag => ProtoValue {
+            RawValue::NullFlag => ProtoValue {
                 value: Some(Primitive::NullFlagValue(0)),
                 ..ProtoValue::default()
             },
-            Value::Items(v) => ProtoValue {
+            RawValue::Items(v) => ProtoValue {
                 items: v.into_iter().map(|item| item.into()).collect(),
                 ..ProtoValue::default()
             },
-            Value::Pairs(v) => ProtoValue {
+            RawValue::Pairs(v) => ProtoValue {
                 pairs: v.into_iter().map(|item| item.into()).collect(),
                 ..ProtoValue::default()
             },
-            Value::Variant(v) => ProtoValue {
+            RawValue::Variant(v) => ProtoValue {
                 value: Some(ydb_grpc::ydb_proto::value::Value::NestedValue(Box::new(
                     v.value.into(),
                 ))),
@@ -189,8 +189,8 @@ impl From<Value> for ProtoValue {
     }
 }
 
-impl From<ValuePair> for ydb_grpc::ydb_proto::ValuePair {
-    fn from(v: ValuePair) -> Self {
+impl From<RawValuePair> for ydb_grpc::ydb_proto::ValuePair {
+    fn from(v: RawValuePair) -> Self {
         Self {
             key: Some(v.key.into()),
             payload: Some(v.payload.into()),
@@ -198,8 +198,8 @@ impl From<ValuePair> for ydb_grpc::ydb_proto::ValuePair {
     }
 }
 
-impl From<TypedValue> for ydb_grpc::ydb_proto::TypedValue {
-    fn from(v: TypedValue) -> Self {
+impl From<RawTypedValue> for ydb_grpc::ydb_proto::TypedValue {
+    fn from(v: RawTypedValue) -> Self {
         Self {
             r#type: Some(v.r#type.into()),
             value: Some(v.value.into()),

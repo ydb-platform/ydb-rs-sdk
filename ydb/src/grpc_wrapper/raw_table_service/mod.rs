@@ -8,3 +8,4 @@ pub(crate) mod value;
 pub(crate) mod value_type;
 pub(crate) mod execute_data_query;
 pub(crate) mod transaction_control;
+pub(crate) mod query_stats;

@@ -5,7 +5,7 @@ use strum::EnumCount;
 
 #[test]
 fn consistent_conversions() -> RawResult<()> {
-    use Value::*;
+    use RawValue::*;
 
     let test_values = vec![
         Bool(true),
@@ -25,11 +25,11 @@ fn consistent_conversions() -> RawResult<()> {
         Text("asd".to_string()),
         NullFlag,
         Items(vec![Bool(true), Int32(9)]),
-        Pairs(vec![ValuePair {
+        Pairs(vec![RawValuePair {
             key: Int32(2),
             payload: Float(0.1),
         }]),
-        Variant(Box::new(VariantValue {
+        Variant(Box::new(RawVariantValue {
             value: Int64(4),
             index: 5,
         })),
@@ -39,11 +39,11 @@ fn consistent_conversions() -> RawResult<()> {
     for v in test_values {
         discriminants.insert(std::mem::discriminant(&v));
         let proto: ydb_grpc::ydb_proto::Value = v.clone().into();
-        let reverse_v: Value = proto.try_into()?;
+        let reverse_v: RawValue = proto.try_into()?;
         assert_eq!(v, reverse_v);
     }
 
-    assert_eq!(discriminants.len(), Value::COUNT);
+    assert_eq!(discriminants.len(), RawValue::COUNT);
 
     Ok(())
 }

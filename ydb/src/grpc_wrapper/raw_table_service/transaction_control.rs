@@ -1,21 +1,52 @@
 pub(crate) struct RawTransactionControl {
     pub commit_tx: bool,
+    pub tx_selector: RawTxSelector,
 }
 
 pub(crate) enum RawTxSelector {
     Id(String),
-    Begin(RawTxMode),
+    Begin(RawTxSettings),
 }
+
+impl From<RawTxSelector> for ydb_grpc::ydb_proto::table::transaction_control::TxSelector{
+    fn from(v: RawTxSelector) -> Self {
+        use ydb_grpc::ydb_proto::table::transaction_control::TxSelector;
+        match v {
+            RawTxSelector::Id(id) => TxSelector::TxId(id),
+            RawTxSelector::Begin(tx_settings) => TxSelector::BeginTx(tx_settings.into()),
+        }
+    }
+}
+
 
 pub(crate) struct RawTxSettings {
     pub mode: RawTxMode,
+}
+
+impl From<RawTxSettings> for ydb_grpc::ydb_proto::table::TransactionSettings{
+    fn from(v: RawTxSettings) -> Self {
+        Self {
+            tx_mode: Some(v.mode.into()),
+        }
+    }
 }
 
 pub(crate) enum RawTxMode {
     SerializableReadWrite,
     OnlineReadOnly(RawOnlineReadonlySettings),
     StaleReadOnly,
-    SnapshotReadOnly,
+}
+
+impl From<RawTxMode> for ydb_grpc::ydb_proto::table::transaction_settings::TxMode{
+    fn from(v: RawTxMode) -> Self {
+        use ydb_grpc::ydb_proto::table;
+        use ydb_grpc::ydb_proto::table::transaction_settings::TxMode;
+        match v {
+            RawTxMode::SerializableReadWrite => TxMode::SerializableReadWrite(table::SerializableModeSettings{}),
+            RawTxMode::OnlineReadOnly(RawOnlineReadonlySettings{allow_inconsistent_reads}) => TxMode::OnlineReadOnly(table::OnlineModeSettings{ allow_inconsistent_reads }),
+            RawTxMode::StaleReadOnly => TxMode::StaleReadOnly(table::StaleModeSettings{}),
+        }
+    }
 }
 
 pub(crate) struct RawOnlineReadonlySettings{
@@ -26,7 +57,7 @@ impl From<RawTransactionControl> for ydb_grpc::ydb_proto::table::TransactionCont
     fn from(v: RawTransactionControl) -> Self {
         Self {
             commit_tx: v.commit_tx,
-            tx_selector: unimplemented!(),
+            tx_selector: Some(v.tx_selector.into()),
         }
     }
 }
