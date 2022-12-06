@@ -29,3 +29,15 @@ impl From<RawExecuteDataQueryRequest> for ydb_grpc::ydb_proto::table::ExecuteDat
         }
     }
 }
+
+pub(crate) struct RawExecuteDataQueryResult {
+
+}
+
+impl TryFrom<ydb_grpc::ydb_proto::table::ExecuteQueryResult> for RawExecuteDataQueryResult{
+    type Error = RawError;
+
+    fn try_from(value: ExecuteQueryResult) -> Result<Self, Self::Error> {
+        todo!()
+    }
+}
