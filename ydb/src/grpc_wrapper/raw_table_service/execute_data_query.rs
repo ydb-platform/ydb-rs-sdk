@@ -1,10 +1,11 @@
-use std::collections::HashMap;
-use ydb_grpc::ydb_proto::table::ExecuteQueryResult;
 use crate::grpc_wrapper::raw_errors::RawError;
 use crate::grpc_wrapper::raw_table_service::query_stats::RawQueryStatMode;
 use crate::grpc_wrapper::raw_table_service::transaction_control::RawTransactionControl;
-use crate::grpc_wrapper::raw_table_service::value::{RawTypedValue};
+use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawTypedValue};
+use crate::grpc_wrapper::raw_table_service::value_type::RawType;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
+use std::collections::HashMap;
+use ydb_grpc::ydb_proto::table::ExecuteQueryResult;
 
 pub(crate) struct RawExecuteDataQueryRequest {
     pub session_id: String,
@@ -21,23 +22,43 @@ impl From<RawExecuteDataQueryRequest> for ydb_grpc::ydb_proto::table::ExecuteDat
         Self {
             session_id: v.session_id,
             tx_control: Some(v.tx_control.into()),
-            query: Some(ydb_grpc::ydb_proto::table::Query{ query: Some(ydb_grpc::ydb_proto::table::query::Query::YqlText(v.yql_text)) }),
-            parameters: v.params.into_iter().map(|(k, v)| { (k, v.into() )}).collect(),
-            query_cache_policy: Some(ydb_grpc::ydb_proto::table::QueryCachePolicy{keep_in_cache: v.keep_in_cache}),
+            query: Some(ydb_grpc::ydb_proto::table::Query {
+                query: Some(ydb_grpc::ydb_proto::table::query::Query::YqlText(
+                    v.yql_text,
+                )),
+            }),
+            parameters: v.params.into_iter().map(|(k, v)| (k, v.into())).collect(),
+            query_cache_policy: Some(ydb_grpc::ydb_proto::table::QueryCachePolicy {
+                keep_in_cache: v.keep_in_cache,
+            }),
             operation_params: Some(v.operation_params.into()),
-            collect_stats: ydb_grpc::ydb_proto::table::query_stats_collection::Mode::from(v.collect_stats) as i32,
+            collect_stats: ydb_grpc::ydb_proto::table::query_stats_collection::Mode::from(
+                v.collect_stats,
+            ) as i32,
         }
     }
 }
 
 pub(crate) struct RawExecuteDataQueryResult {
-
+    result_sets: Vec<RawResultSet>,
+    tx_meta: RawTransactionMeta,
+    query_meta: RawQueryMeta,
+    // query_stats: Option<RawQueryStats>, // todo
 }
 
-impl TryFrom<ydb_grpc::ydb_proto::table::ExecuteQueryResult> for RawExecuteDataQueryResult{
+impl TryFrom<ydb_grpc::ydb_proto::table::ExecuteQueryResult> for RawExecuteDataQueryResult {
     type Error = RawError;
 
     fn try_from(value: ExecuteQueryResult) -> Result<Self, Self::Error> {
         todo!()
     }
+}
+
+pub(crate) struct RawTransactionMeta {
+    pub id: String,
+}
+
+pub(crate) struct RawQueryMeta {
+    pub id: String,
+    pub parameter_types: HashMap<String, RawType>,
 }

@@ -1,5 +1,5 @@
 use crate::grpc_wrapper::raw_errors::RawError;
-use crate::grpc_wrapper::raw_table_service::value_type::{decode_err, Type};
+use crate::grpc_wrapper::raw_table_service::value_type::{decode_err, RawType};
 use ydb_grpc::ydb_proto::value::Value as Primitive;
 use ydb_grpc::ydb_proto::Value as ProtoValue;
 
@@ -9,7 +9,7 @@ mod value_test;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RawTypedValue {
-    pub r#type: Type,
+    pub r#type: RawType,
     pub value: RawValue,
 }
 
@@ -205,4 +205,14 @@ impl From<RawTypedValue> for ydb_grpc::ydb_proto::TypedValue {
             value: Some(v.value.into()),
         }
     }
+}
+
+pub(crate) struct RawResultSet {
+    pub columns: Vec<RawColumn>,
+    pub rows: Vec<Vec<RawValue>>,
+}
+
+pub(crate) struct RawColumn {
+    pub name: String,
+    pub column_type: RawType,
 }
