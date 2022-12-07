@@ -102,6 +102,7 @@ pub mod entry {
         CoordinationNode = 7,
         Sequence = 15,
         Replication = 16,
+        Topic = 17,
     }
     impl Type {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -119,6 +120,7 @@ pub mod entry {
                 Type::CoordinationNode => "COORDINATION_NODE",
                 Type::Sequence => "SEQUENCE",
                 Type::Replication => "REPLICATION",
+                Type::Topic => "TOPIC",
             }
         }
     }

@@ -80,6 +80,7 @@ fn from_grpc_code_to_scheme_entry_type(value: i32) -> SchemeEntryType {
         Some(grpcT::CoordinationNode) => SchemeEntryType::CoordinationNode,
         Some(grpcT::Sequence) => SchemeEntryType::Sequence,
         Some(grpcT::Replication) => SchemeEntryType::Replication,
+        Some(grpcT::Topic) => SchemeEntryType::Topic,
         None => SchemeEntryType::Unknown(value),
     }
 }
