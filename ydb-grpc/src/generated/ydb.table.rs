@@ -1208,8 +1208,11 @@ pub struct OnlineModeSettings {
 pub struct StaleModeSettings {}
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SnapshotModeSettings {}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TransactionSettings {
-    #[prost(oneof = "transaction_settings::TxMode", tags = "1, 2, 3")]
+    #[prost(oneof = "transaction_settings::TxMode", tags = "1, 2, 3, 4")]
     pub tx_mode: ::core::option::Option<transaction_settings::TxMode>,
 }
 /// Nested message and enum types in `TransactionSettings`.
@@ -1223,6 +1226,8 @@ pub mod transaction_settings {
         OnlineReadOnly(super::OnlineModeSettings),
         #[prost(message, tag = "3")]
         StaleReadOnly(super::StaleModeSettings),
+        #[prost(message, tag = "4")]
+        SnapshotReadOnly(super::SnapshotModeSettings),
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]

@@ -22,6 +22,7 @@ pub enum SchemeEntryType {
     CoordinationNode,
     Sequence,
     Replication,
+    Topic,
     Unknown(i32),
 }
 
