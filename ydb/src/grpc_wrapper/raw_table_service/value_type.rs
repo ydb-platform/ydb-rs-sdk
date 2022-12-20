@@ -6,7 +6,7 @@ use ydb_grpc::ydb_proto::r#type::{PrimitiveTypeId, Type as ProtoType};
 mod value_type_test;
 
 #[derive(Clone, Debug, Eq, PartialEq, strum::EnumCount)]
-pub(crate) enum Type {
+pub(crate) enum RawType {
     // Unspecified, skip unspecified type into internal code
     Bool,
     Int8,
@@ -34,8 +34,8 @@ pub(crate) enum Type {
     JSONDocument,
     DyNumber,
     Decimal(DecimalType),
-    Optional(Box<Type>),
-    List(Box<Type>),
+    Optional(Box<RawType>),
+    List(Box<RawType>),
     Tuple(TupleType),
     Struct(StructType),
     Dict(Box<DictType>),
@@ -55,7 +55,7 @@ pub(crate) struct DecimalType {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TupleType {
-    pub elements: Vec<Type>,
+    pub elements: Vec<RawType>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -66,13 +66,13 @@ pub(crate) struct StructType {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StructMember {
     pub name: String,
-    pub member_type: Type,
+    pub member_type: RawType,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DictType {
-    pub key: Type,
-    pub payload: Type,
+    pub key: RawType,
+    pub payload: RawType,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,10 +84,10 @@ pub(crate) enum VariantType {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TaggedType {
     pub tag: String,
-    pub item_type: Type,
+    pub item_type: RawType,
 }
 
-impl Type {
+impl RawType {
     fn try_from_primitive_type_id(int_type_id: i32) -> RawResult<Self> {
         let type_id = PrimitiveTypeId::from_i32(int_type_id);
         let type_id = if let Some(type_id) = type_id {
@@ -103,31 +103,31 @@ impl Type {
             PrimitiveTypeId::Unspecified => {
                 return Err(RawError::decode_error("got unspecified primitive_type_id"))
             }
-            PrimitiveTypeId::Bool => Type::Bool,
-            PrimitiveTypeId::Int8 => Type::Int8,
-            PrimitiveTypeId::Uint8 => Type::Uint8,
-            PrimitiveTypeId::Int16 => Type::Int16,
-            PrimitiveTypeId::Uint16 => Type::Uint16,
-            PrimitiveTypeId::Int32 => Type::Int32,
-            PrimitiveTypeId::Uint32 => Type::Uint32,
-            PrimitiveTypeId::Int64 => Type::Int64,
-            PrimitiveTypeId::Uint64 => Type::Uint64,
-            PrimitiveTypeId::Float => Type::Float,
-            PrimitiveTypeId::Double => Type::Double,
-            PrimitiveTypeId::Date => Type::Date,
-            PrimitiveTypeId::Datetime => Type::DateTime,
-            PrimitiveTypeId::Timestamp => Type::Timestamp,
-            PrimitiveTypeId::Interval => Type::Interval,
-            PrimitiveTypeId::TzDate => Type::TzDate,
-            PrimitiveTypeId::TzDatetime => Type::TzDatetime,
-            PrimitiveTypeId::TzTimestamp => Type::TzTimestamp,
-            PrimitiveTypeId::String => Type::Bytes,
-            PrimitiveTypeId::Utf8 => Type::UTF8,
-            PrimitiveTypeId::Yson => Type::YSON,
-            PrimitiveTypeId::Json => Type::JSON,
-            PrimitiveTypeId::Uuid => Type::UUID,
-            PrimitiveTypeId::JsonDocument => Type::JSONDocument,
-            PrimitiveTypeId::Dynumber => Type::DyNumber,
+            PrimitiveTypeId::Bool => RawType::Bool,
+            PrimitiveTypeId::Int8 => RawType::Int8,
+            PrimitiveTypeId::Uint8 => RawType::Uint8,
+            PrimitiveTypeId::Int16 => RawType::Int16,
+            PrimitiveTypeId::Uint16 => RawType::Uint16,
+            PrimitiveTypeId::Int32 => RawType::Int32,
+            PrimitiveTypeId::Uint32 => RawType::Uint32,
+            PrimitiveTypeId::Int64 => RawType::Int64,
+            PrimitiveTypeId::Uint64 => RawType::Uint64,
+            PrimitiveTypeId::Float => RawType::Float,
+            PrimitiveTypeId::Double => RawType::Double,
+            PrimitiveTypeId::Date => RawType::Date,
+            PrimitiveTypeId::Datetime => RawType::DateTime,
+            PrimitiveTypeId::Timestamp => RawType::Timestamp,
+            PrimitiveTypeId::Interval => RawType::Interval,
+            PrimitiveTypeId::TzDate => RawType::TzDate,
+            PrimitiveTypeId::TzDatetime => RawType::TzDatetime,
+            PrimitiveTypeId::TzTimestamp => RawType::TzTimestamp,
+            PrimitiveTypeId::String => RawType::Bytes,
+            PrimitiveTypeId::Utf8 => RawType::UTF8,
+            PrimitiveTypeId::Yson => RawType::YSON,
+            PrimitiveTypeId::Json => RawType::JSON,
+            PrimitiveTypeId::Uuid => RawType::UUID,
+            PrimitiveTypeId::JsonDocument => RawType::JSONDocument,
+            PrimitiveTypeId::Dynumber => RawType::DyNumber,
         };
 
         Ok(res)
@@ -138,7 +138,7 @@ impl Type {
 // From protobuf to internal
 //
 
-impl TryFrom<ydb_grpc::ydb_proto::Type> for Type {
+impl TryFrom<ydb_grpc::ydb_proto::Type> for RawType {
     type Error = RawError;
 
     fn try_from(src: ydb_grpc::ydb_proto::Type) -> Result<Self, Self::Error> {
@@ -149,27 +149,29 @@ impl TryFrom<ydb_grpc::ydb_proto::Type> for Type {
         };
 
         let res: Self = match t {
-            ProtoType::TypeId(type_id) => return Type::try_from_primitive_type_id(type_id),
-            ProtoType::DecimalType(decimal) => Type::Decimal(DecimalType {
+            ProtoType::TypeId(type_id) => return RawType::try_from_primitive_type_id(type_id),
+            ProtoType::DecimalType(decimal) => RawType::Decimal(DecimalType {
                 precision: decimal.precision,
                 scale: decimal.scale,
             }),
             ProtoType::OptionalType(optional_type) => {
                 if let Some(item) = optional_type.item {
-                    Type::Optional(Box::new(Type::try_from(*item)?))
+                    RawType::Optional(Box::new(RawType::try_from(*item)?))
                 } else {
                     return decode_err("empty optional type");
                 }
             }
             ProtoType::ListType(list_type) => {
                 if let Some(item) = list_type.item {
-                    Type::List(Box::new(Type::try_from(*item)?))
+                    RawType::List(Box::new(RawType::try_from(*item)?))
                 } else {
                     return decode_err("empty list type");
                 }
             }
-            ProtoType::TupleType(tuple_type) => Type::Tuple(TupleType::try_from(tuple_type)?),
-            ProtoType::StructType(struct_type) => Type::Struct(StructType::try_from(struct_type)?),
+            ProtoType::TupleType(tuple_type) => RawType::Tuple(TupleType::try_from(tuple_type)?),
+            ProtoType::StructType(struct_type) => {
+                RawType::Struct(StructType::try_from(struct_type)?)
+            }
             ProtoType::DictType(dict_type) => {
                 let key = if let Some(key) = dict_type.key {
                     key
@@ -183,9 +185,9 @@ impl TryFrom<ydb_grpc::ydb_proto::Type> for Type {
                     return decode_err("empty payload in dict_type");
                 };
 
-                Type::Dict(Box::new(DictType {
-                    key: Type::try_from(*key)?,
-                    payload: Type::try_from(*payload)?,
+                RawType::Dict(Box::new(DictType {
+                    key: RawType::try_from(*key)?,
+                    payload: RawType::try_from(*payload)?,
                 }))
             }
             ProtoType::VariantType(variant_type) => {
@@ -197,11 +199,11 @@ impl TryFrom<ydb_grpc::ydb_proto::Type> for Type {
 
                 match t {
                     ydb_grpc::ydb_proto::variant_type::Type::TupleItems(tuple_items) => {
-                        Type::Variant(VariantType::Tuple(TupleType::try_from(tuple_items)?))
+                        RawType::Variant(VariantType::Tuple(TupleType::try_from(tuple_items)?))
                     }
 
                     ydb_grpc::ydb_proto::variant_type::Type::StructItems(struct_items) => {
-                        Type::Variant(VariantType::Struct(StructType::try_from(struct_items)?))
+                        RawType::Variant(VariantType::Struct(StructType::try_from(struct_items)?))
                     }
                 }
             }
@@ -212,15 +214,15 @@ impl TryFrom<ydb_grpc::ydb_proto::Type> for Type {
                     return decode_err("empty type in tagged_type");
                 };
 
-                Type::Tagged(Box::new(TaggedType {
+                RawType::Tagged(Box::new(TaggedType {
                     tag: tagged_type.tag,
-                    item_type: Type::try_from(*t)?,
+                    item_type: RawType::try_from(*t)?,
                 }))
             }
-            ProtoType::VoidType(_) => Type::Void,
-            ProtoType::NullType(_) => Type::Null,
-            ProtoType::EmptyListType(_) => Type::EmptyList,
-            ProtoType::EmptyDictType(_) => Type::EmptyDict,
+            ProtoType::VoidType(_) => RawType::Void,
+            ProtoType::NullType(_) => RawType::Null,
+            ProtoType::EmptyListType(_) => RawType::EmptyList,
+            ProtoType::EmptyDictType(_) => RawType::EmptyDict,
         };
 
         return Ok(res);
@@ -234,7 +236,7 @@ impl TryFrom<ydb_grpc::ydb_proto::StructMember> for StructMember {
         let res = if let Some(t) = value.r#type {
             StructMember {
                 name: value.name,
-                member_type: Type::try_from(t)?,
+                member_type: RawType::try_from(t)?,
             }
         } else {
             return decode_err("struct member type empty");
@@ -265,7 +267,7 @@ impl TryFrom<ydb_grpc::ydb_proto::TupleType> for TupleType {
         let results: Result<Vec<_>, _> = value
             .elements
             .into_iter()
-            .map(|item| Type::try_from(item))
+            .map(|item| RawType::try_from(item))
             .collect();
 
         Ok(TupleType { elements: results? })
@@ -276,53 +278,55 @@ impl TryFrom<ydb_grpc::ydb_proto::TupleType> for TupleType {
 // From internal to protobuf
 //
 
-impl From<Type> for ydb_grpc::ydb_proto::Type {
-    fn from(v: Type) -> Self {
+impl From<RawType> for ydb_grpc::ydb_proto::Type {
+    fn from(v: RawType) -> Self {
         let t: ydb_grpc::ydb_proto::r#type::Type = match v {
-            Type::Bool => ProtoType::TypeId(PrimitiveTypeId::Bool as i32),
-            Type::Int8 => ProtoType::TypeId(PrimitiveTypeId::Int8 as i32),
-            Type::Uint8 => ProtoType::TypeId(PrimitiveTypeId::Uint8 as i32),
-            Type::Int16 => ProtoType::TypeId(PrimitiveTypeId::Int16 as i32),
-            Type::Uint16 => ProtoType::TypeId(PrimitiveTypeId::Uint16 as i32),
-            Type::Int32 => ProtoType::TypeId(PrimitiveTypeId::Int32 as i32),
-            Type::Uint32 => ProtoType::TypeId(PrimitiveTypeId::Uint32 as i32),
-            Type::Int64 => ProtoType::TypeId(PrimitiveTypeId::Int64 as i32),
-            Type::Uint64 => ProtoType::TypeId(PrimitiveTypeId::Uint64 as i32),
-            Type::Float => ProtoType::TypeId(PrimitiveTypeId::Float as i32),
-            Type::Double => ProtoType::TypeId(PrimitiveTypeId::Double as i32),
-            Type::Date => ProtoType::TypeId(PrimitiveTypeId::Date as i32),
-            Type::DateTime => ProtoType::TypeId(PrimitiveTypeId::Datetime as i32),
-            Type::Timestamp => ProtoType::TypeId(PrimitiveTypeId::Timestamp as i32),
-            Type::Interval => ProtoType::TypeId(PrimitiveTypeId::Interval as i32),
-            Type::TzDate => ProtoType::TypeId(PrimitiveTypeId::TzDate as i32),
-            Type::TzDatetime => ProtoType::TypeId(PrimitiveTypeId::TzDatetime as i32),
-            Type::TzTimestamp => ProtoType::TypeId(PrimitiveTypeId::TzTimestamp as i32),
-            Type::Bytes => ProtoType::TypeId(PrimitiveTypeId::String as i32),
-            Type::UTF8 => ProtoType::TypeId(PrimitiveTypeId::Utf8 as i32),
-            Type::YSON => ProtoType::TypeId(PrimitiveTypeId::Yson as i32),
-            Type::JSON => ProtoType::TypeId(PrimitiveTypeId::Json as i32),
-            Type::UUID => ProtoType::TypeId(PrimitiveTypeId::Uuid as i32),
-            Type::JSONDocument => ProtoType::TypeId(PrimitiveTypeId::JsonDocument as i32),
-            Type::DyNumber => ProtoType::TypeId(PrimitiveTypeId::Dynumber as i32),
-            Type::Decimal(decimal) => ProtoType::DecimalType(ydb_grpc::ydb_proto::DecimalType {
+            RawType::Bool => ProtoType::TypeId(PrimitiveTypeId::Bool as i32),
+            RawType::Int8 => ProtoType::TypeId(PrimitiveTypeId::Int8 as i32),
+            RawType::Uint8 => ProtoType::TypeId(PrimitiveTypeId::Uint8 as i32),
+            RawType::Int16 => ProtoType::TypeId(PrimitiveTypeId::Int16 as i32),
+            RawType::Uint16 => ProtoType::TypeId(PrimitiveTypeId::Uint16 as i32),
+            RawType::Int32 => ProtoType::TypeId(PrimitiveTypeId::Int32 as i32),
+            RawType::Uint32 => ProtoType::TypeId(PrimitiveTypeId::Uint32 as i32),
+            RawType::Int64 => ProtoType::TypeId(PrimitiveTypeId::Int64 as i32),
+            RawType::Uint64 => ProtoType::TypeId(PrimitiveTypeId::Uint64 as i32),
+            RawType::Float => ProtoType::TypeId(PrimitiveTypeId::Float as i32),
+            RawType::Double => ProtoType::TypeId(PrimitiveTypeId::Double as i32),
+            RawType::Date => ProtoType::TypeId(PrimitiveTypeId::Date as i32),
+            RawType::DateTime => ProtoType::TypeId(PrimitiveTypeId::Datetime as i32),
+            RawType::Timestamp => ProtoType::TypeId(PrimitiveTypeId::Timestamp as i32),
+            RawType::Interval => ProtoType::TypeId(PrimitiveTypeId::Interval as i32),
+            RawType::TzDate => ProtoType::TypeId(PrimitiveTypeId::TzDate as i32),
+            RawType::TzDatetime => ProtoType::TypeId(PrimitiveTypeId::TzDatetime as i32),
+            RawType::TzTimestamp => ProtoType::TypeId(PrimitiveTypeId::TzTimestamp as i32),
+            RawType::Bytes => ProtoType::TypeId(PrimitiveTypeId::String as i32),
+            RawType::UTF8 => ProtoType::TypeId(PrimitiveTypeId::Utf8 as i32),
+            RawType::YSON => ProtoType::TypeId(PrimitiveTypeId::Yson as i32),
+            RawType::JSON => ProtoType::TypeId(PrimitiveTypeId::Json as i32),
+            RawType::UUID => ProtoType::TypeId(PrimitiveTypeId::Uuid as i32),
+            RawType::JSONDocument => ProtoType::TypeId(PrimitiveTypeId::JsonDocument as i32),
+            RawType::DyNumber => ProtoType::TypeId(PrimitiveTypeId::Dynumber as i32),
+            RawType::Decimal(decimal) => ProtoType::DecimalType(ydb_grpc::ydb_proto::DecimalType {
                 precision: decimal.precision,
                 scale: decimal.scale,
             }),
-            Type::Optional(nested) => {
+            RawType::Optional(nested) => {
                 ProtoType::OptionalType(Box::new(ydb_grpc::ydb_proto::OptionalType {
                     item: Some(Box::new((*nested).into())),
                 }))
             }
-            Type::List(item_type) => ProtoType::ListType(Box::new(ydb_grpc::ydb_proto::ListType {
-                item: Some(Box::new((*item_type).into())),
-            })),
-            Type::Tuple(tuple) => ProtoType::TupleType(tuple.into()),
-            Type::Struct(struct_t) => ProtoType::StructType(struct_t.into()),
-            Type::Dict(dict) => ProtoType::DictType(Box::new(ydb_grpc::ydb_proto::DictType {
+            RawType::List(item_type) => {
+                ProtoType::ListType(Box::new(ydb_grpc::ydb_proto::ListType {
+                    item: Some(Box::new((*item_type).into())),
+                }))
+            }
+            RawType::Tuple(tuple) => ProtoType::TupleType(tuple.into()),
+            RawType::Struct(struct_t) => ProtoType::StructType(struct_t.into()),
+            RawType::Dict(dict) => ProtoType::DictType(Box::new(ydb_grpc::ydb_proto::DictType {
                 key: Some(Box::new(dict.key.into())),
                 payload: Some(Box::new(dict.payload.into())),
             })),
-            Type::Variant(variant) => {
+            RawType::Variant(variant) => {
                 let res = match variant {
                     VariantType::Tuple(tuple) => {
                         ydb_grpc::ydb_proto::variant_type::Type::TupleItems(tuple.into())
@@ -334,16 +338,16 @@ impl From<Type> for ydb_grpc::ydb_proto::Type {
 
                 ProtoType::VariantType(ydb_grpc::ydb_proto::VariantType { r#type: Some(res) })
             }
-            Type::Tagged(tagged) => {
+            RawType::Tagged(tagged) => {
                 ProtoType::TaggedType(Box::new(ydb_grpc::ydb_proto::TaggedType {
                     tag: tagged.tag,
                     r#type: Some(Box::new(tagged.item_type.into())),
                 }))
             }
-            Type::Void => ProtoType::VoidType(0),
-            Type::Null => ProtoType::NullType(0),
-            Type::EmptyList => ProtoType::EmptyListType(0),
-            Type::EmptyDict => ProtoType::EmptyDictType(0),
+            RawType::Void => ProtoType::VoidType(0),
+            RawType::Null => ProtoType::NullType(0),
+            RawType::EmptyList => ProtoType::EmptyListType(0),
+            RawType::EmptyDict => ProtoType::EmptyDictType(0),
         };
 
         Self { r#type: Some(t) }

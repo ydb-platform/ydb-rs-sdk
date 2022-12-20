@@ -4,7 +4,7 @@ use strum::EnumCount;
 
 #[test]
 fn consistent_conversion() -> RawResult<()> {
-    use Type::*;
+    use RawType::*;
 
     let values = vec![
         Bool,
@@ -83,12 +83,12 @@ fn consistent_conversion() -> RawResult<()> {
 
     for v in values.into_iter() {
         let proto: ydb_grpc::ydb_proto::Type = v.clone().into();
-        let reverse_internal: Type = proto.try_into()?;
+        let reverse_internal: RawType = proto.try_into()?;
         assert_eq!(v, reverse_internal);
         discriminants.insert(std::mem::discriminant(&v));
     }
 
-    assert_eq!(discriminants.len(), Type::COUNT);
+    assert_eq!(discriminants.len(), RawType::COUNT);
 
     Ok(())
 }

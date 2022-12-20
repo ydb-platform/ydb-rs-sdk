@@ -1,5 +1,6 @@
 use crate::grpc_wrapper::raw_errors::RawError;
-use crate::grpc_wrapper::raw_table_service::value_type::{decode_err, Type};
+use crate::grpc_wrapper::raw_table_service::value_type::{decode_err, RawType};
+use itertools::Itertools;
 use ydb_grpc::ydb_proto::value::Value as Primitive;
 use ydb_grpc::ydb_proto::Value as ProtoValue;
 
@@ -9,7 +10,7 @@ mod value_test;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct RawTypedValue {
-    pub r#type: Type,
+    pub r#type: RawType,
     pub value: RawValue,
 }
 
@@ -204,5 +205,55 @@ impl From<RawTypedValue> for ydb_grpc::ydb_proto::TypedValue {
             r#type: Some(v.r#type.into()),
             value: Some(v.value.into()),
         }
+    }
+}
+
+pub(crate) struct RawResultSet {
+    pub columns: Vec<RawColumn>,
+    pub rows: Vec<Vec<RawValue>>,
+}
+
+impl TryFrom<ydb_grpc::ydb_proto::ResultSet> for RawResultSet {
+    type Error = RawError;
+
+    fn try_from(value: ydb_grpc::ydb_proto::ResultSet) -> Result<Self, Self::Error> {
+        let columns_res: Result<Vec<RawColumn>, RawError> = value
+            .columns
+            .into_iter()
+            .map(|item| RawColumn::try_from(item))
+            .collect();
+        let columns = columns_res?;
+
+        let values_res: Result<Vec<RawValue>, RawError> =
+            value.rows.into_iter().map(|item| item.try_into()).collect();
+        let values = values_res?;
+
+        let rows: Vec<Vec<RawValue>> = values
+            .chunks(columns.len())
+            .into_iter()
+            .map(|item| item.into())
+            .collect();
+
+        Ok(Self { columns, rows })
+    }
+}
+
+pub(crate) struct RawColumn {
+    pub name: String,
+    pub column_type: RawType,
+}
+
+impl TryFrom<ydb_grpc::ydb_proto::Column> for RawColumn {
+    type Error = RawError;
+
+    fn try_from(value: ydb_grpc::ydb_proto::Column) -> Result<Self, Self::Error> {
+        let t = value
+            .r#type
+            .ok_or(RawError::custom("empty type at column description"))?;
+
+        Ok(Self {
+            name: value.name,
+            column_type: RawType::try_from(t)?,
+        })
     }
 }
