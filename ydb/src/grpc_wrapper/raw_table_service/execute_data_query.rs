@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use ydb_grpc::ydb_proto::table::ExecuteQueryResult;
 use crate::grpc_wrapper::raw_errors::RawError;
 use crate::grpc_wrapper::raw_table_service::query_stats::RawQueryStatMode;
 use crate::grpc_wrapper::raw_table_service::transaction_control::RawTransactionControl;
@@ -37,7 +36,7 @@ pub(crate) struct RawExecuteDataQueryResult {
 impl TryFrom<ydb_grpc::ydb_proto::table::ExecuteQueryResult> for RawExecuteDataQueryResult{
     type Error = RawError;
 
-    fn try_from(value: ExecuteQueryResult) -> Result<Self, Self::Error> {
+    fn try_from(value: ydb_grpc::ydb_proto::table::ExecuteQueryResult) -> Result<Self, Self::Error> {
         todo!()
     }
 }
