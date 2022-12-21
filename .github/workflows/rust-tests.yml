@@ -20,6 +20,20 @@ jobs:
       matrix:
         rust_version: [ "1.56.0", "1.66.0" ]
 
+    services:
+      ydb:
+        image: amyasnikov/ydb:slim
+        ports:
+          - 2135:2135
+          - 2136:2136
+          - 8765:8765
+        volumes:
+          - /tmp/ydb_certs:/ydb_certs
+        env:
+          YDB_DEFAULT_LOG_LEVEL: INFO
+          YDB_USE_IN_MEMORY_PDISKS: true
+        options: '-h localhost'
+
     runs-on: ubuntu-20.04
 
     steps:
@@ -52,9 +66,6 @@ jobs:
       if: matrix.rust_version != '1.56.0'
       run: |
         cargo clippy --workspace --all-targets -- -D warnings
-
-    - name: Wait database available
-      run: bash ./.github/scripts/start-ydb-container.sh
 
     - name: Run tests
       env:
