@@ -25,21 +25,7 @@ function publish_crate() {
     local CRATE_NAME="$1"
     (
       cd "$CRATE_NAME"
-
-      local SUCCESS=0
-      for TRY_COUNTER in $(seq 0 10); do
-        [ "$TRY_COUNTER" != "0" ] && echo "retry count: $TRY_COUNTER" && sleep 60
-
-        if cargo publish; then
-          SUCCESS=1
-          break
-        fi
-      done
-
-      if [ "$SUCCESS" == "0" ]; then
-        echo "Publish crate '$CRATE_NAME' failed."
-        return 1
-      fi
+      cargo publish
     )
 }
 
@@ -123,9 +109,6 @@ function bump_version() {
 }
 
 bump_version "$CRATE_NAME" "$VERSION_PART"
-
-# Force update Cargo.toml for new versions
-cargo check
 
 git diff
 
