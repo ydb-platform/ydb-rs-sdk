@@ -59,6 +59,7 @@ const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 #[non_exhaustive]
 pub enum Value {
     Void,
+    Null,
     Bool(bool),
     Int8(i8),
     Uint8(u8),
@@ -307,6 +308,7 @@ impl Value {
                     }
                     Self::Struct(s)
                 }
+                T::NullType(_) => Self::Null,
                 _ => unimplemented!("{:?}", t_val),
                 // think about map to internal types as 1:1
             }
@@ -401,6 +403,7 @@ impl Value {
             (Value::Optional(ydb_optional), val) => {
                 Self::from_proto_value_optional(ydb_optional, val)?
             }
+            (Value::Null, _) => Value::Null,
             (t, val) => {
                 return Err(YdbError::Custom(format!(
                     "unexpected from_proto_value. t: '{:?}', val: '{:?}'",
@@ -448,6 +451,17 @@ impl Value {
                     r#type: Some(ydb_proto::r#type::Type::VoidType(
                         prost_types::NullValue::NullValue.into(),
                     )),
+                }),
+                value: Some(ydb_proto::Value {
+                    value: Some(ydb_proto::value::Value::NullFlagValue(
+                        prost_types::NullValue::NullValue.into(),
+                    )),
+                    ..ydb_proto::Value::default()
+                }),
+            },
+            Self::Null => ydb_proto::TypedValue {
+                r#type: Some(ydb_proto::Type {
+                    r#type: Some(ydb_proto::r#type::Type::NullType(0)),
                 }),
                 value: Some(ydb_proto::Value {
                     value: Some(ydb_proto::value::Value::NullFlagValue(
@@ -601,6 +615,7 @@ mod test {
 
         let mut discriminants = HashSet::new();
         let mut values = vec![
+            Value::Null,
             Value::Bool(false),
             Value::Bool(true),
             Value::String(Bytes::from("asd".to_string())),

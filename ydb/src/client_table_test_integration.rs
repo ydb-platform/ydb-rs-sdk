@@ -476,10 +476,7 @@ SELECT NULL
     let res = res.results.into_iter().next().unwrap();
     assert_eq!(1, res.columns().len());
 
-    assert_eq!(
-        Value::optional_from(Value::Void, None)?,
-        res.rows().next().unwrap().remove_field(0)?
-    );
+    assert_eq!(Value::Null, res.rows().next().unwrap().remove_field(0)?);
     Ok(())
 }
 
