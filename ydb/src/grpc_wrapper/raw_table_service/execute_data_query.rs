@@ -5,7 +5,6 @@ use crate::grpc_wrapper::raw_table_service::transaction_control::RawTransactionC
 use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawTypedValue};
 use crate::grpc_wrapper::raw_table_service::value_type::RawType;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-use std::collections::HashMap;
 
 pub(crate) struct RawExecuteDataQueryRequest {
     pub session_id: String,

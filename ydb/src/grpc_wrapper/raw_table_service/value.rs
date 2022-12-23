@@ -1,6 +1,5 @@
 use crate::grpc_wrapper::raw_errors::RawError;
 use crate::grpc_wrapper::raw_table_service::value_type::{decode_err, RawType};
-use itertools::Itertools;
 use ydb_grpc::ydb_proto::value::Value as Primitive;
 use ydb_grpc::ydb_proto::Value as ProtoValue;
 
