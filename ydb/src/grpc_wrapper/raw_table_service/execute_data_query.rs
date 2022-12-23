@@ -3,7 +3,7 @@ use crate::grpc_wrapper::raw_errors::RawError;
 use crate::grpc_wrapper::raw_table_service::query_stats::RawQueryStatMode;
 use crate::grpc_wrapper::raw_table_service::transaction_control::RawTransactionControl;
 use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawTypedValue};
-use crate::grpc_wrapper::raw_table_service::value_type::RawType;
+use crate::grpc_wrapper::raw_table_service::value::value_type::RawType;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 
 pub(crate) struct RawExecuteDataQueryRequest {
