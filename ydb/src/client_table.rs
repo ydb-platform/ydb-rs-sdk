@@ -125,7 +125,7 @@ impl TableClient {
         Self {
             error_on_truncate: false,
             session_pool: SessionPool::new(Box::new(connection_manager), timeouts),
-            retrier: Arc::new(Box::new(TimeoutRetrier::default())),
+            retrier: Arc::new(Box::<TimeoutRetrier>::default()),
             transaction_options: TransactionOptions::new(),
             idempotent_operation: false,
             timeouts,

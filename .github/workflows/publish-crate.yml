@@ -1,7 +1,7 @@
 name: Publish rust crate to crates.io
 env:
   CARGO_TERM_COLOR: always
-  RUST_VERSION: 1.56.1
+  RUST_VERSION: 1.66.0
 
 on:
   workflow_dispatch:

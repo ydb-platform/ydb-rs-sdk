@@ -148,7 +148,7 @@ impl Row {
         Err(YdbError::Custom("field not found".into()))
     }
 
-    pub(crate) fn remove_field(&mut self, index: usize) -> errors::YdbResult<Value> {
+    pub fn remove_field(&mut self, index: usize) -> errors::YdbResult<Value> {
         match self.pb.remove(&index) {
             Some(val) => Value::from_proto(&self.columns[index].v_type, val),
             None => Err(YdbError::Custom("it has no the field".into())),
@@ -168,13 +168,11 @@ impl Iterator for ResultSetRowsIter {
     fn next(&mut self) -> Option<Self::Item> {
         match self.row_iter.next() {
             None => None,
-            Some(row) => {
-                Some(Row {
-                    columns: self.columns.clone(),
-                    columns_by_name: self.columns_by_name.clone(),
-                    pb: row.items.into_iter().enumerate().collect(),
-                })
-            }
+            Some(row) => Some(Row {
+                columns: self.columns.clone(),
+                columns_by_name: self.columns_by_name.clone(),
+                pb: row.items.into_iter().enumerate().collect(),
+            }),
         }
     }
 }

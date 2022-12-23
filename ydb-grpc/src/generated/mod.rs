@@ -1,3 +1,8 @@
+pub mod google {
+    pub mod protobuf {
+        include!("google.protobuf.rs");
+    }
+}
 pub mod ydb {
     pub mod discovery {
         pub mod v1 {
@@ -5,20 +10,20 @@ pub mod ydb {
         }
         include!("ydb.discovery.rs");
     }
+    pub mod formats {
+        include!("ydb.formats.rs");
+    }
+    pub mod issue {
+        include!("ydb.issue.rs");
+    }
+    pub mod operations {
+        include!("ydb.operations.rs");
+    }
     pub mod scheme {
         pub mod v1 {
             include!("ydb.scheme.v1.rs");
         }
         include!("ydb.scheme.rs");
-    }
-    pub mod issue {
-        include!("ydb.issue.rs");
-    }
-    pub mod table_stats {
-        include!("ydb.table_stats.rs");
-    }
-    pub mod formats {
-        include!("ydb.formats.rs");
     }
     pub mod table {
         pub mod v1 {
@@ -26,13 +31,8 @@ pub mod ydb {
         }
         include!("ydb.table.rs");
     }
-    pub mod operations {
-        include!("ydb.operations.rs");
+    pub mod table_stats {
+        include!("ydb.table_stats.rs");
     }
     include!("ydb.rs");
-}
-pub mod google {
-    pub mod protobuf {
-        include!("google.protobuf.rs");
-    }
 }
