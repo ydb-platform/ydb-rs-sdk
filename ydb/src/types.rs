@@ -3,12 +3,13 @@ use std::collections::HashMap;
 
 use std::convert::TryInto;
 use std::fmt::Debug;
+use std::num::TryFromIntError;
 use std::ops::Deref;
 use std::time::Duration;
 use strum::{EnumDiscriminants, EnumIter, IntoStaticStr};
 use ydb_grpc::ydb_proto;
 
-const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
+pub(crate) const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 
 /// Internal represent database value for send to or received from database.
 ///
@@ -100,8 +101,8 @@ impl Value {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValueStruct {
-    fields_name: Vec<String>,
-    values: Vec<Value>,
+    pub(crate) fields_name: Vec<String>,
+    pub(crate) values: Vec<Value>,
 }
 
 impl ValueStruct {
@@ -203,7 +204,7 @@ pub struct SignedInterval {
 }
 
 impl SignedInterval {
-    pub(crate) fn as_nanos(self) -> YdbResult<i64> {
+    pub(crate) fn as_nanos(self) -> std::result::Result<i64, TryFromIntError> {
         let nanos: i64 = self.duration.as_nanos().try_into()?;
         let res = match self.sign {
             Sign::Plus => nanos,

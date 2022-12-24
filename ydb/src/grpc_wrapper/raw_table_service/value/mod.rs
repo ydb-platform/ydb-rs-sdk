@@ -3,6 +3,7 @@ mod value_test;
 
 pub(crate) mod value_proto;
 pub(crate) mod value_type;
+pub(crate) mod ydb_value;
 
 use crate::grpc_wrapper::raw_table_service::value::value_type::{RawType};
 
