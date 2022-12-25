@@ -30,9 +30,9 @@ pub(crate) enum RawType {
     TzTimestamp,
     Bytes, // String
     UTF8,
-    YSON,
-    JSON,
-    UUID,
+    Yson,
+    Json,
+    Uuid,
     JSONDocument,
     DyNumber,
     Decimal(DecimalType),
@@ -125,9 +125,9 @@ impl RawType {
             PrimitiveTypeId::TzTimestamp => RawType::TzTimestamp,
             PrimitiveTypeId::String => RawType::Bytes,
             PrimitiveTypeId::Utf8 => RawType::UTF8,
-            PrimitiveTypeId::Yson => RawType::YSON,
-            PrimitiveTypeId::Json => RawType::JSON,
-            PrimitiveTypeId::Uuid => RawType::UUID,
+            PrimitiveTypeId::Yson => RawType::Yson,
+            PrimitiveTypeId::Json => RawType::Json,
+            PrimitiveTypeId::Uuid => RawType::Uuid,
             PrimitiveTypeId::JsonDocument => RawType::JSONDocument,
             PrimitiveTypeId::Dynumber => RawType::DyNumber,
         };
@@ -135,7 +135,7 @@ impl RawType {
         Ok(res)
     }
 
-    pub fn to_value_example(self)->RawResult<Value>{
+    pub fn into_value_example(self) ->RawResult<Value>{
         fn unimplemented_type(t: RawType)->RawResult<Value>{
             return Err(RawError::custom(format!("unimplemented example value for type: {:?}", t)));
         }
@@ -161,25 +161,25 @@ impl RawType {
             t@RawType::TzTimestamp => return unimplemented_type(t),
             RawType::Bytes => Value::String(Bytes::default()),
             RawType::UTF8 => Value::Text(String::default()),
-            RawType::YSON => Value::Yson(String::default()),
-            RawType::JSON => Value::Json(String::default()),
-            t @ RawType::UUID => return unimplemented_type(t),
+            RawType::Yson => Value::Yson(String::default()),
+            RawType::Json => Value::Json(String::default()),
+            t @ RawType::Uuid => return unimplemented_type(t),
             RawType::JSONDocument => Value::JsonDocument(String::default()),
             t @ RawType::DyNumber => return unimplemented_type(t),
             t @ RawType::Decimal(_) => return unimplemented_type(t),
             RawType::Optional(inner_type) => Value::Optional(Box::new(ValueOptional{
-                t: (*inner_type).to_value_example()?,
+                t: (*inner_type).into_value_example()?,
                 value: None,
             })),
             RawType::List(inner_type) => Value::List(Box::new(ValueList{
-                t: inner_type.to_value_example()?,
+                t: inner_type.into_value_example()?,
                 values: Vec::default(),
             })),
             t @ RawType::Tuple(_) => return unimplemented_type(t),
             RawType::Struct(fields) => {
                 let mut value_struct = ValueStruct::with_capacity(fields.members.len());
                 for field in fields.members.into_iter() {
-                    value_struct.insert(field.name, field.member_type.to_value_example()?)
+                    value_struct.insert(field.name, field.member_type.into_value_example()?)
                 }
                 Value::Struct(value_struct)
             }
@@ -286,7 +286,7 @@ impl TryFrom<ydb_grpc::ydb_proto::Type> for RawType {
             ProtoType::EmptyDictType(_) => RawType::EmptyDict,
         };
 
-        return Ok(res);
+        Ok(res)
     }
 }
 
@@ -314,7 +314,7 @@ impl TryFrom<ydb_grpc::ydb_proto::StructType> for StructType {
         let results: Result<Vec<_>, _> = value
             .members
             .into_iter()
-            .map(|item| StructMember::try_from(item))
+            .map(StructMember::try_from)
             .collect();
 
         Ok(StructType { members: results? })
@@ -328,7 +328,7 @@ impl TryFrom<ydb_grpc::ydb_proto::TupleType> for TupleType {
         let results: Result<Vec<_>, _> = value
             .elements
             .into_iter()
-            .map(|item| RawType::try_from(item))
+            .map(RawType::try_from)
             .collect();
 
         Ok(TupleType { elements: results? })
@@ -362,9 +362,9 @@ impl From<RawType> for ydb_grpc::ydb_proto::Type {
             RawType::TzTimestamp => ProtoType::TypeId(PrimitiveTypeId::TzTimestamp as i32),
             RawType::Bytes => ProtoType::TypeId(PrimitiveTypeId::String as i32),
             RawType::UTF8 => ProtoType::TypeId(PrimitiveTypeId::Utf8 as i32),
-            RawType::YSON => ProtoType::TypeId(PrimitiveTypeId::Yson as i32),
-            RawType::JSON => ProtoType::TypeId(PrimitiveTypeId::Json as i32),
-            RawType::UUID => ProtoType::TypeId(PrimitiveTypeId::Uuid as i32),
+            RawType::Yson => ProtoType::TypeId(PrimitiveTypeId::Yson as i32),
+            RawType::Json => ProtoType::TypeId(PrimitiveTypeId::Json as i32),
+            RawType::Uuid => ProtoType::TypeId(PrimitiveTypeId::Uuid as i32),
             RawType::JSONDocument => ProtoType::TypeId(PrimitiveTypeId::JsonDocument as i32),
             RawType::DyNumber => ProtoType::TypeId(PrimitiveTypeId::Dynumber as i32),
             RawType::Decimal(decimal) => ProtoType::DecimalType(ydb_grpc::ydb_proto::DecimalType {

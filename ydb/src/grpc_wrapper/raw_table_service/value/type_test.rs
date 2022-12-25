@@ -27,9 +27,9 @@ fn consistent_conversion() -> RawResult<()> {
         TzTimestamp,
         Bytes, // String
         UTF8,
-        YSON,
-        JSON,
-        UUID,
+        Yson,
+        Json,
+        Uuid,
         JSONDocument,
         DyNumber,
         Void,
@@ -43,7 +43,7 @@ fn consistent_conversion() -> RawResult<()> {
         Optional(Box::new(Bytes)),
         Optional(Box::new(Optional(Box::new(List(Box::new(JSONDocument)))))),
         List(Box::new(UTF8)),
-        List(Box::new(List(Box::new(UUID)))),
+        List(Box::new(List(Box::new(Uuid)))),
         Tuple(TupleType { elements: vec![] }),
         Tuple(TupleType {
             elements: vec![List(Box::new(Bytes)), Int64],

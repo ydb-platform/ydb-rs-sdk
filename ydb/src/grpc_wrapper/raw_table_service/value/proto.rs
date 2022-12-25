@@ -34,7 +34,7 @@ impl TryFrom<ProtoValue> for RawValue {
             return Ok(res);
         };
 
-        if value.items.len() > 0 {
+        if !value.items.is_empty() {
             let items: Result<_, _> = value
                 .items
                 .into_iter()
@@ -43,7 +43,7 @@ impl TryFrom<ProtoValue> for RawValue {
             return Ok(Items(items?));
         };
 
-        if value.pairs.len() > 0 {
+        if !value.pairs.is_empty() {
             let pairs: Result<_, _> = value
                 .pairs
                 .into_iter()
@@ -171,7 +171,7 @@ impl TryFrom<ydb_grpc::ydb_proto::TypedValue> for RawTypedValue {
         let t = if let Some(t) = value.r#type {
             RawType::try_from(t)?
         } else {
-            return Err(RawError::decode_error(format!("empty type in proto typed value")))
+            return Err(RawError::decode_error("empty type in proto typed value"))
         };
 
         let v = if let Some(v) = value.value {
@@ -194,7 +194,7 @@ impl TryFrom<ydb_grpc::ydb_proto::ResultSet> for RawResultSet {
         let columns_res: Result<Vec<RawColumn>, RawError> = value
             .columns
             .into_iter()
-            .map(|item| RawColumn::try_from(item))
+            .map(RawColumn::try_from)
             .collect();
         let columns = columns_res?;
 
@@ -218,7 +218,7 @@ impl TryFrom<ydb_grpc::ydb_proto::Column> for RawColumn {
     fn try_from(value: ydb_grpc::ydb_proto::Column) -> Result<Self, Self::Error> {
         let t = value
             .r#type
-            .ok_or(RawError::custom("empty type at column description"))?;
+            .ok_or_else(|| RawError::custom("empty type at column description"))?;
 
         Ok(Self {
             name: value.name,

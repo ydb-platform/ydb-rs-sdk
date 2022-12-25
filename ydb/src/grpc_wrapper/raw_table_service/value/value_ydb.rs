@@ -94,11 +94,11 @@ impl TryFrom<crate::Value> for RawTypedValue {
                 value: RawValue::Text(v),
             },
             Value::Yson(v) => RawTypedValue {
-                r#type: RawType::YSON,
+                r#type: RawType::Yson,
                 value: RawValue::Text(v),
             },
             Value::Json(v) => RawTypedValue {
-                r#type: RawType::JSON,
+                r#type: RawType::Json,
                 value: RawValue::Text(v),
             },
             Value::JsonDocument(v) => RawTypedValue {
@@ -134,7 +134,7 @@ impl TryFrom<crate::Value> for RawTypedValue {
                     return Err(RawError::custom(format!("struct fields len: {} not equals with values len: {}", v.fields_name.len(), v.values.len())));
                 }
 
-                let items_res: Result<Vec<RawTypedValue>, _> = v.values.into_iter().map(|item| RawTypedValue::try_from(item)).collect();
+                let items_res: Result<Vec<RawTypedValue>, _> = v.values.into_iter().map(RawTypedValue::try_from).collect();
                 let items = items_res?;
 
                 let mut raw_members = Vec::with_capacity(items.len());
@@ -210,11 +210,11 @@ impl TryFrom<RawTypedValue> for Value {
             (t @ RawType::Bytes, v) => return types_mismatch(t, v),
             (RawType::UTF8, RawValue::Text(v)) => Value::Text(v),
             (t @ RawType::UTF8, v) => return types_mismatch(t, v),
-            (RawType::YSON, RawValue::Text(v)) => Value::Yson(v),
-            (t @ RawType::YSON, v) => return types_mismatch(t, v),
-            (RawType::JSON, RawValue::Text(v)) => Value::Json(v),
-            (t @ RawType::JSON, v) => return types_mismatch(t, v),
-            (t @ RawType::UUID, _) => return type_unimplemented(t),
+            (RawType::Yson, RawValue::Text(v)) => Value::Yson(v),
+            (t @ RawType::Yson, v) => return types_mismatch(t, v),
+            (RawType::Json, RawValue::Text(v)) => Value::Json(v),
+            (t @ RawType::Json, v) => return types_mismatch(t, v),
+            (t @ RawType::Uuid, _) => return type_unimplemented(t),
             (RawType::JSONDocument, RawValue::Text(v)) => Value::JsonDocument(v),
             (t @ RawType::JSONDocument, v) => return types_mismatch(t, v),
             (t @ RawType::DyNumber, _) => return type_unimplemented(t),
@@ -230,7 +230,7 @@ impl TryFrom<RawTypedValue> for Value {
                     Some(val)
                 };
 
-                let type_example: Value = (*inner_type).to_value_example()?;
+                let type_example: Value = (*inner_type).into_value_example()?;
 
                 match Value::optional_from(type_example, opt_value) {
                     Ok(val) => val,
@@ -255,7 +255,7 @@ impl TryFrom<RawTypedValue> for Value {
                     },
                     _ => return types_mismatch(RawType::List(inner_type), v),
                 };
-                let type_example = (*inner_type).to_value_example()?;
+                let type_example = (*inner_type).into_value_example()?;
                 match Value::list_from(type_example, values) {
                     Ok(val) => val,
                     Err(err)=>return Err(RawError::custom(

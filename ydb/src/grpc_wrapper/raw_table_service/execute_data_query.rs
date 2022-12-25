@@ -56,19 +56,18 @@ impl TryFrom<ydb_grpc::ydb_proto::table::ExecuteQueryResult> for RawExecuteDataQ
             .into_iter()
             .map(|item| item.try_into())
             .collect();
-        Self {
+
+        Ok(Self {
             result_sets: result_sets_res?,
             tx_meta: value
                 .tx_meta
-                .ok_or(RawError::custom("no tx_meta at ExecuteQueryResult"))?
+                .ok_or_else(|| RawError::custom("no tx_meta at ExecuteQueryResult"))?
                 .into(),
             query_meta: value
                 .query_meta
-                .ok_or(RawError::custom("no query_mets at ExecuteQueryResult"))?
+                .ok_or_else(|| RawError::custom("no query_mets at ExecuteQueryResult"))?
                 .try_into()?,
-        };
-
-        todo!()
+        })
     }
 }
 
