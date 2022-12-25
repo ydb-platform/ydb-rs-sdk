@@ -4,7 +4,6 @@ mod proto_test;
 pub(crate) mod proto;
 pub(crate) mod r#type;
 pub(crate) mod value_ydb;
-pub(crate) mod value_proto;
 
 use crate::grpc_wrapper::raw_table_service::value::r#type::{RawType};
 

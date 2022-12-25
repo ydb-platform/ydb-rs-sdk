@@ -1,10 +1,10 @@
 use super::*;
-use crate::grpc_wrapper::raw_errors::RawResult;
+use crate::grpc_wrapper::raw_errors::{RawResult};
 use std::collections::HashSet;
 use strum::EnumCount;
 
 #[test]
-fn consistent_conversions() -> RawResult<()> {
+fn convert_raw_protobuf() -> RawResult<()> {
     use RawValue::*;
 
     let test_values = vec![

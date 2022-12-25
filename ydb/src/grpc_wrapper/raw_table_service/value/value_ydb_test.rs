@@ -14,7 +14,7 @@ fn convert_ydb_raw_grpc()->RawResult<()>{
         Ok(())
     }
 
-    let values = Value::examples();
+    let values = Value::examples_for_test();
 
     for value in values {
         if let Err(err) = check_value(value.clone()){

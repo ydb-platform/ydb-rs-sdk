@@ -1,5 +1,5 @@
 use crate::errors::{YdbError, YdbResult};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap};
 
 use std::convert::TryInto;
 use std::fmt::Debug;
@@ -607,7 +607,10 @@ impl Value {
         })
     }
 
-    pub(crate) fn examples()->Vec<Value>{
+    #[cfg(test)]
+    pub(crate) fn examples_for_test() ->Vec<Value>{
+        use std::collections::HashSet;
+
         // test zero, one, minimum and maximum values
         macro_rules! num_tests {
             ($values:ident, $en_name:path, $type_name:ty) => {
@@ -703,7 +706,7 @@ mod test {
 
     #[test]
     fn serialize() -> YdbResult<()> {
-        let values = Value::examples();
+        let values = Value::examples_for_test();
 
         for v in values.into_iter() {
             let proto = v.clone().to_typed_value()?;
