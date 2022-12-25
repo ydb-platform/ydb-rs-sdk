@@ -1,11 +1,11 @@
 #[cfg(test)]
-mod value_test;
+mod proto_test;
 
-pub(crate) mod value_proto;
-pub(crate) mod value_type;
-pub(crate) mod ydb_value;
+pub(crate) mod proto;
+pub(crate) mod r#type;
+pub(crate) mod value_ydb;
 
-use crate::grpc_wrapper::raw_table_service::value::value_type::{RawType};
+use crate::grpc_wrapper::raw_table_service::value::r#type::{RawType};
 
 
 #[derive(Clone, Debug, PartialEq)]

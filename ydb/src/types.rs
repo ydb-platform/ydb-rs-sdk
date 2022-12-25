@@ -111,6 +111,22 @@ impl ValueStruct {
         self.values.push(v);
     }
 
+    pub(crate) fn from_fields(fields: Vec<(String, Value)>)->ValueStruct{
+        let fields_len = fields.len();
+        let (names, values) = fields.into_iter().fold(
+            (Vec::with_capacity(fields_len), Vec::with_capacity(fields_len)),
+            |(mut names, mut values), (name, value)| {
+                names.push(name);
+                values.push(value);
+                (names, values)
+            });
+
+        ValueStruct{
+            fields_name: names,
+            values,
+        }
+    }
+
     #[allow(dead_code)]
     pub(crate) fn from_names_and_values(
         fields_name: Vec<String>,
@@ -246,6 +262,10 @@ impl Value {
             }
         }
         Ok(Value::Optional(Box::new(ValueOptional { t, value })))
+    }
+
+    pub fn struct_from_fields(fields: Vec<(String,Value)>)->Value{
+        Value::Struct(ValueStruct::from_fields(fields))
     }
 
     // return empty value of requested type

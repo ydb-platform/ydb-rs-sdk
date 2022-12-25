@@ -1,9 +1,11 @@
+use std::time::Duration;
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use ydb_grpc::ydb_proto::r#type::{PrimitiveTypeId, Type as ProtoType};
+use crate::{Bytes, SignedInterval, Value, ValueList, ValueOptional, ValueStruct};
 
 #[cfg(test)]
-#[path = "value_type_test.rs"]
-mod value_type_test;
+#[path = "type_test.rs"]
+mod type_test;
 
 #[derive(Clone, Debug, Eq, PartialEq, strum::EnumCount)]
 pub(crate) enum RawType {
@@ -130,6 +132,65 @@ impl RawType {
             PrimitiveTypeId::Dynumber => RawType::DyNumber,
         };
 
+        Ok(res)
+    }
+
+    pub fn to_value_example(self)->RawResult<Value>{
+        fn unimplemented_type(t: RawType)->RawResult<Value>{
+            return Err(RawError::custom(format!("unimplemented example value for type: {:?}", t)));
+        }
+
+        let res = match self {
+            RawType::Bool => Value::Bool(false),
+            RawType::Int8 => Value::Int8(0),
+            RawType::Uint8 => Value::Uint8(0),
+            RawType::Int16 => Value::Int16(0),
+            RawType::Uint16 => Value::Uint16(0),
+            RawType::Int32 => Value::Int32(0),
+            RawType::Uint32 => Value::Uint32(0),
+            RawType::Int64 => Value::Int64(0),
+            RawType::Uint64 => Value::Uint64(0),
+            RawType::Float => Value::Float(0.0),
+            RawType::Double => Value::Double(0.0),
+            RawType::Date => Value::Date(Duration::default()),
+            RawType::DateTime => Value::DateTime(Duration::default()),
+            RawType::Timestamp => Value::Timestamp(Duration::default()),
+            RawType::Interval => Value::Interval(SignedInterval::default()),
+            t @ RawType::TzDate => return unimplemented_type(t),
+            t@RawType::TzDatetime => return unimplemented_type(t),
+            t@RawType::TzTimestamp => return unimplemented_type(t),
+            RawType::Bytes => Value::String(Bytes::default()),
+            RawType::UTF8 => Value::Text(String::default()),
+            RawType::YSON => Value::Yson(String::default()),
+            RawType::JSON => Value::Json(String::default()),
+            t @ RawType::UUID => return unimplemented_type(t),
+            RawType::JSONDocument => Value::JsonDocument(String::default()),
+            t @ RawType::DyNumber => return unimplemented_type(t),
+            t @ RawType::Decimal(_) => return unimplemented_type(t),
+            RawType::Optional(inner_type) => Value::Optional(Box::new(ValueOptional{
+                t: (*inner_type).to_value_example()?,
+                value: None,
+            })),
+            RawType::List(inner_type) => Value::List(Box::new(ValueList{
+                t: inner_type.to_value_example()?,
+                values: Vec::default(),
+            })),
+            t @ RawType::Tuple(_) => return unimplemented_type(t),
+            RawType::Struct(fields) => {
+                let mut value_struct = ValueStruct::with_capacity(fields.members.len());
+                for field in fields.members.into_iter() {
+                    value_struct.insert(field.name, field.member_type.to_value_example()?)
+                }
+                Value::Struct(value_struct)
+            }
+            t@RawType::Dict(_) => return unimplemented_type(t),
+            t@RawType::Variant(_) => return unimplemented_type(t),
+            t@RawType::Tagged(_) => return unimplemented_type(t),
+            t@RawType::Void => return unimplemented_type(t),
+            RawType::Null => Value::Null,
+            t@RawType::EmptyList => return unimplemented_type(t),
+            t@RawType::EmptyDict => return unimplemented_type(t),
+        };
         Ok(res)
     }
 }
