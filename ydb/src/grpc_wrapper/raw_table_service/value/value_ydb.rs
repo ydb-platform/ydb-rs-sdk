@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "value_ydb_test.rs"]
+mod value_ydb_test;
+
 use std::time::Duration;
 
 use itertools::Itertools;
@@ -34,7 +38,7 @@ impl TryFrom<crate::Value> for RawTypedValue {
                 value: RawValue::Int32(v as i32),
             },
             Value::Int16(v) => RawTypedValue {
-                r#type: RawType::Uint16,
+                r#type: RawType::Int16,
                 value: RawValue::Int32(v as i32),
             },
             Value::Uint16(v) => RawTypedValue {
@@ -42,7 +46,7 @@ impl TryFrom<crate::Value> for RawTypedValue {
                 value: RawValue::Int32(v as i32),
             },
             Value::Int32(v) => RawTypedValue {
-                r#type: RawType::Uint32,
+                r#type: RawType::Int32,
                 value: RawValue::Int32(v),
             },
             Value::Uint32(v) => RawTypedValue {
@@ -121,7 +125,7 @@ impl TryFrom<crate::Value> for RawTypedValue {
                 let items_res: Result<Vec<RawTypedValue>, _> = v.values.into_iter().map(|item| item.try_into()).collect();
 
                 RawTypedValue {
-                    r#type: type_example.r#type,
+                    r#type: RawType::List(Box::new(type_example.r#type)) ,
                     value: RawValue::Items(items_res?.into_iter().map(|item| item.value).collect()),
                 }
             }
@@ -288,7 +292,7 @@ impl TryFrom<RawTypedValue> for Value {
             (t @ RawType::Tagged(_), _) => return type_unimplemented(t),
             ( RawType::Null, RawValue::NullFlag) => Value::Null,
             (t @ RawType::Null, v) => return types_mismatch(t, v),
-            (RawType::Void, RawValue::NullFlag) => Value::Null,
+            (RawType::Void, RawValue::NullFlag) => Value::Void,
             (t @ RawType::Void, v) => return types_mismatch(t, v),
             (t @ RawType::EmptyList, v) => return types_mismatch(t, v),
             (t @ RawType::EmptyDict, v) => return types_mismatch(t, v),

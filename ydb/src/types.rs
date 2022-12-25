@@ -1,12 +1,12 @@
 use crate::errors::{YdbError, YdbResult};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::num::TryFromIntError;
 use std::ops::Deref;
 use std::time::Duration;
-use strum::{EnumDiscriminants, EnumIter, IntoStaticStr};
+use strum::{EnumCount, EnumDiscriminants, EnumIter, IntoStaticStr};
 use ydb_grpc::ydb_proto;
 
 pub(crate) const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
@@ -53,9 +53,10 @@ pub(crate) const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 ///
 /// #### Possible native convertions
 ///
-#[derive(Clone, Debug, EnumDiscriminants, EnumIter, PartialEq)]
-#[strum_discriminants(vis())] // private
-#[strum_discriminants(derive(IntoStaticStr))]
+#[derive(Clone, Debug, EnumCount, EnumDiscriminants, EnumIter, PartialEq)]
+#[strum_discriminants(vis(pub(crate)))] // private
+#[strum_discriminants(derive(IntoStaticStr,EnumIter,Hash))]
+#[strum_discriminants(name(ValueDiscriminants))]
 #[allow(dead_code)]
 #[non_exhaustive]
 pub enum Value {
@@ -605,25 +606,8 @@ impl Value {
             }),
         })
     }
-}
 
-#[derive(Debug)]
-pub(crate) struct Column {
-    pub(crate) name: String,
-    pub(crate) v_type: Value,
-}
-
-#[cfg(test)]
-mod test {
-    use crate::errors::YdbResult;
-    use crate::types::{Bytes, Sign, SignedInterval, Value, ValueStruct};
-    use std::collections::HashSet;
-
-    use std::time::Duration;
-    use strum::IntoEnumIterator;
-
-    #[test]
-    fn serialize() -> YdbResult<()> {
+    pub(crate) fn examples()->Vec<Value>{
         // test zero, one, minimum and maximum values
         macro_rules! num_tests {
             ($values:ident, $en_name:path, $type_name:ty) => {
@@ -634,7 +618,6 @@ mod test {
             };
         }
 
-        let mut discriminants = HashSet::new();
         let mut values = vec![
             Value::Null,
             Value::Bool(false),
@@ -677,13 +660,13 @@ mod test {
             duration: Duration::from_secs(1),
         })); // -1 second interval
 
-        values.push(Value::optional_from(Value::Int8(0), None)?);
-        values.push(Value::optional_from(Value::Int8(0), Some(Value::Int8(1)))?);
+        values.push(Value::optional_from(Value::Int8(0), None).unwrap());
+        values.push(Value::optional_from(Value::Int8(0), Some(Value::Int8(1))).unwrap());
 
         values.push(Value::list_from(
             Value::Int8(0),
             vec![Value::Int8(1), Value::Int8(2), Value::Int8(3)],
-        )?);
+        ).unwrap());
 
         values.push(Value::Struct(ValueStruct {
             fields_name: vec!["a".into(), "b".into()],
@@ -692,26 +675,42 @@ mod test {
                 Value::list_from(
                     Value::Int32(0),
                     vec![Value::Int32(1), Value::Int32(2), Value::Int32(3)],
-                )?,
+                ).unwrap(),
             ],
         }));
 
+        let mut discriminants = HashSet::new();
+        for item in values.iter() {
+            discriminants.insert(std::mem::discriminant(item));
+        }
+        assert_eq!(discriminants.len(), Value::COUNT);
+
+        values
+    }
+
+}
+
+#[derive(Debug)]
+pub(crate) struct Column {
+    pub(crate) name: String,
+    pub(crate) v_type: Value,
+}
+
+#[cfg(test)]
+mod test {
+    use crate::errors::YdbResult;
+    use crate::types::{Value};
+
+    #[test]
+    fn serialize() -> YdbResult<()> {
+        let values = Value::examples();
+
         for v in values.into_iter() {
-            discriminants.insert(std::mem::discriminant(&v));
             let proto = v.clone().to_typed_value()?;
             let t = Value::from_proto_type(&proto.r#type)?;
             let v2 = Value::from_proto(&t, proto.value.unwrap())?;
             assert_eq!(&v, &v2);
         }
-
-        let mut non_tested = Vec::new();
-        for v in Value::iter() {
-            if !discriminants.contains(&std::mem::discriminant(&v)) {
-                non_tested.push(format!("{:?}", &v));
-            }
-        }
-
-        assert_eq!(non_tested.len(), 0, "{:?}", non_tested);
 
         Ok(())
     }
