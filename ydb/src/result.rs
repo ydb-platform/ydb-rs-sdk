@@ -1,28 +1,31 @@
 use crate::errors;
 use crate::errors::{YdbError, YdbResult, YdbStatusError};
 use crate::grpc::proto_issues_to_ydb_issues;
-use crate::types::Value;
+use crate::types::{ Value};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::vec::IntoIter;
+use itertools::Itertools;
 use tracing::trace;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
-use ydb_grpc::ydb_proto::table::{ExecuteQueryResult, ExecuteScanQueryPartialResponse};
+use ydb_grpc::ydb_proto::table::{ExecuteScanQueryPartialResponse};
+use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryResult;
+use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawTypedValue, RawValue};
+use crate::trace_helpers::ensure_len_string;
 
 #[derive(Debug)]
 pub struct QueryResult {
-    pub(crate) session_id: Option<String>,
     pub(crate) results: Vec<ResultSet>,
+    pub(crate) tx_id: String,
 }
 
 impl QueryResult {
-    pub(crate) fn from_proto(
-        proto_res: ExecuteQueryResult,
-        error_on_truncate: bool,
-    ) -> errors::YdbResult<Self> {
-        trace!("proto_res: {:?}", proto_res);
-        let mut results = Vec::with_capacity(proto_res.result_sets.len());
-        for current_set in proto_res.result_sets.into_iter() {
+    pub(crate) fn from_raw_result(error_on_truncate: bool, raw_res: RawExecuteDataQueryResult)->YdbResult<Self>{
+        trace!("raw_res: {}",
+            ensure_len_string(serde_json::to_string(&raw_res)?)
+            );
+        let mut results = Vec::with_capacity(raw_res.result_sets.len());
+        for current_set in raw_res.result_sets.into_iter() {
             if error_on_truncate && current_set.truncated {
                 return Err(
                     format!("got truncated result. result set index: {}", results.len())
@@ -30,20 +33,14 @@ impl QueryResult {
                         .into(),
                 );
             }
-            let result_set = ResultSet::from_proto(current_set)?;
+            let result_set = ResultSet::try_from(current_set)?;
 
             results.push(result_set);
         }
 
-        let session_id = if let Some(meta) = proto_res.tx_meta {
-            Some(meta.id)
-        } else {
-            None
-        };
-
         Ok(QueryResult {
-            session_id,
             results,
+            tx_id: raw_res.tx_meta.id,
         })
     }
 
@@ -81,7 +78,7 @@ impl QueryResult {
 pub struct ResultSet {
     columns: Vec<crate::types::Column>,
     columns_by_name: HashMap<String, usize>,
-    pb: ydb_grpc::ydb_proto::ResultSet,
+    raw_result_set: RawResultSet,
 }
 
 impl ResultSet {
@@ -94,32 +91,25 @@ impl ResultSet {
         ResultSetRowsIter {
             columns: Rc::new(self.columns),
             columns_by_name: Rc::new(self.columns_by_name),
-            row_iter: self.pb.rows.into_iter(),
+            row_iter: self.raw_result_set.rows.into_iter(),
         }
     }
 
     #[allow(dead_code)]
     pub(crate) fn truncated(&self) -> bool {
-        self.pb.truncated
+        self.raw_result_set.truncated
     }
+}
 
-    pub(crate) fn from_proto(pb: ydb_grpc::ydb_proto::ResultSet) -> errors::YdbResult<Self> {
-        let mut columns = Vec::with_capacity(pb.columns.len());
-        for pb_col in pb.columns.iter() {
-            columns.push(crate::types::Column {
-                name: pb_col.name.clone(),
-                v_type: Value::from_proto_type(&pb_col.r#type)?,
-            })
-        }
-        let columns_by_name = columns
-            .iter()
-            .enumerate()
-            .map(|(k, v)| (v.name.clone(), k))
-            .collect();
-        Ok(Self {
-            columns,
+impl TryFrom<RawResultSet> for ResultSet {
+    type Error = YdbError;
+
+    fn try_from(value: RawResultSet) -> Result<Self, Self::Error> {
+        let columns_by_name: HashMap<String, usize> = value.columns.iter().enumerate().map(|(index, column)| (column.name.clone(), index)).collect();
+        Ok(Self{
+            columns: value.columns.iter().map(|item|item.clone().try_into()).try_collect()?,
             columns_by_name,
-            pb,
+            raw_result_set: value
         })
     }
 }
@@ -137,7 +127,7 @@ impl IntoIterator for ResultSet {
 pub struct Row {
     columns: Rc<Vec<crate::types::Column>>,
     columns_by_name: Rc<HashMap<String, usize>>,
-    pb: HashMap<usize, ydb_grpc::ydb_proto::Value>,
+    raw_values: HashMap<usize, RawValue>,
 }
 
 impl Row {
@@ -149,8 +139,11 @@ impl Row {
     }
 
     pub fn remove_field(&mut self, index: usize) -> errors::YdbResult<Value> {
-        match self.pb.remove(&index) {
-            Some(val) => Value::from_proto(&self.columns[index].v_type, val),
+        match self.raw_values.remove(&index) {
+            Some(val) => Ok(Value::try_from(RawTypedValue{
+                r#type: self.columns[index].v_type.clone(),
+                value: val,
+            })?),
             None => Err(YdbError::Custom("it has no the field".into())),
         }
     }
@@ -159,7 +152,7 @@ impl Row {
 pub struct ResultSetRowsIter {
     columns: Rc<Vec<crate::types::Column>>,
     columns_by_name: Rc<HashMap<String, usize>>,
-    row_iter: IntoIter<ydb_grpc::ydb_proto::Value>,
+    row_iter: IntoIter<Vec<RawValue>>,
 }
 
 impl Iterator for ResultSetRowsIter {
@@ -171,7 +164,7 @@ impl Iterator for ResultSetRowsIter {
             Some(row) => Some(Row {
                 columns: self.columns.clone(),
                 columns_by_name: self.columns_by_name.clone(),
-                pb: row.items.into_iter().enumerate().collect(),
+                raw_values: row.into_iter().enumerate().collect(),
             }),
         }
     }
@@ -204,7 +197,8 @@ impl StreamResult {
         } else {
             return Err(YdbError::InternalError("unexpected empty result".into()));
         };
-        let result_set = ResultSet::from_proto(proto_result_set)?;
+        let raw_res = RawResultSet::try_from(proto_result_set)?;
+        let result_set = ResultSet::try_from(raw_res)?;
         Ok(Some(result_set))
     }
 }

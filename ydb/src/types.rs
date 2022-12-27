@@ -1,14 +1,16 @@
 use crate::errors::{YdbError, YdbResult};
-use std::collections::HashMap;
+use std::collections::{HashMap};
 
 use std::convert::TryInto;
 use std::fmt::Debug;
-use std::ops::Deref;
+use std::num::TryFromIntError;
 use std::time::Duration;
-use strum::{EnumDiscriminants, EnumIter, IntoStaticStr};
+use strum::{EnumCount, EnumDiscriminants, EnumIter, IntoStaticStr};
 use ydb_grpc::ydb_proto;
+use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
+use crate::grpc_wrapper::raw_table_service::value::RawColumn;
 
-const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
+pub(crate) const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 
 /// Internal represent database value for send to or received from database.
 ///
@@ -52,9 +54,10 @@ const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 ///
 /// #### Possible native convertions
 ///
-#[derive(Clone, Debug, EnumDiscriminants, EnumIter, PartialEq)]
-#[strum_discriminants(vis())] // private
-#[strum_discriminants(derive(IntoStaticStr))]
+#[derive(Clone, Debug, EnumCount, EnumDiscriminants, EnumIter, PartialEq)]
+#[strum_discriminants(vis(pub(crate)))] // private
+#[strum_discriminants(derive(IntoStaticStr,EnumIter,Hash))]
+#[strum_discriminants(name(ValueDiscriminants))]
 #[allow(dead_code)]
 #[non_exhaustive]
 pub enum Value {
@@ -81,7 +84,7 @@ pub enum Value {
     String(Bytes),
 
     /// Text data, encoded to valid utf8
-    Utf8(String),
+    Text(String),
     Yson(String),
     Json(String),
     JsonDocument(String),
@@ -100,14 +103,30 @@ impl Value {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValueStruct {
-    fields_name: Vec<String>,
-    values: Vec<Value>,
+    pub(crate) fields_name: Vec<String>,
+    pub(crate) values: Vec<Value>,
 }
 
 impl ValueStruct {
     pub(crate) fn insert(&mut self, name: String, v: Value) {
         self.fields_name.push(name);
         self.values.push(v);
+    }
+
+    pub(crate) fn from_fields(fields: Vec<(String, Value)>)->ValueStruct{
+        let fields_len = fields.len();
+        let (names, values) = fields.into_iter().fold(
+            (Vec::with_capacity(fields_len), Vec::with_capacity(fields_len)),
+            |(mut names, mut values), (name, value)| {
+                names.push(name);
+                values.push(value);
+                (names, values)
+            });
+
+        ValueStruct{
+            fields_name: names,
+            values,
+        }
     }
 
     #[allow(dead_code)]
@@ -203,7 +222,7 @@ pub struct SignedInterval {
 }
 
 impl SignedInterval {
-    pub(crate) fn as_nanos(self) -> YdbResult<i64> {
+    pub(crate) fn as_nanos(self) -> std::result::Result<i64, TryFromIntError> {
         let nanos: i64 = self.duration.as_nanos().try_into()?;
         let res = match self.sign {
             Sign::Plus => nanos,
@@ -247,184 +266,8 @@ impl Value {
         Ok(Value::Optional(Box::new(ValueOptional { t, value })))
     }
 
-    // return empty value of requested type
-    pub(crate) fn from_proto_type(proto_type: &Option<ydb_proto::Type>) -> YdbResult<Self> {
-        use ydb_proto::r#type::PrimitiveTypeId as P;
-        use ydb_proto::r#type::Type as T;
-        let res = if let Some(ydb_proto::Type {
-            r#type: Some(t_val),
-        }) = proto_type
-        {
-            match t_val {
-                T::TypeId(t_id) => match P::from_i32(*t_id) {
-                    Some(P::Bool) => Self::Bool(false),
-                    Some(P::String) => Self::String(Bytes::default()),
-                    Some(P::Utf8) => Self::Utf8(String::default()),
-                    Some(P::Float) => Self::Float(0.0),
-                    Some(P::Double) => Self::Double(0.0),
-                    Some(P::Int8) => Self::Int8(0),
-                    Some(P::Uint8) => Self::Uint8(0),
-                    Some(P::Int16) => Self::Int16(0),
-                    Some(P::Uint16) => Self::Uint16(0),
-                    Some(P::Int32) => Self::Int32(0),
-                    Some(P::Uint32) => Self::Uint32(0),
-                    Some(P::Int64) => Self::Int64(0),
-                    Some(P::Uint64) => Self::Uint64(0),
-                    Some(P::Timestamp) => Self::Timestamp(Duration::default()),
-                    Some(P::Interval) => Self::Interval(SignedInterval::default()),
-                    Some(P::Date) => Self::Date(Duration::default()),
-                    Some(P::Datetime) => Self::DateTime(Duration::default()),
-                    Some(P::Dynumber) => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
-                    Some(P::Json) => Self::Json(String::default()),
-                    Some(P::Yson) => Self::Yson(String::default()),
-                    Some(P::JsonDocument) => Self::JsonDocument(String::default()),
-                    _ => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
-                },
-                T::VoidType(_) => Value::Void,
-                T::OptionalType(val) => {
-                    let t = if let Some(item) = &val.item {
-                        Some(*item.clone())
-                    } else {
-                        return Err(YdbError::Custom("none item in optional type".into()));
-                    };
-                    return Self::optional_from(Self::from_proto_type(&t)?, None);
-                }
-                T::ListType(oblt) => {
-                    let item = if let Some(blt) = &oblt.item {
-                        Self::from_proto_type(&Some(blt.deref().clone()))?
-                    } else {
-                        unimplemented!()
-                    };
-                    Self::List(Box::new(ValueList {
-                        t: item,
-                        values: Vec::default(),
-                    }))
-                }
-                T::StructType(struct_type) => {
-                    let mut s = ValueStruct::with_capacity(struct_type.members.len());
-                    for field in &struct_type.members {
-                        let t = Self::from_proto_type(&field.r#type)?;
-                        s.insert(field.name.clone(), t);
-                    }
-                    Self::Struct(s)
-                }
-                T::NullType(_) => Self::Null,
-                _ => unimplemented!("{:?}", t_val),
-                // think about map to internal types as 1:1
-            }
-        } else {
-            return Err(YdbError::Custom("column type is None".into()));
-        };
-        Ok(res)
-    }
-
-    pub(crate) fn from_proto(t: &Value, proto_value: ydb_proto::Value) -> YdbResult<Self> {
-        let res = match (t, proto_value) {
-            (Value::Void, _) => Value::Void,
-            (
-                t,
-                ydb_proto::Value {
-                    value: Some(val), ..
-                },
-            ) => Self::from_proto_value(t, val)?,
-            (Value::List(item_type_vec), ydb_proto::Value { items, .. }) => {
-                let items_type = &item_type_vec.t;
-                let mut values = Vec::with_capacity(items.len());
-                items.into_iter().try_for_each(|item| {
-                    values.push(Self::from_proto(items_type, item)?);
-                    YdbResult::<()>::Ok(())
-                })?;
-                Value::List(Box::new(ValueList {
-                    t: items_type.clone(),
-                    values,
-                }))
-            }
-            (Value::Struct(struct_t), ydb_proto::Value { items, .. }) => {
-                Self::from_proto_struct(struct_t, items)?
-            }
-            (t, proto_value) => {
-                return Err(YdbError::Custom(format!(
-                    "unsupported from_proto combination: t: '{:?}', proto_value: '{:?}'",
-                    t, proto_value
-                )))
-            }
-        };
-        Ok(res)
-    }
-
-    fn from_proto_struct(t: &ValueStruct, items: Vec<ydb_proto::Value>) -> YdbResult<Value> {
-        if t.fields_name.len() != items.len() {
-            return Err(YdbError::Custom(format!(
-                "struct description and items has diferrent length. t: {:?}, items: {:?}",
-                t, items
-            )));
-        };
-
-        let mut res = ValueStruct::with_capacity(t.fields_name.len());
-        for (index, item) in items.into_iter().enumerate() {
-            let v = Value::from_proto(&t.values[index], item)?;
-            res.insert(t.fields_name[index].clone(), v);
-        }
-        Ok(Value::Struct(res))
-    }
-
-    fn from_proto_value(t: &Value, v: ydb_proto::value::Value) -> YdbResult<Value> {
-        use ydb_proto::value::Value as pv;
-
-        let res = match (t, v) {
-            (Value::Bool(_), pv::BoolValue(val)) => Value::Bool(val),
-            (Value::Int8(_), pv::Int32Value(val)) => Value::Int8(val.try_into()?),
-            (Value::Uint8(_), pv::Uint32Value(val)) => Value::Uint8(val.try_into()?),
-            (Value::Int16(_), pv::Int32Value(val)) => Value::Int16(val.try_into()?),
-            (Value::Uint16(_), pv::Uint32Value(val)) => Value::Uint16(val.try_into()?),
-            (Value::Int32(_), pv::Int32Value(val)) => Value::Int32(val),
-            (Value::Uint32(_), pv::Uint32Value(val)) => Value::Uint32(val),
-            (Value::Int64(_), pv::Int64Value(val)) => Value::Int64(val),
-            (Value::Uint64(_), pv::Uint64Value(val)) => Value::Uint64(val),
-            (Value::Float(_), pv::FloatValue(val)) => Value::Float(val),
-            (Value::Double(_), pv::DoubleValue(val)) => Value::Double(val),
-            (Value::Date(_), pv::Uint32Value(val)) => {
-                Value::Date(std::time::Duration::from_secs(SECONDS_PER_DAY * val as u64))
-            }
-            (Value::DateTime(_), pv::Uint32Value(val)) => {
-                Value::DateTime(std::time::Duration::from_secs(val as u64))
-            }
-            (Value::Timestamp(_), pv::Uint64Value(val)) => {
-                Value::Timestamp(Duration::from_micros(val))
-            }
-            (Value::Interval(_), pv::Int64Value(val)) => {
-                Value::Interval(SignedInterval::from_nanos(val))
-            }
-            (Value::String(_), pv::BytesValue(val)) => Value::String(val.into()),
-            (Value::Utf8(_), pv::TextValue(val)) => Value::Utf8(val),
-            (Value::Yson(_), pv::TextValue(val)) => Value::Yson(val),
-            (Value::Json(_), pv::TextValue(val)) => Value::Json(val),
-            (Value::JsonDocument(_), pv::TextValue(val)) => Value::JsonDocument(val),
-            (Value::Optional(ydb_optional), val) => {
-                Self::from_proto_value_optional(ydb_optional, val)?
-            }
-            (Value::Null, _) => Value::Null,
-            (t, val) => {
-                return Err(YdbError::Custom(format!(
-                    "unexpected from_proto_value. t: '{:?}', val: '{:?}'",
-                    t, val
-                )))
-            }
-        };
-        Ok(res)
-    }
-
-    fn from_proto_value_optional(
-        t: &ValueOptional,
-        val: ydb_proto::value::Value,
-    ) -> YdbResult<Self> {
-        use ydb_proto::value::Value as pv;
-
-        let res = match val {
-            pv::NullFlagValue(_) => Self::optional_from(t.t.clone(), None)?,
-            val => Self::optional_from(t.t.clone(), Some(Self::from_proto_value(&t.t, val)?))?,
-        };
-        Ok(res)
+    pub fn struct_from_fields(fields: Vec<(String,Value)>)->Value{
+        Value::Struct(ValueStruct::from_fields(fields))
     }
 
     #[allow(clippy::wrong_self_convention)]
@@ -493,7 +336,7 @@ impl Value {
             }
             Self::Interval(val) => proto_typed_value(pt::Interval, pv::Int64Value(val.as_nanos()?)),
             Self::String(val) => proto_typed_value(pt::String, pv::BytesValue(val.into())),
-            Self::Utf8(val) => proto_typed_value(pt::Utf8, pv::TextValue(val)),
+            Self::Text(val) => proto_typed_value(pt::Utf8, pv::TextValue(val)),
             Self::Yson(val) => proto_typed_value(pt::Yson, pv::TextValue(val)),
             Self::Json(val) => proto_typed_value(pt::Json, pv::TextValue(val)),
             Self::JsonDocument(val) => proto_typed_value(pt::JsonDocument, pv::TextValue(val)),
@@ -584,25 +427,11 @@ impl Value {
             }),
         })
     }
-}
 
-#[derive(Debug)]
-pub(crate) struct Column {
-    pub(crate) name: String,
-    pub(crate) v_type: Value,
-}
+    #[cfg(test)]
+    pub(crate) fn examples_for_test() ->Vec<Value>{
+        use std::collections::HashSet;
 
-#[cfg(test)]
-mod test {
-    use crate::errors::YdbResult;
-    use crate::types::{Bytes, Sign, SignedInterval, Value, ValueStruct};
-    use std::collections::HashSet;
-
-    use std::time::Duration;
-    use strum::IntoEnumIterator;
-
-    #[test]
-    fn serialize() -> YdbResult<()> {
         // test zero, one, minimum and maximum values
         macro_rules! num_tests {
             ($values:ident, $en_name:path, $type_name:ty) => {
@@ -613,14 +442,13 @@ mod test {
             };
         }
 
-        let mut discriminants = HashSet::new();
         let mut values = vec![
             Value::Null,
             Value::Bool(false),
             Value::Bool(true),
             Value::String(Bytes::from("asd".to_string())),
-            Value::Utf8("asd".into()),
-            Value::Utf8("фыв".into()),
+            Value::Text("asd".into()),
+            Value::Text("фыв".into()),
             Value::Json("{}".into()),
             Value::JsonDocument("{}".into()),
             Value::Yson("1;2;3;".into()),
@@ -656,13 +484,13 @@ mod test {
             duration: Duration::from_secs(1),
         })); // -1 second interval
 
-        values.push(Value::optional_from(Value::Int8(0), None)?);
-        values.push(Value::optional_from(Value::Int8(0), Some(Value::Int8(1)))?);
+        values.push(Value::optional_from(Value::Int8(0), None).unwrap());
+        values.push(Value::optional_from(Value::Int8(0), Some(Value::Int8(1))).unwrap());
 
         values.push(Value::list_from(
             Value::Int8(0),
             vec![Value::Int8(1), Value::Int8(2), Value::Int8(3)],
-        )?);
+        ).unwrap());
 
         values.push(Value::Struct(ValueStruct {
             fields_name: vec!["a".into(), "b".into()],
@@ -671,28 +499,36 @@ mod test {
                 Value::list_from(
                     Value::Int32(0),
                     vec![Value::Int32(1), Value::Int32(2), Value::Int32(3)],
-                )?,
+                ).unwrap(),
             ],
         }));
 
-        for v in values.into_iter() {
-            discriminants.insert(std::mem::discriminant(&v));
-            let proto = v.clone().to_typed_value()?;
-            let t = Value::from_proto_type(&proto.r#type)?;
-            let v2 = Value::from_proto(&t, proto.value.unwrap())?;
-            assert_eq!(&v, &v2);
+        let mut discriminants = HashSet::new();
+        for item in values.iter() {
+            discriminants.insert(std::mem::discriminant(item));
         }
+        assert_eq!(discriminants.len(), Value::COUNT);
 
-        let mut non_tested = Vec::new();
-        for v in Value::iter() {
-            if !discriminants.contains(&std::mem::discriminant(&v)) {
-                non_tested.push(format!("{:?}", &v));
-            }
-        }
+        values
+    }
 
-        assert_eq!(non_tested.len(), 0, "{:?}", non_tested);
+}
 
-        Ok(())
+#[derive(Debug)]
+pub(crate) struct Column {
+    #[allow(dead_code)]
+    pub(crate) name: String,
+    pub(crate) v_type: RawType,
+}
+
+impl TryFrom<RawColumn> for Column {
+    type Error = YdbError;
+
+    fn try_from(value: RawColumn) -> Result<Self, Self::Error> {
+        Ok(Self{
+            name: value.name,
+            v_type: value.column_type,
+        })
     }
 }
 

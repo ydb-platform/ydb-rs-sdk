@@ -1,4 +1,5 @@
 use std::fmt::{Display, Formatter};
+use std::num::TryFromIntError;
 
 pub(crate) type RawResult<T> = std::result::Result<T, RawError>;
 
@@ -14,6 +15,9 @@ impl RawError {
     pub fn custom<S: Into<String>>(text: S) -> Self {
         RawError::Custom(text.into())
     }
+    pub fn decode_error<S: Into<String>>(text: S) -> Self {
+        RawError::ProtobufDecodeError(text.into())
+    }
 }
 
 impl From<tonic::Status> for RawError {
@@ -25,6 +29,12 @@ impl From<tonic::Status> for RawError {
 impl From<prost::DecodeError> for RawError {
     fn from(e: prost::DecodeError) -> Self {
         Self::ProtobufDecodeError(e.to_string())
+    }
+}
+
+impl From<std::num::TryFromIntError> for RawError {
+    fn from(_: TryFromIntError) -> Self {
+        RawError::custom("bad convert from int")
     }
 }
 

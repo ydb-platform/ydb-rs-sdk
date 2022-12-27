@@ -4,3 +4,7 @@ pub(crate) mod create_session;
 pub(crate) mod execute_scheme_query;
 pub(crate) mod keepalive;
 pub(crate) mod rollback_transaction;
+pub(crate) mod value;
+pub(crate) mod execute_data_query;
+pub(crate) mod transaction_control;
+pub(crate) mod query_stats;
