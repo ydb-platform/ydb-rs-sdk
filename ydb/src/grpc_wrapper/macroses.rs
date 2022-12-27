@@ -5,7 +5,7 @@ macro_rules! request_without_result {
         trace!(
             " {} request: {}",
             stringify!($ClientType.$method),
-            serde_json::to_string(&req).unwrap_or("bad json".into())
+            crate::trace_helpers::ensure_len_string(serde_json::to_string(&req).unwrap_or("bad json".into()))
         );
 
         let response = $self.service.$method(req).await?;
@@ -24,7 +24,7 @@ macro_rules! request_with_result {
         trace!(
             " {} request: {}",
             stringify!($ClientType.$method),
-            serde_json::to_string(&req).unwrap_or("bad json".into())
+            crate::trace_helpers::ensure_len_string(serde_json::to_string(&req).unwrap_or("bad json".into()))
         );
 
         let response = $self.service.$method(req).await?;
@@ -34,7 +34,7 @@ macro_rules! request_with_result {
         trace!(
             "{} result: {}",
             stringify!($ClientType.$method),
-            serde_json::to_string(&result).unwrap_or("bad json".into())
+            crate::trace_helpers::ensure_len_string(serde_json::to_string(&result).unwrap_or("bad json".into()))
         );
 
         return <$RawResultType>::try_from(result);

@@ -13,6 +13,7 @@ use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTra
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use tracing::trace;
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
+use crate::grpc_wrapper::raw_table_service::execute_data_query::{RawExecuteDataQueryRequest, RawExecuteDataQueryResult};
 
 pub(crate) struct RawTableClient {
     timeouts: TimeoutSettings,
@@ -52,6 +53,14 @@ impl RawTableClient {
             self.service.create_session,
             req => ydb_grpc::ydb_proto::table::CreateSessionRequest,
             ydb_grpc::ydb_proto::table::CreateSessionResult => RawCreateSessionResult
+        );
+    }
+
+    pub async fn execute_data_query(&mut self, req: RawExecuteDataQueryRequest)->RawResult<RawExecuteDataQueryResult>{
+        request_with_result!(
+            self.service.execute_data_query,
+            req => ydb_grpc::ydb_proto::table::ExecuteDataQueryRequest,
+            ydb_grpc::ydb_proto::table::ExecuteQueryResult => RawExecuteDataQueryResult
         );
     }
 

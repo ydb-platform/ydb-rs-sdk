@@ -3,6 +3,7 @@ use ydb_grpc::ydb_proto::value::Value as Primitive;
 use crate::grpc_wrapper::raw_errors::RawError;
 use crate::grpc_wrapper::raw_table_service::value::{RawColumn, RawResultSet, RawTypedValue, RawValue, RawValuePair};
 use crate::grpc_wrapper::raw_table_service::value::r#type::{decode_err, RawType};
+use itertools::Itertools;
 
 impl TryFrom<ProtoValue> for RawValue {
     type Error = RawError;
@@ -190,25 +191,26 @@ impl TryFrom<ydb_grpc::ydb_proto::TypedValue> for RawTypedValue {
 impl TryFrom<ydb_grpc::ydb_proto::ResultSet> for RawResultSet {
     type Error = RawError;
 
-    fn try_from(value: ydb_grpc::ydb_proto::ResultSet) -> Result<Self, Self::Error> {
-        let columns_res: Result<Vec<RawColumn>, RawError> = value
+    fn try_from(proto_result_set: ydb_grpc::ydb_proto::ResultSet) -> Result<Self, Self::Error> {
+        let columns = proto_result_set
             .columns
             .into_iter()
             .map(RawColumn::try_from)
-            .collect();
-        let columns = columns_res?;
+            .try_collect()?;
 
-        let values_res: Result<Vec<RawValue>, RawError> =
-            value.rows.into_iter().map(|item| item.try_into()).collect();
-        let values = values_res?;
+        let raw_rows: Vec<RawValue> = proto_result_set.rows.into_iter().map(|item| item.try_into()).try_collect()?;
 
-        let rows: Vec<Vec<RawValue>> = values
-            .chunks(columns.len())
+        let rows: Vec<Vec<RawValue>> = raw_rows
             .into_iter()
-            .map(|item| item.into())
-            .collect();
+            .map(|item_row| {
+                match item_row {
+                    RawValue::Items(items) => Ok(items),
+                    item=> Err(RawError::custom(format!("unexpected item type while parse rawset, expect items: {:?}", item)))
+                }
+            })
+            .try_collect()?;
 
-        Ok(Self { columns, rows })
+        Ok(Self { columns, rows, truncated: proto_result_set.truncated })
     }
 }
 

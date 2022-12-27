@@ -7,7 +7,7 @@ use crate::{Bytes, SignedInterval, Value, ValueList, ValueOptional, ValueStruct}
 #[path = "type_test.rs"]
 mod type_test;
 
-#[derive(Clone, Debug, Eq, PartialEq, strum::EnumCount)]
+#[derive(Clone, Debug, Eq, PartialEq, strum::EnumCount, serde::Serialize)]
 pub(crate) enum RawType {
     // Unspecified, skip unspecified type into internal code
     Bool,
@@ -49,41 +49,41 @@ pub(crate) enum RawType {
     EmptyDict,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub(crate) struct DecimalType {
     pub precision: u32,
     pub scale: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub(crate) struct TupleType {
     pub elements: Vec<RawType>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub(crate) struct StructType {
     pub members: Vec<StructMember>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub(crate) struct StructMember {
     pub name: String,
     pub member_type: RawType,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub(crate) struct DictType {
     pub key: RawType,
     pub payload: RawType,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub(crate) enum VariantType {
     Tuple(TupleType),
     Struct(StructType),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub(crate) struct TaggedType {
     pub tag: String,
     pub item_type: RawType,

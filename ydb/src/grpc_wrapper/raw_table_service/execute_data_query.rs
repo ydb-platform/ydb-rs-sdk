@@ -6,6 +6,7 @@ use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawTypedValue}
 use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 
+#[derive(serde::Serialize)]
 pub(crate) struct RawExecuteDataQueryRequest {
     pub session_id: String,
     pub tx_control: RawTransactionControl,
@@ -38,10 +39,11 @@ impl From<RawExecuteDataQueryRequest> for ydb_grpc::ydb_proto::table::ExecuteDat
     }
 }
 
+#[derive(serde::Serialize)]
 pub(crate) struct RawExecuteDataQueryResult {
-    result_sets: Vec<RawResultSet>,
-    tx_meta: RawTransactionMeta,
-    query_meta: RawQueryMeta,
+    pub result_sets: Vec<RawResultSet>,
+    pub tx_meta: RawTransactionMeta,
+    pub query_meta: Option<RawQueryMeta>,
     // query_stats: Option<RawQueryStats>, // todo
 }
 
@@ -57,20 +59,23 @@ impl TryFrom<ydb_grpc::ydb_proto::table::ExecuteQueryResult> for RawExecuteDataQ
             .map(|item| item.try_into())
             .collect();
 
+        let query_meta = if let Some(proto_meta) = value.query_meta{
+            Some(RawQueryMeta::try_from(proto_meta)?)
+        } else {
+            None
+        };
         Ok(Self {
             result_sets: result_sets_res?,
             tx_meta: value
                 .tx_meta
                 .ok_or_else(|| RawError::custom("no tx_meta at ExecuteQueryResult"))?
                 .into(),
-            query_meta: value
-                .query_meta
-                .ok_or_else(|| RawError::custom("no query_mets at ExecuteQueryResult"))?
-                .try_into()?,
+            query_meta,
         })
     }
 }
 
+#[derive(serde::Serialize)]
 pub(crate) struct RawTransactionMeta {
     pub id: String,
 }
@@ -81,6 +86,7 @@ impl From<ydb_grpc::ydb_proto::table::TransactionMeta> for RawTransactionMeta {
     }
 }
 
+#[derive(serde::Serialize)]
 pub(crate) struct RawQueryMeta {
     pub id: String,
     pub parameter_types: HashMap<String, RawType>,

@@ -9,8 +9,9 @@ use ydb_grpc::ydb_proto::TypedValue;
 /// Query object
 #[derive(Clone)]
 pub struct Query {
-    text: String,
-    parameters: HashMap<String, Value>,
+    pub(crate) text: String,
+    pub(crate) parameters: HashMap<String, Value>,
+    pub(crate) keep_in_cache: bool,
 }
 
 impl Query {
@@ -19,6 +20,7 @@ impl Query {
         Query {
             text: query.into(),
             parameters: HashMap::new(),
+            keep_in_cache: false,
         }
     }
 
@@ -50,6 +52,7 @@ impl Query {
     /// ```
     pub fn with_params(mut self, params: HashMap<String, Value>) -> Self {
         self.parameters = params;
+        self.keep_in_cache = self.parameters.len() > 0;
         self
     }
 

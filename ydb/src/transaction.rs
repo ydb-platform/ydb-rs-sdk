@@ -6,6 +6,7 @@ use crate::result::QueryResult;
 use crate::session::Session;
 use crate::session_pool::SessionPool;
 use async_trait::async_trait;
+use itertools::Itertools;
 use tracing::trace;
 use ydb_grpc::ydb_proto::table::transaction_control::TxSelector;
 use ydb_grpc::ydb_proto::table::transaction_settings::TxMode;
@@ -13,6 +14,9 @@ use ydb_grpc::ydb_proto::table::{
     ExecuteDataQueryRequest, OnlineModeSettings, SerializableModeSettings, TransactionControl,
     TransactionSettings,
 };
+use crate::grpc_wrapper::raw_table_service::execute_data_query::{RawExecuteDataQueryRequest, RawExecuteDataQueryResult};
+use crate::grpc_wrapper::raw_table_service::query_stats::RawQueryStatMode;
+use crate::grpc_wrapper::raw_table_service::transaction_control::{RawOnlineReadonlySettings, RawTransactionControl, RawTxMode, RawTxSelector, RawTxSettings};
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Mode {
@@ -27,6 +31,15 @@ impl From<Mode> for TxMode {
             Mode::SerializableReadWrite => {
                 TxMode::SerializableReadWrite(SerializableModeSettings::default())
             }
+        }
+    }
+}
+
+impl From<Mode> for RawTxMode {
+    fn from(value: Mode) -> Self {
+        match value {
+            Mode::OnlineReadonly => Self::OnlineReadOnly(RawOnlineReadonlySettings{ allow_inconsistent_reads: false }),
+            Mode::SerializableReadWrite => Self::SerializableReadWrite,
         }
     }
 }
@@ -70,23 +83,28 @@ impl Drop for AutoCommit {
 #[async_trait]
 impl Transaction for AutoCommit {
     async fn query(&mut self, query: Query) -> YdbResult<QueryResult> {
-        let req = ExecuteDataQueryRequest {
-            tx_control: Some(TransactionControl {
+        let req = RawExecuteDataQueryRequest{
+            session_id: String::default(),
+            tx_control: RawTransactionControl {
                 commit_tx: true,
-                tx_selector: Some(TxSelector::BeginTx(TransactionSettings {
-                    tx_mode: Some(self.mode.into()),
-                })),
-            }),
-            query: Some(query.query_to_proto()),
-            parameters: query.params_to_proto()?,
-            operation_params: operation_params(self.timeouts.operation_timeout),
-            ..ExecuteDataQueryRequest::default()
+                tx_selector: RawTxSelector::Begin(RawTxSettings{ mode: self.mode.into() }),
+            },
+            yql_text: query.text,
+            operation_params: self.timeouts.operation_params(),
+            params: query.parameters.into_iter().map(|(k, v)| {
+                match v.try_into() {
+                    Ok(converted)=>Ok((k, converted)),
+                    Err(err)=>Err(err)
+                }
+            }).try_collect()?,
+            keep_in_cache: query.keep_in_cache,
+            collect_stats: RawQueryStatMode::None,
         };
 
         let mut session = self.session_pool.session().await?;
-        return session
+        return Ok(session
             .execute_data_query(req, self.error_on_truncate_response)
-            .await;
+            .await?.into());
     }
 
     async fn commit(&mut self) -> YdbResult<()> {
@@ -156,33 +174,41 @@ impl Transaction for SerializableReadWriteTx {
             trace!("create session from transaction");
             self.session.as_mut().unwrap()
         };
-        trace!("session: {:#?}", session);
+        trace!("session: {:#?}", &session);
 
         let tx_selector = if let Some(tx_id) = &self.id {
             trace!("tx_id: {}", tx_id);
-            TxSelector::TxId(tx_id.clone())
+            RawTxSelector::Id(tx_id.clone())
         } else {
             trace!("start new transaction");
-            TxSelector::BeginTx(TransactionSettings {
-                tx_mode: Some(Mode::SerializableReadWrite.into()),
+            RawTxSelector::Begin(RawTxSettings{
+                mode: RawTxMode::SerializableReadWrite,
             })
         };
 
-        let req = ExecuteDataQueryRequest {
-            tx_control: Some(TransactionControl {
+        let req = RawExecuteDataQueryRequest {
+            session_id: session.id.clone(),
+            tx_control: RawTransactionControl {
                 commit_tx: false,
-                tx_selector: Some(tx_selector),
-            }),
-            query: Some(query.query_to_proto()),
-            parameters: query.params_to_proto()?,
-            operation_params: operation_params(self.timeouts.operation_timeout),
-            ..ExecuteDataQueryRequest::default()
+                tx_selector,
+            },
+            yql_text: query.text,
+
+            operation_params: self.timeouts.operation_params(),
+            params: query.parameters.into_iter().map(|(k, v)|{
+                match v.try_into(){
+                    Ok(converted)=>Ok((k, converted)),
+                    Err(err)=>Err(err)
+                }
+            }).try_collect()?,
+            keep_in_cache: false,
+            collect_stats: RawQueryStatMode::None,
         };
         let query_result = session
             .execute_data_query(req, self.error_on_truncate_response)
             .await?;
         if self.id.is_none() {
-            self.id = query_result.session_id.clone();
+            self.id = Some(query_result.tx_id.clone());
         };
 
         return Ok(query_result);

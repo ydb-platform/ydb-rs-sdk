@@ -26,6 +26,7 @@ use ydb_grpc::ydb_proto::table::{
     execute_scan_query_request, ExecuteDataQueryRequest, ExecuteQueryResult,
     ExecuteScanQueryRequest,
 };
+use crate::grpc_wrapper::raw_table_service::execute_data_query::{RawExecuteDataQueryRequest, RawExecuteDataQueryResult};
 
 static REQUEST_NUMBER: AtomicI64 = AtomicI64::new(0);
 static DEFAULT_COLLECT_STAT_MODE: CollectStatsMode = CollectStatsMode::None;
@@ -129,32 +130,30 @@ impl Session {
     #[tracing::instrument(skip(self, req), fields(req_number=req_number()))]
     pub(crate) async fn execute_data_query(
         &mut self,
-        mut req: ExecuteDataQueryRequest,
+        mut req: RawExecuteDataQueryRequest,
         error_on_truncated: bool,
     ) -> YdbResult<QueryResult> {
         req.session_id.clone_from(&self.id);
-        if req.operation_params.is_none() {
-            req.operation_params = operation_params(self.timeouts.operation_timeout)
-        }
+        req.operation_params = self.timeouts.operation_params();
 
         trace!(
             "request: {}",
             ensure_len_string(serde_json::to_string(&req)?)
         );
 
-        let mut channel = self.get_channel().await?;
-        let response = channel.execute_data_query(req).await?;
-        let operation_result: ExecuteQueryResult = self.handle_operation_result(response)?;
-
+        let res = self.get_table_client().await?.execute_data_query(req).await;
+        let res = self.handle_raw_result(res)?;
         trace!(
-            "response: {}",
-            ensure_len_string(serde_json::to_string(&operation_result)?)
+            "result: {}",
+            ensure_len_string(serde_json::to_string(&res)?)
         );
-
-        QueryResult::from_proto(operation_result, error_on_truncated)
+        if error_on_truncated {
+            return Err(YdbError::from_str("result of query was truncated"))
+        }
+        QueryResult::from_raw_result(self.id.clone(), error_on_truncated, res)
     }
 
-    #[tracing::instrument(skip(self, query), fields(req_number=req_number()))]
+        #[tracing::instrument(skip(self, query), fields(req_number=req_number()))]
     pub async fn execute_scan_query(&mut self, query: Query) -> YdbResult<StreamResult> {
         let req = ExecuteScanQueryRequest {
             query: Some(query.query_to_proto()),
@@ -162,7 +161,7 @@ impl Session {
             mode: execute_scan_query_request::Mode::Exec as i32,
             ..ExecuteScanQueryRequest::default()
         };
-        debug!("request: {}", serde_json::to_string(&req)?);
+        debug!("request: {}", crate::trace_helpers::ensure_len_string(serde_json::to_string(&req)?));
         let mut channel = self.get_channel().await?;
         let resp = channel.stream_execute_scan_query(req).await?;
         let stream = resp.into_inner();

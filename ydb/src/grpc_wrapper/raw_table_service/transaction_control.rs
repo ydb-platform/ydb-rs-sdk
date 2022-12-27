@@ -1,8 +1,10 @@
+#[derive(serde::Serialize)]
 pub(crate) struct RawTransactionControl {
     pub commit_tx: bool,
     pub tx_selector: RawTxSelector,
 }
 
+#[derive(serde::Serialize)]
 pub(crate) enum RawTxSelector {
     Id(String),
     Begin(RawTxSettings),
@@ -18,7 +20,7 @@ impl From<RawTxSelector> for ydb_grpc::ydb_proto::table::transaction_control::Tx
     }
 }
 
-
+#[derive(serde::Serialize)]
 pub(crate) struct RawTxSettings {
     pub mode: RawTxMode,
 }
@@ -31,6 +33,7 @@ impl From<RawTxSettings> for ydb_grpc::ydb_proto::table::TransactionSettings{
     }
 }
 
+#[derive(serde::Serialize)]
 pub(crate) enum RawTxMode {
     SerializableReadWrite,
     OnlineReadOnly(RawOnlineReadonlySettings),
@@ -49,6 +52,7 @@ impl From<RawTxMode> for ydb_grpc::ydb_proto::table::transaction_settings::TxMod
     }
 }
 
+#[derive(serde::Serialize)]
 pub(crate) struct RawOnlineReadonlySettings{
     pub allow_inconsistent_reads: bool,
 }

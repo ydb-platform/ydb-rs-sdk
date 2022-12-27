@@ -8,6 +8,8 @@ use std::ops::Deref;
 use std::time::Duration;
 use strum::{EnumCount, EnumDiscriminants, EnumIter, IntoStaticStr};
 use ydb_grpc::ydb_proto;
+use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
+use crate::grpc_wrapper::raw_table_service::value::RawColumn;
 
 pub(crate) const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 
@@ -696,7 +698,18 @@ impl Value {
 #[derive(Debug)]
 pub(crate) struct Column {
     pub(crate) name: String,
-    pub(crate) v_type: Value,
+    pub(crate) v_type: RawType,
+}
+
+impl TryFrom<RawColumn> for Column {
+    type Error = YdbError;
+
+    fn try_from(value: RawColumn) -> Result<Self, Self::Error> {
+        Ok(Self{
+            name: value.name,
+            v_type: value.column_type,
+        })
+    }
 }
 
 #[cfg(test)]
