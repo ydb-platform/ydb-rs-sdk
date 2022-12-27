@@ -62,7 +62,7 @@ impl Debug for RawResultSet {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match serde_json::to_string(self) {
             Ok(s) => f.write_str(ensure_len_string(s).as_str()),
-            Err(_) => return Err(std::fmt::Error)
+            Err(_) => Err(std::fmt::Error)
         }
     }
 }

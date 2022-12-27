@@ -1,27 +1,26 @@
 use crate::errors;
 use crate::errors::{YdbError, YdbResult, YdbStatusError};
 use crate::grpc::proto_issues_to_ydb_issues;
-use crate::types::{Column, Value};
+use crate::types::{ Value};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::vec::IntoIter;
 use itertools::Itertools;
 use tracing::trace;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
-use ydb_grpc::ydb_proto::table::{ExecuteQueryResult, ExecuteScanQueryPartialResponse};
+use ydb_grpc::ydb_proto::table::{ExecuteScanQueryPartialResponse};
 use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryResult;
 use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawTypedValue, RawValue};
 use crate::trace_helpers::ensure_len_string;
 
 #[derive(Debug)]
 pub struct QueryResult {
-    pub(crate) session_id: Option<String>,
     pub(crate) results: Vec<ResultSet>,
     pub(crate) tx_id: String,
 }
 
 impl QueryResult {
-    pub(crate) fn from_raw_result(session_id: String, error_on_truncate: bool, raw_res: RawExecuteDataQueryResult)->YdbResult<Self>{
+    pub(crate) fn from_raw_result(error_on_truncate: bool, raw_res: RawExecuteDataQueryResult)->YdbResult<Self>{
         trace!("raw_res: {}",
             ensure_len_string(serde_json::to_string(&raw_res)?)
             );
@@ -40,7 +39,6 @@ impl QueryResult {
         }
 
         Ok(QueryResult {
-            session_id: Some(session_id),
             results,
             tx_id: raw_res.tx_meta.id,
         })

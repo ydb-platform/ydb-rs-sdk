@@ -4,7 +4,6 @@ use std::collections::{HashMap};
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::num::TryFromIntError;
-use std::ops::Deref;
 use std::time::Duration;
 use strum::{EnumCount, EnumDiscriminants, EnumIter, IntoStaticStr};
 use ydb_grpc::ydb_proto;
@@ -271,186 +270,6 @@ impl Value {
         Value::Struct(ValueStruct::from_fields(fields))
     }
 
-    // return empty value of requested type
-    pub(crate) fn from_proto_type(proto_type: &Option<ydb_proto::Type>) -> YdbResult<Self> {
-        use ydb_proto::r#type::PrimitiveTypeId as P;
-        use ydb_proto::r#type::Type as T;
-        let res = if let Some(ydb_proto::Type {
-            r#type: Some(t_val),
-        }) = proto_type
-        {
-            match t_val {
-                T::TypeId(t_id) => match P::from_i32(*t_id) {
-                    Some(P::Bool) => Self::Bool(false),
-                    Some(P::String) => Self::String(Bytes::default()),
-                    Some(P::Utf8) => Self::Text(String::default()),
-                    Some(P::Float) => Self::Float(0.0),
-                    Some(P::Double) => Self::Double(0.0),
-                    Some(P::Int8) => Self::Int8(0),
-                    Some(P::Uint8) => Self::Uint8(0),
-                    Some(P::Int16) => Self::Int16(0),
-                    Some(P::Uint16) => Self::Uint16(0),
-                    Some(P::Int32) => Self::Int32(0),
-                    Some(P::Uint32) => Self::Uint32(0),
-                    Some(P::Int64) => Self::Int64(0),
-                    Some(P::Uint64) => Self::Uint64(0),
-                    Some(P::Timestamp) => Self::Timestamp(Duration::default()),
-                    Some(P::Interval) => Self::Interval(SignedInterval::default()),
-                    Some(P::Date) => Self::Date(Duration::default()),
-                    Some(P::Datetime) => Self::DateTime(Duration::default()),
-                    Some(P::Dynumber) => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
-                    Some(P::Json) => Self::Json(String::default()),
-                    Some(P::Yson) => Self::Yson(String::default()),
-                    Some(P::JsonDocument) => Self::JsonDocument(String::default()),
-                    _ => unimplemented!("{:?} ({})", P::from_i32(*t_id), *t_id),
-                },
-                T::VoidType(_) => Value::Void,
-                T::OptionalType(val) => {
-                    let t = if let Some(item) = &val.item {
-                        Some(*item.clone())
-                    } else {
-                        return Err(YdbError::Custom("none item in optional type".into()));
-                    };
-                    return Self::optional_from(Self::from_proto_type(&t)?, None);
-                }
-                T::ListType(oblt) => {
-                    let item = if let Some(blt) = &oblt.item {
-                        Self::from_proto_type(&Some(blt.deref().clone()))?
-                    } else {
-                        unimplemented!()
-                    };
-                    Self::List(Box::new(ValueList {
-                        t: item,
-                        values: Vec::default(),
-                    }))
-                }
-                T::StructType(struct_type) => {
-                    let mut s = ValueStruct::with_capacity(struct_type.members.len());
-                    for field in &struct_type.members {
-                        let t = Self::from_proto_type(&field.r#type)?;
-                        s.insert(field.name.clone(), t);
-                    }
-                    Self::Struct(s)
-                }
-                T::NullType(_) => Self::Null,
-                _ => unimplemented!("{:?}", t_val),
-                // think about map to internal types as 1:1
-            }
-        } else {
-            return Err(YdbError::Custom("column type is None".into()));
-        };
-        Ok(res)
-    }
-
-    pub(crate) fn from_proto(t: &Value, proto_value: ydb_proto::Value) -> YdbResult<Self> {
-        let res = match (t, proto_value) {
-            (Value::Void, _) => Value::Void,
-            (
-                t,
-                ydb_proto::Value {
-                    value: Some(val), ..
-                },
-            ) => Self::from_proto_value(t, val)?,
-            (Value::List(item_type_vec), ydb_proto::Value { items, .. }) => {
-                let items_type = &item_type_vec.t;
-                let mut values = Vec::with_capacity(items.len());
-                items.into_iter().try_for_each(|item| {
-                    values.push(Self::from_proto(items_type, item)?);
-                    YdbResult::<()>::Ok(())
-                })?;
-                Value::List(Box::new(ValueList {
-                    t: items_type.clone(),
-                    values,
-                }))
-            }
-            (Value::Struct(struct_t), ydb_proto::Value { items, .. }) => {
-                Self::from_proto_struct(struct_t, items)?
-            }
-            (t, proto_value) => {
-                return Err(YdbError::Custom(format!(
-                    "unsupported from_proto combination: t: '{:?}', proto_value: '{:?}'",
-                    t, proto_value
-                )))
-            }
-        };
-        Ok(res)
-    }
-
-    fn from_proto_struct(t: &ValueStruct, items: Vec<ydb_proto::Value>) -> YdbResult<Value> {
-        if t.fields_name.len() != items.len() {
-            return Err(YdbError::Custom(format!(
-                "struct description and items has diferrent length. t: {:?}, items: {:?}",
-                t, items
-            )));
-        };
-
-        let mut res = ValueStruct::with_capacity(t.fields_name.len());
-        for (index, item) in items.into_iter().enumerate() {
-            let v = Value::from_proto(&t.values[index], item)?;
-            res.insert(t.fields_name[index].clone(), v);
-        }
-        Ok(Value::Struct(res))
-    }
-
-    fn from_proto_value(t: &Value, v: ydb_proto::value::Value) -> YdbResult<Value> {
-        use ydb_proto::value::Value as pv;
-
-        let res = match (t, v) {
-            (Value::Bool(_), pv::BoolValue(val)) => Value::Bool(val),
-            (Value::Int8(_), pv::Int32Value(val)) => Value::Int8(val.try_into()?),
-            (Value::Uint8(_), pv::Uint32Value(val)) => Value::Uint8(val.try_into()?),
-            (Value::Int16(_), pv::Int32Value(val)) => Value::Int16(val.try_into()?),
-            (Value::Uint16(_), pv::Uint32Value(val)) => Value::Uint16(val.try_into()?),
-            (Value::Int32(_), pv::Int32Value(val)) => Value::Int32(val),
-            (Value::Uint32(_), pv::Uint32Value(val)) => Value::Uint32(val),
-            (Value::Int64(_), pv::Int64Value(val)) => Value::Int64(val),
-            (Value::Uint64(_), pv::Uint64Value(val)) => Value::Uint64(val),
-            (Value::Float(_), pv::FloatValue(val)) => Value::Float(val),
-            (Value::Double(_), pv::DoubleValue(val)) => Value::Double(val),
-            (Value::Date(_), pv::Uint32Value(val)) => {
-                Value::Date(std::time::Duration::from_secs(SECONDS_PER_DAY * val as u64))
-            }
-            (Value::DateTime(_), pv::Uint32Value(val)) => {
-                Value::DateTime(std::time::Duration::from_secs(val as u64))
-            }
-            (Value::Timestamp(_), pv::Uint64Value(val)) => {
-                Value::Timestamp(Duration::from_micros(val))
-            }
-            (Value::Interval(_), pv::Int64Value(val)) => {
-                Value::Interval(SignedInterval::from_nanos(val))
-            }
-            (Value::String(_), pv::BytesValue(val)) => Value::String(val.into()),
-            (Value::Text(_), pv::TextValue(val)) => Value::Text(val),
-            (Value::Yson(_), pv::TextValue(val)) => Value::Yson(val),
-            (Value::Json(_), pv::TextValue(val)) => Value::Json(val),
-            (Value::JsonDocument(_), pv::TextValue(val)) => Value::JsonDocument(val),
-            (Value::Optional(ydb_optional), val) => {
-                Self::from_proto_value_optional(ydb_optional, val)?
-            }
-            (Value::Null, _) => Value::Null,
-            (t, val) => {
-                return Err(YdbError::Custom(format!(
-                    "unexpected from_proto_value. t: '{:?}', val: '{:?}'",
-                    t, val
-                )))
-            }
-        };
-        Ok(res)
-    }
-
-    fn from_proto_value_optional(
-        t: &ValueOptional,
-        val: ydb_proto::value::Value,
-    ) -> YdbResult<Self> {
-        use ydb_proto::value::Value as pv;
-
-        let res = match val {
-            pv::NullFlagValue(_) => Self::optional_from(t.t.clone(), None)?,
-            val => Self::optional_from(t.t.clone(), Some(Self::from_proto_value(&t.t, val)?))?,
-        };
-        Ok(res)
-    }
-
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_typed_value(self) -> YdbResult<ydb_proto::TypedValue> {
         use ydb_proto::r#type::PrimitiveTypeId as pt;
@@ -697,6 +516,7 @@ impl Value {
 
 #[derive(Debug)]
 pub(crate) struct Column {
+    #[allow(dead_code)]
     pub(crate) name: String,
     pub(crate) v_type: RawType,
 }
@@ -709,26 +529,6 @@ impl TryFrom<RawColumn> for Column {
             name: value.name,
             v_type: value.column_type,
         })
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::errors::YdbResult;
-    use crate::types::{Value};
-
-    #[test]
-    fn serialize() -> YdbResult<()> {
-        let values = Value::examples_for_test();
-
-        for v in values.into_iter() {
-            let proto = v.clone().to_typed_value()?;
-            let t = Value::from_proto_type(&proto.r#type)?;
-            let v2 = Value::from_proto(&t, proto.value.unwrap())?;
-            assert_eq!(&v, &v2);
-        }
-
-        Ok(())
     }
 }
 

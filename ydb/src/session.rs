@@ -1,10 +1,8 @@
 use crate::client::TimeoutSettings;
 use crate::client_table::TableServiceClientType;
 use crate::errors::{YdbError, YdbResult};
-use crate::grpc::{grpc_read_operation_result, operation_params};
 use crate::query::Query;
 use crate::result::{QueryResult, StreamResult};
-use crate::trait_operation::Operation;
 use derivative::Derivative;
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -23,10 +21,10 @@ use crate::trace_helpers::ensure_len_string;
 use tracing::{debug, trace};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 use ydb_grpc::ydb_proto::table::{
-    execute_scan_query_request, ExecuteDataQueryRequest, ExecuteQueryResult,
+    execute_scan_query_request,
     ExecuteScanQueryRequest,
 };
-use crate::grpc_wrapper::raw_table_service::execute_data_query::{RawExecuteDataQueryRequest, RawExecuteDataQueryResult};
+use crate::grpc_wrapper::raw_table_service::execute_data_query::{RawExecuteDataQueryRequest};
 
 static REQUEST_NUMBER: AtomicI64 = AtomicI64::new(0);
 static DEFAULT_COLLECT_STAT_MODE: CollectStatsMode = CollectStatsMode::None;
@@ -87,18 +85,6 @@ impl Session {
         res
     }
 
-    fn handle_operation_result<TOp, T>(&mut self, response: tonic::Response<TOp>) -> YdbResult<T>
-    where
-        TOp: Operation,
-        T: Default + prost::Message,
-    {
-        let res: YdbResult<T> = grpc_read_operation_result(response);
-        if let Err(err) = &res {
-            self.handle_error(err);
-        }
-        res
-    }
-
     pub(crate) async fn commit_transaction(&mut self, tx_id: String) -> YdbResult<()> {
         let mut table = self.get_table_client().await?;
         let res = table
@@ -150,7 +136,7 @@ impl Session {
         if error_on_truncated {
             return Err(YdbError::from_str("result of query was truncated"))
         }
-        QueryResult::from_raw_result(self.id.clone(), error_on_truncated, res)
+        QueryResult::from_raw_result( error_on_truncated, res)
     }
 
         #[tracing::instrument(skip(self, query), fields(req_number=req_number()))]

@@ -1,6 +1,5 @@
 use crate::client::TimeoutSettings;
 use crate::errors::{YdbError, YdbResult};
-use crate::grpc::operation_params;
 use crate::query::Query;
 use crate::result::QueryResult;
 use crate::session::Session;
@@ -8,13 +7,11 @@ use crate::session_pool::SessionPool;
 use async_trait::async_trait;
 use itertools::Itertools;
 use tracing::trace;
-use ydb_grpc::ydb_proto::table::transaction_control::TxSelector;
 use ydb_grpc::ydb_proto::table::transaction_settings::TxMode;
 use ydb_grpc::ydb_proto::table::{
-    ExecuteDataQueryRequest, OnlineModeSettings, SerializableModeSettings, TransactionControl,
-    TransactionSettings,
+    OnlineModeSettings, SerializableModeSettings,
 };
-use crate::grpc_wrapper::raw_table_service::execute_data_query::{RawExecuteDataQueryRequest, RawExecuteDataQueryResult};
+use crate::grpc_wrapper::raw_table_service::execute_data_query::{RawExecuteDataQueryRequest};
 use crate::grpc_wrapper::raw_table_service::query_stats::RawQueryStatMode;
 use crate::grpc_wrapper::raw_table_service::transaction_control::{RawOnlineReadonlySettings, RawTransactionControl, RawTxMode, RawTxSelector, RawTxSettings};
 
@@ -102,9 +99,9 @@ impl Transaction for AutoCommit {
         };
 
         let mut session = self.session_pool.session().await?;
-        return Ok(session
+        return session
             .execute_data_query(req, self.error_on_truncate_response)
-            .await?.into());
+            .await;
     }
 
     async fn commit(&mut self) -> YdbResult<()> {

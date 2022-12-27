@@ -52,7 +52,7 @@ impl Query {
     /// ```
     pub fn with_params(mut self, params: HashMap<String, Value>) -> Self {
         self.parameters = params;
-        self.keep_in_cache = self.parameters.len() > 0;
+        self.keep_in_cache = !self.parameters.is_empty();
         self
     }
 
