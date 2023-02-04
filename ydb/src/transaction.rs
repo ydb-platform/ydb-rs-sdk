@@ -154,7 +154,7 @@ impl Drop for SerializableReadWriteTx {
         if !self.finished {
             if let (Some(tx_id), Some(mut session)) = (self.id.take(), self.session.take()) {
                 tokio::spawn(async move {
-                    let _ = session.rollback_transaction(tx_id);
+                    let _ = session.rollback_transaction(tx_id).await;
                 });
             };
         };
