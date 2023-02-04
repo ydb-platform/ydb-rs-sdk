@@ -1,5 +1,5 @@
 use std::fs::OpenOptions;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, Write};
 use std::path::PathBuf;
 use std::{fs, io};
 use walkdir::WalkDir;
@@ -118,7 +118,7 @@ fn fix_generated_file(fpath: &std::path::Path) -> io::Result<()> {
         .collect();
 
     let contents = lines.join("\n");
-    f.seek(SeekFrom::Start(0))?;
+    f.rewind()?;
     f.set_len(0)?;
     f.write_all(contents.as_bytes())?;
     Ok(())
