@@ -34,5 +34,11 @@ pub mod ydb {
     pub mod table_stats {
         include!("ydb.table_stats.rs");
     }
+    pub mod topic {
+        pub mod v1 {
+            include!("ydb.topic.v1.rs");
+        }
+        include!("ydb.topic.rs");
+    }
     include!("ydb.rs");
 }
