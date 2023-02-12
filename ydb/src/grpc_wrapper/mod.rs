@@ -17,5 +17,9 @@ pub(crate) mod raw_status;
 #[allow(dead_code)]
 pub(crate) mod raw_table_service;
 
+// tmp, need to implement and remove allow
+#[allow(dead_code)]
+pub(crate) mod raw_topic_service;
+
 pub(crate) mod raw_ydb_operation;
 pub(crate) mod runtime_interceptors;
