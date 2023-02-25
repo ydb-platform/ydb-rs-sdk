@@ -246,8 +246,7 @@ impl SignedInterval {
 }
 
 impl Value {
-    #[allow(dead_code)]
-    pub(crate) fn list_from(t: Value, values: Vec<Value>) -> YdbResult<Self> {
+    pub fn list_from(t: Value, values: Vec<Value>) -> YdbResult<Self> {
         for (index, value) in values.iter().enumerate() {
             if std::mem::discriminant(&t) != std::mem::discriminant(value) {
                 return Err(YdbError::Custom(format!("failed list_from: type and value has different enum-types. index: {}, type: '{:?}', value: '{:?}'", index, t, value)));
