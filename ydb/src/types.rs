@@ -203,6 +203,13 @@ impl Default for Box<ValueOptional> {
     }
 }
 
+impl ValueOptional {
+    ///  return inner value if exists, None if inner value is empty.
+    pub fn inner_value(self)->Option<Value>{
+        self.value
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Sign {
     Plus,
