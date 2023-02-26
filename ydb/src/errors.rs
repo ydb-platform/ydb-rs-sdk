@@ -27,8 +27,8 @@ impl YdbOrCustomerError {
         Self::Customer(Arc::new(Box::new(YdbError::Custom(s.into()))))
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn from_err<T: std::error::Error + 'static + Send + Sync>(err: T) -> Self {
+    /// Create YdbOrCustomerError from customer error
+    pub fn from_err<T: std::error::Error + 'static + Send + Sync>(err: T) -> Self {
         Self::Customer(Arc::new(Box::new(err)))
     }
 }
