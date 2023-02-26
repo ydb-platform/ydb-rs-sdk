@@ -292,6 +292,11 @@ impl Value {
         Value::Struct(ValueStruct::from_fields(fields))
     }
 
+    ///  Return true if the Value is optional
+        pub fn is_optional(&self)->bool{
+            matches!(self, Self::Optional(_))
+        }
+
     /// present current value as Option
     /// if value is Optional - return inner unwrapper value.
     /// else - return self, wrapped to Option.

@@ -83,6 +83,9 @@ mod types;
 mod types_converters;
 pub(crate) mod waiter;
 
+#[cfg(test)]
+mod types_test;
+
 // full enum pub types
 pub use client::Client;
 // full enum pub types
