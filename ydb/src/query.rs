@@ -12,6 +12,7 @@ pub struct Query {
     pub(crate) text: String,
     pub(crate) parameters: HashMap<String, Value>,
     pub(crate) keep_in_cache: bool,
+    force_keep_in_cache: bool,
 }
 
 impl Query {
@@ -21,6 +22,7 @@ impl Query {
             text: query.into(),
             parameters: HashMap::new(),
             keep_in_cache: false,
+            force_keep_in_cache: false,
         }
     }
 
@@ -52,7 +54,32 @@ impl Query {
     /// ```
     pub fn with_params(mut self, params: HashMap<String, Value>) -> Self {
         self.parameters = params;
-        self.keep_in_cache = !self.parameters.is_empty();
+        if !self.force_keep_in_cache {
+            self.keep_in_cache = !self.parameters.is_empty();
+        }
+        self
+    }
+
+    ///  Set force keep in cache flag for query.
+    ///  By default flag is true for query with non empty params and
+    ///  false for query without params.
+    ///
+    ///  Example:
+    /// ```
+    /// # use ydb::{ydb_params, Query};
+    ///
+    /// // force use server cache for the query
+    /// let q = Query::new("SELECT 1").with_keep_in_cache(true);
+    ///
+    /// // force disable server cache for the query
+    ///  let q = Query::new("
+    /// DECLARE $res AS Int64")
+    /// .with_params(ydb_params!("$val" => 123 as i64))
+    /// .with_keep_in_cache(false);
+    /// ```
+    pub fn with_keep_in_cache(mut self, val: bool)->Self {
+        self.force_keep_in_cache = true;
+        self.keep_in_cache = val;
         self
     }
 
