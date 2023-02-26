@@ -203,13 +203,6 @@ impl Default for Box<ValueOptional> {
     }
 }
 
-impl ValueOptional {
-    ///  return inner value if exists, None if inner value is empty.
-    pub fn inner_value(self)->Option<Value>{
-        self.value
-    }
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Sign {
     Plus,
@@ -297,6 +290,16 @@ impl Value {
     /// ```
     pub fn struct_from_fields(fields: Vec<(String,Value)>)->Value{
         Value::Struct(ValueStruct::from_fields(fields))
+    }
+
+    /// present current value as Option
+    /// if value is Optional - return inner unwrapper value.
+    /// else - return self, wrapped to Option.
+    pub fn to_option(self)->Option<Value>{
+        match self {
+            Value::Optional(inner_box) => inner_box.value,
+            other => Some(other)
+        }
     }
 
     #[allow(clippy::wrong_self_convention)]
