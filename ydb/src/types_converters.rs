@@ -54,6 +54,7 @@ macro_rules! simple_convert {
     };
 }
 
+simple_convert!(bool, Value::Bool);
 simple_convert!(i8, Value::Int8);
 simple_convert!(u8, Value::Uint8);
 simple_convert!(i16, Value::Int16, Value::Int8, Value::Uint8);

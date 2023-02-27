@@ -292,6 +292,21 @@ impl Value {
         Value::Struct(ValueStruct::from_fields(fields))
     }
 
+    ///  Return true if the Value is optional
+        pub fn is_optional(&self)->bool{
+            matches!(self, Self::Optional(_))
+        }
+
+    /// present current value as Option
+    /// if value is Optional - return inner unwrapper value.
+    /// else - return self, wrapped to Option.
+    pub fn to_option(self)->Option<Value>{
+        match self {
+            Value::Optional(inner_box) => inner_box.value,
+            other => Some(other)
+        }
+    }
+
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_typed_value(self) -> YdbResult<ydb_proto::TypedValue> {
         use ydb_proto::r#type::PrimitiveTypeId as pt;
