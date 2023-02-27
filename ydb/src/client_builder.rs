@@ -150,6 +150,7 @@ impl ClientBuilder {
                 discovery_connection_manager,
                 self.endpoint.as_str(),
                 self.discovery_interval,
+                Box::new(db_cred.token_cache.clone()),
             )?),
         };
 

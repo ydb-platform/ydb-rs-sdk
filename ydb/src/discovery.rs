@@ -186,10 +186,15 @@ impl TimerDiscovery {
         connection_manager: GrpcConnectionManager,
         endpoint: &str,
         interval: Duration,
+        token_waiter: Box<dyn Waiter>,
     ) -> YdbResult<Self> {
         let state = Arc::new(DiscoverySharedState::new(connection_manager, endpoint)?);
         let state_weak = Arc::downgrade(&state);
         tokio::spawn(async move {
+            trace!("timer discovery wait token");
+            let result = token_waiter.wait().await;
+            trace!("timer discovery first token done with result: {:?}", result);
+            drop(token_waiter);
             DiscoverySharedState::background_discovery(state_weak, interval).await;
         });
         Ok(TimerDiscovery { state })

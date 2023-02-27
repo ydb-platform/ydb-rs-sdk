@@ -1,12 +1,13 @@
 [package]
 publish=true
 name = "ydb"
-version = "0.5.4"
+version = "0.5.6"
 authors = ["rekby <timofey.koolin@gmail.com>"]
 edition = "2021"
 license = "Apache-2.0"
 description = "Crate contains generated low-level grpc code from YDB API protobuf, used as base for ydb crate"
 repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb"
+rust-version = "1.56"
 
 [dependencies]
 async-trait="0.1"
