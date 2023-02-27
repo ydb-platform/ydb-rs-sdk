@@ -7,6 +7,7 @@ use ydb_grpc::ydb_proto::table::{
     ExecuteDataQueryResponse, ExecuteSchemeQueryResponse, KeepAliveResponse,
     RollbackTransactionResponse,
 };
+use ydb_grpc::ydb_proto::topic::CreateTopicResponse;
 
 pub(crate) trait Operation: Debug {
     fn operation(&self) -> Option<YdbOperation>;
@@ -34,3 +35,4 @@ operation_impl_for!(WhoAmIResponse);
 operation_impl_for!(MakeDirectoryResponse);
 operation_impl_for!(ListDirectoryResponse);
 operation_impl_for!(RemoveDirectoryResponse);
+operation_impl_for!(CreateTopicResponse);
