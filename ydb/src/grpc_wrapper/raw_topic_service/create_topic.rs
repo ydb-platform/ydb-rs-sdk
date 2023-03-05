@@ -1,19 +1,18 @@
-use std::collections::HashMap;
 use itertools::Itertools;
+use std::collections::HashMap;
 
-use ydb_grpc::ydb_proto::operations::OperationParams;
-use ydb_grpc::ydb_proto::topic::{
-    Consumer, CreateTopicRequest, CreateTopicResult, MeteringMode, PartitioningSettings,
-    SupportedCodecs,
-};
-
+use crate::client_topic::client::TopicOptions;
+use crate::errors;
 use crate::grpc_wrapper::raw_common_types::Duration;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
 use crate::grpc_wrapper::raw_topic_service::common::consumer::RawConsumer;
 use crate::grpc_wrapper::raw_topic_service::common::metering_mode::RawMeteringMode;
 use crate::grpc_wrapper::raw_topic_service::common::partitioning_settings::RawPartitioningSettings;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-use crate::grpc_wrapper::raw_errors::RawError;
+use ydb_grpc::ydb_proto::operations::OperationParams;
+use ydb_grpc::ydb_proto::topic::{
+    Consumer, CreateTopicRequest, MeteringMode, PartitioningSettings, SupportedCodecs,
+};
 
 #[derive(serde::Serialize)]
 pub(crate) struct RawCreateTopicRequest {
@@ -30,6 +29,38 @@ pub(crate) struct RawCreateTopicRequest {
     pub metering_mode: RawMeteringMode,
 }
 
+impl RawCreateTopicRequest {
+    pub(crate) fn new(
+        path: String,
+        operation_params: RawOperationParams,
+        topic_options: TopicOptions,
+    ) -> Result<Self, errors::YdbError> {
+        let converted_consumers: Result<Vec<RawConsumer>, errors::YdbError> = topic_options // cannot inline cuz then expression type can't be inferred
+            .consumers
+            .into_iter()
+            .map(|x| -> Result<RawConsumer, errors::YdbError> { RawConsumer::try_from(x) })
+            .collect();
+
+        Ok(Self {
+            operation_params,
+            path,
+            partitioning_settings: RawPartitioningSettings {
+                min_active_partitions: topic_options.min_active_partitions,
+                partition_count_limit: topic_options.partition_count_limit,
+            },
+            retention_period: topic_options.retention_period.map(|x| x.into()),
+            retention_storage_mb: topic_options.retention_storage_mb,
+            supported_codecs: topic_options.supported_codecs.try_into()?,
+            partition_write_speed_bytes_per_second: topic_options
+                .partition_write_speed_bytes_per_second,
+            partition_write_burst_bytes: topic_options.partition_write_burst_bytes,
+            attributes: topic_options.attributes,
+            consumers: converted_consumers?,
+            metering_mode: topic_options.metering_mode.into(),
+        })
+    }
+}
+
 impl From<RawCreateTopicRequest> for CreateTopicRequest {
     fn from(value: RawCreateTopicRequest) -> Self {
         Self {
@@ -44,19 +75,12 @@ impl From<RawCreateTopicRequest> for CreateTopicRequest {
             partition_write_speed_bytes_per_second: value.partition_write_speed_bytes_per_second,
             partition_write_burst_bytes: value.partition_write_burst_bytes,
             attributes: value.attributes,
-            consumers: value.consumers.into_iter().map(Consumer::from).collect_vec(),
+            consumers: value
+                .consumers
+                .into_iter()
+                .map(Consumer::from)
+                .collect_vec(),
             metering_mode: MeteringMode::from(value.metering_mode) as i32,
         }
-    }
-}
-
-pub(crate) struct RawCreateTopicResult {
-}
-
-impl TryFrom<CreateTopicResult> for RawCreateTopicResult {
-    type Error = RawError;
-
-    fn try_from(_value: CreateTopicResult) -> Result<Self, Self::Error> {
-        Ok(Self {})
     }
 }

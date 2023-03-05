@@ -55,6 +55,7 @@ pub(crate) mod client_scheme;
 pub(crate) mod client_table;
 #[cfg(test)]
 mod client_table_test_integration;
+pub(crate) mod client_topic;
 pub(crate) mod connection_pool;
 mod credentials;
 pub(crate) mod discovery;
@@ -76,6 +77,8 @@ mod test_helpers;
 pub(crate) mod dicovery_pessimization_interceptor;
 #[cfg(test)]
 mod test_integration_helper;
+#[cfg(test)]
+pub(crate) mod topic_create_delete_test;
 mod trace_helpers;
 mod trait_operation;
 pub(crate) mod transaction;
@@ -83,6 +86,8 @@ mod types;
 mod types_converters;
 pub(crate) mod waiter;
 
+// full enum pub types
+pub use client_topic::client::{TopicClient, TopicOptions};
 // full enum pub types
 pub use client::Client;
 // full enum pub types

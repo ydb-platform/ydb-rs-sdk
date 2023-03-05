@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use ydb_grpc::ydb_proto::topic::{Codec, SupportedCodecs};
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone)]
 pub(crate) enum RawCodec {
     Unspecified,
     Raw,
@@ -11,7 +11,7 @@ pub(crate) enum RawCodec {
     Custom(i32),
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone, Default)]
 pub(crate) struct RawSupportedCodecs {
     pub codecs: Vec<RawCodec>,
 }

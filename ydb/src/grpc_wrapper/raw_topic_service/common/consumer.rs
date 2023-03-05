@@ -5,7 +5,7 @@ use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
 use ydb_grpc::google_proto_workaround::protobuf::Timestamp;
 use ydb_grpc::ydb_proto::topic::{Consumer, SupportedCodecs};
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone)]
 pub(crate) struct RawConsumer {
     pub name: String,
     pub important: bool,

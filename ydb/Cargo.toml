@@ -11,6 +11,7 @@ repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb"
 [dependencies]
 async-trait="0.1"
 derivative="2"
+derive_builder="0.12.0"
 http = "0.2"
 itertools="0.10"
 num = "0.4"
