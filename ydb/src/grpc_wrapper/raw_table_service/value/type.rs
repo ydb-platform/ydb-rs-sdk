@@ -137,7 +137,7 @@ impl RawType {
 
     pub fn into_value_example(self) ->RawResult<Value>{
         fn unimplemented_type(t: RawType)->RawResult<Value>{
-            return Err(RawError::custom(format!("unimplemented example value for type: {:?}", t)));
+            Err(RawError::custom(format!("unimplemented example value for type: {:?}", t)))
         }
 
         let res = match self {
