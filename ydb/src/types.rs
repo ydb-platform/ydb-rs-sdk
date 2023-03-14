@@ -4,7 +4,7 @@ use std::collections::{HashMap};
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::num::TryFromIntError;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use strum::{EnumCount, EnumDiscriminants, EnumIter, IntoStaticStr};
 use ydb_grpc::ydb_proto;
 use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
@@ -54,7 +54,7 @@ pub(crate) const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 ///
 /// #### Possible native convertions
 ///
-#[derive(Clone, Debug, EnumCount, EnumDiscriminants, EnumIter, PartialEq)]
+#[derive(Clone, Debug, EnumCount, EnumDiscriminants, PartialEq)]
 #[strum_discriminants(vis(pub(crate)))] // private
 #[strum_discriminants(derive(IntoStaticStr,EnumIter,Hash))]
 #[strum_discriminants(name(ValueDiscriminants))]
@@ -74,9 +74,9 @@ pub enum Value {
     Uint64(u64),
     Float(f32),
     Double(f64),
-    Date(std::time::Duration), // seconds from UNIX_EPOCH to start of day in UTC.
-    DateTime(std::time::Duration), // seconds from UNIX_EPOCH to start of day in UTC.
-    Timestamp(std::time::Duration), // seconds from UNIX_EPOCH to start of day in UTC.
+    Date(std::time::SystemTime),
+    DateTime(std::time::SystemTime),
+    Timestamp(std::time::SystemTime),
     Interval(SignedInterval),
 
     /// Store native bytes array, similary to binary/blob in other databases. It named string by history reason only.
@@ -363,13 +363,13 @@ impl Value {
             Self::Double(val) => proto_typed_value(pt::Double, pv::DoubleValue(val)),
             Self::Date(val) => proto_typed_value(
                 pt::Date,
-                pv::Uint32Value((val.as_secs() / SECONDS_PER_DAY).try_into()?),
+                pv::Uint32Value((val.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() / SECONDS_PER_DAY).try_into()?),
             ),
             Self::DateTime(val) => {
-                proto_typed_value(pt::Datetime, pv::Uint32Value(val.as_secs().try_into()?))
+                proto_typed_value(pt::Datetime, pv::Uint32Value(val.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs().try_into()?))
             }
             Self::Timestamp(val) => {
-                proto_typed_value(pt::Timestamp, pv::Uint64Value(val.as_micros().try_into()?))
+                proto_typed_value(pt::Timestamp, pv::Uint64Value(val.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_micros().try_into()?))
             }
             Self::Interval(val) => proto_typed_value(pt::Interval, pv::Int64Value(val.as_nanos()?)),
             Self::String(val) => proto_typed_value(pt::String, pv::BytesValue(val.into())),
@@ -467,7 +467,7 @@ impl Value {
 
     #[cfg(test)]
     pub(crate) fn examples_for_test() ->Vec<Value>{
-        use std::collections::HashSet;
+        use std::{collections::HashSet, ops::Add};
 
         // test zero, one, minimum and maximum values
         macro_rules! num_tests {
@@ -504,12 +504,12 @@ impl Value {
 
         values.push(Value::Void);
 
-        values.push(Value::Date(std::time::Duration::from_secs(1633996800))); //Tue Oct 12 00:00:00 UTC 2021
-        values.push(Value::DateTime(std::time::Duration::from_secs(1634000523))); //Tue Oct 12 01:02:03 UTC 2021
+        values.push(Value::Date(SystemTime::UNIX_EPOCH.add(std::time::Duration::from_secs(1633996800)))); //Tue Oct 12 00:00:00 UTC 2021
+        values.push(Value::DateTime(SystemTime::UNIX_EPOCH.add(std::time::Duration::from_secs(1634000523)))); //Tue Oct 12 01:02:03 UTC 2021
 
-        values.push(Value::Timestamp(std::time::Duration::from_micros(
+        values.push(Value::Timestamp(SystemTime::UNIX_EPOCH.add(std::time::Duration::from_micros(
             16340005230000123,
-        ))); //Tue Oct 12 00:00:00.000123 UTC 2021
+        )))); //Tue Oct 12 00:00:00.000123 UTC 2021
 
         values.push(Value::Interval(SignedInterval {
             sign: Sign::Plus,
