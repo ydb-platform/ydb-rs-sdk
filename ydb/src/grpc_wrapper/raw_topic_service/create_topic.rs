@@ -2,7 +2,6 @@ use itertools::Itertools;
 use std::collections::HashMap;
 
 use crate::client_topic::client::TopicOptions;
-use crate::errors;
 use crate::grpc_wrapper::raw_common_types::Duration;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
 use crate::grpc_wrapper::raw_topic_service::common::consumer::RawConsumer;
@@ -34,14 +33,8 @@ impl RawCreateTopicRequest {
         path: String,
         operation_params: RawOperationParams,
         topic_options: TopicOptions,
-    ) -> Result<Self, errors::YdbError> {
-        let converted_consumers: Result<Vec<RawConsumer>, errors::YdbError> = topic_options // cannot inline cuz then expression type can't be inferred
-            .consumers
-            .into_iter()
-            .map(|x| -> Result<RawConsumer, errors::YdbError> { RawConsumer::try_from(x) })
-            .collect();
-
-        Ok(Self {
+    ) -> Self {
+        Self {
             operation_params,
             path,
             partitioning_settings: RawPartitioningSettings {
@@ -50,14 +43,18 @@ impl RawCreateTopicRequest {
             },
             retention_period: topic_options.retention_period.map(|x| x.into()),
             retention_storage_mb: topic_options.retention_storage_mb,
-            supported_codecs: topic_options.supported_codecs.try_into()?,
+            supported_codecs: topic_options.supported_codecs.into(),
             partition_write_speed_bytes_per_second: topic_options
                 .partition_write_speed_bytes_per_second,
             partition_write_burst_bytes: topic_options.partition_write_burst_bytes,
             attributes: topic_options.attributes,
-            consumers: converted_consumers?,
+            consumers: topic_options
+                .consumers
+                .into_iter()
+                .map(RawConsumer::from)
+                .collect(),
             metering_mode: topic_options.metering_mode.into(),
-        })
+        }
     }
 }
 

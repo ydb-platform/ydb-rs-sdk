@@ -2,13 +2,14 @@ use itertools::Itertools;
 use ydb_grpc::ydb_proto::topic::{Codec, SupportedCodecs};
 
 #[derive(serde::Serialize, Clone)]
-pub(crate) enum RawCodec {
-    Unspecified,
-    Raw,
-    Gzip,
-    Lzop,
-    Zstd,
-    Custom(i32),
+pub(crate) struct RawCodec {
+    pub code: i32
+}
+
+impl RawCodec{
+    fn is_raw(&self) -> bool{
+        self.code == i32::from(Codec::Raw)
+    }
 }
 
 #[derive(serde::Serialize, Clone, Default)]
@@ -22,14 +23,7 @@ impl From<RawSupportedCodecs> for SupportedCodecs {
             codecs: value
                 .codecs
                 .into_iter()
-                .map(|x| match x {
-                    RawCodec::Custom(val) => val,
-                    RawCodec::Unspecified => Codec::Unspecified.into(),
-                    RawCodec::Raw => Codec::Raw.into(),
-                    RawCodec::Gzip => Codec::Gzip.into(),
-                    RawCodec::Lzop => Codec::Lzop.into(),
-                    RawCodec::Zstd => Codec::Zstd.into(),
-                })
+                .map(|x| x.code)
                 .collect_vec(),
         }
     }

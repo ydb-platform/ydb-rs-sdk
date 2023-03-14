@@ -13,13 +13,13 @@ use std::collections::HashMap;
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct TopicOptions {
     // Use TopicOptionsBuilder
-    #[builder(default)]
-    pub metering_mode: MeteringMode,
+    #[builder(setter(strip_option), default)]
+    pub metering_mode: Option<MeteringMode>,
     #[builder(default)]
     pub min_active_partitions: i64,
     #[builder(default)]
     pub partition_count_limit: i64,
-    #[builder(default)]
+    #[builder(setter(strip_option), default)]
     pub retention_period: Option<core::time::Duration>,
     #[builder(default)]
     pub retention_storage_mb: i64,
@@ -62,7 +62,7 @@ impl TopicClient {
         path: String,
         topic_options: TopicOptions,
     ) -> YdbResult<()> {
-        let req = RawCreateTopicRequest::new(path, self.timeouts.operation_params(), topic_options)?;
+        let req = RawCreateTopicRequest::new(path, self.timeouts.operation_params(), topic_options);
 
         let mut service = self.connection().await?;
         service.create_topic(req).await?;

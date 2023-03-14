@@ -1,9 +1,9 @@
-use crate::errors;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::{RawCodec, RawSupportedCodecs};
 use crate::grpc_wrapper::raw_topic_service::common::consumer::RawConsumer;
 use crate::grpc_wrapper::raw_topic_service::common::metering_mode::RawMeteringMode;
 use std::collections::HashMap;
 use std::time::Duration;
+use std::option::Option;
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Codec {
@@ -26,59 +26,38 @@ pub struct SupportedCodecs {
     pub codecs: Vec<Codec>,
 }
 
-impl TryFrom<Codec> for RawCodec {
-    type Error = errors::YdbError;
-
-    fn try_from(value: Codec) -> Result<Self, Self::Error> {
-        match value {
-            Codec::RAW => Ok(RawCodec::Raw),
-            Codec::GZIP => Ok(RawCodec::Gzip),
-            Codec::LZOP => Ok(RawCodec::Lzop),
-            Codec::ZSTD => Ok(RawCodec::Zstd),
-            codec_val if codec_val.is_custom() => Ok(RawCodec::Custom(codec_val.code)),
-            codec_val => Err(errors::YdbError::Convert(format!(
-                "Unexpected codec value {}",
-                codec_val.code
-            ))),
-        }
+impl From<Codec> for RawCodec {
+    fn from(value: Codec) -> Self {
+       Self{
+           code: value.code
+       }
     }
 }
 
-impl TryFrom<SupportedCodecs> for RawSupportedCodecs {
-    type Error = errors::YdbError;
-
-    fn try_from(value: SupportedCodecs) -> Result<RawSupportedCodecs, Self::Error> {
-        let converted_codecs: Result<Vec<RawCodec>, errors::YdbError> = value // cannot inline cuz then expression type can't be inferred
-            .codecs
-            .into_iter()
-            .map(|x| -> Result<RawCodec, errors::YdbError> { RawCodec::try_from(x) })
-            .collect();
-
-        Ok(Self {
-            codecs: converted_codecs?,
-        })
+impl From<SupportedCodecs> for RawSupportedCodecs {
+    fn from(value: SupportedCodecs) -> RawSupportedCodecs {
+        Self {
+            codecs: value
+                .codecs
+                .into_iter()
+                .map(|x| RawCodec{code: x.code})
+                .collect(),
+        }
     }
 }
 
 #[derive(Clone)]
 pub enum MeteringMode {
-    Unspecified,
     ReservedCapacity,
     RequestUnits,
 }
 
-impl Default for MeteringMode {
-    fn default() -> Self {
-        MeteringMode::Unspecified
-    }
-}
-
-impl From<MeteringMode> for RawMeteringMode {
-    fn from(value: MeteringMode) -> Self {
+impl From<Option<MeteringMode>> for RawMeteringMode {
+    fn from(value: Option<MeteringMode>) -> Self {
         match value {
-            MeteringMode::Unspecified => RawMeteringMode::Unspecified,
-            MeteringMode::RequestUnits => RawMeteringMode::RequestUnits,
-            MeteringMode::ReservedCapacity => RawMeteringMode::ReservedCapacity,
+            None => RawMeteringMode::Unspecified,
+            Some(MeteringMode::RequestUnits) => RawMeteringMode::RequestUnits,
+            Some(MeteringMode::ReservedCapacity) => RawMeteringMode::ReservedCapacity,
         }
     }
 }
@@ -92,16 +71,15 @@ pub struct Consumer {
     pub attributes: HashMap<String, String>,
 }
 
-impl TryFrom<Consumer> for RawConsumer {
-    type Error = errors::YdbError;
+impl From<Consumer> for RawConsumer {
 
-    fn try_from(consumer: Consumer) -> Result<Self, Self::Error> {
-        Ok(Self {
+    fn from(consumer: Consumer) -> Self {
+        Self {
             name: consumer.name,
             important: consumer.important,
             read_from: consumer.read_from,
-            supported_codecs: consumer.supported_codecs.try_into()?,
+            supported_codecs: consumer.supported_codecs.into(),
             attributes: consumer.attributes,
-        })
+        }
     }
 }

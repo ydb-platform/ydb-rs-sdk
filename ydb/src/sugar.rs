@@ -1,5 +1,4 @@
 #[macro_export]
-
 /// sugar for manual construct query params
 ///
 /// similar to Query::new("SELECT 1").with_params(HashMap::<String, Value>::from_iter(
