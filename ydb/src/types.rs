@@ -246,15 +246,27 @@ impl SignedInterval {
 }
 
 impl Value {
-    #[allow(dead_code)]
-    pub(crate) fn list_from(t: Value, values: Vec<Value>) -> YdbResult<Self> {
+    /// list_from create Value from example of item and values
+    /// example value must be same type as items in value
+    /// it used for describe type in query.
+    ///
+    /// It can't use one of values because values can be empty.
+    /// Example:
+    /// ```
+    ///  # use ydb::{Value, YdbResult};
+    ///  # fn example() -> YdbResult<()>{
+    ///  let v = Value::list_from(0.into(), vec![1.into(), 2.into(), 3.into()])?;
+    ///  # Ok(())
+    /// }
+    /// ```
+    pub fn list_from(example_value: Value, values: Vec<Value>) -> YdbResult<Self> {
         for (index, value) in values.iter().enumerate() {
-            if std::mem::discriminant(&t) != std::mem::discriminant(value) {
-                return Err(YdbError::Custom(format!("failed list_from: type and value has different enum-types. index: {}, type: '{:?}', value: '{:?}'", index, t, value)));
+            if std::mem::discriminant(&example_value) != std::mem::discriminant(value) {
+                return Err(YdbError::Custom(format!("failed list_from: type and value has different enum-types. index: {}, type: '{:?}', value: '{:?}'", index, example_value, value)));
             }
         }
 
-        Ok(Value::List(Box::new(ValueList { t, values })))
+        Ok(Value::List(Box::new(ValueList { t: example_value, values })))
     }
 
     pub(crate) fn optional_from(t: Value, value: Option<Value>) -> YdbResult<Self> {
@@ -266,8 +278,33 @@ impl Value {
         Ok(Value::Optional(Box::new(ValueOptional { t, value })))
     }
 
+    /// Create struct value from fields in form name, value.
+    ///
+    /// Example:
+    /// ```
+    /// # use ydb::Value;
+    /// let v = Value::struct_from_fields(vec![
+    ///     ("id".to_string(), 1.into()),
+    ///     ("value".to_string(), "test-value".into()),
+    /// ]);
+    /// ```
     pub fn struct_from_fields(fields: Vec<(String,Value)>)->Value{
         Value::Struct(ValueStruct::from_fields(fields))
+    }
+
+    ///  Return true if the Value is optional
+        pub fn is_optional(&self)->bool{
+            matches!(self, Self::Optional(_))
+        }
+
+    /// present current value as Option
+    /// if value is Optional - return inner unwrapper value.
+    /// else - return self, wrapped to Option.
+    pub fn to_option(self)->Option<Value>{
+        match self {
+            Value::Optional(inner_box) => inner_box.value,
+            other => Some(other)
+        }
     }
 
     #[allow(clippy::wrong_self_convention)]

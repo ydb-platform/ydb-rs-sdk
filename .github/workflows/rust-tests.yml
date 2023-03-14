@@ -12,13 +12,14 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   CACHE_VERSION: 1
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 jobs:
   tests:
     strategy:
       fail-fast: false
       matrix:
-        rust_version: [ "1.56.0", "1.67.0" ]
+        rust_version: [ "1.56.0", "1.68.0" ]
 
     services:
       ydb:
@@ -64,7 +65,7 @@ jobs:
     - name: Linter
       if: matrix.rust_version != '1.56.0'
       run: |
-        cargo clippy --workspace --all-targets -- -D warnings -A clippy::uninlined_format_args
+        cargo clippy --workspace --all-targets -- -D warnings
 
     - name: Run tests
       env:

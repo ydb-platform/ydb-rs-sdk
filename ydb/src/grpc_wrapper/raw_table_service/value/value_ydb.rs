@@ -165,11 +165,11 @@ impl TryFrom<RawTypedValue> for Value {
 
     fn try_from(value: RawTypedValue) -> Result<Self, Self::Error> {
         fn types_mismatch(t: RawType, v: RawValue) -> Result<Value, RawError> {
-            return Err(RawError::custom(format!("unexpected combination of type '{:?}' and value '{:?}'", t, v)));
+            Err(RawError::custom(format!("unexpected combination of type '{:?}' and value '{:?}'", t, v)))
         }
 
         fn type_unimplemented(t: RawType) -> Result<Value, RawError> {
-            return Err(RawError::custom(format!("unimplemented raw to internal rust type conversion for type: {:?}", t)));
+            Err(RawError::custom(format!("unimplemented raw to internal rust type conversion for type: {:?}", t)))
         }
 
         let res = match (value.r#type, value.value) {
