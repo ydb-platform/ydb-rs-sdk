@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{SystemTime};
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use ydb_grpc::ydb_proto::r#type::{PrimitiveTypeId, Type as ProtoType};
 use crate::{Bytes, SignedInterval, Value, ValueList, ValueOptional, ValueStruct};
@@ -152,9 +152,9 @@ impl RawType {
             RawType::Uint64 => Value::Uint64(0),
             RawType::Float => Value::Float(0.0),
             RawType::Double => Value::Double(0.0),
-            RawType::Date => Value::Date(Duration::default()),
-            RawType::DateTime => Value::DateTime(Duration::default()),
-            RawType::Timestamp => Value::Timestamp(Duration::default()),
+            RawType::Date => Value::Date(SystemTime::UNIX_EPOCH),
+            RawType::DateTime => Value::DateTime(SystemTime::UNIX_EPOCH),
+            RawType::Timestamp => Value::Timestamp(SystemTime::UNIX_EPOCH),
             RawType::Interval => Value::Interval(SignedInterval::default()),
             t @ RawType::TzDate => return unimplemented_type(t),
             t@RawType::TzDatetime => return unimplemented_type(t),

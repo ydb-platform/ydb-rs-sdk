@@ -2,7 +2,7 @@
 #[path = "value_ydb_test.rs"]
 mod value_ydb_test;
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use itertools::Itertools;
 
@@ -71,15 +71,15 @@ impl TryFrom<crate::Value> for RawTypedValue {
             },
             Value::Date(v) => RawTypedValue {
                 r#type: RawType::Date,
-                value: RawValue::UInt32((v.as_secs() / SECONDS_PER_DAY).try_into()?),
+                value: RawValue::UInt32((v.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() / SECONDS_PER_DAY).try_into()?),
             },
             Value::DateTime(v) => RawTypedValue {
                 r#type: RawType::DateTime,
-                value: RawValue::UInt32(v.as_secs().try_into()?),
+                value: RawValue::UInt32(v.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs().try_into()?),
             },
             Value::Timestamp(v) => RawTypedValue {
                 r#type: RawType::Timestamp,
-                value: RawValue::UInt64(v.as_micros().try_into()?),
+                value: RawValue::UInt64(v.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_micros().try_into()?),
             },
             Value::Interval(v) => RawTypedValue {
                 r#type: RawType::Interval,
@@ -195,11 +195,11 @@ impl TryFrom<RawTypedValue> for Value {
             (t @ RawType::Float, v) => return types_mismatch(t, v),
             (RawType::Double, RawValue::Double(v)) => Value::Double(v),
             (t @ RawType::Double, v) => return types_mismatch(t, v),
-            (RawType::Date, RawValue::UInt32(v)) => Value::Date(Duration::from_secs((v as u64) * SECONDS_PER_DAY)),
+            (RawType::Date, RawValue::UInt32(v)) => Value::Date(SystemTime::UNIX_EPOCH + Duration::from_secs((v as u64) * SECONDS_PER_DAY)),
             (t @ RawType::Date, v) => return types_mismatch(t, v),
-            (RawType::DateTime, RawValue::UInt32(v)) => Value::DateTime(Duration::from_secs(v.into())),
+            (RawType::DateTime, RawValue::UInt32(v)) => Value::DateTime(SystemTime::UNIX_EPOCH + Duration::from_secs(v.into())),
             (t @ RawType::DateTime, v) => return types_mismatch(t, v),
-            (RawType::Timestamp, RawValue::UInt64(v)) => Value::Timestamp(Duration::from_micros(v)),
+            (RawType::Timestamp, RawValue::UInt64(v)) => Value::Timestamp(SystemTime::UNIX_EPOCH + Duration::from_micros(v)),
             (t @ RawType::Timestamp, v) => return types_mismatch(t, v),
             (RawType::Interval, RawValue::Int64(v)) => Value::Interval(SignedInterval::from_nanos(v)),
             (t @ RawType::Interval, v) => return types_mismatch(t, v),

@@ -2,7 +2,7 @@ use crate::grpc_wrapper::raw_topic_service::common::codecs::{RawCodec, RawSuppor
 use crate::grpc_wrapper::raw_topic_service::common::consumer::RawConsumer;
 use crate::grpc_wrapper::raw_topic_service::common::metering_mode::RawMeteringMode;
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{SystemTime};
 use std::option::Option;
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -66,7 +66,7 @@ impl From<Option<MeteringMode>> for RawMeteringMode {
 pub struct Consumer {
     pub name: String,
     pub important: bool,
-    pub read_from: Duration, // seconds since UNIX_EPOCH
+    pub read_from: SystemTime,
     pub supported_codecs: SupportedCodecs,
     pub attributes: HashMap<String, String>,
 }
