@@ -1,5 +1,7 @@
 use crate::client::TimeoutSettings;
 use crate::client_topic::list_types::{Consumer, MeteringMode, SupportedCodecs};
+use crate::client_topic::topicwriter::writer::TopicWriter;
+use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
 use crate::errors;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
@@ -80,6 +82,18 @@ impl TopicClient {
         service.delete_topic(req).await?;
 
         Ok(())
+    }
+
+    pub fn create_writer_with_params(
+        &mut self,
+        path: String,
+        writer_options: TopicWriterOptions,
+    ) -> TopicWriter {
+        TopicWriter::new(path, Some(writer_options))
+    }
+
+    pub fn create_writer(&mut self, path: String) -> TopicWriter {
+        TopicWriter::new(path, None)
     }
 
     async fn connection(

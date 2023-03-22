@@ -92,6 +92,12 @@ mod types_test;
 // full enum pub types
 pub use client_topic::client::{TopicClient, TopicOptions};
 // full enum pub types
+pub use client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMessageBuilder};
+// full enum pub types
+pub use client_topic::topicwriter::writer::TopicWriter;
+// full enum pub types
+pub use client_topic::topicwriter::writer_options::{TopicWriterOptions, TopicWriterConnectionOptions, TopicWriterRetrySettings, TopicWriterOptionsBuilder};
+// full enum pub types
 pub use client::Client;
 // full enum pub types
 pub use client_builder::ClientBuilder;
