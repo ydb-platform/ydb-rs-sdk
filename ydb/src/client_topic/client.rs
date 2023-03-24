@@ -89,11 +89,19 @@ impl TopicClient {
         path: String,
         writer_options: TopicWriterOptions,
     ) -> TopicWriter {
-        TopicWriter::new(path, Some(writer_options))
+        TopicWriter {
+            topic_path: path,
+            writer_options,
+            connection_manager: self.connection_manager.clone()
+        }
     }
 
     pub fn create_writer(&mut self, path: String) -> TopicWriter {
-        TopicWriter::new(path, None)
+        TopicWriter {
+            topic_path: path,
+            writer_options: TopicWriterOptions::default(),
+            connection_manager: self.connection_manager.clone()
+        }
     }
 
     async fn connection(

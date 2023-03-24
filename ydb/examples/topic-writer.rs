@@ -1,6 +1,5 @@
-use tonic::codegen::Bytes;
 use ydb::{
-    ClientBuilder, TopicWriter, TopicWriterMessage, TopicWriterMessageBuilder,
+    ClientBuilder, TopicWriter, TopicWriterMessageBuilder,
     TopicWriterOptionsBuilder, YdbResult,
 };
 
@@ -22,33 +21,58 @@ async fn main() -> YdbResult<()> {
             .build()?,
     );
 
-    // Simple write
-    writer.write_message(TopicWriterMessage::new("123")).await?;
-
-    // Simple write bytes
+    // Simple write string, waits on message being written into internal buffer
     writer
-        .write_message(TopicWriterMessage::new(vec![50, 51, 52]))
-        .await?;
-
-    // Write with meta info
-    writer
-        .write_message(
+        .write(
             TopicWriterMessageBuilder::default()
-                .seq_no(123)
-                .created_at(std::time::Instant::now())
-                .data(Bytes::from("123".to_string()))
+                .data("123".as_bytes().to_vec())
                 .build()?,
         )
         .await?;
 
-    // Write messages bulk
+    // Simple write raw bytes, waits on message being written into internal buffer
     writer
-        .write_messages_bulk(vec![
-            TopicWriterMessage::new("123"),
-            TopicWriterMessage::new("456"),
-            TopicWriterMessage::new("789"),
-        ])
+        .write(
+            TopicWriterMessageBuilder::default()
+                .data(vec![50, 51, 52])
+                .build()?,
+        )
         .await?;
+
+    // Write with meta info
+    writer
+        .write(
+            TopicWriterMessageBuilder::default()
+                .seq_no(123)
+                .created_at(std::time::SystemTime::now())
+                .data(vec![50, 51, 52])
+                .build()?,
+        )
+        .await?;
+
+    // Write and wait on message being sent to server and returned confirmation or error
+    let _ack_info = writer.write_with_ack(TopicWriterMessageBuilder::default()
+        .data(vec![50, 51, 52])
+        .build()?).await?;
+
+    // Write and get write future, you can wait on that future for server acknowledgement or just ignore it
+    let ack_future = writer.write_with_ack_future(TopicWriterMessageBuilder::default()
+        .data(vec![50, 51, 52])
+        .build()?).await?;
+
+    ack_future.await;
+    
+    // Waits on current buffer messages to be sent and received confirmation
+    for n_message in 1..10 {
+        writer
+            .write(
+                TopicWriterMessageBuilder::default()
+                    .data(vec![n_message])
+                    .build()?,
+            )
+            .await?;
+    }
+    writer.flush().await?;
 
     Ok(())
 }
