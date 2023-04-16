@@ -1,7 +1,7 @@
 use crate::client::TimeoutSettings;
 use crate::client_topic::list_types::{Consumer, MeteringMode, SupportedCodecs};
 use crate::client_topic::topicwriter::writer::TopicWriter;
-use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
+use crate::client_topic::topicwriter::writer_options::{TopicWriterOptions, TopicWriterOptionsBuilder};
 use crate::errors;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
@@ -84,24 +84,16 @@ impl TopicClient {
         Ok(())
     }
 
-    pub fn create_writer_with_params(
+    pub async fn create_writer_with_params(
         &mut self,
         path: String,
         writer_options: TopicWriterOptions,
     ) -> TopicWriter {
-        TopicWriter {
-            topic_path: path,
-            writer_options,
-            connection_manager: self.connection_manager.clone()
-        }
+        TopicWriter::new(path, writer_options, self.connection_manager.clone()).await
     }
 
-    pub fn create_writer(&mut self, path: String) -> TopicWriter {
-        TopicWriter {
-            topic_path: path,
-            writer_options: TopicWriterOptions::default(),
-            connection_manager: self.connection_manager.clone()
-        }
+    pub async fn create_writer(&mut self, path: String) -> TopicWriter {
+        TopicWriter::new(path, TopicWriterOptionsBuilder::default().build().unwrap(), self.connection_manager.clone()).await
     }
 
     async fn connection(

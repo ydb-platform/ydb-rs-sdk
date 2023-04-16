@@ -11,7 +11,9 @@ async fn main() -> YdbResult<()> {
     let mut topic_client = client.topic_client();
 
     // Default topic writer initialization
-    let writer: TopicWriter = topic_client.create_writer("/database/topic/path1".to_string());
+    let writer: TopicWriter = topic_client.create_writer_with_params("/local/my-topic".to_string(), TopicWriterOptionsBuilder::default()
+        .producer_id("some_id".to_string())
+        .build()?).await;
 
     // Parametrized topic write initialization
     let _writer_with_params = topic_client.create_writer_with_params(
@@ -25,11 +27,14 @@ async fn main() -> YdbResult<()> {
     writer
         .write(
             TopicWriterMessageBuilder::default()
-                .data("123".as_bytes().to_vec())
+                .data("Sent from Rust SDK".as_bytes().to_vec())
                 .build()?,
         )
         .await?;
 
+
+
+    /*
     // Simple write raw bytes, waits on message being written into internal buffer
     writer
         .write(
@@ -73,6 +78,6 @@ async fn main() -> YdbResult<()> {
             .await?;
     }
     writer.flush().await?;
-
+    */
     Ok(())
 }

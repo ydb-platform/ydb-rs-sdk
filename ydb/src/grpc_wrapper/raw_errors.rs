@@ -1,5 +1,6 @@
 use std::fmt::{Display, Formatter};
 use std::num::TryFromIntError;
+use std::time::SystemTimeError;
 
 pub(crate) type RawResult<T> = std::result::Result<T, RawError>;
 
@@ -45,3 +46,9 @@ impl Display for RawError {
 }
 
 impl std::error::Error for RawError {}
+
+impl From<SystemTimeError> for RawError {
+    fn from(_value: SystemTimeError) -> Self {
+        RawError::Custom("Bruh".to_string())
+    }
+}

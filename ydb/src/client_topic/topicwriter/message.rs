@@ -10,12 +10,12 @@ use std::time;
 #[builder(build_fn(error = "errors::YdbError", validate = "Self::validate"))]
 #[allow(dead_code)]
 pub struct TopicWriterMessage {
-    #[builder(default = "0")]
-    seq_no: i64,
+    #[builder(default = "1")]
+    pub(crate) seq_no: i64,
     #[builder(default = "time::SystemTime::now()")]
-    created_at: time::SystemTime,
+    pub(crate) created_at: time::SystemTime,
 
-    data: Vec<u8>,
+    pub(crate) data: Vec<u8>,
 }
 
 impl TopicWriterMessageBuilder {
