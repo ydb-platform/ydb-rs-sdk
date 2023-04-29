@@ -8,16 +8,16 @@ use derive_builder::{Builder};
 use prost::bytes::Bytes;
 use std::collections::HashMap;
 
-type EncoderFunc = &'static dyn Fn(Bytes) -> Bytes;
+type EncoderFunc = fn(Bytes) -> Bytes;
 
 #[allow(dead_code)]
-#[derive(Builder)]
+#[derive(Builder, Clone)]
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct TopicWriterOptions {
+    pub topic_path: String,
+
     #[builder(setter(strip_option), default)]
     pub(crate) producer_id: Option<String>,
-    #[builder(setter(strip_option), default)]
-    partition_id: Option<i64>,
     #[builder(setter(strip_option), default)]
     pub(crate) session_metadata: Option<HashMap<String, String>>,
     #[builder(default = "true")]

@@ -10,6 +10,7 @@ use crate::YdbError::InternalError;
 use crate::{grpc_wrapper, YdbResult};
 use derive_builder::{Builder, UninitializedFieldError};
 use std::collections::HashMap;
+use ydb_grpc::ydb_proto::topic::stream_write_message;
 
 #[derive(Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]
@@ -86,14 +87,13 @@ impl TopicClient {
 
     pub async fn create_writer_with_params(
         &mut self,
-        path: String,
         writer_options: TopicWriterOptions,
-    ) -> TopicWriter {
-        TopicWriter::new(path, writer_options, self.connection_manager.clone()).await
+    ) -> YdbResult<TopicWriter> {
+        TopicWriter::new(writer_options, self.connection_manager.clone()).await
     }
 
-    pub async fn create_writer(&mut self, path: String) -> TopicWriter {
-        TopicWriter::new(path, TopicWriterOptionsBuilder::default().build().unwrap(), self.connection_manager.clone()).await
+    pub async fn create_writer(&mut self, path: String) -> YdbResult<TopicWriter> {
+        TopicWriter::new(TopicWriterOptionsBuilder::default().topic_path(path).build().unwrap(), self.connection_manager.clone()).await
     }
 
     async fn connection(

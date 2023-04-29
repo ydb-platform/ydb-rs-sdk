@@ -1,38 +1,43 @@
+use std::ptr::write;
 use ydb::{
-    ClientBuilder, TopicWriter, TopicWriterMessageBuilder,
-    TopicWriterOptionsBuilder, YdbResult,
+    ClientBuilder, TopicWriter, TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbResult,
 };
+use ydb_grpc::ydb_proto::topic::stream_write_message;
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
+    let mut client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
         .client()?;
     client.wait().await?;
+
     let mut topic_client = client.topic_client();
-
-    // Default topic writer initialization
-    let writer: TopicWriter = topic_client.create_writer_with_params("/local/my-topic".to_string(), TopicWriterOptionsBuilder::default()
-        .producer_id("some_id".to_string())
-        .build()?).await;
-
-    // Parametrized topic write initialization
-    let _writer_with_params = topic_client.create_writer_with_params(
-        "/database/topic/path1".to_string(),
-        TopicWriterOptionsBuilder::default()
-            .producer_id("some_id".to_string())
-            .build()?,
-    );
-
-    // Simple write string, waits on message being written into internal buffer
-    writer
-        .write(
-            TopicWriterMessageBuilder::default()
-                .data("Sent from Rust SDK".as_bytes().to_vec())
+    let mut writer: TopicWriter = topic_client
+        .create_writer_with_params(
+            TopicWriterOptionsBuilder::default() // TODO: is it really should be mutable?
+                .topic_path("/local/my-topic".to_string())
+                .producer_id("some_id".to_string())
                 .build()?,
         )
         .await?;
 
 
+    // Simple write string, waits on message being written into internal buffer
+    /*writer
+    .write(
+        TopicWriterMessageBuilder::default()
+            .data("Sent from Rust SDK".as_bytes().to_vec())
+            .build()?,
+    )
+    .await?;*/
+
+    /*
+    // Parametrized topic write initialization
+    let _writer_with_params = topic_client.create_writer_with_params(
+        TopicWriterOptionsBuilder::default()
+            .topic_path("/database/topic/path1".to_string())
+            .producer_id("some_id".to_string())
+            .build()?,
+    );
 
     /*
     // Simple write raw bytes, waits on message being written into internal buffer
@@ -66,7 +71,7 @@ async fn main() -> YdbResult<()> {
         .build()?).await?;
 
     ack_future.await;
-    
+
     // Waits on current buffer messages to be sent and received confirmation
     for n_message in 1..10 {
         writer
@@ -78,6 +83,6 @@ async fn main() -> YdbResult<()> {
             .await?;
     }
     writer.flush().await?;
-    */
+    */ */
     Ok(())
 }

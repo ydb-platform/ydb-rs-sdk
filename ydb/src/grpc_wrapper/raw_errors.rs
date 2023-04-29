@@ -21,6 +21,15 @@ impl RawError {
     }
 }
 
+impl<T> From<tokio::sync::mpsc::error::SendError<T>> for RawError {
+    fn from(value: tokio::sync::mpsc::error::SendError<T>) -> Self {
+        Self::Custom(format!(
+            "Error while sending message into gppc stream via mpsc channel: {}",
+            value.to_string()
+        ))
+    }
+}
+
 impl From<tonic::Status> for RawError {
     fn from(s: tonic::Status) -> Self {
         Self::TonicStatus(s)
@@ -35,7 +44,7 @@ impl From<prost::DecodeError> for RawError {
 
 impl From<std::num::TryFromIntError> for RawError {
     fn from(_: TryFromIntError) -> Self {
-        RawError::custom("bad convert from int")
+        Self::custom("bad convert from int")
     }
 }
 
@@ -49,6 +58,6 @@ impl std::error::Error for RawError {}
 
 impl From<SystemTimeError> for RawError {
     fn from(_value: SystemTimeError) -> Self {
-        RawError::Custom("Bruh".to_string())
+        Self::Custom("System time conversion error".to_string())
     }
 }

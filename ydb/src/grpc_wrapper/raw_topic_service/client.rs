@@ -1,19 +1,18 @@
-use std::time::UNIX_EPOCH;
-use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
+use futures_util::stream::iter;
+use std::thread;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::trace;
-use ydb_grpc::ydb_proto::topic::stream_write_message::{FromClient, InitRequest, WriteRequest};
+use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
-use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::{message_data, MessageData};
+use ydb_grpc::ydb_proto::topic::stream_write_message::{FromClient, InitRequest};
+use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
 
+use crate::client_topic::common::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
-use crate::grpc_wrapper::raw_topic_service::create_topic::{RawCreateTopicRequest};
+use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::delete_topic::RawDropTopicRequest;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
-use crate::{TopicWriterMessage, TopicWriterOptions};
-use futures_util::stream::iter;
-use ydb_grpc::ydb_proto::topic::stream_write_message::init_request::Partitioning;
-
 
 pub(crate) struct RawTopicClient {
     service: TopicServiceClient<InterceptedChannel>,
@@ -40,35 +39,55 @@ impl RawTopicClient {
         );
     }
 
-    pub async fn do_write_handshake(&mut self, topic_path: &String, writer_options: &TopicWriterOptions) -> RawResult<()> {
-        let req = InitRequest {
-            path: topic_path.to_string(),
-            producer_id: writer_options.producer_id.clone().unwrap_or_default(),
-            write_session_meta: writer_options.session_metadata.clone().unwrap_or_default(),
-            get_last_seq_no: false,
-            partitioning: Some(Partitioning::MessageGroupId(writer_options.producer_id.clone().unwrap_or_default())),
-        };
-        let mut result = self.service.stream_write(iter(vec![
-            FromClient
-            {
-                client_message: Some(ClientMessage::InitRequest(req))
-            }])).await?;
+    pub async fn stream_write(
+        &mut self,
+    ) -> RawResult<
+        AsyncGrpcStreamWrapper<stream_write_message::FromClient, stream_write_message::FromServer>,
+    > {
+        let (tx, rx): (
+            tokio::sync::mpsc::UnboundedSender<stream_write_message::FromClient>,
+            tokio::sync::mpsc::UnboundedReceiver<stream_write_message::FromClient>,
+        ) = tokio::sync::mpsc::unbounded_channel();
 
+        /* let (mock_tx, _): (
+            tokio::sync::mpsc::UnboundedSender<stream_write_message::FromClient>,
+            tokio::sync::mpsc::UnboundedReceiver<stream_write_message::FromClient>,
+        ) = tokio::sync::mpsc::unbounded_channel();
 
-        let msg = result.get_mut().message().await?.unwrap();
+         drop(tx); */ // uncomment these lines to make it reach println!("Successful initialization");
 
-        Ok(())
+        let request_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+        let response_stream = self
+            .service
+            .stream_write(request_stream)
+            .await?
+            .into_inner();
+
+        println!("Successful initialization");
+
+        Ok(AsyncGrpcStreamWrapper::<
+            stream_write_message::FromClient,
+            stream_write_message::FromServer,
+        >::new(mock_tx, response_stream)) // pass tx instead of mock_tx in case of proper solution
+
+        /*bidirectional_streaming_request!(
+            self.service.stream_write,
+            stream_write_message::FromClient,
+            stream_write_message::FromServer
+        );*/
     }
 
-    pub async fn do_single_write_request(&mut self, msg: TopicWriterMessage, topic_path: &String, writer_options: &TopicWriterOptions) -> RawResult<()> {
-        let init_req = InitRequest {
-            path: topic_path.to_string(),
-            producer_id: writer_options.producer_id.clone().unwrap_or_default(),
-            write_session_meta: writer_options.session_metadata.clone().unwrap_or_default(),
-            get_last_seq_no: false,
-            partitioning: Some(Partitioning::MessageGroupId(writer_options.producer_id.clone().unwrap_or_default())),
-        };
+    /*
+    pub async fn do_write_handshake(&mut self, writer_options: TopicWriterOptions) -> RawResult<RawInitResponse> {
+        Ok(RawInitResponse {
+            last_seq_no: 0,
+            session_id: "".to_string(),
+            partition_id: 0,
+            supported_codecs: Default::default(),
+        })
+    }
 
+    pub async fn do_single_write_request(&mut self, msg: TopicWriterMessage, writer_options: &TopicWriterOptions) -> RawResult<()> {
         let vec_len = msg.data.len();
         let req = WriteRequest {
             messages: vec![MessageData {
@@ -79,16 +98,12 @@ impl RawTopicClient {
                 }),
                 data: msg.data,
                 uncompressed_size: vec_len as i64,
-                partitioning: Some(message_data::Partitioning::MessageGroupId("some_id".to_string())),
+                partitioning: Some(message_data::Partitioning::MessageGroupId(writer_options.producer_id.clone().unwrap_or_default())),
             }],
             codec: 1,
         };
 
         let mut result = self.service.stream_write(iter(vec![
-            FromClient
-            {
-                client_message: Some(ClientMessage::InitRequest(init_req))
-            },
             FromClient
             {
                 client_message:
@@ -102,7 +117,7 @@ impl RawTopicClient {
         println!("{}", issue.message);
 
         Ok(())
-    }
+    } */
 }
 
 impl GrpcServiceForDiscovery for RawTopicClient {
