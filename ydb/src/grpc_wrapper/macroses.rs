@@ -61,6 +61,9 @@ macro_rules! bidirectional_streaming_request {
         let request_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
         let response_stream = $self.service.$method(request_stream).await?.into_inner();
 
-        return Ok(AsyncGrpcStreamWrapper::<$StreamingItemRequestType, $StreamingItemResponseType>::new(tx, response_stream));
+        return Ok(AsyncGrpcStreamWrapper::<
+            $StreamingItemRequestType,
+            $StreamingItemResponseType,
+        >::new(tx, response_stream));
     };
 }

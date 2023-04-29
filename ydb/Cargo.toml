@@ -37,6 +37,7 @@ tower = "0.4"
 url="2.2"
 ydb-grpc = { version = "0.0.13", path="../ydb-grpc"}
 tokio-stream = "0.1"
+tokio-util = "0.7.8"
 
 [dev-dependencies]
 async_once="0.2"

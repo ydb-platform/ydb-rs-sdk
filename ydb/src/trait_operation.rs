@@ -7,7 +7,7 @@ use ydb_grpc::ydb_proto::table::{
     ExecuteDataQueryResponse, ExecuteSchemeQueryResponse, KeepAliveResponse,
     RollbackTransactionResponse,
 };
-use ydb_grpc::ydb_proto::topic::{CreateTopicResponse,DropTopicResponse};
+use ydb_grpc::ydb_proto::topic::{CreateTopicResponse,DropTopicResponse, stream_write_message::FromServer};
 
 pub(crate) trait Operation: Debug {
     fn operation(&self) -> Option<YdbOperation>;

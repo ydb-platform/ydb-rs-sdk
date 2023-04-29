@@ -1,4 +1,4 @@
-use crate::errors::{YdbIssue};
+use crate::errors::YdbIssue;
 use crate::grpc_wrapper;
 use ydb_grpc::ydb_proto::issue::IssueMessage;
 

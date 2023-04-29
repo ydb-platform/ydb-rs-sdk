@@ -1,9 +1,12 @@
 use futures_util::stream::iter;
+use futures_util::StreamExt;
+use std::collections::HashMap;
 use std::thread;
 use tokio_stream::wrappers::UnboundedReceiverStream;
-use tracing::trace;
+use tracing::{debug, trace};
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
+use ydb_grpc::ydb_proto::topic::stream_write_message::init_request::Partitioning;
 use ydb_grpc::ydb_proto::topic::stream_write_message::{FromClient, InitRequest};
 use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
 
@@ -41,6 +44,7 @@ impl RawTopicClient {
 
     pub async fn stream_write(
         &mut self,
+        init_req_body: InitRequest,
     ) -> RawResult<
         AsyncGrpcStreamWrapper<stream_write_message::FromClient, stream_write_message::FromServer>,
     > {
@@ -49,26 +53,19 @@ impl RawTopicClient {
             tokio::sync::mpsc::UnboundedReceiver<stream_write_message::FromClient>,
         ) = tokio::sync::mpsc::unbounded_channel();
 
-        /* let (mock_tx, _): (
-            tokio::sync::mpsc::UnboundedSender<stream_write_message::FromClient>,
-            tokio::sync::mpsc::UnboundedReceiver<stream_write_message::FromClient>,
-        ) = tokio::sync::mpsc::unbounded_channel();
-
-         drop(tx); */ // uncomment these lines to make it reach println!("Successful initialization");
+        let mess = stream_write_message::FromClient {
+            client_message: Some(ClientMessage::InitRequest(init_req_body)),
+        };
+        tx.send(mess)?;
 
         let request_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
-        let response_stream = self
-            .service
-            .stream_write(request_stream)
-            .await?
-            .into_inner();
-
-        println!("Successful initialization");
+        let stream_writer_result = self.service.stream_write(request_stream).await;
+        let mut response_stream = stream_writer_result?.into_inner();
 
         Ok(AsyncGrpcStreamWrapper::<
             stream_write_message::FromClient,
             stream_write_message::FromServer,
-        >::new(mock_tx, response_stream)) // pass tx instead of mock_tx in case of proper solution
+        >::new(tx, response_stream)) // pass tx instead of mock_tx in case of proper solution
 
         /*bidirectional_streaming_request!(
             self.service.stream_write,

@@ -20,11 +20,7 @@ pub(crate) struct RawSupportedCodecs {
 impl From<RawSupportedCodecs> for SupportedCodecs {
     fn from(value: RawSupportedCodecs) -> Self {
         Self {
-            codecs: value
-                .codecs
-                .into_iter()
-                .map(|x| x.code)
-                .collect_vec(),
+            codecs: value.codecs.into_iter().map(|x| x.code).collect_vec(),
         }
     }
 }
@@ -32,7 +28,11 @@ impl From<RawSupportedCodecs> for SupportedCodecs {
 impl From<SupportedCodecs> for RawSupportedCodecs {
     fn from(value: SupportedCodecs) -> Self {
         Self {
-            codecs: value.codecs.into_iter().map(|x| RawCodec { code: x }).collect_vec()
+            codecs: value
+                .codecs
+                .into_iter()
+                .map(|x| RawCodec { code: x })
+                .collect_vec(),
         }
     }
 }

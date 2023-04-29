@@ -5,37 +5,71 @@
 use crate::client_topic::common::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::client_topic::topicwriter::init_writer::RawInitResponse;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
+use crate::client_topic::topicwriter::message_write_status::{MessageWriteStatus, WriteAck};
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
+use crate::client_topic::topicwriter::writer_reception_queue::{
+    TopicWriterReceptionQueue, TopicWriterReceptionTicket, TopicWriterReceptionType,
+};
 use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
+use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
 use crate::{grpc_wrapper, YdbError, YdbResult};
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use std::time::UNIX_EPOCH;
 use futures_util::{StreamExt, TryStreamExt};
+use std::borrow::{Borrow, BorrowMut};
+use std::collections::BTreeMap;
+use std::collections::HashMap;
+use std::future::Future;
+use std::ops::Deref;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::task::{Context, Poll};
+use std::time::Instant;
+use std::time::{Duration, UNIX_EPOCH};
+use tokio::select;
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::Receiver;
+use tokio::task::JoinHandle;
+use tokio::time::error::Elapsed;
+use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
-use ydb_grpc::ydb_proto::topic::stream_write_message::{InitRequest, WriteRequest};
+use ydb_grpc::ydb_proto::topic::stream_write_message::from_server::ServerMessage;
+use ydb_grpc::ydb_proto::topic::stream_write_message::init_request::Partitioning;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::{message_data, MessageData};
+use ydb_grpc::ydb_proto::topic::stream_write_message::{
+    FromClient, FromServer, InitRequest, WriteRequest,
+};
 
-#[allow(dead_code)]
-pub struct TopicWriter {
-    pub partition_id: i64,
-    pub session_id: String,
-    pub last_seq_num_received: i64,
-
-    /* closed, closeReason, background, stream */
-    stream:
-        AsyncGrpcStreamWrapper<stream_write_message::FromClient, stream_write_message::FromServer>,
-    pub writer_options: TopicWriterOptions,
-
-    pub(crate) connection_manager: GrpcConnectionManager,
+pub enum TopicWriterState {
+    Working,
+    FinishedOk,
+    FinishedWithError(YdbError),
 }
 
 #[allow(dead_code)]
-pub enum AckInfo {
-    SuccessfullySent,
-    Error,
+pub struct TopicWriter {
+    pub(crate) path: String,
+    pub(crate) producer_id: Option<String>,
+    pub(crate) partition_id: i64,
+    pub(crate) session_id: String,
+    pub(crate) last_seq_num_handled: i64,
+    pub(crate) write_request_messages_chunk_size: usize,
+    pub(crate) write_request_send_messages_period: Duration,
+
+    pub(crate) auto_set_seq_no: bool,
+    pub(crate) codecs_from_server: RawSupportedCodecs,
+
+    writer_message_sender: mpsc::Sender<TopicWriterMessage>,
+    writer_loop: JoinHandle<()>,
+    receive_messages_loop: JoinHandle<()>,
+
+    cancellation_token: CancellationToken,
+    writer_state: Arc<Mutex<TopicWriterState>>,
+
+    confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
+
+    pub(crate) connection_manager: GrpcConnectionManager,
 }
 
 #[allow(dead_code)]
@@ -47,6 +81,14 @@ impl Future for AckFuture {
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
         unimplemented!("prototype")
     }
+}
+
+struct WriterPeriodicTaskParams {
+    write_request_messages_chunk_size: usize,
+    write_request_send_messages_period: Duration,
+    auto_set_seq_no: bool,
+    producer_id: Option<String>,
+    request_stream: mpsc::UnboundedSender<stream_write_message::FromClient>,
 }
 
 impl TopicWriter {
@@ -61,56 +103,297 @@ impl TopicWriter {
             path: writer_options.topic_path.clone(),
             producer_id: writer_options.producer_id.clone().unwrap(), // TODO: handle somehow
             write_session_meta: writer_options.session_metadata.clone().unwrap_or_default(),
-            get_last_seq_no: true,
-            partitioning: None, // TODO: pass it
+            get_last_seq_no: writer_options.auto_seq_no.clone(),
+            partitioning: Some(Partitioning::MessageGroupId(
+                writer_options.producer_id.clone().unwrap(),
+            )),
         };
 
-        let mut stream = topic_service.stream_write().await?;
+        let mut stream = topic_service.stream_write(init_request_body).await?;
+        let init_response = RawInitResponse::try_from(stream.receive().await?)?;
 
-        stream.send(stream_write_message::FromClient {
-            client_message: Some(ClientMessage::InitRequest(init_request_body)),
-        }).await?;
+        let (messages_sender, messages_receiver): (
+            mpsc::Sender<TopicWriterMessage>,
+            mpsc::Receiver<TopicWriterMessage>,
+        ) = mpsc::channel(32 as usize);
+        let cancellation_token = CancellationToken::new();
+        let topic_writer_state = Arc::new(Mutex::new(TopicWriterState::Working));
+        let confirmation_reception_queue = Arc::new(Mutex::new(TopicWriterReceptionQueue::new()));
 
-        let init_response = RawInitResponse::try_from(stream.receive().await.ok_or(
-            YdbError::Custom("No response for writer init message".to_string()),
-        )??)?;
+        let writer_loop_cancellation_token = cancellation_token.clone();
+        let writer_state_ref_writer_loop = topic_writer_state.clone();
+
+        let message_receive_loop_cancellation_token = cancellation_token.clone();
+        let writer_state_ref_message_receive_loop = topic_writer_state.clone();
+        let message_loop_reception_queue = confirmation_reception_queue.clone();
+
+        let writer_loop_task_params = WriterPeriodicTaskParams {
+            write_request_messages_chunk_size: writer_options
+                .write_request_messages_chunk_size
+                .clone(),
+            write_request_send_messages_period: writer_options
+                .write_request_send_messages_period
+                .clone(),
+            auto_set_seq_no: writer_options.auto_seq_no.clone(),
+            producer_id: writer_options.producer_id.clone(),
+            request_stream: stream.clone_sender(),
+        };
+        let mut writer_loop = tokio::spawn(async move {
+            let mut message_receiver = messages_receiver; // force move inside
+            let task_params = writer_loop_task_params; // force move inside
+
+            loop {
+                match TopicWriter::write_loop_iteration(
+                    message_receiver.borrow_mut(),
+                    task_params.borrow(),
+                )
+                .await
+                {
+                    Ok(()) => {}
+                    Err(writer_iteration_error) => {
+                        writer_loop_cancellation_token.cancel();
+                        let mut writer_state = writer_state_ref_writer_loop.lock().unwrap(); // TODO handle error
+                        *writer_state = TopicWriterState::FinishedWithError(writer_iteration_error);
+                        return ();
+                    }
+                }
+                if writer_loop_cancellation_token.is_cancelled() {
+                    break;
+                }
+            }
+        });
+        let mut receive_messages_loop = tokio::spawn(async move {
+            let mut stream = stream; // force move inside
+            let mut reception_queue = message_loop_reception_queue; // force move inside
+
+            loop {
+                tokio::select! {
+                    _ = message_receive_loop_cancellation_token.cancelled() => { return (); }
+                    message_receive_it_res = TopicWriter::receive_messages_loop_iteration(
+                                                          stream.borrow_mut(),
+                                                          reception_queue.borrow_mut()) => {
+                        match message_receive_it_res {
+                            Ok(_) => {}
+                            Err(receive_message_iteration_error) => {
+                                message_receive_loop_cancellation_token.cancel();
+                                let mut writer_state =
+                                    writer_state_ref_message_receive_loop.lock().unwrap(); // TODO handle error
+                                *writer_state =
+                                    TopicWriterState::FinishedWithError(receive_message_iteration_error);
+                                return ();
+                            }
+                        }
+                    }
+                }
+            }
+        });
 
         Ok(Self {
+            path: writer_options.topic_path.clone(),
+            producer_id: writer_options.producer_id.clone(),
             partition_id: init_response.partition_id,
             session_id: init_response.session_id,
-            last_seq_num_received: init_response.last_seq_no,
-            stream,
-            writer_options,
+            last_seq_num_handled: init_response.last_seq_no,
+            write_request_messages_chunk_size: writer_options
+                .write_request_messages_chunk_size
+                .clone(),
+            write_request_send_messages_period: writer_options
+                .write_request_send_messages_period
+                .clone(),
+            auto_set_seq_no: writer_options.auto_seq_no.clone(),
+            codecs_from_server: RawSupportedCodecs::from(init_response.supported_codecs),
+            writer_message_sender: messages_sender,
+            writer_loop,
+            receive_messages_loop,
+            cancellation_token,
+            writer_state: topic_writer_state,
+            confirmation_reception_queue: Arc::new(Mutex::new(TopicWriterReceptionQueue::new())),
             connection_manager,
         })
     }
 
-    pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
-        let vec_len = message.data.len();
-        let req = WriteRequest{
-            messages: vec![MessageData{
-                seq_no: 3,
-                created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
-                    seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs() as i64,
-                    nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
-                }),
-                data: message.data,
-                uncompressed_size: vec_len as i64,
-                partitioning: Some(message_data::Partitioning::MessageGroupId(self.writer_options.producer_id.clone().unwrap_or_default())),
-            }],
-            codec: 1
-        };
+    async fn write_loop_iteration(
+        messages_receiver: &mut Receiver<TopicWriterMessage>,
+        task_params: &WriterPeriodicTaskParams,
+    ) -> YdbResult<()> {
+        let mut start = Instant::now();
+        let mut messages = vec![];
+        let elapsed = start.elapsed();
 
-        self.stream.send(stream_write_message::FromClient{
-            client_message: Some(ClientMessage::WriteRequest(req))
-        }).await?;
-
-
+        while (messages.len() < task_params.write_request_messages_chunk_size
+            && elapsed < task_params.write_request_send_messages_period)
+            || messages.is_empty()
+        {
+            match timeout(
+                task_params.write_request_send_messages_period - elapsed,
+                messages_receiver.recv(),
+            )
+            .await
+            {
+                Ok(Some(message)) => {
+                    let data_size = message.data.len() as i64;
+                    messages.push(MessageData {
+                        seq_no: message.seq_no,
+                        created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
+                            seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs()
+                                as i64,
+                            nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
+                        }),
+                        data: message.data,
+                        uncompressed_size: data_size,
+                        partitioning: Some(message_data::Partitioning::MessageGroupId(
+                            task_params.producer_id.clone().unwrap_or_default(),
+                        )),
+                    });
+                }
+                Ok(None) => {
+                    println!("Channel has been closed");
+                    break;
+                }
+                Err(_) => {
+                    break;
+                }
+            }
+        }
+        if !messages.is_empty() {
+            println!("Message is ACTUALLY sent");
+            task_params
+                .request_stream
+                .send(stream_write_message::FromClient {
+                    client_message: Some(ClientMessage::WriteRequest(WriteRequest {
+                        messages,
+                        codec: 1,
+                    })),
+                })
+                .unwrap(); // TODO: HANDLE ERROR
+        }
         Ok(())
     }
 
-    pub async fn write_with_ack(&self, _message: TopicWriterMessage) -> YdbResult<AckInfo> {
-        unimplemented!("prototype")
+    async fn receive_messages_loop_iteration(
+        server_messages_receiver: &mut AsyncGrpcStreamWrapper<
+            stream_write_message::FromClient,
+            stream_write_message::FromServer,
+        >,
+        confirmation_reception_queue: &mut Arc<Mutex<TopicWriterReceptionQueue>>,
+    ) -> YdbResult<()> {
+        match server_messages_receiver.receive().await {
+            Ok(server_message) => match server_message {
+                ServerMessage::InitResponse(init_response_body) => {
+                    return Err(YdbError::Custom(
+                        "Unexpected message type in stream reader: init_response".to_string(),
+                    ));
+                }
+                ServerMessage::WriteResponse(write_response_body) => {
+                    for raw_ack in write_response_body.acks {
+                        let write_ack = WriteAck::from(raw_ack);
+                        let mut reception_queue = confirmation_reception_queue.lock().unwrap();
+                        let reception_ticket = reception_queue.try_get_ticket();
+                        match reception_ticket {
+                            None => {
+                                return Err(YdbError::Custom(
+                                    "Expected reception ticket to be actually present".to_string(),
+                                ));
+                            }
+                            Some(mut ticket) => {
+                                if write_ack.seq_no != ticket.get_seq_no() {
+                                    return Err(YdbError::Custom(
+                                        "Reception ticket and write ack seq_no mismatch"
+                                            .to_string(),
+                                    ));
+                                }
+                                ticket.send_confirmation_if_needed(write_ack.status);
+                            }
+                        }
+                    }
+                }
+                ServerMessage::UpdateTokenResponse(_update_token_response_body) => {}
+            },
+            Err(some_err) => {
+                return Err(YdbError::from(some_err));
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn write(&mut self, mut message: TopicWriterMessage) -> YdbResult<()> {
+        self.is_cancelled().await?;
+
+        self.last_seq_num_handled += 1;
+        let message_seq_num = self.last_seq_num_handled;
+        let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
+
+        if self.auto_set_seq_no {
+            message.seq_no = message_seq_num;
+        }
+
+        reception_queue.add_ticket(TopicWriterReceptionTicket::new(
+            message_seq_num,
+            TopicWriterReceptionType::NoConfirmationExpected,
+        ));
+        self.writer_message_sender.borrow_mut().send(message).await; // TODO: handle
+
+        println!("message is sent");
+        Ok(())
+    }
+
+    pub async fn stop(self) -> YdbResult<()> {
+        println!("Stopping...");
+
+        self.flush().await?;
+        self.cancellation_token.cancel();
+
+        self.writer_loop.await; // TODO: handle ERROR
+        println!("Writer loop stopped");
+
+        self.receive_messages_loop.await; // TODO: handle ERROR
+        println!("Message receive stopped");
+        Ok(())
+    }
+
+    pub async fn write_with_ack(
+        &mut self,
+        mut message: TopicWriterMessage,
+    ) -> YdbResult<MessageWriteStatus> {
+        self.is_cancelled().await?;
+
+        self.last_seq_num_handled += 1;
+        let message_seq_num = self.last_seq_num_handled;
+        let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
+
+        if self.auto_set_seq_no {
+            message.seq_no = message_seq_num;
+        }
+
+        let (tx, rx): (
+            tokio::sync::oneshot::Sender<MessageWriteStatus>,
+            tokio::sync::oneshot::Receiver<MessageWriteStatus>,
+        ) = tokio::sync::oneshot::channel();
+
+        reception_queue.add_ticket(TopicWriterReceptionTicket::new(
+            message_seq_num,
+            TopicWriterReceptionType::AwaitingConfirmation(tx),
+        ));
+
+        return Ok(rx.await?);
+    }
+
+    pub async fn flush(&self) -> YdbResult<()> {
+        self.is_cancelled().await?;
+
+        let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
+        return Ok(reception_queue.init_flush_op()?.await?);
+    }
+
+    async fn is_cancelled(&self) -> YdbResult<()> {
+        let mut state = self.writer_state.lock().unwrap();
+        match state.deref() {
+            TopicWriterState::Working => Ok(()),
+            TopicWriterState::FinishedOk => Err(YdbError::Custom(
+                "Topic writer already finished working".to_string(),
+            )),
+            TopicWriterState::FinishedWithError(err) => Err(err.clone()),
+        }
     }
 
     pub async fn write_with_ack_future(
@@ -118,17 +401,5 @@ impl TopicWriter {
         _message: TopicWriterMessage,
     ) -> YdbResult<AckFuture> {
         unimplemented!("prototype")
-    }
-
-    pub async fn flush(&self) -> YdbResult<()> {
-        unimplemented!("prototype")
-    }
-
-    async fn connection(
-        &self,
-    ) -> YdbResult<grpc_wrapper::raw_topic_service::client::RawTopicClient> {
-        self.connection_manager
-            .get_auth_service(grpc_wrapper::raw_topic_service::client::RawTopicClient::new) // TODO: maybe just call it one time at init
-            .await
     }
 }

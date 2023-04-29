@@ -6,8 +6,9 @@ use ydb_grpc::ydb_proto::topic::stream_write_message;
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let mut client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
-        .client()?;
+    let mut client =
+        ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
+            .client()?;
     client.wait().await?;
 
     let mut topic_client = client.topic_client();
@@ -20,15 +21,16 @@ async fn main() -> YdbResult<()> {
         )
         .await?;
 
+    writer
+        .write(
+            TopicWriterMessageBuilder::default()
+                .data("Sent from Rust SDK".as_bytes().to_vec())
+                .build()?,
+        )
+        .await?;
 
+    writer.stop().await?;
     // Simple write string, waits on message being written into internal buffer
-    /*writer
-    .write(
-        TopicWriterMessageBuilder::default()
-            .data("Sent from Rust SDK".as_bytes().to_vec())
-            .build()?,
-    )
-    .await?;*/
 
     /*
     // Parametrized topic write initialization
