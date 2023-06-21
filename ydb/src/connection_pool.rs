@@ -64,7 +64,7 @@ fn connect_lazy(uri: Uri) -> YdbResult<Channel> {
 
     let uri = Uri::from_parts(parts)?;
 
-    let tls = uri.scheme_str() == Some("https");
+    let tls = uri.scheme() == Some(&Scheme::HTTPS);
 
     let mut endpoint = Endpoint::from(uri);
     if tls {
