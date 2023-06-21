@@ -286,6 +286,7 @@ to_custom_ydb_err!(
     YdbOrCustomerError,
     std::convert::Infallible,
     http::Error,
+    http::uri::InvalidUriParts,
     reqwest::Error,
     serde_json::Error,
     std::env::VarError,
