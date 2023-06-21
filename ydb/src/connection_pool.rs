@@ -3,6 +3,7 @@ use http::Uri;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use http::uri::Scheme;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 
 #[derive(Clone)]
@@ -54,11 +55,16 @@ struct ConnectionInfo {
 }
 
 fn connect_lazy(uri: Uri) -> YdbResult<Channel> {
-    let tls = if let Some(scheme) = uri.scheme_str() {
-        scheme == "https" || scheme == "grpcs"
-    } else {
-        false
-    };
+    let mut parts = uri.into_parts();
+    if parts.scheme.as_ref().unwrap_or(&Scheme::HTTP).as_str() == "grpc" {
+        parts.scheme = Some(Scheme::HTTP)
+    } else if parts.scheme.as_ref().unwrap_or(&Scheme::HTTP).as_str() == "grpcs" {
+        parts.scheme = Some(Scheme::HTTPS)
+    }
+
+    let uri = Uri::from_parts(parts)?;
+
+    let tls = uri.scheme_str() == Some("https");
 
     let mut endpoint = Endpoint::from(uri);
     if tls {

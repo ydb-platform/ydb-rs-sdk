@@ -144,19 +144,11 @@ impl ClientBuilder {
             interceptor.clone(),
         );
 
-        let mut endpoint = self.endpoint;
-        if endpoint.starts_with("grpc://") {
-            endpoint = endpoint.replacen("grpc://", "http://", 1);
-        }
-        if endpoint.starts_with("grpcs://") {
-            endpoint = endpoint.replacen("grpcs://", "https://", 1);
-        }
-
         let discovery = match self.discovery {
             Some(discovery_box) => discovery_box,
             None => Box::new(TimerDiscovery::new(
                 discovery_connection_manager,
-                endpoint.as_str(),
+                self.endpoint.as_str(),
                 self.discovery_interval,
                 Box::new(db_cred.token_cache.clone()),
             )?),
