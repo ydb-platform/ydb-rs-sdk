@@ -171,7 +171,7 @@ impl Discovery for StaticDiscovery {
 #[async_trait]
 impl Waiter for StaticDiscovery {
     async fn wait(&self) -> YdbResult<()> {
-        return Ok(());
+        Ok(())
     }
 }
 
@@ -239,7 +239,7 @@ impl Discovery for TimerDiscovery {
 #[async_trait::async_trait]
 impl Waiter for TimerDiscovery {
     async fn wait(&self) -> YdbResult<()> {
-        return self.state.wait().await;
+        self.state.wait().await
     }
 }
 

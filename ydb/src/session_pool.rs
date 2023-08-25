@@ -173,11 +173,11 @@ mod test {
     #[async_trait]
     impl SessionFabric for SessionClientMock {
         async fn create_session(&self, timeouts: TimeoutSettings) -> YdbResult<Session> {
-            return Ok(Session::new(
+            Ok(Session::new(
                 "asd".into(),
                 TableChannelPoolMock {},
                 timeouts,
-            ));
+            ))
         }
 
         fn clone_box(&self) -> Box<dyn SessionFabric> {
@@ -192,14 +192,14 @@ mod test {
         async fn create_grpc_table_client(
             &self,
         ) -> YdbResult<TableServiceClient<InterceptedChannel>> {
-            return Err(YdbError::Custom("test".into()));
+            Err(YdbError::Custom("test".into()))
         }
 
         async fn create_table_client(
             &self,
             _timeouts: TimeoutSettings,
         ) -> YdbResult<RawTableClient> {
-            return Err(YdbError::Custom("test".into()));
+            Err(YdbError::Custom("test".into()))
         }
 
         fn clone_box(&self) -> Box<dyn CreateTableClient> {
