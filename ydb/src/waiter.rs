@@ -62,6 +62,6 @@ impl Waiter for WaiterImpl {
 #[async_trait::async_trait]
 impl Waiter for Arc<WaiterImpl> {
     async fn wait(&self) -> YdbResult<()> {
-        return self.as_ref().wait().await;
+        self.as_ref().wait().await
     }
 }

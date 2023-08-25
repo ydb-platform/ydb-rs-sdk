@@ -1,5 +1,10 @@
 use crate::client::TimeoutSettings;
 use crate::errors::{YdbError, YdbResult};
+use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryRequest;
+use crate::grpc_wrapper::raw_table_service::query_stats::RawQueryStatMode;
+use crate::grpc_wrapper::raw_table_service::transaction_control::{
+    RawOnlineReadonlySettings, RawTransactionControl, RawTxMode, RawTxSelector, RawTxSettings,
+};
 use crate::query::Query;
 use crate::result::QueryResult;
 use crate::session::Session;
@@ -8,12 +13,7 @@ use async_trait::async_trait;
 use itertools::Itertools;
 use tracing::trace;
 use ydb_grpc::ydb_proto::table::transaction_settings::TxMode;
-use ydb_grpc::ydb_proto::table::{
-    OnlineModeSettings, SerializableModeSettings,
-};
-use crate::grpc_wrapper::raw_table_service::execute_data_query::{RawExecuteDataQueryRequest};
-use crate::grpc_wrapper::raw_table_service::query_stats::RawQueryStatMode;
-use crate::grpc_wrapper::raw_table_service::transaction_control::{RawOnlineReadonlySettings, RawTransactionControl, RawTxMode, RawTxSelector, RawTxSettings};
+use ydb_grpc::ydb_proto::table::{OnlineModeSettings, SerializableModeSettings};
 
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Mode {
@@ -35,7 +35,9 @@ impl From<Mode> for TxMode {
 impl From<Mode> for RawTxMode {
     fn from(value: Mode) -> Self {
         match value {
-            Mode::OnlineReadonly => Self::OnlineReadOnly(RawOnlineReadonlySettings{ allow_inconsistent_reads: false }),
+            Mode::OnlineReadonly => Self::OnlineReadOnly(RawOnlineReadonlySettings {
+                allow_inconsistent_reads: false,
+            }),
             Mode::SerializableReadWrite => Self::SerializableReadWrite,
         }
     }
@@ -80,20 +82,24 @@ impl Drop for AutoCommit {
 #[async_trait]
 impl Transaction for AutoCommit {
     async fn query(&mut self, query: Query) -> YdbResult<QueryResult> {
-        let req = RawExecuteDataQueryRequest{
+        let req = RawExecuteDataQueryRequest {
             session_id: String::default(),
             tx_control: RawTransactionControl {
                 commit_tx: true,
-                tx_selector: RawTxSelector::Begin(RawTxSettings{ mode: self.mode.into() }),
+                tx_selector: RawTxSelector::Begin(RawTxSettings {
+                    mode: self.mode.into(),
+                }),
             },
             yql_text: query.text,
             operation_params: self.timeouts.operation_params(),
-            params: query.parameters.into_iter().map(|(k, v)| {
-                match v.try_into() {
-                    Ok(converted)=>Ok((k, converted)),
-                    Err(err)=>Err(err)
-                }
-            }).try_collect()?,
+            params: query
+                .parameters
+                .into_iter()
+                .map(|(k, v)| match v.try_into() {
+                    Ok(converted) => Ok((k, converted)),
+                    Err(err) => Err(err),
+                })
+                .try_collect()?,
             keep_in_cache: query.keep_in_cache,
             collect_stats: RawQueryStatMode::None,
         };
@@ -105,13 +111,13 @@ impl Transaction for AutoCommit {
     }
 
     async fn commit(&mut self) -> YdbResult<()> {
-        return Ok(());
+        Ok(())
     }
 
     async fn rollback(&mut self) -> YdbResult<()> {
-        return Err(YdbError::from(
+        Err(YdbError::from(
             "impossible to rollback autocommit transaction",
-        ));
+        ))
     }
 }
 
@@ -178,7 +184,7 @@ impl Transaction for SerializableReadWriteTx {
             RawTxSelector::Id(tx_id.clone())
         } else {
             trace!("start new transaction");
-            RawTxSelector::Begin(RawTxSettings{
+            RawTxSelector::Begin(RawTxSettings {
                 mode: RawTxMode::SerializableReadWrite,
             })
         };
@@ -192,12 +198,14 @@ impl Transaction for SerializableReadWriteTx {
             yql_text: query.text,
 
             operation_params: self.timeouts.operation_params(),
-            params: query.parameters.into_iter().map(|(k, v)|{
-                match v.try_into(){
-                    Ok(converted)=>Ok((k, converted)),
-                    Err(err)=>Err(err)
-                }
-            }).try_collect()?,
+            params: query
+                .parameters
+                .into_iter()
+                .map(|(k, v)| match v.try_into() {
+                    Ok(converted) => Ok((k, converted)),
+                    Err(err) => Err(err),
+                })
+                .try_collect()?,
             keep_in_cache: false,
             collect_stats: RawQueryStatMode::None,
         };
