@@ -1,17 +1,17 @@
 use crate::errors;
 use crate::errors::{YdbError, YdbResult, YdbStatusError};
 use crate::grpc::proto_issues_to_ydb_issues;
-use crate::types::{ Value};
-use std::collections::HashMap;
-use std::rc::Rc;
-use std::vec::IntoIter;
-use itertools::Itertools;
-use tracing::trace;
-use ydb_grpc::ydb_proto::status_ids::StatusCode;
-use ydb_grpc::ydb_proto::table::{ExecuteScanQueryPartialResponse};
 use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryResult;
 use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawTypedValue, RawValue};
 use crate::trace_helpers::ensure_len_string;
+use crate::types::Value;
+use itertools::Itertools;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::vec::IntoIter;
+use tracing::trace;
+use ydb_grpc::ydb_proto::status_ids::StatusCode;
+use ydb_grpc::ydb_proto::table::ExecuteScanQueryPartialResponse;
 
 #[derive(Debug)]
 pub struct QueryResult {
@@ -20,10 +20,14 @@ pub struct QueryResult {
 }
 
 impl QueryResult {
-    pub(crate) fn from_raw_result(error_on_truncate: bool, raw_res: RawExecuteDataQueryResult)->YdbResult<Self>{
-        trace!("raw_res: {}",
+    pub(crate) fn from_raw_result(
+        error_on_truncate: bool,
+        raw_res: RawExecuteDataQueryResult,
+    ) -> YdbResult<Self> {
+        trace!(
+            "raw_res: {}",
             ensure_len_string(serde_json::to_string(&raw_res)?)
-            );
+        );
         let mut results = Vec::with_capacity(raw_res.result_sets.len());
         for current_set in raw_res.result_sets.into_iter() {
             if error_on_truncate && current_set.truncated {
@@ -89,8 +93,8 @@ impl ResultSet {
 
     pub fn rows(self) -> ResultSetRowsIter {
         ResultSetRowsIter {
-            columns: Rc::new(self.columns),
-            columns_by_name: Rc::new(self.columns_by_name),
+            columns: Arc::new(self.columns),
+            columns_by_name: Arc::new(self.columns_by_name),
             row_iter: self.raw_result_set.rows.into_iter(),
         }
     }
@@ -105,11 +109,20 @@ impl TryFrom<RawResultSet> for ResultSet {
     type Error = YdbError;
 
     fn try_from(value: RawResultSet) -> Result<Self, Self::Error> {
-        let columns_by_name: HashMap<String, usize> = value.columns.iter().enumerate().map(|(index, column)| (column.name.clone(), index)).collect();
-        Ok(Self{
-            columns: value.columns.iter().map(|item|item.clone().try_into()).try_collect()?,
+        let columns_by_name: HashMap<String, usize> = value
+            .columns
+            .iter()
+            .enumerate()
+            .map(|(index, column)| (column.name.clone(), index))
+            .collect();
+        Ok(Self {
+            columns: value
+                .columns
+                .iter()
+                .map(|item| item.clone().try_into())
+                .try_collect()?,
             columns_by_name,
-            raw_result_set: value
+            raw_result_set: value,
         })
     }
 }
@@ -125,8 +138,8 @@ impl IntoIterator for ResultSet {
 
 #[derive(Debug)]
 pub struct Row {
-    columns: Rc<Vec<crate::types::Column>>,
-    columns_by_name: Rc<HashMap<String, usize>>,
+    columns: Arc<Vec<crate::types::Column>>,
+    columns_by_name: Arc<HashMap<String, usize>>,
     raw_values: HashMap<usize, RawValue>,
 }
 
@@ -140,7 +153,7 @@ impl Row {
 
     pub fn remove_field(&mut self, index: usize) -> errors::YdbResult<Value> {
         match self.raw_values.remove(&index) {
-            Some(val) => Ok(Value::try_from(RawTypedValue{
+            Some(val) => Ok(Value::try_from(RawTypedValue {
                 r#type: self.columns[index].v_type.clone(),
                 value: val,
             })?),
@@ -150,8 +163,8 @@ impl Row {
 }
 
 pub struct ResultSetRowsIter {
-    columns: Rc<Vec<crate::types::Column>>,
-    columns_by_name: Rc<HashMap<String, usize>>,
+    columns: Arc<Vec<crate::types::Column>>,
+    columns_by_name: Arc<HashMap<String, usize>>,
     row_iter: IntoIter<Vec<RawValue>>,
 }
 
