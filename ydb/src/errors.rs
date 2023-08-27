@@ -71,7 +71,7 @@ pub(crate) enum NeedRetry {
 /// Please not parse the text - it can be change at any time without compile check.
 /// Write about error type you need or PR it.
 #[derive(Clone, Debug)]
-#[non_exhaustive]
+#[cfg_attr(not(feature = "disable-non-exhaustive"), non_exhaustive)]
 pub enum YdbError {
     /// Common error
     ///
@@ -112,7 +112,7 @@ impl YdbError {
 /// Messages and codes doesn't have stable gurantee. But codes more stable.
 /// If you want detect some errors prefer code over text parse. Messages for human usage only.
 #[derive(Clone, Debug, Default)]
-#[non_exhaustive]
+#[cfg_attr(not(feature = "disable-non-exhaustive"), non_exhaustive)]
 // Combine with YdbIssue?
 pub struct YdbStatusError {
     /// Human readable message described status
@@ -166,7 +166,7 @@ impl YdbStatusError {
 
 /// Severity of issue
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[non_exhaustive]
+#[cfg_attr(not(feature = "disable-non-exhaustive"), non_exhaustive)]
 #[repr(u32)]
 pub enum YdbIssueSeverity {
     Fatal = 0,
@@ -180,7 +180,7 @@ pub enum YdbIssueSeverity {
 /// Messages and codes doesn't have stable gurantee. But codes more stable.
 /// If you want detect some errors prefer code over text parse. Messages for human usage only.
 #[derive(Clone, Debug, Default)]
-#[non_exhaustive]
+#[cfg_attr(not(feature = "disable-non-exhaustive"), non_exhaustive)]
 // Combine with YdbStatusError?
 pub struct YdbIssue {
     pub issue_code: u32,

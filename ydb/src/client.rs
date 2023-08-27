@@ -82,7 +82,7 @@ impl Client {
 
 const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(1);
 
-#[non_exhaustive]
+#[cfg_attr(not(feature = "disable-non-exhaustive"), non_exhaustive)]
 #[derive(Copy, Clone, Debug)]
 pub struct TimeoutSettings {
     pub operation_timeout: Duration,

@@ -9,6 +9,9 @@ description = "Crate contains generated low-level grpc code from YDB API protobu
 repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb"
 rust-version = "1.56"
 
+[features]
+disable-non-exhaustive=[] # The feature disable all non_exhaustive attributes in ydb public interface.
+
 [dependencies]
 async-trait="0.1"
 derivative="2"
