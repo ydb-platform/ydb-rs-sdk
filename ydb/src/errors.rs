@@ -101,6 +101,12 @@ pub enum YdbError {
     YdbStatusError(YdbStatusError),
 }
 
+impl YdbError {
+    pub(crate) fn custom<T: Into<String>>(message: T) -> Self {
+        Self::Custom(message.into())
+    }
+}
+
 /// Describe operation status from server
 ///
 /// Messages and codes doesn't have stable gurantee. But codes more stable.

@@ -30,7 +30,7 @@ impl<RequestT, ResponseT: StreamingResponseTrait<from_server::ServerMessage>>
     }
 
     pub(crate) async fn send(&mut self, message: RequestT) -> RawResult<()> {
-        self.from_client_grpc.send(message).map_err(|e| e.into())
+        Ok(self.from_client_grpc.send(message)?)
     }
 
     pub(crate) fn clone_sender(&mut self) -> mpsc::UnboundedSender<RequestT> {

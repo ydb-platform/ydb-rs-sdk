@@ -1,7 +1,3 @@
-// Experimental
-//
-// Notice: This API is EXPERIMENTAL and may be changed or removed in a later release.
-
 use crate::client_topic::common::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::client_topic::topicwriter::init_writer::RawInitResponse;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
@@ -32,6 +28,7 @@ use tokio::task::JoinHandle;
 use tokio::time::error::Elapsed;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
+use tracing::log::trace;
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_server::ServerMessage;
@@ -41,7 +38,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::{
     FromClient, FromServer, InitRequest, WriteRequest,
 };
 
-pub enum TopicWriterState {
+pub enum TopicWriterMode {
     Working,
     FinishedOk,
     FinishedWithError(YdbError),
@@ -65,7 +62,7 @@ pub struct TopicWriter {
     receive_messages_loop: JoinHandle<()>,
 
     cancellation_token: CancellationToken,
-    writer_state: Arc<Mutex<TopicWriterState>>,
+    writer_state: Arc<Mutex<TopicWriterMode>>,
 
     confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
 
@@ -96,17 +93,24 @@ impl TopicWriter {
         writer_options: TopicWriterOptions,
         connection_manager: GrpcConnectionManager,
     ) -> YdbResult<Self> {
+        //TODO: split to smaller functions
+
         let mut topic_service = connection_manager
             .get_auth_service(grpc_wrapper::raw_topic_service::client::RawTopicClient::new)
             .await?;
+
+        let producer_id = if let Some(id) = writer_options.producer_id {
+            id
+        } else {
+            uuid::Uuid::new_v4().to_string()
+        };
+
         let init_request_body = InitRequest {
             path: writer_options.topic_path.clone(),
-            producer_id: writer_options.producer_id.clone().unwrap(), // TODO: handle somehow
+            producer_id: producer_id.clone(),
             write_session_meta: writer_options.session_metadata.clone().unwrap_or_default(),
-            get_last_seq_no: writer_options.auto_seq_no.clone(),
-            partitioning: Some(Partitioning::MessageGroupId(
-                writer_options.producer_id.clone().unwrap(),
-            )),
+            get_last_seq_no: writer_options.auto_seq_no,
+            partitioning: Some(Partitioning::MessageGroupId(producer_id.clone())),
         };
 
         let mut stream = topic_service.stream_write(init_request_body).await?;
@@ -117,7 +121,7 @@ impl TopicWriter {
             mpsc::Receiver<TopicWriterMessage>,
         ) = mpsc::channel(32 as usize);
         let cancellation_token = CancellationToken::new();
-        let topic_writer_state = Arc::new(Mutex::new(TopicWriterState::Working));
+        let topic_writer_state = Arc::new(Mutex::new(TopicWriterMode::Working));
         let confirmation_reception_queue = Arc::new(Mutex::new(TopicWriterReceptionQueue::new()));
 
         let writer_loop_cancellation_token = cancellation_token.clone();
@@ -128,14 +132,10 @@ impl TopicWriter {
         let message_loop_reception_queue = confirmation_reception_queue.clone();
 
         let writer_loop_task_params = WriterPeriodicTaskParams {
-            write_request_messages_chunk_size: writer_options
-                .write_request_messages_chunk_size
-                .clone(),
-            write_request_send_messages_period: writer_options
-                .write_request_send_messages_period
-                .clone(),
-            auto_set_seq_no: writer_options.auto_seq_no.clone(),
-            producer_id: writer_options.producer_id.clone(),
+            write_request_messages_chunk_size: writer_options.write_request_messages_chunk_size,
+            write_request_send_messages_period: writer_options.write_request_send_messages_period,
+            auto_set_seq_no: writer_options.auto_seq_no,
+            producer_id: Some(producer_id.clone()),
             request_stream: stream.clone_sender(),
         };
         let mut writer_loop = tokio::spawn(async move {
@@ -153,7 +153,7 @@ impl TopicWriter {
                     Err(writer_iteration_error) => {
                         writer_loop_cancellation_token.cancel();
                         let mut writer_state = writer_state_ref_writer_loop.lock().unwrap(); // TODO handle error
-                        *writer_state = TopicWriterState::FinishedWithError(writer_iteration_error);
+                        *writer_state = TopicWriterMode::FinishedWithError(writer_iteration_error);
                         return ();
                     }
                 }
@@ -179,7 +179,7 @@ impl TopicWriter {
                                 let mut writer_state =
                                     writer_state_ref_message_receive_loop.lock().unwrap(); // TODO handle error
                                 *writer_state =
-                                    TopicWriterState::FinishedWithError(receive_message_iteration_error);
+                                    TopicWriterMode::FinishedWithError(receive_message_iteration_error);
                                 return ();
                             }
                         }
@@ -190,7 +190,7 @@ impl TopicWriter {
 
         Ok(Self {
             path: writer_options.topic_path.clone(),
-            producer_id: writer_options.producer_id.clone(),
+            producer_id: Some(producer_id.clone()),
             partition_id: init_response.partition_id,
             session_id: init_response.session_id,
             last_seq_num_handled: init_response.last_seq_no,
@@ -218,12 +218,16 @@ impl TopicWriter {
     ) -> YdbResult<()> {
         let mut start = Instant::now();
         let mut messages = vec![];
-        let elapsed = start.elapsed();
 
-        while (messages.len() < task_params.write_request_messages_chunk_size
-            && elapsed < task_params.write_request_send_messages_period)
-            || messages.is_empty()
-        {
+        // wait messages loop
+        loop {
+            let elapsed = start.elapsed();
+            if messages.len() >= task_params.write_request_messages_chunk_size
+                || !messages.is_empty() && elapsed >= task_params.write_request_send_messages_period
+            {
+                break;
+            }
+
             match timeout(
                 task_params.write_request_send_messages_period - elapsed,
                 messages_receiver.recv(),
@@ -233,7 +237,9 @@ impl TopicWriter {
                 Ok(Some(message)) => {
                     let data_size = message.data.len() as i64;
                     messages.push(MessageData {
-                        seq_no: message.seq_no,
+                        seq_no: message
+                            .seq_no
+                            .ok_or_else(|| YdbError::custom("empty message seq_no"))?,
                         created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
                             seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs()
                                 as i64,
@@ -255,8 +261,9 @@ impl TopicWriter {
                 }
             }
         }
+
         if !messages.is_empty() {
-            println!("Message is ACTUALLY sent");
+            trace!("Sending topic message to grpc stream...");
             task_params
                 .request_stream
                 .send(stream_write_message::FromClient {
@@ -324,7 +331,7 @@ impl TopicWriter {
         let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
 
         if self.auto_set_seq_no {
-            message.seq_no = message_seq_num;
+            message.seq_no = Some(message_seq_num);
         }
 
         reception_queue.add_ticket(TopicWriterReceptionTicket::new(
@@ -362,7 +369,7 @@ impl TopicWriter {
         let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
 
         if self.auto_set_seq_no {
-            message.seq_no = message_seq_num;
+            message.seq_no = Some(message_seq_num);
         }
 
         let (tx, rx): (
@@ -388,11 +395,11 @@ impl TopicWriter {
     async fn is_cancelled(&self) -> YdbResult<()> {
         let mut state = self.writer_state.lock().unwrap();
         match state.deref() {
-            TopicWriterState::Working => Ok(()),
-            TopicWriterState::FinishedOk => Err(YdbError::Custom(
+            TopicWriterMode::Working => Ok(()),
+            TopicWriterMode::FinishedOk => Err(YdbError::Custom(
                 "Topic writer already finished working".to_string(),
             )),
-            TopicWriterState::FinishedWithError(err) => Err(err.clone()),
+            TopicWriterMode::FinishedWithError(err) => Err(err.clone()),
         }
     }
 

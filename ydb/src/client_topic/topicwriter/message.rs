@@ -1,7 +1,3 @@
-// Experimental
-//
-// Notice: This API is EXPERIMENTAL and may be changed or removed in a later release.
-
 use crate::{errors, YdbError, YdbResult};
 use derive_builder::Builder;
 use std::time;
@@ -10,8 +6,8 @@ use std::time;
 #[builder(build_fn(error = "errors::YdbError", validate = "Self::validate"))]
 #[allow(dead_code)]
 pub struct TopicWriterMessage {
-    #[builder(default = "1")]
-    pub(crate) seq_no: i64,
+    #[builder(default = "None")]
+    pub(crate) seq_no: Option<i64>,
     #[builder(default = "time::SystemTime::now()")]
     pub(crate) created_at: time::SystemTime,
 
@@ -20,15 +16,6 @@ pub struct TopicWriterMessage {
 
 impl TopicWriterMessageBuilder {
     fn validate(&self) -> YdbResult<()> {
-        if let Some(ref data) = self.data {
-            match data {
-                data if data.is_empty() => Err(YdbError::Convert(
-                    "Expected non empty message content".to_string(),
-                )),
-                _ => Ok(()),
-            }
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 }

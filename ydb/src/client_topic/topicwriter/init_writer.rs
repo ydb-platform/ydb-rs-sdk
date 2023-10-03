@@ -14,21 +14,24 @@ impl TryFrom<ServerMessage> for RawInitResponse {
     type Error = RawError;
 
     fn try_from(value: ServerMessage) -> Result<Self, Self::Error> {
-        match value {
-            ServerMessage::InitResponse(body) => Ok(RawInitResponse {
+        if let ServerMessage::InitResponse(body) = value {
+            Ok(RawInitResponse {
                 last_seq_no: body.last_seq_no,
                 session_id: body.session_id,
                 partition_id: body.partition_id,
                 supported_codecs: RawSupportedCodecs::from(
                     body.supported_codecs.unwrap_or_default(),
                 ),
-            }),
-            ServerMessage::WriteResponse(_) => Err(RawError::Custom(
-                "Expected to get InitResponse, got WriteResponse instead".to_string(),
-            )),
-            ServerMessage::UpdateTokenResponse(_) => Err(RawError::Custom(
-                "Expected to get InitResponse, got UpdateTokenResponse instead".to_string(),
-            )),
+            })
+        } else {
+            let message_string = match serde_json::to_string(&value) {
+                Ok(str) => str,
+                Err(err) => format!("Failed to serialize message: {}", err),
+            };
+            Err(RawError::Custom(format!(
+                "Expected to get InitResponse, got: {}",
+                message_string,
+            )))
         }
     }
 }
