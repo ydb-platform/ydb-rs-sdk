@@ -19,11 +19,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust_version: [ "1.56.0", "1.68.0" ]
+        rust_version: [ "1.56.0", "1.72.0" ]
 
     services:
       ydb:
-        image: cr.yandex/yc/yandex-docker-local-ydb:stable-22-5
+        image: cr.yandex/yc/yandex-docker-local-ydb:latest
         ports:
           - 2135:2135
           - 2136:2136

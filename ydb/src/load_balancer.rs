@@ -17,7 +17,7 @@ pub(crate) trait LoadBalancer: Send + Sync + Waiter {
 #[async_trait::async_trait]
 impl Waiter for MockLoadBalancer {
     async fn wait(&self) -> YdbResult<()> {
-        return Ok(());
+        Ok(())
     }
 }
 
@@ -106,7 +106,7 @@ impl LoadBalancer for StaticLoadBalancer {
 #[async_trait::async_trait]
 impl Waiter for StaticLoadBalancer {
     async fn wait(&self) -> YdbResult<()> {
-        return Ok(());
+        Ok(())
     }
 }
 
@@ -164,7 +164,7 @@ impl LoadBalancer for RandomLoadBalancer {
 #[async_trait::async_trait]
 impl Waiter for RandomLoadBalancer {
     async fn wait(&self) -> YdbResult<()> {
-        return self.waiter.wait().await;
+        self.waiter.wait().await
     }
 }
 
@@ -210,6 +210,8 @@ mod test {
         });
 
         let s1 = SharedLoadBalancer::new_with_balancer(Box::new(lb_mock));
+
+        #[allow(clippy::redundant_clone)]
         let s2 = s1.clone();
 
         assert_eq!(test_uri, s1.endpoint(Table)?);
