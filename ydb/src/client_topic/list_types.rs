@@ -2,8 +2,8 @@ use crate::grpc_wrapper::raw_topic_service::common::codecs::{RawCodec, RawSuppor
 use crate::grpc_wrapper::raw_topic_service::common::consumer::RawConsumer;
 use crate::grpc_wrapper::raw_topic_service::common::metering_mode::RawMeteringMode;
 use std::collections::HashMap;
-use std::time::{SystemTime};
 use std::option::Option;
+use std::time::SystemTime;
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Codec {
@@ -28,9 +28,7 @@ pub struct SupportedCodecs {
 
 impl From<Codec> for RawCodec {
     fn from(value: Codec) -> Self {
-       Self{
-           code: value.code
-       }
+        Self { code: value.code }
     }
 }
 
@@ -40,7 +38,7 @@ impl From<SupportedCodecs> for RawSupportedCodecs {
             codecs: value
                 .codecs
                 .into_iter()
-                .map(|x| RawCodec{code: x.code})
+                .map(|x| RawCodec { code: x.code })
                 .collect(),
         }
     }
@@ -72,7 +70,6 @@ pub struct Consumer {
 }
 
 impl From<Consumer> for RawConsumer {
-
     fn from(consumer: Consumer) -> Self {
         Self {
             name: consumer.name,

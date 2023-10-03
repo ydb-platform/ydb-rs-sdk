@@ -1,5 +1,9 @@
 use crate::client::TimeoutSettings;
 use crate::client_topic::list_types::{Consumer, MeteringMode, SupportedCodecs};
+use crate::client_topic::topicwriter::writer::TopicWriter;
+use crate::client_topic::topicwriter::writer_options::{
+    TopicWriterOptions, TopicWriterOptionsBuilder,
+};
 use crate::errors;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
@@ -8,6 +12,7 @@ use crate::YdbError::InternalError;
 use crate::{grpc_wrapper, YdbResult};
 use derive_builder::{Builder, UninitializedFieldError};
 use std::collections::HashMap;
+use ydb_grpc::ydb_proto::topic::stream_write_message;
 
 #[derive(Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]
@@ -80,6 +85,24 @@ impl TopicClient {
         service.delete_topic(req).await?;
 
         Ok(())
+    }
+
+    pub async fn create_writer_with_params(
+        &mut self,
+        writer_options: TopicWriterOptions,
+    ) -> YdbResult<TopicWriter> {
+        TopicWriter::new(writer_options, self.connection_manager.clone()).await
+    }
+
+    pub async fn create_writer(&mut self, path: String) -> YdbResult<TopicWriter> {
+        TopicWriter::new(
+            TopicWriterOptionsBuilder::default()
+                .topic_path(path)
+                .build()
+                .unwrap(),
+            self.connection_manager.clone(),
+        )
+        .await
     }
 
     async fn connection(
