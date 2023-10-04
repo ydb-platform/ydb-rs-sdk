@@ -1,4 +1,4 @@
-use crate::{errors, YdbError, YdbResult};
+use crate::{errors, YdbResult};
 use derive_builder::Builder;
 use std::time;
 

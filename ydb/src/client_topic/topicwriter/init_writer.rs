@@ -1,7 +1,7 @@
 use crate::grpc_wrapper::raw_errors::RawError;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_server::ServerMessage;
-use ydb_grpc::ydb_proto::topic::stream_write_message::FromServer;
+
 
 pub(crate) struct RawInitResponse {
     pub last_seq_no: i64,

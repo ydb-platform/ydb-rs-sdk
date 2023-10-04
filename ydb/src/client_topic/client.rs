@@ -12,7 +12,7 @@ use crate::YdbError::InternalError;
 use crate::{grpc_wrapper, YdbResult};
 use derive_builder::{Builder, UninitializedFieldError};
 use std::collections::HashMap;
-use ydb_grpc::ydb_proto::topic::stream_write_message;
+
 
 #[derive(Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]

@@ -1,7 +1,7 @@
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
-use crate::YdbResult;
-use std::borrow::{Borrow, BorrowMut};
+
+
 use std::collections::VecDeque;
 
 pub enum TopicWriterReceptionType {
@@ -25,7 +25,7 @@ impl TopicWriterReceptionTicket {
     }
 
     pub fn get_flush_flag(&self) -> bool {
-        return self.flush_flag;
+        self.flush_flag
     }
 
     pub fn enable_flush_flag(&mut self) {
@@ -33,10 +33,10 @@ impl TopicWriterReceptionTicket {
     }
 
     pub fn get_seq_no(&self) -> i64 {
-        return self.seq_no;
+        self.seq_no
     }
 
-    pub fn send_confirmation_if_needed(mut self, write_status: MessageWriteStatus) {
+    pub fn send_confirmation_if_needed(self, write_status: MessageWriteStatus) {
         if let TopicWriterReceptionType::AwaitingConfirmation(sender) = self.reception_type
         {
             sender.send(write_status);
@@ -97,7 +97,7 @@ impl TopicWriterReceptionQueue {
                 }
             }
         }
-        return maybe_ticket;
+        maybe_ticket
     }
 
     pub fn add_ticket(&mut self, reception_ticket: TopicWriterReceptionTicket) {

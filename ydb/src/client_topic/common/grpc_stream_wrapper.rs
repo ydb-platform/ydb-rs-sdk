@@ -1,9 +1,9 @@
 use crate::client_topic::common::stream_response_wrapper::StreamingResponseTrait;
-use crate::grpc_wrapper::grpc::create_operation_error;
+
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
-use crate::grpc_wrapper::raw_status::StatusCode;
-use crate::trait_operation::Operation;
-use crate::YdbError::Custom;
+
+
+
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_server;
@@ -47,6 +47,6 @@ impl<RequestT, ResponseT: StreamingResponseTrait<from_server::ServerMessage>>
         let ydb_response = maybe_ydb_response?;
         let response_body = ydb_response.extract_response_body()?;
 
-        return Ok(response_body);
+        Ok(response_body)
     }
 }

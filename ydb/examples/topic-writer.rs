@@ -1,12 +1,12 @@
-use std::ptr::write;
+
 use ydb::{
     ClientBuilder, TopicWriter, TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbResult,
 };
-use ydb_grpc::ydb_proto::topic::stream_write_message;
+
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let mut client =
+    let client =
         ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
             .client()?;
     client.wait().await?;

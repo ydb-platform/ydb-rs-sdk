@@ -1,7 +1,7 @@
 use crate::grpc::proto_issues_to_ydb_issues;
-use crate::grpc_wrapper::raw_errors::RawError::Custom;
+
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
-use std::fmt::{Debug, Formatter};
+
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::{from_server, FromServer};
@@ -23,7 +23,7 @@ impl StreamingResponseTrait<from_server::ServerMessage> for stream_write_message
         if self.status != StatusCode::Success as i32 {
             return Err(create_server_status_error(self));
         }
-        let mut unpacked_server_message = self.server_message.ok_or(RawError::Custom(
+        let unpacked_server_message = self.server_message.ok_or(RawError::Custom(
             "Server message is absent in streaming response body".to_string(),
         ))?;
 
