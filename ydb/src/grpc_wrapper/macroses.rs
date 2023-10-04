@@ -47,6 +47,7 @@ macro_rules! request_with_result {
     };
 }
 
+#[allow(unused_macros)]
 macro_rules! bidirectional_streaming_request {
     (
         $self: ident .service. $method: ident,

@@ -2,8 +2,6 @@ use crate::client_topic::common::stream_response_wrapper::StreamingResponseTrait
 
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 
-
-
 use futures_util::StreamExt;
 use tokio::sync::mpsc;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_server;
@@ -29,6 +27,7 @@ impl<RequestT, ResponseT: StreamingResponseTrait<from_server::ServerMessage>>
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn send(&mut self, message: RequestT) -> RawResult<()> {
         Ok(self.from_client_grpc.send(message)?)
     }

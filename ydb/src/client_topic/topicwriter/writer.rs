@@ -10,9 +10,7 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
 use crate::{grpc_wrapper, YdbError, YdbResult};
-use futures_util::{TryStreamExt};
 use std::borrow::{Borrow, BorrowMut};
-
 
 use std::future::Future;
 use std::ops::Deref;
@@ -34,13 +32,10 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_server::ServerMessage;
 use ydb_grpc::ydb_proto::topic::stream_write_message::init_request::Partitioning;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::{message_data, MessageData};
-use ydb_grpc::ydb_proto::topic::stream_write_message::{
-    InitRequest, WriteRequest,
-};
+use ydb_grpc::ydb_proto::topic::stream_write_message::{InitRequest, WriteRequest};
 
 pub enum TopicWriterMode {
     Working,
-    FinishedOk,
     FinishedWithError(YdbError),
 }
 
@@ -83,7 +78,6 @@ impl Future for AckFuture {
 struct WriterPeriodicTaskParams {
     write_request_messages_chunk_size: usize,
     write_request_send_messages_period: Duration,
-    auto_set_seq_no: bool,
     producer_id: Option<String>,
     request_stream: mpsc::UnboundedSender<stream_write_message::FromClient>,
 }
@@ -134,7 +128,6 @@ impl TopicWriter {
         let writer_loop_task_params = WriterPeriodicTaskParams {
             write_request_messages_chunk_size: writer_options.write_request_messages_chunk_size,
             write_request_send_messages_period: writer_options.write_request_send_messages_period,
-            auto_set_seq_no: writer_options.auto_seq_no,
             producer_id: Some(producer_id.clone()),
             request_stream: stream.clone_sender(),
         };
@@ -154,7 +147,7 @@ impl TopicWriter {
                         writer_loop_cancellation_token.cancel();
                         let mut writer_state = writer_state_ref_writer_loop.lock().unwrap(); // TODO handle error
                         *writer_state = TopicWriterMode::FinishedWithError(writer_iteration_error);
-                        return ;
+                        return;
                     }
                 }
                 if writer_loop_cancellation_token.is_cancelled() {
@@ -194,10 +187,8 @@ impl TopicWriter {
             partition_id: init_response.partition_id,
             session_id: init_response.session_id,
             last_seq_num_handled: init_response.last_seq_no,
-            write_request_messages_chunk_size: writer_options
-                .write_request_messages_chunk_size,
-            write_request_send_messages_period: writer_options
-                .write_request_send_messages_period,
+            write_request_messages_chunk_size: writer_options.write_request_messages_chunk_size,
+            write_request_send_messages_period: writer_options.write_request_send_messages_period,
             auto_set_seq_no: writer_options.auto_seq_no,
             codecs_from_server: init_response.supported_codecs,
             writer_message_sender: messages_sender,
@@ -432,9 +423,6 @@ impl TopicWriter {
         let state = self.writer_state.lock().unwrap();
         match state.deref() {
             TopicWriterMode::Working => Ok(()),
-            TopicWriterMode::FinishedOk => Err(YdbError::Custom(
-                "Topic writer already finished working".to_string(),
-            )),
             TopicWriterMode::FinishedWithError(err) => Err(err.clone()),
         }
     }
