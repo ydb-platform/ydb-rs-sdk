@@ -323,53 +323,65 @@ impl TopicWriter {
         Ok(())
     }
 
-    pub async fn write(&mut self, mut message: TopicWriterMessage) -> YdbResult<()> {
-        self.is_cancelled().await?;
-
-        self.last_seq_num_handled += 1;
-        let message_seq_num = self.last_seq_num_handled;
-        let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
-
-        if self.auto_set_seq_no {
-            message.seq_no = Some(message_seq_num);
-        }
-
-        reception_queue.add_ticket(TopicWriterReceptionTicket::new(
-            message_seq_num,
-            TopicWriterReceptionType::NoConfirmationExpected,
-        ));
-        self.writer_message_sender.borrow_mut().send(message).await; // TODO: handle
-
-        println!("message is sent");
-        Ok(())
-    }
-
     pub async fn stop(self) -> YdbResult<()> {
-        println!("Stopping...");
+        trace!("Stopping...");
 
         self.flush().await?;
         self.cancellation_token.cancel();
 
-        self.writer_loop.await; // TODO: handle ERROR
-        println!("Writer loop stopped");
+        self.writer_loop.await.map_err(|err| {
+            YdbError::custom(format!(
+                "error while wait finish writer_loop on stop: {}",
+                err
+            ))
+        })?; // TODO: handle ERROR
+        trace!("Writer loop stopped");
 
-        self.receive_messages_loop.await; // TODO: handle ERROR
-        println!("Message receive stopped");
+        self.receive_messages_loop.await.map_err(|err| {
+            YdbError::custom(format!(
+                "error while wait finish receive_messages_loop on stop: {}",
+                err
+            ))
+        })?; // TODO: handle ERROR
+        trace!("Message receive stopped");
+        Ok(())
+    }
+
+    pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
+        self.write_message(message, true).await?;
         Ok(())
     }
 
     pub async fn write_with_ack(
         &mut self,
+        message: TopicWriterMessage,
+    ) -> YdbResult<MessageWriteStatus> {
+        self.write_message(message, true).await
+    }
+
+    async fn write_message(
+        &mut self,
         mut message: TopicWriterMessage,
+        wait_ack: bool,
     ) -> YdbResult<MessageWriteStatus> {
         self.is_cancelled().await?;
 
         self.last_seq_num_handled += 1;
         let message_seq_num = self.last_seq_num_handled;
-        let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
 
         if self.auto_set_seq_no {
-            message.seq_no = Some(message_seq_num);
+            if message.seq_no.is_some() {
+                return Err(YdbError::custom(
+                    "force set message seqno possible only if auto_set_seq_no disabled",
+                ));
+            }
+            message.seq_no = Some(self.last_seq_num_handled + 1);
+        }
+
+        if let Some(mess_seqno) = message.seq_no {
+            self.last_seq_num_handled = mess_seqno
+        } else {
+            return Err(YdbError::custom("need to set message seq_no"));
         }
 
         let (tx, rx): (
@@ -377,19 +389,45 @@ impl TopicWriter {
             tokio::sync::oneshot::Receiver<MessageWriteStatus>,
         ) = tokio::sync::oneshot::channel();
 
-        reception_queue.add_ticket(TopicWriterReceptionTicket::new(
-            message_seq_num,
-            TopicWriterReceptionType::AwaitingConfirmation(tx),
-        ));
+        self.writer_message_sender
+            .borrow_mut()
+            .send(message)
+            .await
+            .map_err(|err| {
+                YdbError::custom(format!("can't send the message to channel: {}", err))
+            })?;
 
-        return Ok(rx.await?);
+        let reception_type = if wait_ack {
+            TopicWriterReceptionType::AwaitingConfirmation(tx)
+        } else {
+            TopicWriterReceptionType::NoConfirmationExpected
+        };
+
+        {
+            // bracket needs for release mutex as soon as possible - before await
+            let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
+            reception_queue.add_ticket(TopicWriterReceptionTicket::new(
+                message_seq_num,
+                reception_type,
+            ));
+        }
+
+        if wait_ack {
+            Ok(rx.await?)
+        } else {
+            Ok(MessageWriteStatus::Unknown)
+        }
     }
 
     pub async fn flush(&self) -> YdbResult<()> {
         self.is_cancelled().await?;
 
-        let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
-        return Ok(reception_queue.init_flush_op()?.await?);
+        let flush_op_completed = {
+            let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
+            reception_queue.init_flush_op()?
+        };
+
+        return Ok(flush_op_completed.await?);
     }
 
     async fn is_cancelled(&self) -> YdbResult<()> {

@@ -24,8 +24,8 @@ impl RawError {
 impl<T> From<tokio::sync::mpsc::error::SendError<T>> for RawError {
     fn from(value: tokio::sync::mpsc::error::SendError<T>) -> Self {
         Self::Custom(format!(
-            "Error while sending message into gppc stream via mpsc channel: {}",
-            value.to_string()
+            "Internal error while sending message via mpsc channel: {}",
+            value
         ))
     }
 }

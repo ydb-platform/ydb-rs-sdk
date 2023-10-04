@@ -66,55 +66,7 @@ impl RawTopicClient {
             stream_write_message::FromClient,
             stream_write_message::FromServer,
         >::new(tx, response_stream)) // pass tx instead of mock_tx in case of proper solution
-
-        /*bidirectional_streaming_request!(
-            self.service.stream_write,
-            stream_write_message::FromClient,
-            stream_write_message::FromServer
-        );*/
     }
-
-    /*
-    pub async fn do_write_handshake(&mut self, writer_options: TopicWriterOptions) -> RawResult<RawInitResponse> {
-        Ok(RawInitResponse {
-            last_seq_no: 0,
-            session_id: "".to_string(),
-            partition_id: 0,
-            supported_codecs: Default::default(),
-        })
-    }
-
-    pub async fn do_single_write_request(&mut self, msg: TopicWriterMessage, writer_options: &TopicWriterOptions) -> RawResult<()> {
-        let vec_len = msg.data.len();
-        let req = WriteRequest {
-            messages: vec![MessageData {
-                seq_no: 3,
-                created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
-                    seconds: msg.created_at.duration_since(UNIX_EPOCH)?.as_secs() as i64,
-                    nanos: msg.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
-                }),
-                data: msg.data,
-                uncompressed_size: vec_len as i64,
-                partitioning: Some(message_data::Partitioning::MessageGroupId(writer_options.producer_id.clone().unwrap_or_default())),
-            }],
-            codec: 1,
-        };
-
-        let mut result = self.service.stream_write(iter(vec![
-            FromClient
-            {
-                client_message:
-                Some(ClientMessage::WriteRequest(req))
-            }])).await?;
-
-        let _ignored = result.get_mut().message().await?;
-
-        let msg = result.get_mut().message().await?;
-        let issue = msg.unwrap().issues[0].clone();
-        println!("{}", issue.message);
-
-        Ok(())
-    } */
 }
 
 impl GrpcServiceForDiscovery for RawTopicClient {

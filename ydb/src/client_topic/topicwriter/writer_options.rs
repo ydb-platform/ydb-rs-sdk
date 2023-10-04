@@ -1,7 +1,3 @@
-// # Experimental
-//
-// Notice: This API is EXPERIMENTAL and may be changed or removed in a later release.
-
 use crate::client_topic::list_types::Codec;
 use crate::errors;
 use derive_builder::Builder;
