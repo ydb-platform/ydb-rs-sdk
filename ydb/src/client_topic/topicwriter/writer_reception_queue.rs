@@ -1,7 +1,6 @@
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 
-
 use std::collections::VecDeque;
 
 pub enum TopicWriterReceptionType {
@@ -37,9 +36,8 @@ impl TopicWriterReceptionTicket {
     }
 
     pub fn send_confirmation_if_needed(self, write_status: MessageWriteStatus) {
-        if let TopicWriterReceptionType::AwaitingConfirmation(sender) = self.reception_type
-        {
-            sender.send(write_status);
+        if let TopicWriterReceptionType::AwaitingConfirmation(sender) = self.reception_type {
+            _ = sender.send(write_status);
         }
     }
 }
@@ -83,11 +81,10 @@ impl TopicWriterReceptionQueue {
         let maybe_ticket = self.message_receipt_signals_queue.pop_front();
         match maybe_ticket.as_ref() {
             None => {
-                if self.flush_finished_sender.is_some(){
+                if self.flush_finished_sender.is_some() {
                     let sender = std::mem::take(&mut self.flush_finished_sender);
                     sender.unwrap().send(()).unwrap();
                 }
-
             }
             Some(ticket) => {
                 if ticket.get_flush_flag() {
