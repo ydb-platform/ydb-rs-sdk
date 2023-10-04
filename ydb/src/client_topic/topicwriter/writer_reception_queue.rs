@@ -37,7 +37,9 @@ impl TopicWriterReceptionTicket {
 
     pub fn send_confirmation_if_needed(self, write_status: MessageWriteStatus) {
         if let TopicWriterReceptionType::AwaitingConfirmation(sender) = self.reception_type {
-            _ = sender.send(write_status);
+            // drop is workaround for old rust: destructive assigment was unstable until 1.59
+            // E0658
+            drop(sender.send(write_status));
         }
     }
 }
