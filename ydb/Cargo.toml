@@ -35,7 +35,7 @@ tracing-subscriber = "0.3"
 tonic = {version= "0.8.1", features=["tls"]}
 tower = "0.4"
 url="2.2"
-uuid={version="1.4", features = ["v4","macro-diagnostics"]}
+uuid={version="1", features = ["v4"]}
 ydb-grpc = { version = "0.0.13", path="../ydb-grpc"}
 tokio-stream = "0.1"
 tokio-util = "0.7.8"
