@@ -13,7 +13,6 @@ use crate::{grpc_wrapper, YdbResult};
 use derive_builder::{Builder, UninitializedFieldError};
 use std::collections::HashMap;
 
-
 #[derive(Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct TopicOptions {
@@ -42,7 +41,7 @@ pub struct TopicOptions {
 
 impl From<UninitializedFieldError> for errors::YdbError {
     fn from(ufe: UninitializedFieldError) -> Self {
-        InternalError(format!("Error during building topic options: {}", ufe))
+        InternalError(format!("Error during build type: {}", ufe))
     }
 }
 

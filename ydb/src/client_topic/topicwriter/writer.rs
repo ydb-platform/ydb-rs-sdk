@@ -27,6 +27,7 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::log::trace;
+use tracing::warn;
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_server::ServerMessage;
@@ -169,6 +170,7 @@ impl TopicWriter {
                             Ok(_) => {}
                             Err(receive_message_iteration_error) => {
                                 message_receive_loop_cancellation_token.cancel();
+                                warn!("error receive message for topic writer receiver stream loop: {}", &receive_message_iteration_error);
                                 let mut writer_state =
                                     writer_state_ref_message_receive_loop.lock().unwrap(); // TODO handle error
                                 *writer_state =
@@ -196,7 +198,7 @@ impl TopicWriter {
             receive_messages_loop,
             cancellation_token,
             writer_state: topic_writer_state,
-            confirmation_reception_queue: Arc::new(Mutex::new(TopicWriterReceptionQueue::new())),
+            confirmation_reception_queue,
             connection_manager,
         })
     }
@@ -293,10 +295,10 @@ impl TopicWriter {
                             }
                             Some(ticket) => {
                                 if write_ack.seq_no != ticket.get_seq_no() {
-                                    return Err(YdbError::Custom(
-                                        "Reception ticket and write ack seq_no mismatch"
-                                            .to_string(),
-                                    ));
+                                    return Err(YdbError::custom(format!(
+                                        "Reception ticket and write ack seq_no mismatch. Seqno from ack: {}, expected: {}",
+                                        write_ack.seq_no, ticket.get_seq_no()
+                                    )));
                                 }
                                 ticket.send_confirmation_if_needed(write_ack.status);
                             }
@@ -337,7 +339,7 @@ impl TopicWriter {
     }
 
     pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
-        self.write_message(message, true).await?;
+        self.write_message(message, false).await?;
         Ok(())
     }
 
@@ -355,9 +357,6 @@ impl TopicWriter {
     ) -> YdbResult<MessageWriteStatus> {
         self.is_cancelled().await?;
 
-        self.last_seq_num_handled += 1;
-        let message_seq_num = self.last_seq_num_handled;
-
         if self.auto_set_seq_no {
             if message.seq_no.is_some() {
                 return Err(YdbError::custom(
@@ -365,13 +364,14 @@ impl TopicWriter {
                 ));
             }
             message.seq_no = Some(self.last_seq_num_handled + 1);
-        }
+        };
 
-        if let Some(mess_seqno) = message.seq_no {
-            self.last_seq_num_handled = mess_seqno
+        let message_seqno = if let Some(mess_seqno) = message.seq_no {
+            self.last_seq_num_handled = mess_seqno;
+            mess_seqno
         } else {
             return Err(YdbError::custom("need to set message seq_no"));
-        }
+        };
 
         let (tx, rx): (
             tokio::sync::oneshot::Sender<MessageWriteStatus>,
@@ -396,7 +396,7 @@ impl TopicWriter {
             // bracket needs for release mutex as soon as possible - before await
             let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
             reception_queue.add_ticket(TopicWriterReceptionTicket::new(
-                message_seq_num,
+                message_seqno,
                 reception_type,
             ));
         }
