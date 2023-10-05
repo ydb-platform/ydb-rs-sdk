@@ -41,7 +41,7 @@ async fn create_delete_topic_test() -> YdbResult<()> {
 
 #[tokio::test]
 #[traced_test]
-// #[ignore] // need YDB access
+#[ignore] // need YDB access
 async fn send_message_test() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
