@@ -135,17 +135,17 @@ async fn send_message_test() -> YdbResult<()> {
     ).await?;
 
     let r_mess1 = topic_messages.recv().await.unwrap();
-    assert_eq!(r_mess1.offset, 1);
+    assert_eq!(r_mess1.offset, 0);
     assert_eq!(r_mess1.seq_no, 200);
     assert_eq!(r_mess1.data, "test-1".as_bytes());
 
     let r_mess2 = topic_messages.recv().await.unwrap();
-    assert_eq!(r_mess2.offset, 2);
+    assert_eq!(r_mess2.offset, 1);
     assert_eq!(r_mess2.seq_no, 300);
     assert_eq!(r_mess2.data, "test-2".as_bytes());
 
     let r_mess3 = topic_messages.recv().await.unwrap();
-    assert_eq!(r_mess3.offset, 3);
+    assert_eq!(r_mess3.offset, 2);
     assert_eq!(r_mess3.seq_no, 301);
     assert_eq!(r_mess3.data, "test-3".as_bytes());
 
@@ -210,6 +210,7 @@ async fn start_read_topic(
     tokio::spawn(async move {
         loop {
             let mess = reader_stream.next().await;
+            trace!("test topic reader receive server message: {:?}", mess);
             let mess = match mess {
                 Some(Ok(mess)) => mess,
                 mess => {
