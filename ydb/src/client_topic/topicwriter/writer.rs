@@ -247,7 +247,7 @@ impl TopicWriter {
                     trace!("Channel has been closed. Stop topic send messages loop.");
                     return Ok(());
                 }
-                Err(err) => {
+                Err(_elapsed) => {
                     break 'messages_loop;
                 }
             }
