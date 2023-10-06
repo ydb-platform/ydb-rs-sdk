@@ -6,6 +6,9 @@ use crate::{
     client_topic::client::TopicOptionsBuilder, TopicWriterMessageBuilder,
     TopicWriterOptionsBuilder, YdbResult,
 };
+use tracing::trace;
+use ydb_grpc::ydb_proto::topic::stream_read_message::init_request::TopicReadSettings;
+use ydb_grpc::ydb_proto::topic::{stream_read_message, stream_write_message};
 
 #[tokio::test]
 #[traced_test]
@@ -48,6 +51,7 @@ async fn send_message_test() -> YdbResult<()> {
     let topic_name = "test_topic".to_string();
     let topic_path = format!("{}/{}", database_path, topic_name);
     let producer_id = "test-producer-id".to_string();
+    let consumer_name = "test-consumer".to_string();
 
     let mut topic_client = client.topic_client();
     let _ = topic_client.drop_topic(topic_path.clone()).await; // ignoring error
@@ -57,7 +61,7 @@ async fn send_message_test() -> YdbResult<()> {
             topic_path.clone(),
             TopicOptionsBuilder::default()
                 .consumers(vec![ConsumerBuilder::default()
-                    .name("test-consumer".to_string())
+                    .name(consumer_name.clone())
                     .build()?])
                 .build()?,
         )
@@ -118,6 +122,12 @@ async fn send_message_test() -> YdbResult<()> {
         )
         .await?;
     println!("sent-4");
+
+    // TODO: read messages with raw grpc queries to check it;
+    let mut _grpc_client = topic_client
+        .raw_client_connection()
+        .await?
+        .get_grpc_service();
 
     Ok(())
 }

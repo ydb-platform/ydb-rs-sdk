@@ -68,7 +68,7 @@ impl TopicClient {
     ) -> YdbResult<()> {
         let req = RawCreateTopicRequest::new(path, self.timeouts.operation_params(), topic_options);
 
-        let mut service = self.connection().await?;
+        let mut service = self.raw_client_connection().await?;
         service.create_topic(req).await?;
 
         Ok(())
@@ -80,7 +80,7 @@ impl TopicClient {
             path,
         };
 
-        let mut service = self.connection().await?;
+        let mut service = self.raw_client_connection().await?;
         service.delete_topic(req).await?;
 
         Ok(())
@@ -104,7 +104,7 @@ impl TopicClient {
         .await
     }
 
-    async fn connection(
+    pub(crate) async fn raw_client_connection(
         &self,
     ) -> YdbResult<grpc_wrapper::raw_topic_service::client::RawTopicClient> {
         self.connection_manager

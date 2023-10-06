@@ -62,6 +62,11 @@ impl RawTopicClient {
             stream_write_message::FromServer,
         >::new(tx, response_stream)) // pass tx instead of mock_tx in case of proper solution
     }
+
+    // use for tests only, while reader not ready
+    pub(crate) fn get_grpc_service(&self) -> TopicServiceClient<InterceptedChannel> {
+        self.service.clone()
+    }
 }
 
 impl GrpcServiceForDiscovery for RawTopicClient {
