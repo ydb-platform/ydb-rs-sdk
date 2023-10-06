@@ -16,8 +16,8 @@ pub(crate) struct RawConsumer {
 
 impl From<RawConsumer> for Consumer {
     fn from(value: RawConsumer) -> Self {
-        let read_from = if let Some(value_read_from) = value.read_from {
-            Some(Timestamp {
+        let read_from = value.read_from.map(|value_read_from| {
+            Timestamp {
                 seconds: value_read_from
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .unwrap()
@@ -26,10 +26,8 @@ impl From<RawConsumer> for Consumer {
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .unwrap()
                     .as_nanos() as i32,
-            })
-        } else {
-            None
-        };
+            }
+        });
 
         Self {
             name: value.name,

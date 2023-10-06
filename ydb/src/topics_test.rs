@@ -6,7 +6,7 @@ use crate::test_integration_helper::create_client;
 use crate::{client_topic::client::TopicOptionsBuilder, TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError, YdbResult};
 use tracing::{trace, warn};
 use ydb_grpc::ydb_proto::topic::stream_read_message::init_request::TopicReadSettings;
-use ydb_grpc::ydb_proto::topic::{stream_read_message, stream_write_message};
+use ydb_grpc::ydb_proto::topic::{stream_read_message};
 use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
@@ -123,8 +123,7 @@ async fn send_message_test() -> YdbResult<()> {
         .await?;
     println!("sent-4");
 
-    // TODO: read messages with raw grpc queries to check it;
-    let mut grpc_client = topic_client
+    let grpc_client = topic_client
         .raw_client_connection()
         .await?
         .get_grpc_service();
@@ -135,7 +134,20 @@ async fn send_message_test() -> YdbResult<()> {
         topic_path,
     ).await?;
 
-    println!("message: {:?}", topic_messages.recv().await);
+    let r_mess1 = topic_messages.recv().await.unwrap();
+    assert_eq!(r_mess1.offset, 1);
+    assert_eq!(r_mess1.seq_no, 200);
+    assert_eq!(r_mess1.data, "test-1".as_bytes());
+
+    let r_mess2 = topic_messages.recv().await.unwrap();
+    assert_eq!(r_mess2.offset, 2);
+    assert_eq!(r_mess2.seq_no, 300);
+    assert_eq!(r_mess2.data, "test-2".as_bytes());
+
+    let r_mess3 = topic_messages.recv().await.unwrap();
+    assert_eq!(r_mess3.offset, 3);
+    assert_eq!(r_mess3.seq_no, 301);
+    assert_eq!(r_mess3.data, "test-3".as_bytes());
 
     Ok(())
 }
@@ -151,6 +163,7 @@ async fn start_read_topic(
     ) = tokio::sync::mpsc::unbounded_channel();
 
     let init_request = stream_read_message::from_client::ClientMessage::InitRequest(
+        #[allow(clippy::needless_update)]
         stream_read_message::InitRequest{
             topics_read_settings: vec![
                 TopicReadSettings{
@@ -176,6 +189,7 @@ async fn start_read_topic(
     let _init_response = reader_stream.next().await.ok_or(YdbError::custom("failed receive init response in test reader"))??;
 
     let data_request = stream_read_message::from_client::ClientMessage::ReadRequest(
+        #[allow(clippy::needless_update)]
         stream_read_message::ReadRequest{
             bytes_size: 1024*1024,
             ..stream_read_message::ReadRequest::default()
