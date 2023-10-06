@@ -59,15 +59,12 @@ jobs:
     - name: Rust cache
       uses: Swatinem/rust-cache@v2
 
-    - name: Build
-      run: cargo build --verbose --workspace --all-targets
+    - name: Run tests
+      env:
+        YDB_CONNECTION_STRING: grpc://localhost:2136?database=/local
+      run: cargo test --verbose --workspace -- --include-ignored
 
     - name: Linter
       if: matrix.rust_version != '1.56.0'
       run: |
         cargo clippy --workspace --all-targets -- -D warnings
-
-    - name: Run tests
-      env:
-        YDB_CONNECTION_STRING: grpc://localhost:2136?database=/local
-      run: cargo test --verbose --workspace -- --include-ignored
