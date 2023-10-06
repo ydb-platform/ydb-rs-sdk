@@ -100,8 +100,7 @@ async fn send_message_test() -> YdbResult<()> {
         )
         .await?;
     println!("sent-3");
-
-    drop(writer_manual);
+    writer_manual.stop()?;
 
     // quto-seq
     let mut writer = topic_client
@@ -122,6 +121,7 @@ async fn send_message_test() -> YdbResult<()> {
         )
         .await?;
     println!("sent-4");
+    writer.stop();
 
     let grpc_client = topic_client
         .raw_client_connection()
