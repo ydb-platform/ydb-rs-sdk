@@ -47,6 +47,7 @@ async fn send_message_test() -> YdbResult<()> {
     let database_path = client.database();
     let topic_name = "test_topic".to_string();
     let topic_path = format!("{}/{}", database_path, topic_name);
+    let producer_id = "test-producer-id".to_string();
 
     let mut topic_client = client.topic_client();
     let _ = topic_client.drop_topic(topic_path.clone()).await; // ignoring error
@@ -70,7 +71,7 @@ async fn send_message_test() -> YdbResult<()> {
             TopicWriterOptionsBuilder::default()
                 .auto_seq_no(false)
                 .topic_path(topic_path.clone())
-                .producer_id("test-producer-id-1".to_string())
+                .producer_id(producer_id.clone())
                 .build()?,
         )
         .await?;
@@ -99,7 +100,15 @@ async fn send_message_test() -> YdbResult<()> {
     drop(writer_manual);
 
     // quto-seq
-    let mut writer = topic_client.create_writer(topic_path).await?;
+    let mut writer = topic_client
+        .create_writer_with_params(
+            TopicWriterOptionsBuilder::default()
+                .auto_seq_no(true)
+                .topic_path(topic_path.clone())
+                .producer_id(producer_id)
+                .build()?,
+        )
+        .await?;
 
     writer
         .write_with_ack(
