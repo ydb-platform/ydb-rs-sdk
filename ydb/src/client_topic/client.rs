@@ -1,5 +1,9 @@
 use crate::client::TimeoutSettings;
 use crate::client_topic::list_types::{Consumer, MeteringMode, SupportedCodecs};
+use crate::client_topic::topicwriter::writer::TopicWriter;
+use crate::client_topic::topicwriter::writer_options::{
+    TopicWriterOptions, TopicWriterOptionsBuilder,
+};
 use crate::errors;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
@@ -37,7 +41,7 @@ pub struct TopicOptions {
 
 impl From<UninitializedFieldError> for errors::YdbError {
     fn from(ufe: UninitializedFieldError) -> Self {
-        InternalError(format!("Error during building topic options: {}", ufe))
+        InternalError(format!("Error during build type: {}", ufe))
     }
 }
 
@@ -64,7 +68,7 @@ impl TopicClient {
     ) -> YdbResult<()> {
         let req = RawCreateTopicRequest::new(path, self.timeouts.operation_params(), topic_options);
 
-        let mut service = self.connection().await?;
+        let mut service = self.raw_client_connection().await?;
         service.create_topic(req).await?;
 
         Ok(())
@@ -76,13 +80,31 @@ impl TopicClient {
             path,
         };
 
-        let mut service = self.connection().await?;
+        let mut service = self.raw_client_connection().await?;
         service.delete_topic(req).await?;
 
         Ok(())
     }
 
-    async fn connection(
+    pub async fn create_writer_with_params(
+        &mut self,
+        writer_options: TopicWriterOptions,
+    ) -> YdbResult<TopicWriter> {
+        TopicWriter::new(writer_options, self.connection_manager.clone()).await
+    }
+
+    pub async fn create_writer(&mut self, path: String) -> YdbResult<TopicWriter> {
+        TopicWriter::new(
+            TopicWriterOptionsBuilder::default()
+                .topic_path(path)
+                .build()
+                .unwrap(),
+            self.connection_manager.clone(),
+        )
+        .await
+    }
+
+    pub(crate) async fn raw_client_connection(
         &self,
     ) -> YdbResult<grpc_wrapper::raw_topic_service::client::RawTopicClient> {
         self.connection_manager

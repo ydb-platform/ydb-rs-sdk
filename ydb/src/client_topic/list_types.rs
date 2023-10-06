@@ -1,9 +1,10 @@
 use crate::grpc_wrapper::raw_topic_service::common::codecs::{RawCodec, RawSupportedCodecs};
 use crate::grpc_wrapper::raw_topic_service::common::consumer::RawConsumer;
 use crate::grpc_wrapper::raw_topic_service::common::metering_mode::RawMeteringMode;
+use derive_builder::Builder;
 use std::collections::HashMap;
-use std::time::{SystemTime};
 use std::option::Option;
+use std::time::SystemTime;
 
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Codec {
@@ -28,9 +29,7 @@ pub struct SupportedCodecs {
 
 impl From<Codec> for RawCodec {
     fn from(value: Codec) -> Self {
-       Self{
-           code: value.code
-       }
+        Self { code: value.code }
     }
 }
 
@@ -40,7 +39,7 @@ impl From<SupportedCodecs> for RawSupportedCodecs {
             codecs: value
                 .codecs
                 .into_iter()
-                .map(|x| RawCodec{code: x.code})
+                .map(|x| RawCodec { code: x.code })
                 .collect(),
         }
     }
@@ -62,17 +61,26 @@ impl From<Option<MeteringMode>> for RawMeteringMode {
     }
 }
 
+#[derive(Builder)]
+#[builder(build_fn(error = "crate::errors::YdbError"))]
 #[derive(Clone)]
 pub struct Consumer {
     pub name: String,
+
+    #[builder(default = "false")]
     pub important: bool,
-    pub read_from: SystemTime,
+
+    #[builder(default = "None")]
+    pub read_from: Option<SystemTime>,
+
+    #[builder(default = "SupportedCodecs::default()")]
     pub supported_codecs: SupportedCodecs,
+
+    #[builder(default = "HashMap::new()")]
     pub attributes: HashMap<String, String>,
 }
 
 impl From<Consumer> for RawConsumer {
-
     fn from(consumer: Consumer) -> Self {
         Self {
             name: consumer.name,

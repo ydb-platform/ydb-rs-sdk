@@ -78,7 +78,7 @@ pub(crate) mod dicovery_pessimization_interceptor;
 #[cfg(test)]
 mod test_integration_helper;
 #[cfg(test)]
-pub(crate) mod topic_create_delete_test;
+pub(crate) mod topics_test;
 mod trace_helpers;
 mod trait_operation;
 pub(crate) mod transaction;
@@ -91,6 +91,15 @@ mod types_test;
 
 // full enum pub types
 pub use client_topic::client::{TopicClient, TopicOptions};
+// full enum pub types
+pub use client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMessageBuilder};
+// full enum pub types
+pub use client_topic::topicwriter::writer::TopicWriter;
+// full enum pub types
+pub use client_topic::topicwriter::writer_options::{
+    TopicWriterConnectionOptions, TopicWriterOptions, TopicWriterOptionsBuilder,
+    TopicWriterRetrySettings,
+};
 // full enum pub types
 pub use client::Client;
 // full enum pub types

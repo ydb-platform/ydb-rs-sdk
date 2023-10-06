@@ -16,7 +16,7 @@ impl From<RawMeteringMode> for ydb_grpc::ydb_proto::topic::MeteringMode {
     }
 }
 
-impl Default for RawMeteringMode{
+impl Default for RawMeteringMode {
     fn default() -> Self {
         RawMeteringMode::Unspecified
     }
