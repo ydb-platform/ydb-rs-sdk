@@ -211,7 +211,7 @@ impl TopicWriter {
         let mut messages = vec![];
 
         // wait messages loop
-        loop {
+        'messages_loop: loop {
             let elapsed = start.elapsed();
             if messages.len() >= task_params.write_request_messages_chunk_size
                 || !messages.is_empty() && elapsed >= task_params.write_request_send_messages_period
@@ -244,11 +244,11 @@ impl TopicWriter {
                     });
                 }
                 Ok(None) => {
-                    println!("Channel has been closed");
-                    break;
+                    trace!("Channel has been closed. Stop topic send messages loop.");
+                    return Ok(());
                 }
-                Err(_) => {
-                    break;
+                Err(err) => {
+                    break 'messages_loop;
                 }
             }
         }
