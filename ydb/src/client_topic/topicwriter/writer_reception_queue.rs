@@ -3,12 +3,12 @@ use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 
 use std::collections::VecDeque;
 
-pub enum TopicWriterReceptionType {
+pub(crate) enum TopicWriterReceptionType {
     AwaitingConfirmation(tokio::sync::oneshot::Sender<MessageWriteStatus>),
     NoConfirmationExpected,
 }
 
-pub struct TopicWriterReceptionTicket {
+pub(crate) struct TopicWriterReceptionTicket {
     seq_no: i64,
     reception_type: TopicWriterReceptionType,
     flush_flag: bool,
@@ -44,7 +44,7 @@ impl TopicWriterReceptionTicket {
     }
 }
 
-pub struct TopicWriterReceptionQueue {
+pub(crate) struct TopicWriterReceptionQueue {
     message_receipt_signals_queue: VecDeque<TopicWriterReceptionTicket>,
 
     flush_finished_sender: Option<tokio::sync::oneshot::Sender<()>>,

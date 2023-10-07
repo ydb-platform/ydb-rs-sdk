@@ -9,7 +9,7 @@ pub struct MessageWriteInfo {
 pub enum MessageSkipReason {
     Unspecified,
     AlreadyWritten,
-    InvalidReason,
+    UnknownReasonCode(i32),
 }
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
@@ -19,17 +19,19 @@ pub enum MessageWriteStatus {
     Unknown,
 }
 
-pub struct WriteAck {
+pub(crate) struct WriteAck {
     pub seq_no: i64,
     pub status: MessageWriteStatus,
 }
 
 impl From<i32> for MessageSkipReason {
     fn from(value: i32) -> Self {
-        match value {
-            0 => MessageSkipReason::Unspecified,
-            1 => MessageSkipReason::AlreadyWritten,
-            _ => MessageSkipReason::InvalidReason,
+        use write_response::write_ack::skipped::Reason;
+
+        match Reason::from_i32(value) {
+            Some(Reason::Unspecified) => MessageSkipReason::Unspecified,
+            Some(Reason::AlreadyWritten) => MessageSkipReason::AlreadyWritten,
+            None => MessageSkipReason::UnknownReasonCode(value),
         }
     }
 }
@@ -38,16 +40,10 @@ impl From<Option<write_response::write_ack::MessageWriteStatus>> for MessageWrit
     fn from(value: Option<write_response::write_ack::MessageWriteStatus>) -> Self {
         match value {
             None => MessageWriteStatus::Unknown,
-            Some(status) => match status {
-                write_response::write_ack::MessageWriteStatus::Written(write_info) => {
-                    MessageWriteStatus::Written(MessageWriteInfo {
-                        offset: write_info.offset,
-                    })
-                }
-                write_response::write_ack::MessageWriteStatus::Skipped(skip_info) => {
-                    MessageWriteStatus::Skipped(MessageSkipReason::from(skip_info.reason))
-                }
-            },
+            Some(write_response::write_ack::MessageWriteStatus::Written(write_info))=>MessageWriteStatus::Written(MessageWriteInfo {
+                offset: write_info.offset,
+            }),
+            Some(write_response::write_ack::MessageWriteStatus::Skipped(skip_info)) =>MessageWriteStatus::Skipped(MessageSkipReason::from(skip_info.reason)),
         }
     }
 }
