@@ -59,7 +59,7 @@ pub(crate) const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 #[strum_discriminants(derive(IntoStaticStr, EnumIter, Hash))]
 #[strum_discriminants(name(ValueDiscriminants))]
 #[allow(dead_code)]
-#[cfg_attr(not(feature = "disable-non-exhaustive"), non_exhaustive)]
+#[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 pub enum Value {
     Void,
     Null,

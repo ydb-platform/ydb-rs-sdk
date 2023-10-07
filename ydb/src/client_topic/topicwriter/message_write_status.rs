@@ -1,18 +1,18 @@
 use ydb_grpc::generated::ydb::topic::stream_write_message::write_response;
 
-#[cfg_attr(not(feature = "disable-non-exhaustive"), non_exhaustive)]
+#[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 pub struct MessageWriteInfo {
     pub offset: i64,
 }
 
-#[cfg_attr(not(feature = "disable-non-exhaustive"), non_exhaustive)]
+#[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 pub enum MessageSkipReason {
     Unspecified,
     AlreadyWritten,
     InvalidReason,
 }
 
-#[cfg_attr(not(feature = "disable-non-exhaustive"), non_exhaustive)]
+#[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 pub enum MessageWriteStatus {
     Written(MessageWriteInfo),
     Skipped(MessageSkipReason),
