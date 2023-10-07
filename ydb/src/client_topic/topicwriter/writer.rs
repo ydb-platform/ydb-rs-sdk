@@ -35,12 +35,14 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::init_request::Partitioning
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::{message_data, MessageData};
 use ydb_grpc::ydb_proto::topic::stream_write_message::{InitRequest, WriteRequest};
 
-pub enum TopicWriterMode {
+pub(crate) enum TopicWriterMode {
     Working,
     FinishedWithError(YdbError),
 }
 
-#[allow(dead_code)]
+/// TopicWriter at initial state of implementation
+/// it really doesn't ready for use. For example
+/// It isn't handle lost connection to the server and have some unimplemented method.
 pub struct TopicWriter {
     pub(crate) path: String,
     pub(crate) producer_id: Option<String>,
@@ -66,13 +68,21 @@ pub struct TopicWriter {
 }
 
 #[allow(dead_code)]
-pub struct AckFuture {}
+pub struct AckFuture {
+    receiver: tokio::sync::oneshot::Receiver<MessageWriteStatus>
+}
 
 impl Future for AckFuture {
-    type Output = ();
+    type Output = YdbResult<MessageWriteStatus>;
 
     fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        unimplemented!("prototype")
+        match self.receiver.poll(_cx){
+            Poll::Ready(Ok(result)) =>
+                Poll::Ready(Ok(result))
+            ,
+            Poll::Ready(Err(err)) => Err(YdbError::custom("message writer was closed")),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -339,7 +349,7 @@ impl TopicWriter {
     }
 
     pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
-        self.write_message(message, false).await?;
+        let _skip_write_status = self.write_message(message, None).await?;
         Ok(())
     }
 
@@ -347,14 +357,33 @@ impl TopicWriter {
         &mut self,
         message: TopicWriterMessage,
     ) -> YdbResult<MessageWriteStatus> {
-        self.write_message(message, true).await
+        let (tx, rx): (
+            tokio::sync::oneshot::Sender<MessageWriteStatus>,
+            tokio::sync::oneshot::Receiver<MessageWriteStatus>,
+        ) = tokio::sync::oneshot::channel();
+
+        self.write_message(message, Some(tx)).await?;
+        Ok(rx.await?)
+    }
+
+    pub async fn write_with_ack_future(
+        & mut self,
+        _message: TopicWriterMessage,
+    ) -> YdbResult<AckFuture> {
+        let (tx, rx): (
+            tokio::sync::oneshot::Sender<MessageWriteStatus>,
+            tokio::sync::oneshot::Receiver<MessageWriteStatus>,
+        ) = tokio::sync::oneshot::channel();
+
+        self.write_message(_message, Some(tx)).await?;
+        return Ok(AckFuture{receiver: rx})
     }
 
     async fn write_message(
         &mut self,
         mut message: TopicWriterMessage,
-        wait_ack: bool,
-    ) -> YdbResult<MessageWriteStatus> {
+        wait_ack: Option<tokio::sync::oneshot::Sender<MessageWriteStatus>>,
+    ) -> YdbResult<()> {
         self.is_cancelled().await?;
 
         if self.auto_set_seq_no {
@@ -373,11 +402,6 @@ impl TopicWriter {
             return Err(YdbError::custom("need to set message seq_no"));
         };
 
-        let (tx, rx): (
-            tokio::sync::oneshot::Sender<MessageWriteStatus>,
-            tokio::sync::oneshot::Receiver<MessageWriteStatus>,
-        ) = tokio::sync::oneshot::channel();
-
         self.writer_message_sender
             .borrow_mut()
             .send(message)
@@ -386,11 +410,10 @@ impl TopicWriter {
                 YdbError::custom(format!("can't send the message to channel: {}", err))
             })?;
 
-        let reception_type = if wait_ack {
-            TopicWriterReceptionType::AwaitingConfirmation(tx)
-        } else {
-            TopicWriterReceptionType::NoConfirmationExpected
-        };
+
+        let reception_type = wait_ack.map_or(
+            TopicWriterReceptionType::NoConfirmationExpected, |sender|TopicWriterReceptionType::AwaitingConfirmation(sender)
+        );
 
         {
             // bracket needs for release mutex as soon as possible - before await
@@ -401,11 +424,7 @@ impl TopicWriter {
             ));
         }
 
-        if wait_ack {
-            Ok(rx.await?)
-        } else {
-            Ok(MessageWriteStatus::Unknown)
-        }
+        Ok(())
     }
 
     pub async fn flush(&self) -> YdbResult<()> {
@@ -425,12 +444,5 @@ impl TopicWriter {
             TopicWriterMode::Working => Ok(()),
             TopicWriterMode::FinishedWithError(err) => Err(err.clone()),
         }
-    }
-
-    pub async fn write_with_ack_future(
-        &self,
-        _message: TopicWriterMessage,
-    ) -> YdbResult<AckFuture> {
-        unimplemented!("prototype")
     }
 }
