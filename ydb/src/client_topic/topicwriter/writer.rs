@@ -350,7 +350,7 @@ impl TopicWriter {
     }
 
     pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
-        let _skip_write_status = self.write_message(message, None).await?;
+        self.write_message(message, None).await?;
         Ok(())
     }
 
@@ -377,7 +377,7 @@ impl TopicWriter {
         ) = tokio::sync::oneshot::channel();
 
         self.write_message(_message, Some(tx)).await?;
-        return Ok(AckFuture{receiver: rx})
+        Ok(AckFuture{receiver: rx})
     }
 
     async fn write_message(
@@ -413,7 +413,7 @@ impl TopicWriter {
 
 
         let reception_type = wait_ack.map_or(
-            TopicWriterReceptionType::NoConfirmationExpected, |sender|TopicWriterReceptionType::AwaitingConfirmation(sender)
+            TopicWriterReceptionType::NoConfirmationExpected, TopicWriterReceptionType::AwaitingConfirmation
         );
 
         {
