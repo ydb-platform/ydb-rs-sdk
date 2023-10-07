@@ -167,12 +167,46 @@ impl YdbStatusError {
 /// Severity of issue
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
-#[repr(u32)]
 pub enum YdbIssueSeverity {
-    Fatal = 0,
-    Error = 1,
-    Warning = 2,
-    Info = 3,
+    Fatal,
+    Error,
+    Warning,
+    Info,
+
+    // no use Unknown for own logic (use for debug/log only) - for prevent broke your code when new level will be defined.
+    // use convert to u32 for temporary use int code and ask a maintainer to add new level as explicit value
+    Unknown(u32),
+}
+
+// Default derive for enum was experimental until rust 1.62
+impl Default for YdbIssueSeverity {
+    fn default() -> Self {
+        YdbIssueSeverity::Fatal
+    }
+}
+
+impl From<YdbIssueSeverity> for u32 {
+    fn from(value: YdbIssueSeverity) -> Self {
+        match value {
+            YdbIssueSeverity::Fatal => 0,
+            YdbIssueSeverity::Error => 1,
+            YdbIssueSeverity::Warning => 2,
+            YdbIssueSeverity::Info => 3,
+            YdbIssueSeverity::Unknown(code) => code,
+        }
+    }
+}
+
+impl From<u32> for YdbIssueSeverity {
+    fn from(value: u32) -> Self {
+        match value {
+            0 => YdbIssueSeverity::Fatal,
+            1 => YdbIssueSeverity::Error,
+            2 => YdbIssueSeverity::Warning,
+            3 => YdbIssueSeverity::Info,
+            value => YdbIssueSeverity::Unknown(value),
+        }
+    }
 }
 
 /// Describe issue from server
@@ -189,41 +223,18 @@ pub struct YdbIssue {
     /// Recursive issues, explained current problems
     pub issues: Vec<YdbIssue>,
 
-    /// Severity of the issue
-    ///
-    /// The field conains raw u32 severity value.
-    /// For get types severity use severity fn
-    ///
+    /// Severity of the issue.
+    /// For get numeric code - use convert to u32.
     /// ```
     /// # use ydb::{YdbIssue, YdbIssueSeverity, YdbResult};
     /// # fn main()->YdbResult<()>{
     /// let mut issue = YdbIssue::default();
-    /// issue.severity = 2;
-    /// assert_eq!(issue.severity, 2);
-    /// assert_eq!(YdbIssueSeverity::Warning, YdbIssueSeverity::Warning);
-    /// assert_eq!(issue.severity()?, YdbIssueSeverity::Warning);
+    /// issue.severity = YdbIssueSeverity::Warning;
+    /// assert_eq!(u32::from(issue.severity), 2);
     /// # return Ok(());
     /// # }
     /// ```
-    pub severity: u32,
-}
-
-impl YdbIssue {
-    pub fn severity(&self) -> YdbResult<YdbIssueSeverity> {
-        let val = match self.severity {
-            0 => YdbIssueSeverity::Fatal,
-            1 => YdbIssueSeverity::Error,
-            2 => YdbIssueSeverity::Warning,
-            3 => YdbIssueSeverity::Info,
-            _ => {
-                return Err(YdbError::InternalError(format!(
-                    "unexpected issue severity: {}",
-                    self.severity
-                )))
-            }
-        };
-        Ok(val)
-    }
+    pub severity: YdbIssueSeverity,
 }
 
 impl YdbError {

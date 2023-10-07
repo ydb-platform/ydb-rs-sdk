@@ -53,7 +53,7 @@ pub(crate) fn proto_issues_to_ydb_issues(proto_issues: Vec<IssueMessage>) -> Vec
             issue_code: proto_issue.issue_code,
             message: proto_issue.message,
             issues: proto_issues_to_ydb_issues(proto_issue.issues),
-            severity: proto_issue.severity,
+            severity: proto_issue.severity.into(),
         })
         .collect()
 }
