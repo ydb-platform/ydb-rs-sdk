@@ -43,6 +43,7 @@ pub(crate) enum TopicWriterMode {
 /// TopicWriter at initial state of implementation
 /// it really doesn't ready for use. For example
 /// It isn't handle lost connection to the server and have some unimplemented method.
+#[allow(dead_code)]
 pub struct TopicWriter {
     pub(crate) path: String,
     pub(crate) producer_id: Option<String>,
@@ -75,12 +76,12 @@ pub struct AckFuture {
 impl Future for AckFuture {
     type Output = YdbResult<MessageWriteStatus>;
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.receiver.poll(_cx){
+    fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match Pin::new(&mut self.receiver).poll(_cx){
             Poll::Ready(Ok(result)) =>
                 Poll::Ready(Ok(result))
             ,
-            Poll::Ready(Err(err)) => Err(YdbError::custom("message writer was closed")),
+            Poll::Ready(Err(_)) => Poll::Ready(Err(YdbError::custom("message writer was closed"))),
             Poll::Pending => Poll::Pending,
         }
     }
