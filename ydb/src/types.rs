@@ -1,14 +1,14 @@
 use crate::errors::{YdbError, YdbResult};
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
+use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
+use crate::grpc_wrapper::raw_table_service::value::RawColumn;
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::num::TryFromIntError;
 use std::time::{Duration, SystemTime};
 use strum::{EnumCount, EnumDiscriminants, EnumIter, IntoStaticStr};
 use ydb_grpc::ydb_proto;
-use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
-use crate::grpc_wrapper::raw_table_service::value::RawColumn;
 
 pub(crate) const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 
@@ -56,10 +56,10 @@ pub(crate) const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 ///
 #[derive(Clone, Debug, EnumCount, EnumDiscriminants, PartialEq)]
 #[strum_discriminants(vis(pub(crate)))] // private
-#[strum_discriminants(derive(IntoStaticStr,EnumIter,Hash))]
+#[strum_discriminants(derive(IntoStaticStr, EnumIter, Hash))]
 #[strum_discriminants(name(ValueDiscriminants))]
 #[allow(dead_code)]
-#[non_exhaustive]
+#[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 pub enum Value {
     Void,
     Null,
@@ -113,17 +113,21 @@ impl ValueStruct {
         self.values.push(v);
     }
 
-    pub(crate) fn from_fields(fields: Vec<(String, Value)>)->ValueStruct{
+    pub(crate) fn from_fields(fields: Vec<(String, Value)>) -> ValueStruct {
         let fields_len = fields.len();
         let (names, values) = fields.into_iter().fold(
-            (Vec::with_capacity(fields_len), Vec::with_capacity(fields_len)),
+            (
+                Vec::with_capacity(fields_len),
+                Vec::with_capacity(fields_len),
+            ),
             |(mut names, mut values), (name, value)| {
                 names.push(name);
                 values.push(value);
                 (names, values)
-            });
+            },
+        );
 
-        ValueStruct{
+        ValueStruct {
             fields_name: names,
             values,
         }
@@ -266,7 +270,10 @@ impl Value {
             }
         }
 
-        Ok(Value::List(Box::new(ValueList { t: example_value, values })))
+        Ok(Value::List(Box::new(ValueList {
+            t: example_value,
+            values,
+        })))
     }
 
     pub(crate) fn optional_from(t: Value, value: Option<Value>) -> YdbResult<Self> {
@@ -288,22 +295,22 @@ impl Value {
     ///     ("value".to_string(), "test-value".into()),
     /// ]);
     /// ```
-    pub fn struct_from_fields(fields: Vec<(String,Value)>)->Value{
+    pub fn struct_from_fields(fields: Vec<(String, Value)>) -> Value {
         Value::Struct(ValueStruct::from_fields(fields))
     }
 
     ///  Return true if the Value is optional
-        pub fn is_optional(&self)->bool{
-            matches!(self, Self::Optional(_))
-        }
+    pub fn is_optional(&self) -> bool {
+        matches!(self, Self::Optional(_))
+    }
 
     /// present current value as Option
     /// if value is Optional - return inner unwrapper value.
     /// else - return self, wrapped to Option.
-    pub fn to_option(self)->Option<Value>{
+    pub fn to_option(self) -> Option<Value> {
         match self {
             Value::Optional(inner_box) => inner_box.value,
-            other => Some(other)
+            other => Some(other),
         }
     }
 
@@ -363,14 +370,32 @@ impl Value {
             Self::Double(val) => proto_typed_value(pt::Double, pv::DoubleValue(val)),
             Self::Date(val) => proto_typed_value(
                 pt::Date,
-                pv::Uint32Value((val.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() / SECONDS_PER_DAY).try_into()?),
+                pv::Uint32Value(
+                    (val.duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs()
+                        / SECONDS_PER_DAY)
+                        .try_into()?,
+                ),
             ),
-            Self::DateTime(val) => {
-                proto_typed_value(pt::Datetime, pv::Uint32Value(val.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs().try_into()?))
-            }
-            Self::Timestamp(val) => {
-                proto_typed_value(pt::Timestamp, pv::Uint64Value(val.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_micros().try_into()?))
-            }
+            Self::DateTime(val) => proto_typed_value(
+                pt::Datetime,
+                pv::Uint32Value(
+                    val.duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs()
+                        .try_into()?,
+                ),
+            ),
+            Self::Timestamp(val) => proto_typed_value(
+                pt::Timestamp,
+                pv::Uint64Value(
+                    val.duration_since(SystemTime::UNIX_EPOCH)
+                        .unwrap()
+                        .as_micros()
+                        .try_into()?,
+                ),
+            ),
             Self::Interval(val) => proto_typed_value(pt::Interval, pv::Int64Value(val.as_nanos()?)),
             Self::String(val) => proto_typed_value(pt::String, pv::BytesValue(val.into())),
             Self::Text(val) => proto_typed_value(pt::Utf8, pv::TextValue(val)),
@@ -466,7 +491,7 @@ impl Value {
     }
 
     #[cfg(test)]
-    pub(crate) fn examples_for_test() ->Vec<Value>{
+    pub(crate) fn examples_for_test() -> Vec<Value> {
         use std::{collections::HashSet, ops::Add};
 
         // test zero, one, minimum and maximum values
@@ -504,12 +529,16 @@ impl Value {
 
         values.push(Value::Void);
 
-        values.push(Value::Date(SystemTime::UNIX_EPOCH.add(std::time::Duration::from_secs(1633996800)))); //Tue Oct 12 00:00:00 UTC 2021
-        values.push(Value::DateTime(SystemTime::UNIX_EPOCH.add(std::time::Duration::from_secs(1634000523)))); //Tue Oct 12 01:02:03 UTC 2021
+        values.push(Value::Date(
+            SystemTime::UNIX_EPOCH.add(std::time::Duration::from_secs(1633996800)),
+        )); //Tue Oct 12 00:00:00 UTC 2021
+        values.push(Value::DateTime(
+            SystemTime::UNIX_EPOCH.add(std::time::Duration::from_secs(1634000523)),
+        )); //Tue Oct 12 01:02:03 UTC 2021
 
-        values.push(Value::Timestamp(SystemTime::UNIX_EPOCH.add(std::time::Duration::from_micros(
-            16340005230000123,
-        )))); //Tue Oct 12 00:00:00.000123 UTC 2021
+        values.push(Value::Timestamp(
+            SystemTime::UNIX_EPOCH.add(std::time::Duration::from_micros(16340005230000123)),
+        )); //Tue Oct 12 00:00:00.000123 UTC 2021
 
         values.push(Value::Interval(SignedInterval {
             sign: Sign::Plus,
@@ -524,10 +553,13 @@ impl Value {
         values.push(Value::optional_from(Value::Int8(0), None).unwrap());
         values.push(Value::optional_from(Value::Int8(0), Some(Value::Int8(1))).unwrap());
 
-        values.push(Value::list_from(
-            Value::Int8(0),
-            vec![Value::Int8(1), Value::Int8(2), Value::Int8(3)],
-        ).unwrap());
+        values.push(
+            Value::list_from(
+                Value::Int8(0),
+                vec![Value::Int8(1), Value::Int8(2), Value::Int8(3)],
+            )
+            .unwrap(),
+        );
 
         values.push(Value::Struct(ValueStruct {
             fields_name: vec!["a".into(), "b".into()],
@@ -536,7 +568,8 @@ impl Value {
                 Value::list_from(
                     Value::Int32(0),
                     vec![Value::Int32(1), Value::Int32(2), Value::Int32(3)],
-                ).unwrap(),
+                )
+                .unwrap(),
             ],
         }));
 
@@ -548,7 +581,6 @@ impl Value {
 
         values
     }
-
 }
 
 #[derive(Debug)]
@@ -562,7 +594,7 @@ impl TryFrom<RawColumn> for Column {
     type Error = YdbError;
 
     fn try_from(value: RawColumn) -> Result<Self, Self::Error> {
-        Ok(Self{
+        Ok(Self {
             name: value.name,
             v_type: value.column_type,
         })
