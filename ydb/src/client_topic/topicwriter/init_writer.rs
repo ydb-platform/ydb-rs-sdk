@@ -1,7 +1,9 @@
+use ydb_grpc::ydb_proto::topic::stream_write_message::from_server::ServerMessage;
+use ydb_grpc::ydb_proto::topic::stream_write_message::FromServer;
+
 use crate::grpc_wrapper::raw_errors::RawError;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
-use ydb_grpc::ydb_proto::topic::stream_write_message::from_server::ServerMessage;
-
+use crate::grpc_wrapper::raw_topic_service::stream_write::from_grpc_to_server_message;
 
 pub(crate) struct RawInitResponse {
     pub last_seq_no: i64,
@@ -10,10 +12,11 @@ pub(crate) struct RawInitResponse {
     pub supported_codecs: RawSupportedCodecs,
 }
 
-impl TryFrom<ServerMessage> for RawInitResponse {
+impl TryFrom<FromServer> for RawInitResponse {
     type Error = RawError;
 
-    fn try_from(value: ServerMessage) -> Result<Self, Self::Error> {
+    fn try_from(value: FromServer) -> Result<Self, Self::Error> {
+        let value = from_grpc_to_server_message(value)?;
         if let ServerMessage::InitResponse(body) = value {
             Ok(RawInitResponse {
                 last_seq_no: body.last_seq_no,
