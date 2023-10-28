@@ -24,6 +24,7 @@ use ydb_grpc::ydb_proto::table::{
     execute_scan_query_request,
     ExecuteScanQueryRequest,
 };
+use crate::grpc_wrapper::raw_table_service::copy_table::RawCopyTableRequest;
 use crate::grpc_wrapper::raw_table_service::execute_data_query::{RawExecuteDataQueryRequest};
 
 static REQUEST_NUMBER: AtomicI64 = AtomicI64::new(0);
@@ -139,7 +140,7 @@ impl Session {
         QueryResult::from_raw_result( error_on_truncated, res)
     }
 
-        #[tracing::instrument(skip(self, query), fields(req_number=req_number()))]
+    #[tracing::instrument(skip(self, query), fields(req_number=req_number()))]
     pub async fn execute_scan_query(&mut self, query: Query) -> YdbResult<StreamResult> {
         let req = ExecuteScanQueryRequest {
             query: Some(query.query_to_proto()),
@@ -160,6 +161,24 @@ impl Session {
             .rollback_transaction(RawRollbackTransactionRequest {
                 session_id: self.id.clone(),
                 tx_id,
+                operation_params: self.timeouts.operation_params(),
+            })
+            .await;
+
+        self.handle_raw_result(res)
+    }
+
+    pub(crate) async fn copy_table(
+        &mut self,
+        source_path: String,
+        destination_path: String,
+    ) -> YdbResult<()> {
+        let mut table = self.get_table_client().await?;
+        let res = table
+            .copy_table(RawCopyTableRequest {
+                session_id: self.id.clone(),
+                source_path,
+                destination_path,
                 operation_params: self.timeouts.operation_params(),
             })
             .await;
