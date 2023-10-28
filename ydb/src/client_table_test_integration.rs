@@ -13,7 +13,6 @@ use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::query::Query;
 use crate::test_integration_helper::create_client;
 use crate::transaction::Mode;
-use crate::transaction::Mode::SerializableReadWrite;
 use crate::transaction::Transaction;
 use crate::types::{Value, ValueList, ValueStruct};
 use crate::{ydb_params, Bytes, TableClient};
@@ -129,7 +128,7 @@ async fn interactive_transaction() -> YdbResult<()> {
 
     let mut tx_auto = client
         .table_client()
-        .create_autocommit_transaction(SerializableReadWrite);
+        .create_autocommit_transaction(Mode::SerializableReadWrite);
 
     let mut tx = client.table_client().create_interactive_transaction();
     tx.query(Query::new("DELETE FROM test_values")).await?;
@@ -180,6 +179,15 @@ async fn interactive_transaction() -> YdbResult<()> {
             .unwrap()
     );
 
+    client
+        .table_client()
+        .create_session()
+        .await?
+        .execute_schema_query(
+            "DROP TABLE test_values".to_string(),
+        )
+        .await?;
+
     Ok(())
 }
 
@@ -190,11 +198,20 @@ async fn copy_table() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
 
+    let time_now = time::SystemTime::now().duration_since(UNIX_EPOCH)?;
+    let table_name = format!("temp_table_{}", time_now.as_millis());
+    let copy_table_name = format!("copy_{}", table_name);
+
     table_client
         .retry_with_session(RetryOptions::new(), |session| async {
             let mut session = session; // force borrow for lifetime of t inside closure
             session
-                .copy_table("test_values".into(), "test_values_copy".into())
+                .execute_schema_query(
+                    format!(
+                        "CREATE TABLE {} (id Int64, vInt64 Int64, PRIMARY KEY (id))",
+                        table_name
+                    )
+                )
                 .await?;
 
             Ok(())
@@ -203,10 +220,44 @@ async fn copy_table() -> YdbResult<()> {
         .unwrap();
 
     let mut transaction = table_client
-        .create_autocommit_transaction(SerializableReadWrite);
+        .create_autocommit_transaction(Mode::SerializableReadWrite);
+
+    let mut interactive_tx = table_client
+        .create_interactive_transaction();
+
+    interactive_tx.query(
+        format!(
+            "UPSERT INTO {} (id, vInt64) VALUES (1, 2)",
+            table_name
+        ).into()
+    ).await?;
+
+    interactive_tx.commit().await?;
+
+    table_client
+        .retry_with_session(RetryOptions::new(), |session| async {
+            let mut session = session; // force borrow for lifetime of t inside closure
+            let database_path = client.database();
+
+            session
+                .copy_table(
+                    format!("{}/{}", database_path, table_name),
+                    format!("{}/{}", database_path, copy_table_name),
+                )
+                .await?;
+
+            Ok(())
+        })
+        .await
+        .unwrap();
 
     let res = transaction
-        .query("SELECT vInt64 FROM test_values_copy WHERE id=1".into())
+        .query(
+            format!(
+                "SELECT vInt64 FROM {} WHERE id=1",
+                copy_table_name
+            ).into()
+        )
         .await?;
 
     assert_eq!(
@@ -221,9 +272,24 @@ async fn copy_table() -> YdbResult<()> {
             .unwrap()
     );
 
-    let mut interactive_tx = client.table_client().create_interactive_transaction();
-    interactive_tx.query("DROP TABLE test_values_copy".into()).await?;
-    interactive_tx.commit().await?;
+    for &target in [&table_name, &copy_table_name].iter() {
+        table_client
+            .retry_with_session(RetryOptions::new(), |session| async {
+                let mut session = session; // force borrow for lifetime of t inside closure
+                session
+                    .execute_schema_query(
+                        format!(
+                            "DROP TABLE {}",
+                            target
+                        )
+                    )
+                    .await?;
+
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
 
     Ok(())
 }
