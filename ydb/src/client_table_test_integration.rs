@@ -186,6 +186,51 @@ async fn interactive_transaction() -> YdbResult<()> {
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
+async fn copy_table() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+
+    table_client
+        .retry_with_session(RetryOptions::new(), |session| async {
+            let mut session = session; // force borrow for lifetime of t inside closure
+            session
+                .copy_table("test_values".into(), "test_values_copy".into())
+                .await?;
+
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let mut transaction = table_client
+        .create_autocommit_transaction(SerializableReadWrite);
+
+    let res = transaction
+        .query("SELECT vInt64 FROM test_values_copy WHERE id=1".into())
+        .await?;
+
+    assert_eq!(
+        Value::optional_from(Value::Int64(0), Some(Value::Int64(2)))?,
+        res
+            .into_only_result()
+            .unwrap()
+            .rows()
+            .next()
+            .unwrap()
+            .remove_field_by_name("vInt64")
+            .unwrap()
+    );
+
+    let mut interactive_tx = client.table_client().create_interactive_transaction();
+    interactive_tx.query("DROP TABLE test_values_copy".into()).await?;
+    interactive_tx.commit().await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
 async fn retry_test() -> YdbResult<()> {
     let client = create_client().await?;
 
