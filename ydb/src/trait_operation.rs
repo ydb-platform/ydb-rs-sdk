@@ -5,7 +5,7 @@ use ydb_grpc::ydb_proto::scheme::{ListDirectoryResponse, MakeDirectoryResponse, 
 use ydb_grpc::ydb_proto::table::{
     CommitTransactionResponse, CreateSessionResponse, DeleteSessionResponse,
     ExecuteDataQueryResponse, ExecuteSchemeQueryResponse, KeepAliveResponse,
-    RollbackTransactionResponse,
+    RollbackTransactionResponse, CopyTableResponse
 };
 use ydb_grpc::ydb_proto::topic::{CreateTopicResponse,DropTopicResponse};
 
@@ -37,3 +37,4 @@ operation_impl_for!(ListDirectoryResponse);
 operation_impl_for!(RemoveDirectoryResponse);
 operation_impl_for!(CreateTopicResponse);
 operation_impl_for!(DropTopicResponse);
+operation_impl_for!(CopyTableResponse);
