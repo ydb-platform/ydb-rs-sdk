@@ -20,20 +20,27 @@ impl<RequestT, ResponseT> AsyncGrpcStreamWrapper<RequestT, ResponseT> {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn send(&mut self, message: RequestT) -> RawResult<()> {
-        Ok(self.from_client_grpc.send(message)?)
+    pub(crate) async fn send<Message>(&mut self, message: Message) -> RawResult<()>
+    where
+        Message: Into<RequestT>,
+    {
+        Ok(self.from_client_grpc.send(message.into())?)
     }
 
     pub(crate) fn clone_sender(&mut self) -> mpsc::UnboundedSender<RequestT> {
         self.from_client_grpc.clone()
     }
 
-    pub(crate) async fn receive(&mut self) -> RawResult<ResponseT> {
+    pub(crate) async fn receive<Message>(&mut self) -> RawResult<Message>
+    where
+        Message: TryFrom<ResponseT, Error = RawError>,
+    {
         let maybe_ydb_response = self
             .from_server_grpc
             .next()
             .await
             .ok_or(RawError::Custom("Stream seems to be empty".to_string()))?;
-        Ok(maybe_ydb_response?)
+        let message = Message::try_from(maybe_ydb_response?)?;
+        Ok(message)
     }
 }

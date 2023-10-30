@@ -1,4 +1,3 @@
-use crate::client_topic::topicwriter::init_writer::RawInitResponse;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_write_status::{MessageWriteStatus, WriteAck};
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
@@ -9,7 +8,8 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
-use crate::grpc_wrapper::raw_topic_service::stream_write::from_grpc_to_server_message;
+use crate::grpc_wrapper::raw_topic_service::stream_write::init::RawInitResponse;
+use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
 use crate::{grpc_wrapper, YdbError, YdbResult};
 use std::borrow::{Borrow, BorrowMut};
 
@@ -31,7 +31,6 @@ use tracing::log::trace;
 use tracing::warn;
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
-use ydb_grpc::ydb_proto::topic::stream_write_message::from_server::ServerMessage;
 use ydb_grpc::ydb_proto::topic::stream_write_message::init_request::Partitioning;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::{message_data, MessageData};
 use ydb_grpc::ydb_proto::topic::stream_write_message::{InitRequest, WriteRequest};
@@ -119,7 +118,7 @@ impl TopicWriter {
         };
 
         let mut stream = topic_service.stream_write(init_request_body).await?;
-        let init_response = RawInitResponse::try_from(stream.receive().await?)?;
+        let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
 
         let (messages_sender, messages_receiver): (
             mpsc::Sender<TopicWriterMessage>,
@@ -285,14 +284,14 @@ impl TopicWriter {
         >,
         confirmation_reception_queue: &mut Arc<Mutex<TopicWriterReceptionQueue>>,
     ) -> YdbResult<()> {
-        match server_messages_receiver.receive().await {
-            Ok(message) => match from_grpc_to_server_message(message)? {
-                ServerMessage::InitResponse(_init_response_body) => {
+        match server_messages_receiver.receive::<RawServerMessage>().await {
+            Ok(message) => match message {
+                RawServerMessage::Init(_init_response_body) => {
                     return Err(YdbError::Custom(
                         "Unexpected message type in stream reader: init_response".to_string(),
                     ));
                 }
-                ServerMessage::WriteResponse(write_response_body) => {
+                RawServerMessage::Write(write_response_body) => {
                     for raw_ack in write_response_body.acks {
                         let write_ack = WriteAck::from(raw_ack);
                         let mut reception_queue = confirmation_reception_queue.lock().unwrap();
@@ -315,7 +314,7 @@ impl TopicWriter {
                         }
                     }
                 }
-                ServerMessage::UpdateTokenResponse(_update_token_response_body) => {}
+                RawServerMessage::UpdateToken(_update_token_response_body) => {}
             },
             Err(some_err) => {
                 return Err(YdbError::from(some_err));
