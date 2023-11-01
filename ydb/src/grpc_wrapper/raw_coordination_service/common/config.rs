@@ -5,9 +5,8 @@ use crate::{
     grpc_wrapper::raw_errors::{RawError, RawResult},
 };
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub(crate) enum RawConsistencyMode {
-    #[default]
     Unset,
     Strict,
     Relaxed,
@@ -39,9 +38,8 @@ impl TryFrom<i32> for RawConsistencyMode {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub(crate) enum RawRateLimiterCountersMode {
-    #[default]
     Unset,
     Aggregated,
     Detailed,
