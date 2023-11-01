@@ -1,4 +1,5 @@
 use crate::client_common::DBCredentials;
+use crate::client_coordination::client::CoordinationClient;
 use crate::client_scheme::client::SchemeClient;
 use crate::client_table::TableClient;
 use crate::discovery::Discovery;
@@ -57,6 +58,11 @@ impl Client {
     /// Create instance of client for topic service
     pub fn topic_client(&self) -> TopicClient {
         TopicClient::new(self.timeouts, self.connection_manager.clone())
+    }
+
+    /// Create instance of client for coordination service
+    pub fn coordination_client(&self) -> CoordinationClient {
+        CoordinationClient::new(self.timeouts, self.connection_manager.clone())
     }
 
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {

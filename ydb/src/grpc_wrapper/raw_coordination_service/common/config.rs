@@ -1,9 +1,13 @@
 use ydb_grpc::ydb_proto::coordination::{Config, ConsistencyMode, RateLimiterCountersMode};
 
-use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
+use crate::{
+    client_coordination::list_types::NodeConfig,
+    grpc_wrapper::raw_errors::{RawError, RawResult},
+};
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub(crate) enum RawConsistencyMode {
+    #[default]
     Unset,
     Strict,
     Relaxed,
@@ -35,8 +39,9 @@ impl TryFrom<i32> for RawConsistencyMode {
     }
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub(crate) enum RawRateLimiterCountersMode {
+    #[default]
     Unset,
     Aggregated,
     Detailed,
@@ -76,6 +81,21 @@ pub(crate) struct RawCoordinationNodeConfig {
     pub read_consistency_mode: RawConsistencyMode,
     pub attach_consistency_mode: RawConsistencyMode,
     pub rate_limiter_counters_mode: RawRateLimiterCountersMode,
+}
+
+impl From<NodeConfig> for RawCoordinationNodeConfig {
+    fn from(config: NodeConfig) -> Self {
+        Self {
+            path: "".to_string(),
+            self_check_period_millis: config.self_check_period_millis,
+            session_grace_period_millis: config.session_grace_period_millis,
+            read_consistency_mode: RawConsistencyMode::from(config.read_consistency_mode),
+            attach_consistency_mode: RawConsistencyMode::from(config.attach_consistency_mode),
+            rate_limiter_counters_mode: RawRateLimiterCountersMode::from(
+                config.rate_limiter_counters_mode,
+            ),
+        }
+    }
 }
 
 impl From<RawCoordinationNodeConfig> for Config {
