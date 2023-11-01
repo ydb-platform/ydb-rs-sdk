@@ -28,9 +28,9 @@ async fn create_delete_node_test() -> YdbResult<()> {
     let node_desc = coordination_client.describe_node(node_path.clone()).await?;
     assert_eq!(node_desc.config.self_check_period_millis, 0);
     assert_eq!(node_desc.config.session_grace_period_millis, 0);
-    assert!(matches!(node_desc.config.read_consistency_mode, None));
-    assert!(matches!(node_desc.config.attach_consistency_mode, None));
-    assert!(matches!(node_desc.config.rate_limiter_counters_mode, None));
+    assert!(node_desc.config.read_consistency_mode.is_none());
+    assert!(node_desc.config.attach_consistency_mode.is_none());
+    assert!(node_desc.config.rate_limiter_counters_mode.is_none());
 
     coordination_client
         .alter_node(
@@ -51,7 +51,7 @@ async fn create_delete_node_test() -> YdbResult<()> {
         node_desc.config.read_consistency_mode,
         Some(ConsistencyMode::Strict)
     ));
-    assert!(matches!(node_desc.config.attach_consistency_mode, None));
+    assert!(node_desc.config.attach_consistency_mode.is_none());
     assert!(matches!(
         node_desc.config.rate_limiter_counters_mode,
         Some(RateLimiterCountersMode::Aggregated)
