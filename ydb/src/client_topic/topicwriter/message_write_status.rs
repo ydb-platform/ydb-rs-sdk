@@ -40,10 +40,14 @@ impl From<Option<write_response::write_ack::MessageWriteStatus>> for MessageWrit
     fn from(value: Option<write_response::write_ack::MessageWriteStatus>) -> Self {
         match value {
             None => MessageWriteStatus::Unknown,
-            Some(write_response::write_ack::MessageWriteStatus::Written(write_info))=>MessageWriteStatus::Written(MessageWriteInfo {
-                offset: write_info.offset,
-            }),
-            Some(write_response::write_ack::MessageWriteStatus::Skipped(skip_info)) =>MessageWriteStatus::Skipped(MessageSkipReason::from(skip_info.reason)),
+            Some(write_response::write_ack::MessageWriteStatus::Written(write_info)) => {
+                MessageWriteStatus::Written(MessageWriteInfo {
+                    offset: write_info.offset,
+                })
+            }
+            Some(write_response::write_ack::MessageWriteStatus::Skipped(skip_info)) => {
+                MessageWriteStatus::Skipped(MessageSkipReason::from(skip_info.reason))
+            }
         }
     }
 }

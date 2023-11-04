@@ -49,6 +49,7 @@ extern crate core;
 pub(crate) mod client;
 mod client_builder;
 pub(crate) mod client_common;
+pub(crate) mod client_coordination;
 #[cfg(test)]
 mod client_directory_test_integration;
 pub(crate) mod client_scheme;
@@ -74,6 +75,8 @@ mod sugar;
 #[cfg(test)]
 mod test_helpers;
 
+#[cfg(test)]
+pub(crate) mod coordination_test;
 pub(crate) mod dicovery_pessimization_interceptor;
 #[cfg(test)]
 mod test_integration_helper;

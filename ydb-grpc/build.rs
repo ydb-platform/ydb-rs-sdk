@@ -7,10 +7,11 @@ use walkdir::WalkDir;
 const DST_FOLDER: &str = "src/generated";
 
 const COMPILE_FILES: &[&str] = &[
-    "ydb_scheme_v1.proto",
+    "ydb_coordination_v1.proto",
     "ydb_discovery_v1.proto",
+    "ydb_scheme_v1.proto",
     "ydb_table_v1.proto",
-    "ydb_topic_v1.proto"
+    "ydb_topic_v1.proto",
 ];
 
 const INCLUDE_DIRS: &[&str] = &["ydb-api-protos"];

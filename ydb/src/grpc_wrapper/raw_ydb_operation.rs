@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(Debug,serde::Serialize)]
+#[derive(Debug, serde::Serialize)]
 pub(crate) struct RawOperationParams {
     operation_mode: OperationMode,
     operation_timeout: Option<crate::grpc_wrapper::raw_common_types::Duration>,
