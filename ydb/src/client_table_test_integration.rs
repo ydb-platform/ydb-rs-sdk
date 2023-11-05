@@ -650,7 +650,7 @@ DECLARE $values AS List<Struct<
 
 UPSERT INTO stream_query
 SELECT
-    * 
+    *
 FROM
     AS_TABLE($values);
 ",
