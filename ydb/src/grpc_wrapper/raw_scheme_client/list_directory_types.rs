@@ -48,7 +48,7 @@ impl TryFrom<ydb_grpc::ydb_proto::scheme::ListDirectoryResult> for RawListDirect
     }
 }
 
-fn from_grpc_to_scheme_entry(value: ydb_grpc::ydb_proto::scheme::Entry) -> SchemeEntry {
+pub(crate) fn from_grpc_to_scheme_entry(value: ydb_grpc::ydb_proto::scheme::Entry) -> SchemeEntry {
     SchemeEntry {
         name: value.name,
         owner: value.owner,

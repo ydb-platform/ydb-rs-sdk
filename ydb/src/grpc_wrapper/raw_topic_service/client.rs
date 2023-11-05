@@ -5,7 +5,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage
 use ydb_grpc::ydb_proto::topic::stream_write_message::InitRequest;
 use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
 
-use crate::client_topic::common::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
+use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;

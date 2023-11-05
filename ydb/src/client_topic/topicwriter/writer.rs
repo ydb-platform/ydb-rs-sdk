@@ -1,5 +1,3 @@
-use crate::client_topic::common::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
-use crate::client_topic::topicwriter::init_writer::RawInitResponse;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_write_status::{MessageWriteStatus, WriteAck};
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
@@ -8,7 +6,10 @@ use crate::client_topic::topicwriter::writer_reception_queue::{
 };
 use crate::grpc_connection_manager::GrpcConnectionManager;
 
+use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
+use crate::grpc_wrapper::raw_topic_service::stream_write::init::RawInitResponse;
+use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
 use crate::{grpc_wrapper, YdbError, YdbResult};
 use std::borrow::{Borrow, BorrowMut};
 
@@ -30,7 +31,6 @@ use tracing::log::trace;
 use tracing::warn;
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
-use ydb_grpc::ydb_proto::topic::stream_write_message::from_server::ServerMessage;
 use ydb_grpc::ydb_proto::topic::stream_write_message::init_request::Partitioning;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::{message_data, MessageData};
 use ydb_grpc::ydb_proto::topic::stream_write_message::{InitRequest, WriteRequest};
@@ -70,17 +70,15 @@ pub struct TopicWriter {
 
 #[allow(dead_code)]
 pub struct AckFuture {
-    receiver: tokio::sync::oneshot::Receiver<MessageWriteStatus>
+    receiver: tokio::sync::oneshot::Receiver<MessageWriteStatus>,
 }
 
 impl Future for AckFuture {
     type Output = YdbResult<MessageWriteStatus>;
 
     fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match Pin::new(&mut self.receiver).poll(_cx){
-            Poll::Ready(Ok(result)) =>
-                Poll::Ready(Ok(result))
-            ,
+        match Pin::new(&mut self.receiver).poll(_cx) {
+            Poll::Ready(Ok(result)) => Poll::Ready(Ok(result)),
             Poll::Ready(Err(_)) => Poll::Ready(Err(YdbError::custom("message writer was closed"))),
             Poll::Pending => Poll::Pending,
         }
@@ -120,7 +118,7 @@ impl TopicWriter {
         };
 
         let mut stream = topic_service.stream_write(init_request_body).await?;
-        let init_response = RawInitResponse::try_from(stream.receive().await?)?;
+        let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
 
         let (messages_sender, messages_receiver): (
             mpsc::Sender<TopicWriterMessage>,
@@ -286,14 +284,14 @@ impl TopicWriter {
         >,
         confirmation_reception_queue: &mut Arc<Mutex<TopicWriterReceptionQueue>>,
     ) -> YdbResult<()> {
-        match server_messages_receiver.receive().await {
-            Ok(server_message) => match server_message {
-                ServerMessage::InitResponse(_init_response_body) => {
+        match server_messages_receiver.receive::<RawServerMessage>().await {
+            Ok(message) => match message {
+                RawServerMessage::Init(_init_response_body) => {
                     return Err(YdbError::Custom(
                         "Unexpected message type in stream reader: init_response".to_string(),
                     ));
                 }
-                ServerMessage::WriteResponse(write_response_body) => {
+                RawServerMessage::Write(write_response_body) => {
                     for raw_ack in write_response_body.acks {
                         let write_ack = WriteAck::from(raw_ack);
                         let mut reception_queue = confirmation_reception_queue.lock().unwrap();
@@ -316,7 +314,7 @@ impl TopicWriter {
                         }
                     }
                 }
-                ServerMessage::UpdateTokenResponse(_update_token_response_body) => {}
+                RawServerMessage::UpdateToken(_update_token_response_body) => {}
             },
             Err(some_err) => {
                 return Err(YdbError::from(some_err));
@@ -368,7 +366,7 @@ impl TopicWriter {
     }
 
     pub async fn write_with_ack_future(
-        & mut self,
+        &mut self,
         _message: TopicWriterMessage,
     ) -> YdbResult<AckFuture> {
         let (tx, rx): (
@@ -377,7 +375,7 @@ impl TopicWriter {
         ) = tokio::sync::oneshot::channel();
 
         self.write_message(_message, Some(tx)).await?;
-        Ok(AckFuture{receiver: rx})
+        Ok(AckFuture { receiver: rx })
     }
 
     async fn write_message(
@@ -411,9 +409,9 @@ impl TopicWriter {
                 YdbError::custom(format!("can't send the message to channel: {}", err))
             })?;
 
-
         let reception_type = wait_ack.map_or(
-            TopicWriterReceptionType::NoConfirmationExpected, TopicWriterReceptionType::AwaitingConfirmation
+            TopicWriterReceptionType::NoConfirmationExpected,
+            TopicWriterReceptionType::AwaitingConfirmation,
         );
 
         {

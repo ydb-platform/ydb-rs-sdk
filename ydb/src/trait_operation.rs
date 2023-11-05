@@ -1,13 +1,18 @@
 use std::fmt::Debug;
+use ydb_grpc::ydb_proto::coordination::{
+    AlterNodeResponse, CreateNodeResponse, DescribeNodeResponse, DropNodeResponse,
+};
 use ydb_grpc::ydb_proto::discovery::{ListEndpointsResponse, WhoAmIResponse};
 use ydb_grpc::ydb_proto::operations::Operation as YdbOperation;
-use ydb_grpc::ydb_proto::scheme::{ListDirectoryResponse, MakeDirectoryResponse, RemoveDirectoryResponse};
+use ydb_grpc::ydb_proto::scheme::{
+    ListDirectoryResponse, MakeDirectoryResponse, RemoveDirectoryResponse,
+};
 use ydb_grpc::ydb_proto::table::{
     CommitTransactionResponse, CreateSessionResponse, DeleteSessionResponse,
     ExecuteDataQueryResponse, ExecuteSchemeQueryResponse, KeepAliveResponse,
     RollbackTransactionResponse, CopyTableResponse
 };
-use ydb_grpc::ydb_proto::topic::{CreateTopicResponse,DropTopicResponse};
+use ydb_grpc::ydb_proto::topic::{CreateTopicResponse, DropTopicResponse};
 
 pub(crate) trait Operation: Debug {
     fn operation(&self) -> Option<YdbOperation>;
@@ -37,4 +42,8 @@ operation_impl_for!(ListDirectoryResponse);
 operation_impl_for!(RemoveDirectoryResponse);
 operation_impl_for!(CreateTopicResponse);
 operation_impl_for!(DropTopicResponse);
+operation_impl_for!(CreateNodeResponse);
+operation_impl_for!(DescribeNodeResponse);
+operation_impl_for!(AlterNodeResponse);
+operation_impl_for!(DropNodeResponse);
 operation_impl_for!(CopyTableResponse);

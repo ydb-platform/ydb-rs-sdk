@@ -4,6 +4,12 @@ pub mod google {
     }
 }
 pub mod ydb {
+    pub mod coordination {
+        pub mod v1 {
+            include!("ydb.coordination.v1.rs");
+        }
+        include!("ydb.coordination.rs");
+    }
     pub mod discovery {
         pub mod v1 {
             include!("ydb.discovery.v1.rs");
