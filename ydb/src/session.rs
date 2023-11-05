@@ -169,7 +169,7 @@ impl Session {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn copy_table(
+    pub async fn copy_table(
         &mut self,
         source_path: String,
         destination_path: String,
