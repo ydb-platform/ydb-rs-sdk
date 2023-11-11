@@ -20,7 +20,7 @@ use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
 async fn create_delete_topic_test() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
-    let topic_name = "test_topic".to_string();
+    let topic_name = "del_test_topic".to_string();
     let topic_path = format!("{}/{}", database_path, topic_name);
 
     let mut topic_client = client.topic_client();
@@ -52,7 +52,7 @@ async fn create_delete_topic_test() -> YdbResult<()> {
 async fn send_message_test() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
-    let topic_name = "test_topic".to_string();
+    let topic_name = "send_test_topic".to_string();
     let topic_path = format!("{}/{}", database_path, topic_name);
     let producer_id = "test-producer-id".to_string();
     let consumer_name = "test-consumer".to_string();
