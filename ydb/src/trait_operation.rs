@@ -10,7 +10,7 @@ use ydb_grpc::ydb_proto::scheme::{
 use ydb_grpc::ydb_proto::table::{
     CommitTransactionResponse, CreateSessionResponse, DeleteSessionResponse,
     ExecuteDataQueryResponse, ExecuteSchemeQueryResponse, KeepAliveResponse,
-    RollbackTransactionResponse,
+    RollbackTransactionResponse, CopyTableResponse
 };
 use ydb_grpc::ydb_proto::topic::{CreateTopicResponse, DropTopicResponse};
 
@@ -46,3 +46,4 @@ operation_impl_for!(CreateNodeResponse);
 operation_impl_for!(DescribeNodeResponse);
 operation_impl_for!(AlterNodeResponse);
 operation_impl_for!(DropNodeResponse);
+operation_impl_for!(CopyTableResponse);
