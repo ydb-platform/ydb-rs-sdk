@@ -1,8 +1,7 @@
 use derive_builder::Builder;
 
-use crate::grpc_wrapper::raw_coordination_service::common::config::RawCoordinationNodeConfig;
-use crate::grpc_wrapper::raw_coordination_service::common::config::{
-    RawConsistencyMode, RawRateLimiterCountersMode,
+use crate::grpc_wrapper::raw_coordination_service::config::{
+    RawConsistencyMode, RawCoordinationNodeConfig, RawRateLimiterCountersMode,
 };
 use crate::grpc_wrapper::raw_coordination_service::describe_node::RawDescribeNodeResult;
 use crate::{errors, SchemeEntry};
@@ -97,6 +96,54 @@ impl From<RawDescribeNodeResult> for NodeDescription {
         Self {
             entry: value.self_,
             config: NodeConfig::from(value.config),
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+#[allow(dead_code)]
+pub struct SemaphoreSession {
+    pub order_id: u64,
+    pub session_id: u64,
+    pub timeout_millis: u64,
+    pub count: u64,
+    pub data: Vec<u8>,
+}
+
+impl From<ydb_grpc::ydb_proto::coordination::SemaphoreSession> for SemaphoreSession {
+    fn from(value: ydb_grpc::ydb_proto::coordination::SemaphoreSession) -> Self {
+        Self {
+            order_id: value.order_id,
+            session_id: value.session_id,
+            timeout_millis: value.timeout_millis,
+            count: value.count,
+            data: value.data,
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+#[allow(dead_code)]
+pub struct SemaphoreDescription {
+    pub name: String,
+    pub data: Vec<u8>,
+    pub count: u64,
+    pub limit: u64,
+    pub ephemeral: bool,
+    pub owners: Vec<SemaphoreSession>,
+    pub waiters: Vec<SemaphoreSession>,
+}
+
+impl From<ydb_grpc::ydb_proto::coordination::SemaphoreDescription> for SemaphoreDescription {
+    fn from(value: ydb_grpc::ydb_proto::coordination::SemaphoreDescription) -> Self {
+        Self {
+            name: value.name,
+            data: value.data,
+            count: value.count,
+            limit: value.limit,
+            ephemeral: value.ephemeral,
+            owners: value.owners.into_iter().map(|v| v.into()).collect(),
+            waiters: value.waiters.into_iter().map(|v| v.into()).collect(),
         }
     }
 }

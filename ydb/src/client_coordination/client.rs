@@ -1,11 +1,11 @@
 use crate::client::TimeoutSettings;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_coordination_service::alter_node::RawAlterNodeRequest;
-use crate::grpc_wrapper::raw_coordination_service::common::config::RawCoordinationNodeConfig;
+use crate::grpc_wrapper::raw_coordination_service::config::RawCoordinationNodeConfig;
 use crate::grpc_wrapper::raw_coordination_service::create_node::RawCreateNodeRequest;
 use crate::grpc_wrapper::raw_coordination_service::describe_node::RawDescribeNodeRequest;
 use crate::grpc_wrapper::raw_coordination_service::drop_node::RawDropNodeRequest;
-use crate::{grpc_wrapper, YdbResult};
+use crate::{grpc_wrapper, Session, SessionOptions, YdbResult};
 
 use super::list_types::{NodeConfig, NodeDescription};
 
@@ -23,6 +23,14 @@ impl CoordinationClient {
             timeouts,
             connection_manager,
         }
+    }
+
+    pub async fn create_session(
+        &mut self,
+        _path: String,
+        _options: SessionOptions,
+    ) -> YdbResult<Session> {
+        unimplemented!()
     }
 
     pub async fn create_node(&mut self, path: String, config: NodeConfig) -> YdbResult<()> {

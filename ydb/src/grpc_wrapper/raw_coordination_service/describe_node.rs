@@ -6,7 +6,7 @@ use crate::grpc_wrapper::{
     raw_ydb_operation::RawOperationParams,
 };
 
-use super::common::config::RawCoordinationNodeConfig;
+use super::config::RawCoordinationNodeConfig;
 
 #[derive(Debug)]
 pub(crate) struct RawDescribeNodeRequest {

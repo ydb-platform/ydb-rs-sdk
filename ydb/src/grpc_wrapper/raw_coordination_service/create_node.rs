@@ -2,7 +2,7 @@ use ydb_grpc::ydb_proto::coordination::CreateNodeRequest;
 
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 
-use super::common::config::RawCoordinationNodeConfig;
+use super::config::RawCoordinationNodeConfig;
 
 #[derive(serde::Serialize)]
 pub(crate) struct RawCreateNodeRequest {

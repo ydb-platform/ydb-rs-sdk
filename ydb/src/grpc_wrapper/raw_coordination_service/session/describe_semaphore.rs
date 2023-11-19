@@ -3,16 +3,14 @@ use ydb_grpc::ydb_proto::{
 };
 
 use crate::{
-    grpc_wrapper::{
-        grpc::proto_issues_to_ydb_issues,
-        raw_coordination_service::common::semaphore::RawSemaphoreDescription, raw_errors::RawError,
-    },
+    client_coordination::list_types::SemaphoreDescription,
+    grpc_wrapper::{grpc::proto_issues_to_ydb_issues, raw_errors::RawError},
     YdbStatusError,
 };
 
 pub(crate) struct RawDescribeSemaphoreResult {
     pub req_id: u64,
-    pub semaphore_description: RawSemaphoreDescription,
+    pub semaphore_description: SemaphoreDescription,
     pub watch_added: bool,
 }
 
