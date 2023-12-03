@@ -1,7 +1,6 @@
 use crate::errors;
 use derive_builder::Builder;
 use std::time::Duration;
-use tokio::sync::mpsc::Sender;
 
 pub enum AcquireCount {
     Single,
@@ -15,9 +14,6 @@ pub enum AcquireCount {
 pub struct AcquireOptions {
     #[builder(setter(strip_option), default)]
     pub data: Option<Vec<u8>>,
-
-    #[builder(setter(strip_option), default)]
-    pub(crate) on_enqueued: Option<Sender<()>>,
 
     #[builder(default = "false")]
     pub(crate) ephemeral: bool,

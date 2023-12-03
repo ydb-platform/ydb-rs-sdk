@@ -1,9 +1,12 @@
+use tokio::sync::mpsc;
+use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
+
 use crate::{
     client_coordination::list_types::SemaphoreDescription, AcquireCount, AcquireOptions,
     CoordinationClient, DescribeOptions, YdbResult,
 };
 
-use super::{create_options::SemaphoreLimit, lease::Lease};
+use super::{create_options::SemaphoreLimit, describe_options::WatchOptions, lease::Lease};
 
 pub struct Session;
 
@@ -13,7 +16,7 @@ impl Session {
         unimplemented!()
     }
 
-    pub async fn close(self) -> YdbResult<()> {
+    pub fn alive(&self) -> CancellationToken {
         unimplemented!()
     }
 
@@ -34,6 +37,14 @@ impl Session {
         unimplemented!()
     }
 
+    pub async fn watch_semaphore(
+        &mut self,
+        _name: String,
+        _options: WatchOptions,
+    ) -> YdbResult<mpsc::Receiver<SemaphoreDescription>> {
+        unimplemented!()
+    }
+
     pub async fn update_semaphore(
         &mut self,
         _name: String,
@@ -51,11 +62,11 @@ impl Session {
     }
 
     pub async fn acquire_semaphore(
-        &mut self,
+        &self,
         _name: String,
         _count: AcquireCount,
         _options: AcquireOptions,
-    ) -> YdbResult<Option<Lease>> {
+    ) -> YdbResult<Lease> {
         unimplemented!()
     }
 

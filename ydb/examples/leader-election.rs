@@ -1,144 +1,138 @@
 use std::{sync::Arc, time::Duration};
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::{sync::Mutex, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
 use ydb::{
-    AcquireOptionsBuilder, ClientBuilder, CoordinationClient, DescribeOptionsBuilder, Lease,
-    NodeConfigBuilder, SemaphoreDescription, Session, SessionEvent, SessionOptionsBuilder,
-    WatchMode, YdbResult,
+    AcquireOptionsBuilder, ClientBuilder, CoordinationClient, DescribeOptionsBuilder,
+    NodeConfigBuilder, Session, SessionOptionsBuilder, WatchMode, WatchOptionsBuilder, YdbResult,
 };
 
 #[allow(dead_code)]
 struct ServiceWorker {
     endpoint: String,
+    coordination: CoordinationClient,
     leader_endpoint: Arc<Mutex<Option<String>>>,
-    session: Arc<Mutex<Session>>,
+    explode_token: CancellationToken,
 }
 
 #[allow(dead_code)]
 impl ServiceWorker {
-    async fn new(endpoint: String, mut coordination_client: CoordinationClient) -> Self {
-        let (sender, receiver) = mpsc::channel(1_usize);
-        let session = coordination_client
-            .create_session(
-                // FIXME: to places where session constructed
-                "local/test".to_string(),
-                SessionOptionsBuilder::default()
-                    .on_state_changed(sender.clone())
+    fn new(endpoint: String, coordination: CoordinationClient) -> Self {
+        Self {
+            endpoint,
+            coordination,
+            leader_endpoint: Arc::new(Mutex::new(None)),
+            explode_token: CancellationToken::new(),
+        }
+    }
+
+    async fn get_leader(&self) -> Option<String> {
+        let leader_handle = self.leader_endpoint.lock().await;
+        leader_handle.clone()
+    }
+
+    fn explode(&self) {
+        self.explode_token.cancel();
+    }
+
+    async fn become_leader(&self) {
+        let mut leader_handle = self.leader_endpoint.lock().await;
+        *leader_handle = Some(self.endpoint.clone());
+
+        tokio::time::sleep(tokio::time::Duration::from_secs(100)).await;
+    }
+
+    async fn become_secondary(&self, session: &mut Session) {
+        let mut subscription = session
+            .watch_semaphore(
+                "my-service-leader".to_string(),
+                WatchOptionsBuilder::default()
+                    .watch_mode(WatchMode::Owners)
+                    .describe_options(
+                        DescribeOptionsBuilder::default()
+                            .with_owners(true)
+                            .build()
+                            .unwrap(),
+                    )
                     .build()
                     .unwrap(),
             )
             .await
             .unwrap();
 
-        let session = Arc::new(Mutex::new(session));
-        let session_handle = session.clone();
-
-        // session renewer
-        // TODO: move to sdk?
-        let _ = tokio::spawn(async move {
-            let sender = sender.clone();
-            let mut receiver = receiver;
-            loop {
-                loop {
-                    let event = receiver.recv().await.unwrap();
-                    if let SessionEvent::Expired = event {
-                        break;
-                    }
-                }
-
-                let new_session = coordination_client
-                    .create_session(
-                        // FIXME: to places where session constructed
-                        "local/test".to_string(),
-                        SessionOptionsBuilder::default()
-                            .on_state_changed(sender.clone())
-                            .build()
-                            .unwrap(),
-                    )
-                    .await
-                    .unwrap();
-
-                {
-                    let mut session_lock = session_handle.lock().await;
-                    *session_lock = new_session;
-                }
-            }
-        });
-
-        Self {
-            endpoint,
-            leader_endpoint: Arc::new(Mutex::new(None)),
-            session: session.clone(),
-        }
-    }
-
-    async fn get_leader(&mut self) -> Option<String> {
-        let leader_handle = self.leader_endpoint.lock().await;
-        leader_handle.clone()
-    }
-
-    async fn run(&mut self) {
         loop {
-            let lease: Option<Lease>;
-            {
-                let mut session = self.session.lock().await;
-                lease = session
-                    .acquire_semaphore(
-                        "my-service-leader".to_string(),
-                        ydb::AcquireCount::Single,
-                        AcquireOptionsBuilder::default()
-                            .data(self.endpoint.as_bytes().to_vec())
-                            // try acquire
-                            .timeout(Duration::ZERO)
-                            .build()
-                            .unwrap(),
-                    )
-                    .await
-                    .unwrap();
+            let leader_description = subscription.recv().await;
+            if let None = leader_description {
+                break;
             }
 
-            match lease {
-                Some(_) => {
+            match leader_description.unwrap().owners.first() {
+                Some(owner) => {
                     let mut leader_handle = self.leader_endpoint.lock().await;
-                    *leader_handle = Some(self.endpoint.clone());
-
-                    tokio::time::sleep(tokio::time::Duration::from_secs(100)).await;
+                    *leader_handle = Some(String::from_utf8(owner.data.clone()).unwrap());
                 }
                 None => {
-                    let (sender, mut receiver) = mpsc::channel(1_usize);
-
-                    let leader_description: SemaphoreDescription;
-                    {
-                        let mut session = self.session.lock().await;
-                        leader_description = session
-                            .describe_semaphore(
-                                "my-service-leader".to_string(),
-                                DescribeOptionsBuilder::default()
-                                    .watch_mode(WatchMode::Owners)
-                                    .with_owners(true)
-                                    .on_changed(sender.clone())
-                                    .build()
-                                    .unwrap(),
-                            )
-                            .await
-                            .unwrap();
-                    }
-
-                    match leader_description.owners.first() {
-                        Some(owner) => {
-                            let mut leader_handle = self.leader_endpoint.lock().await;
-                            *leader_handle = Some(String::from_utf8(owner.data.clone()).unwrap());
-                        }
-                        None => {
-                            // try reacquire
-                            continue;
-                        }
-                    }
-
-                    receiver.recv().await.unwrap();
+                    // try reacquire
+                    break;
                 }
             }
         }
+    }
+
+    async fn do_work(&self, mut session: Session) {
+        loop {
+            let lease = session
+                .acquire_semaphore(
+                    "my-service-leader".to_string(),
+                    ydb::AcquireCount::Single,
+                    AcquireOptionsBuilder::default()
+                        .data(self.endpoint.as_bytes().to_vec())
+                        // try acquire
+                        .timeout(Duration::ZERO)
+                        .build()
+                        .unwrap(),
+                )
+                .await;
+
+            match lease {
+                Ok(lease) => {
+                    let lease_alive = lease.alive();
+                    tokio::select! {
+                        _ = lease_alive.cancelled() => {},
+                        _ = self.become_leader() => {},
+                    }
+                }
+                Err(_) => {
+                    self.become_secondary(&mut session).await;
+                }
+            }
+        }
+    }
+
+    async fn run(&self, session: Session) {
+        let session_alive_token = session.alive();
+        let explode_token = self.explode_token.clone();
+        tokio::select! {
+            _ = session_alive_token.cancelled() => {},
+            _ = explode_token.cancelled() => {},
+            _ = self.do_work(session) => {},
+        }
+    }
+}
+
+async fn explode_leader(workers: &Vec<Arc<ServiceWorker>>) {
+    let leader_1 = workers[0].get_leader().await;
+    let leader_2 = workers[1].get_leader().await;
+    let leader_3 = workers[2].get_leader().await;
+
+    assert_eq!(leader_1, leader_2);
+    assert_eq!(leader_2, leader_3);
+
+    match leader_1.unwrap().as_str() {
+        "endpoint-1" => workers[0].explode(),
+        "endpoint-2" => workers[1].explode(),
+        "endpoint-3" => workers[2].explode(),
+        _ => unreachable!("bad leader"),
     }
 }
 
@@ -176,28 +170,40 @@ async fn main() -> YdbResult<()> {
         )
         .await?;
 
-    let client_1 = client.coordination_client();
-    let client_2 = client.coordination_client();
-    let client_3 = client.coordination_client();
-
     let workers = vec![
-        tokio::spawn(async move {
-            let mut worker = ServiceWorker::new("endpoint-1".to_string(), client_1).await;
-            worker.run().await;
-        }),
-        tokio::spawn(async move {
-            let mut worker = ServiceWorker::new("endpoint-2".to_string(), client_2).await;
-            worker.run().await;
-        }),
-        tokio::spawn(async move {
-            let mut worker = ServiceWorker::new("endpoint-3".to_string(), client_3).await;
-            worker.run().await;
-        }),
+        Arc::new(ServiceWorker::new(
+            "endpoint-1".to_string(),
+            client.coordination_client(),
+        )),
+        Arc::new(ServiceWorker::new(
+            "endpoint-2".to_string(),
+            client.coordination_client(),
+        )),
+        Arc::new(ServiceWorker::new(
+            "endpoint-3".to_string(),
+            client.coordination_client(),
+        )),
     ];
 
-    for worker in workers {
-        worker.await.unwrap();
+    let mut handles: Vec<JoinHandle<()>> = vec![];
+    for worker in workers.iter() {
+        let worker_ref = worker.clone();
+        let worker_session = coordination_client
+            .create_session(
+                "local/test".to_string(),
+                SessionOptionsBuilder::default().build()?,
+            )
+            .await?;
+
+        handles.push(tokio::spawn(async move {
+            worker_ref.run(worker_session).await;
+        }))
     }
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    explode_leader(&workers).await;
+
+    futures_util::future::join_all(handles).await;
 
     Ok(())
 }

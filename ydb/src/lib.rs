@@ -103,7 +103,7 @@ pub use client_coordination::session::acquire_options::{
 };
 pub use client_coordination::session::create_options::SemaphoreLimit;
 pub use client_coordination::session::describe_options::{
-    DescribeOptions, DescribeOptionsBuilder, WatchMode,
+    DescribeOptions, DescribeOptionsBuilder, WatchMode, WatchOptions, WatchOptionsBuilder,
 };
 pub use client_coordination::session::lease::Lease;
 pub use client_coordination::session::session::Session;

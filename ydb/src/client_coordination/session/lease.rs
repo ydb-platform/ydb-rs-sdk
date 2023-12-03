@@ -1,4 +1,6 @@
-use crate::{SemaphoreDescription, YdbResult};
+use tokio_util::sync::CancellationToken;
+
+use crate::YdbResult;
 
 pub struct Lease;
 
@@ -8,8 +10,8 @@ impl Lease {
         unimplemented!()
     }
 
-    pub async fn release(mut self) -> YdbResult<()> {
-        self.release_impl().await
+    pub fn alive(&self) -> CancellationToken {
+        unimplemented!()
     }
 
     async fn release_impl(&mut self) -> YdbResult<()> {
