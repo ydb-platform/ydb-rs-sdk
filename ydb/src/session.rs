@@ -24,8 +24,10 @@ use ydb_grpc::ydb_proto::table::{
     execute_scan_query_request,
     ExecuteScanQueryRequest,
 };
-use crate::grpc_wrapper::raw_table_service::copy_table::RawCopyTableRequest;
 use crate::grpc_wrapper::raw_table_service::execute_data_query::{RawExecuteDataQueryRequest};
+use crate::grpc_wrapper::raw_table_service::copy_table::{
+    RawCopyTableRequest, RawCopyTableItem, RawCopyTablesRequest
+};
 
 static REQUEST_NUMBER: AtomicI64 = AtomicI64::new(0);
 static DEFAULT_COLLECT_STAT_MODE: CollectStatsMode = CollectStatsMode::None;
@@ -181,6 +183,23 @@ impl Session {
                 source_path,
                 destination_path,
                 operation_params: self.timeouts.operation_params(),
+            })
+            .await;
+
+        self.handle_raw_result(res)
+    }
+
+    #[allow(dead_code)]
+    pub async fn copy_tables(
+        &mut self,
+        tables: Vec<RawCopyTableItem>,
+    ) -> YdbResult<()> {
+        let mut table = self.get_table_client().await?;
+        let res = table
+            .copy_tables(RawCopyTablesRequest {
+                operation_params: self.timeouts.operation_params(),
+                session_id: self.id.clone(),
+                tables,
             })
             .await;
 
