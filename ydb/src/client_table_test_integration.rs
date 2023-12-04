@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::UNIX_EPOCH;
 
+use rand::distributions::{Alphanumeric, DistString};
 use tonic::{Code, Status};
 use tracing::trace;
 use tracing_test::traced_test;
@@ -16,6 +17,7 @@ use crate::transaction::Mode;
 use crate::transaction::Transaction;
 use crate::types::{Value, ValueList, ValueStruct};
 use crate::{ydb_params, Bytes, TableClient};
+use crate::table_service_types::WrappedCopyTableItem;
 
 #[tokio::test]
 #[traced_test]
@@ -198,8 +200,8 @@ async fn copy_table() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
 
-    let time_now = time::SystemTime::now().duration_since(UNIX_EPOCH)?;
-    let table_name = format!("temp_table_{}", time_now.as_millis());
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_name = format!("temp_table_{}", rand_str);
     let copy_table_name = format!("copy_{}", table_name);
 
     table_client
@@ -243,6 +245,114 @@ async fn copy_table() -> YdbResult<()> {
                 .copy_table(
                     format!("{}/{}", database_path, table_name),
                     format!("{}/{}", database_path, copy_table_name),
+                )
+                .await?;
+
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let res = transaction
+        .query(
+            format!(
+                "SELECT vInt64 FROM {} WHERE id=1",
+                copy_table_name
+            ).into()
+        )
+        .await?;
+
+    assert_eq!(
+        Value::optional_from(Value::Int64(0), Some(Value::Int64(2)))?,
+        res
+            .into_only_result()
+            .unwrap()
+            .rows()
+            .next()
+            .unwrap()
+            .remove_field_by_name("vInt64")
+            .unwrap()
+    );
+
+    for &target in [&table_name, &copy_table_name].iter() {
+        table_client
+            .retry_with_session(RetryOptions::new(), |session| async {
+                let mut session = session; // force borrow for lifetime of t inside closure
+                session
+                    .execute_schema_query(
+                        format!(
+                            "DROP TABLE {}",
+                            target
+                        )
+                    )
+                    .await?;
+
+                Ok(())
+            })
+            .await
+            .unwrap();
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn copy_tables() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_name = format!("temp_table_{}", rand_str);
+    let copy_table_name = format!("copy_{}", table_name);
+
+    table_client
+        .retry_with_session(RetryOptions::new(), |session| async {
+            let mut session = session; // force borrow for lifetime of t inside closure
+            session
+                .execute_schema_query(
+                    format!(
+                        "CREATE TABLE {} (id Int64, vInt64 Int64, PRIMARY KEY (id))",
+                        table_name
+                    )
+                )
+                .await?;
+
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let mut transaction = table_client
+        .create_autocommit_transaction(Mode::SerializableReadWrite);
+
+    let mut interactive_tx = table_client
+        .create_interactive_transaction();
+
+    interactive_tx.query(
+        format!(
+            "UPSERT INTO {} (id, vInt64) VALUES (1, 2)",
+            table_name
+        ).into()
+    ).await?;
+
+    interactive_tx.commit().await?;
+
+    table_client
+        .retry_with_session(RetryOptions::new(), |session| async {
+            let mut session = session; // force borrow for lifetime of t inside closure
+            let database_path = client.database();
+
+            session
+                .copy_tables(
+                    vec![
+                        WrappedCopyTableItem::new(
+                            format!("{}/{}", database_path, table_name),
+                            format!("{}/{}", database_path, copy_table_name),
+                            true
+                        )
+                    ]
                 )
                 .await?;
 
