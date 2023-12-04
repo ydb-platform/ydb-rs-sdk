@@ -21,7 +21,6 @@ impl From<RawCopyTableRequest>
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct RawCopyTableItem {
     pub source_path: String,
     pub destination_path: String,

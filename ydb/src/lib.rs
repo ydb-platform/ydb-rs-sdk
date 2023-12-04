@@ -87,6 +87,7 @@ mod trait_operation;
 pub(crate) mod transaction;
 mod types;
 mod types_converters;
+mod table_service_types;
 pub(crate) mod waiter;
 
 #[cfg(test)]
