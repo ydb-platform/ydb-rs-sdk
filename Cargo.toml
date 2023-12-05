@@ -4,5 +4,6 @@ members = [
     "ydb",
     "ydb-grpc",
 #    "ydb-grpc-helpers",
-    "ydb-example-urlshortener"
+    "ydb-example-urlshortener",
+    "ydb/examples/todo-list"
 ]
