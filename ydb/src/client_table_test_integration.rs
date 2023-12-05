@@ -236,20 +236,12 @@ async fn copy_table() -> YdbResult<()> {
 
     interactive_tx.commit().await?;
 
+    let database_path = client.database();
     table_client
-        .retry_with_session(RetryOptions::new(), |session| async {
-            let mut session = session; // force borrow for lifetime of t inside closure
-            let database_path = client.database();
-
-            session
-                .copy_table(
-                    format!("{}/{}", database_path, table_name),
-                    format!("{}/{}", database_path, copy_table_name),
-                )
-                .await?;
-
-            Ok(())
-        })
+        .copy_table(
+            format!("{}/{}", database_path, table_name),
+            format!("{}/{}", database_path, copy_table_name),
+        )
         .await
         .unwrap();
 
@@ -339,25 +331,17 @@ async fn copy_tables() -> YdbResult<()> {
 
     interactive_tx.commit().await?;
 
+    let database_path = client.database();
     table_client
-        .retry_with_session(RetryOptions::new(), |session| async {
-            let mut session = session; // force borrow for lifetime of t inside closure
-            let database_path = client.database();
-
-            session
-                .copy_tables(
-                    vec![
-                        CopyTableItem::new(
-                            format!("{}/{}", database_path, table_name),
-                            format!("{}/{}", database_path, copy_table_name),
-                            true
-                        )
-                    ]
+        .copy_tables(
+            vec![
+                CopyTableItem::new(
+                    format!("{}/{}", database_path, table_name),
+                    format!("{}/{}", database_path, copy_table_name),
+                    true
                 )
-                .await?;
-
-            Ok(())
-        })
+            ],
+        )
         .await
         .unwrap();
 

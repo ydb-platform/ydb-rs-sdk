@@ -1,5 +1,6 @@
 use crate::grpc_wrapper::raw_table_service::copy_table::RawCopyTableItem;
 
+#[derive(Clone)]
 pub struct CopyTableItem {
     inner: RawCopyTableItem,
 }

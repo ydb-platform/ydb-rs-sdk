@@ -173,7 +173,6 @@ impl Session {
         self.handle_raw_result(res)
     }
 
-    #[allow(dead_code)]
     pub async fn copy_table(
         &mut self,
         source_path: String,
@@ -192,7 +191,6 @@ impl Session {
         self.handle_raw_result(res)
     }
 
-    #[allow(dead_code)]
     pub async fn copy_tables(
         &mut self,
         tables: Vec<CopyTableItem>,
