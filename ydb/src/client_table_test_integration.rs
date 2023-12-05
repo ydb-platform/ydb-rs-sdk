@@ -17,7 +17,7 @@ use crate::transaction::Mode;
 use crate::transaction::Transaction;
 use crate::types::{Value, ValueList, ValueStruct};
 use crate::{ydb_params, Bytes, TableClient};
-use crate::table_service_types::WrappedCopyTableItem;
+use crate::table_service_types::CopyTableItem;
 
 #[tokio::test]
 #[traced_test]
@@ -347,7 +347,7 @@ async fn copy_tables() -> YdbResult<()> {
             session
                 .copy_tables(
                     vec![
-                        WrappedCopyTableItem::new(
+                        CopyTableItem::new(
                             format!("{}/{}", database_path, table_name),
                             format!("{}/{}", database_path, copy_table_name),
                             true

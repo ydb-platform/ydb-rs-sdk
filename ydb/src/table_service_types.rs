@@ -1,10 +1,10 @@
 use crate::grpc_wrapper::raw_table_service::copy_table::RawCopyTableItem;
 
-pub struct WrappedCopyTableItem {
+pub struct CopyTableItem {
     inner: RawCopyTableItem,
 }
 
-impl WrappedCopyTableItem {
+impl CopyTableItem {
     #[allow(dead_code)]
     pub fn new(
         source_path: String,
@@ -21,8 +21,8 @@ impl WrappedCopyTableItem {
     }
 }
 
-impl From<WrappedCopyTableItem> for RawCopyTableItem {
-    fn from(value: WrappedCopyTableItem) -> Self {
+impl From<CopyTableItem> for RawCopyTableItem {
+    fn from(value: CopyTableItem) -> Self {
         value.inner
     }
 }

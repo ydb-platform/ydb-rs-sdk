@@ -30,7 +30,7 @@ use crate::grpc_wrapper::raw_table_service::copy_table::{
     RawCopyTableRequest,
     RawCopyTablesRequest
 };
-use crate::table_service_types::WrappedCopyTableItem;
+use crate::table_service_types::CopyTableItem;
 
 static REQUEST_NUMBER: AtomicI64 = AtomicI64::new(0);
 static DEFAULT_COLLECT_STAT_MODE: CollectStatsMode = CollectStatsMode::None;
@@ -195,7 +195,7 @@ impl Session {
     #[allow(dead_code)]
     pub async fn copy_tables(
         &mut self,
-        tables: Vec<WrappedCopyTableItem>,
+        tables: Vec<CopyTableItem>,
     ) -> YdbResult<()> {
         let mut table = self.get_table_client().await?;
         let res = table
