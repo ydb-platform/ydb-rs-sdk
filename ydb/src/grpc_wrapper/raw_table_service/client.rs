@@ -13,7 +13,7 @@ use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTra
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use tracing::trace;
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
-use crate::grpc_wrapper::raw_table_service::copy_table::RawCopyTableRequest;
+use crate::grpc_wrapper::raw_table_service::copy_table::{RawCopyTableRequest, RawCopyTablesRequest};
 use crate::grpc_wrapper::raw_table_service::execute_data_query::{RawExecuteDataQueryRequest, RawExecuteDataQueryResult};
 
 pub(crate) struct RawTableClient {
@@ -100,6 +100,16 @@ impl RawTableClient {
         request_without_result!(
             self.service.copy_table,
             req => ydb_grpc::ydb_proto::table::CopyTableRequest
+        );
+    }
+
+    pub async fn copy_tables(
+        &mut self,
+        req: RawCopyTablesRequest,
+    ) -> RawResult<()> {
+        request_without_result!(
+            self.service.copy_tables,
+            req => ydb_grpc::ydb_proto::table::CopyTablesRequest
         );
     }
 }
