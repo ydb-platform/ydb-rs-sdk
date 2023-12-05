@@ -31,6 +31,13 @@ impl YdbOrCustomerError {
     pub fn from_err<T: std::error::Error + 'static + Send + Sync>(err: T) -> Self {
         Self::Customer(Arc::new(Box::new(err)))
     }
+
+    pub fn to_ydb_error(self) -> YdbError {
+        match self {
+            Self::YDB(err) => err,
+            Self::Customer(err) => YdbError::custom(format!("{}", err)),
+        }
+    }
 }
 
 impl Debug for YdbOrCustomerError {
