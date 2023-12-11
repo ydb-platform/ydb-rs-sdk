@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::iter::FromIterator;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time;
 use std::time::UNIX_EPOCH;
+use tokio::sync::Mutex as AsyncMutex;
 
 use rand::distributions::{Alphanumeric, DistString};
 use tonic::{Code, Status};
@@ -12,12 +13,12 @@ use tracing_test::traced_test;
 use crate::client_table::RetryOptions;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::query::Query;
+use crate::table_service_types::CopyTableItem;
 use crate::test_integration_helper::create_client;
 use crate::transaction::Mode;
 use crate::transaction::Transaction;
 use crate::types::{Value, ValueList, ValueStruct};
 use crate::{ydb_params, Bytes, TableClient};
-use crate::table_service_types::CopyTableItem;
 
 #[tokio::test]
 #[traced_test]
@@ -185,9 +186,7 @@ async fn interactive_transaction() -> YdbResult<()> {
         .table_client()
         .create_session()
         .await?
-        .execute_schema_query(
-            "DROP TABLE test_values".to_string(),
-        )
+        .execute_schema_query("DROP TABLE test_values".to_string())
         .await?;
 
     Ok(())
@@ -208,12 +207,10 @@ async fn copy_table() -> YdbResult<()> {
         .retry_with_session(RetryOptions::new(), |session| async {
             let mut session = session; // force borrow for lifetime of t inside closure
             session
-                .execute_schema_query(
-                    format!(
-                        "CREATE TABLE {} (id Int64, vInt64 Int64, PRIMARY KEY (id))",
-                        table_name
-                    )
-                )
+                .execute_schema_query(format!(
+                    "CREATE TABLE {} (id Int64, vInt64 Int64, PRIMARY KEY (id))",
+                    table_name
+                ))
                 .await?;
 
             Ok(())
@@ -221,18 +218,13 @@ async fn copy_table() -> YdbResult<()> {
         .await
         .unwrap();
 
-    let mut transaction = table_client
-        .create_autocommit_transaction(Mode::SerializableReadWrite);
+    let mut transaction = table_client.create_autocommit_transaction(Mode::SerializableReadWrite);
 
-    let mut interactive_tx = table_client
-        .create_interactive_transaction();
+    let mut interactive_tx = table_client.create_interactive_transaction();
 
-    interactive_tx.query(
-        format!(
-            "UPSERT INTO {} (id, vInt64) VALUES (1, 2)",
-            table_name
-        ).into()
-    ).await?;
+    interactive_tx
+        .query(format!("UPSERT INTO {} (id, vInt64) VALUES (1, 2)", table_name).into())
+        .await?;
 
     interactive_tx.commit().await?;
 
@@ -246,18 +238,12 @@ async fn copy_table() -> YdbResult<()> {
         .unwrap();
 
     let res = transaction
-        .query(
-            format!(
-                "SELECT vInt64 FROM {} WHERE id=1",
-                copy_table_name
-            ).into()
-        )
+        .query(format!("SELECT vInt64 FROM {} WHERE id=1", copy_table_name).into())
         .await?;
 
     assert_eq!(
         Value::optional_from(Value::Int64(0), Some(Value::Int64(2)))?,
-        res
-            .into_only_result()
+        res.into_only_result()
             .unwrap()
             .rows()
             .next()
@@ -271,12 +257,7 @@ async fn copy_table() -> YdbResult<()> {
             .retry_with_session(RetryOptions::new(), |session| async {
                 let mut session = session; // force borrow for lifetime of t inside closure
                 session
-                    .execute_schema_query(
-                        format!(
-                            "DROP TABLE {}",
-                            target
-                        )
-                    )
+                    .execute_schema_query(format!("DROP TABLE {}", target))
                     .await?;
 
                 Ok(())
@@ -303,12 +284,10 @@ async fn copy_tables() -> YdbResult<()> {
         .retry_with_session(RetryOptions::new(), |session| async {
             let mut session = session; // force borrow for lifetime of t inside closure
             session
-                .execute_schema_query(
-                    format!(
-                        "CREATE TABLE {} (id Int64, vInt64 Int64, PRIMARY KEY (id))",
-                        table_name
-                    )
-                )
+                .execute_schema_query(format!(
+                    "CREATE TABLE {} (id Int64, vInt64 Int64, PRIMARY KEY (id))",
+                    table_name
+                ))
                 .await?;
 
             Ok(())
@@ -316,48 +295,33 @@ async fn copy_tables() -> YdbResult<()> {
         .await
         .unwrap();
 
-    let mut transaction = table_client
-        .create_autocommit_transaction(Mode::SerializableReadWrite);
+    let mut transaction = table_client.create_autocommit_transaction(Mode::SerializableReadWrite);
 
-    let mut interactive_tx = table_client
-        .create_interactive_transaction();
+    let mut interactive_tx = table_client.create_interactive_transaction();
 
-    interactive_tx.query(
-        format!(
-            "UPSERT INTO {} (id, vInt64) VALUES (1, 2)",
-            table_name
-        ).into()
-    ).await?;
+    interactive_tx
+        .query(format!("UPSERT INTO {} (id, vInt64) VALUES (1, 2)", table_name).into())
+        .await?;
 
     interactive_tx.commit().await?;
 
     let database_path = client.database();
     table_client
-        .copy_tables(
-            vec![
-                CopyTableItem::new(
-                    format!("{}/{}", database_path, table_name),
-                    format!("{}/{}", database_path, copy_table_name),
-                    true
-                )
-            ],
-        )
+        .copy_tables(vec![CopyTableItem::new(
+            format!("{}/{}", database_path, table_name),
+            format!("{}/{}", database_path, copy_table_name),
+            true,
+        )])
         .await
         .unwrap();
 
     let res = transaction
-        .query(
-            format!(
-                "SELECT vInt64 FROM {} WHERE id=1",
-                copy_table_name
-            ).into()
-        )
+        .query(format!("SELECT vInt64 FROM {} WHERE id=1", copy_table_name).into())
         .await?;
 
     assert_eq!(
         Value::optional_from(Value::Int64(0), Some(Value::Int64(2)))?,
-        res
-            .into_only_result()
+        res.into_only_result()
             .unwrap()
             .rows()
             .next()
@@ -371,12 +335,7 @@ async fn copy_tables() -> YdbResult<()> {
             .retry_with_session(RetryOptions::new(), |session| async {
                 let mut session = session; // force borrow for lifetime of t inside closure
                 session
-                    .execute_schema_query(
-                        format!(
-                            "DROP TABLE {}",
-                            target
-                        )
-                    )
+                    .execute_schema_query(format!("DROP TABLE {}", target))
                     .await?;
 
                 Ok(())
@@ -394,12 +353,12 @@ async fn copy_tables() -> YdbResult<()> {
 async fn retry_test() -> YdbResult<()> {
     let client = create_client().await?;
 
-    let attempt = Arc::new(Mutex::new(0));
+    let attempt = Arc::new(AsyncMutex::new(0));
     let res = client
         .table_client()
         .retry_transaction(|t| async {
             let mut t = t; // force borrow for lifetime of t inside closure
-            let mut locked_res = attempt.lock().unwrap();
+            let mut locked_res = attempt.lock().await;
             *locked_res += 1;
 
             let res = t.query(Query::new("SELECT 1+1 as res")).await?;
