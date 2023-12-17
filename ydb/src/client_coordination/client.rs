@@ -13,6 +13,9 @@ use super::list_types::{NodeConfig, NodeDescription};
 
 pub struct CoordinationClient {
     timeouts: TimeoutSettings,
+
+    session_seq_no: u64,
+
     connection_manager: GrpcConnectionManager,
 }
 
@@ -23,16 +26,20 @@ impl CoordinationClient {
     ) -> Self {
         Self {
             timeouts,
+            session_seq_no: 0,
             connection_manager,
         }
     }
 
     pub async fn create_session(
         &mut self,
-        _path: String,
-        _options: SessionOptions,
+        path: String,
+        options: SessionOptions,
     ) -> YdbResult<Session> {
-        unimplemented!()
+        let seq_no = self.session_seq_no;
+        self.session_seq_no += 1;
+
+        Ok(Session::new(path, seq_no, options, self.connection_manager.clone()).await?)
     }
 
     pub async fn create_node(&mut self, path: String, config: NodeConfig) -> YdbResult<()> {

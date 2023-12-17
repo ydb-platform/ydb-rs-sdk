@@ -8,6 +8,16 @@ pub enum AcquireCount {
     Custom(u64),
 }
 
+impl From<AcquireCount> for u64 {
+    fn from(value: AcquireCount) -> Self {
+        match value {
+            AcquireCount::Single => 1,
+            AcquireCount::Exclusive => u64::MAX,
+            AcquireCount::Custom(count) => count,
+        }
+    }
+}
+
 #[derive(Builder, Clone)]
 #[builder(build_fn(error = "errors::YdbError"))]
 #[allow(dead_code)]

@@ -1,14 +1,65 @@
 use ydb_grpc::ydb_proto::{
-    coordination::session_response::CreateSemaphoreResult, status_ids::StatusCode,
+    coordination::{session_request, session_response::CreateSemaphoreResult},
+    status_ids::StatusCode,
 };
 
 use crate::{
+    client_coordination::session::session::IdentifiedMessage,
     grpc_wrapper::{grpc::proto_issues_to_ydb_issues, raw_errors::RawError},
-    YdbStatusError,
+    SemaphoreLimit, YdbStatusError,
 };
+
+pub(crate) struct RawCreateSemaphoreRequest {
+    pub req_id: u64,
+    pub name: String,
+    pub limit: SemaphoreLimit,
+    pub data: Vec<u8>,
+}
 
 pub(crate) struct RawCreateSemaphoreResult {
     pub req_id: u64,
+}
+
+impl RawCreateSemaphoreRequest {
+    pub fn new(name: String, limit: SemaphoreLimit, data: Vec<u8>) -> Self {
+        Self {
+            req_id: 0,
+            name,
+            limit,
+            data,
+        }
+    }
+}
+
+impl IdentifiedMessage for RawCreateSemaphoreRequest {
+    fn id(&self) -> u64 {
+        self.req_id
+    }
+
+    fn set_id(&mut self, id: u64) {
+        self.req_id = id
+    }
+}
+
+impl From<RawCreateSemaphoreRequest> for session_request::Request {
+    fn from(value: RawCreateSemaphoreRequest) -> Self {
+        session_request::Request::CreateSemaphore(session_request::CreateSemaphore {
+            req_id: value.req_id,
+            name: value.name,
+            limit: value.limit.into(),
+            data: value.data,
+        })
+    }
+}
+
+impl IdentifiedMessage for RawCreateSemaphoreResult {
+    fn id(&self) -> u64 {
+        self.req_id
+    }
+
+    fn set_id(&mut self, id: u64) {
+        self.req_id = id
+    }
 }
 
 impl TryFrom<CreateSemaphoreResult> for RawCreateSemaphoreResult {
