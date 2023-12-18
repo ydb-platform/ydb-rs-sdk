@@ -2,6 +2,7 @@ use crate::errors;
 use derive_builder::Builder;
 use std::time::Duration;
 
+#[derive(Debug)]
 pub enum AcquireCount {
     Single,
     Exclusive,

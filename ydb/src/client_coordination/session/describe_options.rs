@@ -1,7 +1,7 @@
 use crate::errors;
 use derive_builder::Builder;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum WatchMode {
     Data,

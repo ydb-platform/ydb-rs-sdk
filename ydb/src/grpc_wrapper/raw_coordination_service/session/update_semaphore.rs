@@ -9,12 +9,14 @@ use crate::{
     YdbStatusError,
 };
 
+#[derive(Debug)]
 pub(crate) struct RawUpdateSemaphoreRequest {
     pub req_id: u64,
     pub name: String,
     pub data: Option<Vec<u8>>,
 }
 
+#[derive(Debug)]
 pub(crate) struct RawUpdateSemaphoreResult {
     pub req_id: u64,
 }

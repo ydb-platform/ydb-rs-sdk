@@ -9,11 +9,13 @@ use crate::{
     YdbStatusError,
 };
 
+#[derive(Debug)]
 pub(crate) struct RawReleaseSemaphoreRequest {
     pub req_id: u64,
     pub name: String,
 }
 
+#[derive(Debug)]
 pub(crate) struct RawReleaseSemaphoreResult {
     pub req_id: u64,
     pub released: bool,

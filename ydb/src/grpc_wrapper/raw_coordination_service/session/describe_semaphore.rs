@@ -9,6 +9,7 @@ use crate::{
     WatchMode, YdbStatusError,
 };
 
+#[derive(Debug)]
 pub(crate) struct RawDescribeSemaphoreRequest {
     pub req_id: u64,
     pub name: String,
@@ -17,6 +18,7 @@ pub(crate) struct RawDescribeSemaphoreRequest {
     pub watch_mode: Option<WatchMode>,
 }
 
+#[derive(Debug)]
 pub(crate) struct RawDescribeSemaphoreResult {
     pub req_id: u64,
     pub semaphore_description: SemaphoreDescription,

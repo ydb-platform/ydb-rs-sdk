@@ -5,6 +5,7 @@ use crate::{
     Session,
 };
 
+#[allow(dead_code)]
 pub struct Lease<'a> {
     session: &'a Session,
     semaphore_name: String,
@@ -29,13 +30,17 @@ impl<'a> Lease<'a> {
         self.cancellation_token.clone()
     }
 
-    fn release_impl(mut self) {
+    pub fn release(mut self) {
+        self.release_impl()
+    }
+
+    pub fn release_impl(&mut self) {
         self.cancellation_token.cancel();
-        drop(
-            self.session
-                .release_semaphore
-                .send(RawReleaseSemaphoreRequest::new(self.semaphore_name)),
-        );
+        //drop(
+        //    self.session
+        //        .release_semaphore
+        //        .send(RawReleaseSemaphoreRequest::new(self.semaphore_name)),
+        //);
     }
 }
 

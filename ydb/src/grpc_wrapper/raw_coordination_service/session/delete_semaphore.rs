@@ -9,12 +9,14 @@ use crate::{
     YdbStatusError,
 };
 
+#[derive(Debug)]
 pub(crate) struct RawDeleteSemaphoreRequest {
     pub req_id: u64,
     pub name: String,
     pub force: bool,
 }
 
+#[derive(Debug)]
 pub(crate) struct RawDeleteSemaphoreResult {
     pub req_id: u64,
 }

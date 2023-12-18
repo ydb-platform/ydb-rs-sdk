@@ -37,7 +37,7 @@ async fn main() -> YdbResult<()> {
 
     let _ = coordination_client
         .drop_node("local/test".to_string())
-        .await?;
+        .await;
 
     coordination_client
         .create_node(
@@ -57,27 +57,29 @@ async fn main() -> YdbResult<()> {
         .create_semaphore("my-resource".to_string(), ydb::SemaphoreLimit::Mutex, None)
         .await?;
 
-    let mut handles: Vec<JoinHandle<()>> = vec![];
-    for _ in range(0, 4) {
-        let mut client = client.coordination_client();
-        handles.push(tokio::spawn(async move {
-            let mut session = client
-                .create_session(
-                    "local/test".to_string(),
-                    SessionOptionsBuilder::default().build().unwrap(),
-                )
-                .await
-                .unwrap();
+    println!("done");
 
-            let session_alive_token = session.alive();
-            tokio::select! {
-                _ = session_alive_token.cancelled() => {},
-                _ = mutex_work(&mut session) => {},
-            }
-        }));
-    }
+    // let mut handles: Vec<JoinHandle<()>> = vec![];
+    // for _ in range(0, 4) {
+    //     let mut client = client.coordination_client();
+    //     handles.push(tokio::spawn(async move {
+    //         let mut session = client
+    //             .create_session(
+    //                 "local/test".to_string(),
+    //                 SessionOptionsBuilder::default().build().unwrap(),
+    //             )
+    //             .await
+    //             .unwrap();
 
-    futures_util::future::join_all(handles).await;
+    //         let session_alive_token = session.alive();
+    //         tokio::select! {
+    //             _ = session_alive_token.cancelled() => {},
+    //             _ = mutex_work(&mut session) => {},
+    //         }
+    //     }));
+    // }
+
+    // futures_util::future::join_all(handles).await;
 
     Ok(())
 }

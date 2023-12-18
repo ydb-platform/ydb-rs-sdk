@@ -11,6 +11,7 @@ use crate::{
     AcquireCount, YdbStatusError,
 };
 
+#[derive(Debug)]
 pub(crate) struct RawAcquireSemaphoreRequest {
     pub req_id: u64,
     pub name: String,
@@ -20,6 +21,7 @@ pub(crate) struct RawAcquireSemaphoreRequest {
     pub data: Option<Vec<u8>>,
 }
 
+#[derive(Debug)]
 pub(crate) struct RawAcquireSemaphoreResult {
     pub req_id: u64,
     pub acquired: bool,

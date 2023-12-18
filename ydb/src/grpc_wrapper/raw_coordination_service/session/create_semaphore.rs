@@ -9,6 +9,7 @@ use crate::{
     SemaphoreLimit, YdbStatusError,
 };
 
+#[derive(Debug)]
 pub(crate) struct RawCreateSemaphoreRequest {
     pub req_id: u64,
     pub name: String,
@@ -16,6 +17,7 @@ pub(crate) struct RawCreateSemaphoreRequest {
     pub data: Vec<u8>,
 }
 
+#[derive(Debug)]
 pub(crate) struct RawCreateSemaphoreResult {
     pub req_id: u64,
 }
