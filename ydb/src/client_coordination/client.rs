@@ -1,5 +1,3 @@
-use tokio_util::sync::WaitForCancellationFutureOwned;
-
 use crate::client::TimeoutSettings;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_coordination_service::alter_node::RawAlterNodeRequest;

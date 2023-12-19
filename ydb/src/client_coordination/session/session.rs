@@ -1,8 +1,6 @@
 use std::{
-    borrow::BorrowMut,
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     sync::{atomic, Arc},
-    time::{Duration, Instant},
 };
 
 use rand::RngCore;
@@ -12,15 +10,12 @@ use tokio::{
         Mutex,
     },
     task::JoinHandle,
-    time::timeout,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{log::trace, warn};
 use ydb_grpc::ydb_proto::coordination::{
-    session_request::{
-        self, AcquireSemaphore, CreateSemaphore, DescribeSemaphore, PingPong, SessionStart,
-    },
-    session_response::{CreateSemaphoreResult, DescribeSemaphoreResult, SessionStarted},
+    session_request::{self, SessionStart},
+    session_response::SessionStarted,
     SessionRequest, SessionResponse,
 };
 
@@ -30,17 +25,14 @@ use crate::{
     grpc_wrapper::{
         self,
         grpc_stream_wrapper::AsyncGrpcStreamWrapper,
-        raw_coordination_service::{
-            describe_node::RawDescribeNodeRequest,
-            session::{
-                acquire_semaphore::{RawAcquireSemaphoreRequest, RawAcquireSemaphoreResult},
-                create_semaphore::{self, RawCreateSemaphoreRequest, RawCreateSemaphoreResult},
-                delete_semaphore::{RawDeleteSemaphoreRequest, RawDeleteSemaphoreResult},
-                describe_semaphore::{RawDescribeSemaphoreRequest, RawDescribeSemaphoreResult},
-                release_semaphore::RawReleaseSemaphoreResult,
-                update_semaphore::{RawUpdateSemaphoreRequest, RawUpdateSemaphoreResult},
-                RawSessionResponse,
-            },
+        raw_coordination_service::session::{
+            acquire_semaphore::{RawAcquireSemaphoreRequest, RawAcquireSemaphoreResult},
+            create_semaphore::{RawCreateSemaphoreRequest, RawCreateSemaphoreResult},
+            delete_semaphore::{RawDeleteSemaphoreRequest, RawDeleteSemaphoreResult},
+            describe_semaphore::{RawDescribeSemaphoreRequest, RawDescribeSemaphoreResult},
+            release_semaphore::RawReleaseSemaphoreResult,
+            update_semaphore::{RawUpdateSemaphoreRequest, RawUpdateSemaphoreResult},
+            RawSessionResponse,
         },
     },
     AcquireCount, AcquireOptions, CoordinationClient, DescribeOptions, SessionOptions, YdbError,
