@@ -1,26 +1,32 @@
+use std::sync::Arc;
+
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    grpc_wrapper::raw_coordination_service::session::release_semaphore::RawReleaseSemaphoreRequest,
-    Session,
+    grpc_wrapper::raw_coordination_service::session::release_semaphore::{
+        RawReleaseSemaphoreRequest, RawReleaseSemaphoreResult,
+    },
+    YdbResult,
 };
 
+use super::session::RequestController;
+
 #[allow(dead_code)]
-pub struct Lease<'a> {
-    session: &'a Session,
+pub struct Lease {
+    release_channel: Arc<RequestController<RawReleaseSemaphoreResult>>,
     semaphore_name: String,
     cancellation_token: CancellationToken,
 }
 
 #[allow(dead_code)]
-impl<'a> Lease<'a> {
+impl Lease {
     pub(crate) fn new(
-        session: &'a Session,
+        release_channel: Arc<RequestController<RawReleaseSemaphoreResult>>,
         semaphore_name: String,
         cancellation_token: CancellationToken,
-    ) -> Lease<'_> {
+    ) -> Lease {
         Lease {
-            session,
+            release_channel,
             semaphore_name,
             cancellation_token,
         }
@@ -30,22 +36,41 @@ impl<'a> Lease<'a> {
         self.cancellation_token.clone()
     }
 
-    pub fn release(mut self) {
-        self.release_impl()
+    pub fn release(self) {
+        tokio::spawn(Lease::release_impl(
+            self.semaphore_name.clone(),
+            self.cancellation_token.clone(),
+            self.release_channel.clone(),
+        ));
     }
 
-    pub fn release_impl(&mut self) {
-        self.cancellation_token.cancel();
-        //drop(
-        //    self.session
-        //        .release_semaphore
-        //        .send(RawReleaseSemaphoreRequest::new(self.semaphore_name)),
-        //);
+    async fn release_impl(
+        semaphore_name: String,
+        cancellation_token: CancellationToken,
+        release_channel: Arc<RequestController<RawReleaseSemaphoreResult>>,
+    ) -> YdbResult<()> {
+        cancellation_token.cancel();
+        println!("RELEASING SEMAPHORE {}", semaphore_name);
+        let mut rx = release_channel
+            .send(RawReleaseSemaphoreRequest::new(semaphore_name))
+            .await?;
+
+        let result = rx.recv().await;
+        if let Some(answer) = result {
+            if answer.released {
+                println!("RELEASED");
+            }
+        }
+        Ok(())
     }
 }
 
-impl<'a> Drop for Lease<'a> {
+impl Drop for Lease {
     fn drop(&mut self) {
-        self.release_impl();
+        tokio::spawn(Lease::release_impl(
+            self.semaphore_name.clone(),
+            self.cancellation_token.clone(),
+            self.release_channel.clone(),
+        ));
     }
 }

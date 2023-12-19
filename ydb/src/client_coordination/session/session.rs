@@ -57,7 +57,7 @@ pub trait IdentifiedMessage {
 pub struct RequestController<Response: IdentifiedMessage> {
     last_req_id: atomic::AtomicU64,
     messages_sender: mpsc::UnboundedSender<SessionRequest>,
-    active_requests: Arc<Mutex<HashMap<u64, tokio::sync::oneshot::Sender<Response>>>>,
+    active_requests: Arc<Mutex<HashMap<u64, tokio::sync::mpsc::UnboundedSender<Response>>>>,
 }
 
 impl<Response: IdentifiedMessage> RequestController<Response> {
@@ -72,13 +72,13 @@ impl<Response: IdentifiedMessage> RequestController<Response> {
     pub async fn send<Request: IdentifiedMessage + Into<session_request::Request>>(
         &self,
         mut req: Request,
-    ) -> YdbResult<tokio::sync::oneshot::Receiver<Response>> {
+    ) -> YdbResult<tokio::sync::mpsc::UnboundedReceiver<Response>> {
         let curr_id = self.last_req_id.fetch_add(1, atomic::Ordering::AcqRel);
 
         let (tx, rx): (
-            tokio::sync::oneshot::Sender<Response>,
-            tokio::sync::oneshot::Receiver<Response>,
-        ) = tokio::sync::oneshot::channel();
+            tokio::sync::mpsc::UnboundedSender<Response>,
+            tokio::sync::mpsc::UnboundedReceiver<Response>,
+        ) = tokio::sync::mpsc::unbounded_channel();
 
         req.set_id(curr_id);
         self.messages_sender
@@ -122,11 +122,11 @@ pub struct Session {
 
     raw_sender: mpsc::UnboundedSender<SessionRequest>,
     create_semaphore: Arc<RequestController<RawCreateSemaphoreResult>>,
-    //describe_semaphore: RequestController<RawDescribeSemaphoreResult>,
-    //acquire_semaphore: RequestController<RawAcquireSemaphoreResult>,
-    //update_semaphore: RequestController<RawUpdateSemaphoreResult>,
-    //delete_semaphore: RequestController<RawDeleteSemaphoreResult>,
-    //pub release_semaphore: RequestController<RawReleaseSemaphoreResult>,
+    describe_semaphore: Arc<RequestController<RawDescribeSemaphoreResult>>,
+    acquire_semaphore: Arc<RequestController<RawAcquireSemaphoreResult>>,
+    update_semaphore: Arc<RequestController<RawUpdateSemaphoreResult>>,
+    delete_semaphore: Arc<RequestController<RawDeleteSemaphoreResult>>,
+    pub(crate) release_semaphore: Arc<RequestController<RawReleaseSemaphoreResult>>,
     protection_key: Vec<u8>,
 
     connection_manager: GrpcConnectionManager,
@@ -172,23 +172,35 @@ impl Session {
         let cancellation_token = CancellationToken::new();
 
         let create_semaphore = Arc::new(RequestController::new(stream.clone_sender()));
+        let update_semaphore = Arc::new(RequestController::new(stream.clone_sender()));
+        let delete_semaphore = Arc::new(RequestController::new(stream.clone_sender()));
+        let describe_semaphore = Arc::new(RequestController::new(stream.clone_sender()));
+        let acquire_semaphore = Arc::new(RequestController::new(stream.clone_sender()));
+        let release_semaphore = Arc::new(RequestController::new(stream.clone_sender()));
 
         let raw_sender = stream.clone_sender();
 
         let loop_token = cancellation_token.clone();
         let loop_sender = stream.clone_sender();
         let loop_create_semaphore = create_semaphore.clone();
+        let loop_update_semaphore = update_semaphore.clone();
+        let loop_delete_semaphore = delete_semaphore.clone();
+        let loop_describe_semaphore = describe_semaphore.clone();
+        let loop_acquire_semaphore = acquire_semaphore.clone();
+        let loop_release_semaphore = release_semaphore.clone();
 
         let receiver_loop = tokio::spawn(async move {
             let mut receiver = stream;
-            let loop_token = loop_token;
-            let loop_sender = loop_sender;
-            let loop_create_semaphore = loop_create_semaphore;
             loop {
                 match Session::receive_messages_loop_iteration(
                     &mut receiver,
                     &loop_sender,
                     &loop_create_semaphore,
+                    &loop_update_semaphore,
+                    &loop_delete_semaphore,
+                    &loop_acquire_semaphore,
+                    &loop_describe_semaphore,
+                    &loop_release_semaphore,
                 )
                 .await
                 {
@@ -208,7 +220,13 @@ impl Session {
             receiver_loop,
 
             raw_sender,
+
             create_semaphore,
+            update_semaphore,
+            describe_semaphore,
+            acquire_semaphore,
+            delete_semaphore,
+            release_semaphore,
 
             cancellation_token,
             protection_key,
@@ -222,7 +240,7 @@ impl Session {
     }
 
     pub async fn create_semaphore(
-        &mut self,
+        &self,
         name: String,
         limit: SemaphoreLimit,
         data: Option<Vec<u8>>,
@@ -230,103 +248,94 @@ impl Session {
         let request = RawCreateSemaphoreRequest::new(name, limit, data.unwrap_or_default());
         warn!("sening request: {:?}", request);
 
-        let rx = self.create_semaphore.send(request).await?;
+        let mut rx = self.create_semaphore.send(request).await?;
 
         warn!("awaiting response");
-        rx.await?;
-
-        warn!("done!");
-        Ok(())
+        match rx.recv().await {
+            Some(_) => Ok(()),
+            None => Err(YdbError::Custom("channel closed".to_string())),
+        }
     }
 
     pub async fn describe_semaphore(
-        &mut self,
-        _name: String,
-        _options: DescribeOptions,
+        &self,
+        name: String,
+        options: DescribeOptions,
     ) -> YdbResult<SemaphoreDescription> {
-        //let rx = self
-        //    .describe_semaphore
-        //    .send(RawDescribeSemaphoreRequest::new(
-        //        name,
-        //        options.with_owners,
-        //        options.with_waiters,
-        //        None,
-        //    ))
-        //    .await?;
-        //let result = rx.await?;
-        //Ok(result.semaphore_description)
-        unimplemented!()
+        let mut rx = self
+            .describe_semaphore
+            .send(RawDescribeSemaphoreRequest::new(
+                name,
+                options.with_owners,
+                options.with_waiters,
+                None,
+            ))
+            .await?;
+        let result = rx.recv().await.unwrap();
+        Ok(result.semaphore_description)
     }
 
     pub async fn watch_semaphore(
-        &mut self,
+        &self,
         _name: String,
         _options: WatchOptions,
     ) -> YdbResult<mpsc::Receiver<SemaphoreDescription>> {
         unimplemented!()
     }
 
-    pub async fn update_semaphore(
-        &mut self,
-        _name: String,
-        _data: Option<Vec<u8>>,
-    ) -> YdbResult<()> {
-        //let rx = self
-        //    .update_semaphore
-        //    .send(RawUpdateSemaphoreRequest::new(name, data))
-        //    .await?;
-        //rx.await?;
-        //Ok(())
-        unimplemented!()
+    pub async fn update_semaphore(&self, name: String, data: Option<Vec<u8>>) -> YdbResult<()> {
+        let mut rx = self
+            .update_semaphore
+            .send(RawUpdateSemaphoreRequest::new(name, data))
+            .await?;
+        rx.recv().await.unwrap();
+        Ok(())
     }
 
-    pub async fn delete_semaphore(&mut self, _name: String) -> YdbResult<()> {
-        //let rx = self
-        //    .delete_semaphore
-        //    .send(RawDeleteSemaphoreRequest::new(name, false))
-        //    .await?;
-        //rx.await?;
-        //Ok(())
-        unimplemented!()
+    pub async fn delete_semaphore(&self, name: String) -> YdbResult<()> {
+        let mut rx = self
+            .delete_semaphore
+            .send(RawDeleteSemaphoreRequest::new(name, false))
+            .await?;
+        rx.recv().await.unwrap();
+        Ok(())
     }
 
-    pub async fn force_delete_semaphore(&mut self, _name: String) -> YdbResult<()> {
-        //let rx = self
-        //    .delete_semaphore
-        //    .send(RawDeleteSemaphoreRequest::new(name, true))
-        //    .await?;
-        //rx.await?;
-        //Ok(())
-        unimplemented!()
+    pub async fn force_delete_semaphore(&self, name: String) -> YdbResult<()> {
+        let mut rx = self
+            .delete_semaphore
+            .send(RawDeleteSemaphoreRequest::new(name, true))
+            .await?;
+        rx.recv().await.unwrap();
+        Ok(())
     }
 
     pub async fn acquire_semaphore(
-        &mut self,
-        _name: String,
-        _count: AcquireCount,
-        _options: AcquireOptions,
+        &self,
+        name: String,
+        count: AcquireCount,
+        options: AcquireOptions,
     ) -> YdbResult<Lease> {
-        //let rx = self
-        //    .acquire_semaphore
-        //    .send(RawAcquireSemaphoreRequest::new(
-        //        name.clone(),
-        //        count,
-        //        options.timeout,
-        //        options.ephemeral,
-        //        options.data,
-        //    ))
-        //    .await?;
-        //let response = rx.await?;
-        //if response.acquired {
-        //    Ok(Lease::new(
-        //        self,
-        //        name,
-        //        self.cancellation_token.child_token(),
-        //    ))
-        //} else {
-        //    Err(YdbError::Custom("failed to acquire semaphore".to_string()))
-        //}
-        unimplemented!()
+        let mut rx = self
+            .acquire_semaphore
+            .send(RawAcquireSemaphoreRequest::new(
+                name.clone(),
+                count,
+                options.timeout,
+                options.ephemeral,
+                options.data,
+            ))
+            .await?;
+        let response = rx.recv().await.unwrap();
+        if response.acquired {
+            Ok(Lease::new(
+                self.release_semaphore.clone(),
+                name,
+                self.cancellation_token.child_token(),
+            ))
+        } else {
+            Err(YdbError::Custom("failed to acquire semaphore".to_string()))
+        }
     }
 
     pub fn client(&self) -> CoordinationClient {
@@ -337,6 +346,11 @@ impl Session {
         server_messages_receiver: &mut AsyncGrpcStreamWrapper<SessionRequest, SessionResponse>,
         raw_sender: &UnboundedSender<SessionRequest>,
         create_semaphore: &Arc<RequestController<RawCreateSemaphoreResult>>,
+        update_semaphore: &Arc<RequestController<RawUpdateSemaphoreResult>>,
+        delete_semaphore: &Arc<RequestController<RawDeleteSemaphoreResult>>,
+        acquire_semaphore: &Arc<RequestController<RawAcquireSemaphoreResult>>,
+        describe_semaphore: &Arc<RequestController<RawDescribeSemaphoreResult>>,
+        release_semaphore: &Arc<RequestController<RawReleaseSemaphoreResult>>,
     ) -> YdbResult<()> {
         let response = server_messages_receiver
             .receive::<RawSessionResponse>()
@@ -366,6 +380,26 @@ impl Session {
                 }
                 RawSessionResponse::CreateSemaphoreResult(semaphore_created) => {
                     create_semaphore.get_response(semaphore_created).await?;
+                }
+                RawSessionResponse::UpdateSemaphoreResult(semaphore_updated) => {
+                    update_semaphore.get_response(semaphore_updated).await?;
+                }
+                RawSessionResponse::DescribeSemaphoreResult(semaphore_description) => {
+                    describe_semaphore
+                        .get_response(semaphore_description)
+                        .await?;
+                }
+                RawSessionResponse::DeleteSemaphoreResult(semaphore_deleted) => {
+                    delete_semaphore.get_response(semaphore_deleted).await?;
+                }
+                RawSessionResponse::AcquireSemaphoreResult(semaphore_acquired) => {
+                    acquire_semaphore.get_response(semaphore_acquired).await?;
+                }
+                RawSessionResponse::AcquireSemaphorePending(_) => {
+                    // TODO: send to the same conversation
+                }
+                RawSessionResponse::ReleaseSemaphoreResult(semaphore_released) => {
+                    release_semaphore.get_response(semaphore_released).await?;
                 }
                 _ => todo!(),
             },

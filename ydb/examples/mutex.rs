@@ -1,14 +1,13 @@
 use num::range;
 use std::time::Duration;
 use tokio::task::JoinHandle;
-use tracing::log::info;
 
 use ydb::{
     AcquireOptionsBuilder, ClientBuilder, NodeConfigBuilder, Session, SessionOptionsBuilder,
     YdbResult,
 };
 
-async fn mutex_work(session: &mut Session) {
+async fn mutex_work(session: Session) {
     let lease = session
         .acquire_semaphore(
             "my-resource".to_string(),
@@ -22,7 +21,7 @@ async fn mutex_work(session: &mut Session) {
     tokio::select! {
         _ = lease_alive.cancelled() => {},
         _ = tokio::time::sleep(Duration::from_secs(1)) => {
-            info!("finished work");
+            println!("finished work");
         },
     }
 }
@@ -46,7 +45,7 @@ async fn main() -> YdbResult<()> {
         )
         .await?;
 
-    let mut session = coordination_client
+    let session = coordination_client
         .create_session(
             "local/test".to_string(),
             SessionOptionsBuilder::default().build()?,
@@ -59,27 +58,27 @@ async fn main() -> YdbResult<()> {
 
     println!("done");
 
-    // let mut handles: Vec<JoinHandle<()>> = vec![];
-    // for _ in range(0, 4) {
-    //     let mut client = client.coordination_client();
-    //     handles.push(tokio::spawn(async move {
-    //         let mut session = client
-    //             .create_session(
-    //                 "local/test".to_string(),
-    //                 SessionOptionsBuilder::default().build().unwrap(),
-    //             )
-    //             .await
-    //             .unwrap();
+    let mut handles: Vec<JoinHandle<()>> = vec![];
+    for _ in range(0, 4) {
+        let mut client = client.coordination_client();
+        handles.push(tokio::spawn(async move {
+            let session = client
+                .create_session(
+                    "local/test".to_string(),
+                    SessionOptionsBuilder::default().build().unwrap(),
+                )
+                .await
+                .unwrap();
 
-    //         let session_alive_token = session.alive();
-    //         tokio::select! {
-    //             _ = session_alive_token.cancelled() => {},
-    //             _ = mutex_work(&mut session) => {},
-    //         }
-    //     }));
-    // }
+            let session_alive_token = session.alive();
+            tokio::select! {
+                _ = session_alive_token.cancelled() => {},
+                _ = mutex_work(session) => {},
+            }
+        }));
+    }
 
-    // futures_util::future::join_all(handles).await;
+    futures_util::future::join_all(handles).await;
 
     Ok(())
 }
