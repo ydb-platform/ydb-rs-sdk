@@ -1,13 +1,12 @@
-use num::range;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 
 use ydb::{
-    AcquireOptionsBuilder, ClientBuilder, NodeConfigBuilder, Session, SessionOptionsBuilder,
-    YdbResult,
+    AcquireOptionsBuilder, ClientBuilder, CoordinationSession, NodeConfigBuilder,
+    SessionOptionsBuilder, YdbResult,
 };
 
-async fn mutex_work(session: Session) {
+async fn mutex_work(session: CoordinationSession) {
     let lease = session
         .acquire_semaphore(
             "my-resource".to_string(),
@@ -20,7 +19,7 @@ async fn mutex_work(session: Session) {
     let lease_alive = lease.alive();
     tokio::select! {
         _ = lease_alive.cancelled() => {},
-        _ = tokio::time::sleep(Duration::from_secs(1)) => {
+        _ = tokio::time::sleep(Duration::from_millis(20)) => {
             println!("finished work");
         },
     }
@@ -59,7 +58,7 @@ async fn main() -> YdbResult<()> {
     println!("done");
 
     let mut handles: Vec<JoinHandle<()>> = vec![];
-    for _ in range(0, 4) {
+    for _ in 0..10 {
         let mut client = client.coordination_client();
         handles.push(tokio::spawn(async move {
             let session = client
@@ -78,7 +77,9 @@ async fn main() -> YdbResult<()> {
         }));
     }
 
-    futures_util::future::join_all(handles).await;
+    for result in futures_util::future::join_all(handles).await {
+        result?;
+    }
 
     Ok(())
 }

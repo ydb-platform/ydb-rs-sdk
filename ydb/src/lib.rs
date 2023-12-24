@@ -100,15 +100,13 @@ pub use client_coordination::list_types::{
 pub use client_coordination::session::acquire_options::{
     AcquireCount, AcquireOptions, AcquireOptionsBuilder,
 };
+pub use client_coordination::session::coordination_session::CoordinationSession;
 pub use client_coordination::session::create_options::SemaphoreLimit;
 pub use client_coordination::session::describe_options::{
     DescribeOptions, DescribeOptionsBuilder, WatchMode, WatchOptions, WatchOptionsBuilder,
 };
 pub use client_coordination::session::lease::Lease;
-pub use client_coordination::session::session::Session;
-pub use client_coordination::session::session_options::{
-    SessionEvent, SessionOptions, SessionOptionsBuilder,
-};
+pub use client_coordination::session::session_options::{SessionOptions, SessionOptionsBuilder};
 pub use client_coordination::session::update_options::{
     UpdateSemaphoreOptions, UpdateSemaphoreOptionsBuilder,
 };

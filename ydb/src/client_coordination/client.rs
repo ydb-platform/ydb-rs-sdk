@@ -5,7 +5,7 @@ use crate::grpc_wrapper::raw_coordination_service::config::RawCoordinationNodeCo
 use crate::grpc_wrapper::raw_coordination_service::create_node::RawCreateNodeRequest;
 use crate::grpc_wrapper::raw_coordination_service::describe_node::RawDescribeNodeRequest;
 use crate::grpc_wrapper::raw_coordination_service::drop_node::RawDropNodeRequest;
-use crate::{grpc_wrapper, Session, SessionOptions, YdbResult};
+use crate::{grpc_wrapper, CoordinationSession, SessionOptions, YdbResult};
 
 use super::list_types::{NodeConfig, NodeDescription};
 
@@ -33,11 +33,11 @@ impl CoordinationClient {
         &mut self,
         path: String,
         options: SessionOptions,
-    ) -> YdbResult<Session> {
+    ) -> YdbResult<CoordinationSession> {
         let seq_no = self.session_seq_no;
         self.session_seq_no += 1;
 
-        Ok(Session::new(path, seq_no, options, self.connection_manager.clone()).await?)
+        CoordinationSession::new(path, seq_no, options, self.connection_manager.clone()).await
     }
 
     pub async fn create_node(&mut self, path: String, config: NodeConfig) -> YdbResult<()> {

@@ -3,8 +3,9 @@ use std::{sync::Arc, time::Duration};
 use tokio::{sync::Mutex, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use ydb::{
-    AcquireOptionsBuilder, ClientBuilder, CoordinationClient, DescribeOptionsBuilder,
-    NodeConfigBuilder, Session, SessionOptionsBuilder, WatchMode, WatchOptionsBuilder, YdbResult,
+    AcquireOptionsBuilder, ClientBuilder, CoordinationClient, CoordinationSession,
+    DescribeOptionsBuilder, NodeConfigBuilder, SessionOptionsBuilder, WatchMode,
+    WatchOptionsBuilder, YdbResult,
 };
 
 #[allow(dead_code)]
@@ -42,7 +43,7 @@ impl ServiceWorker {
         tokio::time::sleep(tokio::time::Duration::from_secs(100)).await;
     }
 
-    async fn become_secondary(&self, session: &mut Session) {
+    async fn become_secondary(&self, session: &mut CoordinationSession) {
         let mut subscription = session
             .watch_semaphore(
                 "my-service-leader".to_string(),
@@ -79,7 +80,7 @@ impl ServiceWorker {
         }
     }
 
-    async fn do_work(&self, mut session: Session) {
+    async fn do_work(&self, mut session: CoordinationSession) {
         loop {
             let lease = session
                 .acquire_semaphore(
@@ -109,7 +110,7 @@ impl ServiceWorker {
         }
     }
 
-    async fn run(&self, session: Session) {
+    async fn run(&self, session: CoordinationSession) {
         let session_alive_token = session.alive();
         let explode_token = self.explode_token.clone();
         tokio::select! {
@@ -155,7 +156,7 @@ async fn main() -> YdbResult<()> {
         )
         .await?;
 
-    let mut session = coordination_client
+    let session = coordination_client
         .create_session(
             "local/test".to_string(),
             SessionOptionsBuilder::default().build()?,
