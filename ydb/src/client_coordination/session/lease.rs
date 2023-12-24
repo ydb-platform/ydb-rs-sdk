@@ -9,7 +9,7 @@ use crate::{
     YdbResult,
 };
 
-use super::session::RequestController;
+use super::controller::RequestController;
 
 #[allow(dead_code)]
 pub struct Lease {

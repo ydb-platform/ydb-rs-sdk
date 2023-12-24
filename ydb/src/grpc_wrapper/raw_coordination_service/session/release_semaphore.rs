@@ -4,7 +4,7 @@ use ydb_grpc::ydb_proto::{
 };
 
 use crate::{
-    client_coordination::session::session::IdentifiedMessage,
+    client_coordination::session::controller::IdentifiedMessage,
     grpc_wrapper::{grpc::proto_issues_to_ydb_issues, raw_errors::RawError},
     YdbStatusError,
 };

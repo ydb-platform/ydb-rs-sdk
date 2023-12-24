@@ -1,18 +1,12 @@
-use std::{
-    collections::HashMap,
-    sync::{atomic, Arc},
-};
+use std::sync::Arc;
 
 use rand::RngCore;
 use tokio::{
-    sync::{
-        mpsc::{self, UnboundedSender},
-        Mutex,
-    },
+    sync::mpsc::{self, UnboundedSender},
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{log::trace, warn};
+use tracing::warn;
 use ydb_grpc::ydb_proto::coordination::{
     session_request::{self, SessionStart},
     session_response::SessionStarted,
@@ -20,7 +14,6 @@ use ydb_grpc::ydb_proto::coordination::{
 };
 
 use crate::{
-    client_coordination::list_types::SemaphoreDescription,
     grpc_connection_manager::GrpcConnectionManager,
     grpc_wrapper::{
         self,
@@ -29,7 +22,9 @@ use crate::{
             acquire_semaphore::{RawAcquireSemaphoreRequest, RawAcquireSemaphoreResult},
             create_semaphore::{RawCreateSemaphoreRequest, RawCreateSemaphoreResult},
             delete_semaphore::{RawDeleteSemaphoreRequest, RawDeleteSemaphoreResult},
-            describe_semaphore::{RawDescribeSemaphoreRequest, RawDescribeSemaphoreResult},
+            describe_semaphore::{
+                RawDescribeSemaphoreRequest, RawDescribeSemaphoreResult, SemaphoreDescription,
+            },
             release_semaphore::RawReleaseSemaphoreResult,
             update_semaphore::{RawUpdateSemaphoreRequest, RawUpdateSemaphoreResult},
             RawSessionResponse,
@@ -39,69 +34,10 @@ use crate::{
     YdbResult,
 };
 
-use super::{create_options::SemaphoreLimit, describe_options::WatchOptions, lease::Lease};
-
-pub trait IdentifiedMessage {
-    fn id(&self) -> u64;
-    fn set_id(&mut self, id: u64);
-}
-
-pub struct RequestController<Response: IdentifiedMessage> {
-    last_req_id: atomic::AtomicU64,
-    messages_sender: mpsc::UnboundedSender<SessionRequest>,
-    active_requests: Arc<Mutex<HashMap<u64, tokio::sync::mpsc::UnboundedSender<Response>>>>,
-}
-
-impl<Response: IdentifiedMessage> RequestController<Response> {
-    pub fn new(messages_sender: mpsc::UnboundedSender<SessionRequest>) -> Self {
-        Self {
-            last_req_id: atomic::AtomicU64::new(0),
-            messages_sender,
-            active_requests: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    pub async fn send<Request: IdentifiedMessage + Into<session_request::Request>>(
-        &self,
-        mut req: Request,
-    ) -> YdbResult<tokio::sync::mpsc::UnboundedReceiver<Response>> {
-        let curr_id = self.last_req_id.fetch_add(1, atomic::Ordering::AcqRel);
-
-        let (tx, rx): (
-            tokio::sync::mpsc::UnboundedSender<Response>,
-            tokio::sync::mpsc::UnboundedReceiver<Response>,
-        ) = tokio::sync::mpsc::unbounded_channel();
-
-        req.set_id(curr_id);
-        self.messages_sender
-            .send(SessionRequest {
-                request: Some(req.into()),
-            })
-            .map_err(|_| YdbError::Custom("can't send".to_string()))?;
-
-        {
-            let mut active_requests = self.active_requests.lock().await;
-            active_requests.insert(curr_id, tx);
-        }
-
-        Ok(rx)
-    }
-
-    pub async fn get_response(&self, response: Response) -> YdbResult<()> {
-        let waiter = self.active_requests.lock().await.remove(&response.id());
-        match waiter {
-            Some(sender) => {
-                sender
-                    .send(response)
-                    .map_err(|_| YdbError::Custom("can't send".to_string()))?;
-            }
-            None => {
-                trace!("got response for already unknown id: {}", response.id());
-            }
-        };
-        Ok(())
-    }
-}
+use super::{
+    controller::RequestController, create_options::SemaphoreLimit, describe_options::WatchOptions,
+    lease::Lease,
+};
 
 #[allow(dead_code)]
 pub struct Session {

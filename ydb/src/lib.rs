@@ -78,6 +78,7 @@ mod test_helpers;
 #[cfg(test)]
 pub(crate) mod coordination_test;
 pub(crate) mod dicovery_pessimization_interceptor;
+mod table_service_types;
 #[cfg(test)]
 mod test_integration_helper;
 #[cfg(test)]
@@ -87,7 +88,6 @@ mod trait_operation;
 pub(crate) mod transaction;
 mod types;
 mod types_converters;
-mod table_service_types;
 pub(crate) mod waiter;
 
 #[cfg(test)]
@@ -96,7 +96,6 @@ mod types_test;
 pub use client_coordination::client::CoordinationClient;
 pub use client_coordination::list_types::{
     ConsistencyMode, NodeConfig, NodeConfigBuilder, NodeDescription, RateLimiterCountersMode,
-    SemaphoreDescription, SemaphoreSession,
 };
 pub use client_coordination::session::acquire_options::{
     AcquireCount, AcquireOptions, AcquireOptionsBuilder,
