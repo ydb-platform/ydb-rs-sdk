@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use ydb_grpc::ydb_proto::auth::LoginResponse;
 use ydb_grpc::ydb_proto::coordination::{
     AlterNodeResponse, CreateNodeResponse, DescribeNodeResponse, DropNodeResponse,
 };
@@ -48,3 +49,4 @@ operation_impl_for!(AlterNodeResponse);
 operation_impl_for!(DropNodeResponse);
 operation_impl_for!(CopyTableResponse);
 operation_impl_for!(CopyTablesResponse);
+operation_impl_for!(LoginResponse);

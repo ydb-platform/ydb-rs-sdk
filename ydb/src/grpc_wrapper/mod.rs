@@ -4,6 +4,7 @@ pub(crate) mod grpc;
 #[macro_use]
 mod macroses;
 pub(crate) mod grpc_stream_wrapper;
+pub(crate) mod raw_auth_service;
 pub(crate) mod raw_common_types;
 pub(crate) mod raw_discovery_client;
 pub(crate) mod raw_errors;

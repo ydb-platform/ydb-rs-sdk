@@ -7,6 +7,7 @@ use walkdir::WalkDir;
 const DST_FOLDER: &str = "src/generated";
 
 const COMPILE_FILES: &[&str] = &[
+    "ydb_auth_v1.proto",
     "ydb_coordination_v1.proto",
     "ydb_discovery_v1.proto",
     "ydb_scheme_v1.proto",
