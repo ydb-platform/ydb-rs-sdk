@@ -7,17 +7,20 @@ use crate::grpc_wrapper::raw_errors::RawResult;
 
 use tracing::trace;
 
+#[allow(dead_code)]
 pub(crate) struct RawAuthClient {
     service: AuthServiceClient<InterceptedChannel>,
 }
 
 impl RawAuthClient {
+    #[allow(dead_code)]
     pub fn new(service: InterceptedChannel) -> Self {
         Self {
             service: AuthServiceClient::new(service),
         }
     }
 
+    #[allow(dead_code)]
     pub async fn login(&mut self, req: RawLoginRequest) -> RawResult<RawLoginResult> {
         request_with_result!(
             self.service.login,

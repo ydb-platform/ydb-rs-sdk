@@ -23,6 +23,7 @@ impl From<RawLoginRequest> for LoginRequest {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) struct RawLoginResult {
     pub token: String,
