@@ -6,6 +6,7 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
+use tracing::trace;
 use ydb_grpc::ydb_proto::coordination::{
     session_request::{self, SessionStart},
     session_response::SessionStarted,
@@ -29,23 +30,20 @@ use crate::{
             RawSessionResponse,
         },
     },
-    AcquireCount, AcquireOptions, CoordinationClient, DescribeOptions, SessionOptions, YdbError,
-    YdbResult,
+    AcquireOptions, AcquireOptionsBuilder, DescribeOptions, DescribeOptionsBuilder, SessionOptions,
+    YdbError, YdbResult,
 };
 
-use super::{
-    controller::RequestController, create_options::SemaphoreLimit, describe_options::WatchOptions,
-    lease::Lease,
-};
+use super::{controller::RequestController, lease::Lease};
 
 #[derive(Clone)]
 struct MethodControllers {
-    pub create_semaphore: Arc<RequestController<RawCreateSemaphoreResult>>,
-    pub describe_semaphore: Arc<RequestController<RawDescribeSemaphoreResult>>,
-    pub acquire_semaphore: Arc<RequestController<RawAcquireSemaphoreResult>>,
-    pub update_semaphore: Arc<RequestController<RawUpdateSemaphoreResult>>,
-    pub delete_semaphore: Arc<RequestController<RawDeleteSemaphoreResult>>,
-    pub release_semaphore: Arc<RequestController<RawReleaseSemaphoreResult>>,
+    create_semaphore: Arc<RequestController<RawCreateSemaphoreResult>>,
+    describe_semaphore: Arc<RequestController<RawDescribeSemaphoreResult>>,
+    acquire_semaphore: Arc<RequestController<RawAcquireSemaphoreResult>>,
+    update_semaphore: Arc<RequestController<RawUpdateSemaphoreResult>>,
+    delete_semaphore: Arc<RequestController<RawDeleteSemaphoreResult>>,
+    release_semaphore: Arc<RequestController<RawReleaseSemaphoreResult>>,
 }
 
 #[allow(dead_code)]
@@ -99,7 +97,7 @@ impl CoordinationSession {
         } else {
             return Err(YdbError::Custom("unexpected session answer".to_string()));
         }
-        println!("session started! {:?}", session_response);
+        trace!("session started! {:?}", session_response);
 
         let cancellation_token = CancellationToken::new();
 
@@ -153,17 +151,21 @@ impl CoordinationSession {
         })
     }
 
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
     pub fn alive(&self) -> CancellationToken {
         self.cancellation_token.child_token()
     }
 
-    pub async fn create_semaphore(
+    pub async fn create_semaphore<S: ToString>(
         &self,
-        name: String,
-        limit: SemaphoreLimit,
-        data: Option<Vec<u8>>,
+        name: S,
+        limit: u64,
+        data: Vec<u8>,
     ) -> YdbResult<()> {
-        let request = RawCreateSemaphoreRequest::new(name, limit, data.unwrap_or_default());
+        let request = RawCreateSemaphoreRequest::new(name.to_string(), limit, data);
 
         let mut rx = self
             .method_controllers
@@ -177,16 +179,29 @@ impl CoordinationSession {
         }
     }
 
-    pub async fn describe_semaphore(
+    pub async fn describe_semaphore<S: ToString>(
         &self,
-        name: String,
+        name: S,
+    ) -> YdbResult<SemaphoreDescription> {
+        let options = DescribeOptionsBuilder::default()
+            .with_owners(true)
+            .with_waiters(true)
+            .build()
+            .unwrap();
+
+        self.describe_semaphore_with_params(name, options).await
+    }
+
+    pub async fn describe_semaphore_with_params<S: ToString>(
+        &self,
+        name: S,
         options: DescribeOptions,
     ) -> YdbResult<SemaphoreDescription> {
         let mut rx = self
             .method_controllers
             .describe_semaphore
             .send(RawDescribeSemaphoreRequest::new(
-                name,
+                name.to_string(),
                 options.with_owners,
                 options.with_waiters,
                 None,
@@ -199,19 +214,11 @@ impl CoordinationSession {
         }
     }
 
-    pub async fn watch_semaphore(
-        &self,
-        _name: String,
-        _options: WatchOptions,
-    ) -> YdbResult<mpsc::Receiver<SemaphoreDescription>> {
-        unimplemented!()
-    }
-
-    pub async fn update_semaphore(&self, name: String, data: Option<Vec<u8>>) -> YdbResult<()> {
+    pub async fn update_semaphore<S: ToString>(&self, name: S, data: Vec<u8>) -> YdbResult<()> {
         let mut rx = self
             .method_controllers
             .update_semaphore
-            .send(RawUpdateSemaphoreRequest::new(name, data))
+            .send(RawUpdateSemaphoreRequest::new(name.to_string(), data))
             .await?;
 
         match rx.recv().await {
@@ -220,11 +227,11 @@ impl CoordinationSession {
         }
     }
 
-    pub async fn delete_semaphore(&self, name: String) -> YdbResult<()> {
+    pub async fn delete_semaphore<S: ToString>(&self, name: S) -> YdbResult<()> {
         let mut rx = self
             .method_controllers
             .delete_semaphore
-            .send(RawDeleteSemaphoreRequest::new(name, false))
+            .send(RawDeleteSemaphoreRequest::new(name.to_string(), false))
             .await?;
 
         match rx.recv().await {
@@ -233,11 +240,11 @@ impl CoordinationSession {
         }
     }
 
-    pub async fn force_delete_semaphore(&self, name: String) -> YdbResult<()> {
+    pub async fn force_delete_semaphore<S: ToString>(&self, name: S) -> YdbResult<()> {
         let mut rx = self
             .method_controllers
             .delete_semaphore
-            .send(RawDeleteSemaphoreRequest::new(name, true))
+            .send(RawDeleteSemaphoreRequest::new(name.to_string(), true))
             .await?;
 
         match rx.recv().await {
@@ -246,17 +253,23 @@ impl CoordinationSession {
         }
     }
 
-    pub async fn acquire_semaphore(
+    pub async fn acquire_semaphore<S: ToString>(&self, name: S, count: u64) -> YdbResult<Lease> {
+        let options = AcquireOptionsBuilder::default().build()?;
+        self.acquire_semaphore_with_params(name, count, options)
+            .await
+    }
+
+    pub async fn acquire_semaphore_with_params<S: ToString>(
         &self,
-        name: String,
-        count: AcquireCount,
+        name: S,
+        count: u64,
         options: AcquireOptions,
     ) -> YdbResult<Lease> {
         let mut rx = self
             .method_controllers
             .acquire_semaphore
             .send(RawAcquireSemaphoreRequest::new(
-                name.clone(),
+                name.to_string(),
                 count,
                 options.timeout,
                 options.ephemeral,
@@ -267,20 +280,12 @@ impl CoordinationSession {
         if response.acquired {
             Ok(Lease::new(
                 self.method_controllers.release_semaphore.clone(),
-                name,
+                name.to_string(),
                 self.cancellation_token.child_token(),
             ))
         } else {
             Err(YdbError::Custom("failed to acquire semaphore".to_string()))
         }
-    }
-
-    pub fn id(&self) -> u64 {
-        self.id
-    }
-
-    pub fn client(&self) -> CoordinationClient {
-        unimplemented!()
     }
 
     async fn receive_messages_loop_iteration(
@@ -292,7 +297,7 @@ impl CoordinationSession {
             .receive::<RawSessionResponse>()
             .await;
 
-        println!("received response: {:?}", response);
+        trace!("received response: {:?}", response);
 
         match response {
             Ok(message) => match message {

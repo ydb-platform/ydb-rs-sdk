@@ -1,22 +1,19 @@
 use std::time::Duration;
+
 use tokio::task::JoinHandle;
 
 use ydb::{
-    AcquireOptionsBuilder, ClientBuilder, CoordinationSession, NodeConfigBuilder,
-    SessionOptionsBuilder, YdbResult,
+    ClientBuilder, CoordinationSession, NodeConfigBuilder, SessionOptionsBuilder, YdbResult,
 };
 
 async fn mutex_work(session: CoordinationSession) {
     let lease = session
-        .acquire_semaphore(
-            "my-resource".to_string(),
-            ydb::AcquireCount::Single,
-            AcquireOptionsBuilder::default().build().unwrap(),
-        )
+        .acquire_semaphore("my-resource".to_string(), 1)
         .await
         .unwrap();
 
     let lease_alive = lease.alive();
+    println!("acquired semaphore");
     tokio::select! {
         _ = lease_alive.cancelled() => {},
         _ = tokio::time::sleep(Duration::from_millis(20)) => {
@@ -51,11 +48,7 @@ async fn main() -> YdbResult<()> {
         )
         .await?;
 
-    session
-        .create_semaphore("my-resource".to_string(), ydb::SemaphoreLimit::Mutex, None)
-        .await?;
-
-    println!("done");
+    session.create_semaphore("my-resource", 1, vec![]).await?;
 
     let mut handles: Vec<JoinHandle<()>> = vec![];
     for _ in 0..10 {

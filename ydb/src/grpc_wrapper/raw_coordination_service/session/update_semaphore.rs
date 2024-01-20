@@ -13,7 +13,7 @@ use crate::{
 pub(crate) struct RawUpdateSemaphoreRequest {
     pub req_id: u64,
     pub name: String,
-    pub data: Option<Vec<u8>>,
+    pub data: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -22,7 +22,7 @@ pub(crate) struct RawUpdateSemaphoreResult {
 }
 
 impl RawUpdateSemaphoreRequest {
-    pub fn new(name: String, data: Option<Vec<u8>>) -> Self {
+    pub fn new(name: String, data: Vec<u8>) -> Self {
         Self {
             req_id: 0,
             name,
@@ -46,7 +46,7 @@ impl From<RawUpdateSemaphoreRequest> for session_request::Request {
         session_request::Request::UpdateSemaphore(session_request::UpdateSemaphore {
             req_id: value.req_id,
             name: value.name,
-            data: value.data.unwrap_or_default(),
+            data: value.data,
         })
     }
 }

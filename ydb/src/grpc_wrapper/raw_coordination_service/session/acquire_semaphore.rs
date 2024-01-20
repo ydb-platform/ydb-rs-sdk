@@ -8,17 +8,17 @@ use ydb_grpc::ydb_proto::{
 use crate::{
     client_coordination::session::controller::IdentifiedMessage,
     grpc_wrapper::{grpc::proto_issues_to_ydb_issues, raw_errors::RawError},
-    AcquireCount, YdbStatusError,
+    YdbStatusError,
 };
 
 #[derive(Debug)]
 pub(crate) struct RawAcquireSemaphoreRequest {
     pub req_id: u64,
     pub name: String,
-    pub count: AcquireCount,
+    pub count: u64,
     pub timeout: Duration,
     pub ephemeral: bool,
-    pub data: Option<Vec<u8>>,
+    pub data: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -30,10 +30,10 @@ pub(crate) struct RawAcquireSemaphoreResult {
 impl RawAcquireSemaphoreRequest {
     pub fn new(
         name: String,
-        count: AcquireCount,
+        count: u64,
         timeout: Duration,
         ephemeral: bool,
-        data: Option<Vec<u8>>,
+        data: Vec<u8>,
     ) -> Self {
         Self {
             req_id: 0,
@@ -61,10 +61,10 @@ impl From<RawAcquireSemaphoreRequest> for session_request::Request {
         session_request::Request::AcquireSemaphore(session_request::AcquireSemaphore {
             req_id: value.req_id,
             name: value.name,
-            count: value.count.into(),
+            count: value.count,
             timeout_millis: value.timeout.as_millis() as u64,
             ephemeral: value.ephemeral,
-            data: value.data.unwrap_or_default(),
+            data: value.data,
         })
     }
 }

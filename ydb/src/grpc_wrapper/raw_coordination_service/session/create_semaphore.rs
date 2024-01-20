@@ -6,14 +6,14 @@ use ydb_grpc::ydb_proto::{
 use crate::{
     client_coordination::session::controller::IdentifiedMessage,
     grpc_wrapper::{grpc::proto_issues_to_ydb_issues, raw_errors::RawError},
-    SemaphoreLimit, YdbStatusError,
+    YdbStatusError,
 };
 
 #[derive(Debug)]
 pub(crate) struct RawCreateSemaphoreRequest {
     pub req_id: u64,
     pub name: String,
-    pub limit: SemaphoreLimit,
+    pub limit: u64,
     pub data: Vec<u8>,
 }
 
@@ -23,7 +23,7 @@ pub(crate) struct RawCreateSemaphoreResult {
 }
 
 impl RawCreateSemaphoreRequest {
-    pub fn new(name: String, limit: SemaphoreLimit, data: Vec<u8>) -> Self {
+    pub fn new(name: String, limit: u64, data: Vec<u8>) -> Self {
         Self {
             req_id: 0,
             name,
@@ -48,7 +48,7 @@ impl From<RawCreateSemaphoreRequest> for session_request::Request {
         session_request::Request::CreateSemaphore(session_request::CreateSemaphore {
             req_id: value.req_id,
             name: value.name,
-            limit: value.limit.into(),
+            limit: value.limit,
             data: value.data,
         })
     }

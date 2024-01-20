@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use tracing::trace;
 
 use tokio_util::sync::CancellationToken;
 
@@ -50,15 +51,15 @@ impl Lease {
         release_channel: Arc<RequestController<RawReleaseSemaphoreResult>>,
     ) -> YdbResult<()> {
         cancellation_token.cancel();
-        println!("RELEASING SEMAPHORE {}", semaphore_name);
+        trace!("releaseing semaphore {}", semaphore_name);
         let mut rx = release_channel
-            .send(RawReleaseSemaphoreRequest::new(semaphore_name))
+            .send(RawReleaseSemaphoreRequest::new(semaphore_name.clone()))
             .await?;
 
         let result = rx.recv().await;
         if let Some(answer) = result {
             if answer.released {
-                println!("RELEASED");
+                trace!("semaphore {} released", semaphore_name);
             }
         }
         Ok(())
