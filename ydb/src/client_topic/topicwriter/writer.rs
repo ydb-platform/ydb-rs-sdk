@@ -282,7 +282,7 @@ impl TopicWriter {
             stream_write_message::FromClient,
             stream_write_message::FromServer,
         >,
-        confirmation_reception_queue: &mut Arc<Mutex<TopicWriterReceptionQueue>>,
+        confirmation_reception_queue: &Arc<Mutex<TopicWriterReceptionQueue>>,
     ) -> YdbResult<()> {
         match server_messages_receiver.receive::<RawServerMessage>().await {
             Ok(message) => match message {

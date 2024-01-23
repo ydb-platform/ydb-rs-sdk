@@ -1,15 +1,82 @@
+use std::time::Duration;
+
 use ydb_grpc::ydb_proto::{
-    coordination::session_response::AcquireSemaphoreResult, status_ids::StatusCode,
+    coordination::{session_request, session_response::AcquireSemaphoreResult},
+    status_ids::StatusCode,
 };
 
 use crate::{
+    client_coordination::session::controller::IdentifiedMessage,
     grpc_wrapper::{grpc::proto_issues_to_ydb_issues, raw_errors::RawError},
     YdbStatusError,
 };
 
+#[derive(Debug)]
+pub(crate) struct RawAcquireSemaphoreRequest {
+    pub req_id: u64,
+    pub name: String,
+    pub count: u64,
+    pub timeout: Duration,
+    pub ephemeral: bool,
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug)]
 pub(crate) struct RawAcquireSemaphoreResult {
     pub req_id: u64,
     pub acquired: bool,
+}
+
+impl RawAcquireSemaphoreRequest {
+    pub fn new(
+        name: String,
+        count: u64,
+        timeout: Duration,
+        ephemeral: bool,
+        data: Vec<u8>,
+    ) -> Self {
+        Self {
+            req_id: 0,
+            name,
+            count,
+            timeout,
+            ephemeral,
+            data,
+        }
+    }
+}
+
+impl IdentifiedMessage for RawAcquireSemaphoreRequest {
+    fn id(&self) -> u64 {
+        self.req_id
+    }
+
+    fn set_id(&mut self, id: u64) {
+        self.req_id = id
+    }
+}
+
+impl From<RawAcquireSemaphoreRequest> for session_request::Request {
+    fn from(value: RawAcquireSemaphoreRequest) -> Self {
+        session_request::Request::AcquireSemaphore(session_request::AcquireSemaphore {
+            req_id: value.req_id,
+            name: value.name,
+            count: value.count,
+            timeout_millis: value.timeout.as_millis() as u64,
+            ephemeral: value.ephemeral,
+            data: value.data,
+        })
+    }
+}
+
+impl IdentifiedMessage for RawAcquireSemaphoreResult {
+    fn id(&self) -> u64 {
+        self.req_id
+    }
+
+    fn set_id(&mut self, id: u64) {
+        self.req_id = id
+    }
 }
 
 impl TryFrom<AcquireSemaphoreResult> for RawAcquireSemaphoreResult {
