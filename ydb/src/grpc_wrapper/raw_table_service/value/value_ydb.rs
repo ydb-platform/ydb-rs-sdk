@@ -95,7 +95,7 @@ impl TryFrom<crate::Value> for RawTypedValue {
             },
             Value::Yson(v) => RawTypedValue {
                 r#type: RawType::Yson,
-                value: RawValue::Text(v),
+                value: RawValue::Bytes(v.into()),
             },
             Value::Json(v) => RawTypedValue {
                 r#type: RawType::Json,
@@ -210,7 +210,7 @@ impl TryFrom<RawTypedValue> for Value {
             (t @ RawType::Bytes, v) => return types_mismatch(t, v),
             (RawType::UTF8, RawValue::Text(v)) => Value::Text(v),
             (t @ RawType::UTF8, v) => return types_mismatch(t, v),
-            (RawType::Yson, RawValue::Text(v)) => Value::Yson(v),
+            (RawType::Yson, RawValue::Bytes(v)) => Value::Yson(Bytes::from(v)),
             (t @ RawType::Yson, v) => return types_mismatch(t, v),
             (RawType::Json, RawValue::Text(v)) => Value::Json(v),
             (t @ RawType::Json, v) => return types_mismatch(t, v),
