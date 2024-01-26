@@ -116,6 +116,39 @@ async fn execute_data_query_params() -> YdbResult<()> {
 
 #[tokio::test]
 #[traced_test]
+#[ignore]
+async fn query_yson() -> YdbResult<()>{
+    let client = create_client().await?;
+
+    let res = client
+        .table_client()
+        .retry_transaction(|mut t| async move {
+            let tst_query = "DECLARE $p AS YSON; \
+SELECT $p";
+
+            let res = t
+                .query(
+                    Query::new(tst_query)
+                        .with_params(ydb_params!("$p" => Value::Yson("[]".into()))),
+                )
+                .await?;
+
+            Ok(res
+                .into_only_result()?
+                .rows()
+                .next()
+                .unwrap()
+                .remove_field(0))
+        })
+        .await??;
+
+    assert!(res == Value::Yson("[]".into()));
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
 #[ignore] // need YDB access
 async fn interactive_transaction() -> YdbResult<()> {
     let client = create_client().await?;

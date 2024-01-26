@@ -90,7 +90,6 @@ simple_convert!(
     Value::Text,
     Value::Json,
     Value::JsonDocument,
-    Value::Yson
 );
 simple_convert!(
     Bytes,
