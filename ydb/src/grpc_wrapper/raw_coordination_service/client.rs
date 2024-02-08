@@ -85,6 +85,6 @@ impl RawCoordinationClient {
 
 impl GrpcServiceForDiscovery for RawCoordinationClient {
     fn get_grpc_discovery_service() -> Service {
-        Service::Topic
+        Service::Coordination
     }
 }
