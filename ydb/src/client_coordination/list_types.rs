@@ -1,8 +1,7 @@
 use derive_builder::Builder;
 
-use crate::grpc_wrapper::raw_coordination_service::common::config::RawCoordinationNodeConfig;
-use crate::grpc_wrapper::raw_coordination_service::common::config::{
-    RawConsistencyMode, RawRateLimiterCountersMode,
+use crate::grpc_wrapper::raw_coordination_service::config::{
+    RawConsistencyMode, RawCoordinationNodeConfig, RawRateLimiterCountersMode,
 };
 use crate::grpc_wrapper::raw_coordination_service::describe_node::RawDescribeNodeResult;
 use crate::{errors, SchemeEntry};

@@ -161,7 +161,7 @@ impl RawType {
             t@RawType::TzTimestamp => return unimplemented_type(t),
             RawType::Bytes => Value::String(Bytes::default()),
             RawType::UTF8 => Value::Text(String::default()),
-            RawType::Yson => Value::Yson(String::default()),
+            RawType::Yson => Value::Yson(Bytes::default()),
             RawType::Json => Value::Json(String::default()),
             t @ RawType::Uuid => return unimplemented_type(t),
             RawType::JSONDocument => Value::JsonDocument(String::default()),

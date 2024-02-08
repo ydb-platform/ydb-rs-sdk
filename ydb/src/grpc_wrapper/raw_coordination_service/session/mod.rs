@@ -23,6 +23,7 @@ use self::describe_semaphore::RawDescribeSemaphoreResult;
 use self::release_semaphore::RawReleaseSemaphoreResult;
 use self::update_semaphore::RawUpdateSemaphoreResult;
 
+#[derive(Debug)]
 pub(crate) enum RawSessionResponse {
     Ping(PingPong),
     Pong(PingPong),
