@@ -1,16 +1,19 @@
 use crate::client::TimeoutSettings;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_coordination_service::alter_node::RawAlterNodeRequest;
-use crate::grpc_wrapper::raw_coordination_service::common::config::RawCoordinationNodeConfig;
+use crate::grpc_wrapper::raw_coordination_service::config::RawCoordinationNodeConfig;
 use crate::grpc_wrapper::raw_coordination_service::create_node::RawCreateNodeRequest;
 use crate::grpc_wrapper::raw_coordination_service::describe_node::RawDescribeNodeRequest;
 use crate::grpc_wrapper::raw_coordination_service::drop_node::RawDropNodeRequest;
-use crate::{grpc_wrapper, YdbResult};
+use crate::{grpc_wrapper, CoordinationSession, SessionOptions, YdbResult};
 
 use super::list_types::{NodeConfig, NodeDescription};
 
 pub struct CoordinationClient {
     timeouts: TimeoutSettings,
+
+    session_seq_no: u64,
+
     connection_manager: GrpcConnectionManager,
 }
 
@@ -21,8 +24,20 @@ impl CoordinationClient {
     ) -> Self {
         Self {
             timeouts,
+            session_seq_no: 0,
             connection_manager,
         }
+    }
+
+    pub async fn create_session(
+        &mut self,
+        path: String,
+        options: SessionOptions,
+    ) -> YdbResult<CoordinationSession> {
+        let seq_no = self.session_seq_no;
+        self.session_seq_no += 1;
+
+        CoordinationSession::new(path, seq_no, options, self.connection_manager.clone()).await
     }
 
     pub async fn create_node(&mut self, path: String, config: NodeConfig) -> YdbResult<()> {
@@ -84,5 +99,11 @@ impl CoordinationClient {
                 grpc_wrapper::raw_coordination_service::client::RawCoordinationClient::new,
             )
             .await
+    }
+}
+
+impl Clone for CoordinationClient {
+    fn clone(&self) -> Self {
+        unimplemented!()
     }
 }
