@@ -5,7 +5,6 @@ use crate::discovery::{Discovery, TimerDiscovery};
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
-use crate::grpc_wrapper::raw_auth_service::client::RawAuthClient;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 use crate::{Client, Credentials};
@@ -131,19 +130,13 @@ fn token_password(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
     client_builder = database(uri, client_builder)?;
 
     let endpoint: Uri = Uri::from_str(client_builder.endpoint.as_str())?;
-    let static_balancer = StaticLoadBalancer::new(endpoint);
-    let empty_connection_manager = GrpcConnectionManager::new(
-        SharedLoadBalancer::new_with_balancer(Box::new(static_balancer)),
-        client_builder.database.clone(),
-        MultiInterceptor::new(),
-    );
 
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-    let auth_client = rt.block_on(empty_connection_manager.get_auth_service(RawAuthClient::new)).unwrap();
     client_builder.credentials = credencials_ref(UserPasswordAuth::new(
         username,
         password,
-        auth_client));
+        endpoint,
+        client_builder.database.clone(),
+    ));
 
     Ok(client_builder)
 }

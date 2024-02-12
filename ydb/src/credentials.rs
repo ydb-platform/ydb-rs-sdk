@@ -1,8 +1,12 @@
 use crate::client::TimeoutSettings;
 use crate::errors::{YdbError, YdbResult};
+use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_auth_service::client::RawAuthClient;
 use crate::grpc_wrapper::raw_auth_service::login::RawLoginRequest;
+use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 use crate::pub_traits::{Credentials, TokenInfo};
+use http::Uri;
 use serde::Deserialize;
 use std::fmt::Debug;
 use std::ops::Add;
@@ -239,7 +243,17 @@ pub struct UserPasswordAuth {
 }
 
 impl UserPasswordAuth {
-    pub fn new(username: String, password: String, auth_client: RawAuthClient) -> Self {
+    pub fn new(username: String, password: String, endpoint: Uri, database: String) -> Self {
+        let static_balancer = StaticLoadBalancer::new(endpoint);
+        let empty_connection_manager = GrpcConnectionManager::new(
+            SharedLoadBalancer::new_with_balancer(Box::new(static_balancer)),
+            database,
+            MultiInterceptor::new(),
+        );
+
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let auth_client = rt.block_on(empty_connection_manager.get_auth_service(RawAuthClient::new)).unwrap();
+
         Self {username,
             password,
             auth_client
