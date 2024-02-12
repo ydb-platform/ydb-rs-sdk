@@ -119,10 +119,10 @@ fn token_password(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
             }
         }
     }
-    if username == None {
+    if username.is_none() {
         return Err(YdbError::Custom("username was not provided for password authentication".to_string()));
     }
-    if password == None {
+    if password.is_none() {
         return Err(YdbError::Custom("password was not provided for password authentication".to_string()));
     }
     let username = username.unwrap();
