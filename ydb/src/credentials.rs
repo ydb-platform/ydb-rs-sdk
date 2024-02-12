@@ -1,4 +1,7 @@
+use crate::client::TimeoutSettings;
 use crate::errors::{YdbError, YdbResult};
+use crate::grpc_wrapper::raw_auth_service::client::RawAuthClient;
+use crate::grpc_wrapper::raw_auth_service::login::RawLoginRequest;
 use crate::pub_traits::{Credentials, TokenInfo};
 use serde::Deserialize;
 use std::fmt::Debug;
@@ -175,7 +178,7 @@ impl GCEMetadata {
     /// Example:
     /// ```
     /// # use ydb::YdbResult;
-    /// # fn main()->YdbResult<()>{   
+    /// # fn main()->YdbResult<()>{
     /// use ydb::GCEMetadata;
     /// let cred = GCEMetadata::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")?;
     /// # return Ok(());
@@ -226,5 +229,35 @@ impl Credentials for GCEMetadata {
 
     fn debug_string(&self) -> String {
         format!("GoogleComputeEngineMetadata from {}", self.uri.as_str())
+    }
+}
+
+pub struct UserPasswordAuth {
+    username: String,
+    password: String,
+    auth_client: RawAuthClient,
+}
+
+impl UserPasswordAuth {
+    pub fn new(username: String, password: String, auth_client: RawAuthClient) -> Self {
+        Self {username,
+            password,
+            auth_client
+        }
+    }
+}
+
+impl Credentials for UserPasswordAuth {
+    fn create_token(&self) -> YdbResult<TokenInfo> {
+        let raw_request = RawLoginRequest{
+            operation_params: TimeoutSettings::default().operation_params(),
+            user: self.username.clone(),
+            password: self.password.clone(),
+        };
+
+        let mut auth_client = self.auth_client.clone();
+        let res = auth_client.login(raw_request).unwrap();
+
+        Ok(TokenInfo::token(res.token))
     }
 }

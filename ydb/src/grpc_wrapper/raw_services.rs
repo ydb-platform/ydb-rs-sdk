@@ -37,4 +37,7 @@ pub(crate) enum Service {
 
     #[strum(serialize = "coordination_service")]
     Coordination,
+
+    #[strum(serialize = "auth_service")]
+    Auth,
 }

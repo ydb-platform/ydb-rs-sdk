@@ -1,10 +1,11 @@
 use crate::client_common::{DBCredentials, TokenCache};
-use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticToken};
+use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticToken, UserPasswordAuth};
 use crate::dicovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
 use crate::discovery::{Discovery, TimerDiscovery};
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
+use crate::grpc_wrapper::raw_auth_service::client::RawAuthClient;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 use crate::{Client, Credentials};
@@ -25,6 +26,7 @@ static PARAM_HANDLERS: Lazy<Mutex<HashMap<String, ParamHandler>>> = Lazy::new(||
         m.insert("token".to_string(), token);
         m.insert("token_cmd".to_string(), token_cmd);
         m.insert("token_metadata".to_string(), token_metadata);
+        m.insert("token_password".to_string(), token_password);
         m
     })
 });
@@ -98,6 +100,51 @@ fn token_metadata(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
             }
         }
     }
+    Ok(client_builder)
+}
+
+fn token_password(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
+    let mut username = Option::<String>::default();
+    let mut password = Option::<String>::default();
+
+    for (key, value) in url::Url::parse(uri)?.query_pairs() {
+        match key.as_ref() {
+            "password" => {
+                password = Some(value.as_ref().to_string());
+            }
+            "username" => {
+                username = Some(value.as_ref().to_string());
+            }
+            _ => {
+                continue;
+            }
+        }
+    }
+    if username == None {
+        return Err(YdbError::Custom("username was not provided for password authentication".to_string()));
+    }
+    if password == None {
+        return Err(YdbError::Custom("password was not provided for password authentication".to_string()));
+    }
+    let username = username.unwrap();
+    let password = password.unwrap();
+    client_builder = database(uri, client_builder)?;
+
+    let endpoint: Uri = Uri::from_str(client_builder.endpoint.as_str())?;
+    let static_balancer = StaticLoadBalancer::new(endpoint);
+    let empty_connection_manager = GrpcConnectionManager::new(
+        SharedLoadBalancer::new_with_balancer(Box::new(static_balancer)),
+        client_builder.database.clone(),
+        MultiInterceptor::new(),
+    );
+
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let auth_client = rt.block_on(empty_connection_manager.get_auth_service(RawAuthClient::new)).unwrap();
+    client_builder.credentials = credencials_ref(UserPasswordAuth::new(
+        username,
+        password,
+        auth_client));
+
     Ok(client_builder)
 }
 
