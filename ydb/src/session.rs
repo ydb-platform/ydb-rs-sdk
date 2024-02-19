@@ -3,8 +3,9 @@ use crate::client_table::TableServiceClientType;
 use crate::errors::{YdbError, YdbResult};
 use crate::query::Query;
 use crate::result::{QueryResult, StreamResult};
-use derivative::Derivative;
 use std::sync::atomic::{AtomicI64, Ordering};
+use derivative::Derivative;
+use itertools::Itertools;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_table_service::client::{
@@ -25,6 +26,11 @@ use ydb_grpc::ydb_proto::table::{
     ExecuteScanQueryRequest,
 };
 use crate::grpc_wrapper::raw_table_service::execute_data_query::{RawExecuteDataQueryRequest};
+use crate::grpc_wrapper::raw_table_service::copy_table::{
+    RawCopyTableRequest,
+    RawCopyTablesRequest
+};
+use crate::table_service_types::CopyTableItem;
 
 static REQUEST_NUMBER: AtomicI64 = AtomicI64::new(0);
 static DEFAULT_COLLECT_STAT_MODE: CollectStatsMode = CollectStatsMode::None;
@@ -139,7 +145,7 @@ impl Session {
         QueryResult::from_raw_result( error_on_truncated, res)
     }
 
-        #[tracing::instrument(skip(self, query), fields(req_number=req_number()))]
+    #[tracing::instrument(skip(self, query), fields(req_number=req_number()))]
     pub async fn execute_scan_query(&mut self, query: Query) -> YdbResult<StreamResult> {
         let req = ExecuteScanQueryRequest {
             query: Some(query.query_to_proto()),
@@ -161,6 +167,40 @@ impl Session {
                 session_id: self.id.clone(),
                 tx_id,
                 operation_params: self.timeouts.operation_params(),
+            })
+            .await;
+
+        self.handle_raw_result(res)
+    }
+
+    pub async fn copy_table(
+        &mut self,
+        source_path: String,
+        destination_path: String,
+    ) -> YdbResult<()> {
+        let mut table = self.get_table_client().await?;
+        let res = table
+            .copy_table(RawCopyTableRequest {
+                session_id: self.id.clone(),
+                source_path,
+                destination_path,
+                operation_params: self.timeouts.operation_params(),
+            })
+            .await;
+
+        self.handle_raw_result(res)
+    }
+
+    pub async fn copy_tables(
+        &mut self,
+        tables: Vec<CopyTableItem>,
+    ) -> YdbResult<()> {
+        let mut table = self.get_table_client().await?;
+        let res = table
+            .copy_tables(RawCopyTablesRequest {
+                operation_params: self.timeouts.operation_params(),
+                session_id: self.id.clone(),
+                tables: tables.into_iter().map_into().collect(),
             })
             .await;
 

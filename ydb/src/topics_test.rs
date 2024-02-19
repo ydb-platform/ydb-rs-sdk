@@ -1,14 +1,18 @@
 use futures_util::StreamExt;
+use std::time::Duration;
 use tracing_test::traced_test;
 
 use crate::client_topic::list_types::ConsumerBuilder;
-use crate::test_integration_helper::create_client;
-use crate::{client_topic::client::TopicOptionsBuilder, TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError, YdbResult};
-use tracing::{trace, warn};
-use ydb_grpc::ydb_proto::topic::stream_read_message::init_request::TopicReadSettings;
-use ydb_grpc::ydb_proto::topic::{stream_read_message};
-use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
+use crate::test_integration_helper::create_client;
+use crate::{
+    client_topic::client::TopicOptionsBuilder, TopicWriterMessageBuilder,
+    TopicWriterOptionsBuilder, YdbError, YdbResult,
+};
+use tracing::{info, trace, warn};
+use ydb_grpc::ydb_proto::topic::stream_read_message;
+use ydb_grpc::ydb_proto::topic::stream_read_message::init_request::TopicReadSettings;
+use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
 
 #[tokio::test]
 #[traced_test]
@@ -16,7 +20,7 @@ use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 async fn create_delete_topic_test() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
-    let topic_name = "test_topic".to_string();
+    let topic_name = "del_test_topic".to_string();
     let topic_path = format!("{}/{}", database_path, topic_name);
 
     let mut topic_client = client.topic_client();
@@ -48,13 +52,31 @@ async fn create_delete_topic_test() -> YdbResult<()> {
 async fn send_message_test() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
-    let topic_name = "test_topic".to_string();
+    let topic_name = "send_test_topic".to_string();
     let topic_path = format!("{}/{}", database_path, topic_name);
     let producer_id = "test-producer-id".to_string();
     let consumer_name = "test-consumer".to_string();
 
     let mut topic_client = client.topic_client();
     let _ = topic_client.drop_topic(topic_path.clone()).await; // ignoring error
+    trace!("previous topic removed");
+
+    'wait_topic_dropped: loop {
+        let mut scheme = client.scheme_client();
+        let res = scheme.list_directory(database_path.clone()).await?;
+        let mut topic_exists = false;
+        for item in res.into_iter() {
+            if item.name == topic_name {
+                topic_exists = true;
+                break;
+            }
+        }
+        if !topic_exists {
+            break 'wait_topic_dropped;
+        }
+        info!("waiting previous topic dropped...");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 
     topic_client
         .create_topic(
@@ -67,7 +89,7 @@ async fn send_message_test() -> YdbResult<()> {
         )
         .await?;
 
-    println!("sent-0");
+    trace!("topic created");
 
     // manual seq
     let mut writer_manual = topic_client
@@ -79,7 +101,7 @@ async fn send_message_test() -> YdbResult<()> {
                 .build()?,
         )
         .await?;
-    println!("sent-1");
+    trace!("first writer created");
 
     writer_manual
         .write(
@@ -89,7 +111,7 @@ async fn send_message_test() -> YdbResult<()> {
                 .build()?,
         )
         .await?;
-    println!("sent-2");
+    trace!("sent message test-1");
 
     writer_manual
         .write_with_ack(
@@ -99,7 +121,7 @@ async fn send_message_test() -> YdbResult<()> {
                 .build()?,
         )
         .await?;
-    println!("sent-3");
+    trace!("sent message test-2");
     writer_manual.stop().await?;
 
     // quto-seq
@@ -120,7 +142,7 @@ async fn send_message_test() -> YdbResult<()> {
                 .build()?,
         )
         .await?;
-    println!("sent-4");
+    trace!("sent message test-3");
     writer.stop().await?;
 
     let grpc_client = topic_client
@@ -128,11 +150,7 @@ async fn send_message_test() -> YdbResult<()> {
         .await?
         .get_grpc_service();
 
-    let mut topic_messages = start_read_topic(
-        grpc_client,
-        consumer_name,
-        topic_path,
-    ).await?;
+    let mut topic_messages = start_read_topic(grpc_client, consumer_name, topic_path).await?;
 
     let r_mess1 = topic_messages.recv().await.unwrap();
     assert_eq!(r_mess1.offset, 0);
@@ -156,7 +174,8 @@ async fn start_read_topic(
     mut grpc_topic_service: TopicServiceClient<InterceptedChannel>,
     consumer: String,
     topic_path: String,
-)->YdbResult<tokio::sync::mpsc::UnboundedReceiver<stream_read_message::read_response::MessageData>>{
+) -> YdbResult<tokio::sync::mpsc::UnboundedReceiver<stream_read_message::read_response::MessageData>>
+{
     let (reader_stream_tx, reader_stream_rx): (
         tokio::sync::mpsc::UnboundedSender<stream_read_message::FromClient>,
         tokio::sync::mpsc::UnboundedReceiver<stream_read_message::FromClient>,
@@ -164,48 +183,53 @@ async fn start_read_topic(
 
     let init_request = stream_read_message::from_client::ClientMessage::InitRequest(
         #[allow(clippy::needless_update)]
-        stream_read_message::InitRequest{
-            topics_read_settings: vec![
-                TopicReadSettings{
-                    path: topic_path,
-                    ..TopicReadSettings::default()
-                }
-            ],
+        stream_read_message::InitRequest {
+            topics_read_settings: vec![TopicReadSettings {
+                path: topic_path,
+                ..TopicReadSettings::default()
+            }],
             consumer,
             ..stream_read_message::InitRequest::default()
-        }
+        },
     );
 
-    let mess = stream_read_message::FromClient{
+    let mess = stream_read_message::FromClient {
         client_message: Some(init_request),
     };
 
-    reader_stream_tx.send(mess).expect("failed to send init message from test topic reader");
-
+    reader_stream_tx
+        .send(mess)
+        .expect("failed to send init message from test topic reader");
 
     let request_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(reader_stream_rx);
-    let mut reader_stream = grpc_topic_service.stream_read(request_stream).await?.into_inner();
+    let mut reader_stream = grpc_topic_service
+        .stream_read(request_stream)
+        .await?
+        .into_inner();
 
-    let _init_response = reader_stream.next().await.ok_or(YdbError::custom("failed receive init response in test reader"))??;
+    let _init_response = reader_stream.next().await.ok_or(YdbError::custom(
+        "failed receive init response in test reader",
+    ))??;
 
     let data_request = stream_read_message::from_client::ClientMessage::ReadRequest(
         #[allow(clippy::needless_update)]
-        stream_read_message::ReadRequest{
-            bytes_size: 1024*1024,
+        stream_read_message::ReadRequest {
+            bytes_size: 1024 * 1024,
             ..stream_read_message::ReadRequest::default()
-        }
+        },
     );
 
-    let mess = stream_read_message::FromClient{
+    let mess = stream_read_message::FromClient {
         client_message: Some(data_request),
     };
-    reader_stream_tx.send(mess).expect("failed to send data request in test topic reader");
+    reader_stream_tx
+        .send(mess)
+        .expect("failed to send data request in test topic reader");
 
     let (topic_messages_tx, topic_messages_rx): (
         tokio::sync::mpsc::UnboundedSender<stream_read_message::read_response::MessageData>,
         tokio::sync::mpsc::UnboundedReceiver<stream_read_message::read_response::MessageData>,
     ) = tokio::sync::mpsc::unbounded_channel();
-
 
     tokio::spawn(async move {
         loop {
@@ -215,15 +239,22 @@ async fn start_read_topic(
                 Some(Ok(mess)) => mess,
                 mess => {
                     trace!("stop to receive reader stream mess in test: {:?}", mess);
-                    return
+                    return;
                 }
             };
 
-            let mess = if let stream_read_message::FromServer{server_message: Some(mess), ..} = mess {
+            let mess = if let stream_read_message::FromServer {
+                server_message: Some(mess),
+                ..
+            } = mess
+            {
                 mess
             } else {
-                warn!("failed decode server message in test topic reader: {:?}", mess);
-                return
+                warn!(
+                    "failed decode server message in test topic reader: {:?}",
+                    mess
+                );
+                return;
             };
 
             match mess {

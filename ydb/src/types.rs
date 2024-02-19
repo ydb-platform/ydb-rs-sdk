@@ -85,7 +85,7 @@ pub enum Value {
 
     /// Text data, encoded to valid utf8
     Text(String),
-    Yson(String),
+    Yson(Bytes),
     Json(String),
     JsonDocument(String),
 
@@ -399,7 +399,7 @@ impl Value {
             Self::Interval(val) => proto_typed_value(pt::Interval, pv::Int64Value(val.as_nanos()?)),
             Self::String(val) => proto_typed_value(pt::String, pv::BytesValue(val.into())),
             Self::Text(val) => proto_typed_value(pt::Utf8, pv::TextValue(val)),
-            Self::Yson(val) => proto_typed_value(pt::Yson, pv::TextValue(val)),
+            Self::Yson(val) => proto_typed_value(pt::Yson, pv::BytesValue(val.into())),
             Self::Json(val) => proto_typed_value(pt::Json, pv::TextValue(val)),
             Self::JsonDocument(val) => proto_typed_value(pt::JsonDocument, pv::TextValue(val)),
             Self::Optional(val) => Self::to_typed_optional(*val)?,
@@ -624,3 +624,10 @@ impl From<String> for Bytes {
         Self { vec: val.into() }
     }
 }
+
+impl From<&str> for Bytes {
+    fn from(val: &str)->Self{
+        Self{vec: val.into()}
+    }
+}
+

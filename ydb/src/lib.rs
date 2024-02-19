@@ -49,6 +49,7 @@ extern crate core;
 pub(crate) mod client;
 mod client_builder;
 pub(crate) mod client_common;
+pub(crate) mod client_coordination;
 #[cfg(test)]
 mod client_directory_test_integration;
 pub(crate) mod client_scheme;
@@ -74,7 +75,10 @@ mod sugar;
 #[cfg(test)]
 mod test_helpers;
 
+#[cfg(test)]
+pub(crate) mod coordination_test;
 pub(crate) mod dicovery_pessimization_interceptor;
+mod table_service_types;
 #[cfg(test)]
 mod test_integration_helper;
 #[cfg(test)]
@@ -88,6 +92,18 @@ pub(crate) mod waiter;
 
 #[cfg(test)]
 mod types_test;
+
+pub use client_coordination::client::CoordinationClient;
+pub use client_coordination::list_types::{
+    ConsistencyMode, NodeConfig, NodeConfigBuilder, NodeDescription, RateLimiterCountersMode,
+};
+pub use client_coordination::session::acquire_options::{AcquireOptions, AcquireOptionsBuilder};
+pub use client_coordination::session::coordination_session::CoordinationSession;
+pub use client_coordination::session::describe_options::{
+    DescribeOptions, DescribeOptionsBuilder, WatchMode, WatchOptions, WatchOptionsBuilder,
+};
+pub use client_coordination::session::lease::Lease;
+pub use client_coordination::session::session_options::{SessionOptions, SessionOptionsBuilder};
 
 // full enum pub types
 pub use client_topic::client::{TopicClient, TopicOptions};

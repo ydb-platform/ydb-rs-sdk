@@ -1,7 +1,7 @@
 [package]
 publish=true
 name = "ydb"
-version = "0.6.2"
+version = "0.7.0"
 authors = ["rekby <timofey.koolin@gmail.com>"]
 edition = "2021"
 license = "Apache-2.0"
@@ -40,7 +40,7 @@ tonic = {version= "0.8.1", features=["tls"]}
 tower = "0.4"
 url="2.2"
 uuid={version="1", features = ["v4"]}
-ydb-grpc = { version = "0.0.13", path="../ydb-grpc"}
+ydb-grpc = { version = "0.0.14", path="../ydb-grpc"}
 
 [dev-dependencies]
 async_once="0.2"
