@@ -78,7 +78,7 @@ async fn password_client_test() -> YdbResult<()> {
         let field_val: i32 = res.into_only_row()?.remove_field_by_name("sum")?.try_into()?;
 
         // return result
-        return Ok(field_val);
+        Ok(field_val)
     })
     .await?;
 
