@@ -25,7 +25,7 @@ static PARAM_HANDLERS: Lazy<Mutex<HashMap<String, ParamHandler>>> = Lazy::new(||
         m.insert("token".to_string(), token);
         m.insert("token_cmd".to_string(), token_cmd);
         m.insert("token_metadata".to_string(), token_metadata);
-        m.insert("token_password".to_string(), token_password);
+        m.insert("token_password".to_string(), password);
         m
     })
 });
@@ -102,7 +102,7 @@ fn token_metadata(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
     Ok(client_builder)
 }
 
-fn token_password(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
+fn password(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
     let mut username = Option::<String>::default();
     let mut password = Option::<String>::default();
 
@@ -127,7 +127,10 @@ fn token_password(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
     }
     let username = username.unwrap();
     let password = password.unwrap();
-    client_builder = database(uri, client_builder)?;
+
+    if client_builder.database.is_empty() {
+        client_builder = database(uri, client_builder)?;
+    }
 
     let endpoint: Uri = Uri::from_str(client_builder.endpoint.as_str())?;
 

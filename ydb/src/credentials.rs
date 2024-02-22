@@ -239,39 +239,44 @@ impl Credentials for GCEMetadata {
 pub struct UserPasswordAuth {
     username: String,
     password: String,
-    auth_client: RawAuthClient,
+    database: String,
+    endpoint: Uri,
 }
 
 impl UserPasswordAuth {
-    pub fn new(username: String, password: String, endpoint: Uri, database: String) -> Self {
-        let static_balancer = StaticLoadBalancer::new(endpoint);
+    pub async fn acquire_token(&self) -> YdbResult<String> {
+        let static_balancer = StaticLoadBalancer::new(self.endpoint.clone());
         let empty_connection_manager = GrpcConnectionManager::new(
             SharedLoadBalancer::new_with_balancer(Box::new(static_balancer)),
-            database,
+            self.database.clone(),
             MultiInterceptor::new(),
         );
 
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let auth_client = rt.block_on(empty_connection_manager.get_auth_service(RawAuthClient::new)).unwrap();
+        let mut auth_client = futures::executor::block_on(
+            empty_connection_manager.get_auth_service(RawAuthClient::new)).unwrap();
 
-        Self {username,
-            password,
-            auth_client
-        }
-    }
-}
-
-impl Credentials for UserPasswordAuth {
-    fn create_token(&self) -> YdbResult<TokenInfo> {
+        // TODO: add configurable authorization request timeout
         let raw_request = RawLoginRequest{
             operation_params: TimeoutSettings::default().operation_params(),
             user: self.username.clone(),
             password: self.password.clone(),
         };
 
-        let mut auth_client = self.auth_client.clone();
-        let res = auth_client.login(raw_request).unwrap();
+        let raw_result = auth_client.login(raw_request).await?;
+        Ok(raw_result.token)
+    }
 
-        Ok(TokenInfo::token(res.token))
+    pub fn new(username: String, password: String, endpoint: Uri, database: String) -> Self {
+        Self {username,
+            password,
+            database,
+            endpoint,
+        }
+    }
+}
+
+impl Credentials for UserPasswordAuth {
+    fn create_token(&self) -> YdbResult<TokenInfo> {
+        Ok(TokenInfo::token(futures::executor::block_on(self.acquire_token())?))
     }
 }

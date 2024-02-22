@@ -20,7 +20,6 @@ impl RawAuthClient {
         }
     }
 
-    #[tokio::main(flavor = "current_thread")]
     pub async fn login(&mut self, req: RawLoginRequest) -> RawResult<RawLoginResult> {
         request_with_result!(
             self.service.login,

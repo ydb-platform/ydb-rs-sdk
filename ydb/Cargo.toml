@@ -16,6 +16,7 @@ force-exhaustive-all=[] # The feature disable all non_exhaustive attributes in y
 async-trait="0.1"
 derivative="2"
 derive_builder="0.12.0"
+futures = "0.3"
 futures-util = "0.3"
 http = "0.2"
 itertools="0.10"
