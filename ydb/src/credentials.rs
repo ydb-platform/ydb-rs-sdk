@@ -236,14 +236,14 @@ impl Credentials for GCEMetadata {
     }
 }
 
-pub struct UserPasswordAuth {
+pub struct StaticCredentialsAuth {
     username: String,
     password: String,
     database: String,
     endpoint: Uri,
 }
 
-impl UserPasswordAuth {
+impl StaticCredentialsAuth {
     pub async fn acquire_token(&self) -> YdbResult<String> {
         let static_balancer = StaticLoadBalancer::new(self.endpoint.clone());
         let empty_connection_manager = GrpcConnectionManager::new(
@@ -275,7 +275,7 @@ impl UserPasswordAuth {
     }
 }
 
-impl Credentials for UserPasswordAuth {
+impl Credentials for StaticCredentialsAuth {
     fn create_token(&self) -> YdbResult<TokenInfo> {
         Ok(TokenInfo::token(futures::executor::block_on(self.acquire_token())?))
     }
