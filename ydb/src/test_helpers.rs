@@ -14,8 +14,13 @@ pub(crate) fn test_client_builder() -> ClientBuilder {
 }
 
 pub(crate) fn get_passworded_connection_string() -> String {
-    Url::parse_with_params(&CONNECTION_STRING,
-        &[("password", "1234"), ("username", "root")]).unwrap().as_str().to_string()
+    Url::parse_with_params(
+        &CONNECTION_STRING,
+        &[("password", "1234"), ("username", "root")],
+    )
+    .unwrap()
+    .as_str()
+    .to_string()
 }
 
 pub(crate) fn test_with_password_builder() -> ClientBuilder {

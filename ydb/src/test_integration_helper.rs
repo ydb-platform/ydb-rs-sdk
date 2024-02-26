@@ -1,7 +1,7 @@
 use crate::client::Client;
 use crate::client::TimeoutSettings;
 use crate::errors::YdbResult;
-use crate::test_helpers::{test_with_password_builder, test_client_builder};
+use crate::test_helpers::{test_client_builder, test_with_password_builder};
 use async_once::AsyncOnce;
 use lazy_static::lazy_static;
 use std::sync::Arc;

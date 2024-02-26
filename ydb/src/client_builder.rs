@@ -1,5 +1,7 @@
 use crate::client_common::{DBCredentials, TokenCache};
-use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticToken, StaticCredentialsAuth};
+use crate::credentials::{
+    credencials_ref, CredentialsRef, GCEMetadata, StaticCredentialsAuth, StaticToken,
+};
 use crate::dicovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
 use crate::discovery::{Discovery, TimerDiscovery};
 use crate::errors::{YdbError, YdbResult};
@@ -120,10 +122,14 @@ fn token_static_password(uri: &str, mut client_builder: ClientBuilder) -> YdbRes
         }
     }
     if username.is_none() {
-        return Err(YdbError::Custom("username was not provided for password authentication".to_string()));
+        return Err(YdbError::Custom(
+            "username was not provided for password authentication".to_string(),
+        ));
     }
     if password.is_none() {
-        return Err(YdbError::Custom("password was not provided for password authentication".to_string()));
+        return Err(YdbError::Custom(
+            "password was not provided for password authentication".to_string(),
+        ));
     }
     let username = username.unwrap();
     let password = password.unwrap();
@@ -295,11 +301,14 @@ mod test {
     #[test]
     fn password_without_username() -> YdbResult<()> {
         let builder = ClientBuilder::new_from_connection_string(
-            "http://asd:222/qwe1?token_static_password=hello");
+            "http://asd:222/qwe1?token_static_password=hello",
+        );
 
         match builder {
             Err(YdbError::Custom(_)) => Ok(()),
-            _ => Err(YdbError::Custom("expected connection string parsing failure".to_string())),
+            _ => Err(YdbError::Custom(
+                "expected connection string parsing failure".to_string(),
+            )),
         }
     }
 }

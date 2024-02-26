@@ -252,11 +252,13 @@ impl StaticCredentialsAuth {
             MultiInterceptor::new(),
         );
 
-        let mut auth_client = futures::executor::block_on(
-            empty_connection_manager.get_auth_service(RawAuthClient::new)).unwrap();
+        let mut auth_client = empty_connection_manager
+            .get_auth_service(RawAuthClient::new)
+            .await
+            .unwrap();
 
         // TODO: add configurable authorization request timeout
-        let raw_request = RawLoginRequest{
+        let raw_request = RawLoginRequest {
             operation_params: TimeoutSettings::default().operation_params(),
             user: self.username.clone(),
             password: self.password.clone(),
@@ -267,7 +269,8 @@ impl StaticCredentialsAuth {
     }
 
     pub fn new(username: String, password: String, endpoint: Uri, database: String) -> Self {
-        Self {username,
+        Self {
+            username,
             password,
             database,
             endpoint,
@@ -276,7 +279,8 @@ impl StaticCredentialsAuth {
 }
 
 impl Credentials for StaticCredentialsAuth {
-    fn create_token(&self) -> YdbResult<TokenInfo> {
-        Ok(TokenInfo::token(futures::executor::block_on(self.acquire_token())?))
+    #[tokio::main(flavor = "current_thread")]
+    async fn create_token(&self) -> YdbResult<TokenInfo> {
+        Ok(TokenInfo::token(self.acquire_token().await?))
     }
 }
