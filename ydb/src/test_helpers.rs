@@ -1,5 +1,6 @@
 use crate::ClientBuilder;
 use once_cell::sync::Lazy;
+use url::Url;
 
 pub(crate) static CONNECTION_STRING: Lazy<String> = Lazy::new(|| {
     std::env::var("YDB_CONNECTION_STRING")
@@ -10,4 +11,18 @@ pub(crate) static CONNECTION_STRING: Lazy<String> = Lazy::new(|| {
 
 pub(crate) fn test_client_builder() -> ClientBuilder {
     CONNECTION_STRING.as_str().parse().unwrap()
+}
+
+pub(crate) fn get_passworded_connection_string() -> String {
+    Url::parse_with_params(
+        &CONNECTION_STRING,
+        &[("password", "1234"), ("username", "root")],
+    )
+    .unwrap()
+    .as_str()
+    .to_string()
+}
+
+pub(crate) fn test_with_password_builder() -> ClientBuilder {
+    ClientBuilder::new_from_connection_string(get_passworded_connection_string()).unwrap()
 }

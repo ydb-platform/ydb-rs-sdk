@@ -73,6 +73,9 @@ mod session_pool;
 mod sugar;
 
 #[cfg(test)]
+pub(crate) mod auth_test;
+
+#[cfg(test)]
 mod test_helpers;
 
 #[cfg(test)]

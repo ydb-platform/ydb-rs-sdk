@@ -1,5 +1,12 @@
+use crate::client::TimeoutSettings;
 use crate::errors::{YdbError, YdbResult};
+use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::grpc_wrapper::raw_auth_service::client::RawAuthClient;
+use crate::grpc_wrapper::raw_auth_service::login::RawLoginRequest;
+use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 use crate::pub_traits::{Credentials, TokenInfo};
+use http::Uri;
 use serde::Deserialize;
 use std::fmt::Debug;
 use std::ops::Add;
@@ -175,7 +182,7 @@ impl GCEMetadata {
     /// Example:
     /// ```
     /// # use ydb::YdbResult;
-    /// # fn main()->YdbResult<()>{   
+    /// # fn main()->YdbResult<()>{
     /// use ydb::GCEMetadata;
     /// let cred = GCEMetadata::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")?;
     /// # return Ok(());
@@ -226,5 +233,54 @@ impl Credentials for GCEMetadata {
 
     fn debug_string(&self) -> String {
         format!("GoogleComputeEngineMetadata from {}", self.uri.as_str())
+    }
+}
+
+pub struct StaticCredentialsAuth {
+    username: String,
+    password: String,
+    database: String,
+    endpoint: Uri,
+}
+
+impl StaticCredentialsAuth {
+    pub async fn acquire_token(&self) -> YdbResult<String> {
+        let static_balancer = StaticLoadBalancer::new(self.endpoint.clone());
+        let empty_connection_manager = GrpcConnectionManager::new(
+            SharedLoadBalancer::new_with_balancer(Box::new(static_balancer)),
+            self.database.clone(),
+            MultiInterceptor::new(),
+        );
+
+        let mut auth_client = empty_connection_manager
+            .get_auth_service(RawAuthClient::new)
+            .await
+            .unwrap();
+
+        // TODO: add configurable authorization request timeout
+        let raw_request = RawLoginRequest {
+            operation_params: TimeoutSettings::default().operation_params(),
+            user: self.username.clone(),
+            password: self.password.clone(),
+        };
+
+        let raw_result = auth_client.login(raw_request).await?;
+        Ok(raw_result.token)
+    }
+
+    pub fn new(username: String, password: String, endpoint: Uri, database: String) -> Self {
+        Self {
+            username,
+            password,
+            database,
+            endpoint,
+        }
+    }
+}
+
+impl Credentials for StaticCredentialsAuth {
+    #[tokio::main(flavor = "current_thread")]
+    async fn create_token(&self) -> YdbResult<TokenInfo> {
+        Ok(TokenInfo::token(self.acquire_token().await?))
     }
 }

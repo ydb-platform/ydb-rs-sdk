@@ -1,5 +1,7 @@
 use crate::client_common::{DBCredentials, TokenCache};
-use crate::credentials::{credencials_ref, CredentialsRef, GCEMetadata, StaticToken};
+use crate::credentials::{
+    credencials_ref, CredentialsRef, GCEMetadata, StaticCredentialsAuth, StaticToken,
+};
 use crate::dicovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
 use crate::discovery::{Discovery, TimerDiscovery};
 use crate::errors::{YdbError, YdbResult};
@@ -25,6 +27,7 @@ static PARAM_HANDLERS: Lazy<Mutex<HashMap<String, ParamHandler>>> = Lazy::new(||
         m.insert("token".to_string(), token);
         m.insert("token_cmd".to_string(), token_cmd);
         m.insert("token_metadata".to_string(), token_metadata);
+        m.insert("token_static_password".to_string(), token_static_password);
         m
     })
 });
@@ -98,6 +101,52 @@ fn token_metadata(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
             }
         }
     }
+    Ok(client_builder)
+}
+
+fn token_static_password(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
+    let mut username = Option::<String>::default();
+    let mut password = Option::<String>::default();
+
+    for (key, value) in url::Url::parse(uri)?.query_pairs() {
+        match key.as_ref() {
+            "token_static_password" => {
+                password = Some(value.as_ref().to_string());
+            }
+            "token_static_username" => {
+                username = Some(value.as_ref().to_string());
+            }
+            _ => {
+                continue;
+            }
+        }
+    }
+    if username.is_none() {
+        return Err(YdbError::Custom(
+            "username was not provided for password authentication".to_string(),
+        ));
+    }
+    if password.is_none() {
+        return Err(YdbError::Custom(
+            "password was not provided for password authentication".to_string(),
+        ));
+    }
+    let username = username.unwrap();
+    let password = password.unwrap();
+
+    if client_builder.database.is_empty() {
+        client_builder = database(uri, client_builder)?;
+    }
+
+    let endpoint: Uri = Uri::from_str(client_builder.endpoint.as_str())?;
+
+    client_builder.credentials = credencials_ref(StaticCredentialsAuth::new(
+        username,
+        password,
+        endpoint,
+        client_builder.database.clone(),
+    ));
+
     Ok(client_builder)
 }
 
@@ -233,7 +282,7 @@ impl FromStr for ClientBuilder {
 
 #[cfg(test)]
 mod test {
-    use crate::{ClientBuilder, YdbResult};
+    use crate::{ClientBuilder, YdbError, YdbResult};
 
     #[test]
     fn database_from_path() -> YdbResult<()> {
@@ -247,5 +296,19 @@ mod test {
         let builder = ClientBuilder::new_from_connection_string("http://asd:222/?database=/qwe2")?;
         assert_eq!(builder.database, "/qwe2".to_string());
         Ok(())
+    }
+
+    #[test]
+    fn password_without_username() -> YdbResult<()> {
+        let builder = ClientBuilder::new_from_connection_string(
+            "http://asd:222/qwe1?token_static_password=hello",
+        );
+
+        match builder {
+            Err(YdbError::Custom(_)) => Ok(()),
+            _ => Err(YdbError::Custom(
+                "expected connection string parsing failure".to_string(),
+            )),
+        }
     }
 }
