@@ -2,6 +2,7 @@ use crate::credentials::CredentialsRef;
 use crate::errors::YdbResult;
 use crate::pub_traits::TokenInfo;
 use crate::waiter::Waiter;
+use secrecy::SecretString;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 use tokio::sync::watch;
@@ -40,7 +41,7 @@ impl TokenCache {
         Ok(token_cache)
     }
 
-    pub(crate) fn token(&self) -> String {
+    pub(crate) fn token(&self) -> SecretString {
         let now = Instant::now();
 
         let read = self.0.read().unwrap();
