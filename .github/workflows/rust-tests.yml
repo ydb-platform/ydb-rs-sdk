@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust_version: [ "1.56.0", "1.75.0" ]
+        rust_version: [ "1.60.0", "1.75.0" ]
 
     services:
       ydb:
@@ -63,6 +63,6 @@ jobs:
       run: cargo test --verbose --workspace -- --include-ignored
 
     - name: Linter
-      if: matrix.rust_version != '1.56.0'
+      if: matrix.rust_version != '1.60.0'
       run: |
         cargo clippy --workspace --all-targets -- -D warnings

@@ -1,3 +1,4 @@
+use secrecy::ExposeSecret;
 use tracing::trace;
 use tracing_test::traced_test;
 
@@ -15,10 +16,11 @@ fn auth_success_test() -> YdbResult<()> {
     let database = uri.path().to_string();
     let up_auth = StaticCredentialsAuth::new("root".to_string(), "1234".to_string(), uri, database);
 
-    let token_str = up_auth.create_token()?.token;
+    let token_sec = up_auth.create_token()?.token;
+    let raw_token = token_sec.expose_secret();
 
-    trace!("got token: `{}'", token_str);
-    if token_str.is_empty() {
+    trace!("got token: `{}'", raw_token);
+    if raw_token.is_empty() {
         panic!("got the empty token on the presumably successful auth request");
     }
 
@@ -34,14 +36,15 @@ async fn auth_async_success_test() -> YdbResult<()> {
     let database = uri.path().to_string();
     let up_auth = StaticCredentialsAuth::new("root".to_string(), "1234".to_string(), uri, database);
 
-    let token_str = std::thread::spawn(move || up_auth.create_token())
+    let token_sec = std::thread::spawn(move || up_auth.create_token())
         .join()
         .unwrap()
         .unwrap()
         .token;
+    let raw_token = token_sec.expose_secret();
 
-    trace!("got token: `{}'", token_str);
-    if token_str.is_empty() {
+    trace!("got token: `{}'", raw_token);
+    if raw_token.is_empty() {
         panic!("got the empty token on the presumably successful auth request");
     }
 

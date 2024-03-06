@@ -7,6 +7,7 @@ use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 use crate::pub_traits::{Credentials, TokenInfo};
 use http::Uri;
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use std::fmt::Debug;
 use std::ops::Add;
@@ -125,7 +126,7 @@ impl Credentials for CommandLineYcToken {
     fn debug_string(&self) -> String {
         let token_describe: String = match self.create_token() {
             Ok(token_info) => {
-                let token = token_info.token;
+                let token = token_info.token.expose_secret();
                 let desc: String = if token.len() > 20 {
                     format!(
                         "{}..{}",
@@ -238,7 +239,7 @@ impl Credentials for GCEMetadata {
 
 pub struct StaticCredentialsAuth {
     username: String,
-    password: String,
+    password: SecretString,
     database: String,
     endpoint: Uri,
 }
@@ -261,17 +262,17 @@ impl StaticCredentialsAuth {
         let raw_request = RawLoginRequest {
             operation_params: TimeoutSettings::default().operation_params(),
             user: self.username.clone(),
-            password: self.password.clone(),
+            password: self.password.expose_secret().clone(),
         };
 
-        let raw_result = auth_client.login(raw_request).await?;
-        Ok(raw_result.token)
+        let raw_response = auth_client.login(raw_request).await?;
+        Ok(raw_response.token)
     }
 
     pub fn new(username: String, password: String, endpoint: Uri, database: String) -> Self {
         Self {
             username,
-            password,
+            password: SecretString::new(password),
             database,
             endpoint,
         }

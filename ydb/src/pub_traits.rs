@@ -1,5 +1,5 @@
-
 use crate::errors::YdbResult;
+use secrecy::SecretString;
 use std::fmt::{Debug, Formatter};
 use std::ops::Add;
 use std::time::{Duration, Instant};
@@ -8,14 +8,14 @@ pub(crate) const DEFAULT_TOKEN_RENEW_INTERVAL: Duration = Duration::from_secs(36
 
 #[derive(Debug, Clone)]
 pub struct TokenInfo {
-    pub(crate) token: String,
+    pub(crate) token: SecretString,
     pub(crate) next_renew: Instant,
 }
 
 impl TokenInfo {
     pub(crate) fn token(token: String) -> Self {
         Self {
-            token,
+            token: SecretString::new(token),
             next_renew: Instant::now().add(DEFAULT_TOKEN_RENEW_INTERVAL),
         }
     }
