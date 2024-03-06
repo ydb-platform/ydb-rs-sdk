@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust_version: [ "1.60.0", "1.74.0" ]
+        rust_version: [ "1.60.0", "1.75.0" ]
 
     services:
       ydb:
