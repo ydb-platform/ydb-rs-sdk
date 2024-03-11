@@ -11,13 +11,15 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+  RUST_VERSION_OLD: "1.60.0"
+  RUST_VERSION_NEW: "1.76.0"
 
 jobs:
   tests:
     strategy:
       fail-fast: false
       matrix:
-        rust_version: [ "1.60.0", "1.76.0" ]
+        rust_version: [ "RUST_VERSION_OLD", "RUST_VERSION_NEW" ]
 
     services:
       ydb:
@@ -38,7 +40,7 @@ jobs:
     - name: Install fixed rust version
       uses: ATiltedTree/setup-rust@v1
       with:
-        rust-version: ${{ matrix.rust_version }}
+        rust-version: ${{ env[matrix.rust_version] }}
         components: clippy
 
     - name: Checkout
