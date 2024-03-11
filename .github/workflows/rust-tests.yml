@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust_version: [ "OLD", "NEW" ]
+        rust_version: [ "RUST_VERSION_OLD", "RUST_VERSION_NEW" ]
 
     services:
       ydb:
