@@ -40,7 +40,7 @@ jobs:
     - name: Install fixed rust version
       uses: ATiltedTree/setup-rust@v1
       with:
-        rust-version: ${{ env["RUST_VERSION_" + matrix.rust_version] }}
+        rust-version: ${{ env[matrix.rust_version] }}
         components: clippy
 
     - name: Checkout
