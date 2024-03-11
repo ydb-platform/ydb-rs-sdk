@@ -19,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust_version: [ "RUST_VERSION_OLD", "RUST_VERSION_NEW" ]
+        rust_version: [ "OLD", "NEW" ]
 
     services:
       ydb:
@@ -40,7 +40,7 @@ jobs:
     - name: Install fixed rust version
       uses: ATiltedTree/setup-rust@v1
       with:
-        rust-version: ${{ env[matrix.rust_version] }}
+        rust-version: ${{ env["RUST_VERSION_" + matrix.rust_version] }}
         components: clippy
 
     - name: Checkout
@@ -65,6 +65,6 @@ jobs:
       run: cargo test --verbose --workspace -- --include-ignored
 
     - name: Linter
-      if: matrix.rust_version != '1.60.0'
+      if: matrix.rust_version == 'NEW'
       run: |
         cargo clippy --workspace --all-targets -- -D warnings
