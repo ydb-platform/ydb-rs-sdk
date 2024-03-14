@@ -16,7 +16,7 @@ pub(crate) fn test_client_builder() -> ClientBuilder {
 pub(crate) fn get_passworded_connection_string() -> String {
     Url::parse_with_params(
         &CONNECTION_STRING,
-        &[("password", "1234"), ("username", "root")],
+        &[("token_static_password", "1234"), ("token_static_username", "root")],
     )
     .unwrap()
     .as_str()
