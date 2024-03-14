@@ -142,7 +142,7 @@ pub use transaction::{Mode, Transaction};
 pub use waiter::Waiter;
 // full enum pub types
 pub use crate::{
-    credentials::{CommandLineYcToken, GCEMetadata, StaticToken, YandexMetadata},
+    credentials::{CommandLineYcToken, GCEMetadata, StaticToken, StaticCredentialsAuth, YandexMetadata},
     errors::{
         YdbError, YdbIssue, YdbIssueSeverity, YdbOrCustomerError, YdbResult,
         YdbResultWithCustomerErr, YdbStatusError,
