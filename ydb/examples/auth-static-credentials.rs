@@ -1,5 +1,3 @@
-// use secrecy::SecretString;
-// use http::Uri;
 use ydb::{ClientBuilder, Query, StaticCredentialsAuth, YdbResult};
 
 #[tokio::main]
