@@ -1451,6 +1451,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "secrecy"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb052cf770a381fa9a6ee63038ff9a0b11d30abb53be970672e950649ff0bfb"
+dependencies = [
+ "zeroize",
+]
+
+[[package]]
 name = "security-framework"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2431,7 +2440,7 @@ dependencies = [
 
 [[package]]
 name = "ydb"
-version = "0.6.2"
+version = "0.8.0"
 dependencies = [
  "async-trait",
  "async_once",
@@ -2450,6 +2459,7 @@ dependencies = [
  "prost-types",
  "rand",
  "reqwest",
+ "secrecy",
  "serde",
  "serde_json",
  "strum",
@@ -2483,7 +2493,7 @@ dependencies = [
 
 [[package]]
 name = "ydb-grpc"
-version = "0.0.13"
+version = "0.0.14"
 dependencies = [
  "pbjson",
  "pbjson-build",
@@ -2496,3 +2506,9 @@ dependencies = [
  "tonic-build",
  "walkdir",
 ]
+
+[[package]]
+name = "zeroize"
+version = "1.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "525b4ec142c6b68a2d10f01f7bbf6755599ca3f81ea53b8431b7dd348f5fdb2d"
