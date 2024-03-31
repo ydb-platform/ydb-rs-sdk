@@ -1,6 +1,7 @@
 use crate::client_common::{DBCredentials, TokenCache};
 use crate::credentials::{
-    credencials_ref, CredentialsRef, GCEMetadata, StaticCredentialsAuth, StaticToken,
+    credencials_ref, CredentialsRef, GCEMetadata, ServiceAccount, StaticCredentialsAuth,
+    StaticToken,
 };
 use crate::dicovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
 use crate::discovery::{Discovery, TimerDiscovery};
@@ -16,6 +17,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tonic::client;
 
 type ParamHandler = fn(&str, ClientBuilder) -> YdbResult<ClientBuilder>;
 

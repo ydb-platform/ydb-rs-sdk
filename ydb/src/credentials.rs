@@ -6,14 +6,18 @@ use crate::grpc_wrapper::raw_auth_service::login::RawLoginRequest;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 use crate::pub_traits::{Credentials, TokenInfo};
+use core::time;
 use http::Uri;
+
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::ops::Add;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tracing::debug;
 
 pub(crate) type CredentialsRef = Arc<Box<dyn Credentials>>;
 
@@ -144,6 +148,122 @@ impl Credentials for CommandLineYcToken {
         };
 
         token_describe
+    }
+}
+
+pub struct ServiceAccount {
+    /// ID of the service account whose key the JWT is signed with.
+    account_id: String,
+    /// ID of the public key obtained when creating authorized keys.
+    /// The key must belong to the service account that the IAM token is requested for.
+    key_id: String,
+
+    /// the private key obtained when creating authorized keys.
+    private_key: SecretString,
+}
+
+impl ServiceAccount {
+    pub fn new(
+        account_id: impl Into<String>,
+        key_id: impl Into<String>,
+        private_key: impl Into<String>,
+    ) -> Self {
+        Self {
+            account_id: account_id.into(),
+            key_id: key_id.into(),
+            private_key: SecretString::new(private_key.into()),
+        }
+    }
+
+    const AUDIENCE: &'static str = "https://iam.api.cloud.yandex.net/iam/v1/tokens";
+    const JWT_TOKEN_LIFE_TIME: usize = 3600;
+
+    fn build_jwt(&self) -> YdbResult<String> {
+        #[derive(Debug, Serialize, Deserialize)]
+        struct PemFile {
+            public_key: String,
+            private_key: String,
+        }
+
+        let private_key = self.private_key.to_owned();
+        let pem = private_key.expose_secret().as_bytes();
+        let pem: PemFile = serde_json::from_slice(pem).unwrap();
+        let private_key = pem.private_key.as_bytes();
+
+        #[derive(Debug, Serialize, Deserialize)]
+        struct Claims {
+            aud: String, // Optional. Audience
+            exp: usize, // Required (validate_exp defaults to true in validation). Expiration time (as UTC timestamp)
+            iat: usize, // Optional. Issued at (as UTC timestamp)
+            iss: String, // Optional. Issuer
+        }
+
+        let iat = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_secs() as usize;
+
+        let mut header = Header::new(Algorithm::PS256);
+        header.kid = Some(self.key_id.clone());
+
+        let claims = Claims {
+            exp: iat + Self::JWT_TOKEN_LIFE_TIME,
+            aud: Self::AUDIENCE.to_owned(),
+            iat,
+            iss: self.account_id.clone(),
+        };
+        let token = encode(
+            &header,
+            &claims,
+            &EncodingKey::from_rsa_pem(private_key).map_err(|e| YdbError::custom(e.to_string()))?,
+        )
+        .map_err(|e| YdbError::custom(format!("can't build jwt: {}", e)))?;
+
+        debug!("Token was built");
+        Ok(token)
+    }
+
+    fn system_time_to_instant(system_time: SystemTime) -> Instant {
+        let epoch = SystemTime::UNIX_EPOCH;
+        let duration = system_time
+            .duration_since(epoch)
+            .expect("Failed to convert SystemTime to Duration");
+
+        Instant::now()
+            .checked_add(duration)
+            .expect("Failed to convert Duration to Instant")
+    }
+}
+
+impl Credentials for ServiceAccount {
+    fn create_token(&self) -> YdbResult<TokenInfo> {
+        const API_URL: &'static str = "https://iam.api.cloud.yandex.net/iam/v1/tokens";
+
+        #[derive(Deserialize)]
+        struct TokenResponse {
+            #[serde(rename = "iamToken")]
+            iam_token: String,
+            #[serde(rename = "expiresAt")]
+            expires_at: SystemTime,
+        }
+
+        #[derive(Serialize)]
+        struct TokenRequest {
+            jwt: String,
+        }
+
+        let jwt = self.build_jwt()?;
+
+        let req = TokenRequest { jwt };
+        let client = reqwest::blocking::Client::new();
+        let res: TokenResponse = client
+            .request(reqwest::Method::POST, API_URL)
+            .json(&req)
+            .send()?
+            .json()?;
+
+        Ok(TokenInfo::token(format!("Bearer {}", res.iam_token))
+            .with_renew(Self::system_time_to_instant(res.expires_at)))
     }
 }
 

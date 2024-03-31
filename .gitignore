@@ -3,3 +3,6 @@ Cargo.toml.bak
 /.idea
 /target
 /.run/
+key.json
+.env
+.vscode/W
