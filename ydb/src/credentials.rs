@@ -164,15 +164,18 @@ impl Credentials for CommandLineYcToken {
 /// ```
 /// or
 /// ```
+/// use ydb::ServiceAccountCredentials;
 /// let json = "....";
 /// let cred = ServiceAccountCredentials::from_json(json);
 /// ```
 /// or
 /// ```
+/// use ydb::ServiceAccountCredentials;
 /// let cred = ServiceAccountCredentials::new("service_account_id", "key_id", "private_key");
 /// ```
 /// or
 /// ```
+/// use ydb::ServiceAccountCredentials;
 /// let cred = ServiceAccountCredentials::from_file("/path/to/file");
 /// ```
 pub struct ServiceAccountCredentials {
