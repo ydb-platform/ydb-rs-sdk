@@ -13,7 +13,7 @@ async fn main() -> YdbResult<()> {
         env::var("YDB_CONNECTION_STRING").expect("YDB_CONNECTION_STRING not set");
 
     let client = ClientBuilder::new_from_connection_string(connection_string)?
-        .with_credentials(ServiceAccountCredentials::from_env())
+        .with_credentials(ServiceAccountCredentials::from_env().unwrap())
         .client()?;
 
     info!("Waiting for client");
