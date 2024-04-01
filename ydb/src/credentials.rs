@@ -7,7 +7,6 @@ use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 use crate::pub_traits::{Credentials, TokenInfo};
 use chrono::DateTime;
-use core::time;
 use http::Uri;
 
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
@@ -18,7 +17,7 @@ use std::ops::Add;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tracing::{debug, info};
+use tracing::debug;
 
 pub(crate) type CredentialsRef = Arc<Box<dyn Credentials>>;
 

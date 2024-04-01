@@ -1,4 +1,4 @@
-use std::{env, fs, str::FromStr};
+use std::{env, str::FromStr};
 
 use tracing::{info, Level};
 use ydb::{ClientBuilder, Query, ServiceAccountCredentials, YdbResult};
