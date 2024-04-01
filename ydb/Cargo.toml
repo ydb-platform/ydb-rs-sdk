@@ -14,6 +14,7 @@ force-exhaustive-all = [
 ] # The feature disable all non_exhaustive attributes in ydb public interface.
 
 [dependencies]
+chrono = { version = "0.4", features = ["serde"] }
 dotenv = "0.15"
 async-trait = "0.1"
 derivative = "2"
@@ -29,10 +30,10 @@ prost = "0.11.2"
 prost-types = "0.11.2"
 pbjson-types = "0.5.1"
 rand = "0.8"
-reqwest = { version = "0.11", features = [
+reqwest = { version = "0.12", features = [
     "blocking",
     "json",
-    "rustls",
+    "rustls-tls",
 ], default-features = false }
 secrecy = "0.4.1"
 serde = { version = "1.0", features = ["derive"] }

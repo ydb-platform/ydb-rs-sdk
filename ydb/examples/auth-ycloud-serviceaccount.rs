@@ -1,7 +1,7 @@
-use std::{env, fs};
+use std::{env, fs, str::FromStr};
 
 use tracing::{info, Level};
-use ydb::{ClientBuilder, Query, ServiceAccount, YdbResult};
+use ydb::{ClientBuilder, Query, ServiceAccountCredentials, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -9,22 +9,19 @@ async fn main() -> YdbResult<()> {
     init_logs();
     info!("Building client");
 
-    let endpoint = env::var("YDB_ENDPOINT").expect("YDB_ENDPOINT not set");
-    let account_id = env::var("YC_ACCOUNT_ID").expect("YC_ACCOUNT_ID not set");
-    let key_id = env::var("YC_KEY_ID").expect("YC_KEY_ID not set");
-    let key_file_path = env::var("YC_SA_KEY_FILE").expect("YC_SA_KEY_FILE not set");
+    let connection_string =
+        env::var("YDB_CONNECTION_STRING").expect("YDB_CONNECTION_STRING not set");
 
-    let key_file = fs::read_to_string(key_file_path).expect("Error reading key file");
-
-    let client = ClientBuilder::new_from_connection_string(endpoint)?
-        .with_credentials(ServiceAccount::new(account_id, key_id, key_file))
+    let client = ClientBuilder::new_from_connection_string(connection_string)?
+        .with_credentials(ServiceAccountCredentials::from_env())
         .client()?;
+
     info!("Waiting for client");
     client.wait().await?;
     let sum: i32 = client
         .table_client()
         .retry_transaction(|mut t| async move {
-            let res = t.query(Query::from("SELECT 1 + 1 AS sum")).await?;
+            let res = t.query(Query::from("SELECT 1 + 1 as sum")).await?;
             Ok(res.into_only_row()?.remove_field_by_name("sum")?)
         })
         .await?
@@ -35,8 +32,10 @@ async fn main() -> YdbResult<()> {
 }
 
 fn init_logs() {
+    let level = env::var("RUST_LOG").unwrap_or("INFO".to_string());
+    let log_level = Level::from_str(&level).unwrap();
     let subscriber = tracing_subscriber::FmtSubscriber::builder()
-        .with_max_level(Level::TRACE)
+        .with_max_level(log_level)
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("Error setting subscriber");
 }

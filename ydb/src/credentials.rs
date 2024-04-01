@@ -6,6 +6,7 @@ use crate::grpc_wrapper::raw_auth_service::login::RawLoginRequest;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 use crate::pub_traits::{Credentials, TokenInfo};
+use chrono::DateTime;
 use core::time;
 use http::Uri;
 
@@ -17,7 +18,7 @@ use std::ops::Add;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tracing::debug;
+use tracing::{debug, info};
 
 pub(crate) type CredentialsRef = Arc<Box<dyn Credentials>>;
 
@@ -151,44 +152,83 @@ impl Credentials for CommandLineYcToken {
     }
 }
 
-pub struct ServiceAccount {
-    /// ID of the service account whose key the JWT is signed with.
-    account_id: String,
-    /// ID of the public key obtained when creating authorized keys.
-    /// The key must belong to the service account that the IAM token is requested for.
-    key_id: String,
-
-    /// the private key obtained when creating authorized keys.
+/// Get service account credentials instance
+/// service account key should be:
+/// - in the local file and YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS environment variable should point to it
+/// - in the local file and it's path is specified
+/// - in the json format string
+///
+/// Example:
+/// ```
+/// use ydb::ServiceAccountCredentials;
+/// let cred = ServiceAccountCredentials::from_env();
+/// ```
+/// or
+/// ```
+/// let json = "....";
+/// let cred = ServiceAccountCredentials::from_json(json);
+/// ```
+/// or
+/// ```
+/// let cred = ServiceAccountCredentials::new("service_account_id", "key_id", "private_key");
+/// ```
+/// or
+/// ```
+/// let cred = ServiceAccountCredentials::from_file("/path/to/file");
+/// ```
+pub struct ServiceAccountCredentials {
     private_key: SecretString,
+    service_account_id: String,
+    key_id: String,
 }
 
-impl ServiceAccount {
+impl ServiceAccountCredentials {
     pub fn new(
-        account_id: impl Into<String>,
+        service_account_id: impl Into<String>,
         key_id: impl Into<String>,
         private_key: impl Into<String>,
     ) -> Self {
         Self {
-            account_id: account_id.into(),
-            key_id: key_id.into(),
             private_key: SecretString::new(private_key.into()),
+            service_account_id: service_account_id.into(),
+            key_id: key_id.into(),
         }
+    }
+
+    pub fn from_env() -> YdbResult<Self> {
+        let path = std::env::var("YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS")?;
+
+        ServiceAccountCredentials::from_file(path)
+    }
+
+    pub fn from_file(path: impl AsRef<std::path::Path>) -> YdbResult<Self> {
+        let json_key = std::fs::read_to_string(path)?;
+        ServiceAccountCredentials::from_json(&json_key)
+    }
+
+    pub fn from_json(json_key: &str) -> YdbResult<Self> {
+        #[derive(Debug, Serialize, Deserialize)]
+        struct JsonKey {
+            public_key: String,
+            private_key: String,
+            service_account_id: String,
+            id: String,
+        }
+
+        let key: JsonKey = serde_json::from_str(json_key)?;
+
+        Ok(Self {
+            key_id: key.id,
+            service_account_id: key.service_account_id,
+            private_key: SecretString::new(key.private_key),
+        })
     }
 
     const AUDIENCE: &'static str = "https://iam.api.cloud.yandex.net/iam/v1/tokens";
     const JWT_TOKEN_LIFE_TIME: usize = 3600;
 
     fn build_jwt(&self) -> YdbResult<String> {
-        #[derive(Debug, Serialize, Deserialize)]
-        struct PemFile {
-            public_key: String,
-            private_key: String,
-        }
-
-        let private_key = self.private_key.to_owned();
-        let pem = private_key.expose_secret().as_bytes();
-        let pem: PemFile = serde_json::from_slice(pem).unwrap();
-        let private_key = pem.private_key.as_bytes();
+        let private_key = self.private_key.expose_secret().as_bytes();
 
         #[derive(Debug, Serialize, Deserialize)]
         struct Claims {
@@ -205,12 +245,14 @@ impl ServiceAccount {
 
         let mut header = Header::new(Algorithm::PS256);
         header.kid = Some(self.key_id.clone());
+        header.alg = Algorithm::PS256;
+        header.typ = Some("JWT".to_string());
 
         let claims = Claims {
             exp: iat + Self::JWT_TOKEN_LIFE_TIME,
             aud: Self::AUDIENCE.to_owned(),
             iat,
-            iss: self.account_id.clone(),
+            iss: self.service_account_id.clone(),
         };
         let token = encode(
             &header,
@@ -223,28 +265,25 @@ impl ServiceAccount {
         Ok(token)
     }
 
-    fn system_time_to_instant(system_time: SystemTime) -> Instant {
-        let epoch = SystemTime::UNIX_EPOCH;
-        let duration = system_time
-            .duration_since(epoch)
-            .expect("Failed to convert SystemTime to Duration");
+    fn time_to_instant(time: chrono::DateTime<chrono::Utc>) -> Instant {
+        let duration = time - chrono::Utc::now();
 
         Instant::now()
-            .checked_add(duration)
+            .checked_add(duration.to_std().unwrap())
             .expect("Failed to convert Duration to Instant")
     }
 }
 
-impl Credentials for ServiceAccount {
+impl Credentials for ServiceAccountCredentials {
     fn create_token(&self) -> YdbResult<TokenInfo> {
         const API_URL: &'static str = "https://iam.api.cloud.yandex.net/iam/v1/tokens";
-
+        use chrono::Utc;
         #[derive(Deserialize)]
         struct TokenResponse {
             #[serde(rename = "iamToken")]
             iam_token: String,
             #[serde(rename = "expiresAt")]
-            expires_at: SystemTime,
+            expires_at: DateTime<Utc>,
         }
 
         #[derive(Serialize)]
@@ -263,7 +302,7 @@ impl Credentials for ServiceAccount {
             .json()?;
 
         Ok(TokenInfo::token(format!("Bearer {}", res.iam_token))
-            .with_renew(Self::system_time_to_instant(res.expires_at)))
+            .with_renew(Self::time_to_instant(res.expires_at)))
     }
 }
 
