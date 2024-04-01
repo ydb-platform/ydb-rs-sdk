@@ -5,7 +5,6 @@ use ydb::{ClientBuilder, Query, ServiceAccountCredentials, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    dotenv::dotenv().ok();
     init_logs();
     info!("Building client");
 

@@ -5,4 +5,4 @@ Cargo.toml.bak
 /.run/
 key.json
 .env
-.vscode/W
+.vscode/
