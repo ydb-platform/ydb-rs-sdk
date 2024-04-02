@@ -179,6 +179,7 @@ impl Credentials for CommandLineYcToken {
 /// let cred = ServiceAccountCredentials::from_file("/path/to/file");
 /// ```
 pub struct ServiceAccountCredentials {
+    audience_url: String,
     private_key: SecretString,
     service_account_id: String,
     key_id: String,
@@ -191,10 +192,16 @@ impl ServiceAccountCredentials {
         private_key: impl Into<String>,
     ) -> Self {
         Self {
+            audience_url: Self::DEFAULT_AUDIENCE.to_string(),
             private_key: SecretString::new(private_key.into()),
             service_account_id: service_account_id.into(),
             key_id: key_id.into(),
         }
+    }
+
+    pub fn with_url(mut self, url: impl Into<String>) -> Self {
+        self.audience_url = url.into();
+        self
     }
 
     pub fn from_env() -> YdbResult<Self> {
@@ -220,13 +227,14 @@ impl ServiceAccountCredentials {
         let key: JsonKey = serde_json::from_str(json_key)?;
 
         Ok(Self {
+            audience_url: Self::DEFAULT_AUDIENCE.to_string(),
             key_id: key.id,
             service_account_id: key.service_account_id,
             private_key: SecretString::new(key.private_key),
         })
     }
 
-    const AUDIENCE: &'static str = "https://iam.api.cloud.yandex.net/iam/v1/tokens";
+    const DEFAULT_AUDIENCE: &'static str = "https://iam.api.cloud.yandex.net/iam/v1/tokens";
     const JWT_TOKEN_LIFE_TIME: usize = 3600;
 
     fn build_jwt(&self) -> YdbResult<String> {
@@ -252,7 +260,7 @@ impl ServiceAccountCredentials {
 
         let claims = Claims {
             exp: iat + Self::JWT_TOKEN_LIFE_TIME,
-            aud: Self::AUDIENCE.to_owned(),
+            aud: self.audience_url.clone(),
             iat,
             iss: self.service_account_id.clone(),
         };
