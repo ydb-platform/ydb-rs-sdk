@@ -14,6 +14,8 @@ async fn main() -> YdbResult<()> {
     let client = ClientBuilder::new_from_connection_string(connection_string)?
         // get credentials from file located at path specified in YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS
         .with_credentials(ServiceAccountCredentials::from_env()?)
+        // or use can use custom url
+        // .with_credentials(ServiceAccountCredentials::from_env()?.with_url("https://iam.api.cloud.yandex.net/iam/v1/tokens"))
         .client()?;
 
     info!("Waiting for client");
