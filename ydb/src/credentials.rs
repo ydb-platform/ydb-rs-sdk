@@ -17,7 +17,7 @@ use std::ops::Add;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tracing::debug;
+use tracing::{trace,debug};
 
 pub(crate) type CredentialsRef = Arc<Box<dyn Credentials>>;
 
@@ -275,12 +275,12 @@ impl ServiceAccountCredentials {
         Ok(token)
     }
 
-    fn time_to_instant(time: chrono::DateTime<chrono::Utc>) -> Instant {
+    fn get_renew_time_for_lifetime(time: chrono::DateTime<chrono::Utc>) -> Instant {
         let duration = time - chrono::Utc::now();
-
-        Instant::now()
-            .checked_add(duration.to_std().unwrap())
-            .expect("Failed to convert Duration to Instant")
+        let seconds = (0.1 * duration.num_seconds() as f64) as u64;
+        trace!("renew in: {}", seconds);
+        let instant = Instant::now() + Duration::from_secs(seconds);        
+        instant     
     }
 }
 
@@ -312,7 +312,7 @@ impl Credentials for ServiceAccountCredentials {
             .json()?;
 
         Ok(TokenInfo::token(format!("Bearer {}", res.iam_token))
-            .with_renew(Self::time_to_instant(res.expires_at)))
+            .with_renew(Self::get_renew_time_for_lifetime(res.expires_at)))
     }
 }
 
