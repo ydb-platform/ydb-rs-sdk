@@ -6,14 +6,18 @@ use crate::grpc_wrapper::raw_auth_service::login::RawLoginRequest;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 use crate::pub_traits::{Credentials, TokenInfo};
+use chrono::DateTime;
 use http::Uri;
+
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use secrecy::{ExposeSecret, SecretString};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::ops::Add;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tracing::{trace,debug};
 
 pub(crate) type CredentialsRef = Arc<Box<dyn Credentials>>;
 
@@ -144,6 +148,171 @@ impl Credentials for CommandLineYcToken {
         };
 
         token_describe
+    }
+}
+
+/// Get service account credentials instance
+/// service account key should be:
+/// - in the local file and YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS environment variable should point to it
+/// - in the local file and it's path is specified
+/// - in the json format string
+///
+/// Example:
+/// ```
+/// use ydb::ServiceAccountCredentials;
+/// let cred = ServiceAccountCredentials::from_env();
+/// ```
+/// or
+/// ```
+/// use ydb::ServiceAccountCredentials;
+/// let json = "....";
+/// let cred = ServiceAccountCredentials::from_json(json);
+/// ```
+/// or
+/// ```
+/// use ydb::ServiceAccountCredentials;
+/// let cred = ServiceAccountCredentials::new("service_account_id", "key_id", "private_key");
+/// ```
+/// or
+/// ```
+/// use ydb::ServiceAccountCredentials;
+/// let cred = ServiceAccountCredentials::from_file("/path/to/file");
+/// ```
+pub struct ServiceAccountCredentials {
+    audience_url: String,
+    private_key: SecretString,
+    service_account_id: String,
+    key_id: String,
+}
+
+impl ServiceAccountCredentials {
+    pub fn new(
+        service_account_id: impl Into<String>,
+        key_id: impl Into<String>,
+        private_key: impl Into<String>,
+    ) -> Self {
+        Self {
+            audience_url: Self::DEFAULT_AUDIENCE.to_string(),
+            private_key: SecretString::new(private_key.into()),
+            service_account_id: service_account_id.into(),
+            key_id: key_id.into(),
+        }
+    }
+
+    pub fn with_url(mut self, url: impl Into<String>) -> Self {
+        self.audience_url = url.into();
+        self
+    }
+
+    pub fn from_env() -> YdbResult<Self> {
+        let path = std::env::var("YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS")?;
+
+        ServiceAccountCredentials::from_file(path)
+    }
+
+    pub fn from_file(path: impl AsRef<std::path::Path>) -> YdbResult<Self> {
+        let json_key = std::fs::read_to_string(path)?;
+        ServiceAccountCredentials::from_json(&json_key)
+    }
+
+    pub fn from_json(json_key: &str) -> YdbResult<Self> {
+        #[derive(Debug, Serialize, Deserialize)]
+        struct JsonKey {
+            public_key: String,
+            private_key: String,
+            service_account_id: String,
+            id: String,
+        }
+
+        let key: JsonKey = serde_json::from_str(json_key)?;
+
+        Ok(Self {
+            audience_url: Self::DEFAULT_AUDIENCE.to_string(),
+            key_id: key.id,
+            service_account_id: key.service_account_id,
+            private_key: SecretString::new(key.private_key),
+        })
+    }
+
+    const DEFAULT_AUDIENCE: &'static str = "https://iam.api.cloud.yandex.net/iam/v1/tokens";
+    const JWT_TOKEN_LIFE_TIME: usize = 720; // max 3600
+
+    fn build_jwt(&self) -> YdbResult<String> {
+        let private_key = self.private_key.expose_secret().as_bytes();
+
+        #[derive(Debug, Serialize, Deserialize)]
+        struct Claims {
+            aud: String, // Optional. Audience
+            exp: usize, // Required (validate_exp defaults to true in validation). Expiration time (as UTC timestamp)
+            iat: usize, // Optional. Issued at (as UTC timestamp)
+            iss: String, // Optional. Issuer
+        }
+
+        let iat = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_secs() as usize;
+
+        let mut header = Header::new(Algorithm::PS256);
+        header.kid = Some(self.key_id.clone());
+        header.alg = Algorithm::PS256;
+        header.typ = Some("JWT".to_string());
+
+        let claims = Claims {
+            exp: iat + Self::JWT_TOKEN_LIFE_TIME,
+            aud: self.audience_url.clone(),
+            iat,
+            iss: self.service_account_id.clone(),
+        };
+        let token = encode(
+            &header,
+            &claims,
+            &EncodingKey::from_rsa_pem(private_key).map_err(|e| YdbError::custom(e.to_string()))?,
+        )
+        .map_err(|e| YdbError::custom(format!("can't build jwt: {}", e)))?;
+
+        debug!("Token was built");
+        Ok(token)
+    }
+
+    fn get_renew_time_for_lifetime(time: chrono::DateTime<chrono::Utc>) -> Instant {
+        let duration = time - chrono::Utc::now();
+        let seconds = (0.1 * duration.num_seconds() as f64) as u64;
+        trace!("renew in: {}", seconds);
+        let instant = Instant::now() + Duration::from_secs(seconds);        
+        instant     
+    }
+}
+
+impl Credentials for ServiceAccountCredentials {
+    fn create_token(&self) -> YdbResult<TokenInfo> {
+        const API_URL: &'static str = "https://iam.api.cloud.yandex.net/iam/v1/tokens";
+        use chrono::Utc;
+        #[derive(Deserialize)]
+        struct TokenResponse {
+            #[serde(rename = "iamToken")]
+            iam_token: String,
+            #[serde(rename = "expiresAt")]
+            expires_at: DateTime<Utc>,
+        }
+
+        #[derive(Serialize)]
+        struct TokenRequest {
+            jwt: String,
+        }
+
+        let jwt = self.build_jwt()?;
+
+        let req = TokenRequest { jwt };
+        let client = reqwest::blocking::Client::new();
+        let res: TokenResponse = client
+            .request(reqwest::Method::POST, API_URL)
+            .json(&req)
+            .send()?
+            .json()?;
+
+        Ok(TokenInfo::token(format!("Bearer {}", res.iam_token))
+            .with_renew(Self::get_renew_time_for_lifetime(res.expires_at)))
     }
 }
 
