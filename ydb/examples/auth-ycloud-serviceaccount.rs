@@ -9,10 +9,11 @@ async fn main() -> YdbResult<()> {
     info!("Building client");
 
     let connection_string =
-        env::var("YDB_CONNECTION_STRING").expect("YDB_CONNECTION_STRING not set");
+        env::var("YDB_CONNECTION_STRING").map_err(|_| "YDB_CONNECTION_STRING not set")?;
 
     let client = ClientBuilder::new_from_connection_string(connection_string)?
-        .with_credentials(ServiceAccountCredentials::from_env().unwrap())
+        // get credentials from file located at path specified in YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS
+        .with_credentials(ServiceAccountCredentials::from_env()?)
         .client()?;
 
     info!("Waiting for client");
