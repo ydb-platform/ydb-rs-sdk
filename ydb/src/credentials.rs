@@ -235,7 +235,7 @@ impl ServiceAccountCredentials {
     }
 
     const DEFAULT_AUDIENCE: &'static str = "https://iam.api.cloud.yandex.net/iam/v1/tokens";
-    const JWT_TOKEN_LIFE_TIME: usize = 3600;
+    const JWT_TOKEN_LIFE_TIME: usize = 720; // max 3600
 
     fn build_jwt(&self) -> YdbResult<String> {
         let private_key = self.private_key.expose_secret().as_bytes();
