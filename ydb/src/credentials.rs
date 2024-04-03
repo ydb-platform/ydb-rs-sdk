@@ -25,17 +25,36 @@ const YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS: &str = "YDB_SERVICE_ACCOUNT_KEY_
 const YDB_METADATA_CREDENTIALS: &str = "YDB_METADATA_CREDENTIALS";
 const YDB_ACCESS_TOKEN_CREDENTIALS: &str = "YDB_ACCESS_TOKEN_CREDENTIALS";
 
-// from within yandex cloud virtual machine or container is the same as
-// http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token
 const YDB_METADATA_URL: &str =
-    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
+    "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token";
 
 const EMPTY_TOKEN: &str = "";
+
+pub type MetadataUrlCredentials = GCEMetadata;
+pub type AccessTokenCredentials = StaticToken;
 
 pub(crate) type CredentialsRef = Arc<Box<dyn Credentials>>;
 
 pub(crate) fn credencials_ref<T: 'static + Credentials>(cred: T) -> CredentialsRef {
     Arc::new(Box::new(cred))
+}
+
+pub struct AnonymousCredentials {
+    inner: StaticToken,
+}
+
+impl AnonymousCredentials {
+    pub fn new() -> Self {
+        Self {
+            inner: StaticToken::from(EMPTY_TOKEN),
+        }
+    }
+}
+
+impl Credentials for AnonymousCredentials {
+    fn create_token(&self) -> YdbResult<TokenInfo> {
+        self.inner.create_token()
+    }
 }
 
 /// Select credentials from environment
@@ -46,16 +65,17 @@ pub struct FromEnvCredentials {
 
 enum InnerCredentials {
     ServiceAccount(ServiceAccountCredentials),
-    Metadata(YandexMetadata),
-    AccessToken(StaticToken),
+    Metadata(MetadataUrlCredentials),
+    AccessToken(AccessTokenCredentials),
+    Anonymous(AnonymousCredentials),
 }
 
 impl FromEnvCredentials {
     pub fn new() -> YdbResult<Self> {
-        if let Ok(path) = env::var(YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS) {
+        if let Ok(file_creds) = env::var(YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS) {
             return Ok(Self {
                 inner: InnerCredentials::ServiceAccount(ServiceAccountCredentials::from_file(
-                    path,
+                    file_creds,
                 )?),
             });
         }
@@ -64,7 +84,7 @@ impl FromEnvCredentials {
             if v == "1" {
                 return Ok(Self {
                     // anonymous credentials is empty token
-                    inner: InnerCredentials::AccessToken(StaticToken::from(EMPTY_TOKEN)),
+                    inner: InnerCredentials::Anonymous(AnonymousCredentials::new()),
                 });
             }
         }
@@ -95,6 +115,7 @@ impl Credentials for FromEnvCredentials {
             InnerCredentials::ServiceAccount(inner) => inner.create_token(),
             InnerCredentials::Metadata(inner) => inner.create_token(),
             InnerCredentials::AccessToken(inner) => inner.create_token(),
+            InnerCredentials::Anonymous(inner) => inner.create_token(),
         }
     }
 }

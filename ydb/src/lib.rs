@@ -143,8 +143,9 @@ pub use waiter::Waiter;
 // full enum pub types
 pub use crate::{
     credentials::{
-        CommandLineYcToken, FromEnvCredentials, GCEMetadata, ServiceAccountCredentials,
-        StaticCredentialsAuth, StaticToken, YandexMetadata,
+        AccessTokenCredentials, AnonymousCredentials, CommandLineYcToken, FromEnvCredentials,
+        GCEMetadata, MetadataUrlCredentials, ServiceAccountCredentials, StaticCredentialsAuth,
+        StaticToken, YandexMetadata,
     },
     errors::{
         YdbError, YdbIssue, YdbIssueSeverity, YdbOrCustomerError, YdbResult,
