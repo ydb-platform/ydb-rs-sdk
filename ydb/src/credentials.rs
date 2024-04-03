@@ -12,17 +12,91 @@ use http::Uri;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::fmt::Debug;
 use std::ops::Add;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tracing::{trace,debug};
+use tracing::{debug, trace};
+
+const YDB_ANONYMOUS_CREDENTIALS: &str = "YDB_ANONYMOUS_CREDENTIALS";
+const YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS: &str = "YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS";
+const YDB_METADATA_CREDENTIALS: &str = "YDB_METADATA_CREDENTIALS";
+const YDB_ACCESS_TOKEN_CREDENTIALS: &str = "YDB_ACCESS_TOKEN_CREDENTIALS";
+
+// from within yandex cloud virtual machine or container is the same as
+// http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token
+const YDB_METADATA_URL: &str =
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
+
+const EMPTY_TOKEN: &str = "";
 
 pub(crate) type CredentialsRef = Arc<Box<dyn Credentials>>;
 
 pub(crate) fn credencials_ref<T: 'static + Credentials>(cred: T) -> CredentialsRef {
     Arc::new(Box::new(cred))
+}
+
+/// Select credentials from environment
+/// reference: https://ydb.tech/docs/en/reference/ydb-sdk/auth
+pub struct FromEnvCredentials {
+    inner: InnerCredentials,
+}
+
+enum InnerCredentials {
+    ServiceAccount(ServiceAccountCredentials),
+    Metadata(YandexMetadata),
+    AccessToken(StaticToken),
+}
+
+impl FromEnvCredentials {
+    pub fn new() -> YdbResult<Self> {
+        if let Ok(path) = env::var(YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS) {
+            return Ok(Self {
+                inner: InnerCredentials::ServiceAccount(ServiceAccountCredentials::from_file(
+                    path,
+                )?),
+            });
+        }
+
+        if let Ok(v) = env::var(YDB_ANONYMOUS_CREDENTIALS) {
+            if v == "1" {
+                return Ok(Self {
+                    // anonymous credentials is empty token
+                    inner: InnerCredentials::AccessToken(StaticToken::from(EMPTY_TOKEN)),
+                });
+            }
+        }
+
+        if let Ok(v) = env::var(YDB_METADATA_CREDENTIALS) {
+            if v == "1" {
+                return Ok(Self {
+                    inner: InnerCredentials::Metadata(YandexMetadata::new()),
+                });
+            }
+        }
+
+        if let Ok(token) = env::var(YDB_ACCESS_TOKEN_CREDENTIALS) {
+            return Ok(Self {
+                inner: InnerCredentials::AccessToken(StaticToken::from(token)),
+            });
+        }
+
+        return Ok(Self {
+            inner: InnerCredentials::Metadata(YandexMetadata::new()),
+        });
+    }
+}
+
+impl Credentials for FromEnvCredentials {
+    fn create_token(&self) -> YdbResult<TokenInfo> {
+        match &self.inner {
+            InnerCredentials::ServiceAccount(inner) => inner.create_token(),
+            InnerCredentials::Metadata(inner) => inner.create_token(),
+            InnerCredentials::AccessToken(inner) => inner.create_token(),
+        }
+    }
 }
 
 /// Credentials with static token without renewing
@@ -205,7 +279,7 @@ impl ServiceAccountCredentials {
     }
 
     pub fn from_env() -> YdbResult<Self> {
-        let path = std::env::var("YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS")?;
+        let path = std::env::var(YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS)?;
 
         ServiceAccountCredentials::from_file(path)
     }
@@ -279,8 +353,8 @@ impl ServiceAccountCredentials {
         let duration = time - chrono::Utc::now();
         let seconds = (0.1 * duration.num_seconds() as f64) as u64;
         trace!("renew in: {}", seconds);
-        let instant = Instant::now() + Duration::from_secs(seconds);        
-        instant     
+        let instant = Instant::now() + Duration::from_secs(seconds);
+        instant
     }
 }
 
@@ -343,7 +417,7 @@ pub struct GCEMetadata {
 impl GCEMetadata {
     /// Create GCEMetadata with default url for receive token
     pub fn new() -> Self {
-        Self::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token").unwrap()
+        Self::from_url(YDB_METADATA_URL).unwrap()
     }
 
     /// Create GCEMetadata with custom url (may need for debug or spec infrastructure with non standard metadata)
@@ -353,7 +427,7 @@ impl GCEMetadata {
     /// # use ydb::YdbResult;
     /// # fn main()->YdbResult<()>{
     /// use ydb::GCEMetadata;
-    /// let cred = GCEMetadata::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")?;
+    /// let cred = GCEMetadata::from_url(YDB_METADATA_URL)?;
     /// # return Ok(());
     /// # }
     /// ```
