@@ -32,6 +32,8 @@ const EMPTY_TOKEN: &str = "";
 
 pub type MetadataUrlCredentials = GCEMetadata;
 pub type AccessTokenCredentials = StaticToken;
+pub type CommandLineCredentials = CommandLineYcToken;
+pub type StaticCredentials = StaticCredentialsAuth;
 
 pub(crate) type CredentialsRef = Arc<Box<dyn Credentials>>;
 
