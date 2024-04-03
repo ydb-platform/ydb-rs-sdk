@@ -25,7 +25,7 @@ const YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS: &str = "YDB_SERVICE_ACCOUNT_KEY_
 const YDB_METADATA_CREDENTIALS: &str = "YDB_METADATA_CREDENTIALS";
 const YDB_ACCESS_TOKEN_CREDENTIALS: &str = "YDB_ACCESS_TOKEN_CREDENTIALS";
 
-const YDB_METADATA_URL: &str =
+pub const YDB_METADATA_URL: &str =
     "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token";
 
 const EMPTY_TOKEN: &str = "";
@@ -450,7 +450,7 @@ impl GCEMetadata {
     /// # use ydb::YdbResult;
     /// # fn main()->YdbResult<()>{
     /// use ydb::GCEMetadata;
-    /// let cred = GCEMetadata::from_url(YDB_METADATA_URL)?;
+    /// let cred = GCEMetadata::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")?;
     /// # return Ok(());
     /// # }
     /// ```
