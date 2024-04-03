@@ -192,7 +192,7 @@ impl ServiceAccountCredentials {
         private_key: impl Into<String>,
     ) -> Self {
         Self {
-            audience_url: Self::DEFAULT_AUDIENCE.to_string(),
+            audience_url: Self::IAM_TOKEN_DEFAULT.to_string(),
             private_key: SecretString::new(private_key.into()),
             service_account_id: service_account_id.into(),
             key_id: key_id.into(),
@@ -227,14 +227,14 @@ impl ServiceAccountCredentials {
         let key: JsonKey = serde_json::from_str(json_key)?;
 
         Ok(Self {
-            audience_url: Self::DEFAULT_AUDIENCE.to_string(),
+            audience_url: Self::IAM_TOKEN_DEFAULT.to_string(),
             key_id: key.id,
             service_account_id: key.service_account_id,
             private_key: SecretString::new(key.private_key),
         })
     }
 
-    const DEFAULT_AUDIENCE: &'static str = "https://iam.api.cloud.yandex.net/iam/v1/tokens";
+    const IAM_TOKEN_DEFAULT: &'static str = "https://iam.api.cloud.yandex.net/iam/v1/tokens";
     const JWT_TOKEN_LIFE_TIME: usize = 720; // max 3600
 
     fn build_jwt(&self) -> YdbResult<String> {
@@ -286,7 +286,6 @@ impl ServiceAccountCredentials {
 
 impl Credentials for ServiceAccountCredentials {
     fn create_token(&self) -> YdbResult<TokenInfo> {
-        const API_URL: &'static str = "https://iam.api.cloud.yandex.net/iam/v1/tokens";
         use chrono::Utc;
         #[derive(Deserialize)]
         struct TokenResponse {
@@ -306,7 +305,7 @@ impl Credentials for ServiceAccountCredentials {
         let req = TokenRequest { jwt };
         let client = reqwest::blocking::Client::new();
         let res: TokenResponse = client
-            .request(reqwest::Method::POST, API_URL)
+            .request(reqwest::Method::POST, self.audience_url.clone())
             .json(&req)
             .send()?
             .json()?;
