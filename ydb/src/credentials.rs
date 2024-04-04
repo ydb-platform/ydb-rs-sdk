@@ -144,7 +144,7 @@ impl AccessTokenCredentials {
     ///
     /// Example:
     /// ```
-    /// # use ydb::StaticToken;
+    /// # use ydb::AccessTokenCredentials;
     /// AccessTokenCredentials::from("asd");
     /// ```
     pub fn from<T: Into<String>>(token: T) -> Self {
