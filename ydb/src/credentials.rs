@@ -76,9 +76,27 @@ impl Credentials for AnonymousCredentials {
     }
 }
 
+pub struct FromEnvCredentials {
+    inner: Box<dyn Credentials>,
+}
+
 /// Select credentials from environment
 /// reference: https://ydb.tech/docs/en/reference/ydb-sdk/auth
-pub fn get_credentials_from_env() -> YdbResult<Box<dyn Credentials>> {
+impl FromEnvCredentials {
+    pub fn new() -> YdbResult<Self> {
+        Ok(Self {
+            inner: get_credentials_from_env()?,
+        })
+    }
+}
+
+impl Credentials for FromEnvCredentials {
+    fn create_token(&self) -> YdbResult<TokenInfo> {
+        self.inner.create_token()
+    }
+}
+
+fn get_credentials_from_env() -> YdbResult<Box<dyn Credentials>> {
     if let Ok(file_creds) = env::var(YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS) {
         return Ok(Box::new(ServiceAccountCredentials::from_file(file_creds)?));
     }
