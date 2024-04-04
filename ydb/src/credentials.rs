@@ -65,6 +65,23 @@ impl MetadataUrlCredentials {
             inner: GCEMetadata::from_url(YC_METADATA_URL).unwrap(),
         }
     }
+
+    /// Create GCEMetadata with custom url (may need for debug or spec infrastructure with non standard metadata)
+    ///
+    /// Example:
+    /// ```
+    /// # use ydb::YdbResult;
+    /// # fn main()->YdbResult<()>{
+    /// use ydb::MetadataUrlCredentials;
+    /// let cred = MetadataUrlCredentials::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")?;
+    /// # return Ok(());
+    /// # }
+    /// ```
+    pub fn from_url<T: Into<String>>(url: T) -> YdbResult<Self> {
+        Ok(Self {
+            inner: GCEMetadata::from_url(url)?,
+        })
+    }
 }
 
 impl Credentials for MetadataUrlCredentials {
