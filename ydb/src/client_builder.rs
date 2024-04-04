@@ -1,6 +1,6 @@
 use crate::client_common::{DBCredentials, TokenCache};
 use crate::credentials::{
-    credencials_ref, CredentialsRef, GCEMetadata, StaticCredentialsAuth, StaticToken,
+    credencials_ref, AccessTokenCredentials, CredentialsRef, GCEMetadata, StaticCredentials,
 };
 use crate::dicovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
 use crate::discovery::{Discovery, TimerDiscovery};
@@ -64,8 +64,9 @@ fn token(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilde
             continue;
         };
 
-        client_builder.credentials =
-            credencials_ref(crate::credentials::StaticToken::from(value.as_ref()));
+        client_builder.credentials = credencials_ref(
+            crate::credentials::AccessTokenCredentials::from(value.as_ref()),
+        );
     }
     Ok(client_builder)
 }
@@ -77,7 +78,7 @@ fn token_cmd(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBu
         };
 
         client_builder.credentials = credencials_ref(
-            crate::credentials::CommandLineYcToken::from_cmd(value.as_ref())?,
+            crate::credentials::CommandLineCredentials::from_cmd(value.as_ref())?,
         );
     }
     Ok(client_builder)
@@ -140,7 +141,7 @@ fn token_static_password(uri: &str, mut client_builder: ClientBuilder) -> YdbRes
 
     let endpoint: Uri = Uri::from_str(client_builder.endpoint.as_str())?;
 
-    client_builder.credentials = credencials_ref(StaticCredentialsAuth::new(
+    client_builder.credentials = credencials_ref(StaticCredentials::new(
         username,
         password,
         endpoint,
@@ -249,7 +250,7 @@ impl ClientBuilder {
 
     fn new() -> Self {
         Self {
-            credentials: credencials_ref(StaticToken::from("")),
+            credentials: credencials_ref(AccessTokenCredentials::from("")),
             database: "/local".to_string(),
             discovery_interval: Duration::from_secs(60),
             endpoint: "grpc://localhost:2135".to_string(),

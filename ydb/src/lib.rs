@@ -143,9 +143,9 @@ pub use waiter::Waiter;
 // full enum pub types
 pub use crate::{
     credentials::{
-        AccessTokenCredentials, AnonymousCredentials, CommandLineCredentials, CommandLineYcToken,
-        FromEnvCredentials, GCEMetadata, MetadataUrlCredentials, ServiceAccountCredentials,
-        StaticCredentials, StaticCredentialsAuth, StaticToken, YandexMetadata,
+        get_credentials_from_env, AccessTokenCredentials, AnonymousCredentials,
+        CommandLineCredentials, GCEMetadata, MetadataUrlCredentials, ServiceAccountCredentials,
+        StaticCredentials,
     },
     errors::{
         YdbError, YdbIssue, YdbIssueSeverity, YdbOrCustomerError, YdbResult,
@@ -153,4 +153,10 @@ pub use crate::{
     },
     pub_traits::{Credentials, TokenInfo},
     types::{Bytes, Sign, SignedInterval, Value, ValueList, ValueOptional, ValueStruct},
+};
+
+// deprecated types
+
+pub use crate::credentials::{
+    CommandLineYcToken, StaticCredentialsAuth, StaticToken, YandexMetadata,
 };
