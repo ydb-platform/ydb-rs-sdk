@@ -25,23 +25,12 @@ const YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS: &str = "YDB_SERVICE_ACCOUNT_KEY_
 const YDB_METADATA_CREDENTIALS: &str = "YDB_METADATA_CREDENTIALS";
 const YDB_ACCESS_TOKEN_CREDENTIALS: &str = "YDB_ACCESS_TOKEN_CREDENTIALS";
 
-// for compatibility
-// inside yandex cloud containers, cloud functions and vms
-// metadata.google.internal is resolved to 169.254.169.254
-pub const YC_METADATA_URL: &str =
+const YC_METADATA_URL: &str =
+    "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token";
+const GCE_METADATA_URL: &str =
     "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
 
 const EMPTY_TOKEN: &str = "";
-
-/// Get token of service account of instance
-///
-/// Yandex cloud support GCE token compatible. Use it.
-/// Example:
-/// ```
-/// use ydb::MetadataUrlCredentials;
-/// let cred = MetadataUrlCredentials::new();
-/// ```
-pub type MetadataUrlCredentials = GCEMetadata;
 
 #[deprecated(note = "use AccessTokenCredentials instead")]
 pub type StaticToken = AccessTokenCredentials;
@@ -56,6 +45,32 @@ pub(crate) type CredentialsRef = Arc<Box<dyn Credentials>>;
 
 pub(crate) fn credencials_ref<T: 'static + Credentials>(cred: T) -> CredentialsRef {
     Arc::new(Box::new(cred))
+}
+
+/// Get token of service account of instance
+///
+/// Yandex cloud support GCE token compatible. Use it.
+/// Example:
+/// ```
+/// use ydb::MetadataUrlCredentials;
+/// let cred = MetadataUrlCredentials::new();
+/// ```
+pub struct MetadataUrlCredentials {
+    inner: GCEMetadata,
+}
+
+impl MetadataUrlCredentials {
+    pub fn new() -> Self {
+        Self {
+            inner: GCEMetadata::from_url(YC_METADATA_URL).unwrap(),
+        }
+    }
+}
+
+impl Credentials for MetadataUrlCredentials {
+    fn create_token(&self) -> YdbResult<TokenInfo> {
+        self.inner.create_token()
+    }
 }
 
 pub struct AnonymousCredentials {
@@ -431,7 +446,7 @@ pub struct GCEMetadata {
 impl GCEMetadata {
     /// Create GCEMetadata with default url for receive token
     pub fn new() -> Self {
-        Self::from_url(YC_METADATA_URL).unwrap()
+        Self::from_url(GCE_METADATA_URL).unwrap()
     }
 
     /// Create GCEMetadata with custom url (may need for debug or spec infrastructure with non standard metadata)
