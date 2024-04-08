@@ -1,10 +1,10 @@
-use ydb::{ClientBuilder, Query, YandexMetadata, YdbResult};
+use ydb::{ClientBuilder, MetadataUrlCredentials, Query, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
     let client =
         ClientBuilder::new_from_connection_string(std::env::var("YDB_CONNECTION_STRING")?)?
-            .with_credentials(YandexMetadata::new())
+            .with_credentials(MetadataUrlCredentials::new())
             .client()?;
     client.wait().await?;
     let sum: i32 = client

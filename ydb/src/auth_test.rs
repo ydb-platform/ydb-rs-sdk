@@ -3,7 +3,7 @@ use tracing::trace;
 use tracing_test::traced_test;
 
 use crate::{
-    credentials::StaticCredentialsAuth, pub_traits::Credentials, test_helpers::CONNECTION_STRING,
+    credentials::StaticCredentials, pub_traits::Credentials, test_helpers::CONNECTION_STRING,
     test_integration_helper::create_password_client, Query, Transaction, YdbResult,
 };
 
@@ -14,7 +14,7 @@ fn auth_success_test() -> YdbResult<()> {
     let uri = http::uri::Uri::from_static(&(CONNECTION_STRING));
 
     let database = uri.path().to_string();
-    let up_auth = StaticCredentialsAuth::new("root".to_string(), "1234".to_string(), uri, database);
+    let up_auth = StaticCredentials::new("root".to_string(), "1234".to_string(), uri, database);
 
     let token_sec = up_auth.create_token()?.token;
     let raw_token = token_sec.expose_secret();
@@ -34,7 +34,7 @@ async fn auth_async_success_test() -> YdbResult<()> {
     let uri = http::uri::Uri::from_static(&(CONNECTION_STRING));
 
     let database = uri.path().to_string();
-    let up_auth = StaticCredentialsAuth::new("root".to_string(), "1234".to_string(), uri, database);
+    let up_auth = StaticCredentials::new("root".to_string(), "1234".to_string(), uri, database);
 
     let token_sec = std::thread::spawn(move || up_auth.create_token())
         .join()
@@ -58,7 +58,7 @@ async fn auth_async_success_test() -> YdbResult<()> {
 async fn wrong_username_test() {
     let uri = http::uri::Uri::from_static(&(CONNECTION_STRING));
     let database = uri.path().to_string();
-    let up_auth = StaticCredentialsAuth::new(
+    let up_auth = StaticCredentials::new(
         "wr0n9_u$ern@me".to_string(),
         "1234".to_string(),
         uri,
@@ -75,7 +75,7 @@ async fn wrong_username_test() {
 async fn wrong_password_test() {
     let uri = http::uri::Uri::from_static(&(CONNECTION_STRING));
     let database = uri.path().to_string();
-    let up_auth = StaticCredentialsAuth::new(
+    let up_auth = StaticCredentials::new(
         "root".to_string(),
         "wr0n9_p@$$w0rd".to_string(),
         uri,

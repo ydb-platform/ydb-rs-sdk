@@ -12,12 +12,34 @@ use http::Uri;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::fmt::Debug;
 use std::ops::Add;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tracing::{trace,debug};
+use tracing::{debug, trace};
+
+const YDB_ANONYMOUS_CREDENTIALS: &str = "YDB_ANONYMOUS_CREDENTIALS";
+const YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS: &str = "YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS";
+const YDB_METADATA_CREDENTIALS: &str = "YDB_METADATA_CREDENTIALS";
+const YDB_ACCESS_TOKEN_CREDENTIALS: &str = "YDB_ACCESS_TOKEN_CREDENTIALS";
+
+const YC_METADATA_URL: &str =
+    "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token";
+const GCE_METADATA_URL: &str =
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
+
+const EMPTY_TOKEN: &str = "";
+
+#[deprecated(note = "use AccessTokenCredentials instead")]
+pub type StaticToken = AccessTokenCredentials;
+#[deprecated(note = "use CommandLineCredentials instead")]
+pub type CommandLineYcToken = CommandLineCredentials;
+#[deprecated(note = "use StaticCredentials instead")]
+pub type StaticCredentialsAuth = StaticCredentials;
+#[deprecated(note = "use MetadataUrlCredentials instead")]
+pub type YandexMetadata = MetadataUrlCredentials;
 
 pub(crate) type CredentialsRef = Arc<Box<dyn Credentials>>;
 
@@ -25,38 +47,146 @@ pub(crate) fn credencials_ref<T: 'static + Credentials>(cred: T) -> CredentialsR
     Arc::new(Box::new(cred))
 }
 
+/// Get token of service account of instance
+///
+/// Yandex cloud support GCE token compatible. Use it.
+/// Example:
+/// ```
+/// use ydb::MetadataUrlCredentials;
+/// let cred = MetadataUrlCredentials::new();
+/// ```
+pub struct MetadataUrlCredentials {
+    inner: GCEMetadata,
+}
+
+impl MetadataUrlCredentials {
+    pub fn new() -> Self {
+        Self {
+            inner: GCEMetadata::from_url(YC_METADATA_URL).unwrap(),
+        }
+    }
+
+    /// Create GCEMetadata with custom url (may need for debug or spec infrastructure with non standard metadata)
+    ///
+    /// Example:
+    /// ```
+    /// # use ydb::YdbResult;
+    /// # fn main()->YdbResult<()>{
+    /// use ydb::MetadataUrlCredentials;
+    /// let cred = MetadataUrlCredentials::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")?;
+    /// # return Ok(());
+    /// # }
+    /// ```
+    pub fn from_url<T: Into<String>>(url: T) -> YdbResult<Self> {
+        Ok(Self {
+            inner: GCEMetadata::from_url(url)?,
+        })
+    }
+}
+
+impl Credentials for MetadataUrlCredentials {
+    fn create_token(&self) -> YdbResult<TokenInfo> {
+        self.inner.create_token()
+    }
+}
+
+pub struct AnonymousCredentials {
+    inner: AccessTokenCredentials,
+}
+
+impl AnonymousCredentials {
+    pub fn new() -> Self {
+        Self {
+            inner: AccessTokenCredentials::from(EMPTY_TOKEN),
+        }
+    }
+}
+
+impl Credentials for AnonymousCredentials {
+    fn create_token(&self) -> YdbResult<TokenInfo> {
+        self.inner.create_token()
+    }
+}
+
+pub struct FromEnvCredentials {
+    inner: Box<dyn Credentials>,
+}
+
+/// Select credentials from environment
+/// reference: https://ydb.tech/docs/en/reference/ydb-sdk/auth
+impl FromEnvCredentials {
+    pub fn new() -> YdbResult<Self> {
+        Ok(Self {
+            inner: get_credentials_from_env()?,
+        })
+    }
+}
+
+impl Credentials for FromEnvCredentials {
+    fn create_token(&self) -> YdbResult<TokenInfo> {
+        self.inner.create_token()
+    }
+}
+
+fn get_credentials_from_env() -> YdbResult<Box<dyn Credentials>> {
+    if let Ok(file_creds) = env::var(YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS) {
+        return Ok(Box::new(ServiceAccountCredentials::from_file(file_creds)?));
+    }
+
+    if let Ok(v) = env::var(YDB_ANONYMOUS_CREDENTIALS) {
+        if v == "1" {
+            return Ok(Box::new(
+                // anonymous credentials is empty token
+                AnonymousCredentials::new(),
+            ));
+        }
+    }
+
+    if let Ok(v) = env::var(YDB_METADATA_CREDENTIALS) {
+        if v == "1" {
+            return Ok(Box::new(MetadataUrlCredentials::new()));
+        }
+    }
+
+    if let Ok(token) = env::var(YDB_ACCESS_TOKEN_CREDENTIALS) {
+        return Ok(Box::new(AccessTokenCredentials::from(token)));
+    }
+
+    return Ok(Box::new(MetadataUrlCredentials::new()));
+}
+
 /// Credentials with static token without renewing
 ///
 /// Example:
 /// ```no_run
-/// # use ydb::{ClientBuilder, StaticToken, YdbResult};
+/// # use ydb::{ClientBuilder, AccessTokenCredentials, YdbResult};
 /// # fn main()->YdbResult<()>{
 /// let builder = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=/local")?;
-/// let client = builder.with_credentials(StaticToken::from("asd")).client()?;
+/// let client = builder.with_credentials(AccessTokenCredentials::from("asd")).client()?;
 /// # return Ok(());
 /// # }
 /// ```
 #[derive(Debug, Clone)]
-pub struct StaticToken {
+pub struct AccessTokenCredentials {
     pub(crate) token: String,
 }
 
-impl StaticToken {
+impl AccessTokenCredentials {
     /// Create static token from string
     ///
     /// Example:
     /// ```
-    /// # use ydb::StaticToken;
-    /// StaticToken::from("asd");
+    /// # use ydb::AccessTokenCredentials;
+    /// AccessTokenCredentials::from("asd");
     /// ```
     pub fn from<T: Into<String>>(token: T) -> Self {
-        StaticToken {
+        AccessTokenCredentials {
             token: token.into(),
         }
     }
 }
 
-impl Credentials for StaticToken {
+impl Credentials for AccessTokenCredentials {
     fn create_token(&self) -> YdbResult<TokenInfo> {
         Ok(TokenInfo::token(self.token.clone()))
     }
@@ -78,16 +208,16 @@ impl Credentials for StaticToken {
 ///
 /// Example create token from yandex cloud command line utility:
 /// ```rust
-/// use ydb::CommandLineYcToken;
+/// use ydb::CommandLineCredentials;
 ///
-/// let cred = CommandLineYcToken::from_cmd("yc iam create-token").unwrap();
+/// let cred = CommandLineCredentials::from_cmd("yc iam create-token").unwrap();
 /// ```
 #[derive(Debug)]
-pub struct CommandLineYcToken {
+pub struct CommandLineCredentials {
     command: Arc<Mutex<Command>>,
 }
 
-impl CommandLineYcToken {
+impl CommandLineCredentials {
     /// Command line for create token
     ///
     /// The command will be called every time when token needed (token cache by default and will call rare).
@@ -106,13 +236,13 @@ impl CommandLineYcToken {
         let mut command = Command::new(cmd_parts[0]);
         command.args(&cmd_parts.as_slice()[1..]);
 
-        Ok(CommandLineYcToken {
+        Ok(CommandLineCredentials {
             command: Arc::new(Mutex::new(command)),
         })
     }
 }
 
-impl Credentials for CommandLineYcToken {
+impl Credentials for CommandLineCredentials {
     fn create_token(&self) -> YdbResult<TokenInfo> {
         let result = self.command.lock()?.output()?;
         if !result.status.success() {
@@ -205,7 +335,7 @@ impl ServiceAccountCredentials {
     }
 
     pub fn from_env() -> YdbResult<Self> {
-        let path = std::env::var("YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS")?;
+        let path = std::env::var(YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS)?;
 
         ServiceAccountCredentials::from_file(path)
     }
@@ -279,8 +409,8 @@ impl ServiceAccountCredentials {
         let duration = time - chrono::Utc::now();
         let seconds = (0.1 * duration.num_seconds() as f64) as u64;
         trace!("renew in: {}", seconds);
-        let instant = Instant::now() + Duration::from_secs(seconds);        
-        instant     
+        let instant = Instant::now() + Duration::from_secs(seconds);
+        instant
     }
 }
 
@@ -315,16 +445,6 @@ impl Credentials for ServiceAccountCredentials {
     }
 }
 
-/// Get token of service account of instance
-///
-/// Yandex cloud support GCE token compatible. Use it.
-/// Example:
-/// ```
-/// use ydb::YandexMetadata;
-/// let cred = YandexMetadata::new();
-/// ```
-pub type YandexMetadata = GCEMetadata;
-
 /// Get instance service account token from GCE instance
 ///
 /// Get token from google cloud engine instance metadata.
@@ -343,7 +463,7 @@ pub struct GCEMetadata {
 impl GCEMetadata {
     /// Create GCEMetadata with default url for receive token
     pub fn new() -> Self {
-        Self::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token").unwrap()
+        Self::from_url(GCE_METADATA_URL).unwrap()
     }
 
     /// Create GCEMetadata with custom url (may need for debug or spec infrastructure with non standard metadata)
@@ -405,14 +525,14 @@ impl Credentials for GCEMetadata {
     }
 }
 
-pub struct StaticCredentialsAuth {
+pub struct StaticCredentials {
     username: String,
     password: SecretString,
     database: String,
     endpoint: Uri,
 }
 
-impl StaticCredentialsAuth {
+impl StaticCredentials {
     pub async fn acquire_token(&self) -> YdbResult<String> {
         let static_balancer = StaticLoadBalancer::new(self.endpoint.clone());
         let empty_connection_manager = GrpcConnectionManager::new(
@@ -447,7 +567,7 @@ impl StaticCredentialsAuth {
     }
 }
 
-impl Credentials for StaticCredentialsAuth {
+impl Credentials for StaticCredentials {
     #[tokio::main(flavor = "current_thread")]
     async fn create_token(&self) -> YdbResult<TokenInfo> {
         Ok(TokenInfo::token(self.acquire_token().await?))

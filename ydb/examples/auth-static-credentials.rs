@@ -1,17 +1,18 @@
-use ydb::{ClientBuilder, Query, StaticCredentialsAuth, YdbResult};
+use ydb::{ClientBuilder, Query, StaticCredentials, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
     println!("create client...");
-    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local".to_string())
-        .unwrap()
-        .with_credentials(StaticCredentialsAuth::new(
-            "root".to_string(),
-            "1234".to_string(),
-            http::uri::Uri::from_static("grpc://localhost:2136/local"),
-            "local".to_string(),
-        ))
-        .client()?;
+    let client =
+        ClientBuilder::new_from_connection_string("grpc://localhost:2136/local".to_string())
+            .unwrap()
+            .with_credentials(StaticCredentials::new(
+                "root".to_string(),
+                "1234".to_string(),
+                http::uri::Uri::from_static("grpc://localhost:2136/local"),
+                "local".to_string(),
+            ))
+            .client()?;
     client.wait().await?;
 
     println!("created\nmake a query...");

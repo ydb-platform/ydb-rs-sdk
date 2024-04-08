@@ -1,9 +1,9 @@
-use ydb::{ClientBuilder, Query, StaticToken, YdbResult};
+use ydb::{AccessTokenCredentials, ClientBuilder, Query, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
     let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
-        .with_credentials(StaticToken::from("asd"))
+        .with_credentials(AccessTokenCredentials::from("asd"))
         .client()?;
     client.wait().await?;
     let sum: i32 = client

@@ -1,9 +1,9 @@
-use ydb::{ClientBuilder, Query, YandexMetadata, YdbResult};
+use ydb::{ClientBuilder, MetadataUrlCredentials, Query, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
     let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
-        .with_credentials(YandexMetadata::new())
+        .with_credentials(MetadataUrlCredentials::new())
         .client()?;
     client.wait().await?;
     let sum: i32 = client
