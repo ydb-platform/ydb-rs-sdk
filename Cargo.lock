@@ -267,6 +267,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "decimal-rs"
+version = "0.1.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da0ad9d041ab836f528b91b4f4039feda1091adbef4d85850eac6b3d2f9cd6f3"
+dependencies = [
+ "serde",
+ "stack-buf",
+]
+
+[[package]]
 name = "derivative"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1655,6 +1665,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 
 [[package]]
+name = "stack-buf"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7386b49cb287f6fafbfd3bd604914bccb99fb8d53483f40e1ecfda5d45f3370"
+
+[[package]]
 name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2534,11 +2550,12 @@ dependencies = [
 
 [[package]]
 name = "ydb"
-version = "0.8.2"
+version = "0.8.3"
 dependencies = [
  "async-trait",
  "async_once",
  "chrono",
+ "decimal-rs",
  "derivative",
  "derive_builder",
  "futures-util",

@@ -5,10 +5,9 @@ pub(crate) mod proto;
 pub(crate) mod r#type;
 pub(crate) mod value_ydb;
 
-use std::fmt::{Debug, Formatter};
-use crate::grpc_wrapper::raw_table_service::value::r#type::{RawType};
+use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
 use crate::trace_helpers::ensure_len_string;
-
+use std::fmt::{Debug, Formatter};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub(crate) struct RawTypedValue {
@@ -33,6 +32,7 @@ pub(crate) enum RawValue {
     Items(Vec<RawValue>),
     Pairs(Vec<RawValuePair>),
     Variant(Box<RawVariantValue>),
+    Decimal(decimal_rs::Decimal),
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -62,7 +62,7 @@ impl Debug for RawResultSet {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match serde_json::to_string(self) {
             Ok(s) => f.write_str(ensure_len_string(s).as_str()),
-            Err(_) => Err(std::fmt::Error)
+            Err(_) => Err(std::fmt::Error),
         }
     }
 }

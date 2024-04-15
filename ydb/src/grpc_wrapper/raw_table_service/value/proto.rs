@@ -1,9 +1,11 @@
-use ydb_grpc::ydb_proto::Value as ProtoValue;
-use ydb_grpc::ydb_proto::value::Value as Primitive;
 use crate::grpc_wrapper::raw_errors::RawError;
-use crate::grpc_wrapper::raw_table_service::value::{RawColumn, RawResultSet, RawTypedValue, RawValue, RawValuePair};
 use crate::grpc_wrapper::raw_table_service::value::r#type::{decode_err, RawType};
+use crate::grpc_wrapper::raw_table_service::value::{
+    RawColumn, RawResultSet, RawTypedValue, RawValue, RawValuePair,
+};
 use itertools::Itertools;
+use ydb_grpc::ydb_proto::value::{self, Value as Primitive};
+use ydb_grpc::ydb_proto::Value as ProtoValue;
 
 impl TryFrom<ProtoValue> for RawValue {
     type Error = RawError;
@@ -143,6 +145,17 @@ impl From<RawValue> for ProtoValue {
                 variant_index: v.index,
                 ..ProtoValue::default()
             },
+
+            RawValue::Decimal(v) => {
+                let (int_val, scale, negative) = v.into_parts();
+                let low64: u64 = 0; //todo!
+                let high64: u64 = 0; //todo!
+                ProtoValue {
+                    value: Some(Primitive::Low128(low64)),
+                    high_128: high64,
+                    ..ProtoValue::default()
+                }
+            }
         }
     }
 }
@@ -172,7 +185,7 @@ impl TryFrom<ydb_grpc::ydb_proto::TypedValue> for RawTypedValue {
         let t = if let Some(t) = value.r#type {
             RawType::try_from(t)?
         } else {
-            return Err(RawError::decode_error("empty type in proto typed value"))
+            return Err(RawError::decode_error("empty type in proto typed value"));
         };
 
         let v = if let Some(v) = value.value {
@@ -198,19 +211,28 @@ impl TryFrom<ydb_grpc::ydb_proto::ResultSet> for RawResultSet {
             .map(RawColumn::try_from)
             .try_collect()?;
 
-        let raw_rows: Vec<RawValue> = proto_result_set.rows.into_iter().map(|item| item.try_into()).try_collect()?;
+        let raw_rows: Vec<RawValue> = proto_result_set
+            .rows
+            .into_iter()
+            .map(|item| item.try_into())
+            .try_collect()?;
 
         let rows: Vec<Vec<RawValue>> = raw_rows
             .into_iter()
-            .map(|item_row| {
-                match item_row {
-                    RawValue::Items(items) => Ok(items),
-                    item=> Err(RawError::custom(format!("unexpected item type while parse rawset, expect items: {:?}", item)))
-                }
+            .map(|item_row| match item_row {
+                RawValue::Items(items) => Ok(items),
+                item => Err(RawError::custom(format!(
+                    "unexpected item type while parse rawset, expect items: {:?}",
+                    item
+                ))),
             })
             .try_collect()?;
 
-        Ok(Self { columns, rows, truncated: proto_result_set.truncated })
+        Ok(Self {
+            columns,
+            rows,
+            truncated: proto_result_set.truncated,
+        })
     }
 }
 
