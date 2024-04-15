@@ -169,7 +169,7 @@ impl RawType {
             t @ RawType::Uuid => return unimplemented_type(t),
             RawType::JSONDocument => Value::JsonDocument(String::default()),
             t @ RawType::DyNumber => return unimplemented_type(t),
-            t @ RawType::Decimal(_) => return unimplemented_type(t),
+            t @ RawType::Decimal(_) => Value::Decimal(decimal_rs::Decimal::default()),
             RawType::Optional(inner_type) => Value::Optional(Box::new(ValueOptional {
                 t: (*inner_type).into_value_example()?,
                 value: None,

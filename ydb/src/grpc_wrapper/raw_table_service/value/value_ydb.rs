@@ -188,6 +188,22 @@ impl TryFrom<crate::Value> for RawTypedValue {
     }
 }
 
+#[repr(C)]
+pub(crate) union DecimalUnion {
+    pub high_low: [u64; 2],
+    pub int_value: i128,
+}
+
+impl DecimalUnion {
+    pub fn as_i128(&self) -> i128 {
+        unsafe { self.int_value }
+    }
+
+    pub fn as_high_low(&self) -> (u64, u64) {
+        unsafe { (self.high_low[1], self.high_low[0]) }
+    }
+}
+
 impl TryFrom<RawTypedValue> for Value {
     type Error = RawError;
 
@@ -260,7 +276,19 @@ impl TryFrom<RawTypedValue> for Value {
             (RawType::JSONDocument, RawValue::Text(v)) => Value::JsonDocument(v),
             (t @ RawType::JSONDocument, v) => return types_mismatch(t, v),
             (t @ RawType::DyNumber, _) => return type_unimplemented(t),
-            (t @ RawType::Decimal(_), _) => return type_unimplemented(t),
+
+            (RawType::Decimal(t), RawValue::HighLow128(high, low)) => {
+                let un = DecimalUnion {
+                    high_low: [low, high],
+                };
+                let int_val = un.as_i128();
+
+                let value =
+                    decimal_rs::Decimal::from_parts(int_val.abs() as u128, t.scale, int_val < 0)
+                        .map_err(|e| RawError::decode_error(e.to_string()))?;
+                return Ok(Value::Decimal(value));
+            }
+            (t @ RawType::Decimal(_), v) => return types_mismatch(t, v),
             (RawType::Optional(inner_type), v) => {
                 let opt_value: Option<Value> = if let RawValue::NullFlag = v {
                     None
