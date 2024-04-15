@@ -147,9 +147,13 @@ impl From<RawValue> for ProtoValue {
             },
 
             RawValue::Decimal(v) => {
-                let (int_val, scale, negative) = v.into_parts();
-                let low64: u64 = 0; //todo!
-                let high64: u64 = 0; //todo!
+                let (int_val, _scale, negative) = v.into_parts();
+                let int_val = (if negative { -1 } else { 1 }) * (int_val as i128);
+                let low = (int_val as i128) & 0xffffffffffffffff;
+                let high = (int_val as i128) >> 64;
+
+                let low64 = low as u64;
+                let high64 = high as u64;
                 ProtoValue {
                     value: Some(Primitive::Low128(low64)),
                     high_128: high64,
@@ -157,6 +161,31 @@ impl From<RawValue> for ProtoValue {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::str::FromStr;
+
+    use decimal_rs::Decimal;
+    use tracing::info;
+
+    #[test]
+    fn test() {
+        let dec = Decimal::from_str("-1233333333333333333333345.34333").unwrap();
+        let (int_val, scale, negative) = dec.into_parts();
+        let int_val = (if negative { -1 } else { 1 }) * (int_val as i128);
+        let low = (int_val as i128) & 0xffffffffffffffff;
+        let high = (int_val as i128) >> 64;
+
+        let low64 = low as u64;
+        let high64 = high as u64;
+        info!("low:{}, high:{}", low as u64, high as u64);
+        info!(
+            "int_val:{:?}, scale:{:?}, negative:{:?}",
+            int_val, scale, negative
+        );
     }
 }
 
