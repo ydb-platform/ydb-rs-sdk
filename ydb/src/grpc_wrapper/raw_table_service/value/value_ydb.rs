@@ -104,13 +104,13 @@ impl TryFrom<crate::Value> for RawTypedValue {
             Value::JsonDocument(v) => RawTypedValue {
                 r#type: RawType::JSONDocument,
                 value: RawValue::Text(v),
+                
             },
             Value::Decimal(v) => {
                 let (int_val, _scale, negative) = v.into_parts();
-                let un = DecimalUnion {
-                    int_value: (if negative { -1 } else { 1 }) * (int_val as i128),
-                };
-                let (high, low) = un.as_high_low();
+                let int_value= (if negative { -1 } else { 1 }) * (int_val as i128);
+                let (high, low) = split_to_parts(int_value as u128);
+               
                 RawTypedValue {
                     r#type: RawType::Decimal(DecimalType {
                         precision: v.precision(),
@@ -174,20 +174,14 @@ impl TryFrom<crate::Value> for RawTypedValue {
     }
 }
 
-#[repr(C)]
-pub(crate) union DecimalUnion {
-    pub high_low: [u64; 2],
-    pub int_value: i128,
+pub(crate) fn split_to_parts(v: u128) -> (u64, u64) {
+    let high = (v >> 64) as u64;
+    let low = v as u64;
+    (high, low)
 }
 
-impl DecimalUnion {
-    pub fn as_i128(&self) -> i128 {
-        unsafe { self.int_value }
-    }
-
-    pub fn as_high_low(&self) -> (u64, u64) {
-        unsafe { (self.high_low[1], self.high_low[0]) }
-    }
+pub(crate) fn merge_parts(high: u64, low: u64) -> u128 {
+    (high as u128) << 64 | (low as u128)
 }
 
 impl TryFrom<RawTypedValue> for Value {
@@ -249,10 +243,8 @@ impl TryFrom<RawTypedValue> for Value {
             (t @ RawType::JSONDocument, v) => return types_mismatch(t, v),
             (t @ RawType::DyNumber, _) => return type_unimplemented(t),
             (RawType::Decimal(t), RawValue::HighLow128(high, low)) => {
-                let un = DecimalUnion {
-                    high_low: [low, high],
-                };
-                let int_val = un.as_i128();
+               
+                let int_val = merge_parts(high, low) as i128;
 
                 let value =
                     decimal_rs::Decimal::from_parts(int_val.abs() as u128, t.scale, int_val < 0)

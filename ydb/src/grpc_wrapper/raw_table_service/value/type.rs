@@ -212,8 +212,8 @@ impl TryFrom<ydb_grpc::ydb_proto::Type> for RawType {
         let res: Self = match t {
             ProtoType::TypeId(type_id) => return RawType::try_from_primitive_type_id(type_id),
             ProtoType::DecimalType(decimal) => RawType::Decimal(DecimalType {
-                precision: decimal.precision as u8,
-                scale: decimal.scale as i16,
+                precision: u8::try_from(decimal.precision)?,
+                scale: i16::try_from(decimal.scale)?,
             }),
             ProtoType::OptionalType(optional_type) => {
                 if let Some(item) = optional_type.item {
