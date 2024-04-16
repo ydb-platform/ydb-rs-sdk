@@ -407,7 +407,6 @@ impl Value {
             Self::Optional(val) => Self::to_typed_optional(*val)?,
             Self::List(items) => Self::to_typed_value_list(*items)?,
             Value::Struct(s) => { Self::to_typed_struct(s) }?,
-
             Self::Decimal(val) => Self::to_typed_decimal(val)?,
         };
         Ok(res)
@@ -429,6 +428,7 @@ impl Value {
             }),
         })
     }
+
 
     fn to_typed_optional(optional: ValueOptional) -> YdbResult<ydb_proto::TypedValue> {
         if let Value::Optional(_opt) = optional.t {
@@ -648,7 +648,7 @@ impl From<String> for Bytes {
 }
 
 impl From<&str> for Bytes {
-    fn from(val: &str) -> Self {
-        Self { vec: val.into() }
+    fn from(val: &str)->Self{
+        Self{vec: val.into()}
     }
 }

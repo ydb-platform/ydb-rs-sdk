@@ -4,7 +4,7 @@ use crate::{ValueList, ValueStruct};
 use itertools::Itertools;
 use std::any::type_name;
 use std::collections::HashMap;
-use std::time::SystemTime;
+use std::time::{SystemTime};
 
 macro_rules! simple_convert {
     ($native_type:ty, $ydb_value_kind_first:path $(,$ydb_value_kind:path)* $(,)?) => {
@@ -85,7 +85,12 @@ simple_convert!(
     Value::Uint16,
     Value::Uint8,
 );
-simple_convert!(String, Value::Text, Value::Json, Value::JsonDocument,);
+simple_convert!(
+    String,
+    Value::Text,
+    Value::Json,
+    Value::JsonDocument,
+);
 simple_convert!(
     Bytes,
     Value::String,

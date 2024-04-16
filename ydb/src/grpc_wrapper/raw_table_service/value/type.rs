@@ -1,7 +1,7 @@
-use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
-use crate::{Bytes, SignedInterval, Value, ValueList, ValueOptional, ValueStruct};
 use std::time::SystemTime;
+use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use ydb_grpc::ydb_proto::r#type::{PrimitiveTypeId, Type as ProtoType};
+use crate::{Bytes, SignedInterval, Value, ValueList, ValueOptional, ValueStruct};
 
 #[cfg(test)]
 #[path = "type_test.rs"]
@@ -135,12 +135,9 @@ impl RawType {
         Ok(res)
     }
 
-    pub fn into_value_example(self) -> RawResult<Value> {
-        fn unimplemented_type(t: RawType) -> RawResult<Value> {
-            Err(RawError::custom(format!(
-                "unimplemented example value for type: {:?}",
-                t
-            )))
+    pub fn into_value_example(self) ->RawResult<Value>{
+        fn unimplemented_type(t: RawType)->RawResult<Value>{
+            Err(RawError::custom(format!("unimplemented example value for type: {:?}", t)))
         }
 
         let res = match self {
@@ -160,8 +157,8 @@ impl RawType {
             RawType::Timestamp => Value::Timestamp(SystemTime::UNIX_EPOCH),
             RawType::Interval => Value::Interval(SignedInterval::default()),
             t @ RawType::TzDate => return unimplemented_type(t),
-            t @ RawType::TzDatetime => return unimplemented_type(t),
-            t @ RawType::TzTimestamp => return unimplemented_type(t),
+            t@RawType::TzDatetime => return unimplemented_type(t),
+            t@RawType::TzTimestamp => return unimplemented_type(t),
             RawType::Bytes => Value::String(Bytes::default()),
             RawType::UTF8 => Value::Text(String::default()),
             RawType::Yson => Value::Yson(Bytes::default()),
@@ -170,11 +167,11 @@ impl RawType {
             RawType::JSONDocument => Value::JsonDocument(String::default()),
             t @ RawType::DyNumber => return unimplemented_type(t),
             RawType::Decimal(_) => Value::Decimal(decimal_rs::Decimal::default()),
-            RawType::Optional(inner_type) => Value::Optional(Box::new(ValueOptional {
+            RawType::Optional(inner_type) => Value::Optional(Box::new(ValueOptional{
                 t: (*inner_type).into_value_example()?,
                 value: None,
             })),
-            RawType::List(inner_type) => Value::List(Box::new(ValueList {
+            RawType::List(inner_type) => Value::List(Box::new(ValueList{
                 t: inner_type.into_value_example()?,
                 values: Vec::default(),
             })),
@@ -186,13 +183,13 @@ impl RawType {
                 }
                 Value::Struct(value_struct)
             }
-            t @ RawType::Dict(_) => return unimplemented_type(t),
-            t @ RawType::Variant(_) => return unimplemented_type(t),
-            t @ RawType::Tagged(_) => return unimplemented_type(t),
-            t @ RawType::Void => return unimplemented_type(t),
+            t@RawType::Dict(_) => return unimplemented_type(t),
+            t@RawType::Variant(_) => return unimplemented_type(t),
+            t@RawType::Tagged(_) => return unimplemented_type(t),
+            t@RawType::Void => return unimplemented_type(t),
             RawType::Null => Value::Null,
-            t @ RawType::EmptyList => return unimplemented_type(t),
-            t @ RawType::EmptyDict => return unimplemented_type(t),
+            t@RawType::EmptyList => return unimplemented_type(t),
+            t@RawType::EmptyDict => return unimplemented_type(t),
         };
         Ok(res)
     }
@@ -328,8 +325,11 @@ impl TryFrom<ydb_grpc::ydb_proto::TupleType> for TupleType {
     type Error = RawError;
 
     fn try_from(value: ydb_grpc::ydb_proto::TupleType) -> Result<Self, Self::Error> {
-        let results: Result<Vec<_>, _> =
-            value.elements.into_iter().map(RawType::try_from).collect();
+        let results: Result<Vec<_>, _> = value
+            .elements
+            .into_iter()
+            .map(RawType::try_from)
+            .collect();
 
         Ok(TupleType { elements: results? })
     }
