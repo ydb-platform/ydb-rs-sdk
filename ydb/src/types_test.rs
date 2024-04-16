@@ -1,9 +1,4 @@
-use std::env;
-
-use http::Uri;
-use tracing::info;
-
-use crate::{client_common::{DBCredentials, TokenCache}, test_helpers::test_client_builder, Query, Value, YdbResult};
+use crate::{test_helpers::test_client_builder, Query, Value, YdbResult};
 
 #[test]
 fn test_is_optional()->YdbResult<()>{
