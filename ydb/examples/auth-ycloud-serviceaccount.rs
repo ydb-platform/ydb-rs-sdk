@@ -22,20 +22,16 @@ async fn main() -> YdbResult<()> {
 
     info!("Waiting for client");
     client.wait().await?;
-    let sum: Option<decimal_rs::Decimal> = client
+    let sum: i32 = client
         .table_client()
         .retry_transaction(|mut t| async move {
-            let res = t
-                .query(Query::from(
-                    "select CAST(\"-1233333333333333333333345.34\" AS Decimal(28, 2)) as sum",
-                ))
-                .await?;
+            let res = t.query(Query::from("SELECT 1 + 1 as sum")).await?;
             Ok(res.into_only_row()?.remove_field_by_name("sum")?)
         })
         .await?
         .try_into()
         .unwrap();
-    info!("sum: {}", sum.unwrap().to_string());
+    info!("sum: {}", sum);
     Ok(())
 }
 
