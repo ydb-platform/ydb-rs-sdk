@@ -11,7 +11,7 @@ use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::grpc_wrapper::raw_table_service::value::{RawTypedValue, RawValue};
 use crate::grpc_wrapper::raw_table_service::value::r#type::{RawType, StructMember, StructType};
 use crate::types::SECONDS_PER_DAY;
-
+use super::r#type::DecimalType;
 impl TryFrom<crate::Value> for RawTypedValue {
     type Error = RawError;
 
@@ -104,6 +104,20 @@ impl TryFrom<crate::Value> for RawTypedValue {
             Value::JsonDocument(v) => RawTypedValue {
                 r#type: RawType::JSONDocument,
                 value: RawValue::Text(v),
+                
+            },
+            Value::Decimal(v) => {
+                let (int_val, _scale, negative) = v.into_parts();
+                let int_value= (if negative { -1 } else { 1 }) * (int_val as i128);
+                let (high, low) = split_to_parts(int_value as u128);
+               
+                RawTypedValue {
+                    r#type: RawType::Decimal(DecimalType {
+                        precision: v.precision(),
+                        scale: v.scale(),
+                    }),
+                    value: RawValue::HighLow128(high, low),
+                }
             },
             Value::Optional(v) => {
                 let type_example: RawTypedValue = v.t.try_into()?;
@@ -158,6 +172,16 @@ impl TryFrom<crate::Value> for RawTypedValue {
         };
         Ok(res)
     }
+}
+
+pub(crate) fn split_to_parts(v: u128) -> (u64, u64) {
+    let high = (v >> 64) as u64;
+    let low = v as u64;
+    (high, low)
+}
+
+pub(crate) fn merge_parts(high: u64, low: u64) -> u128 {
+    (high as u128) << 64 | (low as u128)
 }
 
 impl TryFrom<RawTypedValue> for Value {
@@ -218,7 +242,16 @@ impl TryFrom<RawTypedValue> for Value {
             (RawType::JSONDocument, RawValue::Text(v)) => Value::JsonDocument(v),
             (t @ RawType::JSONDocument, v) => return types_mismatch(t, v),
             (t @ RawType::DyNumber, _) => return type_unimplemented(t),
-            (t @ RawType::Decimal(_), _) => return type_unimplemented(t),
+            (RawType::Decimal(t), RawValue::HighLow128(high, low)) => {
+               
+                let int_val = merge_parts(high, low) as i128;
+
+                let value =
+                    decimal_rs::Decimal::from_parts(int_val.abs() as u128, t.scale, int_val < 0)
+                        .map_err(|e| RawError::decode_error(e.to_string()))?;
+                return Ok(Value::Decimal(value));
+            }
+            (t @ RawType::Decimal(_), v) => return types_mismatch(t, v),
             (RawType::Optional(inner_type), v) => {
                 let opt_value: Option<Value> = if let RawValue::NullFlag = v {
                     None

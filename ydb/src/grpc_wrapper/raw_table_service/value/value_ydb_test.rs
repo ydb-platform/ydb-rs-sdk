@@ -1,7 +1,7 @@
 use ydb_grpc::ydb_proto::TypedValue;
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::grpc_wrapper::raw_table_service::value::RawTypedValue;
-use crate::types::{Value};
+use crate::types::Value;
 
 #[test]
 fn convert_ydb_raw_grpc()->RawResult<()>{

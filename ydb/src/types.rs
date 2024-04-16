@@ -92,6 +92,8 @@ pub enum Value {
     Optional(Box<ValueOptional>),
     List(Box<ValueList>),
     Struct(ValueStruct),
+
+    Decimal(decimal_rs::Decimal),
 }
 
 impl Value {
@@ -405,9 +407,28 @@ impl Value {
             Self::Optional(val) => Self::to_typed_optional(*val)?,
             Self::List(items) => Self::to_typed_value_list(*items)?,
             Value::Struct(s) => { Self::to_typed_struct(s) }?,
+            Self::Decimal(val) => Self::to_typed_decimal(val)?,
         };
         Ok(res)
     }
+
+    fn to_typed_decimal(val: decimal_rs::Decimal) -> YdbResult<ydb_proto::TypedValue> {
+        Ok(ydb_proto::TypedValue {
+            r#type: Some(ydb_proto::Type {
+                r#type: Some(ydb_proto::r#type::Type::DecimalType(
+                    ydb_proto::DecimalType {
+                        precision: val.precision().try_into()?,
+                        scale: val.scale().try_into()?,
+                    },
+                )),
+            }),
+            value: Some(ydb_proto::Value {
+                value: Some(ydb_proto::value::Value::TextValue(val.to_string())),
+                ..ydb_proto::Value::default()
+            }),
+        })
+    }
+
 
     fn to_typed_optional(optional: ValueOptional) -> YdbResult<ydb_proto::TypedValue> {
         if let Value::Optional(_opt) = optional.t {
@@ -514,6 +535,7 @@ impl Value {
             Value::Json("{}".into()),
             Value::JsonDocument("{}".into()),
             Value::Yson("1;2;3;".into()),
+            Value::Decimal("123456789.987654321".parse::<decimal_rs::Decimal>().unwrap()),
         ];
 
         num_tests!(values, Value::Int8, i8);
@@ -630,4 +652,3 @@ impl From<&str> for Bytes {
         Self{vec: val.into()}
     }
 }
-
