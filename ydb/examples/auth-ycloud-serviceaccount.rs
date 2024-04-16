@@ -27,7 +27,7 @@ async fn main() -> YdbResult<()> {
         .retry_transaction(|mut t| async move {
             let res = t
                 .query(Query::from(
-                    "select CAST(\"-1233333333333333333333345.34333\" AS Decimal(28, 2)) as sum",
+                    "select CAST(\"-1233333333333333333333345.34\" AS Decimal(28, 2)) as sum",
                 ))
                 .await?;
             Ok(res.into_only_row()?.remove_field_by_name("sum")?)

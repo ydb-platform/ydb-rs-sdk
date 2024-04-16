@@ -535,6 +535,7 @@ impl Value {
             Value::Json("{}".into()),
             Value::JsonDocument("{}".into()),
             Value::Yson("1;2;3;".into()),
+            Value::Decimal("123456789.987654321".parse::<decimal_rs::Decimal>().unwrap()),
         ];
 
         num_tests!(values, Value::Int8, i8);

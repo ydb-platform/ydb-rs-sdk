@@ -120,13 +120,20 @@ impl TryFrom<crate::Value> for RawTypedValue {
                 r#type: RawType::JSONDocument,
                 value: RawValue::Text(v),
             },
-            Value::Decimal(v) => RawTypedValue {
-                r#type: RawType::Decimal(DecimalType {
-                    precision: v.precision(),
-                    scale: v.scale(),
-                }),
-                value: RawValue::Decimal(v),
-            },
+            Value::Decimal(v) => {
+                let (int_val, _scale, negative) = v.into_parts();
+                let un = DecimalUnion {
+                    int_value: (if negative { -1 } else { 1 }) * (int_val as i128),
+                };
+                let (high, low) = un.as_high_low();
+                RawTypedValue {
+                    r#type: RawType::Decimal(DecimalType {
+                        precision: v.precision(),
+                        scale: v.scale(),
+                    }),
+                    value: RawValue::HighLow128(high, low),
+                }
+            }
             Value::Optional(v) => {
                 let type_example: RawTypedValue = v.t.try_into()?;
                 if let Some(v) = v.value {

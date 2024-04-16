@@ -32,7 +32,6 @@ pub(crate) enum RawValue {
     Items(Vec<RawValue>),
     Pairs(Vec<RawValuePair>),
     Variant(Box<RawVariantValue>),
-    Decimal(decimal_rs::Decimal),
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]

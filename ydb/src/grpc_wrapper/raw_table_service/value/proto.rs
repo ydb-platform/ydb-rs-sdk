@@ -4,7 +4,7 @@ use crate::grpc_wrapper::raw_table_service::value::{
     RawColumn, RawResultSet, RawTypedValue, RawValue, RawValuePair,
 };
 use itertools::Itertools;
-use ydb_grpc::ydb_proto::value::{self, Value as Primitive};
+use ydb_grpc::ydb_proto::value::Value as Primitive;
 use ydb_grpc::ydb_proto::Value as ProtoValue;
 
 use super::value_ydb::DecimalUnion;
@@ -147,54 +147,7 @@ impl From<RawValue> for ProtoValue {
                 variant_index: v.index,
                 ..ProtoValue::default()
             },
-
-            RawValue::Decimal(v) => {
-                let (int_val, _scale, negative) = v.into_parts();
-                let int_value = (if negative { -1 } else { 1 }) * (int_val as i128);
-                let un = DecimalUnion { int_value };
-
-                let (high, low) = un.as_high_low();
-                ProtoValue {
-                    value: Some(Primitive::Low128(low)),
-                    high_128: high,
-                    ..ProtoValue::default()
-                }
-            }
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use std::str::FromStr;
-
-    use decimal_rs::Decimal;
-    use prost::Message;
-    use tracing::info;
-
-    #[test]
-    fn test() {
-        let dec = Decimal::from_str("-1233333333333333333333345.34333").unwrap();
-        let (int_val, scale, negative) = dec.into_parts();
-        let int_val = (if negative { -1 } else { 1 }) * (int_val as i128);
-        let low = (int_val as i128) & 0xffffffffffffffff;
-        let high = (int_val as i128) >> 64;
-        let mut bytes: Vec<u8> = Vec::with_capacity(16);
-        dec.encode(&mut bytes).unwrap();
-
-        let mut bytes2: Vec<u8> = Vec::with_capacity(8);
-        let mut bytes3: Vec<u8> = Vec::with_capacity(8);
-        let low64 = low as u64;
-        let high64 = high as u64;
-
-        low64.encode(&mut bytes2).unwrap();
-        high64.encode(&mut bytes3).unwrap();
-
-        info!("low:{}, high:{}", low as u64, high as u64);
-        info!(
-            "int_val:{:?}, scale:{:?}, negative:{:?}",
-            int_val, scale, negative
-        );
     }
 }
 
