@@ -16,4 +16,4 @@ tokio = { version = "1.18", features = ["macros", "rt-multi-thread", "net"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 warp = "0.3.2"
-ydb = { version = "0.8.3", path="../ydb"}
+ydb = { version = "0.8.4", path="../ydb"}
