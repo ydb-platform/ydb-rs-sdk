@@ -530,6 +530,7 @@ pub struct StaticCredentials {
     password: SecretString,
     database: String,
     endpoint: Uri,
+    cert_path: Option<String>,
 }
 
 impl StaticCredentials {
@@ -539,6 +540,7 @@ impl StaticCredentials {
             SharedLoadBalancer::new_with_balancer(Box::new(static_balancer)),
             self.database.clone(),
             MultiInterceptor::new(),
+            self.cert_path.clone(),
         );
 
         let mut auth_client = empty_connection_manager
@@ -557,12 +559,15 @@ impl StaticCredentials {
         Ok(raw_response.token)
     }
 
-    pub fn new(username: String, password: String, endpoint: Uri, database: String) -> Self {
+    pub fn new(username: String,
+        password: String,
+        endpoint: Uri, database: String, cert_path: Option<String>) -> Self {
         Self {
             username,
             password: SecretString::new(password),
             database,
             endpoint,
+            cert_path,
         }
     }
 }

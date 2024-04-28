@@ -4,6 +4,7 @@ use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterce
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::YdbResult;
 use http::Uri;
+use tracing::trace;
 
 pub(crate) type GrpcConnectionManager = GrpcConnectionManagerGeneric<SharedLoadBalancer>;
 
@@ -17,9 +18,10 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
         balancer: TBalancer,
         database: String,
         interceptor: MultiInterceptor,
+        cert_path: Option<String>
     ) -> Self {
         GrpcConnectionManagerGeneric {
-            state: State::new(balancer, database, interceptor),
+            state: State::new(balancer, database, interceptor, cert_path),
         }
     }
 
@@ -61,14 +63,20 @@ struct State<TBalancer: LoadBalancer> {
     balancer: TBalancer,
     connections_pool: ConnectionPool,
     interceptor: MultiInterceptor,
-    database: String,
+    database: String
 }
 
 impl<TBalancer: LoadBalancer> State<TBalancer> {
-    fn new(balancer: TBalancer, database: String, interceptor: MultiInterceptor) -> Self {
+    fn new(balancer: TBalancer, database: String, interceptor: MultiInterceptor, cert_path: Option<String>) -> Self {
+        let mut cp = ConnectionPool::new();
+        if cert_path.is_some() {
+            trace!("cert path: {}", cert_path.clone().unwrap());
+            cp = cp.certificate_path(cert_path.unwrap());
+        }
+
         State {
             balancer,
-            connections_pool: ConnectionPool::new(),
+            connections_pool: cp,
             interceptor,
             database,
         }
