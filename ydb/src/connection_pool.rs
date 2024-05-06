@@ -10,20 +10,27 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 #[derive(Clone)]
 pub(crate) struct ConnectionPool {
     state: Arc<Mutex<ConnectionPoolState>>,
-    certificate_path: Arc<Option<String>>,
+    tls_config: Arc<Option<ClientTlsConfig>>,
 }
 
 impl ConnectionPool {
     pub(crate) fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(ConnectionPoolState::new())),
-            certificate_path: None.into(),
+            tls_config: None.into(),
         }
     }
 
-    pub(crate) fn certificate_path(self, path: String) -> Self {
+    pub(crate) fn load_certificate(self, path: String) -> Self {
+        trace!("path is {}", path);
+        trace!("cwd is {}", std::env::current_dir().unwrap().display());
+        let pem = std::fs::read_to_string(path).unwrap();
+        trace!("cert: {}", pem);
+        let ca = Certificate::from_pem(pem);
+        let config = ClientTlsConfig::new()
+            .ca_certificate(ca);
         Self {
-            certificate_path: Some(path).into(),
+            tls_config: Some(config).into(),
             ..self
         }
     }
@@ -37,7 +44,7 @@ impl ConnectionPool {
         };
 
         // TODO: replace lazy connection to real, without global block
-        let channel = connect_lazy(uri.clone(), self.certificate_path.as_ref())?;
+        let channel = connect_lazy(uri.clone(), &self.tls_config)?;
         let ci = ConnectionInfo {
             last_usage: now,
             channel: channel.clone(),
@@ -64,7 +71,7 @@ struct ConnectionInfo {
     channel: Channel,
 }
 
-fn connect_lazy(uri: Uri, certificate_path: &Option<String>) -> YdbResult<Channel> {
+fn connect_lazy(uri: Uri, tls_config: &Option<ClientTlsConfig>) -> YdbResult<Channel> {
     let mut parts = uri.into_parts();
     if parts.scheme.as_ref().unwrap_or(&Scheme::HTTP).as_str() == "grpc" {
         parts.scheme = Some(Scheme::HTTP)
@@ -79,15 +86,9 @@ fn connect_lazy(uri: Uri, certificate_path: &Option<String>) -> YdbResult<Channe
 
     let mut endpoint = Endpoint::from(uri);
     if tls {
-        endpoint = match certificate_path {
-            Some(path) =>  {
-                let pem = std::fs::read_to_string(path)?;
-                trace!("cert: {}", pem);
-                let ca = Certificate::from_pem(pem);
-                let tls_config = ClientTlsConfig::new()
-                    .ca_certificate(ca);
-
-                endpoint.tls_config(tls_config)?
+        endpoint = match tls_config {
+            Some(config) =>  {
+                endpoint.tls_config(config.clone())?
             }
             None => endpoint.tls_config(ClientTlsConfig::new())?,
         };

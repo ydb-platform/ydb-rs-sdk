@@ -23,13 +23,11 @@ pub(crate) fn get_passworded_connection_string() -> String {
     .to_string()
 }
 
-pub(crate) fn get_passworded_custom_ca_connection_string() -> String {
+pub(crate) fn get_custom_ca_connection_string() -> String {
     Url::parse_with_params(
         &CONNECTION_STRING,
         &[
-            // ("token_static_password", "1234"),
-            //     ("token_static_username", "root"),
-                ("tls_certificate", "/home/amir/workspace/ydb-rs-sdk/ydb_certs/ca.pem"),
+                ("tls_certificate", "./../ydb_certs/ca.pem"),
                 ],
     )
     .unwrap()
@@ -42,5 +40,5 @@ pub(crate) fn test_with_password_builder() -> ClientBuilder {
 }
 
 pub(crate) fn test_custom_ca_client_builder() -> ClientBuilder {
-    ClientBuilder::new_from_connection_string(get_passworded_custom_ca_connection_string()).unwrap()
+    ClientBuilder::new_from_connection_string(get_custom_ca_connection_string()).unwrap()
 }

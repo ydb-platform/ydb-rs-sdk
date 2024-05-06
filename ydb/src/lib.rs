@@ -76,6 +76,9 @@ mod sugar;
 pub(crate) mod auth_test;
 
 #[cfg(test)]
+pub(crate) mod custom_ca_test;
+
+#[cfg(test)]
 mod test_helpers;
 
 #[cfg(test)]
