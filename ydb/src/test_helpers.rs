@@ -23,17 +23,17 @@ pub(crate) fn get_passworded_connection_string() -> String {
     .to_string()
 }
 
-pub(crate) fn get_custom_ca_connection_string() -> String {
-    Url::parse_with_params(
-        &CONNECTION_STRING,
-        &[
-                ("tls_certificate", "./../ydb_certs/ca.pem"),
-                ],
-    )
-    .unwrap()
-    .as_str()
-    .to_string()
-}
+// pub(crate) fn get_custom_ca_connection_string() -> String {
+//     Url::parse_with_params(
+//         &CONNECTION_STRING,
+//         &[
+//                 ("tls_certificate", "./../ydb_certs/ca.pem"),
+//                 ],
+//     )
+//     .unwrap()
+//     .as_str()
+//     .to_string()
+// }
 
 pub(crate) fn test_with_password_builder() -> ClientBuilder {
     ClientBuilder::new_from_connection_string(get_passworded_connection_string()).unwrap()
