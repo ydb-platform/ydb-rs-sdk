@@ -39,6 +39,6 @@ pub(crate) fn test_with_password_builder() -> ClientBuilder {
     ClientBuilder::new_from_connection_string(get_passworded_connection_string()).unwrap()
 }
 
-pub(crate) fn test_custom_ca_client_builder() -> ClientBuilder {
-    ClientBuilder::new_from_connection_string(get_custom_ca_connection_string()).unwrap()
-}
+// pub(crate) fn test_custom_ca_client_builder() -> ClientBuilder {
+//     ClientBuilder::new_from_connection_string(get_custom_ca_connection_string()).unwrap()
+// }
