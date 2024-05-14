@@ -85,7 +85,7 @@ impl TryFrom<crate::Value> for RawTypedValue {
                 r#type: RawType::Interval,
                 value: RawValue::Int64(v.as_nanos()?),
             },
-            Value::String(v) => RawTypedValue {
+            Value::Bytes(v) => RawTypedValue {
                 r#type: RawType::Bytes,
                 value: RawValue::Bytes(v.into()),
             },
@@ -230,7 +230,7 @@ impl TryFrom<RawTypedValue> for Value {
             (t @ RawType::TzDate, _) => return type_unimplemented(t),
             (t @ RawType::TzDatetime, _) => return type_unimplemented(t),
             (t @ RawType::TzTimestamp, _) => return type_unimplemented(t),
-            (RawType::Bytes, RawValue::Bytes(v)) => Value::String(Bytes::from(v)),
+            (RawType::Bytes, RawValue::Bytes(v)) => Value::Bytes(Bytes::from(v)),
             (t @ RawType::Bytes, v) => return types_mismatch(t, v),
             (RawType::UTF8, RawValue::Text(v)) => Value::Text(v),
             (t @ RawType::UTF8, v) => return types_mismatch(t, v),
