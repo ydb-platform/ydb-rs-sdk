@@ -79,9 +79,8 @@ pub enum Value {
     Timestamp(std::time::SystemTime),
     Interval(SignedInterval),
 
-    /// Store native bytes array, similary to binary/blob in other databases. It named string by history reason only.
-    /// Use Utf8 type for store text.
-    String(Bytes),
+    // It named String at server, but server String type contains binary data https://ydb.tech/docs/en/yql/reference/types/primitive#string
+    Bytes(Bytes),
 
     /// Text data, encoded to valid utf8
     Text(String),
@@ -399,7 +398,7 @@ impl Value {
                 ),
             ),
             Self::Interval(val) => proto_typed_value(pt::Interval, pv::Int64Value(val.as_nanos()?)),
-            Self::String(val) => proto_typed_value(pt::String, pv::BytesValue(val.into())),
+            Self::Bytes(val) => proto_typed_value(pt::String, pv::BytesValue(val.into())),
             Self::Text(val) => proto_typed_value(pt::Utf8, pv::TextValue(val)),
             Self::Yson(val) => proto_typed_value(pt::Yson, pv::BytesValue(val.into())),
             Self::Json(val) => proto_typed_value(pt::Json, pv::TextValue(val)),
@@ -529,7 +528,7 @@ impl Value {
             Value::Null,
             Value::Bool(false),
             Value::Bool(true),
-            Value::String(Bytes::from("asd".to_string())),
+            Value::Bytes(Bytes::from("asd".to_string())),
             Value::Text("asd".into()),
             Value::Text("фыв".into()),
             Value::Json("{}".into()),
