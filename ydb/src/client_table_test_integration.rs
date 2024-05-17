@@ -720,7 +720,7 @@ async fn stream_query() -> YdbResult<()> {
                         vec!["id".to_string(), "val".to_string()],
                         vec![
                             Value::Int64(*v),
-                            Value::String(Bytes::from(gen_value_by_id(*v))),
+                            Value::Bytes(Bytes::from(gen_value_by_id(*v))),
                         ],
                     )?))
                 }
@@ -798,7 +798,7 @@ FROM
 
             match row.remove_field_by_name("val")? {
                 Value::Optional(boxed_val) => match boxed_val.value.unwrap() {
-                    Value::String(content) => {
+                    Value::Bytes(content) => {
                         assert_eq!(gen_value_by_id(expected_id), Vec::<u8>::from(content))
                     }
                     val => panic!("unexpected ydb id type: {:?}", val),

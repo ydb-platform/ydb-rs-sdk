@@ -1,7 +1,7 @@
 name: Publish rust crate to crates.io
 env:
   CARGO_TERM_COLOR: always
-  RUST_VERSION: 1.77.0
+  RUST_VERSION: 1.78.0
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 on:
