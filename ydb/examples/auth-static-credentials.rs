@@ -11,7 +11,6 @@ async fn main() -> YdbResult<()> {
                 "1234".to_string(),
                 http::uri::Uri::from_static("grpc://localhost:2136/local"),
                 "local".to_string(),
-                None,
             ))
             .client()?;
     client.wait().await?;
