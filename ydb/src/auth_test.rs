@@ -14,7 +14,7 @@ fn auth_success_test() -> YdbResult<()> {
     let uri = http::uri::Uri::from_static(&(CONNECTION_STRING));
 
     let database = uri.path().to_string();
-    let up_auth = StaticCredentials::new("root".to_string(), "1234".to_string(), uri, database, None);
+    let up_auth = StaticCredentials::new("root".to_string(), "1234".to_string(), uri, database);
 
     let token_sec = up_auth.create_token()?.token;
     let raw_token = token_sec.expose_secret();
@@ -34,7 +34,7 @@ async fn auth_async_success_test() -> YdbResult<()> {
     let uri = http::uri::Uri::from_static(&(CONNECTION_STRING));
 
     let database = uri.path().to_string();
-    let up_auth = StaticCredentials::new("root".to_string(), "1234".to_string(), uri, database, None);
+    let up_auth = StaticCredentials::new("root".to_string(), "1234".to_string(), uri, database);
 
     let token_sec = std::thread::spawn(move || up_auth.create_token())
         .join()
@@ -63,7 +63,6 @@ async fn wrong_username_test() {
         "1234".to_string(),
         uri,
         database,
-        None,
     );
 
     up_auth.acquire_token().await.unwrap();
@@ -81,7 +80,6 @@ async fn wrong_password_test() {
         "wr0n9_p@$$w0rd".to_string(),
         uri,
         database,
-        None,
     );
 
     up_auth.acquire_token().await.unwrap();

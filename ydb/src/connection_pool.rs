@@ -22,13 +22,10 @@ impl ConnectionPool {
     }
 
     pub(crate) fn load_certificate(self, path: String) -> Self {
-        trace!("path is {}", path);
-        trace!("cwd is {}", std::env::current_dir().unwrap().display());
         let pem = std::fs::read_to_string(path).unwrap();
-        trace!("cert: {}", pem);
+        trace!("loaded cert: {}", pem);
         let ca = Certificate::from_pem(pem);
-        let config = ClientTlsConfig::new()
-            .ca_certificate(ca);
+        let config = ClientTlsConfig::new().ca_certificate(ca);
         Self {
             tls_config: Some(config).into(),
             ..self
@@ -87,9 +84,7 @@ fn connect_lazy(uri: Uri, tls_config: &Option<ClientTlsConfig>) -> YdbResult<Cha
     let mut endpoint = Endpoint::from(uri);
     if tls {
         endpoint = match tls_config {
-            Some(config) =>  {
-                endpoint.tls_config(config.clone())?
-            }
+            Some(config) => endpoint.tls_config(config.clone())?,
             None => endpoint.tls_config(ClientTlsConfig::new())?,
         };
     };

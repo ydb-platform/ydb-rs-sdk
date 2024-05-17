@@ -561,13 +561,25 @@ impl StaticCredentials {
 
     pub fn new(username: String,
         password: String,
-        endpoint: Uri, database: String, cert_path: Option<String>) -> Self {
+        endpoint: Uri, database: String) -> Self {
         Self {
             username,
             password: SecretString::new(password),
             database,
             endpoint,
-            cert_path,
+            cert_path: None,
+        }
+    }
+
+    pub fn new_with_ca(username: String,
+        password: String,
+        endpoint: Uri, database: String, cert_path: String) -> Self {
+        Self {
+            username,
+            password: SecretString::new(password),
+            database,
+            endpoint,
+            cert_path: Some(cert_path),
         }
     }
 }

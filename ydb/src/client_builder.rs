@@ -28,7 +28,7 @@ static PARAM_HANDLERS: Lazy<Mutex<HashMap<String, ParamHandler>>> = Lazy::new(||
         m.insert("token_cmd".to_string(), token_cmd);
         m.insert("token_metadata".to_string(), token_metadata);
         m.insert("token_static_password".to_string(), token_static_password);
-        m.insert("tls_certificate".to_string(), tls_certificate);
+        m.insert("ca_certificate".to_string(), ca_certificate);
         m
     })
 });
@@ -140,25 +140,34 @@ fn token_static_password(uri: &str, mut client_builder: ClientBuilder) -> YdbRes
         client_builder = database(uri, client_builder)?;
     }
     if client_builder.cert_path.is_none() {
-        client_builder = tls_certificate(uri, client_builder)?;
+        client_builder = ca_certificate(uri, client_builder)?;
     }
 
     let endpoint: Uri = Uri::from_str(client_builder.endpoint.as_str())?;
 
-    client_builder.credentials = credencials_ref(StaticCredentials::new(
-        username,
-        password,
-        endpoint,
-        client_builder.database.clone(),
-        client_builder.cert_path.clone(),
-    ));
+    let creds = match client_builder.cert_path.as_ref() {
+        Some(path) => StaticCredentials::new_with_ca(
+            username,
+            password,
+            endpoint,
+            client_builder.database.clone(),
+            path.clone(),
+        ),
+        None => StaticCredentials::new(
+            username,
+            password,
+            endpoint,
+            client_builder.database.clone(),
+        )
+    };
+    client_builder.credentials = credencials_ref(creds);
 
     Ok(client_builder)
 }
 
-fn tls_certificate(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
+fn ca_certificate(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
     for (key, value) in url::Url::parse(uri)?.query_pairs() {
-        if key != "tls_certificate" {
+        if key != "ca_certificate" {
             continue;
         };
         client_builder.cert_path = Some(value.as_ref().to_string());
@@ -174,7 +183,7 @@ pub struct ClientBuilder {
     discovery_interval: Duration,
     pub(crate) endpoint: String,
     discovery: Option<Box<dyn Discovery>>,
-    cert_path: Option<String>,
+    pub cert_path: Option<String>,
 }
 
 impl ClientBuilder {
