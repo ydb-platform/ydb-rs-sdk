@@ -415,7 +415,7 @@ mod test {
             MultiInterceptor::new().with_interceptor(AuthGrpcInterceptor::new(cred.clone())?);
 
         let connection_manager =
-            GrpcConnectionManager::new(load_balancer, cred.database, interceptor);
+            GrpcConnectionManager::new(load_balancer, cred.database, interceptor, None);
 
         let discovery_shared =
             DiscoverySharedState::new(connection_manager, test_client_builder().endpoint.as_str())?;

@@ -28,6 +28,7 @@ static PARAM_HANDLERS: Lazy<Mutex<HashMap<String, ParamHandler>>> = Lazy::new(||
         m.insert("token_cmd".to_string(), token_cmd);
         m.insert("token_metadata".to_string(), token_metadata);
         m.insert("token_static_password".to_string(), token_static_password);
+        m.insert("ca_certificate".to_string(), ca_certificate);
         m
     })
 });
@@ -138,15 +139,40 @@ fn token_static_password(uri: &str, mut client_builder: ClientBuilder) -> YdbRes
     if client_builder.database.is_empty() {
         client_builder = database(uri, client_builder)?;
     }
+    if client_builder.cert_path.is_none() {
+        client_builder = ca_certificate(uri, client_builder)?;
+    }
 
     let endpoint: Uri = Uri::from_str(client_builder.endpoint.as_str())?;
 
-    client_builder.credentials = credencials_ref(StaticCredentials::new(
-        username,
-        password,
-        endpoint,
-        client_builder.database.clone(),
-    ));
+    let creds = match client_builder.cert_path.as_ref() {
+        Some(path) => StaticCredentials::new_with_ca(
+            username,
+            password,
+            endpoint,
+            client_builder.database.clone(),
+            path.clone(),
+        ),
+        None => StaticCredentials::new(
+            username,
+            password,
+            endpoint,
+            client_builder.database.clone(),
+        )
+    };
+    client_builder.credentials = credencials_ref(creds);
+
+    Ok(client_builder)
+}
+
+fn ca_certificate(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
+    for (key, value) in url::Url::parse(uri)?.query_pairs() {
+        if key != "ca_certificate" {
+            continue;
+        };
+        client_builder.cert_path = Some(value.as_ref().to_string());
+        break;
+    }
 
     Ok(client_builder)
 }
@@ -157,6 +183,7 @@ pub struct ClientBuilder {
     discovery_interval: Duration,
     pub(crate) endpoint: String,
     discovery: Option<Box<dyn Discovery>>,
+    pub cert_path: Option<String>,
 }
 
 impl ClientBuilder {
@@ -192,6 +219,7 @@ impl ClientBuilder {
             SharedLoadBalancer::new_with_balancer(Box::new(static_balancer)),
             db_cred.database.clone(),
             interceptor.clone(),
+            self.cert_path.clone(),
         );
 
         let discovery = match self.discovery {
@@ -211,7 +239,7 @@ impl ClientBuilder {
 
         let load_balancer = SharedLoadBalancer::new(discovery.as_ref().as_ref());
         let connection_manager =
-            GrpcConnectionManager::new(load_balancer, db_cred.database.clone(), interceptor);
+            GrpcConnectionManager::new(load_balancer, db_cred.database.clone(), interceptor, self.cert_path);
 
         Client::new(db_cred, discovery, connection_manager)
     }
@@ -255,6 +283,7 @@ impl ClientBuilder {
             discovery_interval: Duration::from_secs(60),
             endpoint: "grpc://localhost:2135".to_string(),
             discovery: None,
+            cert_path: None,
         }
     }
 
