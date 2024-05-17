@@ -10,6 +10,7 @@ use crate::{
 #[traced_test]
 #[ignore] // YDB access is necessary
 async fn custom_ca_test() -> YdbResult<()> {
+    // Enable the test after fix https://github.com/ydb-platform/ydb/issues/4638
     return Ok(());
 
     #[allow(unreachable_code)]
