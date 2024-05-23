@@ -47,6 +47,35 @@ macro_rules! request_with_result {
     };
 }
 
+macro_rules! request_with_hidden_result {
+    (
+        $self: ident .service. $method: ident,
+        $RawRequest: ident => $GrpcRequestType: ty,
+        $GrcpResultType: ty => $RawResultType: ty
+    ) => {
+        let req = <$GrpcRequestType>::from($RawRequest);
+
+        trace!(
+            " {} request: {}",
+            stringify!($ClientType.$method),
+            crate::trace_helpers::ensure_len_string(
+                serde_json::to_string(&req).unwrap_or("bad json".into())
+            )
+        );
+
+        let response = $self.service.$method(req).await?;
+        let result: $GrcpResultType =
+            crate::grpc_wrapper::grpc::grpc_read_operation_result(response)?;
+
+        trace!(
+            "{} result hidden",
+            stringify!($ClientType.$method),
+        );
+
+        return <$RawResultType>::try_from(result);
+    };
+}
+
 #[allow(unused_macros)]
 macro_rules! bidirectional_streaming_request {
     (
