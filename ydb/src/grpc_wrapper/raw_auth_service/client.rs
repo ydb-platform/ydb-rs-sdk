@@ -21,7 +21,7 @@ impl RawAuthClient {
     }
 
     pub async fn login(&mut self, req: RawLoginRequest) -> RawResult<RawLoginResult> {
-        request_with_result!(
+        request_with_hidden_result!(
             self.service.login,
             req => ydb_grpc::ydb_proto::auth::LoginRequest,
             ydb_grpc::ydb_proto::auth::LoginResult => RawLoginResult
