@@ -247,7 +247,7 @@ impl TryFrom<RawTypedValue> for Value {
                 let int_val = merge_parts(high, low) as i128;
 
                 let value =
-                    decimal_rs::Decimal::from_parts(int_val.abs() as u128, t.scale, int_val < 0)
+                    decimal_rs::Decimal::from_parts(int_val.unsigned_abs(), t.scale, int_val < 0)
                         .map_err(|e| RawError::decode_error(e.to_string()))?;
                 return Ok(Value::Decimal(value));
             }
