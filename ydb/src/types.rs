@@ -416,7 +416,7 @@ impl Value {
             r#type: Some(ydb_proto::Type {
                 r#type: Some(ydb_proto::r#type::Type::DecimalType(
                     ydb_proto::DecimalType {
-                        precision: val.precision().try_into()?,
+                        precision: val.precision().into(),
                         scale: val.scale().try_into()?,
                     },
                 )),

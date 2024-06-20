@@ -15,7 +15,6 @@ const DEFAULT_SIZE: usize = 1000;
 #[async_trait]
 pub(crate) trait SessionFabric: Send + Sync {
     async fn create_session(&self, timeouts: TimeoutSettings) -> YdbResult<Session>;
-    fn clone_box(&self) -> Box<dyn SessionFabric>;
 }
 
 #[async_trait]
@@ -28,9 +27,6 @@ impl SessionFabric for GrpcConnectionManager {
         let session_res = table.create_session().await?;
         let session = Session::new(session_res.id, self.clone(), TimeoutSettings::default());
         return Ok(session);
-    }
-    fn clone_box(&self) -> Box<dyn SessionFabric> {
-        Box::new(self.clone())
     }
 }
 
@@ -178,10 +174,6 @@ mod test {
                 TableChannelPoolMock {},
                 timeouts,
             ))
-        }
-
-        fn clone_box(&self) -> Box<dyn SessionFabric> {
-            Box::new(SessionClientMock {})
         }
     }
 

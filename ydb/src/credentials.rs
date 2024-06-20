@@ -66,6 +66,8 @@ impl MetadataUrlCredentials {
         }
     }
 
+
+
     /// Create GCEMetadata with custom url (may need for debug or spec infrastructure with non standard metadata)
     ///
     /// Example:
@@ -84,6 +86,12 @@ impl MetadataUrlCredentials {
     }
 }
 
+impl Default for MetadataUrlCredentials {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Credentials for MetadataUrlCredentials {
     fn create_token(&self) -> YdbResult<TokenInfo> {
         self.inner.create_token()
@@ -99,6 +107,12 @@ impl AnonymousCredentials {
         Self {
             inner: AccessTokenCredentials::from(EMPTY_TOKEN),
         }
+    }
+}
+
+impl Default for AnonymousCredentials {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -152,7 +166,7 @@ fn get_credentials_from_env() -> YdbResult<Box<dyn Credentials>> {
         return Ok(Box::new(AccessTokenCredentials::from(token)));
     }
 
-    return Ok(Box::new(MetadataUrlCredentials::new()));
+    Ok(Box::new(MetadataUrlCredentials::new()))
 }
 
 /// Credentials with static token without renewing
@@ -409,8 +423,8 @@ impl ServiceAccountCredentials {
         let duration = time - chrono::Utc::now();
         let seconds = (0.1 * duration.num_seconds() as f64) as u64;
         trace!("renew in: {}", seconds);
-        let instant = Instant::now() + Duration::from_secs(seconds);
-        instant
+
+        Instant::now() + Duration::from_secs(seconds)
     }
 }
 
