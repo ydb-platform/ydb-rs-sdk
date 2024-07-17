@@ -182,6 +182,45 @@ pub(crate) async fn update_load_balancer(
     }
 }
 
+pub(crate) struct NearestDCBalancer {
+    discovery_state: Arc<DiscoveryState>,
+    waiter: Arc<WaiterImpl>,
+    random_balancer: Option<RandomLoadBalancer>,
+}
+
+impl NearestDCBalancer {
+    pub(crate) fn new(backup_with_random_balancer: bool) -> Self {
+        let mut random_balancer = None;
+        if backup_with_random_balancer {
+            random_balancer = Some(RandomLoadBalancer::new())
+        }
+        Self {
+            discovery_state: Arc::new(DiscoveryState::default()),
+            waiter: Arc::new(WaiterImpl::new()),
+            random_balancer,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Waiter for NearestDCBalancer {
+    async fn wait(&self) -> YdbResult<()> {
+        todo!()
+    }
+}
+
+impl LoadBalancer for NearestDCBalancer {
+    fn endpoint(&self, service: Service) -> YdbResult<Uri> {
+        todo!()
+    }
+    fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()> {
+        todo!()
+    }
+    fn waiter(&self) -> Box<dyn Waiter> {
+        todo!()
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
