@@ -1,9 +1,14 @@
-use crate::discovery::{Discovery, DiscoveryState};
+use crate::discovery::{Discovery, DiscoveryState, NodeInfo};
 use crate::errors::*;
 use http::Uri;
+use rand::thread_rng;
+use tokio::runtime::Handle;
+use tokio_util::sync::CancellationToken;
 
 use crate::grpc_wrapper::raw_services::Service;
 use crate::waiter::{Waiter, WaiterImpl};
+use std::collections::HashMap;
+use std::net::ToSocketAddrs;
 use std::sync::{Arc, RwLock};
 use tokio::sync::watch::Receiver;
 
@@ -183,41 +188,161 @@ pub(crate) async fn update_load_balancer(
 }
 
 pub(crate) struct NearestDCBalancer {
-    discovery_state: Arc<DiscoveryState>,
-    waiter: Arc<WaiterImpl>,
-    random_balancer: Option<RandomLoadBalancer>,
+    random_balancer: RandomLoadBalancer,
 }
 
 impl NearestDCBalancer {
-    pub(crate) fn new(backup_with_random_balancer: bool) -> Self {
-        let mut random_balancer = None;
-        if backup_with_random_balancer {
-            random_balancer = Some(RandomLoadBalancer::new())
-        }
-        Self {
-            discovery_state: Arc::new(DiscoveryState::default()),
-            waiter: Arc::new(WaiterImpl::new()),
-            random_balancer,
-        }
+    pub(crate) fn new() -> Self {
+        let random_balancer = RandomLoadBalancer::new();
+        Self { random_balancer }
     }
 }
 
 #[async_trait::async_trait]
 impl Waiter for NearestDCBalancer {
     async fn wait(&self) -> YdbResult<()> {
-        todo!()
+        self.random_balancer.wait().await
     }
 }
 
+const NODES_PER_DC: usize = 5;
+
 impl LoadBalancer for NearestDCBalancer {
     fn endpoint(&self, service: Service) -> YdbResult<Uri> {
-        todo!()
+        let nodes = self.random_balancer.discovery_state.get_nodes(&service);
+        match nodes {
+            None => Err(YdbError::Custom(format!(
+                "no endpoints for service: '{}'",
+                service
+            ))),
+            Some(nodes) => self.get_local_endpoint(nodes),
+        }
     }
+
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()> {
-        todo!()
+        self.random_balancer.set_discovery_state(discovery_state)
     }
     fn waiter(&self) -> Box<dyn Waiter> {
-        todo!()
+        self.random_balancer.waiter()
+    }
+}
+
+impl NearestDCBalancer {
+    fn get_local_endpoint(&self, nodes: &Vec<NodeInfo>) -> YdbResult<Uri> {
+        let mut dc_to_nodes = self.split_endpoints_by_location(nodes);
+        let mut to_check = Vec::with_capacity(NODES_PER_DC * dc_to_nodes.keys().len());
+
+        dc_to_nodes
+            .iter_mut()
+            .for_each(|(_, eps)| to_check.append(self.get_random_endpoints(eps)));
+
+        if to_check.len() == 0 {
+            return Err(YdbError::Custom(format!("no endpoints")));
+        }
+
+        self.find_fastest_endpoint(&to_check)
+    }
+
+    fn split_endpoints_by_location(&self, nodes: &Vec<NodeInfo>) -> HashMap<String, Vec<NodeInfo>> {
+        // no clones =( ?
+        let mut dc_to_eps = HashMap::<String, Vec<NodeInfo>>::new();
+        nodes.into_iter().for_each(|info| {
+            if let Some(nodes) = dc_to_eps.get_mut(&info.location) {
+                nodes.push(info.clone());
+            } else {
+                dc_to_eps.insert(info.location.clone(), vec![info.clone()]);
+            }
+        });
+        dc_to_eps
+    }
+
+    fn get_random_endpoints<'a>(
+        &'a self,
+        dc_endpoints: &'a mut Vec<NodeInfo>,
+    ) -> &mut Vec<NodeInfo> {
+        use rand::seq::SliceRandom;
+        dc_endpoints.shuffle(&mut thread_rng());
+        dc_endpoints.truncate(NODES_PER_DC);
+        dc_endpoints
+    }
+
+    fn find_fastest_endpoint(&self, to_check: &Vec<NodeInfo>) -> YdbResult<Uri> {
+        let addr_to_node = self.addr_to_node(to_check);
+        if addr_to_node.len() == 0 {
+            return Err(YdbError::Custom(format!("no ips for endpoints")));
+        }
+
+        let addrs = addr_to_node.keys();
+
+        let fastest_address = self.find_fastest_address(addrs.collect());
+
+        Ok(addr_to_node[&fastest_address].uri.clone())
+    }
+
+    fn addr_to_node(&self, nodes: &Vec<NodeInfo>) -> HashMap<String, NodeInfo> {
+        let mut addr_to_node = HashMap::<String, NodeInfo>::with_capacity(2 * nodes.len()); // ipv4 + ipv6
+
+        nodes.into_iter().for_each(|info| {
+            let host: &str;
+            let port: u16;
+            match info.uri.host() {
+                Some(uri_host) => host = uri_host,
+                None => return,
+            }
+
+            match info.uri.port() {
+                Some(uri_port) => port = uri_port.as_u16(),
+                None => return,
+            }
+
+            let _ = (host, port).to_socket_addrs().and_then(|addrs| {
+                for addr in addrs {
+                    addr_to_node.insert(addr.to_string(), info.clone());
+                }
+                Ok(())
+            });
+        });
+
+        addr_to_node
+    }
+    fn find_fastest_address(&self, addrs: Vec<&String>) -> String {
+        let token = CancellationToken::new();
+        let (fire, _) = tokio::sync::broadcast::channel::<()>(1);
+        let (addr_sender, mut addr_reciever) = tokio::sync::mpsc::channel::<String>(1);
+
+        for addr in addrs {
+            let mut wait_for_start = fire.subscribe();
+            let stop_measure = token.clone();
+            let addr = addr.clone();
+            let addr_sender = addr_sender.clone();
+
+            tokio::spawn(async move {
+                let _ = wait_for_start.recv().await;
+                tokio::select! {
+                    connection_result = tokio::net::TcpStream::connect(addr.clone()) =>{
+                        if  connection_result.is_ok(){
+                             addr_sender.send(addr); //?????
+                        }
+                    }
+
+                    _ = stop_measure.cancelled() => {
+                        return ;
+                    }
+                }
+            });
+        }
+
+        tokio::task::block_in_place(move || {
+            Handle::current().block_on(async {
+                match addr_reciever.recv().await {
+                    Some(address) => {
+                        token.cancel();
+                        address
+                    }
+                    None => unreachable!(),
+                }
+            })
+        })
     }
 }
 
