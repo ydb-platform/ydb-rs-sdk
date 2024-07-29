@@ -306,22 +306,24 @@ impl NearestDCBalancer {
         addr_to_node
     }
     fn find_fastest_address(&self, addrs: Vec<&String>) -> String {
-        let token = CancellationToken::new();
-        let (fire, _) = tokio::sync::broadcast::channel::<()>(1);
+        let stop_measure = CancellationToken::new();
+        let (start_measure, _) = tokio::sync::broadcast::channel::<()>(1);
         let (addr_sender, mut addr_reciever) = tokio::sync::mpsc::channel::<String>(1);
 
         for addr in addrs {
-            let mut wait_for_start = fire.subscribe();
-            let stop_measure = token.clone();
-            let addr = addr.clone();
-            let addr_sender = addr_sender.clone();
-
+            let (mut wait_for_start, stop_measure, addr, addr_sender) = (
+                start_measure.subscribe(),
+                stop_measure.clone(),
+                addr.clone(),
+                addr_sender.clone(),
+            );
+            
             tokio::spawn(async move {
                 let _ = wait_for_start.recv().await;
                 tokio::select! {
                     connection_result = tokio::net::TcpStream::connect(addr.clone()) =>{
                         if  connection_result.is_ok(){
-                             addr_sender.send(addr); //?????
+                             addr_sender.send(addr).await.unwrap();
                         }
                     }
 
@@ -333,10 +335,11 @@ impl NearestDCBalancer {
         }
 
         tokio::task::block_in_place(move || {
+            let _ = start_measure.send(());
             Handle::current().block_on(async {
                 match addr_reciever.recv().await {
                     Some(address) => {
-                        token.cancel();
+                        stop_measure.cancel();
                         address
                     }
                     None => unreachable!(),
