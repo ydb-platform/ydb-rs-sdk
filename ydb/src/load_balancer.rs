@@ -191,6 +191,13 @@ pub(crate) async fn update_load_balancer(
     }
 }
 
+// What will balancer do if there is no available endpoints at local dc
+pub(crate) enum NearestDCStrategy {
+    Error,  // Just throw error
+    Random, // Random endpoint from other dcs
+    Next,   // Find next fastest dc
+}
+
 pub(crate) struct NearestDCBalancer {
     random_balancer: RandomLoadBalancer,
 }
