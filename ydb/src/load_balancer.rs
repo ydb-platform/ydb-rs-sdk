@@ -2,7 +2,11 @@ use crate::discovery::{Discovery, DiscoveryState, NodeInfo};
 use crate::errors::*;
 use http::Uri;
 use rand::thread_rng;
+use tokio::io::AsyncWriteExt;
+use tokio::net::TcpStream;
 use tokio::runtime::Handle;
+use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::grpc_wrapper::raw_services::Service;
@@ -308,7 +312,9 @@ impl NearestDCBalancer {
     fn find_fastest_address(&self, addrs: Vec<&String>) -> String {
         let stop_measure = CancellationToken::new();
         let (start_measure, _) = tokio::sync::broadcast::channel::<()>(1);
-        let (addr_sender, mut addr_reciever) = tokio::sync::mpsc::channel::<String>(1);
+        let (addr_sender, addr_reciever) = tokio::sync::mpsc::channel::<String>(1);
+
+        let mut nursery = JoinSet::new();
 
         for addr in addrs {
             let (mut wait_for_start, stop_measure, addr, addr_sender) = (
@@ -317,13 +323,14 @@ impl NearestDCBalancer {
                 addr.clone(),
                 addr_sender.clone(),
             );
-            
-            tokio::spawn(async move {
+
+            nursery.spawn(async move {
                 let _ = wait_for_start.recv().await;
                 tokio::select! {
-                    connection_result = tokio::net::TcpStream::connect(addr.clone()) =>{
+                    connection_result = TcpStream::connect(addr.clone()) =>{
                         if  connection_result.is_ok(){
-                             addr_sender.send(addr).await.unwrap();
+                            let _ = connection_result.unwrap().shutdown().await;
+                            addr_sender.send(addr).await.unwrap();
                         }
                     }
 
@@ -337,15 +344,23 @@ impl NearestDCBalancer {
         tokio::task::block_in_place(move || {
             let _ = start_measure.send(());
             Handle::current().block_on(async {
-                match addr_reciever.recv().await {
-                    Some(address) => {
-                        stop_measure.cancel();
-                        address
-                    }
-                    None => unreachable!(),
-                }
+                let addr = self.wait_for_address(addr_reciever).await;
+                stop_measure.cancel();
+                self.join_all(&mut nursery).await;
+                addr
             })
         })
+    }
+
+    async fn wait_for_address(&self, mut addr_reciever: mpsc::Receiver<String>) -> String {
+        match addr_reciever.recv().await {
+            Some(address) => address,
+            None => unreachable!(),
+        }
+    }
+
+    async fn join_all(&self, awaitable: &mut JoinSet<()>) {
+        while let Some(_) = awaitable.join_next().await {}
     }
 }
 
