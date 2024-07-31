@@ -409,7 +409,7 @@ mod test {
 
         let new_discovery_state = Arc::new(DiscoveryState::default().with_node_info(
             Table,
-            NodeInfo::new(Uri::from_str("http://test.com").unwrap()),
+            NodeInfo::new(Uri::from_str("http://test.com").unwrap(), String::new()),
         ));
 
         let (first_update_sender, first_update_receiver) = tokio::sync::oneshot::channel();
@@ -473,8 +473,8 @@ mod test {
         let load_balancer = RandomLoadBalancer {
             discovery_state: Arc::new(
                 DiscoveryState::default()
-                    .with_node_info(Table, NodeInfo::new(one.clone()))
-                    .with_node_info(Table, NodeInfo::new(two.clone())),
+                    .with_node_info(Table, NodeInfo::new(one.clone(), String::new()))
+                    .with_node_info(Table, NodeInfo::new(two.clone(), String::new())),
             ),
             waiter: Arc::new(WaiterImpl::new()),
         };

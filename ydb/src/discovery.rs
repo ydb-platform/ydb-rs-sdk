@@ -101,14 +101,7 @@ pub(crate) struct NodeInfo {
 }
 
 impl NodeInfo {
-    pub(crate) fn new(uri: Uri) -> Self {
-        Self {
-            uri,
-            location: String::new(),
-        }
-    }
-
-    pub(crate) fn new_with_location(uri: Uri, location: String) -> Self {
+    pub(crate) fn new(uri: Uri, location: String) -> Self {
         Self { uri, location }
     }
 }
@@ -149,7 +142,7 @@ pub struct StaticDiscovery {
 impl StaticDiscovery {
     pub fn new_from_str<'a, T: Into<&'a str>>(endpoint: T) -> YdbResult<Self> {
         let endpoint = Uri::from_str(endpoint.into())?;
-        let nodes = vec![NodeInfo::new(endpoint)];
+        let nodes = vec![NodeInfo::new(endpoint, String::new())];
 
         let state = DiscoveryState::new(std::time::Instant::now(), nodes);
         let state = Arc::new(state);
@@ -333,7 +326,7 @@ impl DiscoverySharedState {
     fn list_endpoints_to_node_infos(list: Vec<EndpointInfo>) -> YdbResult<Vec<NodeInfo>> {
         list.into_iter()
             .map(|item| match Self::endpoint_info_to_uri(&item) {
-                Ok(uri) => YdbResult::<NodeInfo>::Ok(NodeInfo::new_with_location(
+                Ok(uri) => YdbResult::<NodeInfo>::Ok(NodeInfo::new(
                     uri,
                     item.location.clone(),
                 )),
