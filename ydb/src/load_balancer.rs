@@ -255,8 +255,9 @@ impl NearestDCBalancer {
 
         match self.fallback_strategy {
             FallbackStrategy::Error => Err(YdbError::custom(format!(
-                "no available endpoints for service {} in local dc",
-                service
+                "no available endpoints for service:{} in local dc:{}",
+                service,
+                self.location
             ))),
             FallbackStrategy::Random => self.random_balancer.endpoint(service),
             FallbackStrategy::Next => todo!(),
