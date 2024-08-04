@@ -63,6 +63,10 @@ impl DiscoveryState {
         Some(&self.nodes)
     }
 
+    pub(crate) fn get_all_nodes(&self) -> Option<&Vec<NodeInfo>> {
+        Some(&self.nodes)
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.nodes.len() == 0
     }
@@ -98,11 +102,16 @@ impl Default for DiscoveryState {
 pub(crate) struct NodeInfo {
     pub(crate) uri: Uri,
     pub(crate) location: String,
+    pub(crate) service: Vec<Service>,
 }
 
 impl NodeInfo {
-    pub(crate) fn new(uri: Uri, location: String) -> Self {
-        Self { uri, location }
+    pub(crate) fn new(uri: Uri, location: String, service: Vec<Service>) -> Self {
+        Self {
+            uri,
+            location,
+            service,
+        }
     }
 }
 
@@ -142,7 +151,7 @@ pub struct StaticDiscovery {
 impl StaticDiscovery {
     pub fn new_from_str<'a, T: Into<&'a str>>(endpoint: T) -> YdbResult<Self> {
         let endpoint = Uri::from_str(endpoint.into())?;
-        let nodes = vec![NodeInfo::new(endpoint, String::new())];
+        let nodes = vec![NodeInfo::new(endpoint, String::new(), Vec::new())];
 
         let state = DiscoveryState::new(std::time::Instant::now(), nodes);
         let state = Arc::new(state);
@@ -329,6 +338,7 @@ impl DiscoverySharedState {
                 Ok(uri) => YdbResult::<NodeInfo>::Ok(NodeInfo::new(
                     uri,
                     item.location.clone(),
+                    item.service.clone(),
                 )),
                 Err(err) => YdbResult::<NodeInfo>::Err(err),
             })
