@@ -238,7 +238,7 @@ impl ClientBuilder {
             interceptor.with_interceptor(DiscoveryPessimizationInterceptor::new(discovery.clone()));
 
         let load_balancer = SharedLoadBalancer::new(discovery.as_ref().as_ref());
-        let connection_manager = 
+        let connection_manager =
             GrpcConnectionManager::new(load_balancer, db_cred.database.clone(), interceptor, self.cert_path);
 
         Client::new(db_cred, discovery, connection_manager)
