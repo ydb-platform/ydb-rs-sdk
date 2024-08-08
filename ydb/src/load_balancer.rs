@@ -375,9 +375,9 @@ impl NearestDCBalancer {
                         match connection_result{
                             Ok(mut connection) => {
                                 let _ = connection.shutdown().await;
-                                addr_sender.send(Some(addr)).await;
+                                let _ = addr_sender.send(Some(addr)).await;
                             },
-                            Err(_) => {addr_sender.send(None).await;},
+                            Err(_) => {let _ = addr_sender.send(None).await;},
                         }
                     }
                     _ = stop_measure.cancelled() => {
