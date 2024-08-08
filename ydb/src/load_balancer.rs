@@ -21,6 +21,7 @@ use tokio::sync::watch::Receiver;
 pub(crate) trait LoadBalancer: Send + Sync + Waiter {
     fn endpoint(&self, service: Service) -> YdbResult<Uri>;
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()>;
+    fn set_config(&mut self, config: BalancerConfig) -> YdbResult<()>;
     fn waiter(&self) -> Box<dyn Waiter>; // need for wait ready in without read lock
 }
 
@@ -38,7 +39,11 @@ pub(crate) struct SharedLoadBalancer {
 
 impl SharedLoadBalancer {
     pub(crate) fn new(discovery: &dyn Discovery) -> Self {
-        Self::new_with_balancer_and_updater(Box::new(RandomLoadBalancer::new()), discovery)
+        Self::new_with_balancer_and_updater(
+            Box::new(RandomLoadBalancer::new()),
+            BalancerConfig::default(),
+            discovery,
+        )
     }
 
     pub(crate) fn new_with_balancer(load_balancer: Box<dyn LoadBalancer>) -> Self {
@@ -49,9 +54,11 @@ impl SharedLoadBalancer {
 
     pub(crate) fn new_with_balancer_and_updater(
         load_balancer: Box<dyn LoadBalancer>,
+        config: BalancerConfig,
         discovery: &dyn Discovery,
     ) -> Self {
         let mut shared_lb = Self::new_with_balancer(load_balancer);
+        let _ = shared_lb.set_config(config);
         let shared_lb_updater = shared_lb.clone();
         let discovery_receiver = discovery.subscribe();
         let _ = shared_lb.set_discovery_state(&discovery.state());
@@ -69,6 +76,10 @@ impl LoadBalancer for SharedLoadBalancer {
 
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()> {
         self.inner.write()?.set_discovery_state(discovery_state)
+    }
+
+    fn set_config(&mut self, config: BalancerConfig) -> YdbResult<()> {
+        self.inner.write()?.set_config(config)
     }
 
     fn waiter(&self) -> Box<dyn Waiter> {
@@ -103,6 +114,12 @@ impl LoadBalancer for StaticLoadBalancer {
     fn set_discovery_state(&mut self, _: &Arc<DiscoveryState>) -> YdbResult<()> {
         Err(YdbError::Custom(
             "static balancer no way to update state".into(),
+        ))
+    }
+
+    fn set_config(&mut self, _: BalancerConfig) -> YdbResult<()> {
+        Err(YdbError::Custom(
+            "static balancer does not have config".into(),
         ))
     }
 
@@ -166,6 +183,12 @@ impl LoadBalancer for RandomLoadBalancer {
         Ok(())
     }
 
+    fn set_config(&mut self, _: BalancerConfig) -> YdbResult<()> {
+        Err(YdbError::Custom(
+            "random balancer does not have config".into(),
+        ))
+    }
+
     fn waiter(&self) -> Box<dyn Waiter> {
         Box::new(self.waiter.clone())
     }
@@ -192,13 +215,16 @@ pub(crate) async fn update_load_balancer(
     }
 }
 
+#[derive(Default)]
 pub(crate) struct BalancerConfig {
     fallback_strategy: FallbackStrategy,
 }
 
+#[derive(Default)]
 // What will balancer do if there is no available endpoints at local dc
 pub(crate) enum FallbackStrategy {
-    Error,  // Just throw error
+    #[default]
+    Error, // Just throw error
     Random, // Random endpoint from other dcs
 }
 
@@ -237,6 +263,11 @@ impl LoadBalancer for NearestDCBalancer {
         self.random_balancer.set_discovery_state(discovery_state)?;
         self.adjust_local_dc()?;
         self.adjust_allowed_endpoints()
+    }
+
+    fn set_config(&mut self, config: BalancerConfig) -> YdbResult<()> {
+        self.config = config;
+        Ok(())
     }
 
     fn waiter(&self) -> Box<dyn Waiter> {
