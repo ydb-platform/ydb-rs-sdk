@@ -194,26 +194,29 @@ pub(crate) async fn update_load_balancer(
     }
 }
 
+pub(crate) struct BalancerConfig {
+    fallback_strategy: FallbackStrategy,
+}
+
 // What will balancer do if there is no available endpoints at local dc
 pub(crate) enum FallbackStrategy {
     Error,  // Just throw error
     Random, // Random endpoint from other dcs
-    Next,   // Find next fastest dc
 }
 
 pub(crate) struct NearestDCBalancer {
     random_balancer: RandomLoadBalancer,
-    fallback_strategy: FallbackStrategy, //Default - Error
+    config: BalancerConfig,
     allowed_endpoints: Vec<NodeInfo>,
-    location: String, // vec of locations sorted by speed. Next strategy???
+    location: String,
 }
 
 impl NearestDCBalancer {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(config: BalancerConfig) -> Self {
         let random_balancer = RandomLoadBalancer::new();
         Self {
             random_balancer,
-            fallback_strategy: FallbackStrategy::Random,
+            config,
             allowed_endpoints: Vec::new(),
             location: String::new(),
         }
@@ -253,14 +256,12 @@ impl NearestDCBalancer {
             }
         }
 
-        match self.fallback_strategy {
+        match self.config.fallback_strategy {
             FallbackStrategy::Error => Err(YdbError::custom(format!(
                 "no available endpoints for service:{} in local dc:{}",
-                service,
-                self.location
+                service, self.location
             ))),
             FallbackStrategy::Random => self.random_balancer.endpoint(service),
-            FallbackStrategy::Next => todo!(),
         }
     }
 
