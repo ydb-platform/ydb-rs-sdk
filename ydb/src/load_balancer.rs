@@ -13,9 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::grpc_wrapper::raw_services::Service;
 use crate::waiter::{Waiter, WaiterImpl};
 use std::collections::HashMap;
-use std::fmt::format;
 use std::net::ToSocketAddrs;
-use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use tokio::sync::watch::Receiver;
 
@@ -251,9 +249,7 @@ const NODES_PER_DC: usize = 5;
 impl NearestDCBalancer {
     fn get_endpoint(&self, service: Service) -> YdbResult<Uri> {
         for ep in self.allowed_endpoints.iter() {
-            if ep.service.contains(&service) {
-                return YdbResult::Ok(ep.uri.clone());
-            }
+            return YdbResult::Ok(ep.uri.clone());
         }
 
         match self.config.fallback_strategy {
@@ -469,11 +465,7 @@ mod test {
 
         let new_discovery_state = Arc::new(DiscoveryState::default().with_node_info(
             Table,
-            NodeInfo::new(
-                Uri::from_str("http://test.com").unwrap(),
-                String::new(),
-                Vec::new(),
-            ),
+            NodeInfo::new(Uri::from_str("http://test.com").unwrap(), String::new()),
         ));
 
         let (first_update_sender, first_update_receiver) = tokio::sync::oneshot::channel();
@@ -537,8 +529,8 @@ mod test {
         let load_balancer = RandomLoadBalancer {
             discovery_state: Arc::new(
                 DiscoveryState::default()
-                    .with_node_info(Table, NodeInfo::new(one.clone(), String::new(), Vec::new()))
-                    .with_node_info(Table, NodeInfo::new(two.clone(), String::new(), Vec::new())),
+                    .with_node_info(Table, NodeInfo::new(one.clone(), String::new()))
+                    .with_node_info(Table, NodeInfo::new(two.clone(), String::new())),
             ),
             waiter: Arc::new(WaiterImpl::new()),
         };

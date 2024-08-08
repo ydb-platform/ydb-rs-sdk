@@ -102,16 +102,11 @@ impl Default for DiscoveryState {
 pub(crate) struct NodeInfo {
     pub(crate) uri: Uri,
     pub(crate) location: String,
-    pub(crate) service: Vec<Service>,
 }
 
 impl NodeInfo {
-    pub(crate) fn new(uri: Uri, location: String, service: Vec<Service>) -> Self {
-        Self {
-            uri,
-            location,
-            service,
-        }
+    pub(crate) fn new(uri: Uri, location: String) -> Self {
+        Self { uri, location }
     }
 }
 
@@ -151,7 +146,7 @@ pub struct StaticDiscovery {
 impl StaticDiscovery {
     pub fn new_from_str<'a, T: Into<&'a str>>(endpoint: T) -> YdbResult<Self> {
         let endpoint = Uri::from_str(endpoint.into())?;
-        let nodes = vec![NodeInfo::new(endpoint, String::new(), Vec::new())];
+        let nodes = vec![NodeInfo::new(endpoint, String::new())];
 
         let state = DiscoveryState::new(std::time::Instant::now(), nodes);
         let state = Arc::new(state);
@@ -335,11 +330,7 @@ impl DiscoverySharedState {
     fn list_endpoints_to_node_infos(list: Vec<EndpointInfo>) -> YdbResult<Vec<NodeInfo>> {
         list.into_iter()
             .map(|item| match Self::endpoint_info_to_uri(&item) {
-                Ok(uri) => YdbResult::<NodeInfo>::Ok(NodeInfo::new(
-                    uri,
-                    item.location.clone(),
-                    item.service.clone(),
-                )),
+                Ok(uri) => YdbResult::<NodeInfo>::Ok(NodeInfo::new(uri, item.location.clone())),
                 Err(err) => YdbResult::<NodeInfo>::Err(err),
             })
             .try_collect()

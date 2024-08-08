@@ -3,11 +3,8 @@ use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::YdbResult;
 use itertools::Itertools;
-use serde_json::from_str;
 use ydb_grpc::ydb_proto::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_grpc::ydb_proto::discovery::{ListEndpointsRequest, ListEndpointsResult};
-
-use super::raw_services;
 
 pub struct GrpcDiscoveryClient {
     service: DiscoveryServiceClient<InterceptedChannel>,
@@ -32,7 +29,6 @@ impl GrpcDiscoveryClient {
         let resp = self.service.list_endpoints(req).await?;
         let result: ListEndpointsResult = grpc_read_operation_result(resp)?;
 
-        use std::str::FromStr;
         let res = result
             .endpoints
             .into_iter()
@@ -41,12 +37,6 @@ impl GrpcDiscoveryClient {
                 port: item.port,
                 ssl: item.ssl,
                 location: item.location,
-                service: item
-                    .service
-                    .into_iter()
-                    .map(|s| Service::from_str(s.as_str()))
-                    .map(|res| res.unwrap())
-                    .collect(),
             })
             .collect_vec();
         Ok(res)
@@ -58,7 +48,6 @@ pub(crate) struct EndpointInfo {
     pub(crate) port: u32,
     pub(crate) ssl: bool,
     pub(crate) location: String,
-    pub(crate) service: Vec<Service>,
 }
 
 impl GrpcServiceForDiscovery for GrpcDiscoveryClient {
