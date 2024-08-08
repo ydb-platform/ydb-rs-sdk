@@ -215,17 +215,22 @@ pub(crate) async fn update_load_balancer(
     }
 }
 
-#[derive(Default)]
 pub(crate) struct BalancerConfig {
     fallback_strategy: FallbackStrategy,
 }
 
-#[derive(Default)]
 // What will balancer do if there is no available endpoints at local dc
 pub(crate) enum FallbackStrategy {
-    #[default]
-    Error, // Just throw error
+    Error,  // Just throw error
     Random, // Random endpoint from other dcs
+}
+
+impl Default for BalancerConfig {
+    fn default() -> Self {
+        BalancerConfig {
+            fallback_strategy: FallbackStrategy::Error,
+        }
+    }
 }
 
 pub(crate) struct NearestDCBalancer {
