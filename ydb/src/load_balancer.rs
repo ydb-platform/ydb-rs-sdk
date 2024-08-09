@@ -236,7 +236,7 @@ impl Default for BalancerConfig {
 pub(crate) struct NearestDCBalancer {
     random_balancer: RandomLoadBalancer,
     config: BalancerConfig,
-    allowed_endpoints: Vec<NodeInfo>,
+    preferred_endpoints: Vec<NodeInfo>,
     location: String,
 }
 
@@ -246,7 +246,7 @@ impl NearestDCBalancer {
         Self {
             random_balancer,
             config,
-            allowed_endpoints: Vec::new(),
+            preferred_endpoints: Vec::new(),
             location: String::new(),
         }
     }
@@ -267,7 +267,7 @@ impl LoadBalancer for NearestDCBalancer {
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()> {
         self.random_balancer.set_discovery_state(discovery_state)?;
         self.adjust_local_dc()?;
-        self.adjust_allowed_endpoints()
+        self.adjust_preferred_endpoints()
     }
 
     fn set_config(&mut self, config: BalancerConfig) -> YdbResult<()> {
@@ -284,7 +284,7 @@ const NODES_PER_DC: usize = 5;
 
 impl NearestDCBalancer {
     fn get_endpoint(&self, service: Service) -> YdbResult<Uri> {
-        for ep in self.allowed_endpoints.iter() {
+        for ep in self.preferred_endpoints.iter() {
             return YdbResult::Ok(ep.uri.clone());
         }
 
@@ -309,8 +309,8 @@ impl NearestDCBalancer {
         Ok(())
     }
 
-    fn adjust_allowed_endpoints(&mut self) -> YdbResult<()> {
-        self.allowed_endpoints = self
+    fn adjust_preferred_endpoints(&mut self) -> YdbResult<()> {
+        self.preferred_endpoints = self
             .get_nodes()?
             .into_iter()
             .filter(|ep| ep.location == self.location)
