@@ -228,7 +228,7 @@ pub(crate) enum FallbackStrategy {
 impl Default for BalancerConfig {
     fn default() -> Self {
         BalancerConfig {
-            fallback_strategy: FallbackStrategy::Error,
+            fallback_strategy: FallbackStrategy::Random,
         }
     }
 }
