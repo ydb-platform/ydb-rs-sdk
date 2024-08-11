@@ -1,7 +1,4 @@
 use crate::{YdbError, YdbResult};
-use itertools::Itertools;
-use std::future::Future;
-use std::process::Output;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::watch;
