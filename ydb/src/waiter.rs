@@ -1,4 +1,7 @@
-use crate::YdbResult;
+use crate::{YdbError, YdbResult};
+use itertools::Itertools;
+use std::future::Future;
+use std::process::Output;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -80,9 +83,15 @@ impl AllWaiter {
 #[async_trait::async_trait]
 impl Waiter for AllWaiter {
     async fn wait(&self) -> YdbResult<()> {
-        for waiter in self.waiters.iter() {
-            waiter.wait().await?
-        }
+        let awaitables = self
+            .waiters
+            .iter()
+            .map(|waiter| waiter.wait())
+            .collect::<Vec<_>>();
+        futures_util::future::join_all(awaitables)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<()>, YdbError>>()?; // If any waiter produced error - return it, otherwise - Ok
         Ok(())
     }
 }
