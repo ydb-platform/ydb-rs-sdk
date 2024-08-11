@@ -11,7 +11,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::grpc_wrapper::raw_services::Service;
-use crate::waiter::{Waiter, WaiterImpl};
+use crate::waiter::{AllWaiter, Waiter, WaiterImpl};
 use std::collections::HashMap;
 use std::net::ToSocketAddrs;
 use std::sync::{Arc, RwLock};
@@ -38,10 +38,7 @@ pub(crate) struct SharedLoadBalancer {
 
 impl SharedLoadBalancer {
     pub(crate) fn new(discovery: &dyn Discovery) -> Self {
-        Self::new_with_balancer_and_updater(
-            Box::new(RandomLoadBalancer::new()),
-            discovery,
-        )
+        Self::new_with_balancer_and_updater(Box::new(RandomLoadBalancer::new()), discovery)
     }
 
     pub(crate) fn new_with_balancer(load_balancer: Box<dyn LoadBalancer>) -> Self {
@@ -197,45 +194,65 @@ pub(crate) async fn update_load_balancer(
 
 pub(crate) struct BalancerConfig {
     fallback_strategy: FallbackStrategy,
+    fallback_balancer: Option<Box<dyn LoadBalancer>>,
 }
 
 // What will balancer do if there is no available endpoints at local dc
+#[derive(PartialEq, Eq)]
 pub(crate) enum FallbackStrategy {
-    Error,  // Just throw error
-    Random, // Random endpoint from other dcs
+    Error,            // Just throw error
+    BalanceWithOther, // Use another balancer
 }
 
 impl Default for BalancerConfig {
     fn default() -> Self {
         BalancerConfig {
-            fallback_strategy: FallbackStrategy::Random,
+            fallback_strategy: FallbackStrategy::BalanceWithOther,
+            fallback_balancer: Some(Box::new(RandomLoadBalancer::new())),
         }
     }
 }
 
 pub(crate) struct NearestDCBalancer {
-    random_balancer: RandomLoadBalancer,
+    discovery_state: Arc<DiscoveryState>,
+    waiter: Arc<WaiterImpl>,
     config: BalancerConfig,
     preferred_endpoints: Vec<NodeInfo>,
     location: String,
 }
 
 impl NearestDCBalancer {
-    pub(crate) fn new(config: BalancerConfig) -> Self {
-        let random_balancer = RandomLoadBalancer::new();
-        Self {
-            random_balancer,
+    pub(crate) fn new(config: BalancerConfig) -> YdbResult<Self> {
+        match config.fallback_balancer.as_ref() {
+            Some(_) => {
+                if config.fallback_strategy == FallbackStrategy::Error {
+                    return Err(YdbError::Custom(
+                        "fallback strategy is Error but balancer was provided".to_string(),
+                    ));
+                }
+            }
+            None => {
+                if config.fallback_strategy == FallbackStrategy::BalanceWithOther {
+                    return Err(YdbError::Custom(
+                        "no fallback balancer was provided".to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(Self {
+            discovery_state: Arc::new(DiscoveryState::default()),
+            waiter: Arc::new(WaiterImpl::new()),
             config,
             preferred_endpoints: Vec::new(),
             location: String::new(),
-        }
+        })
     }
 }
 
 #[async_trait::async_trait]
 impl Waiter for NearestDCBalancer {
     async fn wait(&self) -> YdbResult<()> {
-        self.random_balancer.wait().await
+        self.waiter().wait().await
     }
 }
 
@@ -245,13 +262,24 @@ impl LoadBalancer for NearestDCBalancer {
     }
 
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()> {
-        self.random_balancer.set_discovery_state(discovery_state)?;
+        match self.config.fallback_balancer.as_mut() {
+            Some(balancer) => balancer.set_discovery_state(discovery_state)?,
+            None => (),
+        }
+        self.discovery_state = discovery_state.clone();
+        if !self.discovery_state.is_empty() {
+            self.waiter.set_received(Ok(()))
+        }
         self.adjust_local_dc()?;
         self.adjust_preferred_endpoints()
     }
 
     fn waiter(&self) -> Box<dyn Waiter> {
-        self.random_balancer.waiter()
+        let self_waiter = Box::new(self.waiter.clone());
+        match self.config.fallback_balancer.as_ref() {
+            Some(balancer) => Box::new(AllWaiter::new(vec![self_waiter, balancer.waiter()])),
+            None => self_waiter,
+        }
     }
 }
 
@@ -268,7 +296,13 @@ impl NearestDCBalancer {
                 "no available endpoints for service:{} in local dc:{}",
                 service, self.location
             ))),
-            FallbackStrategy::Random => self.random_balancer.endpoint(service),
+            FallbackStrategy::BalanceWithOther => {
+                self.config
+                    .fallback_balancer
+                    .as_ref()
+                    .unwrap() // unwrap is safe [checks inside ::new()]
+                    .endpoint(service)
+            }
         }
     }
 
@@ -295,7 +329,7 @@ impl NearestDCBalancer {
     }
 
     fn get_nodes(&self) -> YdbResult<&Vec<NodeInfo>> {
-        let nodes = self.random_balancer.discovery_state.get_all_nodes();
+        let nodes = self.discovery_state.get_all_nodes();
         match nodes {
             None => Err(YdbError::Custom(format!(
                 "no endpoints on discovery update"
