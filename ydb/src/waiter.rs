@@ -65,3 +65,24 @@ impl Waiter for Arc<WaiterImpl> {
         self.as_ref().wait().await
     }
 }
+
+pub(crate) struct AllWaiter {
+    waiters: Vec<Box<dyn Waiter>>,
+}
+
+impl AllWaiter {
+    pub fn new(waiters: Vec<Box<dyn Waiter>>) -> Self {
+        Self { waiters }
+    }
+}
+
+// AllWaiter should point to group of Arc Waiters
+#[async_trait::async_trait]
+impl Waiter for AllWaiter {
+    async fn wait(&self) -> YdbResult<()> {
+        for waiter in self.waiters.iter() {
+            waiter.wait().await?
+        }
+        Ok(())
+    }
+}
