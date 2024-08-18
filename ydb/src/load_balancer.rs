@@ -1,21 +1,23 @@
 use crate::discovery::{Discovery, DiscoveryState, NodeInfo};
 use crate::errors::*;
+use crate::grpc_wrapper::raw_services::Service;
+use crate::waiter::{AllWaiter, Waiter, WaiterImpl};
 use http::Uri;
 use itertools::Itertools;
 use rand::thread_rng;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::runtime::Handle;
-use tokio::sync::mpsc;
-use tokio::task::JoinSet;
+use tokio::sync::watch::{Receiver, Sender};
+use tokio::sync::Mutex;
+use tokio::sync::{mpsc, watch};
+use tokio::task::{JoinHandle, JoinSet};
+use tokio::time::Timeout;
 use tokio_util::sync::CancellationToken;
-
-use crate::grpc_wrapper::raw_services::Service;
-use crate::waiter::{AllWaiter, Waiter, WaiterImpl};
-use std::collections::HashMap;
-use std::net::ToSocketAddrs;
-use std::sync::{Arc, RwLock};
-use tokio::sync::watch::Receiver;
+use tracing::info;
+use tracing::{error, warn};
 
 #[mockall::automock]
 pub(crate) trait LoadBalancer: Send + Sync + Waiter {
@@ -215,10 +217,12 @@ impl Default for BalancerConfig {
 
 pub(crate) struct NearestDCBalancer {
     discovery_state: Arc<DiscoveryState>,
+    state_sender: Sender<Arc<DiscoveryState>>,
+    adjust_local_dc_process_control: CancellationToken,
     waiter: Arc<WaiterImpl>,
     config: BalancerConfig,
     preferred_endpoints: Vec<NodeInfo>,
-    location: String,
+    location: Arc<Mutex<String>>,
 }
 
 impl NearestDCBalancer {
@@ -239,13 +243,38 @@ impl NearestDCBalancer {
                 }
             }
         }
+
+        let discovery_state = Arc::new(DiscoveryState::default());
+        let self_location = Arc::new(Mutex::new(String::new()));
+        let location_updater = self_location.clone();
+        let (state_sender, state_reciever) = watch::channel(discovery_state.clone());
+        let adjust_local_dc_process_control = CancellationToken::new();
+        let adjust_local_dc_process_control_clone = adjust_local_dc_process_control.clone();
+
+        tokio::spawn(async move {
+            Self::adjust_local_dc(
+                location_updater,
+                state_reciever,
+                adjust_local_dc_process_control_clone,
+            )
+            .await
+        });
+
         Ok(Self {
-            discovery_state: Arc::new(DiscoveryState::default()),
+            discovery_state,
+            state_sender,
+            adjust_local_dc_process_control,
             waiter: Arc::new(WaiterImpl::new()),
             config,
             preferred_endpoints: Vec::new(),
-            location: String::new(),
+            location: Arc::new(Mutex::new(String::new())),
         })
+    }
+}
+
+impl Drop for NearestDCBalancer {
+    fn drop(&mut self) {
+        self.adjust_local_dc_process_control.cancel();
     }
 }
 
@@ -267,11 +296,12 @@ impl LoadBalancer for NearestDCBalancer {
             None => (),
         }
         self.discovery_state = discovery_state.clone();
+        let _ = self.state_sender.send(discovery_state.clone());
+        self.adjust_preferred_endpoints()?;
         if !self.discovery_state.is_empty() {
             self.waiter.set_received(Ok(()))
         }
-        self.adjust_local_dc()?;
-        self.adjust_preferred_endpoints()
+        Ok(())
     }
 
     fn waiter(&self) -> Box<dyn Waiter> {
@@ -284,6 +314,7 @@ impl LoadBalancer for NearestDCBalancer {
 }
 
 const NODES_PER_DC: usize = 5;
+const PING_TIMEOUT_SECS: u64 = 60;
 
 impl NearestDCBalancer {
     fn get_endpoint(&self, service: Service) -> YdbResult<Uri> {
@@ -293,8 +324,8 @@ impl NearestDCBalancer {
 
         match self.config.fallback_strategy {
             FallbackStrategy::Error => Err(YdbError::custom(format!(
-                "no available endpoints for service:{} in local dc:{}",
-                service, self.location
+                "no available endpoints for service:{}",
+                service
             ))),
             FallbackStrategy::BalanceWithOther => {
                 self.config
@@ -306,30 +337,60 @@ impl NearestDCBalancer {
         }
     }
 
-    fn adjust_local_dc(&mut self) -> YdbResult<()> {
-        let nodes = self.get_nodes()?;
-        let mut dc_to_nodes = self.split_endpoints_by_location(nodes);
-        let mut to_check = Vec::with_capacity(NODES_PER_DC * dc_to_nodes.keys().len());
-        dc_to_nodes
-            .iter_mut()
-            .for_each(|(_, endpoints)| to_check.append(self.get_random_endpoints(endpoints)));
-        let local_dc = self.find_local_dc(&to_check)?;
-        self.location = local_dc;
-        Ok(())
-    }
-
     fn adjust_preferred_endpoints(&mut self) -> YdbResult<()> {
-        self.preferred_endpoints = self
-            .get_nodes()?
+        let location = match self.location.try_lock() {
+            Ok(location_guard) => (*location_guard).clone(),
+            Err(_) => {
+                info!("could not acquire lock on location");
+                "".into()
+            }
+        };
+        self.preferred_endpoints = Self::extract_nodes(&self.discovery_state)?
             .into_iter()
-            .filter(|ep| ep.location == self.location)
+            .filter(|ep| ep.location == *location)
             .map(|ep| ep.clone())
             .collect_vec();
         Ok(())
     }
 
-    fn get_nodes(&self) -> YdbResult<&Vec<NodeInfo>> {
-        let nodes = self.discovery_state.get_all_nodes();
+    async fn adjust_local_dc(
+        self_location: Arc<Mutex<String>>,
+        mut state_reciever: watch::Receiver<Arc<DiscoveryState>>,
+        stop_ping_process: CancellationToken,
+    ) {
+        loop {
+            let new_state = state_reciever.borrow_and_update().clone();
+            match Self::extract_nodes(&new_state) {
+                Ok(some_nodes) => {
+                    let mut dc_to_nodes = Self::split_endpoints_by_location(some_nodes);
+                    let mut to_check = Vec::with_capacity(NODES_PER_DC * dc_to_nodes.keys().len());
+                    dc_to_nodes.iter_mut().for_each(|(_, endpoints)| {
+                        to_check.append(Self::get_random_endpoints(endpoints))
+                    });
+                    match Self::find_local_dc(&to_check).await {
+                        Ok(dc) => {
+                            info!("found new local dc:{}", dc);
+                            *self_location.lock().await = dc; // fast lock
+                        }
+                        Err(err) => {
+                            error!("error on search local dc:{}", err);
+                            continue;
+                        }
+                    }
+                }
+                Err(_) => continue,
+            }
+            if state_reciever.changed().await.is_err() {
+                return;
+            }
+            if stop_ping_process.is_cancelled() {
+                return;
+            }
+        }
+    }
+
+    fn extract_nodes(from_state: &Arc<DiscoveryState>) -> YdbResult<&Vec<NodeInfo>> {
+        let nodes = from_state.get_all_nodes();
         match nodes {
             None => Err(YdbError::Custom(format!(
                 "no endpoints on discovery update"
@@ -339,7 +400,6 @@ impl NearestDCBalancer {
     }
 
     fn split_endpoints_by_location<'a>(
-        &'a self,
         nodes: &'a Vec<NodeInfo>,
     ) -> HashMap<String, Vec<&NodeInfo>> {
         let mut dc_to_eps = HashMap::<String, Vec<&NodeInfo>>::new();
@@ -353,41 +413,49 @@ impl NearestDCBalancer {
         dc_to_eps
     }
 
-    fn get_random_endpoints<'a>(
-        &'a self,
-        dc_endpoints: &'a mut Vec<&'a NodeInfo>,
-    ) -> &mut Vec<&NodeInfo> {
+    fn get_random_endpoints<'a>(dc_endpoints: &'a mut Vec<&'a NodeInfo>) -> &mut Vec<&NodeInfo> {
         use rand::seq::SliceRandom;
         dc_endpoints.shuffle(&mut thread_rng());
         dc_endpoints.truncate(NODES_PER_DC);
         dc_endpoints
     }
 
-    fn find_local_dc(&self, to_check: &[&NodeInfo]) -> YdbResult<String> {
-        let addr_to_node = self.addr_to_node(to_check);
+    async fn find_local_dc(to_check: &[&NodeInfo]) -> YdbResult<String> {
+        let addr_to_node = Self::addr_to_node(to_check);
         if addr_to_node.is_empty() {
             return Err(YdbError::Custom(format!("no ip addresses for endpoints")));
         }
         let addrs = addr_to_node.keys();
-        match self.find_fastest_address(addrs.collect()) {
-            Some(fastest_address) => Ok(addr_to_node[&fastest_address].location.clone()),
-            None => Err(YdbError::custom("could not find fastest address")),
+        match Self::find_fastest_address(addrs.collect()).await {
+            Ok(fastest_address) => Ok(addr_to_node[&fastest_address].location.clone()),
+            Err(err) => {
+                error!("could not find fastest address:{}", err);
+                Err(err)
+            }
         }
     }
 
-    fn addr_to_node<'a>(&'a self, nodes: &[&'a NodeInfo]) -> HashMap<String, &NodeInfo> {
+    fn addr_to_node<'a>(nodes: &[&'a NodeInfo]) -> HashMap<String, &'a NodeInfo> {
         let mut addr_to_node = HashMap::<String, &NodeInfo>::with_capacity(2 * nodes.len()); // ipv4 + ipv6
         nodes.into_iter().for_each(|info| {
             let host: &str;
             let port: u16;
             match info.uri.host() {
                 Some(uri_host) => host = uri_host,
-                None => return,
+                None => {
+                    warn!("no host for uri:{}", info.uri);
+                    return;
+                }
             }
             match info.uri.port() {
                 Some(uri_port) => port = uri_port.as_u16(),
-                None => return,
+                None => {
+                    warn!("no port for uri:{}", info.uri);
+                    return;
+                }
             }
+
+            use std::net::ToSocketAddrs;
             let _ = (host, port).to_socket_addrs().and_then(|addrs| {
                 for addr in addrs {
                     addr_to_node.insert(addr.to_string(), info);
@@ -398,11 +466,14 @@ impl NearestDCBalancer {
         addr_to_node
     }
 
-    fn find_fastest_address(&self, addrs: Vec<&String>) -> Option<String> {
-        let stop_measure = CancellationToken::new();
+    async fn find_fastest_address(addrs: Vec<&String>) -> YdbResult<String> {
+        // Cancellation flow: timeout -> address collector -> address producers
+        let interrupt_via_timeout = CancellationToken::new();
+        let interrupt_collector_future = interrupt_via_timeout.child_token();
+        let stop_measure = interrupt_collector_future.child_token(); // (*)
+
         let (start_measure, _) = tokio::sync::broadcast::channel::<()>(1);
         let (addr_sender, mut addr_reciever) = tokio::sync::mpsc::channel::<Option<String>>(1);
-        let addr_count = addrs.len();
         let mut nursery = JoinSet::new();
 
         for addr in addrs {
@@ -432,39 +503,53 @@ impl NearestDCBalancer {
             });
         }
 
-        tokio::task::block_in_place(move || {
-            let _ = start_measure.send(());
-            Handle::current().block_on(async {
-                for _ in 0..addr_count {
-                    match self.wait_for_single_address(&mut addr_reciever).await {
-                        Some(address) => {
-                            stop_measure.cancel();
-                            self.join_all(&mut nursery).await;
-                            return Some(address);
+        let wait_first_some_or_cancel = async {
+            loop {
+                tokio::select! {
+                    biased; // check timeout first
+                    _ = interrupt_collector_future.cancelled() =>{
+                        Self::join_all(&mut nursery).await; // children will be cancelled due to tokens chaining, see (*)
+                        return YdbResult::Err("cancelled".into())
+                    }
+                    address_reciever_option = addr_reciever.recv() =>{
+                        match address_reciever_option {
+                            Some(address_option) => {
+                                match address_option {
+                                   Some(address) =>{
+                                    interrupt_collector_future.cancel(); // Cancel other producing children
+                                    Self::join_all(&mut nursery).await;
+                                    return YdbResult::Ok(address);
+                                   },
+                                   None => continue, // Some producer sent blank address -> wait others
+                                }
+                            },
+                            None => return YdbResult::Err("no fastest address".into()), // Channel closed, all producers have done measures
                         }
-                        None => continue,
                     }
                 }
-                None
-            })
-        })
-    }
+            }
+        };
 
-    async fn wait_for_single_address(
-        &self,
-        addr_reciever: &mut mpsc::Receiver<Option<String>>,
-    ) -> Option<String> {
-        match addr_reciever.recv().await {
-            Some(maybe_address) => maybe_address,
-            None => unreachable!(), // no channel closing while awaiting address
+        let _ = start_measure.send(());
+
+        match tokio::time::timeout(
+            Duration::from_secs(PING_TIMEOUT_SECS),
+            wait_first_some_or_cancel,
+        )
+        .await
+        {
+            Ok(address_option) => address_option,
+            Err(_) => {
+                interrupt_via_timeout.cancel();
+                YdbResult::Err("timeout while detecting fastest address".into())
+            }
         }
     }
 
-    async fn join_all(&self, awaitable: &mut JoinSet<()>) {
-        while let Some(_) = awaitable.join_next().await {}
+    async fn join_all(awaitable: &mut JoinSet<()>) {
+        while awaitable.join_next().await.is_some() {}
     }
 }
-
 #[cfg(test)]
 mod test {
     use super::*;
