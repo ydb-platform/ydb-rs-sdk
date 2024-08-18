@@ -5,19 +5,23 @@ use crate::waiter::{AllWaiter, Waiter, WaiterImpl};
 use http::Uri;
 use itertools::Itertools;
 use rand::thread_rng;
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
-use tokio::sync::watch::{Receiver, Sender};
-use tokio::sync::Mutex;
-use tokio::sync::{mpsc, watch};
-use tokio::task::{JoinHandle, JoinSet};
-use tokio::time::Timeout;
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
+use tokio::{
+    io::AsyncWriteExt,
+    net::TcpStream,
+    sync::{
+        broadcast, mpsc, watch,
+        watch::{Receiver, Sender},
+        Mutex,
+    },
+    task::JoinSet,
+};
 use tokio_util::sync::CancellationToken;
-use tracing::info;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 #[mockall::automock]
 pub(crate) trait LoadBalancer: Send + Sync + Waiter {
@@ -472,8 +476,8 @@ impl NearestDCBalancer {
         let interrupt_collector_future = interrupt_via_timeout.child_token();
         let stop_measure = interrupt_collector_future.child_token(); // (*)
 
-        let (start_measure, _) = tokio::sync::broadcast::channel::<()>(1);
-        let (addr_sender, mut addr_reciever) = tokio::sync::mpsc::channel::<Option<String>>(1);
+        let (start_measure, _) = broadcast::channel::<()>(1);
+        let (addr_sender, mut addr_reciever) = mpsc::channel::<Option<String>>(1);
         let mut nursery = JoinSet::new();
 
         for addr in addrs {
