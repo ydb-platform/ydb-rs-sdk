@@ -5,6 +5,7 @@ use crate::waiter::{AllWaiter, Waiter, WaiterImpl};
 use http::Uri;
 use itertools::Itertools;
 use rand::thread_rng;
+use std::borrow::{Borrow, BorrowMut};
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
@@ -203,6 +204,11 @@ pub(crate) struct BalancerConfig {
     fallback_balancer: Option<Box<dyn LoadBalancer>>,
 }
 
+#[derive(Default)]
+struct BalancerState {
+    preferred_endpoints: Vec<NodeInfo>,
+}
+
 // What will balancer do if there is no available endpoints at local dc
 #[derive(PartialEq, Eq)]
 pub(crate) enum FallbackStrategy {
@@ -222,11 +228,10 @@ impl Default for BalancerConfig {
 pub(crate) struct NearestDCBalancer {
     discovery_state: Arc<DiscoveryState>,
     state_sender: Sender<Arc<DiscoveryState>>,
-    adjust_local_dc_process_control: CancellationToken,
+    ping_token: CancellationToken,
     waiter: Arc<WaiterImpl>,
     config: BalancerConfig,
-    preferred_endpoints: Vec<NodeInfo>,
-    location: Arc<Mutex<String>>,
+    balancer_state: Arc<Mutex<BalancerState>>,
 }
 
 impl NearestDCBalancer {
@@ -249,17 +254,22 @@ impl NearestDCBalancer {
         }
 
         let discovery_state = Arc::new(DiscoveryState::default());
-        let self_location = Arc::new(Mutex::new(String::new()));
-        let location_updater = self_location.clone();
+        let balancer_state = Arc::new(Mutex::new(BalancerState::default()));
+        let balancer_state_updater = balancer_state.clone();
         let (state_sender, state_reciever) = watch::channel(discovery_state.clone());
-        let adjust_local_dc_process_control = CancellationToken::new();
-        let adjust_local_dc_process_control_clone = adjust_local_dc_process_control.clone();
+
+        let ping_token = CancellationToken::new();
+        let ping_token_clone = ping_token.clone();
+
+        let waiter = Arc::new(WaiterImpl::new());
+        let waiter_clone = waiter.clone();
 
         tokio::spawn(async move {
             Self::adjust_local_dc(
-                location_updater,
+                balancer_state_updater,
                 state_reciever,
-                adjust_local_dc_process_control_clone,
+                ping_token_clone,
+                waiter_clone,
             )
             .await
         });
@@ -267,18 +277,17 @@ impl NearestDCBalancer {
         Ok(Self {
             discovery_state,
             state_sender,
-            adjust_local_dc_process_control,
-            waiter: Arc::new(WaiterImpl::new()),
+            ping_token,
+            waiter,
             config,
-            preferred_endpoints: Vec::new(),
-            location: Arc::new(Mutex::new(String::new())),
+            balancer_state,
         })
     }
 }
 
 impl Drop for NearestDCBalancer {
     fn drop(&mut self) {
-        self.adjust_local_dc_process_control.cancel();
+        self.ping_token.cancel();
     }
 }
 
@@ -299,12 +308,9 @@ impl LoadBalancer for NearestDCBalancer {
             Some(balancer) => balancer.set_discovery_state(discovery_state)?,
             None => (),
         }
+        println!("sending signal to start ping");
         self.discovery_state = discovery_state.clone();
         let _ = self.state_sender.send(discovery_state.clone());
-        self.adjust_preferred_endpoints()?;
-        if !self.discovery_state.is_empty() {
-            self.waiter.set_received(Ok(()))
-        }
         Ok(())
     }
 
@@ -322,49 +328,39 @@ const PING_TIMEOUT_SECS: u64 = 60;
 
 impl NearestDCBalancer {
     fn get_endpoint(&self, service: Service) -> YdbResult<Uri> {
-        for ep in self.preferred_endpoints.iter() {
-            return YdbResult::Ok(ep.uri.clone());
-        }
-
-        match self.config.fallback_strategy {
-            FallbackStrategy::Error => Err(YdbError::custom(format!(
-                "no available endpoints for service:{}",
-                service
-            ))),
-            FallbackStrategy::BalanceWithOther => {
-                self.config
-                    .fallback_balancer
-                    .as_ref()
-                    .unwrap() // unwrap is safe [checks inside ::new()]
-                    .endpoint(service)
+        match self.balancer_state.try_lock() {
+            Ok(state_guard) => {
+                for ep in state_guard.borrow().preferred_endpoints.iter() {
+                    return YdbResult::Ok(ep.uri.clone());
+                }
+                match self.config.fallback_strategy {
+                    FallbackStrategy::Error => Err(YdbError::custom(format!(
+                        "no available endpoints for service:{}",
+                        service
+                    ))),
+                    FallbackStrategy::BalanceWithOther => {
+                        info!("trying another balancer...");
+                        self.config
+                            .fallback_balancer
+                            .as_ref()
+                            .unwrap() // unwrap is safe [checks inside ::new()]
+                            .endpoint(service)
+                    }
+                }
             }
+            Err(_) => Err(YdbError::Custom("balancer is updating its state".into())),
         }
-    }
-
-    fn adjust_preferred_endpoints(&mut self) -> YdbResult<()> {
-        let location = match self.location.try_lock() {
-            Ok(location_guard) => (*location_guard).clone(),
-            Err(_) => {
-                info!("could not acquire lock on location");
-                "".into()
-            }
-        };
-        self.preferred_endpoints = Self::extract_nodes(&self.discovery_state)?
-            .into_iter()
-            .filter(|ep| ep.location == *location)
-            .map(|ep| ep.clone())
-            .collect_vec();
-        Ok(())
     }
 
     async fn adjust_local_dc(
-        self_location: Arc<Mutex<String>>,
+        balancer_state: Arc<Mutex<BalancerState>>,
         mut state_reciever: watch::Receiver<Arc<DiscoveryState>>,
         stop_ping_process: CancellationToken,
+        waiter: Arc<WaiterImpl>,
     ) {
         loop {
-            let new_state = state_reciever.borrow_and_update().clone();
-            match Self::extract_nodes(&new_state) {
+            let new_discovery_state = state_reciever.borrow_and_update().clone();
+            match Self::extract_nodes(&new_discovery_state) {
                 Ok(some_nodes) => {
                     let mut dc_to_nodes = Self::split_endpoints_by_location(some_nodes);
                     let mut to_check = Vec::with_capacity(NODES_PER_DC * dc_to_nodes.keys().len());
@@ -373,10 +369,13 @@ impl NearestDCBalancer {
                     });
                     match Self::find_local_dc(&to_check).await {
                         Ok(dc) => {
+                            println!("found new local dc:{}", dc);
                             info!("found new local dc:{}", dc);
-                            *self_location.lock().await = dc; // fast lock
+                            Self::adjust_preferred_endpoints(&balancer_state, some_nodes, dc).await;
+                            waiter.set_received(Ok(()));
                         }
                         Err(err) => {
+                            println!("error on search local dc:{}", err);
                             error!("error on search local dc:{}", err);
                             continue;
                         }
@@ -384,13 +383,27 @@ impl NearestDCBalancer {
                 }
                 Err(_) => continue,
             }
-            if state_reciever.changed().await.is_err() {
-                return;
-            }
-            if stop_ping_process.is_cancelled() {
+            if stop_ping_process.is_cancelled() || state_reciever.changed().await.is_err() {
                 return;
             }
         }
+    }
+
+    async fn adjust_preferred_endpoints(
+        balancer_state: &Arc<Mutex<BalancerState>>,
+        new_nodes: &Vec<NodeInfo>,
+        local_dc: String,
+    ) {
+        info!("adjusting endpoints");
+        let new_preferred_endpoints = new_nodes
+            .into_iter()
+            .filter(|ep| ep.location == local_dc)
+            .map(|ep| ep.clone())
+            .collect_vec();
+        println!("new preferred endpoints:{:?}", new_preferred_endpoints);
+        (balancer_state.lock().await) // fast lock
+            .borrow_mut()
+            .preferred_endpoints = new_preferred_endpoints;
     }
 
     fn extract_nodes(from_state: &Arc<DiscoveryState>) -> YdbResult<&Vec<NodeInfo>> {
@@ -433,6 +446,7 @@ impl NearestDCBalancer {
         match Self::find_fastest_address(addrs.collect()).await {
             Ok(fastest_address) => Ok(addr_to_node[&fastest_address].location.clone()),
             Err(err) => {
+                println!("could not find fastest address:{}", err);
                 error!("could not find fastest address:{}", err);
                 Err(err)
             }
@@ -447,6 +461,7 @@ impl NearestDCBalancer {
             match info.uri.host() {
                 Some(uri_host) => host = uri_host,
                 None => {
+                    println!("no host for uri:{}", info.uri);
                     warn!("no host for uri:{}", info.uri);
                     return;
                 }
@@ -454,6 +469,7 @@ impl NearestDCBalancer {
             match info.uri.port() {
                 Some(uri_port) => port = uri_port.as_u16(),
                 None => {
+                    println!("no port for uri:{}", info.uri);
                     warn!("no port for uri:{}", info.uri);
                     return;
                 }
@@ -558,6 +574,7 @@ impl NearestDCBalancer {
 mod test {
     use super::*;
     use crate::discovery::NodeInfo;
+    use crate::grpc_wrapper::raw_services;
     use crate::grpc_wrapper::raw_services::Service::Table;
     use mockall::predicate;
     use std::collections::HashMap;
