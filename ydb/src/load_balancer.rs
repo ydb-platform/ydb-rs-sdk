@@ -240,7 +240,8 @@ impl NearestDCBalancer {
             Some(_) => {
                 if config.fallback_strategy == FallbackStrategy::Error {
                     return Err(YdbError::Custom(
-                        "fallback strategy is Error but balancer was provided".to_string(),
+                        "fallback strategy is \"Error\" but fallback balancer was provided"
+                            .to_string(),
                     ));
                 }
             }
@@ -308,7 +309,6 @@ impl LoadBalancer for NearestDCBalancer {
             Some(balancer) => balancer.set_discovery_state(discovery_state)?,
             None => (),
         }
-        println!("sending signal to start ping");
         self.discovery_state = discovery_state.clone();
         let _ = self.state_sender.send(discovery_state.clone());
         Ok(())
@@ -339,7 +339,7 @@ impl NearestDCBalancer {
                         service
                     ))),
                     FallbackStrategy::BalanceWithOther => {
-                        info!("trying another balancer...");
+                        info!("trying fallback balancer...");
                         self.config
                             .fallback_balancer
                             .as_ref()
@@ -348,7 +348,9 @@ impl NearestDCBalancer {
                     }
                 }
             }
-            Err(_) => Err(YdbError::Custom("balancer is updating its state".into())),
+            Err(_) => Err(YdbError::Custom(
+                "balancer is updating its state".to_string(),
+            )),
         }
     }
 
@@ -369,13 +371,11 @@ impl NearestDCBalancer {
                     });
                     match Self::find_local_dc(&to_check).await {
                         Ok(dc) => {
-                            println!("found new local dc:{}", dc);
                             info!("found new local dc:{}", dc);
                             Self::adjust_preferred_endpoints(&balancer_state, some_nodes, dc).await;
                             waiter.set_received(Ok(()));
                         }
                         Err(err) => {
-                            println!("error on search local dc:{}", err);
                             error!("error on search local dc:{}", err);
                             continue;
                         }
@@ -400,7 +400,6 @@ impl NearestDCBalancer {
             .filter(|ep| ep.location == local_dc)
             .map(|ep| ep.clone())
             .collect_vec();
-        println!("new preferred endpoints:{:?}", new_preferred_endpoints);
         (balancer_state.lock().await) // fast lock
             .borrow_mut()
             .preferred_endpoints = new_preferred_endpoints;
@@ -446,7 +445,6 @@ impl NearestDCBalancer {
         match Self::find_fastest_address(addrs.collect()).await {
             Ok(fastest_address) => Ok(addr_to_node[&fastest_address].location.clone()),
             Err(err) => {
-                println!("could not find fastest address:{}", err);
                 error!("could not find fastest address:{}", err);
                 Err(err)
             }
@@ -461,7 +459,6 @@ impl NearestDCBalancer {
             match info.uri.host() {
                 Some(uri_host) => host = uri_host,
                 None => {
-                    println!("no host for uri:{}", info.uri);
                     warn!("no host for uri:{}", info.uri);
                     return;
                 }
@@ -469,7 +466,6 @@ impl NearestDCBalancer {
             match info.uri.port() {
                 Some(uri_port) => port = uri_port.as_u16(),
                 None => {
-                    println!("no port for uri:{}", info.uri);
                     warn!("no port for uri:{}", info.uri);
                     return;
                 }
@@ -574,9 +570,9 @@ impl NearestDCBalancer {
 mod test {
     use super::*;
     use crate::discovery::NodeInfo;
-    use crate::grpc_wrapper::raw_services;
     use crate::grpc_wrapper::raw_services::Service::Table;
     use mockall::predicate;
+    use ntest::assert_true;
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::atomic::AtomicUsize;
@@ -699,6 +695,65 @@ mod test {
         assert_eq!(map.len(), 2);
         assert!(*map.get(one.to_string().as_str()).unwrap() > 30);
         assert!(*map.get(two.to_string().as_str()).unwrap() > 30);
+        Ok(())
+    }
+
+    #[test]
+    fn split_by_location() -> YdbResult<()> {
+        let nodes = vec![
+            NodeInfo::new(Uri::from_str("http://one:213")?, "A".to_string()),
+            NodeInfo::new(Uri::from_str("http://two:213")?, "A".to_string()),
+            NodeInfo::new(Uri::from_str("http://three:213")?, "B".to_string()),
+            NodeInfo::new(Uri::from_str("http://four:213")?, "B".to_string()),
+            NodeInfo::new(Uri::from_str("http://five:213")?, "C".to_string()),
+        ];
+        let splitted = NearestDCBalancer::split_endpoints_by_location(&nodes);
+        assert_eq!(splitted.keys().len(), 3);
+        assert_eq!(splitted["A"].len(), 2);
+        assert_eq!(splitted["B"].len(), 2);
+        assert_eq!(splitted["C"].len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn choose_random_endpoints() -> YdbResult<()> {
+        let nodes = vec![
+            NodeInfo::new(Uri::from_str("http://one:213")?, "C".to_string()),
+            NodeInfo::new(Uri::from_str("http://two:213")?, "C".to_string()),
+            NodeInfo::new(Uri::from_str("http://three:213")?, "C".to_string()),
+            NodeInfo::new(Uri::from_str("http://four:213")?, "C".to_string()),
+            NodeInfo::new(Uri::from_str("http://five:213")?, "C".to_string()),
+            NodeInfo::new(Uri::from_str("http://seven:213")?, "C".to_string()),
+            NodeInfo::new(Uri::from_str("http://eight:213")?, "C".to_string()),
+            NodeInfo::new(Uri::from_str("http://nine:213")?, "C".to_string()),
+        ];
+
+        let mut refs = nodes.iter().collect_vec();
+        let nodes_clone = refs.clone();
+        let random_subset = NearestDCBalancer::get_random_endpoints(&mut refs);
+
+        assert_eq!(random_subset.len(), NODES_PER_DC);
+        for node in random_subset {
+            assert_true!(nodes_clone.contains(node))
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn extract_addrs_and_map_them() -> YdbResult<()> {
+
+        let one = NodeInfo::new(Uri::from_str("http://localhost:123")?, "C".to_string());
+        let two =  NodeInfo::new(Uri::from_str("http://localhost:321")?, "C".to_string());
+        let nodes = vec![&one, &two];
+        let map = NearestDCBalancer::addr_to_node(&nodes);
+
+        assert_eq!(map.keys().len(), 4); // ipv4 + ipv6 on each
+        assert_true!(map.keys().contains(&"127.0.0.1:123".to_string()));
+        assert_true!(map.keys().contains(&"[::1]:123".to_string()));
+        assert!(map["127.0.0.1:123"].eq(&one));
+        assert!(map["127.0.0.1:123"].eq(map["[::1]:123"]));
+
         Ok(())
     }
 }

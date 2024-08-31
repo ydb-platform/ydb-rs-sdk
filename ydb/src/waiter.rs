@@ -76,7 +76,6 @@ impl AllWaiter {
     }
 }
 
-// AllWaiter should point to group of Arc Waiters
 #[async_trait::async_trait]
 impl Waiter for AllWaiter {
     async fn wait(&self) -> YdbResult<()> {
@@ -88,7 +87,7 @@ impl Waiter for AllWaiter {
         futures_util::future::join_all(awaitables)
             .await
             .into_iter()
-            .collect::<Result<Vec<()>, YdbError>>()?; // If any waiter produced error - return it, otherwise - Ok
+            .collect::<Result<Vec<()>, YdbError>>()?; // If some waiters produced error - return first, otherwise - Ok
         Ok(())
     }
 }
