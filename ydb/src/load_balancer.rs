@@ -361,6 +361,16 @@ impl NearestDCBalancer {
         waiter: Arc<WaiterImpl>,
     ) {
         loop {
+            tokio::select! {
+                _ = stop_ping_process.cancelled() => {
+                    return
+                }
+                result = state_reciever.changed() =>{
+                    if result.is_err(){ // sender have been dropped
+                        return
+                    }
+                }
+            }
             let new_discovery_state = state_reciever.borrow_and_update().clone();
             match Self::extract_nodes(&new_discovery_state) {
                 Ok(some_nodes) => {
@@ -382,9 +392,6 @@ impl NearestDCBalancer {
                     }
                 }
                 Err(_) => continue,
-            }
-            if stop_ping_process.is_cancelled() || state_reciever.changed().await.is_err() {
-                return;
             }
         }
     }
@@ -442,7 +449,9 @@ impl NearestDCBalancer {
             return Err(YdbError::Custom(format!("no ip addresses for endpoints")));
         }
         let addrs = addr_to_node.keys();
-        match Self::find_fastest_address(addrs.collect()).await {
+        match Self::find_fastest_address(addrs.collect(), Duration::from_secs(PING_TIMEOUT_SECS))
+            .await
+        {
             Ok(fastest_address) => Ok(addr_to_node[&fastest_address].location.clone()),
             Err(err) => {
                 error!("could not find fastest address:{}", err);
@@ -470,7 +479,7 @@ impl NearestDCBalancer {
                     return;
                 }
             }
-
+            println!("host:{}, port:{}", host, port);
             use std::net::ToSocketAddrs;
             let _ = (host, port).to_socket_addrs().and_then(|addrs| {
                 for addr in addrs {
@@ -482,14 +491,17 @@ impl NearestDCBalancer {
         addr_to_node
     }
 
-    async fn find_fastest_address(addrs: Vec<&String>) -> YdbResult<String> {
+    async fn find_fastest_address(addrs: Vec<&String>, timeout: Duration) -> YdbResult<String> {
+        println!("addrs:{:?}", addrs);
+
         // Cancellation flow: timeout -> address collector -> address producers
         let interrupt_via_timeout = CancellationToken::new();
         let interrupt_collector_future = interrupt_via_timeout.child_token();
         let stop_measure = interrupt_collector_future.child_token(); // (*)
 
         let (start_measure, _) = broadcast::channel::<()>(1);
-        let (addr_sender, mut addr_reciever) = mpsc::channel::<Option<String>>(1);
+        let buffer_cap = if addrs.len() > 0 { addrs.len() } else { 1 };
+        let (addr_sender, mut addr_reciever) = mpsc::channel::<Option<String>>(buffer_cap);
         let mut nursery = JoinSet::new();
 
         for addr in addrs {
@@ -547,14 +559,14 @@ impl NearestDCBalancer {
         };
 
         let _ = start_measure.send(());
+        println!("start measure");
 
-        match tokio::time::timeout(
-            Duration::from_secs(PING_TIMEOUT_SECS),
-            wait_first_some_or_cancel,
-        )
-        .await
-        {
-            Ok(address_option) => address_option,
+        match tokio::time::timeout(timeout, wait_first_some_or_cancel).await {
+            Ok(address_option) => {
+                println!("got fastest address:{:?}", address_option);
+
+                address_option
+            }
             Err(_) => {
                 interrupt_via_timeout.cancel();
                 YdbResult::Err("timeout while detecting fastest address".into())
@@ -578,6 +590,8 @@ mod test {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::time::Duration;
+    use tokio::net::TcpListener;
+    use tokio::time::timeout;
     use tracing::trace;
 
     #[test]
@@ -742,9 +756,8 @@ mod test {
 
     #[test]
     fn extract_addrs_and_map_them() -> YdbResult<()> {
-
         let one = NodeInfo::new(Uri::from_str("http://localhost:123")?, "C".to_string());
-        let two =  NodeInfo::new(Uri::from_str("http://localhost:321")?, "C".to_string());
+        let two = NodeInfo::new(Uri::from_str("http://localhost:321")?, "C".to_string());
         let nodes = vec![&one, &two];
         let map = NearestDCBalancer::addr_to_node(&nodes);
 
@@ -754,6 +767,417 @@ mod test {
         assert!(map["127.0.0.1:123"].eq(&one));
         assert!(map["127.0.0.1:123"].eq(map["[::1]:123"]));
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn detect_fastest_addr_just_some() -> YdbResult<()> {
+        let l1 = TcpListener::bind("127.0.0.1:0").await?;
+        let l2 = TcpListener::bind("127.0.0.1:0").await?;
+        let l3 = TcpListener::bind("127.0.0.1:0").await?;
+
+        let l1_addr = l1.local_addr()?;
+        let l2_addr = l2.local_addr()?;
+        let l3_addr = l3.local_addr()?;
+
+        println!("Listener №1 on: {}", l1_addr);
+        println!("Listener №2 on: {}", l2_addr);
+        println!("Listener №3 on: {}", l3_addr);
+
+        let nodes = vec![
+            l1_addr.to_string(),
+            l2_addr.to_string(),
+            l3_addr.to_string(),
+        ];
+
+        for _ in 0..100 {
+            let addr = NearestDCBalancer::find_fastest_address(
+                nodes.iter().collect_vec(),
+                Duration::from_secs(PING_TIMEOUT_SECS),
+            )
+            .await?;
+            assert!(nodes.contains(&addr))
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn detect_fastest_addr_with_fault() -> YdbResult<()> {
+        let l1 = TcpListener::bind("127.0.0.1:0").await?;
+        let l2 = TcpListener::bind("127.0.0.1:0").await?;
+        let l3 = TcpListener::bind("127.0.0.1:0").await?;
+
+        let l1_addr = l1.local_addr()?;
+        let l2_addr = l2.local_addr()?;
+        let l3_addr = l3.local_addr()?;
+
+        println!("Listener №1 on: {}", l1_addr);
+        println!("Listener №2 on: {}", l2_addr);
+        println!("Listener №3 on: {}", l3_addr);
+
+        let nodes = vec![
+            l1_addr.to_string(),
+            l2_addr.to_string(),
+            l3_addr.to_string(),
+        ];
+
+        drop(l1);
+
+        for _ in 0..100 {
+            let addr = NearestDCBalancer::find_fastest_address(
+                nodes.iter().collect_vec(),
+                Duration::from_secs(PING_TIMEOUT_SECS),
+            )
+            .await?;
+            assert!(nodes.contains(&addr) && addr != l1_addr.to_string())
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn detect_fastest_addr_one_alive() -> YdbResult<()> {
+        let l1 = TcpListener::bind("127.0.0.1:0").await?;
+        let l2 = TcpListener::bind("127.0.0.1:0").await?;
+        let l3 = TcpListener::bind("127.0.0.1:0").await?;
+
+        let l1_addr = l1.local_addr()?;
+        let l2_addr = l2.local_addr()?;
+        let l3_addr = l3.local_addr()?;
+
+        println!("Listener №1 on: {}", l1_addr);
+        println!("Listener №2 on: {}", l2_addr);
+        println!("Listener №3 on: {}", l3_addr);
+
+        let nodes = vec![
+            l1_addr.to_string(),
+            l2_addr.to_string(),
+            l3_addr.to_string(),
+        ];
+
+        drop(l1);
+        drop(l2);
+
+        for _ in 0..100 {
+            let addr = NearestDCBalancer::find_fastest_address(
+                nodes.iter().collect_vec(),
+                Duration::from_secs(PING_TIMEOUT_SECS),
+            )
+            .await?;
+            assert!(addr == l3_addr.to_string())
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn detect_fastest_addr_timeout() -> YdbResult<()> {
+        let l1 = TcpListener::bind("127.0.0.1:0").await?;
+        let l2 = TcpListener::bind("127.0.0.1:0").await?;
+        let l3 = TcpListener::bind("127.0.0.1:0").await?;
+
+        let l1_addr = l1.local_addr()?;
+        let l2_addr = l2.local_addr()?;
+        let l3_addr = l3.local_addr()?;
+
+        println!("Listener №1 on: {}", l1_addr);
+        println!("Listener №2 on: {}", l2_addr);
+        println!("Listener №3 on: {}", l3_addr);
+
+        let nodes = vec![
+            l1_addr.to_string(),
+            l2_addr.to_string(),
+            l3_addr.to_string(),
+        ];
+
+        drop(l1);
+        drop(l2);
+        drop(l3);
+
+        let result = NearestDCBalancer::find_fastest_address(
+            nodes.iter().collect_vec(),
+            Duration::from_secs(3),
+        )
+        .await;
+        match result {
+            Ok(_) => unreachable!(),
+            Err(err) => {
+                assert_eq!(
+                    err.to_string(),
+                    "Custom(\"timeout while detecting fastest address\")"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn no_addr_timeout() -> YdbResult<()> {
+        let result =
+            NearestDCBalancer::find_fastest_address(Vec::new(), Duration::from_secs(3)).await;
+        match result {
+            Ok(_) => unreachable!(),
+            Err(err) => {
+                assert_eq!(
+                    err.to_string(),
+                    "Custom(\"timeout while detecting fastest address\")"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn detect_fastest_addr() -> YdbResult<()> {
+        let l1 = TcpListener::bind("127.0.0.1:0").await?;
+        let l2 = TcpListener::bind("127.0.0.1:0").await?;
+        let l3 = TcpListener::bind("127.0.0.1:0").await?;
+
+        let l1_addr = l1.local_addr()?;
+        let l2_addr = l2.local_addr()?;
+        let l3_addr = l3.local_addr()?;
+
+        println!("Listener №1 on: {}", l1_addr);
+        println!("Listener №2 on: {}", l2_addr);
+        println!("Listener №3 on: {}", l3_addr);
+
+        let nodes = vec![
+            l1_addr.to_string(),
+            l2_addr.to_string(),
+            l3_addr.to_string(),
+        ];
+
+        drop(l1);
+        drop(l2);
+        drop(l3);
+
+        let result = NearestDCBalancer::find_fastest_address(
+            nodes.iter().collect_vec(),
+            Duration::from_secs(3),
+        )
+        .await;
+        match result {
+            Ok(_) => unreachable!(),
+            Err(err) => {
+                assert_eq!(
+                    err.to_string(),
+                    "Custom(\"timeout while detecting fastest address\")"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn adjusting_dc() -> YdbResult<()> {
+        let l1 = TcpListener::bind("127.0.0.1:0").await?;
+        let l2 = TcpListener::bind("127.0.0.1:0").await?;
+        let l3 = TcpListener::bind("127.0.0.1:0").await?;
+
+        let l1_addr = l1.local_addr()?;
+        let l2_addr = l2.local_addr()?;
+        let l3_addr = l3.local_addr()?;
+
+        println!("Listener №1 on: {}", l1_addr);
+        println!("Listener №2 on: {}", l2_addr);
+        println!("Listener №3 on: {}", l3_addr);
+
+        let discovery_state = Arc::new(DiscoveryState::default());
+        let balancer_state = Arc::new(Mutex::new(BalancerState::default()));
+        let balancer_state_updater = balancer_state.clone();
+        let (state_sender, state_reciever) = watch::channel(discovery_state.clone());
+
+        let ping_token = CancellationToken::new();
+        let ping_token_clone = ping_token.clone();
+
+        let waiter = Arc::new(WaiterImpl::new());
+        let waiter_clone = waiter.clone();
+
+        let updater = tokio::spawn(async move {
+            NearestDCBalancer::adjust_local_dc(
+                balancer_state_updater,
+                state_reciever,
+                ping_token_clone,
+                waiter_clone,
+            )
+            .await
+        });
+
+        let updated_state = Arc::new(
+            DiscoveryState::default()
+                .with_node_info(
+                    Table,
+                    NodeInfo::new(
+                        Uri::from_str(l1_addr.to_string().as_str()).unwrap(),
+                        "A".to_string(),
+                    ),
+                )
+                .with_node_info(
+                    Table,
+                    NodeInfo::new(
+                        Uri::from_str(l2_addr.to_string().as_str()).unwrap(),
+                        "B".to_string(),
+                    ),
+                )
+                .with_node_info(
+                    Table,
+                    NodeInfo::new(
+                        Uri::from_str(l2_addr.to_string().as_str()).unwrap(),
+                        "C".to_string(),
+                    ),
+                ),
+        );
+        assert!(
+            (balancer_state.lock().await)
+                .borrow()
+                .preferred_endpoints
+                .len()
+                == 0 // no endpoints
+        );
+        let _ = state_sender.send(updated_state);
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_true!(timeout(Duration::from_secs(3), waiter.wait()).await.is_ok()); // should not wait
+        assert!(
+            (balancer_state.lock().await)
+                .borrow()
+                .preferred_endpoints
+                .len()
+                == 1 // only one endpoint in each dc
+        );
+        let updated_state_next = Arc::new(
+            DiscoveryState::default()
+                .with_node_info(
+                    Table,
+                    NodeInfo::new(
+                        Uri::from_str(l1_addr.to_string().as_str()).unwrap(),
+                        "A".to_string(),
+                    ),
+                )
+                .with_node_info(
+                    Table,
+                    NodeInfo::new(
+                        Uri::from_str(l2_addr.to_string().as_str()).unwrap(),
+                        "A".to_string(),
+                    ),
+                ),
+        );
+        let _ = state_sender.send(updated_state_next);
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_true!(timeout(Duration::from_secs(3), waiter.wait()).await.is_ok()); // should not wait
+        assert!(
+            (balancer_state.lock().await)
+                .borrow()
+                .preferred_endpoints
+                .len()
+                == 2 // both endpoints in same dc
+        );
+        ping_token.cancel(); // reciever stops wait for state change
+        let _ = tokio::join!(updater); // should join
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nearest_dc_balancer_integration_with_error_fallback() -> YdbResult<()> {
+        let balancer = NearestDCBalancer::new(BalancerConfig {
+            fallback_strategy: FallbackStrategy::Error,
+            fallback_balancer: None,
+        })
+        .unwrap();
+
+        let sh = SharedLoadBalancer::new_with_balancer(Box::new(balancer));
+
+        match sh.endpoint(Table) {
+            Ok(_) => unreachable!(),
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "Custom(\"no available endpoints for service:table_service\")".to_string()
+            ),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nearest_dc_balancer_integration_with_other_fallback_error() -> YdbResult<()> {
+        let balancer = NearestDCBalancer::new(BalancerConfig {
+            fallback_strategy: FallbackStrategy::BalanceWithOther,
+            fallback_balancer: Some(Box::new(RandomLoadBalancer::new())),
+        })
+        .unwrap();
+
+        let sh = SharedLoadBalancer::new_with_balancer(Box::new(balancer));
+
+        match sh.endpoint(Table) {
+            Ok(_) => unreachable!(),
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "Custom(\"empty endpoint list for service: table_service\")".to_string()
+            ),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn nearest_dc_balancer_integration() -> YdbResult<()> {
+        let l1 = TcpListener::bind("127.0.0.1:0").await?;
+        let l2 = TcpListener::bind("127.0.0.1:0").await?;
+
+        let l1_addr = l1.local_addr()?;
+        let l2_addr = l2.local_addr()?;
+
+        println!("Listener №1 on: {}", l1_addr);
+        println!("Listener №2 on: {}", l2_addr);
+
+        let balancer = NearestDCBalancer::new(BalancerConfig {
+            fallback_strategy: FallbackStrategy::Error,
+            fallback_balancer: None,
+        })
+        .unwrap();
+
+        let sh = SharedLoadBalancer::new_with_balancer(Box::new(balancer));
+        let self_updater = sh.clone();
+        let (state_sender, state_reciever) =
+            watch::channel::<Arc<DiscoveryState>>(Arc::new(DiscoveryState::default()));
+
+        tokio::spawn(async move { update_load_balancer(self_updater, state_reciever).await });
+
+        match sh.endpoint(Table) {
+            Ok(_) => unreachable!(),
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "Custom(\"no available endpoints for service:table_service\")".to_string()
+            ),
+        }
+
+        let updated_state = Arc::new(
+            DiscoveryState::default()
+                .with_node_info(
+                    Table,
+                    NodeInfo::new(
+                        Uri::from_str(l1_addr.to_string().as_str()).unwrap(),
+                        "A".to_string(),
+                    ),
+                )
+                .with_node_info(
+                    Table,
+                    NodeInfo::new(
+                        Uri::from_str(l2_addr.to_string().as_str()).unwrap(),
+                        "A".to_string(),
+                    ),
+                ),
+        );
+        
+        let _ = state_sender.send(updated_state);
+        
+        sh.wait().await?;
+        
+        match sh.endpoint(Table) {
+            Ok(uri) => {
+                let addr = uri.host().unwrap();
+                assert!(addr == "127.0.0.1" || addr == "[::1]")
+            }
+            Err(err) => unreachable!("{}", err.to_string()),
+        }
         Ok(())
     }
 }
