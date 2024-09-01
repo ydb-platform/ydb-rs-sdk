@@ -479,7 +479,6 @@ impl NearestDCBalancer {
                     return;
                 }
             }
-            println!("host:{}, port:{}", host, port);
             use std::net::ToSocketAddrs;
             let _ = (host, port).to_socket_addrs().and_then(|addrs| {
                 for addr in addrs {
@@ -492,7 +491,6 @@ impl NearestDCBalancer {
     }
 
     async fn find_fastest_address(addrs: Vec<&String>, timeout: Duration) -> YdbResult<String> {
-        println!("addrs:{:?}", addrs);
 
         // Cancellation flow: timeout -> address collector -> address producers
         let interrupt_via_timeout = CancellationToken::new();
@@ -559,12 +557,9 @@ impl NearestDCBalancer {
         };
 
         let _ = start_measure.send(());
-        println!("start measure");
 
         match tokio::time::timeout(timeout, wait_first_some_or_cancel).await {
             Ok(address_option) => {
-                println!("got fastest address:{:?}", address_option);
-
                 address_option
             }
             Err(_) => {
