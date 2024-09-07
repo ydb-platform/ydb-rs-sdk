@@ -201,7 +201,6 @@ pub(crate) async fn update_load_balancer(
 
 pub(crate) struct BalancerConfig {
     fallback_strategy: FallbackStrategy,
-    fallback_balancer: Option<Box<dyn LoadBalancer>>,
 }
 
 #[derive(Default)]
@@ -210,17 +209,17 @@ struct BalancerState {
 }
 
 // What will balancer do if there is no available endpoints at local dc
-#[derive(PartialEq, Eq)]
 pub(crate) enum FallbackStrategy {
-    Error,            // Just throw error
-    BalanceWithOther, // Use another balancer
+    Error,                                   // Just throw error
+    BalanceWithOther(Box<dyn LoadBalancer>), // Use another balancer
 }
 
 impl Default for BalancerConfig {
     fn default() -> Self {
         BalancerConfig {
-            fallback_strategy: FallbackStrategy::BalanceWithOther,
-            fallback_balancer: Some(Box::new(RandomLoadBalancer::new())),
+            fallback_strategy: FallbackStrategy::BalanceWithOther(Box::new(
+                RandomLoadBalancer::new(),
+            )),
         }
     }
 }
@@ -236,24 +235,6 @@ pub(crate) struct NearestDCBalancer {
 
 impl NearestDCBalancer {
     pub(crate) fn new(config: BalancerConfig) -> YdbResult<Self> {
-        match config.fallback_balancer.as_ref() {
-            Some(_) => {
-                if config.fallback_strategy == FallbackStrategy::Error {
-                    return Err(YdbError::Custom(
-                        "fallback strategy is \"Error\" but fallback balancer was provided"
-                            .to_string(),
-                    ));
-                }
-            }
-            None => {
-                if config.fallback_strategy == FallbackStrategy::BalanceWithOther {
-                    return Err(YdbError::Custom(
-                        "no fallback balancer was provided".to_string(),
-                    ));
-                }
-            }
-        }
-
         let discovery_state = Arc::new(DiscoveryState::default());
         let balancer_state = Arc::new(Mutex::new(BalancerState::default()));
         let balancer_state_updater = balancer_state.clone();
@@ -305,9 +286,11 @@ impl LoadBalancer for NearestDCBalancer {
     }
 
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()> {
-        match self.config.fallback_balancer.as_mut() {
-            Some(balancer) => balancer.set_discovery_state(discovery_state)?,
-            None => (),
+        match self.config.fallback_strategy.borrow_mut() {
+            FallbackStrategy::BalanceWithOther(balancer) => {
+                balancer.set_discovery_state(discovery_state)?
+            }
+            FallbackStrategy::Error => (),
         }
         self.discovery_state = discovery_state.clone();
         let _ = self.state_sender.send(discovery_state.clone());
@@ -316,9 +299,11 @@ impl LoadBalancer for NearestDCBalancer {
 
     fn waiter(&self) -> Box<dyn Waiter> {
         let self_waiter = Box::new(self.waiter.clone());
-        match self.config.fallback_balancer.as_ref() {
-            Some(balancer) => Box::new(AllWaiter::new(vec![self_waiter, balancer.waiter()])),
-            None => self_waiter,
+        match self.config.fallback_strategy.borrow() {
+            FallbackStrategy::BalanceWithOther(balancer) => {
+                Box::new(AllWaiter::new(vec![self_waiter, balancer.waiter()]))
+            }
+            FallbackStrategy::Error => self_waiter,
         }
     }
 }
@@ -333,18 +318,14 @@ impl NearestDCBalancer {
                 for ep in state_guard.borrow().preferred_endpoints.iter() {
                     return YdbResult::Ok(ep.uri.clone());
                 }
-                match self.config.fallback_strategy {
+                match self.config.fallback_strategy.borrow() {
                     FallbackStrategy::Error => Err(YdbError::custom(format!(
                         "no available endpoints for service:{}",
                         service
                     ))),
-                    FallbackStrategy::BalanceWithOther => {
+                    FallbackStrategy::BalanceWithOther(balancer) => {
                         info!("trying fallback balancer...");
-                        self.config
-                            .fallback_balancer
-                            .as_ref()
-                            .unwrap() // unwrap is safe [checks inside ::new()]
-                            .endpoint(service)
+                        balancer.endpoint(service)
                     }
                 }
             }
@@ -491,7 +472,6 @@ impl NearestDCBalancer {
     }
 
     async fn find_fastest_address(addrs: Vec<&String>, timeout: Duration) -> YdbResult<String> {
-
         // Cancellation flow: timeout -> address collector -> address producers
         let interrupt_via_timeout = CancellationToken::new();
         let interrupt_collector_future = interrupt_via_timeout.child_token();
@@ -559,9 +539,7 @@ impl NearestDCBalancer {
         let _ = start_measure.send(());
 
         match tokio::time::timeout(timeout, wait_first_some_or_cancel).await {
-            Ok(address_option) => {
-                address_option
-            }
+            Ok(address_option) => address_option,
             Err(_) => {
                 interrupt_via_timeout.cancel();
                 YdbResult::Err("timeout while detecting fastest address".into())
@@ -1076,7 +1054,6 @@ mod test {
     async fn nearest_dc_balancer_integration_with_error_fallback() -> YdbResult<()> {
         let balancer = NearestDCBalancer::new(BalancerConfig {
             fallback_strategy: FallbackStrategy::Error,
-            fallback_balancer: None,
         })
         .unwrap();
 
@@ -1094,11 +1071,7 @@ mod test {
 
     #[tokio::test]
     async fn nearest_dc_balancer_integration_with_other_fallback_error() -> YdbResult<()> {
-        let balancer = NearestDCBalancer::new(BalancerConfig {
-            fallback_strategy: FallbackStrategy::BalanceWithOther,
-            fallback_balancer: Some(Box::new(RandomLoadBalancer::new())),
-        })
-        .unwrap();
+        let balancer = NearestDCBalancer::new(BalancerConfig::default()).unwrap();
 
         let sh = SharedLoadBalancer::new_with_balancer(Box::new(balancer));
 
@@ -1125,7 +1098,6 @@ mod test {
 
         let balancer = NearestDCBalancer::new(BalancerConfig {
             fallback_strategy: FallbackStrategy::Error,
-            fallback_balancer: None,
         })
         .unwrap();
 
@@ -1161,11 +1133,11 @@ mod test {
                     ),
                 ),
         );
-        
+
         let _ = state_sender.send(updated_state);
-        
+
         sh.wait().await?;
-        
+
         match sh.endpoint(Table) {
             Ok(uri) => {
                 let addr = uri.host().unwrap();
