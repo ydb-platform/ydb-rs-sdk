@@ -363,7 +363,7 @@ impl NearestDCBalancer {
                 Ok(some_nodes) => {
                     let mut dc_to_nodes = Self::split_endpoints_by_location(some_nodes);
                     let mut to_check = Vec::with_capacity(NODES_PER_DC * dc_to_nodes.keys().len());
-                    dc_to_nodes.iter_mut().for_each(|(_, endpoints)| {
+                    dc_to_nodes.values_mut().for_each(|endpoints| {
                         to_check.append(Self::get_random_endpoints(endpoints))
                     });
                     match Self::find_local_dc(&to_check).await {
