@@ -4,7 +4,8 @@ use crate::grpc_wrapper::raw_services::Service;
 use crate::waiter::{AllWaiter, Waiter, WaiterImpl};
 use http::Uri;
 use itertools::Itertools;
-use rand::thread_rng;
+use rand::seq::IteratorRandom;
+use rand::{seq::SliceRandom, thread_rng};
 use std::borrow::{Borrow, BorrowMut};
 use std::{
     collections::HashMap,
@@ -315,8 +316,13 @@ impl NearestDCBalancer {
     fn get_endpoint(&self, service: Service) -> YdbResult<Uri> {
         match self.balancer_state.try_lock() {
             Ok(state_guard) => {
-                for ep in state_guard.borrow().preferred_endpoints.iter() {
-                    return YdbResult::Ok(ep.uri.clone());
+                match state_guard
+                    .borrow()
+                    .preferred_endpoints
+                    .choose(&mut thread_rng())
+                {
+                    Some(ep) => return YdbResult::Ok(ep.uri.clone()),
+                    None => (),
                 }
                 match self.config.fallback_strategy.borrow() {
                     FallbackStrategy::Error => Err(YdbError::custom(format!(
@@ -418,7 +424,6 @@ impl NearestDCBalancer {
     }
 
     fn get_random_endpoints<'a>(dc_endpoints: &'a mut Vec<&'a NodeInfo>) -> &mut Vec<&NodeInfo> {
-        use rand::seq::SliceRandom;
         dc_endpoints.shuffle(&mut thread_rng());
         dc_endpoints.truncate(NODES_PER_DC);
         dc_endpoints
