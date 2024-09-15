@@ -145,18 +145,31 @@ fn random_load_balancer() -> YdbResult<()> {
 
 #[test]
 fn split_by_location() -> YdbResult<()> {
-    let nodes = vec![
+    let (one, two, three, four, five) = (
         NodeInfo::new(Uri::from_str("http://one:213")?, "A".to_string()),
         NodeInfo::new(Uri::from_str("http://two:213")?, "A".to_string()),
         NodeInfo::new(Uri::from_str("http://three:213")?, "B".to_string()),
         NodeInfo::new(Uri::from_str("http://four:213")?, "B".to_string()),
         NodeInfo::new(Uri::from_str("http://five:213")?, "C".to_string()),
+    );
+
+    let nodes = vec![
+        one.clone(),
+        two.clone(),
+        three.clone(),
+        four.clone(),
+        five.clone(),
     ];
+
     let splitted = NearestDCBalancer::split_endpoints_by_location(&nodes);
-    assert_eq!(splitted.keys().len(), 3);
-    assert_eq!(splitted["A"].len(), 2);
-    assert_eq!(splitted["B"].len(), 2);
-    assert_eq!(splitted["C"].len(), 1);
+    assert_eq!(
+        splitted,
+        HashMap::from([
+            ("A".to_string(), vec![&one, &two]),
+            ("B".to_string(), vec![&three, &four]),
+            ("C".to_string(), vec![&five]),
+        ])
+    );
     Ok(())
 }
 
