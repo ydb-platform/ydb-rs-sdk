@@ -40,7 +40,7 @@ pub(super) struct BalancerState {
 }
 
 // What will balancer do if there is no available endpoints at local dc
-pub enum FallbackStrategy {
+pub(crate) enum FallbackStrategy {
     Error,                                   // Just throw error
     BalanceWithOther(Box<dyn LoadBalancer>), // Use another balancer
 }

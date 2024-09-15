@@ -548,7 +548,6 @@ async fn nearest_dc_balancer_integration() -> YdbResult<()> {
         ),
     }
 
-    let updated_state = Arc::new(
         DiscoveryState::default()
             .with_node_info(
                 Table,
