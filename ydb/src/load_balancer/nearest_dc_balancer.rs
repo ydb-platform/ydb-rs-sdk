@@ -319,7 +319,7 @@ impl NearestDCBalancer {
 
         let (start_measure, _) = broadcast::channel::<()>(1);
         let buffer_cap = if addrs.len() > 0 { addrs.len() } else { 1 };
-        let (addr_sender, mut addr_reciever) = mpsc::channel::<Option<String>>(buffer_cap);
+        let (addr_sender, mut addr_reciever) = mpsc::channel::<String>(buffer_cap);
         let mut nursery = JoinSet::new();
 
         for addr in addrs {
@@ -337,13 +337,13 @@ impl NearestDCBalancer {
                         match connection_result{
                             Ok(mut connection) => {
                                 let _ = connection.shutdown().await;
-                                let _ = addr_sender.send(Some(addr)).await;
+                                let _ = addr_sender.send(addr).await;
                             },
-                            Err(_) => {let _ = addr_sender.send(None).await;},
+                            Err(_) => (), // Just do nothing if there is error on connection attempt
                         }
                     }
                     _ = stop_measure.cancelled() => {
-                        ();
+                        (); // Also do nothing if there is request to stop pings (balancer already got fastest address)
                     }
                 }
             });
@@ -354,20 +354,15 @@ impl NearestDCBalancer {
                 tokio::select! {
                     biased; // check timeout first
                     _ = interrupt_collector_future.cancelled() =>{
-                        Self::join_all(&mut nursery).await; // children will be cancelled due to tokens chaining, see (*)
+                        Self::join_all(&mut nursery).await; // Children will be cancelled due to tokens chaining, see (*)
                         return YdbResult::Err("cancelled".into())
                     }
-                    address_reciever_option = addr_reciever.recv() =>{
-                        match address_reciever_option {
-                            Some(address_option) => {
-                                match address_option {
-                                   Some(address) =>{
-                                    interrupt_collector_future.cancel(); // Cancel other producing children
-                                    Self::join_all(&mut nursery).await;
-                                    return YdbResult::Ok(address);
-                                   },
-                                   None => continue, // Some producer sent blank address -> wait others
-                                }
+                    address_option = addr_reciever.recv() =>{
+                        match address_option {
+                            Some(address) => {
+                                interrupt_collector_future.cancel(); // Cancel other producing children
+                                Self::join_all(&mut nursery).await;
+                                return YdbResult::Ok(address);
                             },
                             None => return YdbResult::Err("no fastest address".into()), // Channel closed, all producers have done measures
                         }
