@@ -373,7 +373,6 @@ async fn no_addr_timeout() -> YdbResult<()> {
     Ok(())
 }
 
-
 #[tokio::test]
 async fn adjusting_dc() -> YdbResult<()> {
     let l1 = TcpListener::bind("127.0.0.1:0").await?;
@@ -547,7 +546,7 @@ async fn nearest_dc_balancer_integration() -> YdbResult<()> {
             "Custom(\"no available endpoints for service:table_service\")".to_string()
         ),
     }
-
+    let updated_state = Arc::new(
         DiscoveryState::default()
             .with_node_info(
                 Table,
