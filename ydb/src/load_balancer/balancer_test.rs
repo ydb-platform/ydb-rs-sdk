@@ -187,28 +187,17 @@ fn choose_random_endpoints() -> YdbResult<()> {
         NodeInfo::new(Uri::from_str("http://nine:213")?, "C".to_string()),
     );
 
-    let nodes_big = vec![
-        one.clone(),
-        two.clone(),
-        three.clone(),
-        four.clone(),
-        five.clone(),
-        six.clone(),
-        seven.clone(),
-        eight.clone(),
-        nine.clone(),
+    let mut nodes_big = vec![
+        &one, &two, &three, &four, &five, &six, &seven, &eight, &nine,
     ];
 
-    let nodes_small = vec![one.clone(), two.clone(), three.clone()];
+    let mut nodes_small = vec![&one, &two, &three];
 
-    let mut refs_big = nodes_big.iter().collect_vec();
-    let mut refs_small = nodes_small.iter().collect_vec();
-
-    let random_subset_big = NearestDCBalancer::get_random_endpoints(&mut refs_big);
-    let random_subset_small = NearestDCBalancer::get_random_endpoints(&mut refs_small);
+    let random_subset_big = NearestDCBalancer::get_random_endpoints(&mut nodes_big);
+    let random_subset_small = NearestDCBalancer::get_random_endpoints(&mut nodes_small);
 
     assert_eq!(random_subset_big.len(), NODES_PER_DC);
-    assert_eq!(random_subset_small.len(), nodes_small.len());
+    assert_eq!(random_subset_small.len(), 3);
 
     Ok(())
 }
