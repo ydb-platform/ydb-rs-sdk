@@ -175,25 +175,40 @@ fn split_by_location() -> YdbResult<()> {
 
 #[test]
 fn choose_random_endpoints() -> YdbResult<()> {
-    let nodes = vec![
+    let (one, two, three, four, five, six, seven, eight, nine) = (
         NodeInfo::new(Uri::from_str("http://one:213")?, "C".to_string()),
         NodeInfo::new(Uri::from_str("http://two:213")?, "C".to_string()),
         NodeInfo::new(Uri::from_str("http://three:213")?, "C".to_string()),
         NodeInfo::new(Uri::from_str("http://four:213")?, "C".to_string()),
         NodeInfo::new(Uri::from_str("http://five:213")?, "C".to_string()),
+        NodeInfo::new(Uri::from_str("http://six:213")?, "C".to_string()),
         NodeInfo::new(Uri::from_str("http://seven:213")?, "C".to_string()),
         NodeInfo::new(Uri::from_str("http://eight:213")?, "C".to_string()),
         NodeInfo::new(Uri::from_str("http://nine:213")?, "C".to_string()),
+    );
+
+    let nodes_big = vec![
+        one.clone(),
+        two.clone(),
+        three.clone(),
+        four.clone(),
+        five.clone(),
+        six.clone(),
+        seven.clone(),
+        eight.clone(),
+        nine.clone(),
     ];
 
-    let mut refs = nodes.iter().collect_vec();
-    let nodes_clone = refs.clone();
-    let random_subset = NearestDCBalancer::get_random_endpoints(&mut refs);
+    let nodes_small = vec![one.clone(), two.clone(), three.clone()];
 
-    assert_eq!(random_subset.len(), NODES_PER_DC);
-    for node in random_subset {
-        assert_true!(nodes_clone.contains(node))
-    }
+    let mut refs_big = nodes_big.iter().collect_vec();
+    let mut refs_small = nodes_small.iter().collect_vec();
+
+    let random_subset_big = NearestDCBalancer::get_random_endpoints(&mut refs_big);
+    let random_subset_small = NearestDCBalancer::get_random_endpoints(&mut refs_small);
+
+    assert_eq!(random_subset_big.len(), NODES_PER_DC);
+    assert_eq!(random_subset_small.len(), nodes_small.len());
 
     Ok(())
 }
