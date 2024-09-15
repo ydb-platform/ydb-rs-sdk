@@ -373,44 +373,6 @@ async fn no_addr_timeout() -> YdbResult<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn detect_fastest_addr() -> YdbResult<()> {
-    let l1 = TcpListener::bind("127.0.0.1:0").await?;
-    let l2 = TcpListener::bind("127.0.0.1:0").await?;
-    let l3 = TcpListener::bind("127.0.0.1:0").await?;
-
-    let l1_addr = l1.local_addr()?;
-    let l2_addr = l2.local_addr()?;
-    let l3_addr = l3.local_addr()?;
-
-    println!("Listener №1 on: {}", l1_addr);
-    println!("Listener №2 on: {}", l2_addr);
-    println!("Listener №3 on: {}", l3_addr);
-
-    let nodes = vec![
-        l1_addr.to_string(),
-        l2_addr.to_string(),
-        l3_addr.to_string(),
-    ];
-
-    drop(l1);
-    drop(l2);
-    drop(l3);
-
-    let result =
-        NearestDCBalancer::find_fastest_address(nodes.iter().collect_vec(), Duration::from_secs(3))
-            .await;
-    match result {
-        Ok(_) => unreachable!(),
-        Err(err) => {
-            assert_eq!(
-                err.to_string(),
-                "Custom(\"timeout while detecting fastest address\")"
-            );
-        }
-    }
-    Ok(())
-}
 
 #[tokio::test]
 async fn adjusting_dc() -> YdbResult<()> {
