@@ -35,7 +35,7 @@ impl TryFrom<crate::Value> for RawTypedValue {
             },
             Value::Uint8(v) => RawTypedValue {
                 r#type: RawType::Uint8,
-                value: RawValue::Int32(v as i32),
+                value: RawValue::UInt32(v as u32),
             },
             Value::Int16(v) => RawTypedValue {
                 r#type: RawType::Int16,
@@ -43,7 +43,7 @@ impl TryFrom<crate::Value> for RawTypedValue {
             },
             Value::Uint16(v) => RawTypedValue {
                 r#type: RawType::Uint16,
-                value: RawValue::Int32(v as i32),
+                value: RawValue::UInt32(v as u32),
             },
             Value::Int32(v) => RawTypedValue {
                 r#type: RawType::Int32,
@@ -201,11 +201,11 @@ impl TryFrom<RawTypedValue> for Value {
             (t @ RawType::Bool, v) => return types_mismatch(t, v),
             (RawType::Int8, RawValue::Int32(v)) => Value::Int8(v.try_into()?),
             (t @ RawType::Int8, v) => return types_mismatch(t, v),
-            (RawType::Uint8, RawValue::Int32(v)) => Value::Uint8(v.try_into()?),
+            (RawType::Uint8, RawValue::UInt32(v)) => Value::Uint8(v.try_into()?),
             (t @ RawType::Uint8, v) => return types_mismatch(t, v),
             (RawType::Int16, RawValue::Int32(v)) => Value::Int16(v.try_into()?),
             (t @ RawType::Int16, v) => return types_mismatch(t, v),
-            (RawType::Uint16, RawValue::Int32(v)) => Value::Uint16(v.try_into()?),
+            (RawType::Uint16, RawValue::UInt32(v)) => Value::Uint16(v.try_into()?),
             (t @ RawType::Uint16, v) => return types_mismatch(t, v),
             (RawType::Int32, RawValue::Int32(v)) => Value::Int32(v),
             (t @ RawType::Int32, v) => return types_mismatch(t, v),
