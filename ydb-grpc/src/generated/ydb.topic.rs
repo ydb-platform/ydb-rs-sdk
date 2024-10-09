@@ -28,6 +28,24 @@ pub struct UpdateTokenRequest {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UpdateTokenResponse {}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartitionWithGeneration {
+    /// Partition identifier.
+    #[prost(int64, tag = "1")]
+    pub partition_id: i64,
+    /// Partition generation.
+    #[prost(int64, tag = "2")]
+    pub generation: i64,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MetadataItem {
+    #[prost(string, tag = "1")]
+    pub key: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "2")]
+    pub value: ::prost::alloc::vec::Vec<u8>,
+}
 /// Messages for bidirectional streaming rpc StreamWrite
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -110,7 +128,7 @@ pub mod stream_write_message {
         pub get_last_seq_no: bool,
         /// Option for setting order on messages.
         /// If neither is set, no guarantees on ordering or partitions to write to.
-        #[prost(oneof = "init_request::Partitioning", tags = "4, 5")]
+        #[prost(oneof = "init_request::Partitioning", tags = "4, 5, 7")]
         pub partitioning: ::core::option::Option<init_request::Partitioning>,
     }
     /// Nested message and enum types in `InitRequest`.
@@ -126,9 +144,12 @@ pub mod stream_write_message {
             /// Explicit partition id to write to.
             #[prost(int64, tag = "5")]
             PartitionId(i64),
+            /// Explicit partition location to write to.
+            #[prost(message, tag = "7")]
+            PartitionWithGeneration(super::super::PartitionWithGeneration),
         }
     }
-    /// Response for handshake.
+    /// Response to the handshake.
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct InitResponse {
@@ -157,6 +178,8 @@ pub mod stream_write_message {
         /// See enum Codec above for values.
         #[prost(int32, tag = "2")]
         pub codec: i32,
+        #[prost(message, optional, tag = "3")]
+        pub tx: ::core::option::Option<super::TransactionIdentity>,
     }
     /// Nested message and enum types in `WriteRequest`.
     pub mod write_request {
@@ -178,8 +201,11 @@ pub mod stream_write_message {
             /// Uncompressed size of client message body.
             #[prost(int64, tag = "4")]
             pub uncompressed_size: i64,
+            /// Message metadata. Overall size is limited to 4096 symbols (all keys and values combined).
+            #[prost(message, repeated, tag = "7")]
+            pub metadata_items: ::prost::alloc::vec::Vec<super::super::MetadataItem>,
             /// Per-message override for respective write session settings.
-            #[prost(oneof = "message_data::Partitioning", tags = "5, 6")]
+            #[prost(oneof = "message_data::Partitioning", tags = "5, 6, 8")]
             pub partitioning: ::core::option::Option<message_data::Partitioning>,
         }
         /// Nested message and enum types in `MessageData`.
@@ -194,6 +220,9 @@ pub mod stream_write_message {
                 /// Explicit partition id to write to.
                 #[prost(int64, tag = "6")]
                 PartitionId(i64),
+                /// Explicit partition location to write to.
+                #[prost(message, tag = "8")]
+                PartitionWithGeneration(super::super::super::PartitionWithGeneration),
             }
         }
     }
@@ -224,7 +253,7 @@ pub mod stream_write_message {
             #[prost(int64, tag = "1")]
             pub seq_no: i64,
             /// Either message is written for the first time or duplicate.
-            #[prost(oneof = "write_ack::MessageWriteStatus", tags = "2, 3")]
+            #[prost(oneof = "write_ack::MessageWriteStatus", tags = "2, 3, 4")]
             pub message_write_status: ::core::option::Option<
                 write_ack::MessageWriteStatus,
             >,
@@ -275,6 +304,9 @@ pub mod stream_write_message {
                     }
                 }
             }
+            #[derive(serde::Serialize, serde::Deserialize)]
+            #[derive(Clone, PartialEq, ::prost::Message)]
+            pub struct WrittenInTx {}
             /// Either message is written for the first time or duplicate.
             #[derive(serde::Serialize, serde::Deserialize)]
             #[derive(Clone, PartialEq, ::prost::Oneof)]
@@ -283,6 +315,8 @@ pub mod stream_write_message {
                 Written(Written),
                 #[prost(message, tag = "3")]
                 Skipped(Skipped),
+                #[prost(message, tag = "4")]
+                WrittenInTx(WrittenInTx),
             }
         }
         /// Message with write statistics.
@@ -328,7 +362,7 @@ pub mod stream_read_message {
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct PartitionSession {
-        /// Identitifier of partition session. Unique inside one RPC call.
+        /// Identifier of partition session. Unique inside one RPC call.
         #[prost(int64, tag = "1")]
         pub partition_session_id: i64,
         /// Topic path of partition.
@@ -344,6 +378,7 @@ pub mod stream_read_message {
     ///      CommitOffsetRequest - request for commit of some read data.
     ///      PartitionSessionStatusRequest - request for session status
     ///      UpdateTokenRequest - request to update auth token
+    ///      DirectReadAck - client signals it has finished direct reading from the partition node.
     ///      StartPartitionSessionResponse - Response to StreamReadServerMessage.StartPartitionSessionRequest.
     ///          Client signals it is ready to get data from partition.
     ///      StopPartitionSessionResponse - Response to StreamReadServerMessage.StopPartitionSessionRequest.
@@ -351,7 +386,7 @@ pub mod stream_read_message {
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct FromClient {
-        #[prost(oneof = "from_client::ClientMessage", tags = "1, 2, 3, 4, 5, 6, 7")]
+        #[prost(oneof = "from_client::ClientMessage", tags = "1, 2, 3, 4, 5, 8, 6, 7")]
         pub client_message: ::core::option::Option<from_client::ClientMessage>,
     }
     /// Nested message and enum types in `FromClient`.
@@ -370,6 +405,8 @@ pub mod stream_read_message {
             PartitionSessionStatusRequest(super::PartitionSessionStatusRequest),
             #[prost(message, tag = "5")]
             UpdateTokenRequest(super::super::UpdateTokenRequest),
+            #[prost(message, tag = "8")]
+            DirectReadAck(super::DirectReadAck),
             /// Responses to respective server commands.
             #[prost(message, tag = "6")]
             StartPartitionSessionResponse(super::StartPartitionSessionResponse),
@@ -385,6 +422,7 @@ pub mod stream_read_message {
     ///      UpdateTokenResponse - acknowledgment of token update.
     ///      StartPartitionSessionRequest - command from server to create a partition session.
     ///      StopPartitionSessionRequest - command from server to destroy a partition session.
+    ///      UpdatePartitionSession - command from server to update a partition session.
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct FromServer {
@@ -394,7 +432,7 @@ pub mod stream_read_message {
         /// Issues if any.
         #[prost(message, repeated, tag = "2")]
         pub issues: ::prost::alloc::vec::Vec<super::super::issue::IssueMessage>,
-        #[prost(oneof = "from_server::ServerMessage", tags = "3, 4, 5, 6, 7, 8, 9")]
+        #[prost(oneof = "from_server::ServerMessage", tags = "3, 4, 5, 6, 7, 8, 9, 10")]
         pub server_message: ::core::option::Option<from_server::ServerMessage>,
     }
     /// Nested message and enum types in `FromServer`.
@@ -418,6 +456,8 @@ pub mod stream_read_message {
             StartPartitionSessionRequest(super::StartPartitionSessionRequest),
             #[prost(message, tag = "9")]
             StopPartitionSessionRequest(super::StopPartitionSessionRequest),
+            #[prost(message, tag = "10")]
+            UpdatePartitionSession(super::UpdatePartitionSession),
         }
     }
     /// Handshake request.
@@ -433,6 +473,12 @@ pub mod stream_read_message {
         /// Path of consumer that is used for reading by this session.
         #[prost(string, tag = "2")]
         pub consumer: ::prost::alloc::string::String,
+        /// Optional name. Will be shown in debug stat.
+        #[prost(string, tag = "3")]
+        pub reader_name: ::prost::alloc::string::String,
+        /// Direct reading from a partition node.
+        #[prost(bool, tag = "4")]
+        pub direct_read: bool,
     }
     /// Nested message and enum types in `InitRequest`.
     pub mod init_request {
@@ -464,7 +510,7 @@ pub mod stream_read_message {
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct InitResponse {
-        /// Read session identifier for debug purposes.
+        /// Read session identifier.
         #[prost(string, tag = "1")]
         pub session_id: ::prost::alloc::string::String,
     }
@@ -489,7 +535,7 @@ pub mod stream_read_message {
         /// 4) Server is free to send up to 50 + 100 = 150 bytes. But the next read message is too big,
         ///     and it sends 160 bytes ReadResponse.
         /// 5) Let's assume client somehow processes it, and its 200 bytes buffer is free again.
-        ///     It shoud account for excess 10 bytes and send ReadRequest with bytes_size = 210.
+        ///     It should account for excess 10 bytes and send ReadRequest with bytes_size = 210.
         #[prost(int64, tag = "1")]
         pub bytes_size: i64,
     }
@@ -512,7 +558,7 @@ pub mod stream_read_message {
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct MessageData {
             /// Partition offset in partition that assigned for message.
-            /// unique value for clientside deduplication - Topic:Partition:Offset
+            /// unique value for client side deduplication - Topic:Partition:Offset
             #[prost(int64, tag = "1")]
             pub offset: i64,
             /// Sequence number that provided with message on write from client.
@@ -534,6 +580,8 @@ pub mod stream_read_message {
             /// Filled if message_group_id was set on message write.
             #[prost(string, tag = "7")]
             pub message_group_id: ::prost::alloc::string::String,
+            #[prost(message, repeated, tag = "8")]
+            pub metadata_items: ::prost::alloc::vec::Vec<super::super::MetadataItem>,
         }
         /// Representation of sequence of client messages from one write session.
         #[derive(serde::Serialize, serde::Deserialize)]
@@ -626,7 +674,7 @@ pub mod stream_read_message {
         #[prost(int64, tag = "1")]
         pub partition_session_id: i64,
     }
-    /// Response for status request.
+    /// Response to status request.
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct PartitionSessionStatusResponse {
@@ -659,6 +707,9 @@ pub mod stream_read_message {
         /// Partition contains messages with offsets in range [start, end).
         #[prost(message, optional, tag = "3")]
         pub partition_offsets: ::core::option::Option<super::OffsetsRange>,
+        /// Partition location, filled only when InitRequest.direct_read is true.
+        #[prost(message, optional, tag = "4")]
+        pub partition_location: ::core::option::Option<super::PartitionLocation>,
     }
     /// Signal for server that cient is ready to recive data for partition.
     #[derive(serde::Serialize, serde::Deserialize)]
@@ -699,6 +750,9 @@ pub mod stream_read_message {
         /// Upper bound for committed offsets.
         #[prost(int64, tag = "3")]
         pub committed_offset: i64,
+        /// Upper bound for read request identifiers, filled only when InitRequest.direct_read is true and graceful is true.
+        #[prost(int64, tag = "4")]
+        pub last_direct_read_id: i64,
     }
     /// Signal for server that client finished working with this partition.
     /// Must be sent only after corresponding StopPartitionSessionRequest from server.
@@ -709,7 +763,275 @@ pub mod stream_read_message {
         /// Partition session identifier of partition session that is released by client.
         #[prost(int64, tag = "1")]
         pub partition_session_id: i64,
+        /// Flag of graceful stop, used only when InitRequest.direct_read is true
+        /// Client must pass this value unchanged from the StopPartitionSessionRequest.
+        /// Server can sent two StopPartitionSessionRequests, the first with graceful=true, the second with graceful=false. The client must answer both of them.
+        #[prost(bool, tag = "2")]
+        pub graceful: bool,
     }
+    /// Command from server to notify about a partition session update.
+    /// Client should not send a response to the command.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct UpdatePartitionSession {
+        /// Partition session identifier.
+        #[prost(int64, tag = "1")]
+        pub partition_session_id: i64,
+        /// Partition location, filled only when InitRequest.direct_read is true.
+        #[prost(message, optional, tag = "2")]
+        pub partition_location: ::core::option::Option<super::PartitionLocation>,
+    }
+    /// Signal for server that client has finished direct reading.
+    /// Server should not send a response to the command.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct DirectReadAck {
+        /// Partition session identifier.
+        #[prost(int64, tag = "1")]
+        pub partition_session_id: i64,
+        /// Identifier of the successfully completed read request.
+        #[prost(int64, tag = "2")]
+        pub direct_read_id: i64,
+    }
+}
+/// Messages for bidirectional streaming rpc StreamDirectRead
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StreamDirectReadMessage {}
+/// Nested message and enum types in `StreamDirectReadMessage`.
+pub mod stream_direct_read_message {
+    /// Client-server message for direct read session.
+    ///      InitDirectRead - command from client to create and start a direct read session.
+    ///      StartDirectReadPartitionSession - command from client to create and start a direct read partition session.
+    ///      UpdateTokenRequest - request to update auth token
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FromClient {
+        #[prost(oneof = "from_client::ClientMessage", tags = "1, 2, 3")]
+        pub client_message: ::core::option::Option<from_client::ClientMessage>,
+    }
+    /// Nested message and enum types in `FromClient`.
+    pub mod from_client {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[derive(Clone, PartialEq, ::prost::Oneof)]
+        pub enum ClientMessage {
+            #[prost(message, tag = "1")]
+            InitDirectRead(super::InitDirectRead),
+            #[prost(message, tag = "2")]
+            StartDirectReadPartitionSession(super::StartDirectReadPartitionSession),
+            #[prost(message, tag = "3")]
+            UpdateTokenRequest(super::super::UpdateTokenRequest),
+        }
+    }
+    /// Server-client message for direct read session.
+    ///      DirectReadResponse - portion of message data.
+    ///      StopDirectReadPartitionSession - command from server to stop a direct read partition session.
+    ///      UpdateTokenResponse - acknowledgment of token update.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct FromServer {
+        /// Server status of response.
+        #[prost(enumeration = "super::super::status_ids::StatusCode", tag = "1")]
+        pub status: i32,
+        /// Issues if any.
+        #[prost(message, repeated, tag = "2")]
+        pub issues: ::prost::alloc::vec::Vec<super::super::issue::IssueMessage>,
+        #[prost(oneof = "from_server::ServerMessage", tags = "3, 4, 5")]
+        pub server_message: ::core::option::Option<from_server::ServerMessage>,
+    }
+    /// Nested message and enum types in `FromServer`.
+    pub mod from_server {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[derive(Clone, PartialEq, ::prost::Oneof)]
+        pub enum ServerMessage {
+            #[prost(message, tag = "3")]
+            StopDirectReadPartitionSession(super::StopDirectReadPartitionSession),
+            #[prost(message, tag = "4")]
+            DirectReadResponse(super::DirectReadResponse),
+            #[prost(message, tag = "5")]
+            UpdateTokenResponse(super::super::UpdateTokenResponse),
+        }
+    }
+    /// Command from client to create and start a direct read session.
+    /// Server should not send a response to the command.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct InitDirectRead {
+        /// Read session identifier.
+        #[prost(string, tag = "1")]
+        pub session_id: ::prost::alloc::string::String,
+        /// Topics that will be read by this session.
+        #[prost(message, repeated, tag = "2")]
+        pub topics_read_settings: ::prost::alloc::vec::Vec<
+            init_direct_read::TopicReadSettings,
+        >,
+        /// Path of consumer that is used for reading by this session.
+        #[prost(string, tag = "3")]
+        pub consumer: ::prost::alloc::string::String,
+    }
+    /// Nested message and enum types in `InitDirectRead`.
+    pub mod init_direct_read {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[derive(Clone, PartialEq, ::prost::Message)]
+        pub struct TopicReadSettings {
+            /// Topic path.
+            #[prost(string, tag = "1")]
+            pub path: ::prost::alloc::string::String,
+        }
+    }
+    /// Command from client to create and start a direct read partition session.
+    /// Server should not send a response to the command.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct StartDirectReadPartitionSession {
+        /// Partition session identifier.
+        #[prost(int64, tag = "1")]
+        pub partition_session_id: i64,
+        /// Upper bound for read request identifiers.
+        #[prost(int64, tag = "2")]
+        pub last_direct_read_id: i64,
+        /// Partition generation.
+        #[prost(int64, tag = "3")]
+        pub generation: i64,
+    }
+    /// Command from server to stop a direct read partition session.
+    /// Client should not send a response to the command.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct StopDirectReadPartitionSession {
+        /// The reason for the stop.
+        #[prost(enumeration = "super::super::status_ids::StatusCode", tag = "1")]
+        pub status: i32,
+        /// Issues if any.
+        #[prost(message, repeated, tag = "2")]
+        pub issues: ::prost::alloc::vec::Vec<super::super::issue::IssueMessage>,
+        /// Partition session identifier.
+        #[prost(int64, tag = "3")]
+        pub partition_session_id: i64,
+    }
+    /// Messages that have been read directly from the partition node.
+    /// It's a response to StreamRead.ReadRequest
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct DirectReadResponse {
+        /// Partition session identifier.
+        #[prost(int64, tag = "1")]
+        pub partition_session_id: i64,
+        /// Read request identifier.
+        #[prost(int64, tag = "2")]
+        pub direct_read_id: i64,
+        /// Messages data
+        #[prost(message, optional, tag = "3")]
+        pub partition_data: ::core::option::Option<
+            super::stream_read_message::read_response::PartitionData,
+        >,
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TransactionIdentity {
+    /// Transaction identifier from TableService.
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    /// Session identifier from TableService.
+    #[prost(string, tag = "2")]
+    pub session: ::prost::alloc::string::String,
+}
+/// Add offsets to transaction request sent from client to server.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UpdateOffsetsInTransactionRequest {
+    #[prost(message, optional, tag = "1")]
+    pub operation_params: ::core::option::Option<super::operations::OperationParams>,
+    #[prost(message, optional, tag = "2")]
+    pub tx: ::core::option::Option<TransactionIdentity>,
+    /// Ranges of offsets by topics.
+    #[prost(message, repeated, tag = "3")]
+    pub topics: ::prost::alloc::vec::Vec<
+        update_offsets_in_transaction_request::TopicOffsets,
+    >,
+    #[prost(string, tag = "4")]
+    pub consumer: ::prost::alloc::string::String,
+}
+/// Nested message and enum types in `UpdateOffsetsInTransactionRequest`.
+pub mod update_offsets_in_transaction_request {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct TopicOffsets {
+        /// Topic path.
+        #[prost(string, tag = "1")]
+        pub path: ::prost::alloc::string::String,
+        /// Ranges of offsets by partitions.
+        #[prost(message, repeated, tag = "2")]
+        pub partitions: ::prost::alloc::vec::Vec<topic_offsets::PartitionOffsets>,
+    }
+    /// Nested message and enum types in `TopicOffsets`.
+    pub mod topic_offsets {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[derive(Clone, PartialEq, ::prost::Message)]
+        pub struct PartitionOffsets {
+            /// Partition identifier.
+            #[prost(int64, tag = "1")]
+            pub partition_id: i64,
+            /// List of offset ranges.
+            #[prost(message, repeated, tag = "2")]
+            pub partition_offsets: ::prost::alloc::vec::Vec<super::super::OffsetsRange>,
+        }
+    }
+}
+/// Add offsets to transaction response sent from server to client.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UpdateOffsetsInTransactionResponse {
+    /// Result of request will be inside operation.
+    #[prost(message, optional, tag = "1")]
+    pub operation: ::core::option::Option<super::operations::Operation>,
+}
+/// Add offsets to transaction result message that will be inside UpdateOffsetsInTransactionResponse.operation.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UpdateOffsetsInTransactionResult {}
+/// Commit offset request sent from client to server.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CommitOffsetRequest {
+    #[prost(message, optional, tag = "1")]
+    pub operation_params: ::core::option::Option<super::operations::OperationParams>,
+    /// Topic path of partition.
+    #[prost(string, tag = "2")]
+    pub path: ::prost::alloc::string::String,
+    /// Partition identifier.
+    #[prost(int64, tag = "3")]
+    pub partition_id: i64,
+    /// Path of consumer.
+    #[prost(string, tag = "4")]
+    pub consumer: ::prost::alloc::string::String,
+    /// Processed offset.
+    #[prost(int64, tag = "5")]
+    pub offset: i64,
+}
+/// Commit offset response sent from server to client.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CommitOffsetResponse {
+    /// Result of request will be inside operation.
+    #[prost(message, optional, tag = "1")]
+    pub operation: ::core::option::Option<super::operations::Operation>,
+}
+/// Commit offset result message inside CommitOffsetResponse.operation.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CommitOffsetResult {}
+/// message representing statistics by several windows
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MultipleWindowsStat {
+    #[prost(int64, tag = "1")]
+    pub per_minute: i64,
+    #[prost(int64, tag = "2")]
+    pub per_hour: i64,
+    #[prost(int64, tag = "3")]
+    pub per_day: i64,
 }
 /// Consumer description.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -728,6 +1050,7 @@ pub struct Consumer {
     pub read_from: ::core::option::Option<super::super::google::protobuf::Timestamp>,
     /// List of supported codecs by this consumer.
     /// supported_codecs on topic must be contained inside this list.
+    /// If empty, codec compatibility check for the consumer is disabled.
     #[prost(message, optional, tag = "5")]
     pub supported_codecs: ::core::option::Option<SupportedCodecs>,
     /// Attributes of consumer
@@ -736,6 +1059,34 @@ pub struct Consumer {
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
+    /// Filled only when requested statistics in Describe*Request.
+    #[prost(message, optional, tag = "7")]
+    pub consumer_stats: ::core::option::Option<consumer::ConsumerStats>,
+}
+/// Nested message and enum types in `Consumer`.
+pub mod consumer {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ConsumerStats {
+        /// Minimal timestamp of last read from partitions.
+        #[prost(message, optional, tag = "1")]
+        pub min_partitions_last_read_time: ::core::option::Option<
+            super::super::super::google::protobuf::Timestamp,
+        >,
+        /// Maximum of differences between timestamp of read and write timestamp for all messages, read during last minute.
+        #[prost(message, optional, tag = "2")]
+        pub max_read_time_lag: ::core::option::Option<
+            super::super::super::google::protobuf::Duration,
+        >,
+        /// Maximum of differences between write timestamp and create timestamp for all messages, read during last minute.
+        #[prost(message, optional, tag = "3")]
+        pub max_write_time_lag: ::core::option::Option<
+            super::super::super::google::protobuf::Duration,
+        >,
+        /// Bytes read statistics.
+        #[prost(message, optional, tag = "4")]
+        pub bytes_read: ::core::option::Option<super::MultipleWindowsStat>,
+    }
 }
 /// Consumer alter description.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -754,6 +1105,7 @@ pub struct AlterConsumer {
     pub set_read_from: ::core::option::Option<super::super::google::protobuf::Timestamp>,
     /// List of supported codecs by this consumer.
     /// supported_codecs on topic must be contained inside this list.
+    /// If empty, codec compatibility check for the consumer is disabled.
     #[prost(message, optional, tag = "5")]
     pub set_supported_codecs: ::core::option::Option<SupportedCodecs>,
     /// User and server attributes of consumer. Server attributes starts from "_" and will be validated by server.
@@ -816,6 +1168,7 @@ pub struct CreateTopicRequest {
     pub retention_storage_mb: i64,
     /// List of allowed codecs for writers.
     /// Writes with codec not from this list are forbidden.
+    /// If empty, codec compatibility check for the topic is disabled.
     #[prost(message, optional, tag = "7")]
     pub supported_codecs: ::core::option::Option<SupportedCodecs>,
     /// Partition write speed in bytes per second. Must be less than database limit.
@@ -852,6 +1205,17 @@ pub struct CreateTopicResponse {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateTopicResult {}
+/// Topic partition location
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartitionLocation {
+    /// Node identificator.
+    #[prost(int32, tag = "1")]
+    pub node_id: i32,
+    /// Partition generation.
+    #[prost(int64, tag = "2")]
+    pub generation: i64,
+}
 /// Describe topic request sent from client to server.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -861,6 +1225,12 @@ pub struct DescribeTopicRequest {
     /// Topic path.
     #[prost(string, tag = "2")]
     pub path: ::prost::alloc::string::String,
+    /// Include topic statistics.
+    #[prost(bool, tag = "3")]
+    pub include_stats: bool,
+    /// Include partition location.
+    #[prost(bool, tag = "4")]
+    pub include_location: bool,
 }
 /// Describe topic response sent from server to client.
 /// If topic is not existed then response status will be "SCHEME_ERROR".
@@ -897,12 +1267,17 @@ pub struct DescribeTopicResult {
     pub retention_storage_mb: i64,
     /// List of allowed codecs for writers.
     /// Writes with codec not from this list are forbidden.
+    /// If empty, codec compatibility check for the topic is disabled.
     #[prost(message, optional, tag = "7")]
     pub supported_codecs: ::core::option::Option<SupportedCodecs>,
     /// Partition write speed in bytes per second.
     /// Zero value means default limit: 1 MB per second.
     #[prost(int64, tag = "8")]
     pub partition_write_speed_bytes_per_second: i64,
+    #[prost(int64, tag = "14")]
+    pub partition_total_read_speed_bytes_per_second: i64,
+    #[prost(int64, tag = "15")]
+    pub partition_consumer_read_speed_bytes_per_second: i64,
     /// Burst size for write in partition, in bytes.
     /// Zero value means default limit: 1 MB.
     #[prost(int64, tag = "9")]
@@ -919,6 +1294,9 @@ pub struct DescribeTopicResult {
     /// Metering settings.
     #[prost(enumeration = "MeteringMode", tag = "12")]
     pub metering_mode: i32,
+    /// Statistics of topic.
+    #[prost(message, optional, tag = "13")]
+    pub topic_stats: ::core::option::Option<describe_topic_result::TopicStats>,
 }
 /// Nested message and enum types in `DescribeTopicResult`.
 pub mod describe_topic_result {
@@ -937,7 +1315,207 @@ pub mod describe_topic_result {
         /// Ids of partitions from which this partition was formed by split or merge.
         #[prost(int64, repeated, tag = "4")]
         pub parent_partition_ids: ::prost::alloc::vec::Vec<i64>,
+        /// Stats for partition, filled only when include_stats in request is true.
+        #[prost(message, optional, tag = "5")]
+        pub partition_stats: ::core::option::Option<super::PartitionStats>,
+        /// Partition location, filled only when include_location in request is true.
+        #[prost(message, optional, tag = "6")]
+        pub partition_location: ::core::option::Option<super::PartitionLocation>,
     }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct TopicStats {
+        /// Approximate size of topic.
+        #[prost(int64, tag = "1")]
+        pub store_size_bytes: i64,
+        /// Minimum of timestamps of last write among all partitions.
+        #[prost(message, optional, tag = "2")]
+        pub min_last_write_time: ::core::option::Option<
+            super::super::super::google::protobuf::Timestamp,
+        >,
+        /// Maximum of differences between write timestamp and create timestamp for all messages, written during last minute.
+        #[prost(message, optional, tag = "3")]
+        pub max_write_time_lag: ::core::option::Option<
+            super::super::super::google::protobuf::Duration,
+        >,
+        /// How much bytes were written statistics.
+        #[prost(message, optional, tag = "4")]
+        pub bytes_written: ::core::option::Option<super::MultipleWindowsStat>,
+    }
+}
+/// Describe partition request sent from client to server.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DescribePartitionRequest {
+    #[prost(message, optional, tag = "1")]
+    pub operation_params: ::core::option::Option<super::operations::OperationParams>,
+    /// Topic path.
+    #[prost(string, tag = "2")]
+    pub path: ::prost::alloc::string::String,
+    /// Partition identifier.
+    #[prost(int64, tag = "3")]
+    pub partition_id: i64,
+    /// Include partition statistics.
+    #[prost(bool, tag = "4")]
+    pub include_stats: bool,
+    /// Include partition location.
+    #[prost(bool, tag = "5")]
+    pub include_location: bool,
+}
+/// Describe partition response sent from server to client.
+/// If topic is not existed then response status will be "SCHEME_ERROR".
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DescribePartitionResponse {
+    /// Result of request will be inside operation.
+    #[prost(message, optional, tag = "1")]
+    pub operation: ::core::option::Option<super::operations::Operation>,
+}
+/// Describe partition result message that will be inside DescribeTopicResponse.operation.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DescribePartitionResult {
+    /// Partitions description.
+    #[prost(message, optional, tag = "1")]
+    pub partition: ::core::option::Option<describe_topic_result::PartitionInfo>,
+}
+/// Describe topic's consumer request sent from client to server.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DescribeConsumerRequest {
+    #[prost(message, optional, tag = "1")]
+    pub operation_params: ::core::option::Option<super::operations::OperationParams>,
+    /// Topic path.
+    #[prost(string, tag = "2")]
+    pub path: ::prost::alloc::string::String,
+    /// Consumer name;
+    #[prost(string, tag = "3")]
+    pub consumer: ::prost::alloc::string::String,
+    /// Include consumer statistics.
+    #[prost(bool, tag = "4")]
+    pub include_stats: bool,
+    /// Include partition location.
+    #[prost(bool, tag = "5")]
+    pub include_location: bool,
+}
+/// Describe topic's consumer response sent from server to client.
+/// If topic is not existed then response status will be "SCHEME_ERROR".
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DescribeConsumerResponse {
+    /// Result of request will be inside operation.
+    #[prost(message, optional, tag = "1")]
+    pub operation: ::core::option::Option<super::operations::Operation>,
+}
+/// Describe topic's consumer result message that will be inside DescribeConsumerResponse.operation.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DescribeConsumerResult {
+    /// Description of scheme object.
+    #[prost(message, optional, tag = "1")]
+    pub self_: ::core::option::Option<super::scheme::Entry>,
+    #[prost(message, optional, tag = "2")]
+    pub consumer: ::core::option::Option<Consumer>,
+    #[prost(message, repeated, tag = "3")]
+    pub partitions: ::prost::alloc::vec::Vec<describe_consumer_result::PartitionInfo>,
+}
+/// Nested message and enum types in `DescribeConsumerResult`.
+pub mod describe_consumer_result {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct PartitionInfo {
+        /// Partition identifier.
+        #[prost(int64, tag = "1")]
+        pub partition_id: i64,
+        /// Is partition open for write.
+        #[prost(bool, tag = "2")]
+        pub active: bool,
+        /// Ids of partitions which was formed when this partition was split or merged.
+        #[prost(int64, repeated, tag = "3")]
+        pub child_partition_ids: ::prost::alloc::vec::Vec<i64>,
+        /// Ids of partitions from which this partition was formed by split or merge.
+        #[prost(int64, repeated, tag = "4")]
+        pub parent_partition_ids: ::prost::alloc::vec::Vec<i64>,
+        /// Stats for partition, filled only when include_stats in request is true.
+        #[prost(message, optional, tag = "5")]
+        pub partition_stats: ::core::option::Option<super::PartitionStats>,
+        /// Stats for consumer of this partition, filled only when include_stats in request is true.
+        #[prost(message, optional, tag = "6")]
+        pub partition_consumer_stats: ::core::option::Option<PartitionConsumerStats>,
+        /// Partition location, filled only when include_location in request is true.
+        #[prost(message, optional, tag = "7")]
+        pub partition_location: ::core::option::Option<super::PartitionLocation>,
+    }
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct PartitionConsumerStats {
+        /// Last read offset from this partition.
+        #[prost(int64, tag = "1")]
+        pub last_read_offset: i64,
+        /// Committed offset for this partition.
+        #[prost(int64, tag = "2")]
+        pub committed_offset: i64,
+        /// Reading this partition read session identifier.
+        #[prost(string, tag = "3")]
+        pub read_session_id: ::prost::alloc::string::String,
+        /// Timestamp of providing this partition to this session by server.
+        #[prost(message, optional, tag = "4")]
+        pub partition_read_session_create_time: ::core::option::Option<
+            super::super::super::google::protobuf::Timestamp,
+        >,
+        /// Timestamp of last read from this partition.
+        #[prost(message, optional, tag = "5")]
+        pub last_read_time: ::core::option::Option<
+            super::super::super::google::protobuf::Timestamp,
+        >,
+        /// Maximum of differences between timestamp of read and write timestamp for all messages, read during last minute.
+        #[prost(message, optional, tag = "6")]
+        pub max_read_time_lag: ::core::option::Option<
+            super::super::super::google::protobuf::Duration,
+        >,
+        /// Maximum of differences between write timestamp and create timestamp for all messages, read during last minute.
+        #[prost(message, optional, tag = "7")]
+        pub max_write_time_lag: ::core::option::Option<
+            super::super::super::google::protobuf::Duration,
+        >,
+        /// How much bytes were read during several windows statistics from this partition.
+        #[prost(message, optional, tag = "8")]
+        pub bytes_read: ::core::option::Option<super::MultipleWindowsStat>,
+        /// Read session name, provided by client.
+        #[prost(string, tag = "11")]
+        pub reader_name: ::prost::alloc::string::String,
+        /// Host where read session connected.
+        #[prost(int32, tag = "12")]
+        pub connection_node_id: i32,
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartitionStats {
+    /// Partition contains messages with offsets in range [start, end).
+    #[prost(message, optional, tag = "1")]
+    pub partition_offsets: ::core::option::Option<OffsetsRange>,
+    /// Approximate size of partition.
+    #[prost(int64, tag = "2")]
+    pub store_size_bytes: i64,
+    /// Timestamp of last write.
+    #[prost(message, optional, tag = "3")]
+    pub last_write_time: ::core::option::Option<
+        super::super::google::protobuf::Timestamp,
+    >,
+    /// Maximum of differences between write timestamp and create timestamp for all messages, written during last minute.
+    #[prost(message, optional, tag = "4")]
+    pub max_write_time_lag: ::core::option::Option<
+        super::super::google::protobuf::Duration,
+    >,
+    /// How much bytes were written during several windows in this partition.
+    #[prost(message, optional, tag = "5")]
+    pub bytes_written: ::core::option::Option<MultipleWindowsStat>,
+    /// Partition host. Useful for debugging purposes.
+    /// Use PartitionLocation
+    #[deprecated]
+    #[prost(int32, tag = "8")]
+    pub partition_node_id: i32,
 }
 /// Update existing topic request sent from client to server.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -964,6 +1542,7 @@ pub struct AlterTopicRequest {
     pub set_retention_storage_mb: ::core::option::Option<i64>,
     /// List of allowed codecs for writers.
     /// Writes with codec not from this list are forbidden.
+    /// If empty, codec compatibility check for the topic is disabled.
     #[prost(message, optional, tag = "7")]
     pub set_supported_codecs: ::core::option::Option<SupportedCodecs>,
     /// Partition write speed in bytes per second. Must be less than database limit. Default limit - 1 MB/s.

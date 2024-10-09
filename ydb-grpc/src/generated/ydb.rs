@@ -84,6 +84,21 @@ pub struct CostInfo {
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct QuotaExceeded {
+    #[prost(bool, tag = "1")]
+    pub disk: bool,
+}
+/// Specifies a point in database time
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct VirtualTimestamp {
+    #[prost(uint64, tag = "1")]
+    pub plan_step: u64,
+    #[prost(uint64, tag = "2")]
+    pub tx_id: u64,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StatusIds {}
 /// Nested message and enum types in `StatusIds`.
 pub mod status_ids {
@@ -122,6 +137,7 @@ pub mod status_ids {
         Undetermined = 400170,
         Unsupported = 400180,
         SessionBusy = 400190,
+        ExternalError = 400200,
     }
     impl StatusCode {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -149,6 +165,7 @@ pub mod status_ids {
                 StatusCode::Undetermined => "UNDETERMINED",
                 StatusCode::Unsupported => "UNSUPPORTED",
                 StatusCode::SessionBusy => "SESSION_BUSY",
+                StatusCode::ExternalError => "EXTERNAL_ERROR",
             }
         }
     }
@@ -228,10 +245,27 @@ pub struct TaggedType {
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PgType {
+    #[prost(string, tag = "10")]
+    pub type_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "11")]
+    pub type_modifier: ::prost::alloc::string::String,
+    /// pg object id of the type
+    /// full registry could be found here: <https://github.com/postgres/postgres/blob/master/src/include/catalog/pg_type.dat>
+    #[prost(uint32, tag = "1")]
+    pub oid: u32,
+    /// advanced type details useful for pg wire format proxying
+    #[prost(int32, tag = "2")]
+    pub typlen: i32,
+    #[prost(int32, tag = "3")]
+    pub typmod: i32,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Type {
     #[prost(
         oneof = "r#type::Type",
-        tags = "1, 2, 101, 102, 103, 104, 105, 106, 107, 201, 202, 203, 204"
+        tags = "1, 2, 101, 102, 103, 104, 105, 106, 107, 201, 202, 203, 204, 205"
     )]
     pub r#type: ::core::option::Option<r#type::Type>,
 }
@@ -345,6 +379,8 @@ pub mod r#type {
         EmptyListType(i32),
         #[prost(enumeration = "super::super::google::protobuf::NullValue", tag = "204")]
         EmptyDictType(i32),
+        #[prost(message, tag = "205")]
+        PgType(super::PgType),
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]

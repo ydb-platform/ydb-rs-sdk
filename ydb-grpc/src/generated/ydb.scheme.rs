@@ -75,6 +75,9 @@ pub struct Entry {
     /// Empty (zero) in other cases.
     #[prost(uint64, tag = "8")]
     pub size_bytes: u64,
+    /// Virtual timestamp when the object was created
+    #[prost(message, optional, tag = "9")]
+    pub created_at: ::core::option::Option<super::VirtualTimestamp>,
 }
 /// Nested message and enum types in `Entry`.
 pub mod entry {
@@ -100,9 +103,14 @@ pub mod entry {
         RtmrVolume = 5,
         BlockStoreVolume = 6,
         CoordinationNode = 7,
+        ColumnStore = 12,
+        ColumnTable = 13,
         Sequence = 15,
         Replication = 16,
         Topic = 17,
+        ExternalTable = 18,
+        ExternalDataSource = 19,
+        View = 20,
     }
     impl Type {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -118,9 +126,14 @@ pub mod entry {
                 Type::RtmrVolume => "RTMR_VOLUME",
                 Type::BlockStoreVolume => "BLOCK_STORE_VOLUME",
                 Type::CoordinationNode => "COORDINATION_NODE",
+                Type::ColumnStore => "COLUMN_STORE",
+                Type::ColumnTable => "COLUMN_TABLE",
                 Type::Sequence => "SEQUENCE",
                 Type::Replication => "REPLICATION",
                 Type::Topic => "TOPIC",
+                Type::ExternalTable => "EXTERNAL_TABLE",
+                Type::ExternalDataSource => "EXTERNAL_DATA_SOURCE",
+                Type::View => "VIEW",
             }
         }
     }
@@ -193,6 +206,17 @@ pub struct ModifyPermissionsRequest {
     /// Clear all permissions on the object for all subjects
     #[prost(bool, tag = "4")]
     pub clear_permissions: bool,
+    #[prost(oneof = "modify_permissions_request::Inheritance", tags = "5")]
+    pub inheritance: ::core::option::Option<modify_permissions_request::Inheritance>,
+}
+/// Nested message and enum types in `ModifyPermissionsRequest`.
+pub mod modify_permissions_request {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Inheritance {
+        #[prost(bool, tag = "5")]
+        InterruptInheritance(bool),
+    }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]

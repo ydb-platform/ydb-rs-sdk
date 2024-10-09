@@ -13,9 +13,13 @@ pub enum MessageSkipReason {
 }
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
+pub struct MessageWriteInTxInfo {}
+
+#[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 pub enum MessageWriteStatus {
     Written(MessageWriteInfo),
     Skipped(MessageSkipReason),
+    WrittenInTx(MessageWriteInTxInfo),
     Unknown,
 }
 
@@ -47,6 +51,9 @@ impl From<Option<write_response::write_ack::MessageWriteStatus>> for MessageWrit
             }
             Some(write_response::write_ack::MessageWriteStatus::Skipped(skip_info)) => {
                 MessageWriteStatus::Skipped(MessageSkipReason::from(skip_info.reason))
+            }
+            Some(write_response::write_ack::MessageWriteStatus::WrittenInTx(_write_info)) => {
+                MessageWriteStatus::WrittenInTx(MessageWriteInTxInfo{})
             }
         }
     }

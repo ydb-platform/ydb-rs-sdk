@@ -280,6 +280,9 @@ impl TryFrom<ydb_grpc::ydb_proto::Type> for RawType {
                     item_type: RawType::try_from(*t)?,
                 }))
             }
+            ProtoType::PgType(_pg_type) => {
+                return decode_err("pg type unimplemented yet");
+            }
             ProtoType::VoidType(_) => RawType::Void,
             ProtoType::NullType(_) => RawType::Null,
             ProtoType::EmptyListType(_) => RawType::EmptyList,

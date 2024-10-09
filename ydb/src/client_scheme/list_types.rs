@@ -15,6 +15,8 @@ pub enum SchemeEntryType {
     Unspecified,
     Directory,
     Table,
+    ColumnStrore,
+    ColumnTable,
     PersQueueGroup,
     Database,
     RtmrVolume,
@@ -23,6 +25,9 @@ pub enum SchemeEntryType {
     Sequence,
     Replication,
     Topic,
+    ExternalDataSource,
+    ExternalTable,
+    View,
     Unknown(i32),
 }
 

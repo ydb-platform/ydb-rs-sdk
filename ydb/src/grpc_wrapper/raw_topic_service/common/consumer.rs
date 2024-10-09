@@ -35,6 +35,7 @@ impl From<RawConsumer> for Consumer {
             read_from,
             supported_codecs: Some(SupportedCodecs::from(value.supported_codecs)),
             attributes: value.attributes,
+            consumer_stats: None,
         }
     }
 }
