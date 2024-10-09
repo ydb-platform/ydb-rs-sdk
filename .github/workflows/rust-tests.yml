@@ -12,7 +12,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
   RUST_VERSION_OLD: "1.60.0"
-  RUST_VERSION_NEW: "1.79.0"
+  RUST_VERSION_NEW: "1.81.0"
 
 jobs:
   tests:
@@ -65,6 +65,6 @@ jobs:
       run: cargo test --verbose --workspace -- --include-ignored
 
     - name: Linter
-      if: matrix.rust_version == 'NEW'
+      if: matrix.rust_version == 'RUST_VERSION_NEW'
       run: |
-        cargo clippy --workspace --all-targets -- -D warnings
+        cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
