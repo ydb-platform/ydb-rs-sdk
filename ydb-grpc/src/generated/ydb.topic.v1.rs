@@ -174,6 +174,51 @@ pub mod topic_service_client {
             );
             self.inner.streaming(request.into_streaming_request(), path, codec).await
         }
+        /// Single commit offset request.
+        pub async fn commit_offset(
+            &mut self,
+            request: impl tonic::IntoRequest<super::super::CommitOffsetRequest>,
+        ) -> Result<tonic::Response<super::super::CommitOffsetResponse>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/Ydb.Topic.V1.TopicService/CommitOffset",
+            );
+            self.inner.unary(request.into_request(), path, codec).await
+        }
+        /// Add information about offset ranges to the transaction.
+        pub async fn update_offsets_in_transaction(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                super::super::UpdateOffsetsInTransactionRequest,
+            >,
+        ) -> Result<
+                tonic::Response<super::super::UpdateOffsetsInTransactionResponse>,
+                tonic::Status,
+            > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/Ydb.Topic.V1.TopicService/UpdateOffsetsInTransaction",
+            );
+            self.inner.unary(request.into_request(), path, codec).await
+        }
         /// Create topic command.
         pub async fn create_topic(
             &mut self,
@@ -214,6 +259,29 @@ pub mod topic_service_client {
             let codec = tonic::codec::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/Ydb.Topic.V1.TopicService/DescribeTopic",
+            );
+            self.inner.unary(request.into_request(), path, codec).await
+        }
+        /// Describe topic's consumer command.
+        pub async fn describe_consumer(
+            &mut self,
+            request: impl tonic::IntoRequest<super::super::DescribeConsumerRequest>,
+        ) -> Result<
+                tonic::Response<super::super::DescribeConsumerResponse>,
+                tonic::Status,
+            > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/Ydb.Topic.V1.TopicService/DescribeConsumer",
             );
             self.inner.unary(request.into_request(), path, codec).await
         }
