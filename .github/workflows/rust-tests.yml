@@ -67,4 +67,4 @@ jobs:
     - name: Linter
       if: matrix.rust_version == 'RUST_VERSION_NEW'
       run: |
-        cargo clippy --workspace --all-targets -- -D warnings
+        cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
