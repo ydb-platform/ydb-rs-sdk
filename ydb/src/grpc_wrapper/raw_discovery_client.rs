@@ -28,6 +28,7 @@ impl GrpcDiscoveryClient {
         };
         let resp = self.service.list_endpoints(req).await?;
         let result: ListEndpointsResult = grpc_read_operation_result(resp)?;
+
         let res = result
             .endpoints
             .into_iter()
@@ -35,6 +36,7 @@ impl GrpcDiscoveryClient {
                 fqdn: item.address,
                 port: item.port,
                 ssl: item.ssl,
+                location: item.location,
             })
             .collect_vec();
         Ok(res)
@@ -45,6 +47,7 @@ pub(crate) struct EndpointInfo {
     pub(crate) fqdn: String,
     pub(crate) port: u32,
     pub(crate) ssl: bool,
+    pub(crate) location: String,
 }
 
 impl GrpcServiceForDiscovery for GrpcDiscoveryClient {
