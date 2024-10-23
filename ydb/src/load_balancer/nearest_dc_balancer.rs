@@ -7,6 +7,7 @@ use std::{
 use http::Uri;
 use itertools::Itertools;
 use rand::{seq::SliceRandom, thread_rng};
+use std::sync::RwLock;
 use std::time::Duration;
 use tokio::{
     io::AsyncWriteExt,
@@ -14,7 +15,6 @@ use tokio::{
     sync::{
         broadcast, mpsc,
         watch::{self, Sender},
-        Mutex,
     },
     task::JoinSet,
 };
@@ -29,7 +29,6 @@ use crate::{
 };
 
 use super::{random_balancer::RandomLoadBalancer, LoadBalancer};
-
 pub(crate) struct BalancerConfig {
     pub(super) fallback_strategy: FallbackStrategy,
 }
@@ -61,13 +60,13 @@ pub(crate) struct NearestDCBalancer {
     ping_token: CancellationToken,
     waiter: Arc<WaiterImpl>,
     config: BalancerConfig,
-    balancer_state: Arc<Mutex<BalancerState>>,
+    balancer_state: Arc<RwLock<BalancerState>>,
 }
 
 impl NearestDCBalancer {
     pub(crate) fn new(config: BalancerConfig) -> YdbResult<Self> {
         let discovery_state = Arc::new(DiscoveryState::default());
-        let balancer_state = Arc::new(Mutex::new(BalancerState::default()));
+        let balancer_state = Arc::new(RwLock::new(BalancerState::default()));
         let balancer_state_updater = balancer_state.clone();
         let (state_sender, state_reciever) = watch::channel(discovery_state.clone());
 
@@ -141,38 +140,41 @@ impl LoadBalancer for NearestDCBalancer {
 
 pub(super) const NODES_PER_DC: usize = 5;
 pub(super) const PING_TIMEOUT_SECS: u64 = 60;
-
 impl NearestDCBalancer {
     fn get_endpoint(&self, service: Service) -> YdbResult<Uri> {
-        match self.balancer_state.try_lock() {
+        match self.balancer_state.read() {
+            // Fast lock
             Ok(state_guard) => {
-                match state_guard
+                if let Some(node) = state_guard
                     .borrow()
                     .preferred_endpoints
                     .choose(&mut thread_rng())
+                    .clone()
                 {
-                    Some(ep) => return YdbResult::Ok(ep.uri.clone()),
-                    None => (),
-                }
-                match self.config.fallback_strategy.borrow() {
-                    FallbackStrategy::Error => Err(YdbError::custom(format!(
-                        "no available endpoints for service:{}",
-                        service
-                    ))),
-                    FallbackStrategy::BalanceWithOther(balancer) => {
-                        info!("trying fallback balancer...");
-                        balancer.endpoint(service)
-                    }
+                    return YdbResult::Ok(node.uri.clone());
                 }
             }
-            Err(_) => Err(YdbError::Custom(
-                "balancer is updating its state".to_string(),
-            )),
+            Err(err) => {
+                error!("error on get_endpoint:{}", err);
+                return Err(YdbError::Custom(format!(
+                    "could not acquire mutex on get_endpoint"
+                )));
+            }
+        };
+        match self.config.fallback_strategy.borrow() {
+            FallbackStrategy::Error => Err(YdbError::custom(format!(
+                "no available endpoints for service:{}",
+                service
+            ))),
+            FallbackStrategy::BalanceWithOther(balancer) => {
+                info!("trying fallback balancer...");
+                balancer.endpoint(service)
+            }
         }
     }
 
     pub(super) async fn adjust_local_dc(
-        balancer_state: Arc<Mutex<BalancerState>>,
+        balancer_state: Arc<RwLock<BalancerState>>,
         mut state_reciever: watch::Receiver<Arc<DiscoveryState>>,
         stop_ping_process: CancellationToken,
         waiter: Arc<WaiterImpl>,
@@ -198,7 +200,6 @@ impl NearestDCBalancer {
                     });
                     match Self::find_local_dc(&to_check).await {
                         Ok(dc) => {
-                            info!("found new local dc:{}", dc);
                             Self::adjust_preferred_endpoints(&balancer_state, some_nodes, dc).await;
                             waiter.set_received(Ok(()));
                         }
@@ -214,19 +215,23 @@ impl NearestDCBalancer {
     }
 
     async fn adjust_preferred_endpoints(
-        balancer_state: &Arc<Mutex<BalancerState>>,
+        balancer_state: &Arc<RwLock<BalancerState>>,
         new_nodes: &Vec<NodeInfo>,
         local_dc: String,
     ) {
-        info!("adjusting endpoints");
         let new_preferred_endpoints = new_nodes
             .into_iter()
             .filter(|ep| ep.location == local_dc)
             .map(|ep| ep.clone())
             .collect_vec();
-        (balancer_state.lock().await) // fast lock
-            .borrow_mut()
-            .preferred_endpoints = new_preferred_endpoints;
+        // Fast lock
+        match balancer_state.write() {
+            Ok(mut guard) => guard.borrow_mut().preferred_endpoints = new_preferred_endpoints,
+            Err(err) => {
+                error!("error on adjust_preferred_endpoints:{}", err);
+                return;
+            }
+        }
     }
 
     pub(super) fn extract_nodes(from_state: &Arc<DiscoveryState>) -> YdbResult<&Vec<NodeInfo>> {
@@ -315,10 +320,10 @@ impl NearestDCBalancer {
         // Cancellation flow: timeout -> address collector -> address producers
         let interrupt_via_timeout = CancellationToken::new();
         let interrupt_collector_future = interrupt_via_timeout.child_token();
-        let stop_measure = interrupt_collector_future.child_token(); // (*)
+        let stop_measure = interrupt_collector_future.child_token();
 
         let (start_measure, _) = broadcast::channel::<()>(1);
-        let buffer_cap = if addrs.len() > 0 { addrs.len() } else { 1 };
+        let buffer_cap = if !addrs.is_empty() { addrs.len() } else { 1 };
         let (addr_sender, mut addr_reciever) = mpsc::channel::<String>(buffer_cap);
         let mut nursery = JoinSet::new();
 
@@ -334,13 +339,11 @@ impl NearestDCBalancer {
                 let _ = wait_for_start.recv().await;
                 tokio::select! {
                     connection_result = TcpStream::connect(addr.clone()) =>{
-                        match connection_result{
-                            Ok(mut connection) => {
-                                let _ = connection.shutdown().await;
-                                let _ = addr_sender.send(addr).await;
-                            },
-                            Err(_) => (), // Just do nothing if there is error on connection attempt
+                        if let Ok(mut connection) =  connection_result{
+                            let _ = connection.shutdown().await;
+                            let _ = addr_sender.send(addr).await;
                         }
+                        // Send nothing if connection is faulty
                     }
                     _ = stop_measure.cancelled() => {
                         (); // Also do nothing if there is request to stop pings (balancer already got fastest address)
@@ -350,22 +353,20 @@ impl NearestDCBalancer {
         }
 
         let wait_first_some_or_cancel = async {
-            loop {
-                tokio::select! {
-                    biased; // check timeout first
-                    _ = interrupt_collector_future.cancelled() =>{
-                        Self::join_all(&mut nursery).await; // Children will be cancelled due to tokens chaining, see (*)
-                        return YdbResult::Err("cancelled".into())
-                    }
-                    address_option = addr_reciever.recv() =>{
-                        match address_option {
-                            Some(address) => {
-                                interrupt_collector_future.cancel(); // Cancel other producing children
-                                Self::join_all(&mut nursery).await;
-                                return YdbResult::Ok(address);
-                            },
-                            None => return YdbResult::Err("no fastest address".into()), // Channel closed, all producers have done measures
-                        }
+            tokio::select! {
+                biased; // check timeout first
+                _ = interrupt_collector_future.cancelled() =>{
+                    Self::join_all(&mut nursery).await; // Children will be cancelled due to tokens chaining
+                    YdbResult::Err("cancelled".into())
+                }
+                address_option = addr_reciever.recv() =>{
+                    match address_option {
+                        Some(address) => {
+                            interrupt_collector_future.cancel(); // Cancel other producing children
+                            Self::join_all(&mut nursery).await;
+                            YdbResult::Ok(address)
+                        },
+                        None => Err(YdbError::Custom("no fastest address".into())), // Channel closed, all producers have done measures
                     }
                 }
             }

@@ -17,10 +17,10 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::sync::{watch, Mutex};
+use tokio::sync::watch;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
@@ -388,7 +388,7 @@ async fn adjusting_dc() -> YdbResult<()> {
     println!("Listener №3 on: {}", l3_addr);
 
     let discovery_state = Arc::new(DiscoveryState::default());
-    let balancer_state = Arc::new(Mutex::new(BalancerState::default()));
+    let balancer_state = Arc::new(RwLock::new(BalancerState::default()));
     let balancer_state_updater = balancer_state.clone();
     let (state_sender, state_reciever) = watch::channel(discovery_state.clone());
 
@@ -433,7 +433,9 @@ async fn adjusting_dc() -> YdbResult<()> {
             ),
     );
     assert!(
-        (balancer_state.lock().await)
+        balancer_state
+            .read()
+            .unwrap()
             .borrow()
             .preferred_endpoints
             .len()
@@ -443,7 +445,9 @@ async fn adjusting_dc() -> YdbResult<()> {
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_true!(timeout(Duration::from_secs(3), waiter.wait()).await.is_ok()); // should not wait
     assert!(
-        (balancer_state.lock().await)
+        balancer_state
+            .read()
+            .unwrap()
             .borrow()
             .preferred_endpoints
             .len()
@@ -470,7 +474,9 @@ async fn adjusting_dc() -> YdbResult<()> {
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_true!(timeout(Duration::from_secs(3), waiter.wait()).await.is_ok()); // should not wait
     assert!(
-        (balancer_state.lock().await)
+        balancer_state
+            .read()
+            .unwrap()
             .borrow()
             .preferred_endpoints
             .len()
