@@ -1,7 +1,8 @@
 use super::*;
 use super::{
-    update_load_balancer, BalancerConfig, LoadBalancer, MockLoadBalancer, NearestDCBalancer,
-    RandomLoadBalancer, SharedLoadBalancer,
+    nearest_dc_balancer::{BalancerConfig, FallbackStrategy, NearestDCBalancer},
+    random_balancer::RandomLoadBalancer,
+    LoadBalancer, MockLoadBalancer, SharedLoadBalancer,
 };
 use crate::discovery::NodeInfo;
 use crate::grpc_wrapper::raw_services::Service::Table;
@@ -12,6 +13,7 @@ use itertools::Itertools;
 use mockall::predicate;
 use nearest_dc_balancer::{BalancerState, NODES_PER_DC, PING_TIMEOUT_SECS};
 use ntest::assert_true;
+use num::One;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -232,7 +234,7 @@ async fn detect_fastest_addr_just_some() -> YdbResult<()> {
     println!("Listener №2 on: {}", l2_addr);
     println!("Listener №3 on: {}", l3_addr);
 
-    let nodes = vec![
+    let nodes = [
         l1_addr.to_string(),
         l2_addr.to_string(),
         l3_addr.to_string(),
@@ -264,7 +266,7 @@ async fn detect_fastest_addr_with_fault() -> YdbResult<()> {
     println!("Listener №2 on: {}", l2_addr);
     println!("Listener №3 on: {}", l3_addr);
 
-    let nodes = vec![
+    let nodes = [
         l1_addr.to_string(),
         l2_addr.to_string(),
         l3_addr.to_string(),
@@ -298,7 +300,7 @@ async fn detect_fastest_addr_one_alive() -> YdbResult<()> {
     println!("Listener №2 on: {}", l2_addr);
     println!("Listener №3 on: {}", l3_addr);
 
-    let nodes = vec![
+    let nodes = [
         l1_addr.to_string(),
         l2_addr.to_string(),
         l3_addr.to_string(),
@@ -333,7 +335,7 @@ async fn detect_fastest_addr_timeout() -> YdbResult<()> {
     println!("Listener №2 on: {}", l2_addr);
     println!("Listener №3 on: {}", l3_addr);
 
-    let nodes = vec![
+    let nodes = [
         l1_addr.to_string(),
         l2_addr.to_string(),
         l3_addr.to_string(),
@@ -432,15 +434,12 @@ async fn adjusting_dc() -> YdbResult<()> {
                 ),
             ),
     );
-    assert!(
-        balancer_state
-            .read()
-            .unwrap()
-            .borrow()
-            .preferred_endpoints
-            .len()
-            == 0 // no endpoints
-    );
+    assert!(balancer_state
+        .read()
+        .unwrap()
+        .borrow()
+        .preferred_endpoints
+        .is_empty());
     let _ = state_sender.send(updated_state);
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_true!(timeout(Duration::from_secs(3), waiter.wait()).await.is_ok()); // should not wait
@@ -451,7 +450,7 @@ async fn adjusting_dc() -> YdbResult<()> {
             .borrow()
             .preferred_endpoints
             .len()
-            == 1 // only one endpoint in each dc
+            .is_one() // only one endpoint in each dc
     );
     let updated_state_next = Arc::new(
         DiscoveryState::default()

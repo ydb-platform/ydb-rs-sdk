@@ -39,6 +39,7 @@ pub(super) struct BalancerState {
 }
 
 // What will balancer do if there is no available endpoints at local dc
+#[allow(dead_code)]
 pub(crate) enum FallbackStrategy {
     Error,                                   // Just throw error
     BalanceWithOther(Box<dyn LoadBalancer>), // Use another balancer
@@ -63,6 +64,7 @@ pub(crate) struct NearestDCBalancer {
     balancer_state: Arc<RwLock<BalancerState>>,
 }
 
+#[allow(dead_code)]
 impl NearestDCBalancer {
     pub(crate) fn new(config: BalancerConfig) -> YdbResult<Self> {
         let discovery_state = Arc::new(DiscoveryState::default());
@@ -140,6 +142,8 @@ impl LoadBalancer for NearestDCBalancer {
 
 pub(super) const NODES_PER_DC: usize = 5;
 pub(super) const PING_TIMEOUT_SECS: u64 = 60;
+
+#[allow(dead_code)]
 impl NearestDCBalancer {
     fn get_endpoint(&self, service: Service) -> YdbResult<Uri> {
         match self.balancer_state.read() {
@@ -149,16 +153,15 @@ impl NearestDCBalancer {
                     .borrow()
                     .preferred_endpoints
                     .choose(&mut thread_rng())
-                    .clone()
                 {
                     return YdbResult::Ok(node.uri.clone());
                 }
             }
             Err(err) => {
                 error!("error on get_endpoint:{}", err);
-                return Err(YdbError::Custom(format!(
-                    "could not acquire mutex on get_endpoint"
-                )));
+                return Err(YdbError::Custom(
+                    "could not acquire mutex on get_endpoint".to_string(),
+                ));
             }
         };
         match self.config.fallback_strategy.borrow() {
@@ -216,20 +219,19 @@ impl NearestDCBalancer {
 
     async fn adjust_preferred_endpoints(
         balancer_state: &Arc<RwLock<BalancerState>>,
-        new_nodes: &Vec<NodeInfo>,
+        new_nodes: &[NodeInfo],
         local_dc: String,
     ) {
         let new_preferred_endpoints = new_nodes
-            .into_iter()
+            .iter()
             .filter(|ep| ep.location == local_dc)
-            .map(|ep| ep.clone())
+            .cloned()
             .collect_vec();
         // Fast lock
         match balancer_state.write() {
             Ok(mut guard) => guard.borrow_mut().preferred_endpoints = new_preferred_endpoints,
             Err(err) => {
                 error!("error on adjust_preferred_endpoints:{}", err);
-                return;
             }
         }
     }
@@ -237,18 +239,18 @@ impl NearestDCBalancer {
     pub(super) fn extract_nodes(from_state: &Arc<DiscoveryState>) -> YdbResult<&Vec<NodeInfo>> {
         let nodes = from_state.get_all_nodes();
         match nodes {
-            None => Err(YdbError::Custom(format!(
-                "no endpoints on discovery update"
-            ))),
+            None => Err(YdbError::Custom(
+                "no endpoints on discovery update".to_string(),
+            )),
             Some(nodes) => Ok(nodes),
         }
     }
 
-    pub(super) fn split_endpoints_by_location<'a>(
-        nodes: &'a Vec<NodeInfo>,
+    pub(super) fn split_endpoints_by_location(
+        nodes: &[NodeInfo],
     ) -> HashMap<String, Vec<&NodeInfo>> {
         let mut dc_to_eps = HashMap::<String, Vec<&NodeInfo>>::new();
-        nodes.into_iter().for_each(|info| {
+        nodes.iter().for_each(|info| {
             if let Some(nodes) = dc_to_eps.get_mut(&info.location) {
                 nodes.push(info);
             } else {
@@ -269,7 +271,9 @@ impl NearestDCBalancer {
     pub(super) async fn find_local_dc(to_check: &[&NodeInfo]) -> YdbResult<String> {
         let addr_to_node = Self::addr_to_node(to_check);
         if addr_to_node.is_empty() {
-            return Err(YdbError::Custom(format!("no ip addresses for endpoints")));
+            return Err(YdbError::Custom(
+                "no ip addresses for endpoints".to_string(),
+            ));
         }
         let addrs = addr_to_node.keys();
         match Self::find_fastest_address(addrs.collect(), Duration::from_secs(PING_TIMEOUT_SECS))
@@ -285,29 +289,26 @@ impl NearestDCBalancer {
 
     pub(super) fn addr_to_node<'a>(nodes: &[&'a NodeInfo]) -> HashMap<String, &'a NodeInfo> {
         let mut addr_to_node = HashMap::<String, &NodeInfo>::with_capacity(2 * nodes.len()); // ipv4 + ipv6
-        nodes.into_iter().for_each(|info| {
-            let host: &str;
-            let port: u16;
-            match info.uri.host() {
-                Some(uri_host) => host = uri_host,
+        nodes.iter().for_each(|info| {
+            let host = match info.uri.host() {
+                Some(uri_host) => uri_host,
                 None => {
                     warn!("no host for uri:{}", info.uri);
                     return;
                 }
-            }
-            match info.uri.port() {
-                Some(uri_port) => port = uri_port.as_u16(),
+            };
+            let port = match info.uri.port() {
+                Some(uri_port) => uri_port.as_u16(),
                 None => {
                     warn!("no port for uri:{}", info.uri);
                     return;
                 }
-            }
+            };
             use std::net::ToSocketAddrs;
-            let _ = (host, port).to_socket_addrs().and_then(|addrs| {
+            let _ = (host, port).to_socket_addrs().map(|addrs| {
                 for addr in addrs {
                     addr_to_node.insert(addr.to_string(), info);
                 }
-                Ok(())
             });
         });
         addr_to_node
@@ -346,7 +347,7 @@ impl NearestDCBalancer {
                         // Send nothing if connection is faulty
                     }
                     _ = stop_measure.cancelled() => {
-                        (); // Also do nothing if there is request to stop pings (balancer already got fastest address)
+                         // Also do nothing if there is request to stop pings (balancer already got fastest address)
                     }
                 }
             });

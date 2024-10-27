@@ -12,8 +12,6 @@ pub mod random_balancer;
 pub mod shared_balancer;
 pub mod static_balancer;
 
-pub(crate) use nearest_dc_balancer::{BalancerConfig, FallbackStrategy, NearestDCBalancer};
-pub(crate) use random_balancer::RandomLoadBalancer;
 pub(crate) use shared_balancer::SharedLoadBalancer;
 pub(crate) use static_balancer::StaticLoadBalancer;
 
