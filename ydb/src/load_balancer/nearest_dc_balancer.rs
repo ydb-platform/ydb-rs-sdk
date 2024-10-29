@@ -56,7 +56,6 @@ impl Default for BalancerConfig {
 }
 
 pub(crate) struct NearestDCBalancer {
-    discovery_state: Arc<DiscoveryState>,
     state_sender: Sender<Arc<DiscoveryState>>,
     ping_token: CancellationToken,
     waiter: Arc<WaiterImpl>,
@@ -89,7 +88,6 @@ impl NearestDCBalancer {
         });
 
         Ok(Self {
-            discovery_state,
             state_sender,
             ping_token,
             waiter,
@@ -124,7 +122,6 @@ impl LoadBalancer for NearestDCBalancer {
             }
             FallbackStrategy::Error => (),
         }
-        self.discovery_state = discovery_state.clone();
         let _ = self.state_sender.send(discovery_state.clone());
         Ok(())
     }
