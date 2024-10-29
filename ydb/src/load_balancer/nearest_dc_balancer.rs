@@ -57,7 +57,7 @@ impl Default for BalancerConfig {
 
 pub(crate) struct NearestDCBalancer {
     state_sender: Sender<Arc<DiscoveryState>>,
-    ping_token: CancellationToken,
+    adjusting_proccess_token: CancellationToken,
     waiter: Arc<WaiterImpl>,
     config: BalancerConfig,
     balancer_state: Arc<RwLock<BalancerState>>,
@@ -71,8 +71,8 @@ impl NearestDCBalancer {
         let balancer_state_updater = balancer_state.clone();
         let (state_sender, state_reciever) = watch::channel(discovery_state.clone());
 
-        let ping_token = CancellationToken::new();
-        let ping_token_clone = ping_token.clone();
+        let adjusting_proccess_token = CancellationToken::new();
+        let adjusting_proccess_token_clone = adjusting_proccess_token.clone();
 
         let waiter = Arc::new(WaiterImpl::new());
         let waiter_clone = waiter.clone();
@@ -81,7 +81,7 @@ impl NearestDCBalancer {
             Self::adjust_local_dc(
                 balancer_state_updater,
                 state_reciever,
-                ping_token_clone,
+                adjusting_proccess_token_clone,
                 waiter_clone,
             )
             .await
@@ -89,7 +89,7 @@ impl NearestDCBalancer {
 
         Ok(Self {
             state_sender,
-            ping_token,
+            adjusting_proccess_token,
             waiter,
             config,
             balancer_state,
@@ -99,7 +99,7 @@ impl NearestDCBalancer {
 
 impl Drop for NearestDCBalancer {
     fn drop(&mut self) {
-        self.ping_token.cancel();
+        self.adjusting_proccess_token.cancel();
     }
 }
 
@@ -321,7 +321,7 @@ impl NearestDCBalancer {
         let stop_measure = interrupt_collector_future.child_token();
 
         let (start_measure, _) = broadcast::channel::<()>(1);
-        let buffer_cap = if !addrs.is_empty() { addrs.len() } else { 1 };
+        let buffer_cap = if addrs.is_empty() { 1 } else { addrs.len() };
         let (addr_sender, mut addr_reciever) = mpsc::channel::<String>(buffer_cap);
         let mut nursery = JoinSet::new();
 
