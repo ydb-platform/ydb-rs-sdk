@@ -1,4 +1,4 @@
-use crate::YdbResult;
+use crate::{YdbError, YdbResult};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -63,5 +63,31 @@ impl Waiter for WaiterImpl {
 impl Waiter for Arc<WaiterImpl> {
     async fn wait(&self) -> YdbResult<()> {
         self.as_ref().wait().await
+    }
+}
+
+pub(crate) struct AllWaiter {
+    waiters: Vec<Box<dyn Waiter>>,
+}
+
+impl AllWaiter {
+    pub fn new(waiters: Vec<Box<dyn Waiter>>) -> Self {
+        Self { waiters }
+    }
+}
+
+#[async_trait::async_trait]
+impl Waiter for AllWaiter {
+    async fn wait(&self) -> YdbResult<()> {
+        let awaitables = self
+            .waiters
+            .iter()
+            .map(|waiter| waiter.wait())
+            .collect::<Vec<_>>();
+        futures_util::future::join_all(awaitables)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<()>, YdbError>>()?; // If some waiters produced error - return first, otherwise - Ok
+        Ok(())
     }
 }
