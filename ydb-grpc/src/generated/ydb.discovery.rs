@@ -74,3 +74,32 @@ pub struct WhoAmIResponse {
     #[prost(message, optional, tag = "1")]
     pub operation: ::core::option::Option<super::operations::Operation>,
 }
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NodeLocation {
+    /// compatibility section -- will be removed in future versions
+    #[deprecated]
+    #[prost(uint32, optional, tag = "1")]
+    pub data_center_num: ::core::option::Option<u32>,
+    #[deprecated]
+    #[prost(uint32, optional, tag = "2")]
+    pub room_num: ::core::option::Option<u32>,
+    #[deprecated]
+    #[prost(uint32, optional, tag = "3")]
+    pub rack_num: ::core::option::Option<u32>,
+    #[deprecated]
+    #[prost(uint32, optional, tag = "4")]
+    pub body_num: ::core::option::Option<u32>,
+    /// for compatibility with WalleLocation
+    #[deprecated]
+    #[prost(uint32, optional, tag = "100500")]
+    pub body: ::core::option::Option<u32>,
+    #[prost(string, optional, tag = "10")]
+    pub data_center: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "20")]
+    pub module: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "30")]
+    pub rack: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "40")]
+    pub unit: ::core::option::Option<::prost::alloc::string::String>,
+}

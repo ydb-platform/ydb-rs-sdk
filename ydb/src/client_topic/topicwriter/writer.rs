@@ -245,6 +245,7 @@ impl TopicWriter {
                                 as i64,
                             nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
                         }),
+                        metadata_items: vec![],
                         data: message.data,
                         uncompressed_size: data_size,
                         partitioning: Some(message_data::Partitioning::MessageGroupId(
@@ -270,6 +271,7 @@ impl TopicWriter {
                     client_message: Some(ClientMessage::WriteRequest(WriteRequest {
                         messages,
                         codec: 1,
+                        tx: None,
                     })),
                 })
                 .unwrap(); // TODO: HANDLE ERROR

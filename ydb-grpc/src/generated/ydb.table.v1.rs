@@ -494,6 +494,26 @@ pub mod table_service_client {
             );
             self.inner.server_streaming(request.into_request(), path, codec).await
         }
+        /// Reads specified keys non-transactionally from a single table
+        pub async fn read_rows(
+            &mut self,
+            request: impl tonic::IntoRequest<super::super::ReadRowsRequest>,
+        ) -> Result<tonic::Response<super::super::ReadRowsResponse>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/Ydb.Table.V1.TableService/ReadRows",
+            );
+            self.inner.unary(request.into_request(), path, codec).await
+        }
         /// Upserts a batch of rows non-transactionally.
         /// Returns success only when all rows were successfully upserted. In case of an error some rows might
         /// be upserted and some might not.

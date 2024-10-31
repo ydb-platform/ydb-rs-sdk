@@ -656,6 +656,66 @@ SELECT CAST(NULL AS Optional<Int64>)
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
+async fn select_with_u8_param() -> YdbResult<()> {
+    let client = create_client().await?;
+    let mut transaction = client
+        .table_client()
+        .create_autocommit_transaction(Mode::OnlineReadonly);
+    let res = transaction.query(
+        Query::from(r#"
+            DECLARE $val AS Uint8;
+            SELECT $val as s
+        "#).with_params(ydb_params!(
+            "$val" => 99u8
+        )))
+        .await?;
+    trace!("result: {:?}", &res);
+    assert_eq!(
+        Value::Uint8(99u8),
+        res.into_only_result()
+            .unwrap()
+            .rows()
+            .next()
+            .unwrap()
+            .remove_field_by_name("s")
+            .unwrap()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn select_with_u16_param() -> YdbResult<()> {
+    let client = create_client().await?;
+    let mut transaction = client
+        .table_client()
+        .create_autocommit_transaction(Mode::OnlineReadonly);
+    let res = transaction.query(
+        Query::from(r#"
+            DECLARE $val AS Uint16;
+            SELECT $val as s
+        "#).with_params(ydb_params!(
+            "$val" => 34111u16
+        )))
+        .await?;
+    trace!("result: {:?}", &res);
+    assert_eq!(
+        Value::Uint16(34111u16),
+        res.into_only_result()
+            .unwrap()
+            .rows()
+            .next()
+            .unwrap()
+            .remove_field_by_name("s")
+            .unwrap()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
 async fn select_void_null() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client

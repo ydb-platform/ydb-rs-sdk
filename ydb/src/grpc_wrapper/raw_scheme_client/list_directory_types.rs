@@ -73,6 +73,8 @@ fn from_grpc_code_to_scheme_entry_type(value: i32) -> SchemeEntryType {
         Some(grpcT::Unspecified) => SchemeEntryType::Unspecified,
         Some(grpcT::Directory) => SchemeEntryType::Directory,
         Some(grpcT::Table) => SchemeEntryType::Table,
+        Some(grpcT::ColumnStore) => SchemeEntryType::ColumnStrore,
+        Some(grpcT::ColumnTable) => SchemeEntryType::ColumnTable,
         Some(grpcT::PersQueueGroup) => SchemeEntryType::PersQueueGroup,
         Some(grpcT::Database) => SchemeEntryType::Database,
         Some(grpcT::RtmrVolume) => SchemeEntryType::RtmrVolume,
@@ -81,6 +83,9 @@ fn from_grpc_code_to_scheme_entry_type(value: i32) -> SchemeEntryType {
         Some(grpcT::Sequence) => SchemeEntryType::Sequence,
         Some(grpcT::Replication) => SchemeEntryType::Replication,
         Some(grpcT::Topic) => SchemeEntryType::Topic,
+        Some(grpcT::ExternalDataSource) => SchemeEntryType::ExternalDataSource,
+        Some(grpcT::ExternalTable) => SchemeEntryType::ExternalTable,
+        Some(grpcT::View) => SchemeEntryType::View,
         None => SchemeEntryType::Unknown(value),
     }
 }

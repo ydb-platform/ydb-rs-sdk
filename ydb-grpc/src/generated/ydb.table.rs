@@ -42,6 +42,9 @@ pub struct GlobalIndex {}
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalAsyncIndex {}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GlobalUniqueIndex {}
 /// Represent secondary index
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -56,7 +59,7 @@ pub struct TableIndex {
     #[prost(string, repeated, tag = "5")]
     pub data_columns: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// Type of index
-    #[prost(oneof = "table_index::Type", tags = "3, 4")]
+    #[prost(oneof = "table_index::Type", tags = "3, 4, 6")]
     pub r#type: ::core::option::Option<table_index::Type>,
 }
 /// Nested message and enum types in `TableIndex`.
@@ -69,6 +72,8 @@ pub mod table_index {
         GlobalIndex(super::GlobalIndex),
         #[prost(message, tag = "4")]
         GlobalAsyncIndex(super::GlobalAsyncIndex),
+        #[prost(message, tag = "6")]
+        GlobalUniqueIndex(super::GlobalUniqueIndex),
     }
 }
 /// Represent secondary index with index state
@@ -90,7 +95,7 @@ pub struct TableIndexDescription {
     #[prost(uint64, tag = "7")]
     pub size_bytes: u64,
     /// Type of index
-    #[prost(oneof = "table_index_description::Type", tags = "3, 5")]
+    #[prost(oneof = "table_index_description::Type", tags = "3, 5, 8")]
     pub r#type: ::core::option::Option<table_index_description::Type>,
 }
 /// Nested message and enum types in `TableIndexDescription`.
@@ -135,6 +140,8 @@ pub mod table_index_description {
         GlobalIndex(super::GlobalIndex),
         #[prost(message, tag = "5")]
         GlobalAsyncIndex(super::GlobalAsyncIndex),
+        #[prost(message, tag = "8")]
+        GlobalUniqueIndex(super::GlobalUniqueIndex),
     }
 }
 /// State of index building operation
@@ -272,7 +279,12 @@ pub mod changefeed_format {
     #[repr(i32)]
     pub enum Format {
         Unspecified = 0,
+        /// Change record in JSON format for common (row oriented) tables
         Json = 1,
+        /// Change record in JSON format for document (DynamoDB-compatible) tables
+        DynamodbStreamsJson = 2,
+        /// Debezium-like change record JSON format for common (row oriented) tables
+        DebeziumJson = 3,
     }
     impl Format {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -282,6 +294,8 @@ pub mod changefeed_format {
             match self {
                 Format::Unspecified => "FORMAT_UNSPECIFIED",
                 Format::Json => "FORMAT_JSON",
+                Format::DynamodbStreamsJson => "FORMAT_DYNAMODB_STREAMS_JSON",
+                Format::DebeziumJson => "FORMAT_DEBEZIUM_JSON",
             }
         }
     }
@@ -298,6 +312,36 @@ pub struct Changefeed {
     /// Format of the data
     #[prost(enumeration = "changefeed_format::Format", tag = "3")]
     pub format: i32,
+    /// How long data in changefeed's underlying topic should be stored
+    #[prost(message, optional, tag = "4")]
+    pub retention_period: ::core::option::Option<
+        super::super::google::protobuf::Duration,
+    >,
+    /// Emit virtual timestamps of changes along with data or not
+    #[prost(bool, tag = "5")]
+    pub virtual_timestamps: bool,
+    /// Initial scan will output the current state of the table first
+    #[prost(bool, tag = "6")]
+    pub initial_scan: bool,
+    /// Attributes. Total size is limited to 10 KB.
+    #[prost(map = "string, string", tag = "7")]
+    pub attributes: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
+    /// Value that will be emitted in the `awsRegion` field of the record in DYNAMODB_STREAMS_JSON format
+    #[prost(string, tag = "8")]
+    pub aws_region: ::prost::alloc::string::String,
+    /// Periodically emit resolved timestamps. If unspecified, resolved timestamps are not emitted.
+    #[prost(message, optional, tag = "9")]
+    pub resolved_timestamps_interval: ::core::option::Option<
+        super::super::google::protobuf::Duration,
+    >,
+    /// Partitioning settings of underlying topic.
+    #[prost(message, optional, tag = "10")]
+    pub topic_partitioning_settings: ::core::option::Option<
+        super::topic::PartitioningSettings,
+    >,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -314,6 +358,23 @@ pub struct ChangefeedDescription {
     /// State of the feed
     #[prost(enumeration = "changefeed_description::State", tag = "4")]
     pub state: i32,
+    /// State of emitting of virtual timestamps along with data
+    #[prost(bool, tag = "5")]
+    pub virtual_timestamps: bool,
+    /// Attributes
+    #[prost(map = "string, string", tag = "6")]
+    pub attributes: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
+    /// Value that will be emitted in the `awsRegion` field of the record in DYNAMODB_STREAMS_JSON format
+    #[prost(string, tag = "7")]
+    pub aws_region: ::prost::alloc::string::String,
+    /// Interval of emitting of resolved timestamps. If unspecified, resolved timestamps are not emitted.
+    #[prost(message, optional, tag = "8")]
+    pub resolved_timestamps_interval: ::core::option::Option<
+        super::super::google::protobuf::Duration,
+    >,
 }
 /// Nested message and enum types in `ChangefeedDescription`.
 pub mod changefeed_description {
@@ -332,8 +393,14 @@ pub mod changefeed_description {
     #[repr(i32)]
     pub enum State {
         Unspecified = 0,
+        /// Normal state, from this state changefeed can be disabled
         Enabled = 1,
+        /// No new change records are generated, but the old ones remain available
+        /// From this state changefeed cannot be switched to any other state
         Disabled = 2,
+        /// An initial scan is being performed.
+        /// After its completion changefeed will switch to the normal state
+        InitialScan = 3,
     }
     impl State {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -344,6 +411,7 @@ pub mod changefeed_description {
                 State::Unspecified => "STATE_UNSPECIFIED",
                 State::Enabled => "STATE_ENABLED",
                 State::Disabled => "STATE_DISABLED",
+                State::InitialScan => "STATE_INITIAL_SCAN",
             }
         }
     }
@@ -586,6 +654,45 @@ pub struct TableProfile {
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SequenceDescription {
+    /// mandatorys
+    #[prost(string, optional, tag = "1")]
+    pub name: ::core::option::Option<::prost::alloc::string::String>,
+    /// minimum value, defaults to 1 or Min<i64>
+    #[prost(sint64, optional, tag = "2")]
+    pub min_value: ::core::option::Option<i64>,
+    /// maximum value, defaults to Max<i64> or -1
+    #[prost(sint64, optional, tag = "3")]
+    pub max_value: ::core::option::Option<i64>,
+    /// start value, defaults to min_value
+    #[prost(sint64, optional, tag = "4")]
+    pub start_value: ::core::option::Option<i64>,
+    /// number of items to cache, defaults to 1
+    #[prost(uint64, optional, tag = "5")]
+    pub cache: ::core::option::Option<u64>,
+    /// increment at each call, defaults to 1
+    #[prost(sint64, optional, tag = "6")]
+    pub increment: ::core::option::Option<i64>,
+    /// true when cycle on overflow is allowed
+    #[prost(bool, optional, tag = "7")]
+    pub cycle: ::core::option::Option<bool>,
+    /// set_val(next_value, next_used) is executed atomically when creating
+    #[prost(message, optional, tag = "8")]
+    pub set_val: ::core::option::Option<sequence_description::SetVal>,
+}
+/// Nested message and enum types in `SequenceDescription`.
+pub mod sequence_description {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct SetVal {
+        #[prost(sint64, optional, tag = "1")]
+        pub next_value: ::core::option::Option<i64>,
+        #[prost(bool, optional, tag = "2")]
+        pub next_used: ::core::option::Option<bool>,
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ColumnMeta {
     /// Name of column
     #[prost(string, tag = "1")]
@@ -596,6 +703,24 @@ pub struct ColumnMeta {
     /// Column family name of the column
     #[prost(string, tag = "3")]
     pub family: ::prost::alloc::string::String,
+    /// Column nullability
+    #[prost(bool, optional, tag = "4")]
+    pub not_null: ::core::option::Option<bool>,
+    /// Column default value option
+    #[prost(oneof = "column_meta::DefaultValue", tags = "5, 6")]
+    pub default_value: ::core::option::Option<column_meta::DefaultValue>,
+}
+/// Nested message and enum types in `ColumnMeta`.
+pub mod column_meta {
+    /// Column default value option
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum DefaultValue {
+        #[prost(message, tag = "5")]
+        FromLiteral(super::super::TypedValue),
+        #[prost(message, tag = "6")]
+        FromSequence(super::SequenceDescription),
+    }
 }
 /// The row will be considered as expired at the moment of time, when the value
 /// stored in <column_name> is less than or equal to the current time (in epoch
@@ -764,6 +889,9 @@ pub mod column_family {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PartitioningSettings {
+    /// List of columns to partition by
+    #[prost(string, repeated, tag = "1")]
+    pub partition_by: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// Enable auto partitioning on reaching upper or lower partition size bound
     #[prost(enumeration = "super::feature_flag::Status", tag = "2")]
     pub partitioning_by_size: i32,
@@ -866,6 +994,15 @@ pub struct CreateTableRequest {
     /// Read replicas settings for table
     #[prost(message, optional, tag = "17")]
     pub read_replicas_settings: ::core::option::Option<ReadReplicasSettings>,
+    /// Tiering rules name. It specifies how data migrates from one tier (logical storage) to another.
+    #[prost(string, tag = "18")]
+    pub tiering: ::prost::alloc::string::String,
+    /// Is temporary table
+    #[prost(bool, tag = "19")]
+    pub temporary: bool,
+    /// Is table column or row oriented
+    #[prost(enumeration = "StoreType", tag = "20")]
+    pub store_type: i32,
     /// Either one of the following partitions options can be specified
     #[prost(oneof = "create_table_request::Partitions", tags = "13, 14")]
     pub partitions: ::core::option::Option<create_table_request::Partitions>,
@@ -990,6 +1127,9 @@ pub struct AlterTableRequest {
     /// Setup or remove time to live settings
     #[prost(oneof = "alter_table_request::TtlAction", tags = "7, 8")]
     pub ttl_action: ::core::option::Option<alter_table_request::TtlAction>,
+    /// Setup or remove tiering
+    #[prost(oneof = "alter_table_request::TieringAction", tags = "22, 23")]
+    pub tiering_action: ::core::option::Option<alter_table_request::TieringAction>,
 }
 /// Nested message and enum types in `AlterTableRequest`.
 pub mod alter_table_request {
@@ -1001,6 +1141,15 @@ pub mod alter_table_request {
         SetTtlSettings(super::TtlSettings),
         #[prost(message, tag = "8")]
         DropTtlSettings(super::super::super::google::protobuf::Empty),
+    }
+    /// Setup or remove tiering
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum TieringAction {
+        #[prost(string, tag = "22")]
+        SetTiering(::prost::alloc::string::String),
+        #[prost(message, tag = "23")]
+        DropTiering(super::super::super::google::protobuf::Empty),
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1172,6 +1321,15 @@ pub struct DescribeTableResult {
     /// List of changefeeds
     #[prost(message, repeated, tag = "15")]
     pub changefeeds: ::prost::alloc::vec::Vec<ChangefeedDescription>,
+    /// Tiering rules name
+    #[prost(string, tag = "16")]
+    pub tiering: ::prost::alloc::string::String,
+    /// Is temporary table
+    #[prost(bool, tag = "17")]
+    pub temporary: bool,
+    /// Is table column or row oriented
+    #[prost(enumeration = "StoreType", tag = "18")]
+    pub store_type: i32,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1398,6 +1556,8 @@ pub struct ExplainDataQueryRequest {
     pub yql_text: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "3")]
     pub operation_params: ::core::option::Option<super::operations::OperationParams>,
+    #[prost(bool, tag = "4")]
+    pub collect_full_diagnostics: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1413,6 +1573,8 @@ pub struct ExplainQueryResult {
     pub query_ast: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
     pub query_plan: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub query_full_diagnostics: ::prost::alloc::string::String,
 }
 /// Prepare given program to execute
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1781,6 +1943,16 @@ pub struct ReadTableRequest {
     /// Use a server-side snapshot
     #[prost(enumeration = "super::feature_flag::Status", tag = "7")]
     pub use_snapshot: i32,
+    /// Server-side best-effort policy. Can be used as a hint to limit the size
+    /// of batches sent from a server. If both are specified, the server chooses
+    /// the smaller one. The limits are not strict, so batch size can be slightly
+    /// greater than any of the limits
+    #[prost(uint64, tag = "8")]
+    pub batch_limit_bytes: u64,
+    #[prost(uint64, tag = "9")]
+    pub batch_limit_rows: u64,
+    #[prost(enumeration = "super::feature_flag::Status", tag = "10")]
+    pub return_not_null_data_as_optional: i32,
 }
 /// ReadTable doesn't use Operation, returns result directly
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1792,6 +1964,9 @@ pub struct ReadTableResponse {
     /// Issues
     #[prost(message, repeated, tag = "2")]
     pub issues: ::prost::alloc::vec::Vec<super::issue::IssueMessage>,
+    /// Optional snapshot that corresponds to the returned data
+    #[prost(message, optional, tag = "4")]
+    pub snapshot: ::core::option::Option<super::VirtualTimestamp>,
     /// Read table result
     #[prost(message, optional, tag = "3")]
     pub result: ::core::option::Option<ReadTableResult>,
@@ -1802,6 +1977,36 @@ pub struct ReadTableResponse {
 pub struct ReadTableResult {
     /// Result set (same as result of sql request)
     #[prost(message, optional, tag = "1")]
+    pub result_set: ::core::option::Option<super::ResultSet>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ReadRowsRequest {
+    /// Session identifier
+    #[prost(string, tag = "1")]
+    pub session_id: ::prost::alloc::string::String,
+    /// Path to table to read
+    #[prost(string, tag = "2")]
+    pub path: ::prost::alloc::string::String,
+    /// Keys to read. Must be a list of structs where each stuct is a key
+    /// for one requested row and should contain all key columns
+    #[prost(message, optional, tag = "3")]
+    pub keys: ::core::option::Option<super::TypedValue>,
+    /// Output columns. If empty all columns will be requested
+    #[prost(string, repeated, tag = "4")]
+    pub columns: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ReadRowsResponse {
+    /// Status of request (same as other statuses)
+    #[prost(enumeration = "super::status_ids::StatusCode", tag = "1")]
+    pub status: i32,
+    /// Issues
+    #[prost(message, repeated, tag = "2")]
+    pub issues: ::prost::alloc::vec::Vec<super::issue::IssueMessage>,
+    /// Result set (same as result of sql request)
+    #[prost(message, optional, tag = "3")]
     pub result_set: ::core::option::Option<super::ResultSet>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1858,6 +2063,10 @@ pub struct ExecuteScanQueryRequest {
     pub mode: i32,
     #[prost(enumeration = "query_stats_collection::Mode", tag = "8")]
     pub collect_stats: i32,
+    /// works only in mode: MODE_EXPLAIN,
+    /// collects additional diagnostics about query compilation, including query plan and scheme
+    #[prost(bool, tag = "9")]
+    pub collect_full_diagnostics: bool,
 }
 /// Nested message and enum types in `ExecuteScanQueryRequest`.
 pub mod execute_scan_query_request {
@@ -1910,4 +2119,28 @@ pub struct ExecuteScanQueryPartialResult {
     pub result_set: ::core::option::Option<super::ResultSet>,
     #[prost(message, optional, tag = "6")]
     pub query_stats: ::core::option::Option<super::table_stats::QueryStats>,
+    /// works only in mode: MODE_EXPLAIN,
+    /// collects additional diagnostics about query compilation, including query plan and scheme
+    #[prost(string, tag = "7")]
+    pub query_full_diagnostics: ::prost::alloc::string::String,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum StoreType {
+    Unspecified = 0,
+    Row = 1,
+    Column = 2,
+}
+impl StoreType {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            StoreType::Unspecified => "STORE_TYPE_UNSPECIFIED",
+            StoreType::Row => "STORE_TYPE_ROW",
+            StoreType::Column => "STORE_TYPE_COLUMN",
+        }
+    }
 }
