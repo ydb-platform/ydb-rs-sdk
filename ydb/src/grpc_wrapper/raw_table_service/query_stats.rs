@@ -1,4 +1,4 @@
-use crate::query::QueryStatsMode;
+use crate::QueryStatsMode;
 
 #[derive(serde::Serialize)]
 pub(crate) enum RawQueryStatsMode {

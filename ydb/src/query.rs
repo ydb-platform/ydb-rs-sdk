@@ -3,7 +3,7 @@ use crate::types::Value;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::YdbError;
+use crate::{QueryStatsMode, YdbError};
 use ydb_grpc::ydb_proto::TypedValue;
 
 /// Query object
@@ -16,21 +16,6 @@ pub struct Query {
     pub(crate) collect_stats: QueryStatsMode,
 }
 
-/// Specifies which statistics should be collected during request processing
-#[derive(Clone)]
-pub enum QueryStatsMode {
-    /// Stats collection is disabled
-    None,
-
-    /// Aggregated stats of reads, updates and deletes per table    
-    Basic,
-
-    /// Add execution stats and plan on top of STATS_COLLECTION_BASIC
-    Full,
-
-    /// Detailed execution stats including stats for individual tasks and channels
-    Profile,
-}
 
 impl Query {
     /// Create query with query text

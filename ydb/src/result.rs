@@ -1,7 +1,7 @@
-use crate::errors;
+use crate::{errors, QueryStats};
 use crate::errors::{YdbError, YdbResult, YdbStatusError};
 use crate::grpc::proto_issues_to_ydb_issues;
-use crate::grpc_wrapper::raw_table_service::execute_data_query::{RawQueryStats,RawExecuteDataQueryResult, RawOperationStats, RawQueryPhaseStats, RawTableAccessStats};
+use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryResult;
 use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawTypedValue, RawValue};
 use crate::trace_helpers::ensure_len_string;
 use crate::types::Value;
@@ -19,17 +19,6 @@ pub struct QueryResult {
     pub(crate) tx_id: String,
     
     pub stats: Option<QueryStats>,
-}
-
-#[derive(Debug)]
-pub struct QueryStats {
-    pub process_cpu_time: std::time::Duration,
-    pub total_duration: std::time::Duration,
-    pub total_cpu_time: std::time::Duration,
-    pub query_plan: String,
-    pub query_ast: String,
-
-    pub query_phases: Vec<QueryPhaseStats>,
 }
 
 impl QueryResult {
@@ -90,6 +79,8 @@ impl QueryResult {
             None => Err(YdbError::NoRows),
         }
     }
+
+   
 }
 
 #[derive(Debug)]
@@ -228,96 +219,4 @@ impl StreamResult {
         let result_set = ResultSet::try_from(raw_res)?;
         Ok(Some(result_set))
     }
-}
-
-impl From<RawQueryStats> for QueryStats{
-
-    fn from(value: RawQueryStats) -> QueryStats {
-
-        Self {
-            process_cpu_time: value.process_cpu_time,
-            total_duration: value.total_duration,
-            total_cpu_time: value.total_cpu_time,
-            query_ast: value.query_ast,
-            query_plan: value.query_plan,
-
-            query_phases: value.query_phases.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct QueryPhaseStats {
-    pub duration: std::time::Duration,
-    pub table_access: Vec<TableAccessStats>,
-    pub cpu_time: std::time::Duration,
-    pub affected_shards: u64,
-    pub literal_phase: bool,
-}
-
-impl From<RawQueryPhaseStats> for QueryPhaseStats {
-    fn from(value: RawQueryPhaseStats) -> Self {
-        Self {
-
-            duration: value.duration,
-            table_access: value.table_access.into_iter().map(Into::into).collect(),
-            cpu_time: value.cpu_time,
-            affected_shards: value.affected_shards,
-            literal_phase: value.literal_phase,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct TableAccessStats {
-    pub name: String,
-    pub reads: Option<OperationStats>,
-    pub updates: Option<OperationStats>,
-    pub deletes: Option<OperationStats>,
-    pub partitions_count: u64,
-    pub affected_rows: u64
-}
-
-
-
-
-impl From<RawTableAccessStats> for TableAccessStats {
-    fn from(value: RawTableAccessStats) -> Self {
-        fn affected_rows(stats: &Option<OperationStats>) -> u64 {
-            stats.as_ref().map(|x|x.rows).unwrap_or(0)
-        }
-
-        let reads= value.reads.map(Into::into);
-        let updates= value.updates.map(Into::into);
-        let deletes= value.deletes.map(Into::into);
-
-        let affected_rows = 
-            affected_rows(&reads) + affected_rows(&updates) + affected_rows(&deletes);
-
-        Self {
-            name: value.name,
-            reads,
-            updates,
-            deletes,
-            partitions_count: value.partitions_count,
-            affected_rows
-        }
-    }
-}
-
-
-
-impl From<RawOperationStats> for OperationStats {
-    fn from(value: RawOperationStats) -> Self {
-        Self {
-            rows: value.rows,
-            bytes: value.bytes,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct OperationStats {
-    pub rows: u64,
-    pub bytes: u64,
 }
