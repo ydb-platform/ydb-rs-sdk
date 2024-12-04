@@ -4,24 +4,20 @@
 [![YDB tests](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-tests.yml/badge.svg?branch=master&event=schedule)](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-tests.yml)
 
 Rust SDK for YDB.
-Supported rust: 1.60.0 and newer.
 
-## Usage
-Add this to your Cargo.toml:
+### Prerequisites
+Rust 1.60.0 or newer
 
+### Installation
+Add the YDB dependency to your project using `cargo add ydb` or add this your Cargo.toml:
 ```toml
 [dependencies]
 ydb = "0.9.4"
 ```
 
-## Tests
+### Example
+Create a new Rust file (e.g., main.rs) and add the following code:
 
-Integration tests, with dependency from real YDB database marked as ignored.
-To run it:
-1. Set YDB_CONNECTION_STRING env
-2. run cargo test -- --include-ignored
-
-## Example
 ```rust
 use ydb::{ClientBuilder, Query, StaticToken, YdbResult};
 
@@ -59,10 +55,14 @@ async fn main() -> YdbResult<()> {
 }
 ```
 
-## More examples
-[Url shorneter application](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-example-urlshortener)
+For more examples, check out the [URL shortener application](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-example-urlshortener) or [many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples).
 
-[Many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
+## Tests
+
+Integration tests, with dependency from real YDB database marked as ignored.
+To run it:
+1. Set YDB_CONNECTION_STRING env
+2. run cargo test -- --include-ignored
 
 # Version policy
 
