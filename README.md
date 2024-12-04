@@ -6,12 +6,22 @@
 Rust SDK for YDB.
 Supported rust: 1.60.0 and newer.
 
+## Usage
+Add this to your Cargo.toml:
+
+```toml
+[dependencies]
+ydb = "0.9.4"
+```
+
+## Tests
+
 Integration tests, with dependency from real YDB database marked as ignored.
 To run it:
 1. Set YDB_CONNECTION_STRING env
 2. run cargo test -- --include-ignored
 
-# Example
+## Example
 ```rust
 use ydb::{ClientBuilder, Query, StaticToken, YdbResult};
 
@@ -49,7 +59,7 @@ async fn main() -> YdbResult<()> {
 }
 ```
 
-# More examples
+## More examples
 [Url shorneter application](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-example-urlshortener)
 
 [Many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
