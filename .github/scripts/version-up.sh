@@ -70,6 +70,7 @@ function version_set() {
   local VERSION="$2"
 
   sed -i.bak -e "s/^version *=.*/version = \"$VERSION\"/" "$CRATE_NAME/Cargo.toml"
+  sed -i -e "s/^ydb *=.*/ydb = \"$VERSION\"/" "README.md"
 }
 
 function version_dep_set() {
