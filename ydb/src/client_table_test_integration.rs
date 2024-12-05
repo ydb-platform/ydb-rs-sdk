@@ -877,3 +877,91 @@ FROM
     assert!(result_set_count > 1); // ensure get multiply results
     Ok(())
 }
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn test_stats_updates() -> YdbResult<()> {
+    let client = create_client()
+        .await?;
+
+    client
+        .table_client()
+        .create_session()
+        .await?
+        .execute_schema_query(
+            "CREATE TABLE test_values (id Int64, vInt64 Int64, PRIMARY KEY (id))".to_string(),
+        )
+        .await?;
+
+
+    let mut tx = client.table_client().create_interactive_transaction();
+    let res = tx.query(Query::new(
+        "UPSERT INTO test_values (id, vInt64) VALUES (1, 2),(3,4)",
+    ).with_stats(crate::QueryStatsMode::Basic))
+    .await?;
+
+    tx.commit().await?;
+
+    println!("{:?}", res.stats);
+
+    assert_eq!(2, res.stats.map(|x|x.rows_affected()).unwrap_or(0));
+    
+    
+    
+    client
+        .table_client()
+        .create_session()
+        .await?
+        .execute_schema_query("DROP TABLE test_values".to_string())
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn test_stats_reads() -> YdbResult<()> {
+    let client = create_client()
+        .await?;
+
+    client
+        .table_client()
+        .create_session()
+        .await?
+        .execute_schema_query(
+            "CREATE TABLE test_values (id Int64, vInt64 Int64, PRIMARY KEY (id))".to_string(),
+        )
+        .await?;
+
+    let mut tx = client.table_client().create_interactive_transaction();
+    let _res = tx.query(Query::new(
+        "UPSERT INTO test_values (id, vInt64) VALUES (1, 2),(3,4)",
+    ))
+    .await?
+    ;
+
+    
+   
+    
+    let res = tx.query(Query::new("SELECT * FROM test_values")
+    .with_stats(crate::QueryStatsMode::Basic))
+        .await?;
+
+    tx.commit().await?;
+
+    println!("{:?}", res.stats);
+
+    assert_eq!(2, res.stats.map(|x|x.rows_affected()).unwrap_or(0));
+
+    
+    
+    client
+        .table_client()
+        .create_session()
+        .await?
+        .execute_schema_query("DROP TABLE test_values".to_string())
+        .await?;
+
+    Ok(())
+}

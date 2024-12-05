@@ -3,7 +3,7 @@ use crate::types::Value;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::YdbError;
+use crate::{QueryStatsMode, YdbError};
 use ydb_grpc::ydb_proto::TypedValue;
 
 /// Query object
@@ -13,7 +13,9 @@ pub struct Query {
     pub(crate) parameters: HashMap<String, Value>,
     pub(crate) keep_in_cache: bool,
     force_keep_in_cache: bool,
+    pub(crate) collect_stats: QueryStatsMode,
 }
+
 
 impl Query {
     /// Create query with query text
@@ -23,6 +25,7 @@ impl Query {
             parameters: HashMap::new(),
             keep_in_cache: false,
             force_keep_in_cache: false,
+            collect_stats: QueryStatsMode::None,
         }
     }
 
@@ -77,9 +80,14 @@ impl Query {
     /// .with_params(ydb_params!("$val" => 123 as i64))
     /// .with_keep_in_cache(false);
     /// ```
-    pub fn with_keep_in_cache(mut self, val: bool)->Self {
+    pub fn with_keep_in_cache(mut self, val: bool) -> Self {
         self.force_keep_in_cache = true;
         self.keep_in_cache = val;
+        self
+    }
+
+    pub fn with_stats(mut self, mode: QueryStatsMode) -> Self {
+        self.collect_stats = mode;
         self
     }
 
