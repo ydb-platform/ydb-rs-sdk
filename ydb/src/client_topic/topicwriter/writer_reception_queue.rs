@@ -67,7 +67,7 @@ impl TopicWriterReceptionQueue {
             tx.send(()).unwrap();
             return Ok(rx);
         }
-        return match self.message_receipt_signals_queue.back_mut() {
+        match self.message_receipt_signals_queue.back_mut() {
             None => Err(RawError::Custom(
                 "Programming error, should not be happening".to_string(),
             )),
@@ -76,7 +76,7 @@ impl TopicWriterReceptionQueue {
                 self.flush_finished_sender = Some(tx);
                 Ok(rx)
             }
-        };
+        }
     }
 
     pub fn try_get_ticket(&mut self) -> Option<TopicWriterReceptionTicket> {

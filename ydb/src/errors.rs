@@ -172,9 +172,10 @@ impl YdbStatusError {
 }
 
 /// Severity of issue
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 pub enum YdbIssueSeverity {
+    #[default]
     Fatal,
     Error,
     Warning,
@@ -183,13 +184,6 @@ pub enum YdbIssueSeverity {
     // no use Unknown for own logic (use for debug/log only) - for prevent broke your code when new level will be defined.
     // use convert to u32 for temporary use int code and ask a maintainer to add new level as explicit value
     Unknown(u32),
-}
-
-// Default derive for enum was experimental until rust 1.62
-impl Default for YdbIssueSeverity {
-    fn default() -> Self {
-        YdbIssueSeverity::Fatal
-    }
 }
 
 impl From<YdbIssueSeverity> for u32 {
