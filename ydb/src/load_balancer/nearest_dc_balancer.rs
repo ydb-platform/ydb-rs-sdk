@@ -259,7 +259,7 @@ impl NearestDCBalancer {
 
     pub(super) fn get_random_endpoints<'a>(
         dc_endpoints: &'a mut Vec<&'a NodeInfo>,
-    ) -> &mut Vec<&NodeInfo> {
+    ) -> &'a mut Vec<&'a NodeInfo> {
         dc_endpoints.shuffle(&mut thread_rng());
         dc_endpoints.truncate(NODES_PER_DC);
         dc_endpoints

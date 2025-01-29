@@ -5,4 +5,5 @@ members = [
     "ydb-grpc",
     #    "ydb-grpc-helpers",
     "ydb-example-urlshortener",
+    "ydb-slo-tests",
 ]

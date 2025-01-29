@@ -1,5 +1,6 @@
-#[derive(serde::Serialize, Clone)]
+#[derive(serde::Serialize, Clone, Default)]
 pub(crate) enum RawMeteringMode {
+    #[default]
     Unspecified,
     ReservedCapacity,
     RequestUnits,
@@ -13,11 +14,5 @@ impl From<RawMeteringMode> for ydb_grpc::ydb_proto::topic::MeteringMode {
             RawMeteringMode::ReservedCapacity => meteringMode::ReservedCapacity,
             RawMeteringMode::RequestUnits => meteringMode::RequestUnits,
         }
-    }
-}
-
-impl Default for RawMeteringMode {
-    fn default() -> Self {
-        RawMeteringMode::Unspecified
     }
 }

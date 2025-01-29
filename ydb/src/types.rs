@@ -208,16 +208,11 @@ impl Default for Box<ValueOptional> {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum Sign {
+    #[default]
     Plus,
     Minus,
-}
-
-impl Default for Sign {
-    fn default() -> Self {
-        Sign::Plus
-    }
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
