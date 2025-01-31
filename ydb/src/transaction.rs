@@ -1,7 +1,6 @@
 use crate::client::TimeoutSettings;
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryRequest;
-use crate::grpc_wrapper::raw_table_service::query_stats::RawQueryStatMode;
 use crate::grpc_wrapper::raw_table_service::transaction_control::{
     RawOnlineReadonlySettings, RawTransactionControl, RawTxMode, RawTxSelector, RawTxSettings,
 };
@@ -101,7 +100,7 @@ impl Transaction for AutoCommit {
                 })
                 .try_collect()?,
             keep_in_cache: query.keep_in_cache,
-            collect_stats: RawQueryStatMode::None,
+            collect_stats: query.collect_stats.into(),
         };
 
         let mut session = self.session_pool.session().await?;
@@ -207,7 +206,7 @@ impl Transaction for SerializableReadWriteTx {
                 })
                 .try_collect()?,
             keep_in_cache: false,
-            collect_stats: RawQueryStatMode::None,
+            collect_stats: query.collect_stats.into(),
         };
         let query_result = session
             .execute_data_query(req, self.error_on_truncate_response)

@@ -1,6 +1,8 @@
 use crate::grpc_wrapper::raw_errors::RawError;
-use crate::grpc_wrapper::raw_table_service::client::{CollectStatsMode, RawQueryStats};
+use crate::grpc_wrapper::raw_table_service::client::CollectStatsMode;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
+
+use super::execute_data_query::RawQueryStats;
 
 pub(crate) struct RawCommitTransactionRequest {
     pub session_id: String,

@@ -25,7 +25,7 @@ use ydb_grpc::ydb_proto::table::{
     execute_scan_query_request,
     ExecuteScanQueryRequest,
 };
-use crate::grpc_wrapper::raw_table_service::execute_data_query::{RawExecuteDataQueryRequest};
+use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryRequest;
 use crate::grpc_wrapper::raw_table_service::copy_table::{
     RawCopyTableRequest,
     RawCopyTablesRequest

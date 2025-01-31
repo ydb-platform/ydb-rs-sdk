@@ -1,4 +1,4 @@
-use crate::errors;
+use crate::{errors, QueryStats};
 use crate::errors::{YdbError, YdbResult, YdbStatusError};
 use crate::grpc::proto_issues_to_ydb_issues;
 use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryResult;
@@ -17,6 +17,8 @@ use ydb_grpc::ydb_proto::table::ExecuteScanQueryPartialResponse;
 pub struct QueryResult {
     pub(crate) results: Vec<ResultSet>,
     pub(crate) tx_id: String,
+    
+    pub stats: Option<QueryStats>,
 }
 
 impl QueryResult {
@@ -45,6 +47,7 @@ impl QueryResult {
         Ok(QueryResult {
             results,
             tx_id: raw_res.tx_meta.id,
+            stats: raw_res.query_stats.map(QueryStats::from),
         })
     }
 
@@ -76,6 +79,8 @@ impl QueryResult {
             None => Err(YdbError::NoRows),
         }
     }
+
+   
 }
 
 #[derive(Debug)]

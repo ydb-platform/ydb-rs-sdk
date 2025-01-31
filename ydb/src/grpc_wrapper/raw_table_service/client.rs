@@ -11,10 +11,12 @@ use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSche
 use crate::grpc_wrapper::raw_table_service::keepalive::{RawKeepAliveRequest, RawKeepAliveResult};
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
+
 use tracing::trace;
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 use crate::grpc_wrapper::raw_table_service::copy_table::{RawCopyTableRequest, RawCopyTablesRequest};
 use crate::grpc_wrapper::raw_table_service::execute_data_query::{RawExecuteDataQueryRequest, RawExecuteDataQueryResult};
+
 
 pub(crate) struct RawTableClient {
     timeouts: TimeoutSettings,
@@ -165,26 +167,5 @@ impl From<CollectStatsMode> for i32 {
     fn from(value: CollectStatsMode) -> Self {
         let grpc_val = ydb_grpc::ydb_proto::table::query_stats_collection::Mode::from(value);
         grpc_val as i32
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct RawQueryStats {
-    process_cpu_time: std::time::Duration,
-    query_plan: String,
-    query_ast: String,
-    total_duration: std::time::Duration,
-    total_cpu_time: std::time::Duration,
-}
-
-impl From<ydb_grpc::ydb_proto::table_stats::QueryStats> for RawQueryStats {
-    fn from(value: ydb_grpc::ydb_proto::table_stats::QueryStats) -> Self {
-        Self {
-            process_cpu_time: std::time::Duration::from_micros(value.process_cpu_time_us),
-            query_plan: value.query_plan,
-            query_ast: value.query_ast,
-            total_duration: std::time::Duration::from_micros(value.total_duration_us),
-            total_cpu_time: std::time::Duration::from_micros(value.total_cpu_time_us),
-        }
     }
 }
