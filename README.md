@@ -19,17 +19,20 @@ ydb = "0.9.4"
 Create a new Rust file (e.g., main.rs) and add the following code:
 
 ```rust
-use ydb::{ClientBuilder, Query, StaticToken, YdbResult};
+use ydb::{ClientBuilder, Query, AccessTokenCredentials, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
 
  // create the driver
- let client = ClientBuilder::from_str("grpc://localhost:2136?database=local")?
-    .with_credentials(StaticToken::from("asd"))
+ let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
+    .with_credentials(AccessTokenCredentials::from("asd"))
     .client()?;
 
  // wait until the background initialization of the driver finishes
+ // In this example, it will never be resolved because YDB methods have
+ // infinite retries by default. You can manage it using a standard
+ // Tokio timeout.
  client.wait().await?;
 
  // read the query result
