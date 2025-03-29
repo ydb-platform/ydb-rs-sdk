@@ -1,10 +1,10 @@
-use std::collections::HashMap;
 use crate::grpc_wrapper::raw_errors::RawError;
 use crate::grpc_wrapper::raw_table_service::query_stats::RawQueryStatMode;
 use crate::grpc_wrapper::raw_table_service::transaction_control::RawTransactionControl;
-use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawTypedValue};
 use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
+use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawTypedValue};
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
+use std::collections::HashMap;
 
 #[derive(serde::Serialize)]
 pub(crate) struct RawExecuteDataQueryRequest {
@@ -59,7 +59,7 @@ impl TryFrom<ydb_grpc::ydb_proto::table::ExecuteQueryResult> for RawExecuteDataQ
             .map(|item| item.try_into())
             .collect();
 
-        let query_meta = if let Some(proto_meta) = value.query_meta{
+        let query_meta = if let Some(proto_meta) = value.query_meta {
             Some(RawQueryMeta::try_from(proto_meta)?)
         } else {
             None

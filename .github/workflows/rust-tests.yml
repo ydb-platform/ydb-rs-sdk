@@ -59,6 +59,9 @@ jobs:
     - name: Rust cache
       uses: Swatinem/rust-cache@v2
 
+    - name: Rustfmt check
+      run: cargo fmt check
+
     - name: Run tests
       env:
         YDB_CONNECTION_STRING: grpc://localhost:2136?database=/local

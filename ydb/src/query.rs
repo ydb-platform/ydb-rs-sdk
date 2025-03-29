@@ -77,7 +77,7 @@ impl Query {
     /// .with_params(ydb_params!("$val" => 123 as i64))
     /// .with_keep_in_cache(false);
     /// ```
-    pub fn with_keep_in_cache(mut self, val: bool)->Self {
+    pub fn with_keep_in_cache(mut self, val: bool) -> Self {
         self.force_keep_in_cache = true;
         self.keep_in_cache = val;
         self

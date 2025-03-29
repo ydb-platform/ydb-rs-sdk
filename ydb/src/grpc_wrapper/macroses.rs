@@ -67,10 +67,7 @@ macro_rules! request_with_hidden_result {
         let result: $GrcpResultType =
             crate::grpc_wrapper::grpc::grpc_read_operation_result(response)?;
 
-        trace!(
-            "{} result hidden",
-            stringify!($ClientType.$method),
-        );
+        trace!("{} result hidden", stringify!($ClientType.$method),);
 
         return <$RawResultType>::try_from(result);
     };

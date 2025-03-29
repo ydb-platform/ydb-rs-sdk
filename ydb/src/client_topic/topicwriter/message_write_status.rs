@@ -53,7 +53,7 @@ impl From<Option<write_response::write_ack::MessageWriteStatus>> for MessageWrit
                 MessageWriteStatus::Skipped(MessageSkipReason::from(skip_info.reason))
             }
             Some(write_response::write_ack::MessageWriteStatus::WrittenInTx(_write_info)) => {
-                MessageWriteStatus::WrittenInTx(MessageWriteInTxInfo{})
+                MessageWriteStatus::WrittenInTx(MessageWriteInTxInfo {})
             }
         }
     }

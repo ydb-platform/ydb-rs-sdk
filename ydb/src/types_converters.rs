@@ -85,12 +85,7 @@ simple_convert!(
     Value::Uint16,
     Value::Uint8,
 );
-simple_convert!(
-    String,
-    Value::Text,
-    Value::Json,
-    Value::JsonDocument,
-);
+simple_convert!(String, Value::Text, Value::Json, Value::JsonDocument,);
 simple_convert!(
     Bytes,
     Value::Bytes,

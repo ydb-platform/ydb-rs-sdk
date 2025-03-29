@@ -9,9 +9,9 @@ use ydb_grpc::ydb_proto::scheme::{
     ListDirectoryResponse, MakeDirectoryResponse, RemoveDirectoryResponse,
 };
 use ydb_grpc::ydb_proto::table::{
-    CommitTransactionResponse, CreateSessionResponse, DeleteSessionResponse,
-    ExecuteDataQueryResponse, ExecuteSchemeQueryResponse, KeepAliveResponse,
-    RollbackTransactionResponse, CopyTableResponse, CopyTablesResponse
+    CommitTransactionResponse, CopyTableResponse, CopyTablesResponse, CreateSessionResponse,
+    DeleteSessionResponse, ExecuteDataQueryResponse, ExecuteSchemeQueryResponse, KeepAliveResponse,
+    RollbackTransactionResponse,
 };
 use ydb_grpc::ydb_proto::topic::{CreateTopicResponse, DropTopicResponse};
 

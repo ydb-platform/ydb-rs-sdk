@@ -7,11 +7,7 @@ pub struct CopyTableItem {
 
 impl CopyTableItem {
     #[allow(dead_code)]
-    pub fn new(
-        source_path: String,
-        destination_path: String,
-        omit_indexes: bool,
-    ) -> Self {
+    pub fn new(source_path: String, destination_path: String, omit_indexes: bool) -> Self {
         Self {
             inner: RawCopyTableItem {
                 source_path,

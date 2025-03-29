@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use http::Uri;
 
-use crate::{grpc_wrapper::raw_services::Service, waiter::WaiterImpl, DiscoveryState, Waiter, YdbError, YdbResult};
+use crate::{
+    grpc_wrapper::raw_services::Service, waiter::WaiterImpl, DiscoveryState, Waiter, YdbError,
+    YdbResult,
+};
 
 use super::LoadBalancer;
 

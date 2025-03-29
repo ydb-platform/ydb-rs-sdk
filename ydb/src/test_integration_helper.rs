@@ -47,9 +47,12 @@ pub(crate) async fn create_password_client() -> YdbResult<Arc<Client>> {
 
 #[tracing::instrument]
 pub(crate) async fn create_custom_ca_client() -> YdbResult<Arc<Client>> {
-    let client = test_custom_ca_client_builder().client().unwrap().with_timeouts(TimeoutSettings {
-        operation_timeout: std::time::Duration::from_secs(60),
-    });
+    let client = test_custom_ca_client_builder()
+        .client()
+        .unwrap()
+        .with_timeouts(TimeoutSettings {
+            operation_timeout: std::time::Duration::from_secs(60),
+        });
     trace!("start wait");
     client.wait().await.unwrap();
     Ok(Arc::new(client))
