@@ -39,13 +39,13 @@ pub struct TopicWriterOptions {
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct TopicWriterConnectionOptions {
     #[builder(setter(strip_option), default)]
-    pub(crate) connection_timeout: Option<core::time::Duration>,
+    pub(crate) connection_timeout: Option<Duration>,
     #[builder(setter(strip_option), default)]
     pub(crate) max_message_size_bytes: Option<i32>,
     #[builder(setter(strip_option), default)]
     pub(crate) max_buffer_messages_count: Option<i32>,
     #[builder(setter(strip_option), default)]
-    pub(crate) update_token_interval: Option<core::time::Duration>,
+    pub(crate) update_token_interval: Option<Duration>,
 
     #[builder(default = "TopicWriterRetrySettingsBuilder::default().build()?")]
     retry_settings: TopicWriterRetrySettings,
@@ -56,5 +56,5 @@ pub struct TopicWriterConnectionOptions {
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct TopicWriterRetrySettings {
     #[builder(setter(strip_option), default)]
-    start_timeout: Option<core::time::Duration>,
+    start_timeout: Option<Duration>,
 }

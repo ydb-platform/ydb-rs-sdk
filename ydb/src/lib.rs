@@ -112,7 +112,15 @@ pub use client_coordination::session::lease::Lease;
 pub use client_coordination::session::session_options::{SessionOptions, SessionOptionsBuilder};
 
 // full enum pub types
-pub use client_topic::client::{TopicClient, TopicOptions};
+pub use client_topic::client::{
+    AlterTopicOptions, AlterTopicOptionsBuilder, CreateTopicOptions, CreateTopicOptionsBuilder,
+    DescribeTopicOptions, DescribeTopicOptionsBuilder, TopicClient,
+};
+pub use client_topic::list_types::{
+    AlterConsumer, AlterConsumerBuilder, Codec, Consumer, ConsumerBuilder, MeteringMode,
+    PartitionInfo, PartitionLocation, PartitionStats, PartitioningSettings, TopicDescription,
+    TopicStats,
+};
 // full enum pub types
 pub use client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMessageBuilder};
 // full enum pub types

@@ -19,7 +19,7 @@ macro_rules! request_with_result {
     (
         $self: ident .service. $method: ident,
         $RawRequest: ident => $GrpcRequestType: ty,
-        $GrcpResultType: ty => $RawResultType: ty
+        $GrpcResultType: ty => $RawResultType: ty
     ) => {
         let req = <$GrpcRequestType>::from($RawRequest);
 
@@ -32,7 +32,7 @@ macro_rules! request_with_result {
         );
 
         let response = $self.service.$method(req).await?;
-        let result: $GrcpResultType =
+        let result: $GrpcResultType =
             crate::grpc_wrapper::grpc::grpc_read_operation_result(response)?;
 
         trace!(
@@ -51,7 +51,7 @@ macro_rules! request_with_hidden_result {
     (
         $self: ident .service. $method: ident,
         $RawRequest: ident => $GrpcRequestType: ty,
-        $GrcpResultType: ty => $RawResultType: ty
+        $GrpcResultType: ty => $RawResultType: ty
     ) => {
         let req = <$GrpcRequestType>::from($RawRequest);
 
@@ -64,7 +64,7 @@ macro_rules! request_with_hidden_result {
         );
 
         let response = $self.service.$method(req).await?;
-        let result: $GrcpResultType =
+        let result: $GrpcResultType =
             crate::grpc_wrapper::grpc::grpc_read_operation_result(response)?;
 
         trace!("{} result hidden", stringify!($ClientType.$method),);
