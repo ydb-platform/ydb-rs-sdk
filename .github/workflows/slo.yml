@@ -31,6 +31,7 @@ env:
 
 jobs:
   ydb-slo-action-init:
+    if: ${{ false }} # // https://github.com/ydb-platform/ydb-rs-sdk/issues/227
     if: (!contains(github.event.pull_request.labels.*.name, 'no slo'))
 
     name: Run YDB SLO Tests
