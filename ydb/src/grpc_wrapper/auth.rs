@@ -38,7 +38,11 @@ impl GrpcInterceptor for AuthGrpcInterceptor {
         let token_secret = self.token_cache.token();
         let token_string = token_secret.expose_secret();
         let token = HeaderValue::from_str(token_string.as_str()).map_err(|err| {
-            InterceptorError::custom(format!("received bad token (len={}): {}", token_string.len(), err))
+            InterceptorError::custom(format!(
+                "received bad token (len={}): {}",
+                token_string.len(),
+                err
+            ))
         })?;
 
         req.headers_mut()

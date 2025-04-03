@@ -1,5 +1,5 @@
 #[derive(serde::Serialize)]
-pub(crate) enum RawQueryStatMode{
+pub(crate) enum RawQueryStatMode {
     None,
     Basic,
     Full,

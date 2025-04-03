@@ -66,8 +66,6 @@ impl MetadataUrlCredentials {
         }
     }
 
-
-
     /// Create GCEMetadata with custom url (may need for debug or spec infrastructure with non standard metadata)
     ///
     /// Example:
@@ -573,9 +571,7 @@ impl StaticCredentials {
         Ok(raw_response.token)
     }
 
-    pub fn new(username: String,
-        password: String,
-        endpoint: Uri, database: String) -> Self {
+    pub fn new(username: String, password: String, endpoint: Uri, database: String) -> Self {
         Self {
             username,
             password: SecretString::new(password),
@@ -585,9 +581,13 @@ impl StaticCredentials {
         }
     }
 
-    pub fn new_with_ca(username: String,
+    pub fn new_with_ca(
+        username: String,
         password: String,
-        endpoint: Uri, database: String, cert_path: String) -> Self {
+        endpoint: Uri,
+        database: String,
+        cert_path: String,
+    ) -> Self {
         Self {
             username,
             password: SecretString::new(password),

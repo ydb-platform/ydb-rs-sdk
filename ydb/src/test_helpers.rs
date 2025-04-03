@@ -24,7 +24,10 @@ pub(crate) fn test_client_builder() -> ClientBuilder {
 pub(crate) fn get_passworded_connection_string() -> String {
     Url::parse_with_params(
         &CONNECTION_STRING,
-        &[("token_static_password", "1234"), ("token_static_username", "root")],
+        &[
+            ("token_static_password", "1234"),
+            ("token_static_username", "root"),
+        ],
     )
     .unwrap()
     .as_str()
@@ -35,9 +38,7 @@ pub(crate) fn get_custom_ca_connection_string() -> String {
     trace!("forge ca connection string");
     Url::parse_with_params(
         &TLS_CONNECTION_STRING,
-        &[
-            ("ca_certificate", "./../ydb_certs/ca.pem"),
-            ],
+        &[("ca_certificate", "./../ydb_certs/ca.pem")],
     )
     .unwrap()
     .as_str()

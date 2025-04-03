@@ -1,14 +1,11 @@
-
 use ydb::{
     ClientBuilder, TopicWriter, TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbResult,
 };
 
-
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let client =
-        ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
-            .client()?;
+    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
+        .client()?;
     client.wait().await?;
 
     let mut topic_client = client.topic_client();

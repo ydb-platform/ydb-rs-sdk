@@ -10,7 +10,7 @@ pub(crate) enum RawTxSelector {
     Begin(RawTxSettings),
 }
 
-impl From<RawTxSelector> for ydb_grpc::ydb_proto::table::transaction_control::TxSelector{
+impl From<RawTxSelector> for ydb_grpc::ydb_proto::table::transaction_control::TxSelector {
     fn from(v: RawTxSelector) -> Self {
         use ydb_grpc::ydb_proto::table::transaction_control::TxSelector;
         match v {
@@ -25,7 +25,7 @@ pub(crate) struct RawTxSettings {
     pub mode: RawTxMode,
 }
 
-impl From<RawTxSettings> for ydb_grpc::ydb_proto::table::TransactionSettings{
+impl From<RawTxSettings> for ydb_grpc::ydb_proto::table::TransactionSettings {
     fn from(v: RawTxSettings) -> Self {
         Self {
             tx_mode: Some(v.mode.into()),
@@ -40,20 +40,26 @@ pub(crate) enum RawTxMode {
     StaleReadOnly,
 }
 
-impl From<RawTxMode> for ydb_grpc::ydb_proto::table::transaction_settings::TxMode{
+impl From<RawTxMode> for ydb_grpc::ydb_proto::table::transaction_settings::TxMode {
     fn from(v: RawTxMode) -> Self {
         use ydb_grpc::ydb_proto::table;
         use ydb_grpc::ydb_proto::table::transaction_settings::TxMode;
         match v {
-            RawTxMode::SerializableReadWrite => TxMode::SerializableReadWrite(table::SerializableModeSettings{}),
-            RawTxMode::OnlineReadOnly(RawOnlineReadonlySettings{allow_inconsistent_reads}) => TxMode::OnlineReadOnly(table::OnlineModeSettings{ allow_inconsistent_reads }),
-            RawTxMode::StaleReadOnly => TxMode::StaleReadOnly(table::StaleModeSettings{}),
+            RawTxMode::SerializableReadWrite => {
+                TxMode::SerializableReadWrite(table::SerializableModeSettings {})
+            }
+            RawTxMode::OnlineReadOnly(RawOnlineReadonlySettings {
+                allow_inconsistent_reads,
+            }) => TxMode::OnlineReadOnly(table::OnlineModeSettings {
+                allow_inconsistent_reads,
+            }),
+            RawTxMode::StaleReadOnly => TxMode::StaleReadOnly(table::StaleModeSettings {}),
         }
     }
 }
 
 #[derive(serde::Serialize)]
-pub(crate) struct RawOnlineReadonlySettings{
+pub(crate) struct RawOnlineReadonlySettings {
     pub allow_inconsistent_reads: bool,
 }
 

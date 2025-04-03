@@ -8,6 +8,7 @@ use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction}
 use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
+use crate::table_service_types::CopyTableItem;
 use crate::{Query, StreamResult};
 use num::pow;
 use std::future::Future;
@@ -16,7 +17,6 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{instrument, trace};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
-use crate::table_service_types::CopyTableItem;
 
 const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
@@ -426,42 +426,28 @@ impl TableClient {
         }
     }
 
-    pub async fn copy_table(
-        &self,
-        source_path: String,
-        destination_path: String,
-    ) -> YdbResult<()> {
-        self
-            .retry_with_session(RetryOptions::new(), |session| async {
-                let mut session = session; // force borrow for lifetime of t inside closure
-                session
-                    .copy_table(
-                        source_path.clone(),
-                        destination_path.clone(),
-                    )
-                    .await?;
+    pub async fn copy_table(&self, source_path: String, destination_path: String) -> YdbResult<()> {
+        self.retry_with_session(RetryOptions::new(), |session| async {
+            let mut session = session; // force borrow for lifetime of t inside closure
+            session
+                .copy_table(source_path.clone(), destination_path.clone())
+                .await?;
 
-                Ok(())
-            })
-            .await
-            .map_err(YdbOrCustomerError::to_ydb_error)
+            Ok(())
+        })
+        .await
+        .map_err(YdbOrCustomerError::to_ydb_error)
     }
 
-    pub async fn copy_tables(
-        &self,
-        tables: Vec<CopyTableItem>,
-    ) -> YdbResult<()> {
-        self
-            .retry_with_session(RetryOptions::new(), |session| async {
-                let mut session = session; // force borrow for lifetime of t inside closure
-                session
-                    .copy_tables(tables.to_vec())
-                    .await?;
+    pub async fn copy_tables(&self, tables: Vec<CopyTableItem>) -> YdbResult<()> {
+        self.retry_with_session(RetryOptions::new(), |session| async {
+            let mut session = session; // force borrow for lifetime of t inside closure
+            session.copy_tables(tables.to_vec()).await?;
 
-                Ok(())
-            })
-            .await
-            .map_err(YdbOrCustomerError::to_ydb_error)
+            Ok(())
+        })
+        .await
+        .map_err(YdbOrCustomerError::to_ydb_error)
     }
 }
 

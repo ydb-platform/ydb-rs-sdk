@@ -24,6 +24,4 @@ async fn main() {
         println!("Failed to start http server: {}", &err);
         exit(1)
     }
-
-    
 }

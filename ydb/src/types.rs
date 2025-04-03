@@ -423,7 +423,6 @@ impl Value {
         })
     }
 
-
     fn to_typed_optional(optional: ValueOptional) -> YdbResult<ydb_proto::TypedValue> {
         if let Value::Optional(_opt) = optional.t {
             unimplemented!("nested optional")
@@ -529,7 +528,11 @@ impl Value {
             Value::Json("{}".into()),
             Value::JsonDocument("{}".into()),
             Value::Yson("1;2;3;".into()),
-            Value::Decimal("123456789.987654321".parse::<decimal_rs::Decimal>().unwrap()),
+            Value::Decimal(
+                "123456789.987654321"
+                    .parse::<decimal_rs::Decimal>()
+                    .unwrap(),
+            ),
         ];
 
         num_tests!(values, Value::Int8, i8);
@@ -642,7 +645,7 @@ impl From<String> for Bytes {
 }
 
 impl From<&str> for Bytes {
-    fn from(val: &str)->Self{
-        Self{vec: val.into()}
+    fn from(val: &str) -> Self {
+        Self { vec: val.into() }
     }
 }

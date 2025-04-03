@@ -1,10 +1,10 @@
 use ydb_grpc::ydb_proto::auth::v1::auth_service_client::AuthServiceClient;
 
-use crate::grpc_wrapper::raw_auth_service::login::RawLoginResult;
 use crate::grpc_wrapper::raw_auth_service::login::RawLoginRequest;
-use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
+use crate::grpc_wrapper::raw_auth_service::login::RawLoginResult;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
+use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
 use tracing::trace;
 

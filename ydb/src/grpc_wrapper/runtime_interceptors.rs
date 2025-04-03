@@ -1,8 +1,3 @@
-
-
-
-
-
 use itertools::enumerate;
 use std::any::Any;
 use std::fmt::{Debug, Display, Formatter};

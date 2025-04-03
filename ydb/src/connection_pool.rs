@@ -1,11 +1,11 @@
 use crate::YdbResult;
+use http::uri::Scheme;
 use http::Uri;
-use tracing::trace;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use http::uri::Scheme;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
+use tracing::trace;
 
 #[derive(Clone)]
 pub(crate) struct ConnectionPool {
