@@ -12,7 +12,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
   RUST_VERSION_OLD: "1.68.0"
-  RUST_VERSION_NEW: "1.81.0"
+  RUST_VERSION_NEW: "1.86.0"
 
 jobs:
   tests:
@@ -60,6 +60,7 @@ jobs:
       uses: Swatinem/rust-cache@v2
 
     - name: Rustfmt check
+      if: matrix.rust_version == 'RUST_VERSION_NEW'
       run: cargo fmt --check
 
     - name: Run tests
