@@ -242,7 +242,7 @@ async fn describe_semaphore_test() -> YdbResult<()> {
     assert_eq!(description.owners.len(), 0);
     assert_eq!(description.waiters.len(), 0);
 
-    let _lease_1 = sessions[0].acquire_semaphore(semaphore_name, 1).await?;
+    let lease_1 = sessions[0].acquire_semaphore(semaphore_name, 1).await?;
     let description = sessions[0].describe_semaphore(semaphore_name).await?;
     assert!(!description.ephemeral);
     assert_eq!(description.owners.len(), 1);
@@ -277,7 +277,7 @@ async fn describe_semaphore_test() -> YdbResult<()> {
         }
     });
 
-    let lease_3 = tokio::spawn(
+    let lease_3_handle = tokio::spawn(
         sessions[2].acquire_semaphore_with_params(
             semaphore_name,
             1,
@@ -311,7 +311,7 @@ async fn describe_semaphore_test() -> YdbResult<()> {
     );
 
     lease_2.release();
-    let _ = lease_3.await?;
+    let lease_3 = lease_3_handle.await??;
     let description = sessions[0].describe_semaphore(semaphore_name).await?;
     assert!(!description.ephemeral);
     assert_eq!(description.owners.len(), 2);
@@ -328,5 +328,8 @@ async fn describe_semaphore_test() -> YdbResult<()> {
         }
     });
 
+    // ensure for lease 1 and 3 doesn't drop before test ends
+    lease_1.release();
+    lease_3.release();
     Ok(())
 }
