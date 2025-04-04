@@ -37,8 +37,8 @@ impl RawAlterTopicRequest {
             || options.set_partition_count_limit.is_some()
         {
             Some(RawAlterPartitioningSettings {
-                set_min_active_partitions: options.set_min_active_partitions.map(|x| x as i64),
-                set_partition_count_limit: options.set_partition_count_limit.map(|x| x as i64),
+                set_min_active_partitions: options.set_min_active_partitions,
+                set_partition_count_limit: options.set_partition_count_limit,
             })
         } else {
             None
@@ -49,14 +49,11 @@ impl RawAlterTopicRequest {
             path,
             alter_partitioning_settings,
             set_retention_period: options.set_retention_period.map(|x| x.into()),
-            set_retention_storage_mb: options.set_retention_storage_mb.map(|x| x as i64),
+            set_retention_storage_mb: options.set_retention_storage_mb,
             set_supported_codecs: options.set_supported_codecs.map(|x| x.into()),
             set_partition_write_speed_bytes_per_second: options
-                .set_partition_write_speed_bytes_per_second
-                .map(|x| x as i64),
-            set_partition_write_burst_bytes: options
-                .set_partition_write_burst_bytes
-                .map(|x| x as i64),
+                .set_partition_write_speed_bytes_per_second,
+            set_partition_write_burst_bytes: options.set_partition_write_burst_bytes,
             alter_attributes: options.alter_attributes,
             add_consumers: options
                 .add_consumers

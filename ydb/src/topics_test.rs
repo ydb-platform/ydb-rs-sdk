@@ -1,5 +1,5 @@
 use futures_util::StreamExt;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tracing_test::traced_test;
 
 use crate::client_topic::list_types::ConsumerBuilder;
@@ -74,11 +74,11 @@ async fn describe_topic_test() -> YdbResult<()> {
     let supported_codecs = vec![Codec::RAW, Codec::GZIP];
     let write_speed = 100;
     let write_burst = 50;
-    let consumers = vec![
+    let mut consumers = vec![
         ConsumerBuilder::default()
             .name("c1".to_string())
             .supported_codecs(vec![Codec::RAW, Codec::GZIP])
-            .read_from(time)
+            .read_from(Some(time))
             .build()?,
         ConsumerBuilder::default().name("c2".to_string()).build()?,
     ];
@@ -132,6 +132,9 @@ async fn describe_topic_test() -> YdbResult<()> {
     assert_eq!(topic_description.partition_write_burst_bytes, write_burst);
     assert_eq!(topic_description.consumers.len(), consumers.len());
 
+    // when `read_from` was not set, server returns zero timestamp
+    consumers[1].read_from = Some(SystemTime::UNIX_EPOCH);
+
     for (expected, got) in consumers.iter().zip(topic_description.consumers.iter()) {
         assert_eq!(expected.name, got.name);
         assert_eq!(expected.important, got.important);
@@ -143,7 +146,7 @@ async fn describe_topic_test() -> YdbResult<()> {
     }
 
     for (expected_id, partition) in topic_description.partitions.iter().enumerate() {
-        assert_eq!(partition.partition_id, expected_id as u64);
+        assert_eq!(partition.partition_id, expected_id as i64);
         assert!(partition.active);
     }
 

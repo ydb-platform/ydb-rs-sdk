@@ -37,15 +37,14 @@ impl RawCreateTopicRequest {
             operation_params,
             path,
             partitioning_settings: RawPartitioningSettings {
-                min_active_partitions: options.min_active_partitions as i64,
-                partition_count_limit: options.partition_count_limit as i64,
+                min_active_partitions: options.min_active_partitions,
+                partition_count_limit: options.partition_count_limit,
             },
             retention_period: options.retention_period.map(|x| x.into()),
-            retention_storage_mb: options.retention_storage_mb as i64,
+            retention_storage_mb: options.retention_storage_mb,
             supported_codecs: options.supported_codecs.into(),
-            partition_write_speed_bytes_per_second: options.partition_write_speed_bytes_per_second
-                as i64,
-            partition_write_burst_bytes: options.partition_write_burst_bytes as i64,
+            partition_write_speed_bytes_per_second: options.partition_write_speed_bytes_per_second,
+            partition_write_burst_bytes: options.partition_write_burst_bytes,
             attributes: options.attributes,
             consumers: options
                 .consumers

@@ -1,5 +1,5 @@
+use crate::grpc_wrapper::raw_common_types::Timestamp;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
-use crate::grpc_wrapper::{raw_common_types::Timestamp, raw_errors::RawError};
 use std::collections::HashMap;
 use ydb_grpc::ydb_proto::topic::{AlterConsumer, Consumer};
 
@@ -7,28 +7,22 @@ use ydb_grpc::ydb_proto::topic::{AlterConsumer, Consumer};
 pub(crate) struct RawConsumer {
     pub name: String,
     pub important: bool,
-    pub read_from: Timestamp,
+    pub read_from: Option<Timestamp>,
     pub supported_codecs: RawSupportedCodecs,
     pub attributes: HashMap<String, String>,
 }
 
-impl TryFrom<Consumer> for RawConsumer {
-    type Error = RawError;
-
-    fn try_from(value: Consumer) -> Result<Self, Self::Error> {
-        let read_from = value.read_from.ok_or(RawError::ProtobufDecodeError(
-            "read_from is absent from result".to_string(),
-        ))?;
-
-        Ok(Self {
+impl From<Consumer> for RawConsumer {
+    fn from(value: Consumer) -> Self {
+        Self {
             name: value.name,
             important: value.important,
-            read_from: read_from.into(),
+            read_from: value.read_from.map(|x| x.into()),
             supported_codecs: value
                 .supported_codecs
                 .map_or_else(RawSupportedCodecs::default, |x| x.into()),
             attributes: value.attributes,
-        })
+        }
     }
 }
 
@@ -37,7 +31,7 @@ impl From<RawConsumer> for Consumer {
         Self {
             name: value.name,
             important: value.important,
-            read_from: Some(value.read_from.into()),
+            read_from: value.read_from.map(|x| x.into()),
             supported_codecs: Some(value.supported_codecs.into()),
             attributes: value.attributes,
             consumer_stats: None,

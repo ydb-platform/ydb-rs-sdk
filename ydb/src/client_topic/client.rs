@@ -22,19 +22,19 @@ use std::time::Duration;
 pub struct CreateTopicOptions {
     // Use CreateTopicOptionsBuilder
     #[builder(default)]
-    pub min_active_partitions: u64,
+    pub min_active_partitions: i64,
     #[builder(default)]
-    pub partition_count_limit: u64,
+    pub partition_count_limit: i64,
     #[builder(setter(strip_option), default)]
     pub retention_period: Option<Duration>,
     #[builder(default)]
-    pub retention_storage_mb: u64,
+    pub retention_storage_mb: i64,
     #[builder(default)]
     pub supported_codecs: Vec<Codec>,
     #[builder(default)]
-    pub partition_write_speed_bytes_per_second: u64,
+    pub partition_write_speed_bytes_per_second: i64,
     #[builder(default)]
-    pub partition_write_burst_bytes: u64,
+    pub partition_write_burst_bytes: i64,
     #[builder(default)]
     pub consumers: Vec<Consumer>,
     #[builder(default)]
@@ -48,25 +48,25 @@ pub struct CreateTopicOptions {
 pub struct AlterTopicOptions {
     // Use AlterTopicOptionsBuilder
     #[builder(setter(strip_option), default)]
-    pub set_min_active_partitions: Option<u64>,
+    pub set_min_active_partitions: Option<i64>,
 
     #[builder(setter(strip_option), default)]
-    pub set_partition_count_limit: Option<u64>,
+    pub set_partition_count_limit: Option<i64>,
 
     #[builder(setter(strip_option), default)]
     pub set_retention_period: Option<Duration>,
 
     #[builder(setter(strip_option), default)]
-    pub set_retention_storage_mb: Option<u64>,
+    pub set_retention_storage_mb: Option<i64>,
 
     #[builder(setter(strip_option), default)]
     pub set_supported_codecs: Option<Vec<Codec>>,
 
     #[builder(setter(strip_option), default)]
-    pub set_partition_write_speed_bytes_per_second: Option<u64>,
+    pub set_partition_write_speed_bytes_per_second: Option<i64>,
 
     #[builder(setter(strip_option), default)]
-    pub set_partition_write_burst_bytes: Option<u64>,
+    pub set_partition_write_burst_bytes: Option<i64>,
 
     #[builder(default)]
     pub alter_attributes: HashMap<String, String>,

@@ -92,12 +92,6 @@ impl TryFrom<DescribeTopicResult> for RawDescribeTopicResult {
             "retention period is absent in result".to_string(),
         ))?;
 
-        let consumers = value
-            .consumers
-            .into_iter()
-            .map(|consumer| consumer.try_into())
-            .collect::<RawResult<Vec<RawConsumer>>>()?;
-
         Ok(Self {
             self_: from_grpc_to_scheme_entry(entry),
             partitioning_settings: partitioning_settings.into(),
@@ -114,7 +108,7 @@ impl TryFrom<DescribeTopicResult> for RawDescribeTopicResult {
                 .partition_consumer_read_speed_bytes_per_second,
             partition_write_burst_bytes: value.partition_write_burst_bytes,
             attributes: value.attributes,
-            consumers,
+            consumers: value.consumers.into_iter().map(RawConsumer::from).collect(),
             metering_mode: value.metering_mode.try_into()?,
             topic_stats: value.topic_stats.map(|x| x.try_into()).transpose()?,
         })
