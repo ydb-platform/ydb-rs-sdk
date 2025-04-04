@@ -1,14 +1,15 @@
 use futures_util::StreamExt;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tracing_test::traced_test;
 
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::test_integration_helper::create_client;
 use crate::{
-    client_topic::client::TopicOptionsBuilder, TopicWriterMessageBuilder,
-    TopicWriterOptionsBuilder, YdbError, YdbResult,
+    client_topic::client::{AlterTopicOptionsBuilder, CreateTopicOptionsBuilder},
+    TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError, YdbResult,
 };
+use crate::{Codec, DescribeTopicOptionsBuilder};
 use tracing::{info, trace, warn};
 use ydb_grpc::ydb_proto::topic::stream_read_message;
 use ydb_grpc::ydb_proto::topic::stream_read_message::init_request::TopicReadSettings;
@@ -29,7 +30,10 @@ async fn create_delete_topic_test() -> YdbResult<()> {
     let _ = topic_client.drop_topic(topic_path.clone()).await; // ignoring error
 
     topic_client
-        .create_topic(topic_path.clone(), TopicOptionsBuilder::default().build()?)
+        .create_topic(
+            topic_path.clone(),
+            CreateTopicOptionsBuilder::default().build()?,
+        )
         .await?;
     let directories_after_topic_creation =
         scheme_client.list_directory(database_path.clone()).await?;
@@ -42,6 +46,189 @@ async fn create_delete_topic_test() -> YdbResult<()> {
     assert!(!directories_after_topic_droppage
         .iter()
         .any(|d| d.name == topic_name));
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn describe_topic_test() -> YdbResult<()> {
+    let client = create_client().await?;
+    let database_path = client.database();
+    let topic_name = "describe_test_topic".to_string();
+    let topic_path = format!("{}/{}", database_path, topic_name);
+
+    let mut topic_client = client.topic_client();
+    let mut scheme_client = client.scheme_client();
+
+    let _ = topic_client.drop_topic(topic_path.clone()).await; // ignoring error
+
+    let time = std::time::SystemTime::UNIX_EPOCH
+        .checked_add(std::time::Duration::from_secs(100))
+        .unwrap();
+
+    let min_active_partitions = 5;
+    let retention_period = std::time::Duration::from_secs(600);
+    let retention_storage_mb = 100;
+    let supported_codecs = vec![Codec::RAW, Codec::GZIP];
+    let write_speed = 100;
+    let write_burst = 50;
+    let mut consumers = vec![
+        ConsumerBuilder::default()
+            .name("c1".to_string())
+            .supported_codecs(vec![Codec::RAW, Codec::GZIP])
+            .read_from(Some(time))
+            .build()?,
+        ConsumerBuilder::default().name("c2".to_string()).build()?,
+    ];
+
+    topic_client
+        .create_topic(
+            topic_path.clone(),
+            CreateTopicOptionsBuilder::default()
+                .retention_period(retention_period)
+                .min_active_partitions(min_active_partitions)
+                .retention_storage_mb(retention_storage_mb)
+                .supported_codecs(supported_codecs.clone())
+                .partition_write_speed_bytes_per_second(write_speed)
+                .partition_write_burst_bytes(write_burst)
+                .consumers(consumers.clone())
+                .build()?,
+        )
+        .await?;
+    let directories_after_topic_creation =
+        scheme_client.list_directory(database_path.clone()).await?;
+    assert!(directories_after_topic_creation
+        .iter()
+        .any(|d| d.name == topic_name));
+
+    let topic_description = topic_client
+        .describe_topic(
+            topic_path.clone(),
+            DescribeTopicOptionsBuilder::default()
+                .include_stats(true)
+                .include_location(true)
+                .build()?,
+        )
+        .await?;
+    assert_eq!(topic_description.path, topic_name);
+    assert_eq!(topic_description.retention_period, retention_period);
+    assert_eq!(
+        topic_description
+            .partitioning_settings
+            .min_active_partitions,
+        min_active_partitions
+    );
+    assert_eq!(
+        topic_description.retention_storage_mb,
+        Some(retention_storage_mb)
+    );
+    assert_eq!(topic_description.supported_codecs, supported_codecs);
+    assert_eq!(
+        topic_description.partition_write_speed_bytes_per_second,
+        write_speed
+    );
+    assert_eq!(topic_description.partition_write_burst_bytes, write_burst);
+    assert_eq!(topic_description.consumers.len(), consumers.len());
+
+    // when `read_from` was not set, server returns zero timestamp
+    consumers[1].read_from = Some(SystemTime::UNIX_EPOCH);
+
+    for (expected, got) in consumers.iter().zip(topic_description.consumers.iter()) {
+        assert_eq!(expected.name, got.name);
+        assert_eq!(expected.important, got.important);
+        assert_eq!(expected.read_from, got.read_from);
+        assert_eq!(expected.supported_codecs, got.supported_codecs);
+        for (k, v) in expected.attributes.iter() {
+            assert_eq!(Some(v), got.attributes.get(k));
+        }
+    }
+
+    for (expected_id, partition) in topic_description.partitions.iter().enumerate() {
+        assert_eq!(partition.partition_id, expected_id as i64);
+        assert!(partition.active);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn alter_topic_test() -> YdbResult<()> {
+    let client = create_client().await?;
+    let database_path = client.database();
+    let topic_name = "alter_test_topic".to_string();
+    let topic_path = format!("{}/{}", database_path, topic_name);
+
+    let mut topic_client = client.topic_client();
+    let mut scheme_client = client.scheme_client();
+
+    let _ = topic_client.drop_topic(topic_path.clone()).await; // ignoring error
+
+    topic_client
+        .create_topic(
+            topic_path.clone(),
+            CreateTopicOptionsBuilder::default()
+                .retention_period(std::time::Duration::from_secs(600))
+                .min_active_partitions(5)
+                .build()?,
+        )
+        .await?;
+    let directories_after_topic_creation =
+        scheme_client.list_directory(database_path.clone()).await?;
+    assert!(directories_after_topic_creation
+        .iter()
+        .any(|d| d.name == topic_name));
+
+    let topic_description = topic_client
+        .describe_topic(
+            topic_path.clone(),
+            DescribeTopicOptionsBuilder::default().build()?,
+        )
+        .await?;
+
+    assert_eq!(topic_description.path, topic_name);
+    assert_eq!(
+        topic_description.retention_period,
+        std::time::Duration::from_secs(600)
+    );
+    assert_eq!(
+        topic_description
+            .partitioning_settings
+            .min_active_partitions,
+        5
+    );
+
+    topic_client
+        .alter_topic(
+            topic_path.clone(),
+            AlterTopicOptionsBuilder::default()
+                .set_retention_period(std::time::Duration::from_secs(3600))
+                .set_min_active_partitions(10)
+                .build()?,
+        )
+        .await?;
+
+    let topic_description = topic_client
+        .describe_topic(
+            topic_path.clone(),
+            DescribeTopicOptionsBuilder::default().build()?,
+        )
+        .await?;
+
+    assert_eq!(topic_description.path, topic_name);
+    assert_eq!(
+        topic_description.retention_period,
+        std::time::Duration::from_secs(3600)
+    );
+    assert_eq!(
+        topic_description
+            .partitioning_settings
+            .min_active_partitions,
+        10
+    );
 
     Ok(())
 }
@@ -81,7 +268,7 @@ async fn send_message_test() -> YdbResult<()> {
     topic_client
         .create_topic(
             topic_path.clone(),
-            TopicOptionsBuilder::default()
+            CreateTopicOptionsBuilder::default()
                 .consumers(vec![ConsumerBuilder::default()
                     .name(consumer_name.clone())
                     .build()?])
