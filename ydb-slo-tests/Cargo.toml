@@ -17,7 +17,7 @@ rand_core = { version = "0.6.4" }
 ratelimit = { version = "0.10.0" }
 tokio = { version = "=1.38.1" }
 tokio-util = { version = "=0.7.11", features = ["rt"] }
-ydb = { version = "0.9.4", path = "../ydb" }
+ydb = { version = "0.9.5", path="../ydb"}
 async-trait = "0.1"
 
 [[example]]
