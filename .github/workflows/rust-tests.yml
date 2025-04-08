@@ -34,7 +34,7 @@ jobs:
           YDB_USE_IN_MEMORY_PDISKS: true
         options: '-h localhost'
 
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
 
     steps:
     - name: Install rust
