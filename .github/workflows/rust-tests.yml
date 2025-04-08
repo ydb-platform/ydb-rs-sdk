@@ -32,11 +32,14 @@ jobs:
           - /tmp/ydb_certs:/ydb_certs
         env:
           YDB_USE_IN_MEMORY_PDISKS: true
-        options: '-h localhost'
+        options: '-h localhost --name ydb'
 
     runs-on: ubuntu-24.04
 
     steps:
+    - name: Show YDB server version
+      run: docker ps; docker exec ydb /ydbd -V
+
     - name: Install rust
       uses: dtolnay/rust-toolchain@v1
       with:
