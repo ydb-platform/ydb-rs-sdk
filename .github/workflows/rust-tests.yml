@@ -40,10 +40,17 @@ jobs:
     - name: Show YDB server version
       run: docker ps; docker exec ydb /ydbd -V
 
-    - name: Install rust
+    - name: Install stable rust
       uses: dtolnay/rust-toolchain@v1
       with:
-        toolchain: ${{ env[matrix.rust_version] }}, nightly
+        toolchain: ${{ env[matrix.rust_version] }}
+        components: clippy, rustfmt
+
+    - name: Install nightly rust
+      if: matrix.rust_version == 'RUST_VERSION_NEW'
+      uses: dtolnay/rust-toolchain@v1
+      with:
+        toolchain: nightly
         components: clippy, rustfmt
 
     - name: Cargo install
@@ -61,7 +68,7 @@ jobs:
         rustc --version
         cargo --version
         echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
-        echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
+        echo "name=version::$(rustc --version | cut -d ' ' -f 2)" >> $GITHUB_OUTPUT
 
     - name: Rust cache
       uses: Swatinem/rust-cache@v2
