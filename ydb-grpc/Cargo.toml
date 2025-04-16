@@ -10,17 +10,17 @@ repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-grpc"
 rust-version = "1.68.0"
 
 [dependencies]
-prost = "0.11.2"
-serde = { version = "1.0", features = ["derive"] }
-tonic = { version = "0.8.2", features = [
+prost = "0.13"
+serde = { version = "1", features = ["derive"] }
+tonic = { version = "0.12", features = [
     "tls",
     "tls-roots",
     "tls-webpki-roots",
 ] }
 
 [build-dependencies]
-prost-build = "0.11.2"
-tonic-build = "0.8.0"
+prost-build = "0.13"
+tonic-build = "0.12"
 walkdir = "2"
 
 [features]

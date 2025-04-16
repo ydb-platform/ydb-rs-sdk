@@ -175,8 +175,7 @@ impl TopicClient {
         TopicWriter::new(
             TopicWriterOptionsBuilder::default()
                 .topic_path(path)
-                .build()
-                .unwrap(),
+                .build()?,
             self.connection_manager.clone(),
         )
         .await

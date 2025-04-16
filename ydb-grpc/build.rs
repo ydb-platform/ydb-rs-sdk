@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "google.protobuf.Any",
             "#[derive(serde::Serialize, serde::Deserialize)]",
         )
-        .compile_with_config(cfg, COMPILE_FILES, INCLUDE_DIRS)?;
+        .compile_protos_with_config(cfg, COMPILE_FILES, INCLUDE_DIRS)?;
 
     // let descriptor_bytes = std::fs::read(descriptor_file).unwrap();
     // pbjson_build::Builder::new()

@@ -74,7 +74,7 @@ impl MetadataUrlCredentials {
     /// # fn main()->YdbResult<()>{
     /// use ydb::MetadataUrlCredentials;
     /// let cred = MetadataUrlCredentials::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")?;
-    /// # return Ok(());
+    /// # Ok(())
     /// # }
     /// ```
     pub fn from_url<T: Into<String>>(url: T) -> YdbResult<Self> {
@@ -175,7 +175,7 @@ fn get_credentials_from_env() -> YdbResult<Box<dyn Credentials>> {
 /// # fn main()->YdbResult<()>{
 /// let builder = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=/local")?;
 /// let client = builder.with_credentials(AccessTokenCredentials::from("asd")).client()?;
-/// # return Ok(());
+/// # Ok(())
 /// # }
 /// ```
 #[derive(Debug, Clone)]
@@ -276,8 +276,8 @@ impl Credentials for CommandLineCredentials {
                 let desc: String = if token.len() > 20 {
                     format!(
                         "{}..{}",
-                        &token.as_str()[0..3],
-                        &token.as_str()[(token.len() - 3)..token.len()]
+                        &token[0..3],
+                        &token[(token.len() - 3)..token.len()]
                     )
                 } else {
                     "short_token".to_string()
@@ -335,7 +335,7 @@ impl ServiceAccountCredentials {
     ) -> Self {
         Self {
             audience_url: Self::IAM_TOKEN_DEFAULT.to_string(),
-            private_key: SecretString::new(private_key.into()),
+            private_key: SecretString::from(private_key.into()),
             service_account_id: service_account_id.into(),
             key_id: key_id.into(),
         }
@@ -347,7 +347,7 @@ impl ServiceAccountCredentials {
     }
 
     pub fn from_env() -> YdbResult<Self> {
-        let path = std::env::var(YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS)?;
+        let path = env::var(YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS)?;
 
         ServiceAccountCredentials::from_file(path)
     }
@@ -372,7 +372,7 @@ impl ServiceAccountCredentials {
             audience_url: Self::IAM_TOKEN_DEFAULT.to_string(),
             key_id: key.id,
             service_account_id: key.service_account_id,
-            private_key: SecretString::new(key.private_key),
+            private_key: SecretString::from(key.private_key),
         })
     }
 
@@ -417,7 +417,7 @@ impl ServiceAccountCredentials {
         Ok(token)
     }
 
-    fn get_renew_time_for_lifetime(time: chrono::DateTime<chrono::Utc>) -> Instant {
+    fn get_renew_time_for_lifetime(time: DateTime<chrono::Utc>) -> Instant {
         let duration = time - chrono::Utc::now();
         let seconds = (0.1 * duration.num_seconds() as f64) as u64;
         trace!("renew in: {}", seconds);
@@ -486,7 +486,7 @@ impl GCEMetadata {
     /// # fn main()->YdbResult<()>{
     /// use ydb::GCEMetadata;
     /// let cred = GCEMetadata::from_url("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token")?;
-    /// # return Ok(());
+    /// # Ok(())
     /// # }
     /// ```
     pub fn from_url<T: Into<String>>(url: T) -> YdbResult<Self> {
@@ -507,8 +507,7 @@ impl Credentials for GCEMetadata {
         http::Request::builder()
             .uri(self.uri.clone())
             .header("Metadata-Flavor", "Google");
-        let mut request =
-            reqwest::blocking::Request::new(reqwest::Method::GET, self.uri.parse().unwrap());
+        let mut request = reqwest::blocking::Request::new(reqwest::Method::GET, self.uri.parse()?);
         request
             .headers_mut()
             .insert("Metadata-Flavor", "Google".parse().unwrap());
@@ -557,14 +556,13 @@ impl StaticCredentials {
 
         let mut auth_client = empty_connection_manager
             .get_auth_service(RawAuthClient::new)
-            .await
-            .unwrap();
+            .await?;
 
         // TODO: add configurable authorization request timeout
         let raw_request = RawLoginRequest {
             operation_params: TimeoutSettings::default().operation_params(),
             user: self.username.clone(),
-            password: self.password.expose_secret().clone(),
+            password: self.password.expose_secret().to_string(),
         };
 
         let raw_response = auth_client.login(raw_request).await?;
@@ -574,7 +572,7 @@ impl StaticCredentials {
     pub fn new(username: String, password: String, endpoint: Uri, database: String) -> Self {
         Self {
             username,
-            password: SecretString::new(password),
+            password: SecretString::from(password),
             database,
             endpoint,
             cert_path: None,
@@ -590,7 +588,7 @@ impl StaticCredentials {
     ) -> Self {
         Self {
             username,
-            password: SecretString::new(password),
+            password: SecretString::from(password),
             database,
             endpoint,
             cert_path: Some(cert_path),

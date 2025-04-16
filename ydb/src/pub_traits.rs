@@ -15,7 +15,7 @@ pub struct TokenInfo {
 impl TokenInfo {
     pub(crate) fn token(token: String) -> Self {
         Self {
-            token: SecretString::new(token),
+            token: SecretString::from(token),
             next_renew: Instant::now().add(DEFAULT_TOKEN_RENEW_INTERVAL),
         }
     }

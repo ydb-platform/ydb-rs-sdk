@@ -48,7 +48,7 @@ jobs:
 
     - name: Cargo install
       if: matrix.rust_version == 'RUST_VERSION_NEW'
-      run: cargo install cargo-sort cargo-udeps
+      run: cargo install cargo-sort cargo-udeps cargo-audit cargo-pants
 
     - name: Checkout
       uses: actions/checkout@v4
@@ -77,6 +77,10 @@ jobs:
     - name: Cargo udeps check
       if: matrix.rust_version == 'RUST_VERSION_NEW'
       run: cargo +nightly udeps --all-targets
+
+    - name: Security check
+      if: matrix.rust_version == 'RUST_VERSION_NEW'
+      run: cargo audit && cargo pants
 
     - name: Run tests
       env:
