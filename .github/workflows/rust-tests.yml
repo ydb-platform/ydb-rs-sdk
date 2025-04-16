@@ -11,7 +11,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
-  RUST_VERSION_OLD: "1.71.1"
+  RUST_VERSION_OLD: "1.81.0"
   RUST_VERSION_NEW: "1.86.0"
 
 jobs:
@@ -53,9 +53,6 @@ jobs:
         toolchain: nightly
         components: clippy, rustfmt
 
-    - name: Rust cache
-      uses: Swatinem/rust-cache@v2
-
     - name: Cargo install
       if: matrix.rust_version == 'RUST_VERSION_NEW'
       run: cargo install cargo-sort cargo-udeps cargo-audit cargo-pants
@@ -72,6 +69,9 @@ jobs:
         cargo --version
         echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
         echo "name=version::$(rustc --version | cut -d ' ' -f 2)" >> $GITHUB_OUTPUT
+
+    - name: Rust cache
+      uses: Swatinem/rust-cache@v2
 
     - name: Rustfmt check
       if: matrix.rust_version == 'RUST_VERSION_NEW'
