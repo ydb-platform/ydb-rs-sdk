@@ -4,16 +4,13 @@ name = "ydb-example-urlshortener"
 version = "0.0.0"
 edition = "2021"
 rust-version = "1.68.0"
-
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async_once = "0.2.6"
 hashers = "1.0.1"
-lazy_static = "1.4.0"
 serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.18", features = ["macros", "rt-multi-thread", "net"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 warp = "0.3.2"
-ydb = { version = "0.9.5", path="../ydb"}
+ydb = { version = "0.9.5", path = "../ydb" }

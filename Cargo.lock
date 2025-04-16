@@ -2919,7 +2919,7 @@ dependencies = [
 
 [[package]]
 name = "ydb"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "async-trait",
  "async_once",
@@ -2962,9 +2962,7 @@ dependencies = [
 name = "ydb-example-urlshortener"
 version = "0.0.0"
 dependencies = [
- "async_once",
  "hashers",
- "lazy_static",
  "serde",
  "tokio",
  "tracing",
@@ -2977,12 +2975,8 @@ dependencies = [
 name = "ydb-grpc"
 version = "0.1.0"
 dependencies = [
- "pbjson",
- "pbjson-build",
- "pbjson-types",
  "prost",
  "prost-build",
- "prost-types",
  "serde",
  "tonic",
  "tonic-build",
