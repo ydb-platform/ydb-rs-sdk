@@ -11,15 +11,15 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
-  RUST_VERSION_OLD: "1.81.0"
-  RUST_VERSION_NEW: "1.86.0"
+  RUST_VERSION_MSRV: "1.81.0"
+  RUST_VERSION_STABLE: "stable"
 
 jobs:
   tests:
     strategy:
       fail-fast: false
       matrix:
-        rust_version: [ "RUST_VERSION_OLD", "RUST_VERSION_NEW" ]
+        rust_version: [ "RUST_VERSION_MSRV", "RUST_VERSION_STABLE" ]
 
     services:
       ydb:
@@ -45,17 +45,16 @@ jobs:
     - name: Rust cache
       uses: Swatinem/rust-cache@v2
 
-    - name: Install stable rust
-      uses: dtolnay/rust-toolchain@v1
+    - name: Install nightly rust
+      if: matrix.rust_version == 'RUST_VERSION_STABLE'
+      uses: dtolnay/rust-toolchain@nightly
       with:
-        toolchain: ${{ env[matrix.rust_version] }}
         components: clippy, rustfmt
 
-    - name: Install nightly rust
-      if: matrix.rust_version == 'RUST_VERSION_NEW'
-      uses: dtolnay/rust-toolchain@v1
+    - name: Install stable rust
+      uses: dtolnay/rust-toolchain@master # as described in https://github.com/dtolnay/rust-toolchain/blob/master/README.md?plain=1#L45
       with:
-        toolchain: nightly
+        toolchain: ${{ env[matrix.rust_version] }}
         components: clippy, rustfmt
 
     - name: Show YDB server version
@@ -70,23 +69,23 @@ jobs:
         echo "name=version::$(rustc --version | cut -d ' ' -f 2)" >> $GITHUB_OUTPUT
 
     - name: Cargo install
-      if: matrix.rust_version == 'RUST_VERSION_NEW'
+      if: matrix.rust_version == 'RUST_VERSION_STABLE'
       run: cargo install --locked cargo-sort cargo-udeps cargo-audit cargo-pants
 
     - name: Rustfmt check
-      if: matrix.rust_version == 'RUST_VERSION_NEW'
+      if: matrix.rust_version == 'RUST_VERSION_STABLE'
       run: cargo fmt --check
 
     - name: Cargo sort check
-      if: matrix.rust_version == 'RUST_VERSION_NEW'
+      if: matrix.rust_version == 'RUST_VERSION_STABLE'
       run: cargo sort --workspace --check
 
     - name: Cargo udeps check
-      if: matrix.rust_version == 'RUST_VERSION_NEW'
+      if: matrix.rust_version == 'RUST_VERSION_STABLE'
       run: cargo +nightly udeps --all-targets
 
     - name: Security check
-      if: matrix.rust_version == 'RUST_VERSION_NEW'
+      if: matrix.rust_version == 'RUST_VERSION_STABLE'
       run: cargo audit && cargo pants
 
     - name: Run tests
@@ -95,6 +94,6 @@ jobs:
       run: cargo test --verbose --workspace -- --include-ignored
 
     - name: Linter
-      if: matrix.rust_version == 'RUST_VERSION_NEW'
+      if: matrix.rust_version == 'RUST_VERSION_STABLE'
       run: |
         cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
