@@ -165,8 +165,11 @@ impl YdbStatusError {
     /// # }
     /// ```
     pub fn operation_status(&self) -> YdbResult<StatusCode> {
-        StatusCode::from_i32(self.operation_status).ok_or_else(|| {
-            YdbError::InternalError(format!("unknown status code: {}", self.operation_status))
+        StatusCode::try_from(self.operation_status).map_err(|e| {
+            YdbError::InternalError(format!(
+                "unknown status code: {} ({e})",
+                self.operation_status
+            ))
         })
     }
 }
@@ -262,7 +265,7 @@ impl YdbError {
                 }
             }
             Self::YdbStatusError(ydb_err) => {
-                if let Some(status) = StatusCode::from_i32(ydb_err.operation_status) {
+                if let Ok(status) = StatusCode::try_from(ydb_err.operation_status) {
                     match status {
                         StatusCode::Aborted
                         | StatusCode::Unavailable
