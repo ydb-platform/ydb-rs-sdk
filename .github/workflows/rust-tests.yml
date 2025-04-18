@@ -42,9 +42,6 @@ jobs:
       with:
         submodules: true
 
-    - name: Rust cache
-      uses: Swatinem/rust-cache@v2
-
     - name: Install nightly rust
       if: matrix.rust_version == 'RUST_VERSION_NEW'
       uses: dtolnay/rust-toolchain@nightly
@@ -56,6 +53,11 @@ jobs:
       with:
         toolchain: ${{ env[matrix.rust_version] }}
         components: clippy, rustfmt
+
+    - name: Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ env[matrix.rust_version] }}
 
     - name: Show YDB server version
       run: docker ps; docker exec ydb /ydbd -V
