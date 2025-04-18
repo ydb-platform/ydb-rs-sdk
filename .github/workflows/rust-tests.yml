@@ -37,8 +37,13 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-    - name: Show YDB server version
-      run: docker ps; docker exec ydb /ydbd -V
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Rust cache
+      uses: Swatinem/rust-cache@v2
 
     - name: Install stable rust
       uses: dtolnay/rust-toolchain@v1
@@ -53,14 +58,8 @@ jobs:
         toolchain: nightly
         components: clippy, rustfmt
 
-    - name: Cargo install
-      if: matrix.rust_version == 'RUST_VERSION_NEW'
-      run: cargo install cargo-sort cargo-udeps cargo-audit cargo-pants
-
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        submodules: true
+    - name: Show YDB server version
+      run: docker ps; docker exec ydb /ydbd -V
 
     - name: Rust version
       id: rust_version_step
@@ -70,8 +69,9 @@ jobs:
         echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
         echo "name=version::$(rustc --version | cut -d ' ' -f 2)" >> $GITHUB_OUTPUT
 
-    - name: Rust cache
-      uses: Swatinem/rust-cache@v2
+    - name: Cargo install
+      if: matrix.rust_version == 'RUST_VERSION_NEW'
+      run: cargo install cargo-sort cargo-udeps cargo-audit cargo-pants
 
     - name: Rustfmt check
       if: matrix.rust_version == 'RUST_VERSION_NEW'
