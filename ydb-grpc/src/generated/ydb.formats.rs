@@ -19,4 +19,19 @@ pub struct CsvSettings {
     /// First not skipped line is a CSV header (list of column names).
     #[prost(bool, tag = "4")]
     pub header: bool,
+    #[prost(message, optional, tag = "5")]
+    pub quoting: ::core::option::Option<csv_settings::Quoting>,
+}
+/// Nested message and enum types in `CsvSettings`.
+pub mod csv_settings {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Quoting {
+        #[prost(bool, tag = "1")]
+        pub disabled: bool,
+        #[prost(bytes = "vec", tag = "2")]
+        pub quote_char: ::prost::alloc::vec::Vec<u8>,
+        #[prost(bool, tag = "3")]
+        pub double_quote_disabled: bool,
+    }
 }
