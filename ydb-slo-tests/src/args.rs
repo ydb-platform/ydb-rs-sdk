@@ -31,7 +31,7 @@ pub struct RunArgs {
 
     /// read RPS
     #[arg(long = "read-rps", default_value_t = 1000)]
-    pub read_rps: u64,
+    pub read_rps: u32,
 
     /// read timeout milliseconds
     #[arg(long = "read-timeout", default_value_t = 10000)]
@@ -39,7 +39,7 @@ pub struct RunArgs {
 
     /// write RPS
     #[arg(long = "write-rps", default_value_t = 100)]
-    pub write_rps: u64,
+    pub write_rps: u32,
 
     /// write timeout milliseconds
     #[arg(long = "write-timeout", default_value_t = 10000)]
@@ -48,4 +48,12 @@ pub struct RunArgs {
     /// run time in seconds
     #[arg(long, default_value_t = 600)]
     pub time: u64,
+
+    /// prometheus push gateway
+    #[arg(long, default_value_t = String::from(""))]
+    pub prom_pgw: String,
+
+    /// prometheus push period in milliseconds
+    #[arg(long, default_value_t = 250)]
+    pub report_period: u64,
 }

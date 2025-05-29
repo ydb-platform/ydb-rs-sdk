@@ -1,4 +1,4 @@
-name: SLO tests
+name: SLO
 
 on:
   push:
@@ -31,8 +31,6 @@ env:
 
 jobs:
   ydb-slo-action-init:
-    # // https://github.com/ydb-platform/ydb-rs-sdk/issues/227
-    if: ${{ false }}
     if: (!contains(github.event.pull_request.labels.*.name, 'no slo'))
 
     name: Run YDB SLO Tests
@@ -40,21 +38,20 @@ jobs:
 
     strategy:
       matrix:
-        example:
-          - native
+        sdk:
+          - name: native
+            label: native
         rust_version:
           - "RUST_VERSION_OLD"
           - "RUST_VERSION_NEW"
 
     concurrency:
-      group: slo-${{ github.ref }}-${{ matrix.example }}-${{ matrix.rust_version }}
+      group: slo-${{ github.ref }}-${{ matrix.sdk.name }}-${{ matrix.rust_version }}
       cancel-in-progress: true
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: true
 
       - name: Install rust
         uses: dtolnay/rust-toolchain@v1
@@ -73,33 +70,36 @@ jobs:
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Prepare envs
+        run: |
+          REF=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}
+          REF_SAFE=${REF//\//__}
+          echo "METRICS_REF=$REF_SAFE" >> $GITHUB_ENV
+          echo "METRICS_LABEL=${{ matrix.sdk.label }}" >> $GITHUB_ENV
+          echo "METRICS_JOB_NAME=${{ matrix.sdk.name }}" >> $GITHUB_ENV
+
       - name: Initialize YDB SLO
         uses: ydb-platform/ydb-slo-action/init@main
         with:
           github_pull_request_number: ${{ github.event.inputs.github_pull_request_number }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          workload_name: ${{ matrix.example }}-${{ matrix.rust_version }}
+          workload_name: ${{ matrix.sdk.name }}-${{ matrix.rust_version }}
           ydb_database_node_count: 5
 
       - name: Prepare SLO Database
         run: |
-          cargo run --example ${{ matrix.example }} grpc://localhost:2135 /Root/testdb tableName create
+          cargo run --example ${{ matrix.sdk.name }} grpc://localhost:2135 /Root/testdb tableName create
 
       - name: Run SLO Tests
-        env:
-          REF: '${{ github.head_ref || github.ref }}'
         run: |
-          cargo run --example ${{ matrix.example }} grpc://localhost:2135 /Root/testdb tableName run \
+          cargo run --example ${{ matrix.sdk.name }} grpc://localhost:2135 /Root/testdb tableName run \
+            --prom-pgw localhost:9091 \
+            --report-period 250 \
             --time ${{ inputs.slo_workload_duration_seconds || 600}} \
             --read-rps ${{ inputs.slo_workload_read_max_rps || 1000}} \
             --write-rps ${{ inputs.slo_workload_write_max_rps || 100}} \
-            --read-timeout 10000 \
-            --write-timeout 10000 || true
-
-      - if: always()
-        name: Cleanup SLO Database
-        run: |
-          cargo run --example ${{ matrix.example }} grpc://localhost:2135 /Root/testdb tableName cleanup
+            --read-timeout 1000 \
+            --write-timeout 1000 || true
 
       - if: always()
         name: Store ydb chaos testing logs
@@ -109,6 +109,52 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.example}}-${{ matrix.rust_version }}-chaos-ydb.log
+          name: ${{ matrix.sdk.name}}-${{ matrix.rust_version }}-chaos-ydb.log
           path: ./chaos-ydb.log
           retention-days: 1
+
+      - if: always()
+        name: Cleanup SLO Database
+        run: |
+          cargo run --example ${{ matrix.sdk.name }} grpc://localhost:2135 /Root/testdb tableName cleanup || true
+  validate-slo-metrics:
+    name: Validate SLO metrics
+    needs: ydb-slo-action-init
+    runs-on: ubuntu-latest
+
+    env:
+      #      READ_LATENCY_MS_THRESHOLD: "1" # 95th percentile read operations latency in milliseconds
+      #      WRITE_LATENCY_MS_THRESHOLD: "1" # 95th percentile write operations latency in milliseconds
+      READ_THROUGHPUT_THRESHOLD: "150" # Read operations throughput
+      WRITE_THROUGHPUT_THRESHOLD: "3" # Write operations throughput
+      #      READ_ATTEMPTS_THRESHOLD: "1" # Read attempts throughput
+      #      WRITE_ATTEMPTS_THRESHOLD: "1" # Write attempts throughput
+      READ_AVAILABILITY_THRESHOLD: "90" # Read operations availability
+      WRITE_AVAILABILITY_THRESHOLD: "90" # Write operations availability
+
+    strategy:
+      matrix:
+        sdk:
+          - name: native
+            label: native
+        rust_version:
+          - "RUST_VERSION_OLD"
+          - "RUST_VERSION_NEW"
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Download metrics artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.sdk.name }}-${{ matrix.rust_version }}-metrics.json
+          path: ./artifacts
+
+      - name: Make script executable
+        run: chmod +x .github/scripts/check-metrics.sh
+
+      - name: Validate SLO thresholds
+        run: |
+          .github/scripts/check-metrics.sh \
+            ./artifacts/${{ matrix.sdk.name }}-${{ matrix.rust_version }}-metrics.json
