@@ -1,7 +1,8 @@
+use std::time::Duration;
 use std::{env, str::FromStr};
-
+use tokio::time::timeout;
 use tracing::{info, Level};
-use ydb::{ClientBuilder, Query, ServiceAccountCredentials, YdbResult};
+use ydb::{ClientBuilder, Query, ServiceAccountCredentials, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -21,7 +22,13 @@ async fn main() -> YdbResult<()> {
         .client()?;
 
     info!("Waiting for client");
-    client.wait().await?;
+
+    if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
+        res?
+    } else {
+        return Err(YdbError::from("Connection timeout"));
+    };
+
     let sum: i32 = client
         .table_client()
         .retry_transaction(|mut t| async move {

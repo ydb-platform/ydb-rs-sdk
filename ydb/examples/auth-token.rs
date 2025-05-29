@@ -1,11 +1,19 @@
-use ydb::{AccessTokenCredentials, ClientBuilder, Query, YdbResult};
+use std::time::Duration;
+use tokio::time::timeout;
+use ydb::{AccessTokenCredentials, ClientBuilder, Query, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
     let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
         .with_credentials(AccessTokenCredentials::from("asd"))
         .client()?;
-    client.wait().await?;
+
+    if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
+        res?
+    } else {
+        return Err(YdbError::from("Connection timeout"));
+    };
+
     let sum: i32 = client
         .table_client()
         .retry_transaction(|mut t| async move {
