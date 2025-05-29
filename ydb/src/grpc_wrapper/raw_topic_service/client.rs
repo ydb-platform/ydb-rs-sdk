@@ -1,8 +1,6 @@
 use tracing::trace;
-use ydb_grpc::ydb_proto::topic::stream_write_message;
-use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
 
-use ydb_grpc::ydb_proto::topic::stream_write_message::InitRequest;
+use ydb_grpc::ydb_proto::topic::{stream_read_message, stream_write_message};
 use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
 
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
@@ -58,10 +56,36 @@ impl RawTopicClient {
             req => ydb_grpc::ydb_proto::topic::DropTopicRequest
         );
     }
+    
+    pub async fn stream_read(
+        &mut self,
+        init_req_body: stream_read_message::InitRequest,
+    ) -> RawResult<
+        AsyncGrpcStreamWrapper<stream_read_message::FromClient, stream_read_message::FromServer>,
+    > {
+        let (tx, rx): (
+            tokio::sync::mpsc::UnboundedSender<stream_read_message::FromClient>,
+            tokio::sync::mpsc::UnboundedReceiver<stream_read_message::FromClient>,
+        ) = tokio::sync::mpsc::unbounded_channel();
+        
+        let mess = stream_read_message::FromClient {
+            client_message: Some(stream_read_message::from_client::ClientMessage::InitRequest(init_req_body)),
+        };
+        tx.send(mess)?;
+        
+        let request_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+        let stream_reader_result = self.service.stream_read(request_stream).await;
+        let response_stream = stream_reader_result?.into_inner();
+
+        Ok(AsyncGrpcStreamWrapper::<
+            stream_read_message::FromClient,
+            stream_read_message::FromServer,
+        >::new(tx, response_stream))
+    }
 
     pub async fn stream_write(
         &mut self,
-        init_req_body: InitRequest,
+        init_req_body: stream_write_message::InitRequest,
     ) -> RawResult<
         AsyncGrpcStreamWrapper<stream_write_message::FromClient, stream_write_message::FromServer>,
     > {
@@ -71,7 +95,7 @@ impl RawTopicClient {
         ) = tokio::sync::mpsc::unbounded_channel();
 
         let mess = stream_write_message::FromClient {
-            client_message: Some(ClientMessage::InitRequest(init_req_body)),
+            client_message: Some(stream_write_message::from_client::ClientMessage::InitRequest(init_req_body)),
         };
         tx.send(mess)?;
 

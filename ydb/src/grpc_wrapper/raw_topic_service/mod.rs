@@ -5,3 +5,4 @@ pub(crate) mod create_topic;
 pub(crate) mod describe_topic;
 pub(crate) mod drop_topic;
 pub(crate) mod stream_write;
+pub(crate) mod stream_read;

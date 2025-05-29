@@ -16,6 +16,7 @@ use crate::{grpc_wrapper, YdbResult};
 use derive_builder::{Builder, UninitializedFieldError};
 use std::collections::HashMap;
 use std::time::Duration;
+use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
 
 #[derive(Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]
@@ -189,4 +190,9 @@ impl TopicClient {
             .get_auth_service(grpc_wrapper::raw_topic_service::client::RawTopicClient::new)
             .await
     }
+    
+    pub async fn create_reader(&mut self, topic: impl Into<TopicSelectors>) -> YdbResult<TopicReader>{
+        unimplemented!()
+    }
 }
+

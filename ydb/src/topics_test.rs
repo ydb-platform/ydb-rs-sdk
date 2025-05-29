@@ -1,5 +1,6 @@
 use futures_util::StreamExt;
 use std::time::{Duration, SystemTime};
+use itertools::Itertools;
 use tracing_test::traced_test;
 
 use crate::client_topic::list_types::ConsumerBuilder;
@@ -10,7 +11,7 @@ use crate::{
     TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError, YdbResult,
 };
 use crate::{Codec, DescribeTopicOptionsBuilder};
-use tracing::{info, trace, warn};
+use tracing::{debug, info, trace, warn};
 use ydb_grpc::ydb_proto::topic::stream_read_message;
 use ydb_grpc::ydb_proto::topic::stream_read_message::init_request::TopicReadSettings;
 use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
@@ -481,4 +482,87 @@ async fn start_read_topic(
     });
 
     Ok(topic_messages_rx)
+}
+
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn read_topic_message() -> YdbResult<()>{
+    let client = create_client().await?;
+    let database_path = client.database();
+    let topic_name = "send_test_topic".to_string();
+    let topic_path = format!("{}/{}", database_path, topic_name);
+    let producer_id = "test-producer-id".to_string();
+    let consumer_name = "test-consumer".to_string();
+
+    let mut topic_client = client.topic_client();
+    let _ = topic_client.drop_topic(topic_path.clone()).await; // ignoring error
+    debug!("previous topic removed");
+
+    'wait_topic_dropped: loop {
+        let mut scheme = client.scheme_client();
+        let res = scheme.list_directory(database_path.clone()).await?;
+        let mut topic_exists = false;
+        for item in res.into_iter() {
+            if item.name == topic_name {
+                topic_exists = true;
+                break;
+            }
+        }
+        if !topic_exists {
+            break 'wait_topic_dropped;
+        }
+        info!("waiting previous topic dropped...");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    topic_client
+        .create_topic(
+            topic_path.clone(),
+            CreateTopicOptionsBuilder::default()
+                .consumers(vec![ConsumerBuilder::default()
+                    .name(consumer_name.clone())
+                    .build()?])
+                .build()?,
+        )
+        .await?;
+
+    debug!("topic created");
+
+    // manual seq
+    let mut writer_manual = topic_client
+        .create_writer_with_params(
+            TopicWriterOptionsBuilder::default()
+                .auto_seq_no(false)
+                .topic_path(topic_path.clone())
+                .producer_id(producer_id.clone())
+                .build()?,
+        )
+        .await?;
+    debug!("first writer created");
+
+    writer_manual
+        .write(
+            TopicWriterMessageBuilder::default()
+                .seq_no(Some(200))
+                .data("test-1".as_bytes().into())
+                .build()?,
+        )
+        .await?;
+    debug!("sent message");
+
+    info!("creating topic reader");
+    let mut reader = topic_client.create_reader(topic_path.clone()).await?;
+    let batch = reader.read_batch().await?;
+
+    debug!("read a messages batch");
+    assert_eq!(batch.messages.len(), 1);
+
+    let msg = batch.messages.into_iter().next().unwrap();
+    assert_eq!(msg.get_producer_id(), producer_id);
+    assert_eq!(msg.seq_no, 200);
+    assert_eq!(msg.read_data().await?, "test-1".as_bytes());
+    assert_eq!(msg.get_topic_path(), topic_path);
+    Ok(())
 }
