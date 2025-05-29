@@ -220,6 +220,7 @@ impl From<stream_read_message::ReadResponse> for RawReadResponse {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct RawPartitionData {
     pub partition_session_id: i64,
     pub batches: Vec<RawBatch>,
@@ -234,6 +235,7 @@ impl From<stream_read_message::read_response::PartitionData> for RawPartitionDat
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct RawBatch {
     pub producer_id: String,
     pub write_session_meta: HashMap<String, String>,
@@ -256,10 +258,7 @@ impl From<stream_read_message::read_response::Batch> for RawBatch {
     fn from(value: stream_read_message::read_response::Batch) -> Self {
         RawBatch {
             producer_id: value.producer_id,
-            write_session_meta: value
-                .write_session_meta
-                .into_iter()
-                .collect(),
+            write_session_meta: value.write_session_meta.into_iter().collect(),
             codec: RawCodec { code: value.codec },
             written_at: value
                 .written_at
@@ -269,6 +268,7 @@ impl From<stream_read_message::read_response::Batch> for RawBatch {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct RawMessageData {
     pub offset: i64,
     pub seq_no: i64,
@@ -293,7 +293,7 @@ impl From<stream_read_message::read_response::MessageData> for RawMessageData {
 }
 
 pub(crate) struct RawCommitOffsetRequest {
-    commit_offsets: Vec<PartitionCommitOffset>,
+    pub commit_offsets: Vec<PartitionCommitOffset>,
 }
 
 impl From<RawCommitOffsetRequest> for stream_read_message::CommitOffsetRequest {
@@ -305,8 +305,8 @@ impl From<RawCommitOffsetRequest> for stream_read_message::CommitOffsetRequest {
 }
 
 pub(crate) struct PartitionCommitOffset {
-    partition_session_id: i64,
-    offsets: Vec<RawOffsetsRange>,
+    pub partition_session_id: i64,
+    pub offsets: Vec<RawOffsetsRange>,
 }
 
 impl From<PartitionCommitOffset>

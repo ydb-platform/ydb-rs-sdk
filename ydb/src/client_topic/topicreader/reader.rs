@@ -1,17 +1,21 @@
 use crate::client_common::TokenCache;
 use crate::client_topic::topicreader::cancelation_token::YdbCancellationToken;
 use crate::client_topic::topicreader::messages::TopicReaderBatch;
+use crate::client_topic::topicreader::partition_state::PartitionSession;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
+use crate::grpc_wrapper::raw_topic_service::common::partition::RawOffsetsRange;
 use crate::grpc_wrapper::raw_topic_service::common::update_token::RawUpdateTokenRequest;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
-    RawFromClientOneOf, RawFromServer, RawInitRequest, RawReadRequest, RawReadResponse,
-    RawStartPartitionSessionRequest, RawStartPartitionSessionResponse,
-    RawStopPartitionSessionRequest, RawStopPartitionSessionResponse, RawTopicReadSettings,
+    PartitionCommitOffset, RawCommitOffsetRequest, RawFromClientOneOf, RawFromServer,
+    RawInitRequest, RawReadRequest, RawReadResponse, RawStartPartitionSessionRequest,
+    RawStartPartitionSessionResponse, RawStopPartitionSessionRequest,
+    RawStopPartitionSessionResponse, RawTopicReadSettings,
 };
 use crate::{YdbError, YdbResult};
 use secrecy::ExposeSecret;
+use std::collections::HashMap;
 use std::time;
 use std::time::{Duration, SystemTime};
 use tokio::select;
@@ -24,6 +28,8 @@ pub struct TopicReader {
     last_read_response: Option<RawReadResponse>,
     last_error: Option<YdbError>,
     stop_backgroung_work_token: YdbCancellationToken,
+
+    partition_sessions: HashMap<i64, PartitionSession>,
 }
 
 const READER_BUFFER_SIZE: i64 = 1024 * 1024; // 1MB
@@ -55,8 +61,23 @@ impl TopicReader {
         }
     }
 
-    fn commit(&mut self, commit_marker: TopicReaderCommitMarker) {
-        unimplemented!()
+    // add commit to internal buffer. Success return isn't guarantee that the message
+    // committed to server. Real commit is background process.
+    pub fn commit(&mut self, commit_marker: TopicReaderCommitMarker) -> YdbResult<()> {
+        self.stream
+            .send_nowait(RawFromClientOneOf::CommitOffsetRequest(
+                RawCommitOffsetRequest {
+                    commit_offsets: vec![PartitionCommitOffset {
+                        partition_session_id: commit_marker.partition_session_id,
+                        offsets: vec![RawOffsetsRange {
+                            start: commit_marker.end_offset,
+                            end: commit_marker.end_offset,
+                        }],
+                    }],
+                },
+            ))?;
+
+        Ok(())
     }
 
     pub(crate) async fn new(
@@ -99,6 +120,7 @@ impl TopicReader {
             last_read_response: None,
             last_error: None,
             stop_backgroung_work_token,
+            partition_sessions: HashMap::new(),
         })
     }
 
@@ -111,6 +133,7 @@ impl TopicReader {
 
         let last_partition_data = last_read_response.partition_data.last_mut()?;
 
+        let partition_session_id = last_partition_data.partition_session_id;
         let last_batch = if let Some(batch) = last_partition_data.batches.pop() {
             batch
         } else {
@@ -131,7 +154,19 @@ impl TopicReader {
             }
         }
 
-        Some(TopicReaderBatch::new(last_batch))
+        let partition_session = if let Some(partition_session) =
+            self.partition_sessions.get_mut(&partition_session_id)
+        {
+            partition_session
+        } else {
+            error!(
+                "Receive message without active partition, partition_session_id: {}",
+                partition_session_id
+            );
+            return self.cut_batch();
+        };
+
+        Some(TopicReaderBatch::new(last_batch, partition_session))
     }
 
     fn send_read_request(&mut self, size: i64) -> YdbResult<()> {
@@ -176,6 +211,16 @@ impl TopicReader {
         &mut self,
         request: RawStartPartitionSessionRequest,
     ) -> YdbResult<()> {
+        self.partition_sessions.insert(
+            request.partition_session.partition_session_id,
+            PartitionSession {
+                partition_session_id: request.partition_session.partition_session_id,
+                partition_id: request.partition_session.partition_id,
+                topic: request.partition_session.path,
+                next_commit_offset_start: request.committed_offset,
+            },
+        );
+
         self.stream
             .send_nowait(RawFromClientOneOf::StartPartitionSessionResponse(
                 RawStartPartitionSessionResponse {
@@ -190,12 +235,16 @@ impl TopicReader {
         &mut self,
         request: RawStopPartitionSessionRequest,
     ) -> YdbResult<()> {
+        self.partition_sessions
+            .remove(&request.partition_session_id);
+
         self.stream
             .send_nowait(RawFromClientOneOf::StopPartitionSessionResponse(
                 RawStopPartitionSessionResponse {
                     partition_session_id: request.partition_session_id,
                 },
             ))?;
+
         Ok(())
     }
 
@@ -290,7 +339,7 @@ impl From<&str> for TopicSelectors {
 
 #[derive(Clone, Debug)]
 pub struct TopicReaderCommitMarker {
-    partition_session_id: i64,
-    start_offset: i64,
-    end_offset: i64,
+    pub(crate) partition_session_id: i64,
+    pub(crate) start_offset: i64,
+    pub(crate) end_offset: i64,
 }
