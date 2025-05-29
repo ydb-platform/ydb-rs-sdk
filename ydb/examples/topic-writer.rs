@@ -1,12 +1,20 @@
+use std::time::Duration;
+use tokio::time::timeout;
 use ydb::{
-    ClientBuilder, TopicWriter, TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbResult,
+    ClientBuilder, TopicWriter, TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError,
+    YdbResult,
 };
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
     let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
         .client()?;
-    client.wait().await?;
+
+    if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
+        res?
+    } else {
+        return Err(YdbError::from("Connection timeout"));
+    };
 
     let mut topic_client = client.topic_client();
     let mut writer: TopicWriter = topic_client

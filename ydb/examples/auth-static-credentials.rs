@@ -1,4 +1,6 @@
-use ydb::{ClientBuilder, Query, StaticCredentials, YdbResult};
+use std::time::Duration;
+use tokio::time::timeout;
+use ydb::{ClientBuilder, Query, StaticCredentials, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -13,7 +15,12 @@ async fn main() -> YdbResult<()> {
                 "local".to_string(),
             ))
             .client()?;
-    client.wait().await?;
+
+    if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
+        res?
+    } else {
+        return Err(YdbError::from("Connection timeout"));
+    };
 
     println!("created\nmake a query...");
     let product: i32 = client
