@@ -1,11 +1,12 @@
 use async_trait::async_trait;
-use ydb::{
-    ydb_params, ClientBuilder, Query, Row, TableClient, YdbResult, YdbResultWithCustomerErr,
-};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use ydb::{ydb_params, ClientBuilder, Query, TableClient, YdbResult, YdbResultWithCustomerErr};
 use ydb_slo_tests::args::CreateArgs;
 use ydb_slo_tests::cli::SloTestsCli;
 use ydb_slo_tests::row::{RowID, TestRow};
 use ydb_slo_tests::workers::ReadWriter;
+
+pub type Attempts = usize;
 
 #[derive(Clone)]
 pub struct Database {
@@ -65,7 +66,7 @@ impl Database {
 
 #[async_trait]
 impl ReadWriter for Database {
-    async fn read(&self, row_id: RowID) -> YdbResult<Row> {
+    async fn read(&self, row_id: RowID) -> (YdbResultWithCustomerErr<()>, Attempts) {
         let query = Query::from(format!(
             r#"
             DECLARE $id AS Uint64;
@@ -78,17 +79,22 @@ impl ReadWriter for Database {
         ))
         .with_params(ydb_params!("$id" => row_id));
 
-        self.db_table_client
+        let attempts = AtomicUsize::new(0);
+
+        let result = self
+            .db_table_client
             .retry_transaction(|t| async {
                 let mut t = t;
-                let res = t.query(query.clone()).await?;
-                Ok(res)
+                attempts.fetch_add(1, Ordering::Relaxed);
+                t.query(query.clone()).await?;
+                Ok(())
             })
-            .await?
-            .into_only_row()
+            .await;
+
+        (result, attempts.load(Ordering::Relaxed))
     }
 
-    async fn write(&self, row: TestRow) -> YdbResultWithCustomerErr<()> {
+    async fn write(&self, row: TestRow) -> (YdbResultWithCustomerErr<()>, Attempts) {
         let query = Query::from(format!(
             r#"
             DECLARE $id AS Uint64;
@@ -119,13 +125,19 @@ impl ReadWriter for Database {
                 "$payload_timestamp" => row.payload_timestamp,
         ));
 
-        self.db_table_client
+        let attempts = AtomicUsize::new(0);
+
+        let result = self
+            .db_table_client
             .retry_transaction(|t| async {
                 let mut t = t;
+                attempts.fetch_add(1, Ordering::Relaxed);
                 t.query(query.clone()).await?;
                 t.commit().await?;
                 Ok(())
             })
-            .await
+            .await;
+
+        (result, attempts.load(Ordering::Relaxed))
     }
 }
