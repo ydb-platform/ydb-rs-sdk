@@ -1,5 +1,4 @@
 use futures_util::StreamExt;
-use itertools::Itertools;
 use std::time::{Duration, SystemTime};
 use tracing_test::traced_test;
 

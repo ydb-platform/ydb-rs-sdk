@@ -1,16 +1,14 @@
 use crate::grpc_wrapper::grpc::proto_issues_to_ydb_issues;
 use crate::grpc_wrapper::raw_common_types::{Duration, Timestamp};
 use crate::grpc_wrapper::raw_errors::RawError;
-use crate::grpc_wrapper::raw_status::RawStatusCode;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawCodec;
 use crate::grpc_wrapper::raw_topic_service::common::partition::RawOffsetsRange;
 use crate::grpc_wrapper::raw_topic_service::common::update_token::{
     RawUpdateTokenRequest, RawUpdateTokenResponse,
 };
-use crate::grpc_wrapper::raw_topic_service::stream_write::create_server_status_error;
-use crate::{YdbError, YdbIssue, YdbStatusError};
+use crate::YdbStatusError;
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 use tracing::warn;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 use ydb_grpc::ydb_proto::topic::stream_read_message;
@@ -261,7 +259,6 @@ impl From<stream_read_message::read_response::Batch> for RawBatch {
             write_session_meta: value
                 .write_session_meta
                 .into_iter()
-                .map(|x| x.into())
                 .collect(),
             codec: RawCodec { code: value.codec },
             written_at: value
@@ -289,7 +286,7 @@ impl From<stream_read_message::read_response::MessageData> for RawMessageData {
             seq_no: value.seq_no,
             created_at: value.created_at.map(|x| x.into()),
             uncompressed_size: value.uncompressed_size,
-            data: value.data.into_iter().map(|x| x.into()).collect(),
+            data: value.data.into_iter().collect(),
             read_session_size_bytes: 0,
         }
     }
