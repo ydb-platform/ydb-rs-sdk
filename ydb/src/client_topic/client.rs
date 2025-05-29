@@ -1,5 +1,6 @@
 use super::list_types::{Codec, TopicDescription};
 use crate::client::TimeoutSettings;
+use crate::client_common::TokenCache;
 use crate::client_topic::list_types::{AlterConsumer, Consumer, MeteringMode};
 use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
 use crate::client_topic::topicwriter::writer::TopicWriter;
@@ -104,16 +105,19 @@ impl From<UninitializedFieldError> for errors::YdbError {
 pub struct TopicClient {
     timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
+    token_cache: TokenCache,
 }
 
 impl TopicClient {
     pub(crate) fn new(
         timeouts: TimeoutSettings,
         connection_manager: GrpcConnectionManager,
+        token_cache: TokenCache,
     ) -> Self {
         Self {
             timeouts,
             connection_manager,
+            token_cache,
         }
     }
 
@@ -170,7 +174,13 @@ impl TopicClient {
         consumer: String,
         topic: impl Into<TopicSelectors>,
     ) -> YdbResult<TopicReader> {
-        TopicReader::new(consumer, topic.into(), self.connection_manager.clone()).await
+        TopicReader::new(
+            consumer,
+            topic.into(),
+            self.connection_manager.clone(),
+            self.token_cache.clone(),
+        )
+        .await
     }
 
     pub async fn create_writer_with_params(

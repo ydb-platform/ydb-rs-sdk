@@ -158,6 +158,7 @@ impl From<RawTopicReadSettings> for stream_read_message::init_request::TopicRead
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct RawInitResponse {
     session_id: String,
 }

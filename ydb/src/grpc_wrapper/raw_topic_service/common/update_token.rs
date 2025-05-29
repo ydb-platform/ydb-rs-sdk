@@ -1,7 +1,7 @@
 use ydb_grpc::ydb_proto::topic::{UpdateTokenRequest, UpdateTokenResponse};
 
 pub(crate) struct RawUpdateTokenRequest {
-    token: String,
+    pub(crate) token: String,
 }
 
 impl From<RawUpdateTokenRequest> for UpdateTokenRequest {

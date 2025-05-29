@@ -1,24 +1,33 @@
+use crate::client_common::TokenCache;
+use crate::client_topic::topicreader::cancelation_token::YdbCancellationToken;
 use crate::client_topic::topicreader::messages::TopicReaderBatch;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
+use crate::grpc_wrapper::raw_topic_service::common::update_token::RawUpdateTokenRequest;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
     RawFromClientOneOf, RawFromServer, RawInitRequest, RawReadRequest, RawReadResponse,
     RawStartPartitionSessionRequest, RawStartPartitionSessionResponse,
     RawStopPartitionSessionRequest, RawStopPartitionSessionResponse, RawTopicReadSettings,
 };
 use crate::{YdbError, YdbResult};
-use std::time::SystemTime;
-use tracing::{debug, error};
+use secrecy::ExposeSecret;
+use std::time;
+use std::time::{Duration, SystemTime};
+use tokio::select;
+use tokio::sync::mpsc::UnboundedSender;
+use tracing::{debug, error, info, warn};
 use ydb_grpc::ydb_proto::topic::stream_read_message::{FromClient, FromServer};
-
-const READER_BUFFER_SIZE: i64 = 1024 * 1024; // 1MB
 
 pub struct TopicReader {
     stream: AsyncGrpcStreamWrapper<FromClient, FromServer>,
     last_read_response: Option<RawReadResponse>,
     last_error: Option<YdbError>,
+    stop_backgroung_work_token: YdbCancellationToken,
 }
+
+const READER_BUFFER_SIZE: i64 = 1024 * 1024; // 1MB
+const UPDATE_TOKEN_INTERVAL: time::Duration = Duration::from_secs(3600);
 
 impl TopicReader {
     pub async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
@@ -54,6 +63,7 @@ impl TopicReader {
         consumer: String,
         selectors: TopicSelectors,
         connection_manager: GrpcConnectionManager,
+        token_cache: TokenCache,
     ) -> YdbResult<Self> {
         let mut topic_service = connection_manager
             .get_auth_service(RawTopicClient::new)
@@ -74,11 +84,21 @@ impl TopicReader {
             .await?;
 
         // TODO: update token
+        let stop_backgroung_work_token = YdbCancellationToken::new();
+
+        let stop_update_token = stop_backgroung_work_token.clone();
+
+        tokio::spawn(Self::update_token_loop(
+            stop_update_token,
+            stream.clone_sender(),
+            token_cache,
+        ));
 
         Ok(Self {
             stream,
             last_read_response: None,
             last_error: None,
+            stop_backgroung_work_token,
         })
     }
 
@@ -127,8 +147,8 @@ impl TopicReader {
             RawFromServer::ReadResponse(read_resopnse) => {
                 self.process_read_response(read_resopnse)?
             }
-            RawFromServer::InitResponse(_) => {
-                error!("second init response for topic reader")
+            RawFromServer::InitResponse(resp) => {
+                info!("init response for topic reader: {:?}", resp)
             }
             RawFromServer::UpdateTokenResponse(_) => { /*pass*/ }
 
@@ -177,6 +197,49 @@ impl TopicReader {
                 },
             ))?;
         Ok(())
+    }
+
+    async fn update_token_loop(
+        cancellation_token: YdbCancellationToken,
+        send: UnboundedSender<FromClient>,
+        auth_token: TokenCache,
+    ) {
+        loop {
+            if cancellation_token.is_cancelled() {
+                return;
+            }
+
+            let tokio_cancellation = cancellation_token.to_tokio_token();
+            select! {
+                _ = tokio_cancellation.cancelled() => {
+                    return
+                    },
+
+                _ = tokio::time::sleep(UPDATE_TOKEN_INTERVAL) =>{}
+            }
+
+            let token = auth_token.token();
+
+            debug!("sending update token request from topic reader");
+
+            if let Err(err) = send.send(
+                RawFromClientOneOf::UpdateTokenRequest(RawUpdateTokenRequest {
+                    token: token.expose_secret().to_string(),
+                })
+                .into(),
+            ) {
+                warn!(
+                    "error while send update token request from topic reader: {}",
+                    err
+                )
+            }
+        }
+    }
+}
+
+impl Drop for TopicReader {
+    fn drop(&mut self) {
+        self.stop_backgroung_work_token.cancel();
     }
 }
 

@@ -6,22 +6,25 @@ pub struct YdbCancellationToken {
 }
 
 impl YdbCancellationToken {
-    fn new(token: TokioCancellationToken) -> Self {
+    pub(crate) fn new() -> Self {
+        Self {
+            token: TokioCancellationToken::new(),
+        }
+    }
+
+    fn from_tokio_token(token: TokioCancellationToken) -> Self {
         Self { token }
     }
-    
-    fn cancel(&self) {
+
+    pub fn cancel(&self) {
         self.token.cancel()
     }
-    
-    fn is_cancelled(&self) -> bool {
+
+    pub fn is_cancelled(&self) -> bool {
         self.token.is_cancelled()
     }
-}
 
-impl From<YdbCancellationToken> for TokioCancellationToken {
-    fn from(token: YdbCancellationToken) -> Self {
-        token.token
+    pub(crate) fn to_tokio_token(&self) -> TokioCancellationToken {
+        self.token.clone()
     }
 }
-
