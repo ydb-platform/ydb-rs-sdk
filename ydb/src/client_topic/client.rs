@@ -1,6 +1,7 @@
 use super::list_types::{Codec, TopicDescription};
 use crate::client::TimeoutSettings;
 use crate::client_topic::list_types::{AlterConsumer, Consumer, MeteringMode};
+use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
 use crate::client_topic::topicwriter::writer::TopicWriter;
 use crate::client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
@@ -16,7 +17,6 @@ use crate::{grpc_wrapper, YdbResult};
 use derive_builder::{Builder, UninitializedFieldError};
 use std::collections::HashMap;
 use std::time::Duration;
-use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
 
 #[derive(Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]
@@ -165,6 +165,14 @@ impl TopicClient {
         Ok(())
     }
 
+    pub async fn create_reader(
+        &mut self,
+        consumer: String,
+        topic: impl Into<TopicSelectors>,
+    ) -> YdbResult<TopicReader> {
+        TopicReader::new(consumer, topic.into(), self.connection_manager.clone()).await
+    }
+
     pub async fn create_writer_with_params(
         &mut self,
         writer_options: TopicWriterOptions,
@@ -190,9 +198,4 @@ impl TopicClient {
             .get_auth_service(grpc_wrapper::raw_topic_service::client::RawTopicClient::new)
             .await
     }
-    
-    pub async fn create_reader(&mut self, topic: impl Into<TopicSelectors>) -> YdbResult<TopicReader>{
-        unimplemented!()
-    }
 }
-

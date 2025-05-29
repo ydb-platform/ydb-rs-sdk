@@ -8,6 +8,8 @@ use ydb_grpc::ydb_proto::topic::{
     PartitionStats,
 };
 
+// Represents range [start, end).
+// I.e. (end - 1) is the greatest of offsets, included in non-empty range.
 #[derive(serde::Serialize, Clone, Debug)]
 pub(crate) struct RawOffsetsRange {
     pub start: i64,
@@ -16,6 +18,15 @@ pub(crate) struct RawOffsetsRange {
 
 impl From<OffsetsRange> for RawOffsetsRange {
     fn from(value: OffsetsRange) -> Self {
+        Self {
+            start: value.start,
+            end: value.end,
+        }
+    }
+}
+
+impl From<RawOffsetsRange> for OffsetsRange {
+    fn from(value: RawOffsetsRange) -> Self {
         Self {
             start: value.start,
             end: value.end,
