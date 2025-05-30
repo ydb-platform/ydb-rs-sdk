@@ -96,6 +96,9 @@ pub struct Consumer {
 
     #[builder(default)]
     pub attributes: HashMap<String, String>,
+
+    #[builder(default)]
+    pub consumer_stats: Option<ConsumerStats>,
 }
 
 impl From<RawConsumer> for Consumer {
@@ -106,6 +109,7 @@ impl From<RawConsumer> for Consumer {
             read_from: consumer.read_from.map(|x| x.into()),
             supported_codecs: consumer.supported_codecs.into(),
             attributes: consumer.attributes,
+            consumer_stats: None,
         }
     }
 }
@@ -118,6 +122,7 @@ impl From<Consumer> for RawConsumer {
             read_from: consumer.read_from.map(|x| x.into()),
             supported_codecs: consumer.supported_codecs.into(),
             attributes: consumer.attributes,
+            consumer_stats: None,
         }
     }
 }
@@ -188,6 +193,21 @@ pub struct PartitionStats {
     pub bytes_written_per_day: i64,
 }
 
+impl Default for PartitionStats {
+    fn default() -> Self {
+        Self {
+            start_offset: 0,
+            end_offset: 0,
+            store_size_bytes: 0,
+            last_write_time: SystemTime::UNIX_EPOCH,
+            max_write_time_lag: std::time::Duration::from_secs(0),
+            bytes_written_per_minute: 0,
+            bytes_written_per_hour: 0,
+            bytes_written_per_day: 0,
+        }
+    }
+}
+
 impl From<RawPartitionStats> for PartitionStats {
     fn from(value: RawPartitionStats) -> Self {
         Self {
@@ -203,7 +223,7 @@ impl From<RawPartitionStats> for PartitionStats {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PartitionLocation {
     pub node_id: i32,
     pub generation: i64,
@@ -314,6 +334,186 @@ impl From<RawDescribeTopicResult> for TopicDescription {
             consumers: value.consumers.into_iter().map(|x| x.into()).collect(),
             metering_mode: value.metering_mode.into(),
             stats: value.topic_stats.map(|x| x.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ConsumerStats {
+    pub min_partitions_last_read_time: std::time::SystemTime,
+    pub max_read_time_lag: std::time::Duration,
+    pub max_write_time_lag: std::time::Duration,
+    pub max_committed_time_lag: std::time::Duration,
+    pub bytes_read_per_minute: i64,
+    pub bytes_read_per_hour: i64,
+    pub bytes_read_per_day: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PartitionConsumerStats {
+    pub committed_offset: i64,
+    pub last_read_time: std::time::SystemTime,
+    pub max_read_time_lag: std::time::Duration,
+    pub max_write_time_lag: std::time::Duration,
+    pub max_committed_time_lag: std::time::Duration,
+    pub bytes_read_per_minute: i64,
+    pub bytes_read_per_hour: i64,
+    pub bytes_read_per_day: i64,
+}
+
+impl Default for PartitionConsumerStats {
+    fn default() -> Self {
+        Self {
+            committed_offset: 0,
+            last_read_time: std::time::SystemTime::UNIX_EPOCH,
+            max_read_time_lag: std::time::Duration::from_secs(0),
+            max_write_time_lag: std::time::Duration::from_secs(0),
+            max_committed_time_lag: std::time::Duration::from_secs(0),
+            bytes_read_per_minute: 0,
+            bytes_read_per_hour: 0,
+            bytes_read_per_day: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ConsumerPartitionInfo {
+    pub partition_id: i64,
+    pub active: bool,
+    pub child_partition_ids: Vec<i64>,
+    pub parent_partition_ids: Vec<i64>,
+    pub stats: PartitionStats,
+    pub consumer_stats: PartitionConsumerStats,
+    pub location: PartitionLocation,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConsumerDescription {
+    pub path: String,
+    pub consumer: Consumer,
+    pub consumer_stats: ConsumerStats,
+    pub partitions: Vec<ConsumerPartitionInfo>,
+}
+
+impl From<crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsumerResult>
+    for ConsumerDescription
+{
+    fn from(
+        value: crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsumerResult,
+    ) -> Self {
+        let consumer_stats = value
+            .consumer
+            .consumer_stats
+            .as_ref()
+            .map(|stats| ConsumerStats {
+                min_partitions_last_read_time: stats
+                    .min_partitions_last_read_time
+                    .clone()
+                    .map(|x| x.into())
+                    .unwrap_or_else(|| std::time::SystemTime::UNIX_EPOCH),
+                max_read_time_lag: stats
+                    .max_read_time_lag
+                    .clone()
+                    .map(|x| x.into())
+                    .unwrap_or_default(),
+                max_write_time_lag: stats
+                    .max_write_time_lag
+                    .clone()
+                    .map(|x| x.into())
+                    .unwrap_or_default(),
+                max_committed_time_lag: stats
+                    .max_committed_time_lag
+                    .clone()
+                    .map(|x| x.into())
+                    .unwrap_or_default(),
+                bytes_read_per_minute: stats
+                    .bytes_read
+                    .as_ref()
+                    .map(|b| b.per_minute)
+                    .unwrap_or_default(),
+                bytes_read_per_hour: stats
+                    .bytes_read
+                    .as_ref()
+                    .map(|b| b.per_hour)
+                    .unwrap_or_default(),
+                bytes_read_per_day: stats
+                    .bytes_read
+                    .as_ref()
+                    .map(|b| b.per_day)
+                    .unwrap_or_default(),
+            })
+            .unwrap_or_else(|| ConsumerStats {
+                min_partitions_last_read_time: std::time::SystemTime::UNIX_EPOCH,
+                max_read_time_lag: std::time::Duration::from_secs(0),
+                max_write_time_lag: std::time::Duration::from_secs(0),
+                max_committed_time_lag: std::time::Duration::from_secs(0),
+                bytes_read_per_minute: 0,
+                bytes_read_per_hour: 0,
+                bytes_read_per_day: 0,
+            });
+        let consumer: Consumer = value.consumer.into();
+
+        let partitions = value
+            .partitions
+            .into_iter()
+            .map(|p| {
+                let partition_info: RawPartitionInfo = p;
+                ConsumerPartitionInfo {
+                    partition_id: partition_info.partition_id,
+                    active: partition_info.active,
+                    child_partition_ids: partition_info.child_partition_ids,
+                    parent_partition_ids: partition_info.parent_partition_ids,
+                    stats: partition_info
+                        .partition_stats
+                        .map(|x| x.into())
+                        .unwrap_or_default(),
+                    consumer_stats: partition_info
+                        .partition_consumer_stats
+                        .map(|stats| PartitionConsumerStats {
+                            committed_offset: stats.committed_offset,
+                            last_read_time: stats
+                                .last_read_time
+                                .map(|x| x.into())
+                                .unwrap_or_else(|| std::time::SystemTime::UNIX_EPOCH),
+                            max_read_time_lag: stats
+                                .max_read_time_lag
+                                .map(|x| x.into())
+                                .unwrap_or_default(),
+                            max_write_time_lag: stats
+                                .max_write_time_lag
+                                .map(|x| x.into())
+                                .unwrap_or_default(),
+                            max_committed_time_lag: std::time::Duration::from_secs(0),
+                            bytes_read_per_minute: stats
+                                .bytes_read
+                                .as_ref()
+                                .map(|b| b.per_minute)
+                                .unwrap_or_default(),
+                            bytes_read_per_hour: stats
+                                .bytes_read
+                                .as_ref()
+                                .map(|b| b.per_hour)
+                                .unwrap_or_default(),
+                            bytes_read_per_day: stats
+                                .bytes_read
+                                .as_ref()
+                                .map(|b| b.per_day)
+                                .unwrap_or_default(),
+                        })
+                        .unwrap_or_default(),
+                    location: partition_info
+                        .partition_location
+                        .map(|x| x.into())
+                        .unwrap_or_default(),
+                }
+            })
+            .collect();
+
+        Self {
+            path: value.self_.name,
+            consumer,
+            consumer_stats,
+            partitions,
         }
     }
 }

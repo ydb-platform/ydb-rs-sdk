@@ -2,15 +2,17 @@ use futures_util::StreamExt;
 use std::time::{Duration, SystemTime};
 use tracing_test::traced_test;
 
+use crate::client_topic::client::DescribeConsumerOptionsBuilder;
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::test_integration_helper::create_client;
+use crate::transaction::Transaction;
 use crate::{
     client_topic::client::{AlterTopicOptionsBuilder, CreateTopicOptionsBuilder},
     TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError, YdbResult,
 };
 use crate::{Codec, DescribeTopicOptionsBuilder};
-use tracing::{info, trace, warn};
+use tracing::{debug, info, trace, warn};
 use ydb_grpc::ydb_proto::topic::stream_read_message;
 use ydb_grpc::ydb_proto::topic::stream_read_message::init_request::TopicReadSettings;
 use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
@@ -481,4 +483,277 @@ async fn start_read_topic(
     });
 
     Ok(topic_messages_rx)
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn read_topic_message() -> YdbResult<()> {
+    let client = create_client().await?;
+    let database_path = client.database();
+    let topic_name = "read_topic_message".to_string();
+    let topic_path = format!("{}/{}", database_path, topic_name);
+    let producer_id = "test-producer-id".to_string();
+    let consumer_name = "test-consumer".to_string();
+
+    let mut topic_client = client.topic_client();
+    let _ = topic_client.drop_topic(topic_path.clone()).await; // ignoring error
+    debug!("previous topic removed");
+
+    'wait_topic_dropped: loop {
+        let mut scheme = client.scheme_client();
+        let res = scheme.list_directory(database_path.clone()).await?;
+        let mut topic_exists = false;
+        for item in res.into_iter() {
+            if item.name == topic_name {
+                topic_exists = true;
+                break;
+            }
+        }
+        if !topic_exists {
+            break 'wait_topic_dropped;
+        }
+        info!("waiting previous topic dropped...");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    topic_client
+        .create_topic(
+            topic_path.clone(),
+            CreateTopicOptionsBuilder::default()
+                .consumers(vec![ConsumerBuilder::default()
+                    .name(consumer_name.clone())
+                    .build()?])
+                .build()?,
+        )
+        .await?;
+
+    debug!("topic created");
+
+    // manual seq
+    let mut writer_manual = topic_client
+        .create_writer_with_params(
+            TopicWriterOptionsBuilder::default()
+                .auto_seq_no(false)
+                .topic_path(topic_path.clone())
+                .producer_id(producer_id.clone())
+                .build()?,
+        )
+        .await?;
+    debug!("first writer created");
+
+    writer_manual
+        .write(
+            TopicWriterMessageBuilder::default()
+                .seq_no(Some(200))
+                .data("test-1".as_bytes().into())
+                .build()?,
+        )
+        .await?;
+    debug!("sent message");
+
+    info!("creating topic reader");
+    let mut reader = topic_client
+        .create_reader(consumer_name.clone(), topic_path.clone())
+        .await?;
+    let batch = reader.read_batch().await?;
+
+    debug!("read a messages batch");
+    assert_eq!(batch.messages.len(), 1);
+
+    let commit_marker = batch.get_commit_marker();
+    let mut msg = batch.messages.into_iter().next().unwrap();
+    assert_eq!(msg.get_producer_id(), producer_id);
+    assert_eq!(msg.seq_no, 200);
+    assert_eq!(msg.read_and_take().await?.unwrap(), "test-1".as_bytes());
+    // assert_eq!(msg.get_topic_path(), topic_path);
+
+    let consumer_description_before_commit = topic_client
+        .describe_consumer(
+            topic_path.clone(),
+            consumer_name.clone(),
+            DescribeConsumerOptionsBuilder::default()
+                .include_stats(true)
+                .build()?,
+        )
+        .await?;
+
+    assert_eq!(
+        consumer_description_before_commit.partitions[0]
+            .consumer_stats
+            .committed_offset,
+        0
+    );
+
+    reader.commit(commit_marker)?;
+
+    let start = std::time::Instant::now();
+    let mut consumer_description_after_commit;
+    loop {
+        consumer_description_after_commit = topic_client
+            .describe_consumer(
+                topic_path.clone(),
+                consumer_name.clone(),
+                DescribeConsumerOptionsBuilder::default()
+                    .include_stats(true)
+                    .build()?,
+            )
+            .await?;
+        if consumer_description_after_commit.partitions[0]
+            .consumer_stats
+            .committed_offset
+            == 1
+        {
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(10) {
+            panic!("Timeout waiting for committed_offset == 1");
+        }
+    }
+
+    debug!(
+        "consumer description: {:?}",
+        consumer_description_after_commit
+    );
+
+    assert_eq!(
+        consumer_description_after_commit.partitions[0]
+            .consumer_stats
+            .committed_offset,
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn read_topic_message_in_transaction() -> YdbResult<()> {
+    let client = create_client().await?;
+    let database_path = client.database();
+    let topic_name = "tx_test_topic".to_string();
+    let topic_path = format!("{}/{}", database_path, topic_name);
+    let producer_id = "test-producer-id-tx".to_string();
+    let consumer_name = "test-consumer-tx".to_string();
+
+    let mut topic_client = client.topic_client();
+    let _ = topic_client.drop_topic(topic_path.clone()).await; // ignoring error
+    debug!("previous topic removed");
+
+    'wait_topic_dropped: loop {
+        let mut scheme = client.scheme_client();
+        let res = scheme.list_directory(database_path.clone()).await?;
+        let mut topic_exists = false;
+        for item in res.into_iter() {
+            if item.name == topic_name {
+                topic_exists = true;
+                break;
+            }
+        }
+        if !topic_exists {
+            break 'wait_topic_dropped;
+        }
+        info!("waiting previous topic dropped...");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    topic_client
+        .create_topic(
+            topic_path.clone(),
+            CreateTopicOptionsBuilder::default()
+                .consumers(vec![ConsumerBuilder::default()
+                    .name(consumer_name.clone())
+                    .build()?])
+                .build()?,
+        )
+        .await?;
+
+    debug!("topic created");
+
+    // manual seq
+    let mut writer_manual = topic_client
+        .create_writer_with_params(
+            TopicWriterOptionsBuilder::default()
+                .auto_seq_no(false)
+                .topic_path(topic_path.clone())
+                .producer_id(producer_id.clone())
+                .build()?,
+        )
+        .await?;
+    debug!("first writer created");
+
+    writer_manual
+        .write(
+            TopicWriterMessageBuilder::default()
+                .seq_no(Some(300))
+                .data("test-tx-1".as_bytes().into())
+                .build()?,
+        )
+        .await?;
+    debug!("sent message");
+
+    info!("creating topic reader");
+    let mut reader = topic_client
+        .create_reader(consumer_name.clone(), topic_path.clone())
+        .await?;
+
+    let consumer_description_before_commit = topic_client
+        .describe_consumer(
+            topic_path.clone(),
+            consumer_name.clone(),
+            DescribeConsumerOptionsBuilder::default()
+                .include_stats(true)
+                .build()?,
+        )
+        .await?;
+
+    assert_eq!(
+        consumer_description_before_commit.partitions[0]
+            .consumer_stats
+            .committed_offset,
+        0
+    );
+
+    // Create a transaction
+    let mut tx = client.table_client().create_interactive_transaction();
+
+    // Read batch within transaction
+    let batch = reader.pop_batch_in_tx(&mut tx).await?;
+
+    debug!("read a messages batch in transaction");
+    assert_eq!(batch.messages.len(), 1);
+
+    let mut msg = batch.messages.into_iter().next().unwrap();
+    assert_eq!(msg.get_producer_id(), producer_id);
+    assert_eq!(msg.seq_no, 300);
+    assert_eq!(msg.read_and_take().await?.unwrap(), "test-tx-1".as_bytes());
+
+    // Commit the transaction
+    tx.commit().await?;
+    debug!("transaction committed");
+
+    // Check that the message is committed - since transaction commit is synchronous,
+    // we should see the result immediately without polling
+    let consumer_description_after_commit = topic_client
+        .describe_consumer(
+            topic_path.clone(),
+            consumer_name.clone(),
+            DescribeConsumerOptionsBuilder::default()
+                .include_stats(true)
+                .build()?,
+        )
+        .await?;
+
+    debug!(
+        "consumer description after tx commit: {:?}",
+        consumer_description_after_commit
+    );
+
+    assert_eq!(
+        consumer_description_after_commit.partitions[0]
+            .consumer_stats
+            .committed_offset,
+        1
+    );
+    Ok(())
 }
