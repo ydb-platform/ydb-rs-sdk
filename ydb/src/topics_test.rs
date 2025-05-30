@@ -931,11 +931,11 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
         );
 
         // Allow up to 10 minute in the past (generous for test environments)
-        let one_minute_ago = now - Duration::from_secs(600);
+        let ten_minutes_ago = now - Duration::from_secs(600);
         assert!(
-            written_at >= one_minute_ago,
+            written_at >= ten_minutes_ago,
             "Message {} written_at timestamp should not be more than 1 minute old. written_at: {:?}, threshold: {:?}",
-            i + 1, written_at, one_minute_ago
+            i + 1, written_at, ten_minutes_ago
         );
 
         // Validate created_at if present

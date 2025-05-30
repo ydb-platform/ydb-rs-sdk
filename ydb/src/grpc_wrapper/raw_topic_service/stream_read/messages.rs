@@ -195,7 +195,7 @@ impl From<stream_read_message::ReadResponse> for RawReadResponse {
         };
 
         let set_size = if let Some(last_partition_data) = res.partition_data.last_mut() {
-            if let Some(last_batch) = last_partition_data.batches.iter_mut().last() {
+            if let Some(last_batch) = last_partition_data.batches.back_mut() {
                 if let Some(last_message_data) = last_batch.message_data.last_mut() {
                     last_message_data.read_session_size_bytes = res.bytes_size;
                     true
