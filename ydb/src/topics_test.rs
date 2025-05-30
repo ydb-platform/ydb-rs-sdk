@@ -6,7 +6,6 @@ use crate::client_topic::client::DescribeConsumerOptionsBuilder;
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::test_integration_helper::create_client;
-use crate::transaction::Transaction;
 use crate::{
     client_topic::client::{AlterTopicOptionsBuilder, CreateTopicOptionsBuilder},
     TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError, YdbResult,
@@ -552,22 +551,6 @@ async fn read_topic_message() -> YdbResult<()> {
         .await?;
     debug!("sent message");
 
-    info!("creating topic reader");
-    let mut reader = topic_client
-        .create_reader(consumer_name.clone(), topic_path.clone())
-        .await?;
-    let batch = reader.read_batch().await?;
-
-    debug!("read a messages batch");
-    assert_eq!(batch.messages.len(), 1);
-
-    let commit_marker = batch.get_commit_marker();
-    let mut msg = batch.messages.into_iter().next().unwrap();
-    assert_eq!(msg.get_producer_id(), producer_id);
-    assert_eq!(msg.seq_no, 200);
-    assert_eq!(msg.read_and_take().await?.unwrap(), "test-1".as_bytes());
-    // assert_eq!(msg.get_topic_path(), topic_path);
-
     let consumer_description_before_commit = topic_client
         .describe_consumer(
             topic_path.clone(),
@@ -584,6 +567,22 @@ async fn read_topic_message() -> YdbResult<()> {
             .committed_offset,
         0
     );
+
+    info!("creating topic reader");
+    let mut reader = topic_client
+        .create_reader(consumer_name.clone(), topic_path.clone())
+        .await?;
+    let batch = reader.read_batch().await?;
+
+    debug!("read a messages batch");
+    assert_eq!(batch.messages.len(), 1);
+
+    let commit_marker = batch.get_commit_marker();
+    let mut msg = batch.messages.into_iter().next().unwrap();
+    assert_eq!(msg.get_producer_id(), producer_id);
+    assert_eq!(msg.seq_no, 200);
+    assert_eq!(msg.read_and_take().await?.unwrap(), "test-1".as_bytes());
+    // assert_eq!(msg.get_topic_path(), topic_path);
 
     reader.commit(commit_marker)?;
 
@@ -692,11 +691,6 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
         .await?;
     debug!("sent message");
 
-    info!("creating topic reader");
-    let mut reader = topic_client
-        .create_reader(consumer_name.clone(), topic_path.clone())
-        .await?;
-
     let consumer_description_before_commit = topic_client
         .describe_consumer(
             topic_path.clone(),
@@ -714,23 +708,35 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
         0
     );
 
-    // Create a transaction
-    let mut tx = client.table_client().create_interactive_transaction();
+    info!("creating topic reader");
+    let table_client = client.table_client();
+    table_client
+        .retry_transaction(|t| async {
+            let mut t = t; // force borrow for lifetime of t inside closure
+            
+            // Create topic client and reader inside transaction
+            let mut topic_client_inner = client.topic_client();
+            let mut reader = topic_client_inner
+                .create_reader(consumer_name.clone(), topic_path.clone())
+                .await?;
+            
+            // Read batch within transaction
+            let batch = reader.pop_batch_in_tx(&mut t).await?;
 
-    // Read batch within transaction
-    let batch = reader.pop_batch_in_tx(&mut tx).await?;
+            debug!("read a messages batch in transaction");
+            assert_eq!(batch.messages.len(), 1);
 
-    debug!("read a messages batch in transaction");
-    assert_eq!(batch.messages.len(), 1);
+            let mut msg = batch.messages.into_iter().next().unwrap();
+            assert_eq!(msg.get_producer_id(), producer_id.clone());
+            assert_eq!(msg.seq_no, 300);
+            assert_eq!(msg.read_and_take().await?.unwrap(), "test-tx-1".as_bytes());
 
-    let mut msg = batch.messages.into_iter().next().unwrap();
-    assert_eq!(msg.get_producer_id(), producer_id);
-    assert_eq!(msg.seq_no, 300);
-    assert_eq!(msg.read_and_take().await?.unwrap(), "test-tx-1".as_bytes());
-
-    // Commit the transaction
-    tx.commit().await?;
-    debug!("transaction committed");
+            // Commit the transaction
+            t.commit().await?;
+            debug!("transaction committed");
+            Ok(())
+        })
+        .await?;
 
     // Check that the message is committed - since transaction commit is synchronous,
     // we should see the result immediately without polling

@@ -78,9 +78,9 @@ impl TopicReader {
     ///
     /// You can use this method to test the interface and try writing your own code to see how it works.
     /// DO NOT USE IN PRODUCTION
-    pub async fn pop_batch_in_tx<T: Transaction>(
+    pub async fn pop_batch_in_tx(
         &mut self,
-        tx: &mut T,
+        tx: &mut Box<dyn Transaction>,
     ) -> YdbResult<TopicReaderBatch> {
         let tx_info = tx.transaction_info().await?;
 
