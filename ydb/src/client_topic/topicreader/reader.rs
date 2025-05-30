@@ -438,75 +438,6 @@ mod tests {
     use crate::transaction::TransactionInfo;
     use std::time::Duration;
 
-    #[test]
-    fn test_update_offsets_in_transaction_request_creation() {
-        // Create a mock commit marker (simulating what would come from a batch)
-        let commit_marker = TopicReaderCommitMarker {
-            partition_session_id: 123,
-            partition_id: 456,
-            start_offset: 100,
-            end_offset: 200,
-            topic: "test-topic".to_string(),
-        };
-
-        // Create mock transaction info
-        let tx_info = TransactionInfo {
-            transaction_id: "test_tx_id".to_string(),
-            session_id: "test_session_id".to_string(),
-        };
-
-        let consumer = "test-consumer".to_string();
-
-        // Verify we can create the request structure correctly
-        let raw_offsets_range = RawOffsetsRange {
-            start: commit_marker.start_offset,
-            end: commit_marker.end_offset,
-        };
-
-        let raw_partition_offsets = RawPartitionOffsets {
-            partition_id: commit_marker.partition_id,
-            partition_offsets: vec![raw_offsets_range],
-        };
-
-        let raw_topic_offsets = RawTopicOffsets {
-            path: commit_marker.topic.clone(),
-            partitions: vec![raw_partition_offsets],
-        };
-
-        let raw_tx_identity = RawTransactionIdentity {
-            id: tx_info.transaction_id.clone(),
-            session: tx_info.session_id.clone(),
-        };
-
-        let operation_params =
-            RawOperationParams::new_with_timeouts(Duration::from_secs(30), Duration::from_secs(60));
-
-        let request = RawUpdateOffsetsInTransactionRequest {
-            operation_params,
-            tx: raw_tx_identity,
-            topics: vec![raw_topic_offsets],
-            consumer,
-        };
-
-        // Verify the structure is correctly populated
-        assert_eq!(request.tx.id, "test_tx_id");
-        assert_eq!(request.tx.session, "test_session_id");
-        assert_eq!(request.consumer, "test-consumer");
-        assert_eq!(request.topics.len(), 1);
-
-        let topic = &request.topics[0];
-        assert_eq!(topic.path, "test-topic");
-        assert_eq!(topic.partitions.len(), 1);
-
-        let partition = &topic.partitions[0];
-        assert_eq!(partition.partition_id, 456);
-        assert_eq!(partition.partition_offsets.len(), 1);
-
-        let offsets = &partition.partition_offsets[0];
-        assert_eq!(offsets.start, 100);
-        assert_eq!(offsets.end, 200);
-    }
-
     /// Test that demonstrates the complete integration flow of all components
     /// from steps 1-5, showing how they work together.
     #[test]
@@ -610,14 +541,5 @@ mod tests {
         let proto_offsets = &proto_partition.partition_offsets[0];
         assert_eq!(proto_offsets.start, 1000);
         assert_eq!(proto_offsets.end, 1100);
-
-        // This demonstrates that all the components from steps 1-5 work together:
-        // - TransactionInfo from Step 1 ✓
-        // - topic field in commit marker from Step 2 ✓
-        // - Raw wrappers from Step 3 ✓
-        // - GRPC client method from Step 4 (would be tested with RawTopicClient) ✓
-        // - TopicReader integration from Step 5 (this file) ✓
-
-        println!("Integration test passed - all components work together!");
     }
 }

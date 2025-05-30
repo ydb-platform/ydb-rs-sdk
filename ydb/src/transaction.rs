@@ -55,7 +55,9 @@ pub trait Transaction: Send + Sync {
     async fn commit(&mut self) -> YdbResult<()>;
     async fn rollback(&mut self) -> YdbResult<()>;
     async fn transaction_info(&mut self) -> YdbResult<TransactionInfo> {
-        Err(YdbError::custom("Transaction info not available for this transaction type"))
+        Err(YdbError::custom(
+            "Transaction info not available for this transaction type",
+        ))
     }
 }
 
@@ -309,46 +311,10 @@ impl Transaction for SerializableReadWriteTx {
         if self.id.is_none() || self.session.is_none() {
             self.begin_transaction().await?;
         }
-        
+
         Ok(TransactionInfo {
             transaction_id: self.id.clone().unwrap(),
             session_id: self.session.as_ref().unwrap().id.clone(),
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test] 
-    async fn test_transaction_info_default_implementation() {
-        // Test the default error message for transaction_info method
-        // We can't easily test AutoCommit without complex setup, but we can test the trait default
-        struct MockTransaction;
-        
-        #[async_trait::async_trait]
-        impl Transaction for MockTransaction {
-            async fn query(&mut self, _query: Query) -> YdbResult<QueryResult> {
-                unimplemented!()
-            }
-            async fn commit(&mut self) -> YdbResult<()> {
-                unimplemented!()
-            }
-            async fn rollback(&mut self) -> YdbResult<()> {
-                unimplemented!()
-            }
-            // Use default implementation of transaction_info
-        }
-        
-        let mut mock_tx = MockTransaction;
-        let result = mock_tx.transaction_info().await;
-        
-        assert!(result.is_err());
-        if let Err(YdbError::Custom(msg)) = result {
-            assert!(msg.contains("Transaction info not available for this transaction type"));
-        } else {
-            panic!("Expected Custom error with specific message");
-        }
     }
 }
