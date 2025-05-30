@@ -118,8 +118,7 @@ mod tests {
     use std::time::SystemTime;
 
     #[test]
-    fn test_topic_reader_commit_marker_includes_topic() {
-        // Create a test partition session
+    fn test_topic_reader_batch_new() {
         let mut partition_session = PartitionSession {
             partition_session_id: 123,
             partition_id: 456,
@@ -127,7 +126,6 @@ mod tests {
             next_commit_offset_start: 100,
         };
 
-        // Create a test raw batch
         let raw_batch = RawBatch {
             producer_id: "test-producer".to_string(),
             write_session_meta: std::collections::HashMap::new(),
@@ -143,10 +141,8 @@ mod tests {
             }],
         };
 
-        // Create the batch
         let batch = TopicReaderBatch::new(raw_batch, &mut partition_session);
 
-        // Verify that the batch commit marker includes the topic
         let commit_marker = batch.get_commit_marker();
         assert_eq!(commit_marker.topic, "test-topic");
         assert_eq!(commit_marker.partition_session_id, 123);
@@ -154,7 +150,6 @@ mod tests {
         assert_eq!(commit_marker.start_offset, 100);
         assert_eq!(commit_marker.end_offset, 101);
 
-        // Verify that individual message commit markers also include the topic
         assert_eq!(batch.messages.len(), 1);
         let message_commit_marker = batch.messages[0].get_commit_marker();
         assert_eq!(message_commit_marker.topic, "test-topic");

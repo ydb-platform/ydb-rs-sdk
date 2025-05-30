@@ -97,40 +97,33 @@ impl TopicReader {
         batch: &TopicReaderBatch,
         tx_info: &TransactionInfo,
     ) -> YdbResult<()> {
-        // Extract data from batch commit marker
         let commit_marker = batch.get_commit_marker();
 
-        // Create the raw offsets range
         let raw_offsets_range = RawOffsetsRange {
             start: commit_marker.start_offset,
             end: commit_marker.end_offset,
         };
 
-        // Create the partition offsets
         let raw_partition_offsets = RawPartitionOffsets {
             partition_id: commit_marker.partition_id,
             partition_offsets: vec![raw_offsets_range],
         };
 
-        // Create the topic offsets
         let raw_topic_offsets = RawTopicOffsets {
             path: commit_marker.topic.clone(),
             partitions: vec![raw_partition_offsets],
         };
 
-        // Create the transaction identity
         let raw_tx_identity = RawTransactionIdentity {
             id: tx_info.transaction_id.clone(),
             session: tx_info.session_id.clone(),
         };
 
-        // Create operation params with reasonable timeouts
         let operation_params = RawOperationParams::new_with_timeouts(
             Duration::from_secs(30), // operation timeout
             Duration::from_secs(60), // cancel after
         );
 
-        // Create the request
         let request = RawUpdateOffsetsInTransactionRequest {
             operation_params,
             tx: raw_tx_identity,
@@ -138,7 +131,6 @@ impl TopicReader {
             consumer: self.consumer.clone(),
         };
 
-        // Call the GRPC method
         self.topic_service
             .update_offsets_in_transaction(request)
             .await?;
@@ -189,7 +181,6 @@ impl TopicReader {
             }))
             .await?;
 
-        // TODO: update token
         let stop_backgroung_work_token = YdbCancellationToken::new();
 
         let stop_update_token = stop_backgroung_work_token.clone();
@@ -200,7 +191,6 @@ impl TopicReader {
             token_cache,
         ));
 
-        // Create a separate topic service for transaction operations
         let transaction_topic_service = connection_manager
             .get_auth_service(RawTopicClient::new)
             .await?;
