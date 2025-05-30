@@ -395,48 +395,119 @@ pub struct ConsumerDescription {
     pub partitions: Vec<ConsumerPartitionInfo>,
 }
 
-impl From<crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsumerResult> for ConsumerDescription {
-    fn from(value: crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsumerResult) -> Self {
-        let consumer_stats = value.consumer.consumer_stats.as_ref().map(|stats| ConsumerStats {
-            min_partitions_last_read_time: stats.min_partitions_last_read_time.clone().map(|x| x.into()).unwrap_or_else(|| std::time::SystemTime::UNIX_EPOCH),
-            max_read_time_lag: stats.max_read_time_lag.clone().map(|x| x.into()).unwrap_or_default(),
-            max_write_time_lag: stats.max_write_time_lag.clone().map(|x| x.into()).unwrap_or_default(),
-            max_committed_time_lag: stats.max_committed_time_lag.clone().map(|x| x.into()).unwrap_or_default(),
-            bytes_read_per_minute: stats.bytes_read.as_ref().map(|b| b.per_minute).unwrap_or_default(),
-            bytes_read_per_hour: stats.bytes_read.as_ref().map(|b| b.per_hour).unwrap_or_default(),
-            bytes_read_per_day: stats.bytes_read.as_ref().map(|b| b.per_day).unwrap_or_default(),
-        }).unwrap_or_else(|| ConsumerStats {
-            min_partitions_last_read_time: std::time::SystemTime::UNIX_EPOCH,
-            max_read_time_lag: std::time::Duration::from_secs(0),
-            max_write_time_lag: std::time::Duration::from_secs(0),
-            max_committed_time_lag: std::time::Duration::from_secs(0),
-            bytes_read_per_minute: 0,
-            bytes_read_per_hour: 0,
-            bytes_read_per_day: 0,
-        });
+impl From<crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsumerResult>
+    for ConsumerDescription
+{
+    fn from(
+        value: crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsumerResult,
+    ) -> Self {
+        let consumer_stats = value
+            .consumer
+            .consumer_stats
+            .as_ref()
+            .map(|stats| ConsumerStats {
+                min_partitions_last_read_time: stats
+                    .min_partitions_last_read_time
+                    .clone()
+                    .map(|x| x.into())
+                    .unwrap_or_else(|| std::time::SystemTime::UNIX_EPOCH),
+                max_read_time_lag: stats
+                    .max_read_time_lag
+                    .clone()
+                    .map(|x| x.into())
+                    .unwrap_or_default(),
+                max_write_time_lag: stats
+                    .max_write_time_lag
+                    .clone()
+                    .map(|x| x.into())
+                    .unwrap_or_default(),
+                max_committed_time_lag: stats
+                    .max_committed_time_lag
+                    .clone()
+                    .map(|x| x.into())
+                    .unwrap_or_default(),
+                bytes_read_per_minute: stats
+                    .bytes_read
+                    .as_ref()
+                    .map(|b| b.per_minute)
+                    .unwrap_or_default(),
+                bytes_read_per_hour: stats
+                    .bytes_read
+                    .as_ref()
+                    .map(|b| b.per_hour)
+                    .unwrap_or_default(),
+                bytes_read_per_day: stats
+                    .bytes_read
+                    .as_ref()
+                    .map(|b| b.per_day)
+                    .unwrap_or_default(),
+            })
+            .unwrap_or_else(|| ConsumerStats {
+                min_partitions_last_read_time: std::time::SystemTime::UNIX_EPOCH,
+                max_read_time_lag: std::time::Duration::from_secs(0),
+                max_write_time_lag: std::time::Duration::from_secs(0),
+                max_committed_time_lag: std::time::Duration::from_secs(0),
+                bytes_read_per_minute: 0,
+                bytes_read_per_hour: 0,
+                bytes_read_per_day: 0,
+            });
         let consumer: Consumer = value.consumer.into();
-        
-        let partitions = value.partitions.into_iter().map(|p| {
-            let partition_info: RawPartitionInfo = p.into();
-            ConsumerPartitionInfo {
-                partition_id: partition_info.partition_id,
-                active: partition_info.active,
-                child_partition_ids: partition_info.child_partition_ids,
-                parent_partition_ids: partition_info.parent_partition_ids,
-                stats: partition_info.partition_stats.map(|x| x.into()).unwrap_or_default(),
-                consumer_stats: partition_info.partition_consumer_stats.map(|stats| PartitionConsumerStats {
-                    committed_offset: stats.committed_offset,
-                    last_read_time: stats.last_read_time.map(|x| x.into()).unwrap_or_else(|| std::time::SystemTime::UNIX_EPOCH),
-                    max_read_time_lag: stats.max_read_time_lag.map(|x| x.into()).unwrap_or_default(),
-                    max_write_time_lag: stats.max_write_time_lag.map(|x| x.into()).unwrap_or_default(),
-                    max_committed_time_lag: std::time::Duration::from_secs(0),
-                    bytes_read_per_minute: stats.bytes_read.as_ref().map(|b| b.per_minute).unwrap_or_default(),
-                    bytes_read_per_hour: stats.bytes_read.as_ref().map(|b| b.per_hour).unwrap_or_default(),
-                    bytes_read_per_day: stats.bytes_read.as_ref().map(|b| b.per_day).unwrap_or_default(),
-                }).unwrap_or_default(),
-                location: partition_info.partition_location.map(|x| x.into()).unwrap_or_default(),
-            }
-        }).collect();
+
+        let partitions = value
+            .partitions
+            .into_iter()
+            .map(|p| {
+                let partition_info: RawPartitionInfo = p;
+                ConsumerPartitionInfo {
+                    partition_id: partition_info.partition_id,
+                    active: partition_info.active,
+                    child_partition_ids: partition_info.child_partition_ids,
+                    parent_partition_ids: partition_info.parent_partition_ids,
+                    stats: partition_info
+                        .partition_stats
+                        .map(|x| x.into())
+                        .unwrap_or_default(),
+                    consumer_stats: partition_info
+                        .partition_consumer_stats
+                        .map(|stats| PartitionConsumerStats {
+                            committed_offset: stats.committed_offset,
+                            last_read_time: stats
+                                .last_read_time
+                                .map(|x| x.into())
+                                .unwrap_or_else(|| std::time::SystemTime::UNIX_EPOCH),
+                            max_read_time_lag: stats
+                                .max_read_time_lag
+                                .map(|x| x.into())
+                                .unwrap_or_default(),
+                            max_write_time_lag: stats
+                                .max_write_time_lag
+                                .map(|x| x.into())
+                                .unwrap_or_default(),
+                            max_committed_time_lag: std::time::Duration::from_secs(0),
+                            bytes_read_per_minute: stats
+                                .bytes_read
+                                .as_ref()
+                                .map(|b| b.per_minute)
+                                .unwrap_or_default(),
+                            bytes_read_per_hour: stats
+                                .bytes_read
+                                .as_ref()
+                                .map(|b| b.per_hour)
+                                .unwrap_or_default(),
+                            bytes_read_per_day: stats
+                                .bytes_read
+                                .as_ref()
+                                .map(|b| b.per_day)
+                                .unwrap_or_default(),
+                        })
+                        .unwrap_or_default(),
+                    location: partition_info
+                        .partition_location
+                        .map(|x| x.into())
+                        .unwrap_or_default(),
+                }
+            })
+            .collect();
 
         Self {
             path: value.self_.name,

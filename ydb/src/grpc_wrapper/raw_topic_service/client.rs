@@ -1,5 +1,4 @@
 use tracing::trace;
-use prost::Message;
 
 use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
 use ydb_grpc::ydb_proto::topic::{stream_read_message, stream_write_message};
@@ -9,7 +8,9 @@ use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_topic_service::alter_topic::RawAlterTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
-use crate::grpc_wrapper::raw_topic_service::describe_consumer::{RawDescribeConsumerRequest, RawDescribeConsumerResult};
+use crate::grpc_wrapper::raw_topic_service::describe_consumer::{
+    RawDescribeConsumerRequest, RawDescribeConsumerResult,
+};
 use crate::grpc_wrapper::raw_topic_service::describe_topic::{
     RawDescribeTopicRequest, RawDescribeTopicResult,
 };
@@ -72,7 +73,10 @@ impl RawTopicClient {
         );
     }
 
-    pub async fn update_offsets_in_transaction(&mut self, req: RawUpdateOffsetsInTransactionRequest) -> RawResult<()> {
+    pub async fn update_offsets_in_transaction(
+        &mut self,
+        req: RawUpdateOffsetsInTransactionRequest,
+    ) -> RawResult<()> {
         request_without_result!(
             self.service.update_offsets_in_transaction,
             req => ydb_grpc::ydb_proto::topic::UpdateOffsetsInTransactionRequest

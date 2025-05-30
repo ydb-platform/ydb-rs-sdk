@@ -14,8 +14,8 @@ use ydb_grpc::ydb_proto::table::{
     RollbackTransactionResponse,
 };
 use ydb_grpc::ydb_proto::topic::{
-    AlterTopicResponse, CreateTopicResponse, DescribeConsumerResponse, DescribeTopicResponse, DropTopicResponse,
-    UpdateOffsetsInTransactionResponse,
+    AlterTopicResponse, CreateTopicResponse, DescribeConsumerResponse, DescribeTopicResponse,
+    DropTopicResponse, UpdateOffsetsInTransactionResponse,
 };
 
 pub(crate) trait Operation: Debug {

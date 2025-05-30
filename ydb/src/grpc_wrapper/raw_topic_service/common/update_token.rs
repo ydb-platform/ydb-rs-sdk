@@ -13,7 +13,7 @@ impl From<RawUpdateTokenRequest> for UpdateTokenRequest {
 pub(crate) struct RawUpdateTokenResponse {}
 
 impl From<UpdateTokenResponse> for RawUpdateTokenResponse {
-    fn from(value: UpdateTokenResponse) -> Self {
+    fn from(_value: UpdateTokenResponse) -> Self {
         Self {}
     }
 }

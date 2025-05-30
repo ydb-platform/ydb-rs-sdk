@@ -33,7 +33,9 @@ impl From<Consumer> for RawConsumer {
                 .map_or_else(RawSupportedCodecs::default, |x| x.into()),
             attributes: value.attributes,
             consumer_stats: value.consumer_stats.map(|stats| RawConsumerStats {
-                min_partitions_last_read_time: stats.min_partitions_last_read_time.map(|x| x.into()),
+                min_partitions_last_read_time: stats
+                    .min_partitions_last_read_time
+                    .map(|x| x.into()),
                 max_read_time_lag: stats.max_read_time_lag.map(|x| x.into()),
                 max_write_time_lag: stats.max_write_time_lag.map(|x| x.into()),
                 max_committed_time_lag: None,

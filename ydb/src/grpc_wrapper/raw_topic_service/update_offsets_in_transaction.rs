@@ -2,9 +2,8 @@ use crate::grpc_wrapper::raw_topic_service::common::partition::RawOffsetsRange;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use ydb_grpc::ydb_proto::operations::OperationParams;
 use ydb_grpc::ydb_proto::topic::{
-    TransactionIdentity,
-    UpdateOffsetsInTransactionRequest,
-    update_offsets_in_transaction_request::{TopicOffsets, topic_offsets::PartitionOffsets},
+    update_offsets_in_transaction_request::{topic_offsets::PartitionOffsets, TopicOffsets},
+    TransactionIdentity, UpdateOffsetsInTransactionRequest,
 };
 
 /// Raw wrapper for TransactionIdentity
@@ -47,7 +46,11 @@ impl From<RawPartitionOffsets> for PartitionOffsets {
     fn from(value: RawPartitionOffsets) -> Self {
         Self {
             partition_id: value.partition_id,
-            partition_offsets: value.partition_offsets.into_iter().map(|x| x.into()).collect(),
+            partition_offsets: value
+                .partition_offsets
+                .into_iter()
+                .map(|x| x.into())
+                .collect(),
         }
     }
 }
@@ -56,7 +59,11 @@ impl From<PartitionOffsets> for RawPartitionOffsets {
     fn from(value: PartitionOffsets) -> Self {
         Self {
             partition_id: value.partition_id,
-            partition_offsets: value.partition_offsets.into_iter().map(|x| x.into()).collect(),
+            partition_offsets: value
+                .partition_offsets
+                .into_iter()
+                .map(|x| x.into())
+                .collect(),
         }
     }
 }
@@ -112,7 +119,6 @@ impl From<RawUpdateOffsetsInTransactionRequest> for UpdateOffsetsInTransactionRe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grpc_wrapper::raw_common_types::Duration;
     use std::time::Duration as StdDuration;
 
     #[test]
@@ -123,10 +129,7 @@ mod tests {
             session: "test_session_id".to_string(),
         };
 
-        let raw_offsets_range = RawOffsetsRange {
-            start: 0,
-            end: 100,
-        };
+        let raw_offsets_range = RawOffsetsRange { start: 0, end: 100 };
 
         let raw_partition_offsets = RawPartitionOffsets {
             partition_id: 1,
@@ -189,9 +192,9 @@ mod tests {
         assert_eq!(raw_tx.id, "original_tx");
         assert_eq!(raw_tx.session, "original_session");
 
-        // Convert back to protobuf  
+        // Convert back to protobuf
         let converted_tx: TransactionIdentity = raw_tx.into();
         assert_eq!(converted_tx.id, original_tx.id);
         assert_eq!(converted_tx.session, original_tx.session);
     }
-} 
+}

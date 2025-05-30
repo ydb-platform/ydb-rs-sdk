@@ -16,7 +16,7 @@ use ydb_grpc::ydb_proto::table::transaction_settings::TxMode;
 use ydb_grpc::ydb_proto::table::{OnlineModeSettings, SerializableModeSettings};
 
 #[derive(Clone, Debug)]
-pub(crate) struct TransactionInfo {
+pub struct TransactionInfo {
     pub(crate) transaction_id: String,
     pub(crate) session_id: String,
 }

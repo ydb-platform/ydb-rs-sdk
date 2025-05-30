@@ -2,7 +2,7 @@ use futures_util::StreamExt;
 use std::time::{Duration, SystemTime};
 use tracing_test::traced_test;
 
-use crate::client_topic::client::{DescribeConsumerOptions, DescribeConsumerOptionsBuilder};
+use crate::client_topic::client::DescribeConsumerOptionsBuilder;
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::test_integration_helper::create_client;

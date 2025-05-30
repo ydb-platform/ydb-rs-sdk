@@ -435,55 +435,23 @@ pub struct TopicReaderCommitMarker {
 mod tests {
     use super::*;
     use crate::grpc_wrapper::raw_topic_service::update_offsets_in_transaction::*;
-    use crate::transaction::TransactionInfo;
     use std::time::Duration;
 
     /// Test that demonstrates the complete integration flow of all components
-    /// from steps 1-5, showing how they work together.
     #[test]
     fn test_transaction_topic_reading_integration() {
         // This test demonstrates the integration of all the components we've built:
 
-        // 1. From Step 1: TransactionInfo and Transaction trait
-        use crate::transaction::{Transaction, TransactionInfo};
-
-        // Mock transaction implementing our trait
-        struct MockTransaction {
-            tx_info: TransactionInfo,
-        }
-
-        #[async_trait::async_trait]
-        impl Transaction for MockTransaction {
-            async fn query(
-                &mut self,
-                _query: crate::query::Query,
-            ) -> crate::YdbResult<crate::result::QueryResult> {
-                unimplemented!("Not needed for this test")
-            }
-
-            async fn commit(&mut self) -> crate::YdbResult<()> {
-                unimplemented!("Not needed for this test")
-            }
-
-            async fn rollback(&mut self) -> crate::YdbResult<()> {
-                unimplemented!("Not needed for this test")
-            }
-
-            async fn transaction_info(&mut self) -> crate::YdbResult<TransactionInfo> {
-                Ok(self.tx_info.clone())
-            }
-        }
-
-        // 2. From Step 2: TopicReaderCommitMarker with topic field
+        // 1. TopicReaderCommitMarker with topic field
         let commit_marker = TopicReaderCommitMarker {
             partition_session_id: 456,
             partition_id: 789,
             start_offset: 1000,
             end_offset: 1100,
-            topic: "integration-test-topic".to_string(), // This field was added in Step 2
+            topic: "integration-test-topic".to_string(),
         };
 
-        // 3. From Step 3: Raw wrappers for GRPC types
+        // 2. Raw wrappers for GRPC types
         // These types can convert to protobuf types
         let raw_tx_identity = RawTransactionIdentity {
             id: "integration_tx_id".to_string(),
@@ -505,7 +473,7 @@ mod tests {
             partitions: vec![raw_partition_offsets],
         };
 
-        // 4. From Step 3: Main request wrapper
+        // 3. Main request wrapper
         let raw_request = RawUpdateOffsetsInTransactionRequest {
             operation_params: RawOperationParams::new_with_timeouts(
                 Duration::from_secs(30),
@@ -516,7 +484,7 @@ mod tests {
             consumer: "integration-consumer".to_string(),
         };
 
-        // 5. From Step 3: Verify conversion to protobuf types works
+        // 4. Verify conversion to protobuf types works
         use ydb_grpc::ydb_proto::topic::UpdateOffsetsInTransactionRequest;
         let proto_request: UpdateOffsetsInTransactionRequest = raw_request.into();
 
