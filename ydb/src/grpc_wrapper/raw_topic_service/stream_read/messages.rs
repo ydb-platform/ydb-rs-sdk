@@ -7,7 +7,7 @@ use crate::grpc_wrapper::raw_topic_service::common::update_token::{
     RawUpdateTokenRequest, RawUpdateTokenResponse,
 };
 use crate::YdbStatusError;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::UNIX_EPOCH;
 use tracing::warn;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
@@ -195,7 +195,7 @@ impl From<stream_read_message::ReadResponse> for RawReadResponse {
         };
 
         let set_size = if let Some(last_partition_data) = res.partition_data.last_mut() {
-            if let Some(last_batch) = last_partition_data.batches.last_mut() {
+            if let Some(last_batch) = last_partition_data.batches.iter_mut().last() {
                 if let Some(last_message_data) = last_batch.message_data.last_mut() {
                     last_message_data.read_session_size_bytes = res.bytes_size;
                     true
@@ -223,7 +223,7 @@ impl From<stream_read_message::ReadResponse> for RawReadResponse {
 #[derive(Debug)]
 pub(crate) struct RawPartitionData {
     pub partition_session_id: i64,
-    pub batches: Vec<RawBatch>,
+    pub batches: VecDeque<RawBatch>,
 }
 
 impl From<stream_read_message::read_response::PartitionData> for RawPartitionData {

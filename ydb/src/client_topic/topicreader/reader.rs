@@ -23,7 +23,7 @@ use crate::{YdbError, YdbResult};
 use secrecy::ExposeSecret;
 use std::collections::HashMap;
 use std::time;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::select;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{debug, error, info, warn};
@@ -216,7 +216,7 @@ impl TopicReader {
         let last_partition_data = last_read_response.partition_data.last_mut()?;
 
         let partition_session_id = last_partition_data.partition_session_id;
-        let last_batch = if let Some(batch) = last_partition_data.batches.pop() {
+        let last_batch = if let Some(batch) = last_partition_data.batches.pop_front() {
             batch
         } else {
             last_read_response.partition_data.pop();
@@ -411,7 +411,7 @@ impl From<String> for TopicSelectors {
         TopicSelectors(vec![TopicSelector {
             path,
             partition_ids: None,
-            read_from: None,
+            read_from: Some(UNIX_EPOCH),
         }])
     }
 }

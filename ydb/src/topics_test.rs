@@ -695,7 +695,7 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
 
     for (seq_no, content) in &expected_messages {
         writer_manual
-            .write(
+            .write_with_ack(
                 TopicWriterMessageBuilder::default()
                     .seq_no(Some(*seq_no))
                     .data(content.as_bytes().into())
@@ -948,7 +948,7 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
                 "Message {} created_at timestamp should not be more than 1 second in the future. created_at: {:?}, threshold: {:?}",
                 i + 1, created_at, one_second_future
             );
-            
+
             // Allow up to 10 minutes in the past (generous for test environments)
             let ten_minutes_ago = now - Duration::from_secs(600);
             assert!(
