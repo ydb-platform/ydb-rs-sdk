@@ -95,6 +95,14 @@ impl TopicReaderMessage {
     pub fn get_commit_marker(&self) -> TopicReaderCommitMarker {
         self.commit_marker.clone()
     }
+
+    pub fn get_topic(&self) -> &str {
+        &self.commit_marker.topic
+    }
+
+    pub fn get_partition_id(&self) -> i64 {
+        self.commit_marker.partition_id
+    }
 }
 
 #[cfg(test)]
