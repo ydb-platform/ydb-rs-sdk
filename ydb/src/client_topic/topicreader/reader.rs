@@ -70,7 +70,7 @@ impl TopicReader {
                     commit_offsets: vec![PartitionCommitOffset {
                         partition_session_id: commit_marker.partition_session_id,
                         offsets: vec![RawOffsetsRange {
-                            start: commit_marker.end_offset,
+                            start: commit_marker.start_offset,
                             end: commit_marker.end_offset,
                         }],
                     }],

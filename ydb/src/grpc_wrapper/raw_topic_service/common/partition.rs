@@ -89,6 +89,27 @@ impl From<PartitionLocation> for RawPartitionLocation {
 }
 
 #[derive(serde::Serialize, Clone, Debug)]
+pub(crate) struct RawPartitionConsumerStats {
+    pub committed_offset: i64,
+    pub last_read_time: Option<Timestamp>,
+    pub max_read_time_lag: Option<Duration>,
+    pub max_write_time_lag: Option<Duration>,
+    pub bytes_read: Option<RawMultipleWindowsStat>,
+}
+
+impl From<describe_consumer_result::PartitionConsumerStats> for RawPartitionConsumerStats {
+    fn from(value: describe_consumer_result::PartitionConsumerStats) -> Self {
+        Self {
+            committed_offset: value.committed_offset,
+            last_read_time: value.last_read_time.map(|x| x.into()),
+            max_read_time_lag: value.max_read_time_lag.map(|x| x.into()),
+            max_write_time_lag: value.max_write_time_lag.map(|x| x.into()),
+            bytes_read: value.bytes_read.map(|x| x.into()),
+        }
+    }
+}
+
+#[derive(serde::Serialize, Clone, Debug)]
 pub(crate) struct RawPartitionInfo {
     pub partition_id: i64,
     pub active: bool,
@@ -96,6 +117,7 @@ pub(crate) struct RawPartitionInfo {
     pub parent_partition_ids: Vec<i64>,
     pub partition_stats: Option<RawPartitionStats>,
     pub partition_location: Option<RawPartitionLocation>,
+    pub partition_consumer_stats: Option<RawPartitionConsumerStats>,
 }
 
 impl TryFrom<describe_topic_result::PartitionInfo> for RawPartitionInfo {
@@ -109,6 +131,7 @@ impl TryFrom<describe_topic_result::PartitionInfo> for RawPartitionInfo {
             parent_partition_ids: value.parent_partition_ids,
             partition_stats: value.partition_stats.map(|x| x.try_into()).transpose()?,
             partition_location: value.partition_location.map(|x| x.into()),
+            partition_consumer_stats: None,
         })
     }
 }
@@ -124,6 +147,7 @@ impl TryFrom<describe_consumer_result::PartitionInfo> for RawPartitionInfo {
             parent_partition_ids: value.parent_partition_ids,
             partition_stats: value.partition_stats.map(|x| x.try_into()).transpose()?,
             partition_location: value.partition_location.map(|x| x.into()),
+            partition_consumer_stats: value.partition_consumer_stats.map(|x| x.into()),
         })
     }
 }

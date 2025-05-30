@@ -2,6 +2,7 @@ use futures_util::StreamExt;
 use std::time::{Duration, SystemTime};
 use tracing_test::traced_test;
 
+use crate::client_topic::client::{DescribeConsumerOptions, DescribeConsumerOptionsBuilder};
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::test_integration_helper::create_client;
@@ -552,17 +553,69 @@ async fn read_topic_message() -> YdbResult<()> {
 
     info!("creating topic reader");
     let mut reader = topic_client
-        .create_reader(consumer_name, topic_path.clone())
+        .create_reader(consumer_name.clone(), topic_path.clone())
         .await?;
     let batch = reader.read_batch().await?;
 
     debug!("read a messages batch");
     assert_eq!(batch.messages.len(), 1);
 
+    let commit_marker = batch.get_commit_marker();
     let mut msg = batch.messages.into_iter().next().unwrap();
     assert_eq!(msg.get_producer_id(), producer_id);
     assert_eq!(msg.seq_no, 200);
     assert_eq!(msg.read_and_take().await?.unwrap(), "test-1".as_bytes());
     // assert_eq!(msg.get_topic_path(), topic_path);
+
+    let consumer_description_before_commit = topic_client
+        .describe_consumer(
+            topic_path.clone(),
+            consumer_name.clone(),
+            DescribeConsumerOptionsBuilder::default()
+                .include_stats(true)
+                .build()?,
+        )
+        .await?;
+
+    assert_eq!(
+        consumer_description_before_commit.partitions[0]
+            .consumer_stats
+            .committed_offset,
+        0
+    );
+
+    reader.commit(commit_marker)?;
+
+    let start = std::time::Instant::now();
+    let mut consumer_description_after_commit;
+    loop {
+        consumer_description_after_commit = topic_client
+            .describe_consumer(
+                topic_path.clone(),
+                consumer_name.clone(),
+                DescribeConsumerOptionsBuilder::default()
+                    .include_stats(true)
+                    .build()?,
+            )
+            .await?;
+        if consumer_description_after_commit.partitions[0].consumer_stats.committed_offset == 1 {
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(10) {
+            panic!("Timeout waiting for committed_offset == 1");
+        }
+    }
+
+    debug!(
+        "consumer description: {:?}",
+        consumer_description_after_commit
+    );
+
+    assert_eq!(
+        consumer_description_after_commit.partitions[0]
+            .consumer_stats
+            .committed_offset,
+        1
+    );
     Ok(())
 }

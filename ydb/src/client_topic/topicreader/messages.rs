@@ -2,7 +2,6 @@ use crate::client_topic::topicreader::partition_state::PartitionSession;
 use crate::client_topic::topicreader::reader::TopicReaderCommitMarker;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::RawBatch;
 use crate::YdbResult;
-use itertools::partition;
 use std::collections::HashMap;
 use std::time;
 use std::time::SystemTime;
@@ -64,7 +63,7 @@ impl TopicReaderBatch {
 
 impl TopicReaderBatch {
     pub fn get_commit_marker(&self) -> TopicReaderCommitMarker {
-        unimplemented!();
+        self.commit_marker.clone()
     }
 }
 
@@ -95,7 +94,7 @@ impl TopicReaderMessage {
     }
 
     pub fn get_commit_marker(&self) -> TopicReaderCommitMarker {
-        todo!()
+        self.commit_marker.clone()
     }
 
     fn get_write_session_metadata(&self) -> HashMap<String, String> {

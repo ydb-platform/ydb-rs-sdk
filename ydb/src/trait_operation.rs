@@ -14,7 +14,7 @@ use ydb_grpc::ydb_proto::table::{
     RollbackTransactionResponse,
 };
 use ydb_grpc::ydb_proto::topic::{
-    AlterTopicResponse, CreateTopicResponse, DescribeTopicResponse, DropTopicResponse,
+    AlterTopicResponse, CreateTopicResponse, DescribeConsumerResponse, DescribeTopicResponse, DropTopicResponse,
 };
 
 pub(crate) trait Operation: Debug {
@@ -54,3 +54,4 @@ operation_impl_for!(DropNodeResponse);
 operation_impl_for!(CopyTableResponse);
 operation_impl_for!(CopyTablesResponse);
 operation_impl_for!(LoginResponse);
+operation_impl_for!(DescribeConsumerResponse);
