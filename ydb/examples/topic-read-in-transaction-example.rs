@@ -403,7 +403,7 @@ async fn main() -> YdbResult<()> {
                                         VALUES ($topic, $partition, $offset, $body)
                                         "
                                     )
-                                    .with_params(ydb_params!(
+                                        .with_params(ydb_params!(
                                         "$topic" => topic.clone(),
                                         "$partition" => partition_id,
                                         "$offset" => offset,
@@ -412,12 +412,11 @@ async fn main() -> YdbResult<()> {
                                 ).await?;
 
                                 println!("    Stored message: topic={}, partition={}, offset={}, body_len={}",
-                                    topic, partition_id, offset, body_str.len());
+                                         topic, partition_id, offset, body_str.len());
                             }
 
-                            // Commit the transaction explicitly for the first example
-                            // NOTE: You can omit explicit commit() - the retrier will commit automatically
-                            // if the transaction function returns Ok() without errors
+                            // Explicit commit currently required
+                            // Will be auto-committed in future SDK versions
                             t.commit().await?;
                             println!("  Transaction committed successfully");
 
@@ -518,8 +517,9 @@ async fn main() -> YdbResult<()> {
                     });
                 }
 
-                // No explicit commit here - demonstrating automatic commit behavior
-                // The retrier will commit this transaction automatically since we return Ok()
+                // Explicit commit currently required
+                // Will be auto-committed in future SDK versions
+                t.commit().await?;
 
                 // Return the data for processing outside the transaction
                 Ok(rows)
