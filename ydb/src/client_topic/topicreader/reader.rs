@@ -335,35 +335,38 @@ impl TopicReader {
         send: UnboundedSender<FromClient>,
         auth_token: TokenCache,
     ) {
-        loop {
-            if cancellation_token.is_cancelled() {
-                return;
-            }
+        let mut interval = tokio::time::interval(UPDATE_TOKEN_INTERVAL);
+        interval.tick().await;
 
-            let tokio_cancellation = cancellation_token.to_tokio_token();
+        let tokio_cancellation = cancellation_token.to_tokio_token();
+
+        loop {
             select! {
                 _ = tokio_cancellation.cancelled() => {
-                    return
-                    },
-
-                _ = tokio::time::sleep(UPDATE_TOKEN_INTERVAL) =>{}
+                    debug!("update_token_loop cancelled, stopping");
+                    break;
+                }
+                _ = interval.tick() => {
+                    Self::send_update_token(&send, &auth_token).await;
+                }
             }
+        }
+    }
 
-            let token = auth_token.token();
+    async fn send_update_token(send: &UnboundedSender<FromClient>, auth_token: &TokenCache) {
+        let token = auth_token.token();
+        debug!("sending update token request from topic reader");
 
-            debug!("sending update token request from topic reader");
+        let update_request = RawFromClientOneOf::UpdateTokenRequest(RawUpdateTokenRequest {
+            token: token.expose_secret().to_string(),
+        })
+        .into();
 
-            if let Err(err) = send.send(
-                RawFromClientOneOf::UpdateTokenRequest(RawUpdateTokenRequest {
-                    token: token.expose_secret().to_string(),
-                })
-                .into(),
-            ) {
-                warn!(
-                    "error while send update token request from topic reader: {}",
-                    err
-                )
-            }
+        if let Err(err) = send.send(update_request) {
+            warn!(
+                "error while sending update token request from topic reader: {}",
+                err
+            );
         }
     }
 }
