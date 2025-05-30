@@ -491,7 +491,7 @@ async fn start_read_topic(
 async fn read_topic_message() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
-    let topic_name = "send_test_topic".to_string();
+    let topic_name = "read_topic_message".to_string();
     let topic_path = format!("{}/{}", database_path, topic_name);
     let producer_id = "test-producer-id".to_string();
     let consumer_name = "test-consumer".to_string();
