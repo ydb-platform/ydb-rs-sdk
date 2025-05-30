@@ -739,7 +739,6 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
     table_client
         .retry_transaction(|t| {
             let reader_mutex = reader_mutex.clone();
-            let producer_id = producer_id.clone();
             let received_messages = received_messages.clone();
 
             async move {
