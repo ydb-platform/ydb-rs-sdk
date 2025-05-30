@@ -23,8 +23,10 @@ impl TopicReaderBatch {
         let mut batch = Self {
             commit_marker: TopicReaderCommitMarker {
                 partition_session_id: partition_session.partition_session_id,
+                partition_id: partition_session.partition_id,
                 start_offset: partition_session.next_commit_offset_start,
                 end_offset: partition_session.next_commit_offset_start,
+                topic: partition_session.topic.clone(),
             },
 
             messages: raw_batch
@@ -45,8 +47,10 @@ impl TopicReaderBatch {
 
                         commit_marker: TopicReaderCommitMarker {
                             partition_session_id: partition_session.partition_session_id,
+                            partition_id: partition_session.partition_id,
                             start_offset: start_commit_offset,
                             end_offset: message.offset + 1,
+                            topic: partition_session.topic.clone(),
                         },
                     }
                 })
@@ -103,5 +107,60 @@ impl TopicReaderMessage {
 
     fn get_message_metadata(&self) -> HashMap<String, String> {
         unimplemented!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client_topic::topicreader::partition_state::PartitionSession;
+    use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{RawBatch, RawMessageData};
+    use std::time::SystemTime;
+
+    #[test]
+    fn test_topic_reader_commit_marker_includes_topic() {
+        // Create a test partition session
+        let mut partition_session = PartitionSession {
+            partition_session_id: 123,
+            partition_id: 456,
+            topic: "test-topic".to_string(),
+            next_commit_offset_start: 100,
+        };
+
+        // Create a test raw batch
+        let raw_batch = RawBatch {
+            producer_id: "test-producer".to_string(),
+            write_session_meta: std::collections::HashMap::new(),
+            codec: crate::grpc_wrapper::raw_topic_service::common::codecs::RawCodec { code: 1 },
+            written_at: SystemTime::now().into(),
+            message_data: vec![RawMessageData {
+                seq_no: 1,
+                created_at: Some(SystemTime::now().into()),
+                data: vec![1, 2, 3],
+                uncompressed_size: 3,
+                offset: 100,
+                read_session_size_bytes: 0,
+            }],
+        };
+
+        // Create the batch
+        let batch = TopicReaderBatch::new(raw_batch, &mut partition_session);
+
+        // Verify that the batch commit marker includes the topic
+        let commit_marker = batch.get_commit_marker();
+        assert_eq!(commit_marker.topic, "test-topic");
+        assert_eq!(commit_marker.partition_session_id, 123);
+        assert_eq!(commit_marker.partition_id, 456);
+        assert_eq!(commit_marker.start_offset, 100);
+        assert_eq!(commit_marker.end_offset, 101);
+
+        // Verify that individual message commit markers also include the topic
+        assert_eq!(batch.messages.len(), 1);
+        let message_commit_marker = batch.messages[0].get_commit_marker();
+        assert_eq!(message_commit_marker.topic, "test-topic");
+        assert_eq!(message_commit_marker.partition_session_id, 123);
+        assert_eq!(message_commit_marker.partition_id, 456);
+        assert_eq!(message_commit_marker.start_offset, 100);
+        assert_eq!(message_commit_marker.end_offset, 101);
     }
 }

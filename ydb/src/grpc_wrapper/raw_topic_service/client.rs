@@ -15,6 +15,7 @@ use crate::grpc_wrapper::raw_topic_service::describe_topic::{
 };
 use crate::grpc_wrapper::raw_topic_service::drop_topic::RawDropTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::stream_read;
+use crate::grpc_wrapper::raw_topic_service::update_offsets_in_transaction::RawUpdateOffsetsInTransactionRequest;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
 pub(crate) struct RawTopicClient {
@@ -68,6 +69,13 @@ impl RawTopicClient {
         request_without_result!(
             self.service.drop_topic,
             req => ydb_grpc::ydb_proto::topic::DropTopicRequest
+        );
+    }
+
+    pub async fn update_offsets_in_transaction(&mut self, req: RawUpdateOffsetsInTransactionRequest) -> RawResult<()> {
+        request_without_result!(
+            self.service.update_offsets_in_transaction,
+            req => ydb_grpc::ydb_proto::topic::UpdateOffsetsInTransactionRequest
         );
     }
 
