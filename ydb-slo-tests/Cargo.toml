@@ -14,11 +14,13 @@ base64 = { version = "0.22.1" }
 rand = { version = "0.8.5" }
 clap = { version = "=4.2.7", features = ["derive"] }
 rand_core = { version = "0.6.4" }
-ratelimit = { version = "0.10.0" }
 tokio = { version = "=1.38.1" }
 tokio-util = { version = "=0.7.11", features = ["rt"] }
-ydb = { version = "0.9.7", path="../ydb"}
+ydb = { version = "0.9.7", path = "../ydb" }
 async-trait = "0.1"
+reqwest = { version = "=0.11.9" }
+governor = { version = "=0.6.0" }
+prometheus = { version = "=0.13.4", features = ["push"] }
 
 [[example]]
 name = "native"
