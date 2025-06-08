@@ -38,15 +38,12 @@ jobs:
 
     strategy:
       matrix:
-        sdk:
-          - name: native
-            label: native
         rust_version:
           - "RUST_VERSION_OLD"
           - "RUST_VERSION_NEW"
 
     concurrency:
-      group: slo-${{ github.ref }}-${{ matrix.sdk.name }}-${{ matrix.rust_version }}
+      group: slo-${{ github.ref }}-native-${{ matrix.rust_version }}
       cancel-in-progress: true
 
     steps:
@@ -75,31 +72,30 @@ jobs:
           REF=${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}
           REF_SAFE=${REF//\//__}
           echo "METRICS_REF=$REF_SAFE" >> $GITHUB_ENV
-          echo "METRICS_LABEL=${{ matrix.sdk.label }}" >> $GITHUB_ENV
-          echo "METRICS_JOB_NAME=${{ matrix.sdk.name }}" >> $GITHUB_ENV
+          echo "METRICS_LABEL=native" >> $GITHUB_ENV
+          echo "METRICS_JOB_NAME=native" >> $GITHUB_ENV
 
       - name: Initialize YDB SLO
         uses: ydb-platform/ydb-slo-action/init@main
         with:
           github_pull_request_number: ${{ github.event.inputs.github_pull_request_number }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          workload_name: ${{ matrix.sdk.name }}-${{ matrix.rust_version }}
+          workload_name: native-${{ matrix.rust_version }}
           ydb_database_node_count: 5
 
       - name: Prepare SLO Database
         run: |
-          cargo run --example ${{ matrix.sdk.name }} grpc://localhost:2135 /Root/testdb tableName create
+          cargo run -- -t tableName grpc://localhost:2135 /Root/testdb create
 
       - name: Run SLO Tests
         run: |
-          cargo run --example ${{ matrix.sdk.name }} grpc://localhost:2135 /Root/testdb tableName run \
+          cargo run -- -t tableName --write-timeout 1 grpc://localhost:2135 /Root/testdb run \
             --prom-pgw localhost:9091 \
-            --report-period 250 \
+            --report-period 1 \
             --time ${{ inputs.slo_workload_duration_seconds || 600}} \
             --read-rps ${{ inputs.slo_workload_read_max_rps || 1000}} \
             --write-rps ${{ inputs.slo_workload_write_max_rps || 100}} \
-            --read-timeout 1000 \
-            --write-timeout 1000 || true
+            --read-timeout 1 || true
 
       - if: always()
         name: Store ydb chaos testing logs
@@ -109,14 +105,14 @@ jobs:
       - if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.sdk.name}}-${{ matrix.rust_version }}-chaos-ydb.log
+          name: native-${{ matrix.rust_version }}-chaos-ydb.log
           path: ./chaos-ydb.log
           retention-days: 1
 
       - if: always()
         name: Cleanup SLO Database
         run: |
-          cargo run --example ${{ matrix.sdk.name }} grpc://localhost:2135 /Root/testdb tableName cleanup || true
+          cargo run -- -t tableName grpc://localhost:2135 /Root/testdb cleanup || true
   validate-slo-metrics:
     name: Validate SLO metrics
     needs: ydb-slo-action-init
@@ -148,7 +144,7 @@ jobs:
       - name: Download metrics artifact
         uses: actions/download-artifact@v4
         with:
-          name: ${{ matrix.sdk.name }}-${{ matrix.rust_version }}-metrics.json
+          name: native-${{ matrix.rust_version }}-metrics.json
           path: ./artifacts
 
       - name: Make script executable
@@ -157,4 +153,4 @@ jobs:
       - name: Validate SLO thresholds
         run: |
           .github/scripts/check-metrics.sh \
-            ./artifacts/${{ matrix.sdk.name }}-${{ matrix.rust_version }}-metrics.json
+            ./artifacts/native-${{ matrix.rust_version }}-metrics.json

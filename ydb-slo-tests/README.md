@@ -15,72 +15,82 @@ It has 3 commands:
 
 create:
 
-`cargo run --example native grpc://localhost:2136 /local tableName create --min-partitions-count 6 --max-partitions-count 1000 --partition-size 1 -c 1000 --write-timeout 10000`
+`cargo run -- -t testingTable --write-timeout 10 --db-init-timeout 3 grpc://localhost:2136 /local create --min-partitions-count 6 --max-partitions-count 1000 --partition-size 1 -c 1000`
 
 cleanup:
 
-`cargo run --example native grpc://localhost:2136 /local tableName cleanup`
+`cargo run -- -t testingTable --write-timeout 10 --db-init-timeout 3 grpc://localhost:2136 /local cleanup`
 
 run:
 
-`cargo run --example native grpc://localhost:2136 /local tableName run -c 1000 --read-rps 1000 --read-timeout 10000 --write-rps 100 --write-timeout 10000 --time 600 --prom-pgw localhost:9091 --report-period 250`
+`cargo run -- -t testingTable --write-timeout 10 --db-init-timeout 3 grpc://localhost:2136 /local run -c 1000 --read-rps 1000 --read-timeout 10 --write-rps 100 --prom-pgw localhost:9091 --time 600 --report-period 1 --shutdown-time 30`
 
-## Arguments for commands:
+## Arguments and options for commands:
 
 ### create
 
-`cargo run --example <example_name> <ENDPOINT> <DB> <TABLE_NAME> create [OPTIONS]`
+`cargo run [COMMON_OPTIONS] <ENDPOINT> <DB> create [OPTIONS]`
 
 ```
 Arguments:
   ENDPOINT                            YDB endpoint to connect to
   DB                                  YDB database to connect to
-  TABLE_NAME                          table name to create
+  
+Common options:
+  -t --table-name            <string> table name to create [default: testingTable]
+  --write-timeout            <u64>    write timeout in seconds [default: 10]
+  --db-init-timeout          <u64>    YDB database initialization timeout in seconds [default: 3]
 
 Options:
-  --min-partitions-count     <u64>    minimum amount of partitions in table
-  --max-partitions-count     <u64>    maximum amount of partitions in table
-  --partition-size           <u64>    partition size in mb
+  -c --initial-data-count    <u64>    amount of initially created rows [default: 1000]
   
-  -c --initial-data-count    <u64>    amount of initially created rows
+  --min-partitions-count     <u64>    minimum amount of partitions in table [default: 6]
   
-  --write-timeout            <u64>    write timeout milliseconds
+  --max-partitions-count     <u64>    maximum amount of partitions in table [default: 1000]
+  --partition-size           <u64>    partition size in mb [default: 1]
 ```
 
 ### cleanup
 
-`cargo run --example <example_name> <ENDPOINT> <DB> <TABLE_NAME> cleanup`
+`cargo run [COMMON_OPTIONS] <ENDPOINT> <DB> cleanup`
 
 ```
 Arguments:
   ENDPOINT    YDB endpoint to connect to
   DB          YDB database to connect to
-  TABLE_NAME  table name to cleanup
+  
+Common options:
+  -t --table-name            <string> table name to create [default: testingTable]
+  --write-timeout            <u64>    write timeout in seconds [default: 10]
+  --db-init-timeout          <u64>    YDB database initialization timeout in seconds [default: 3]
 ```
 
 ### run
 
-`cargo run --example <example_name> <ENDPOINT> <DB> <TABLE_NAME> run`
+`cargo run [COMMON_OPTIONS] <ENDPOINT> <DB> run [OPTIONS]`
 
 ```
 Arguments:
   ENDPOINT                            YDB endpoint to connect to
   DB                                  YDB database to connect to
-  TABLE_NAME                          table name to use
-
-Options:
-  -c --initial-data-count    <u64>    amount of initially created rows
-                         
-  --read-rps                 <u32>    read RPS
-  --read-timeout             <u64>    read timeout milliseconds
-                         
-  --write-rps                <u32>    write RPS
-  --write-timeout            <u64>    write timeout milliseconds
-                         
-  --time                     <u64>    run time in seconds
   
-  --prom-pgw                 <string> prometheus push gateway
-  --report-period            <u64>    prometheus push period in milliseconds
+Common options:
+  -t --table-name            <string> table name to create [default: testingTable]
+  --write-timeout            <u64>    write timeout in seconds [default: 10]
+  --db-init-timeout          <u64>    YDB database initialization timeout in seconds [default: 3]
+
+Options:  
+  -c --initial-data-count    <u64>    amount of initially created rows [default: 1000]
+                         
+  --read-rps                 <u32>    read RPS [default: 1000]
+  --write-rps                <u32>    write RPS [default: 100]
+  
+  --prom-pgw                 <string> prometheus push gateway [default: ]
+  
+  --read-timeout             <u64>    read timeout in seconds [default: 10]
+  --time                     <u64>    write timeout in seconds [default: 600]
+  --report-period            <u64>    prometheus push period in seconds [default: 1]
+  --shutdown-time            <u64>    time to wait before force kill workers in seconds [default: 30]
 ```
 
 ## What's inside

@@ -3376,7 +3376,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ydb-slo-tests"
+name = "ydb-slo-tests-lib"
 version = "0.1.0"
 dependencies = [
  "async-trait",
@@ -3388,8 +3388,20 @@ dependencies = [
  "rand_core",
  "reqwest 0.11.9",
  "tokio",
+ "ydb",
+]
+
+[[package]]
+name = "ydb-slo-tests-native"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "clap",
+ "governor",
+ "tokio",
  "tokio-util 0.7.11",
  "ydb",
+ "ydb-slo-tests-lib",
 ]
 
 [[package]]
