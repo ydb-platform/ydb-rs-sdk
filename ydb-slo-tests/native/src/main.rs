@@ -42,7 +42,7 @@ async fn main() -> YdbResult<()> {
 async fn program(cli: SloTestsCli, token: CancellationToken) -> YdbResult<()> {
     let database = tokio::select! {
         _ = token.cancelled() => {
-            return Err(YdbError::Custom(format!("{}", "failed to initialize YDB client: cancelled or timeout")))
+            return Err(YdbError::Custom("failed to initialize YDB client: cancelled or timeout".to_string()))
         }
         res = Database::new(cli.clone()) => {
             res.map_err(|err| YdbError::Custom(format!("failed to initialize YDB client: {}", err)))?
@@ -55,7 +55,7 @@ async fn program(cli: SloTestsCli, token: CancellationToken) -> YdbResult<()> {
         Command::Create(create_args) => {
             tokio::select! {
                 _ = token.cancelled() => {
-                    return Err(YdbError::Custom(format!("{}", "failed to create table: cancelled or timeout")))
+                    return Err(YdbError::Custom("failed to create table: cancelled or timeout".to_string()))
                 },
                 res = timeout(
                     Duration::from_secs(cli.write_timeout_seconds),
@@ -87,9 +87,9 @@ async fn program(cli: SloTestsCli, token: CancellationToken) -> YdbResult<()> {
                 join_set.spawn(async move {
                     let row = generator.lock().await.generate();
 
-                    let _ = tokio::select! {
+                    tokio::select! {
                         _ = token.cancelled() => {
-                            return Err(YdbError::Custom(format!("{}", "failed to create row: cancelled or timeout")))
+                            return Err(YdbError::Custom("failed to create row: cancelled or timeout".to_string()))
                         },
                         res = timeout(
                             Duration::from_secs(cli.write_timeout_seconds),
@@ -107,7 +107,7 @@ async fn program(cli: SloTestsCli, token: CancellationToken) -> YdbResult<()> {
                                 }
                             }
                         }
-                    };
+                    }
                 });
             }
 
@@ -131,7 +131,7 @@ async fn program(cli: SloTestsCli, token: CancellationToken) -> YdbResult<()> {
         Command::Cleanup => {
             tokio::select! {
                 _ = token.cancelled() => {
-                   return Err(YdbError::Custom(format!("{}", "failed to clean up table: cancelled or timeout")))
+                   return Err(YdbError::Custom("failed to clean up table: cancelled or timeout".to_string()))
                 }
                 res = timeout(
                     Duration::from_secs(cli.write_timeout_seconds),
@@ -160,7 +160,6 @@ async fn program(cli: SloTestsCli, token: CancellationToken) -> YdbResult<()> {
                 std::env::var("METRICS_JOB_NAME").unwrap_or("metrics_test_job".to_string());
 
             let workers_token = token.clone();
-            let shutdown_token = token.clone();
 
             let generator = Arc::new(Mutex::new(Generator::new(
                 run_args.initial_data_count as RowID,
@@ -233,10 +232,10 @@ async fn program(cli: SloTestsCli, token: CancellationToken) -> YdbResult<()> {
             ));
 
             let metrics_worker = Arc::clone(&workers);
-            let workers_token = workers_token.clone();
+            let metrics_token = workers_token.clone();
             tracker.spawn(async move {
                 tokio::select! {
-                    _ = workers_token.cancelled() => {}
+                    _ = metrics_token.cancelled() => {}
                     _ = metrics_worker.collect_metrics(&metrics_rate_limiter) => {}
                 }
             });
