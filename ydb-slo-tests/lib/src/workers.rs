@@ -67,7 +67,7 @@ impl<RW: ReadWriter> Workers<RW> {
                 }
                 Ok((Err(e), attempts)) => {
                     span.finish(attempts, Some(e.clone()));
-                    println!("Read failed: {}", e);
+                    println!("read failed: {}", e);
                     return;
                 }
                 Err(_) => return,
@@ -95,7 +95,7 @@ impl<RW: ReadWriter> Workers<RW> {
                 }
                 Ok((Err(e), attempts)) => {
                     span.finish(attempts, Some(e.clone()));
-                    println!("Write failed: {}", e);
+                    println!("write failed: {}", e);
                     return;
                 }
                 Err(_) => return,
@@ -108,7 +108,7 @@ impl<RW: ReadWriter> Workers<RW> {
             limiter.until_ready().await;
 
             if let Err(err) = self.metrics.push_to_gateway().await {
-                println!("Failed to collect metrics: {}", err);
+                println!("failed to collect metrics: {}", err);
                 continue;
             }
         }

@@ -243,23 +243,31 @@ async fn program(cli: SloTestsCli, token: CancellationToken) -> YdbResult<()> {
 
             println!("started metrics worker");
 
-            {
-                let tracker = tracker.clone();
-                tokio::spawn(async move {
-                    time::sleep(Duration::from_secs(run_args.shutdown_time_seconds)).await;
-                    tracker.close();
-                    shutdown_token.cancel();
-                });
-            }
-
+            tracker.close();
             tracker.wait().await;
 
-            workers
-                .close()
-                .await
-                .map_err(|err| YdbError::Custom(format!("failed to close workers: {}", err)))?;
-
-            println!("all workers are completed");
+            match timeout(
+                Duration::from_secs(run_args.shutdown_time_seconds),
+                workers.close(),
+            )
+            .await
+            {
+                Err(elapsed) => {
+                    return Err(YdbError::Custom(format!(
+                        "failed to close workers: {}",
+                        elapsed
+                    )))
+                }
+                Ok(Err(err)) => {
+                    return Err(YdbError::Custom(format!(
+                        "failed to close workers: {}",
+                        err
+                    )))
+                }
+                _ => {
+                    println!("all workers are completed")
+                }
+            }
         }
     }
 
