@@ -40,9 +40,14 @@ async fn main() -> YdbResult<()> {
 }
 
 async fn program(cli: SloTestsCli, token: CancellationToken) -> YdbResult<()> {
-    let database = Database::new(cli.clone())
-        .await
-        .map_err(|err| YdbError::Custom(format!("failed to initialize YDB client: {}", err)))?;
+    let database = tokio::select! {
+        _ = token.cancelled() => {
+            return Err(YdbError::Custom(format!("{}", "failed to initialize YDB client: cancelled or timeout")))
+        }
+        res = Database::new(cli.clone()) => {
+            res.map_err(|err| YdbError::Custom(format!("failed to initialize YDB client: {}", err)))?
+        }
+    };
 
     println!("initialized database");
 

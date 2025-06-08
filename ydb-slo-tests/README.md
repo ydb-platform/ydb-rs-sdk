@@ -15,21 +15,21 @@ It has 3 commands:
 
 create:
 
-`cargo run -- -t testingTable --write-timeout 10 --db-init-timeout 3 grpc://localhost:2136 /local create --min-partitions-count 6 --max-partitions-count 1000 --partition-size 1 -c 1000`
+`cargo run --bin ydb-slo-tests-native -- -t testingTable --write-timeout 10 --db-init-timeout 3 grpc://localhost:2136 /local create --min-partitions-count 6 --max-partitions-count 1000 --partition-size 1 -c 1000`
 
 cleanup:
 
-`cargo run -- -t testingTable --write-timeout 10 --db-init-timeout 3 grpc://localhost:2136 /local cleanup`
+`cargo run --bin ydb-slo-tests-native -- -t testingTable --write-timeout 10 --db-init-timeout 3 grpc://localhost:2136 /local cleanup`
 
 run:
 
-`cargo run -- -t testingTable --write-timeout 10 --db-init-timeout 3 grpc://localhost:2136 /local run -c 1000 --read-rps 1000 --read-timeout 10 --write-rps 100 --prom-pgw localhost:9091 --time 600 --report-period 1 --shutdown-time 30`
+`cargo run --bin ydb-slo-tests-native -- -t testingTable --write-timeout 10 --db-init-timeout 3 grpc://localhost:2136 /local run -c 1000 --read-rps 1000 --read-timeout 10 --write-rps 100 --prom-pgw localhost:9091 --time 600 --report-period 1 --shutdown-time 30`
 
 ## Arguments and options for commands:
 
 ### create
 
-`cargo run [COMMON_OPTIONS] <ENDPOINT> <DB> create [OPTIONS]`
+`cargo run --bin <binary_name> -- [COMMON_OPTIONS] <ENDPOINT> <DB> create [OPTIONS]`
 
 ```
 Arguments:
@@ -52,7 +52,7 @@ Options:
 
 ### cleanup
 
-`cargo run [COMMON_OPTIONS] <ENDPOINT> <DB> cleanup`
+`cargo run --bin <binary_name> -- [COMMON_OPTIONS] <ENDPOINT> <DB> cleanup`
 
 ```
 Arguments:
@@ -67,7 +67,7 @@ Common options:
 
 ### run
 
-`cargo run [COMMON_OPTIONS] <ENDPOINT> <DB> run [OPTIONS]`
+`cargo run --bin <binary_name> -- [COMMON_OPTIONS] <ENDPOINT> <DB> run [OPTIONS]`
 
 ```
 Arguments:
