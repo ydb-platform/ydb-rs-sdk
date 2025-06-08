@@ -130,9 +130,6 @@ jobs:
 
     strategy:
       matrix:
-        sdk:
-          - name: native
-            label: native
         rust_version:
           - "RUST_VERSION_OLD"
           - "RUST_VERSION_NEW"

@@ -89,13 +89,13 @@ async fn program(cli: SloTestsCli, token: CancellationToken) -> YdbResult<()> {
 
                     tokio::select! {
                         _ = token.cancelled() => {
-                            return Err(YdbError::Custom("failed to create row: cancelled or timeout".to_string()))
+                            Err(YdbError::Custom("failed to create row: cancelled or timeout".to_string()))
                         },
                         res = timeout(
                             Duration::from_secs(cli.write_timeout_seconds),
                             database.write(row)
                         ) => {
-                            return match res {
+                            match res {
                                 Err(elapsed) => {
                                     Err(YdbError::Custom(format!("failed to create row: {}", elapsed)))
                                 }
