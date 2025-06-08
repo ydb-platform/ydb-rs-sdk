@@ -3,14 +3,14 @@ use std::time::SystemTime;
 pub type RowID = u64;
 
 #[derive(Debug, Clone)]
-pub struct TestRow {
+pub struct Row {
     pub id: RowID,
     pub payload_str: String,
     pub payload_double: f64,
     pub payload_timestamp: SystemTime,
 }
 
-impl TestRow {
+impl Row {
     pub fn new(
         id: RowID,
         payload_str: String,

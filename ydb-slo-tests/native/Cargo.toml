@@ -1,25 +1,19 @@
 [package]
 publish = false
-name = "ydb-slo-tests"
+name = "ydb-slo-tests-native"
 version = "0.1.0"
 authors = ["fatalem0 <madchaterrer@gmail.com>"]
 edition = "2021"
 license = "Apache-2.0"
-description = "Crate contains SLO-tests for YDB"
+description = "Crate contains CLI with SLO-tests for YDB"
 repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-slo-tests"
 rust-version = "1.68.0"
 
 [dependencies]
-base64 = { version = "0.22.1" }
-rand = { version = "0.8.5" }
 clap = { version = "=4.2.7", features = ["derive"] }
-rand_core = { version = "0.6.4" }
-ratelimit = { version = "0.10.0" }
 tokio = { version = "=1.38.1" }
 tokio-util = { version = "=0.7.11", features = ["rt"] }
-ydb = { version = "0.9.7", path="../ydb"}
+ydb = { version = "0.9.7", path = "../../ydb" }
 async-trait = "0.1"
-
-[[example]]
-name = "native"
-path = "examples/native/native.rs"
+governor = { version = "=0.6.0" }
+ydb-slo-tests-lib = { path = "../lib" }

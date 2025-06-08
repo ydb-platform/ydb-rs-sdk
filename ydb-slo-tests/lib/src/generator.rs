@@ -1,4 +1,4 @@
-use crate::row::{RowID, TestRow};
+use crate::db::row::{Row, RowID};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rand::prelude::StdRng;
 use rand::Rng;
@@ -23,7 +23,7 @@ impl Generator {
         }
     }
 
-    pub fn generate(&mut self) -> TestRow {
+    pub fn generate(&mut self) -> Row {
         let id = {
             let mut id_guard = self.current_id.lock().unwrap();
             *id_guard += 1;
@@ -34,7 +34,7 @@ impl Generator {
         let payload_timestamp = SystemTime::now();
         let payload_str = self.gen_payload_string();
 
-        TestRow::new(id, payload_str, payload_double, payload_timestamp)
+        Row::new(id, payload_str, payload_double, payload_timestamp)
     }
 
     fn gen_payload_string(&mut self) -> String {

@@ -15,77 +15,91 @@ It has 3 commands:
 
 create:
 
-`cargo run --example native grpc://localhost:2136 /local tableName create --min-partitions-count 6 --max-partitions-count 1000 --partition-size 1 -c 1000 --write-timeout 10000`
+`cargo run --bin ydb-slo-tests-native -- -t testingTable --write-timeout 10 --db-init-timeout 3 grpc://localhost:2136 /local create --min-partitions-count 6 --max-partitions-count 1000 --partition-size 1 -c 1000`
 
 cleanup:
 
-`cargo run --example native grpc://localhost:2136 /local tableName cleanup`
+`cargo run --bin ydb-slo-tests-native -- -t testingTable --write-timeout 10 --db-init-timeout 3 grpc://localhost:2136 /local cleanup`
 
 run:
 
-`cargo run --example native grpc://localhost:2136 /local tableName run -c 1000 --read-rps 1000 --read-timeout 10000 --write-rps 100 --write-timeout 10000 --time 600`
+`cargo run --bin ydb-slo-tests-native -- -t testingTable --write-timeout 10 --db-init-timeout 3 grpc://localhost:2136 /local run -c 1000 --read-rps 1000 --read-timeout 10 --write-rps 100 --prom-pgw localhost:9091 --time 600 --report-period 1 --shutdown-time 30`
 
-## Arguments for commands:
+## Arguments and options for commands:
 
 ### create
 
-`cargo run --example <example_name> <ENDPOINT> <DB> <TABLE_NAME> create [OPTIONS]`
+`cargo run --bin <binary_name> -- [COMMON_OPTIONS] <ENDPOINT> <DB> create [OPTIONS]`
 
 ```
 Arguments:
   ENDPOINT                            YDB endpoint to connect to
   DB                                  YDB database to connect to
-  TABLE_NAME                          table name to create
+  
+Common options:
+  -t --table-name            <string> table name to create [default: testingTable]
+  --write-timeout            <u64>    write timeout in seconds [default: 10]
+  --db-init-timeout          <u64>    YDB database initialization timeout in seconds [default: 3]
 
 Options:
-  --min-partitions-count     <u64>    minimum amount of partitions in table
-  --max-partitions-count     <u64>    maximum amount of partitions in table
-  --partition-size           <u64>    partition size in mb
+  -c --initial-data-count    <u64>    amount of initially created rows [default: 1000]
   
-  -c --initial-data-count    <u64>    amount of initially created rows
+  --min-partitions-count     <u64>    minimum amount of partitions in table [default: 6]
   
-  --write-timeout            <u64>    write timeout milliseconds
+  --max-partitions-count     <u64>    maximum amount of partitions in table [default: 1000]
+  --partition-size           <u64>    partition size in mb [default: 1]
 ```
 
 ### cleanup
 
-`cargo run --example <example_name> <ENDPOINT> <DB> <TABLE_NAME> cleanup`
+`cargo run --bin <binary_name> -- [COMMON_OPTIONS] <ENDPOINT> <DB> cleanup`
 
 ```
 Arguments:
   ENDPOINT    YDB endpoint to connect to
   DB          YDB database to connect to
-  TABLE_NAME  table name to cleanup
+  
+Common options:
+  -t --table-name            <string> table name to create [default: testingTable]
+  --write-timeout            <u64>    write timeout in seconds [default: 10]
+  --db-init-timeout          <u64>    YDB database initialization timeout in seconds [default: 3]
 ```
 
 ### run
 
-`cargo run --example <example_name> <ENDPOINT> <DB> <TABLE_NAME> run`
+`cargo run --bin <binary_name> -- [COMMON_OPTIONS] <ENDPOINT> <DB> run [OPTIONS]`
 
 ```
 Arguments:
   ENDPOINT                            YDB endpoint to connect to
   DB                                  YDB database to connect to
-  TABLE_NAME                          table name to use
+  
+Common options:
+  -t --table-name            <string> table name to create [default: testingTable]
+  --write-timeout            <u64>    write timeout in seconds [default: 10]
+  --db-init-timeout          <u64>    YDB database initialization timeout in seconds [default: 3]
 
-Options:
-  -c --initial-data-count    <u64>    amount of initially created rows
+Options:  
+  -c --initial-data-count    <u64>    amount of initially created rows [default: 1000]
                          
-  --read-rps                 <u64>    read RPS
-  --read-timeout             <u64>    read timeout milliseconds
-                         
-  --write-rps                <u64>    write RPS
-  --write-timeout            <u64>    write timeout milliseconds
-                         
-  --time                     <u64>    run time in seconds
+  --read-rps                 <u32>    read RPS [default: 1000]
+  --write-rps                <u32>    write RPS [default: 100]
+  
+  --prom-pgw                 <string> prometheus push gateway [default: ]
+  
+  --read-timeout             <u64>    read timeout in seconds [default: 10]
+  --time                     <u64>    write timeout in seconds [default: 600]
+  --report-period            <u64>    prometheus push period in seconds [default: 1]
+  --shutdown-time            <u64>    time to wait before force kill workers in seconds [default: 30]
 ```
 
 ## What's inside
 
-When running `run` command, the program creates two jobs: `readJob`, `writeJob`.
+When running `run` command, the program creates two jobs: `readJob`, `writeJob`, `metricsJob`.
 
 - `readJob`  reads rows from the table one by one with random identifiers generated by `writeJob`
 - `writeJob` generates and inserts rows
+- `metricsJob` periodically sends metrics to Prometheus
 
 Table have these fields:
 
@@ -97,3 +111,23 @@ Table have these fields:
 - `payload_hash Uint64?`
 
 Primary key: `("hash", "id")`
+
+## Collected metrics
+
+- `sdk_errors_total`              - Total number of errors encountered, categorized by error type
+- `sdk_operations_total`          - Total number of operations, categorized by type attempted by the SDK
+- `sdk_operations_success_total`  - Total number of successful operations, categorized by type
+- `sdk_operations_failure_total`  - Total number of failed operations, categorized by type
+- `sdk_operation_latency_seconds` - Latency of operations performed by the SDK in seconds, categorized by type and
+  status
+- `sdk_retry_attempts`            - Current retry attempts, categorized by operation type
+- `sdk_retry_attempts_total`      - Total number of retry attempts, categorized by operation type
+- `sdk_retries_success_total`     - Total number of successful retries, categorized by operation type
+- `sdk_retries_failure_total`     - Total number of failed retries, categorized by operation type
+- `sdk_pending_operations`        - Current number of pending operations, categorized by type
+
+## Look at metrics in grafana
+
+You can get dashboard used in that
+test [here](https://github.com/ydb-platform/slo-tests/blob/main/k8s/helms/grafana.yaml#L69) - you will need to import
+json into grafana.
