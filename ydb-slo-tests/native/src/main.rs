@@ -91,20 +91,12 @@ async fn program(cli: SloTestsCli, token: CancellationToken) -> YdbResult<()> {
                         _ = token.cancelled() => {
                             Err(YdbError::Custom("failed to create row: cancelled or timeout".to_string()))
                         },
-                        res = timeout(
-                            Duration::from_secs(cli.write_timeout_seconds),
-                            database.write(row)
-                        ) => {
+                        res = database.write(row, Duration::from_secs(cli.write_timeout_seconds)) => {
                             match res {
-                                Err(elapsed) => {
-                                    Err(YdbError::Custom(format!("failed to create row: {}", elapsed)))
-                                }
-                                Ok((Err(err), _)) => {
+                                (Err(err), _) => {
                                     Err(YdbError::Custom(format!("failed to create row: {}", err)))
                                 }
-                                _ => {
-                                    Ok(())
-                                }
+                                _ => { Ok(()) }
                             }
                         }
                     }

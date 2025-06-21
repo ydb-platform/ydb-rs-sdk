@@ -11,7 +11,6 @@ use rand::Rng;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::time::timeout;
 use ydb::YdbResultWithCustomerErr;
 
 pub type Attempts = usize;
@@ -19,8 +18,12 @@ type Limiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock, NoOpMiddleware
 
 #[async_trait]
 pub trait ReadWriter: Clone + Send + Sync {
-    async fn read(&self, row_id: RowID) -> (YdbResultWithCustomerErr<()>, Attempts);
-    async fn write(&self, row: Row) -> (YdbResultWithCustomerErr<()>, Attempts);
+    async fn read(
+        &self,
+        row_id: RowID,
+        timeout: Duration,
+    ) -> (YdbResultWithCustomerErr<()>, Attempts);
+    async fn write(&self, row: Row, timeout: Duration) -> (YdbResultWithCustomerErr<()>, Attempts);
 }
 
 pub struct Workers<RW: ReadWriter> {
@@ -54,23 +57,24 @@ impl<RW: ReadWriter> Workers<RW> {
             let row_id = rand::thread_rng().gen_range(0..self.config.initial_data_count);
             let span = self.metrics.start(OperationType::Read);
 
-            let read_result = timeout(
-                Duration::from_millis(self.config.read_timeout_seconds),
-                self.database.read(row_id),
-            )
-            .await;
+            let read_result = self
+                .database
+                .read(
+                    row_id,
+                    Duration::from_secs(self.config.read_timeout_seconds),
+                )
+                .await;
 
             match read_result {
-                Ok((Ok(()), attempts)) => {
+                (Ok(()), attempts) => {
                     span.finish(attempts, None);
                     continue;
                 }
-                Ok((Err(e), attempts)) => {
+                (Err(e), attempts) => {
                     span.finish(attempts, Some(e.clone()));
                     println!("read failed: {}", e);
                     return;
                 }
-                Err(_) => return,
             }
         }
     }
@@ -82,23 +86,21 @@ impl<RW: ReadWriter> Workers<RW> {
             let row = generator.to_owned().generate();
             let span = self.metrics.start(OperationType::Write);
 
-            let write_result = timeout(
-                Duration::from_millis(self.config.write_timeout_seconds),
-                self.database.clone().write(row),
-            )
-            .await;
+            let write_result = self
+                .database
+                .write(row, Duration::from_secs(self.config.write_timeout_seconds))
+                .await;
 
             match write_result {
-                Ok((Ok(()), attempts)) => {
+                (Ok(()), attempts) => {
                     span.finish(attempts, None);
                     continue;
                 }
-                Ok((Err(e), attempts)) => {
+                (Err(e), attempts) => {
                     span.finish(attempts, Some(e.clone()));
                     println!("write failed: {}", e);
                     return;
                 }
-                Err(_) => return,
             }
         }
     }

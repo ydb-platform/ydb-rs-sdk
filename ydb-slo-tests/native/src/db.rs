@@ -66,19 +66,28 @@ impl Database {
 
 #[async_trait]
 impl ReadWriter for Database {
-    async fn read(&self, row_id: RowID) -> (YdbResultWithCustomerErr<()>, Attempts) {
+    async fn read(
+        &self,
+        row_id: RowID,
+        timeout: Duration,
+    ) -> (YdbResultWithCustomerErr<()>, Attempts) {
         let query = generate_read_query(self.cli_args.table_name.as_str(), row_id);
         let attempts = AtomicUsize::new(0);
 
-        let result = self
-            .db_table_client
-            .retry_transaction(|t| async {
+        let result = match tokio::time::timeout(
+            timeout,
+            self.db_table_client.retry_transaction(|t| async {
                 let mut t = t;
                 attempts.fetch_add(1, Ordering::Relaxed);
                 t.query(query.clone()).await?;
                 Ok(())
-            })
-            .await;
+            }),
+        )
+        .await
+        {
+            Ok(res) => res,
+            Err(elapsed) => Err(YdbOrCustomerError::from_err(elapsed)),
+        };
 
         if attempts.load(Ordering::Relaxed) > 0 {
             attempts.fetch_sub(1, Ordering::Relaxed);
@@ -88,21 +97,31 @@ impl ReadWriter for Database {
         }
     }
 
-    async fn write(&self, row: Row) -> (YdbResultWithCustomerErr<()>, Attempts) {
+    async fn write(&self, row: Row, timeout: Duration) -> (YdbResultWithCustomerErr<()>, Attempts) {
         let query = generate_write_query(self.cli_args.table_name.as_str(), row);
         let attempts = AtomicUsize::new(0);
 
-        let result = self
-            .db_table_client
-            .retry_transaction(|t| async {
+        let result = match tokio::time::timeout(
+            timeout,
+            self.db_table_client.retry_transaction(|t| async {
                 let mut t = t;
                 attempts.fetch_add(1, Ordering::Relaxed);
                 t.query(query.clone()).await?;
                 t.commit().await?;
                 Ok(())
-            })
-            .await;
+            }),
+        )
+        .await
+        {
+            Ok(res) => res,
+            Err(elapsed) => Err(YdbOrCustomerError::from_err(elapsed)),
+        };
 
-        (result, attempts.load(Ordering::Relaxed))
+        if attempts.load(Ordering::Relaxed) > 0 {
+            attempts.fetch_sub(1, Ordering::Relaxed);
+            (result, attempts.load(Ordering::Relaxed))
+        } else {
+            (result, attempts.load(Ordering::Relaxed))
+        }
     }
 }
