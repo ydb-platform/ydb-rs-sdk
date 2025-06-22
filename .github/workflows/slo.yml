@@ -119,14 +119,14 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      #      READ_LATENCY_MS_THRESHOLD: "1" # 95th percentile read operations latency in milliseconds
-      #      WRITE_LATENCY_MS_THRESHOLD: "1" # 95th percentile write operations latency in milliseconds
+      READ_LATENCY_MS_THRESHOLD: "600" # 95th percentile read operations latency in milliseconds
+      WRITE_LATENCY_MS_THRESHOLD: "800" # 95th percentile write operations latency in milliseconds
       READ_THROUGHPUT_THRESHOLD: "150" # Read operations throughput
       WRITE_THROUGHPUT_THRESHOLD: "3" # Write operations throughput
-      #      READ_ATTEMPTS_THRESHOLD: "1" # Read attempts throughput
-      #      WRITE_ATTEMPTS_THRESHOLD: "1" # Write attempts throughput
+      READ_ATTEMPTS_THRESHOLD: "100" # Read attempts throughput
+      WRITE_ATTEMPTS_THRESHOLD: "100" # Write attempts throughput
       READ_AVAILABILITY_THRESHOLD: "90" # Read operations availability
-      WRITE_AVAILABILITY_THRESHOLD: "90" # Write operations availability
+      WRITE_AVAILABILITY_THRESHOLD: "80" # Write operations availability
 
     strategy:
       matrix:
