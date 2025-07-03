@@ -456,9 +456,7 @@ async fn main() -> YdbResult<()> {
         }
     }
 
-    println!(
-        "✅ Transactional reading completed successfully after {iteration} iterations"
-    );
+    println!("✅ Transactional reading completed successfully after {iteration} iterations");
 
     // ============================================================================
     // STEP 3: TABLE READING AND VERIFICATION

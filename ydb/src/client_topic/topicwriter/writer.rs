@@ -405,9 +405,7 @@ impl TopicWriter {
             .borrow_mut()
             .send(message)
             .await
-            .map_err(|err| {
-                YdbError::custom(format!("can't send the message to channel: {err}"))
-            })?;
+            .map_err(|err| YdbError::custom(format!("can't send the message to channel: {err}")))?;
 
         let reception_type = wait_ack.map_or(
             TopicWriterReceptionType::NoConfirmationExpected,
