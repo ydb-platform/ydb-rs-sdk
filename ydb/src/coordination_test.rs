@@ -18,7 +18,7 @@ async fn create_delete_node_test() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
     let node_name = "test_node".to_string();
-    let node_path = format!("{}/{}", database_path, node_name);
+    let node_path = format!("{database_path}/{node_name}");
 
     let mut coordination_client = client.coordination_client();
 
@@ -118,7 +118,7 @@ async fn mutex_test() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
     let node_name = "test_mutex".to_string();
-    let node_path = format!("{}/{}", database_path, node_name);
+    let node_path = format!("{database_path}/{node_name}");
 
     let mut coordination_client = client.coordination_client();
 
@@ -168,7 +168,7 @@ async fn ephemeral_mutex_test() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
     let node_name = "test_ephemeral_mutex".to_string();
-    let node_path = format!("{}/{}", database_path, node_name);
+    let node_path = format!("{database_path}/{node_name}");
 
     let mut coordination_client = client.coordination_client();
 
@@ -212,7 +212,7 @@ async fn describe_semaphore_test() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
     let node_name = "test_describe_semaphore".to_string();
-    let node_path = format!("{}/{}", database_path, node_name);
+    let node_path = format!("{database_path}/{node_name}");
 
     let mut coordination_client = client.coordination_client();
 

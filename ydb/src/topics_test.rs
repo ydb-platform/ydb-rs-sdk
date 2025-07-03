@@ -26,7 +26,7 @@ async fn create_delete_topic_test() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
     let topic_name = "del_test_topic".to_string();
-    let topic_path = format!("{}/{}", database_path, topic_name);
+    let topic_path = format!("{database_path}/{topic_name}");
 
     let mut topic_client = client.topic_client();
     let mut scheme_client = client.scheme_client();
@@ -61,7 +61,7 @@ async fn describe_topic_test() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
     let topic_name = "describe_test_topic".to_string();
-    let topic_path = format!("{}/{}", database_path, topic_name);
+    let topic_path = format!("{database_path}/{topic_name}");
 
     let mut topic_client = client.topic_client();
     let mut scheme_client = client.scheme_client();
@@ -164,7 +164,7 @@ async fn alter_topic_test() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
     let topic_name = "alter_test_topic".to_string();
-    let topic_path = format!("{}/{}", database_path, topic_name);
+    let topic_path = format!("{database_path}/{topic_name}");
 
     let mut topic_client = client.topic_client();
     let mut scheme_client = client.scheme_client();
@@ -244,7 +244,7 @@ async fn send_message_test() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
     let topic_name = "send_test_topic".to_string();
-    let topic_path = format!("{}/{}", database_path, topic_name);
+    let topic_path = format!("{database_path}/{topic_name}");
     let producer_id = "test-producer-id".to_string();
     let consumer_name = "test-consumer".to_string();
 
@@ -496,7 +496,7 @@ async fn read_topic_message() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
     let topic_name = "read_topic_message".to_string();
-    let topic_path = format!("{}/{}", database_path, topic_name);
+    let topic_path = format!("{database_path}/{topic_name}");
     let producer_id = "test-producer-id".to_string();
     let consumer_name = "test-consumer".to_string();
 
@@ -636,7 +636,7 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
     let client = create_client().await?;
     let database_path = client.database();
     let topic_name = "tx_test_topic".to_string();
-    let topic_path = format!("{}/{}", database_path, topic_name);
+    let topic_path = format!("{database_path}/{topic_name}");
     let producer_id = "test-producer-id-tx".to_string();
     let consumer_name = "test-consumer-tx".to_string();
 
@@ -762,8 +762,7 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
                         reader_guard.pop_batch_in_tx(&mut t),
                     ).await
                         .map_err(|_| YdbError::Custom(format!(
-                            "Timeout waiting for topic message batch. Expected {} messages, received {} so far",
-                            EXPECTED_MESSAGE_COUNT, message_counter
+                            "Timeout waiting for topic message batch. Expected {EXPECTED_MESSAGE_COUNT} messages, received {message_counter} so far"
                         )))??;
 
                     debug!("read a messages batch in transaction with {} messages", batch.messages.len());

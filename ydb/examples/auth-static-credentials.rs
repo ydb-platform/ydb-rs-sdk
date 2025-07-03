@@ -33,6 +33,6 @@ async fn main() -> YdbResult<()> {
         .try_into()
         .unwrap();
 
-    println!("product: {}", product);
+    println!("product: {product}");
     Ok(())
 }

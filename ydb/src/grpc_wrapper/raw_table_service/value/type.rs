@@ -96,8 +96,7 @@ impl RawType {
             type_id
         } else {
             return Err(RawError::decode_error(format!(
-                "Unexpected primitive type_id: {}",
-                int_type_id
+                "Unexpected primitive type_id: {int_type_id}"
             )));
         };
 
@@ -138,8 +137,7 @@ impl RawType {
     pub fn into_value_example(self) -> RawResult<Value> {
         fn unimplemented_type(t: RawType) -> RawResult<Value> {
             Err(RawError::custom(format!(
-                "unimplemented example value for type: {:?}",
-                t
+                "unimplemented example value for type: {t:?}"
             )))
         }
 

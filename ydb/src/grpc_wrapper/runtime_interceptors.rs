@@ -86,8 +86,7 @@ impl Future for ChannelFuture {
             ChannelFuture::Error(err) => {
                 let err_content = err.take().unwrap();
                 *err = Some(InterceptorError::Internal(format!(
-                    "interceptor err consumed already, prev err: '{}'",
-                    err_content
+                    "interceptor err consumed already, prev err: '{err_content}'"
                 )));
                 Poll::Ready(Err(err_content))
             }
@@ -205,9 +204,9 @@ impl Debug for InterceptorError {
         use InterceptorError::*;
 
         match self {
-            Custom(text) => write!(f, "interceptor custom error: '{}'", text),
-            Internal(text) => write!(f, "interceptor internal error: '{}'", text),
-            Transport(err) => write!(f, "interceptor transport error: {:?}", err),
+            Custom(text) => write!(f, "interceptor custom error: '{text}'"),
+            Internal(text) => write!(f, "interceptor internal error: '{text}'"),
+            Transport(err) => write!(f, "interceptor transport error: {err:?}"),
         }
     }
 }
