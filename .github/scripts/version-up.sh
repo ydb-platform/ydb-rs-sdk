@@ -111,6 +111,9 @@ function bump_version() {
 
 bump_version "$CRATE_NAME" "$VERSION_PART"
 
+# actualize Cargo.lock
+cargo build --workspace --all-targets
+
 git diff
 
 git_set_tags
