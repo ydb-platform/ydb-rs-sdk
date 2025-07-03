@@ -12,7 +12,7 @@ env:
   RUST_VERSION_NEW: "1.88.0"
 
 jobs:
-  tests:
+  check-code-style:
     strategy:
       fail-fast: false
       matrix:
