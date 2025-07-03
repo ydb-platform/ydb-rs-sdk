@@ -37,11 +37,10 @@ impl TryFrom<RawServerMessage> for RawInitResponse {
         } else {
             let message_string = match serde_json::to_string(&value) {
                 Ok(str) => str,
-                Err(err) => format!("Failed to serialize message: {}", err),
+                Err(err) => format!("Failed to serialize message: {err}"),
             };
             Err(RawError::Custom(format!(
-                "Expected to get InitResponse, got: {}",
-                message_string,
+                "Expected to get InitResponse, got: {message_string}",
             )))
         }
     }

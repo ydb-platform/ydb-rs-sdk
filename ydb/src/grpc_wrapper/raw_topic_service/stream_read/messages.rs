@@ -106,8 +106,7 @@ impl TryFrom<stream_read_message::FromServer> for RawFromServer {
             other => {
                 RawFromServer::UnsupportedMessage(serde_json::to_string(&other).map_err(|err| {
                     RawError::Custom(format!(
-                        "failed json serialize while marshal unknown message in topic reader: {}",
-                        err
+                        "failed json serialize while marshal unknown message in topic reader: {err}"
                     ))
                 })?)
             }

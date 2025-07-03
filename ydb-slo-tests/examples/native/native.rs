@@ -24,14 +24,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let database = Database::new(cli)
         .await
-        .unwrap_or_else(|err| panic!("Failed to initialize YDB client: {}", err));
+        .unwrap_or_else(|err| panic!("Failed to initialize YDB client: {err}"));
 
     match command {
         Command::Create(create_args) => {
             database
                 .create_table(&create_args)
                 .await
-                .unwrap_or_else(|err| panic!("Failed to create table: {}", err));
+                .unwrap_or_else(|err| panic!("Failed to create table: {err}"));
 
             println!("Created table");
 
@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             database
                 .drop_table()
                 .await
-                .unwrap_or_else(|err| panic!("Failed to clean up table: {}", err));
+                .unwrap_or_else(|err| panic!("Failed to clean up table: {err}"));
 
             println!("Cleaned up table");
         }

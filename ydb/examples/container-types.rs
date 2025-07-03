@@ -41,7 +41,7 @@ async fn main() -> YdbResult<()> {
                 .try_into()?;
 
             assert_eq!(vec![1, 2, 3], res);
-            println!("List: {:?}", res);
+            println!("List: {res:?}");
             Ok(())
         })
         .await?;
@@ -76,7 +76,7 @@ async fn main() -> YdbResult<()> {
                 .try_into()?;
 
             assert_eq!(source, res);
-            println!("Struct: {:?}", res);
+            println!("Struct: {res:?}");
             Ok(())
         })
         .await?;

@@ -109,7 +109,7 @@ pub struct DescribeConsumerOptions {
 
 impl From<UninitializedFieldError> for errors::YdbError {
     fn from(ufe: UninitializedFieldError) -> Self {
-        InternalError(format!("Error during build type: {}", ufe))
+        InternalError(format!("Error during build type: {ufe}"))
     }
 }
 

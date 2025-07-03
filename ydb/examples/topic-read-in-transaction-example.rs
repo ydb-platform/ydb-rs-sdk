@@ -170,7 +170,7 @@ async fn setup_environment(client: &ydb::Client) -> YdbResult<()> {
 
     let database_path = client.database();
     let topic_name = "test_topic";
-    let topic_path = format!("{}/{}", database_path, topic_name);
+    let topic_path = format!("{database_path}/{topic_name}");
     let consumer_name = "test_consumer";
 
     let mut topic_client = client.topic_client();
@@ -211,7 +211,7 @@ async fn setup_environment(client: &ydb::Client) -> YdbResult<()> {
         )
         .await?;
 
-    println!("Topic '{}' created successfully", topic_name);
+    println!("Topic '{topic_name}' created successfully");
 
     // ============================================================================
     // MESSAGE PUBLISHING: Create deterministic test data
@@ -320,7 +320,7 @@ async fn main() -> YdbResult<()> {
 
     let database_path = client.database();
     let topic_name = "test_topic";
-    let topic_path = format!("{}/{}", database_path, topic_name);
+    let topic_path = format!("{database_path}/{topic_name}");
     let consumer_name = "test_consumer";
 
     let mut topic_client = client.topic_client();
@@ -352,7 +352,7 @@ async fn main() -> YdbResult<()> {
     // 4. Efficient resource usage
     loop {
         iteration += 1;
-        println!("Iteration {}: Starting transaction...", iteration);
+        println!("Iteration {iteration}: Starting transaction...");
 
         // Use retry_transaction to handle each batch in its own transaction
         // This provides automatic retry with exponential backoff for transient failures
@@ -424,7 +424,7 @@ async fn main() -> YdbResult<()> {
                         }
                         Ok(Err(err)) => {
                             // Actual error from the topic reader
-                            println!("  Error reading batch: {}", err);
+                            println!("  Error reading batch: {err}");
                             Err(ydb::YdbOrCustomerError::YDB(err))
                         }
                         Err(_timeout_err) => {
@@ -450,16 +450,13 @@ async fn main() -> YdbResult<()> {
             }
             Err(err) => {
                 // Actual error occurred - transaction failed even after retries
-                println!("Transaction failed: {}", err);
+                println!("Transaction failed: {err}");
                 return Err(ydb::YdbOrCustomerError::to_ydb_error(err));
             }
         }
     }
 
-    println!(
-        "✅ Transactional reading completed successfully after {} iterations",
-        iteration
-    );
+    println!("✅ Transactional reading completed successfully after {iteration} iterations");
 
     // ============================================================================
     // STEP 3: TABLE READING AND VERIFICATION
@@ -557,7 +554,7 @@ async fn main() -> YdbResult<()> {
             );
         }
         Err(err) => {
-            println!("❌ Table reading transaction failed: {}", err);
+            println!("❌ Table reading transaction failed: {err}");
             return Err(ydb::YdbOrCustomerError::to_ydb_error(err));
         }
     }
@@ -582,7 +579,7 @@ async fn main() -> YdbResult<()> {
     {
         Ok(topic_description) => {
             println!("=== Topic Status ===");
-            println!("Topic '{}':", topic_name);
+            println!("Topic '{topic_name}':");
 
             // Calculate consistent statistics from partition info
             // These calculations show how to interpret topic statistics correctly
@@ -603,11 +600,11 @@ async fn main() -> YdbResult<()> {
             }
 
             // Display consistent statistics that help verify processing correctness
-            println!("  Total messages: {}", total_messages);
-            println!("  Committed messages: {}", total_messages); // In this example, all messages are committed
+            println!("  Total messages: {total_messages}");
+            println!("  Committed messages: {total_messages}"); // In this example, all messages are committed
             if last_offset >= 0 {
-                println!("  Last offset: {}", last_offset);
-                println!("  Last committed offset: {}", last_offset);
+                println!("  Last offset: {last_offset}");
+                println!("  Last committed offset: {last_offset}");
             }
 
             // Display partition information (consistent between runs)
@@ -645,7 +642,7 @@ async fn main() -> YdbResult<()> {
             println!("Topic status retrieved successfully");
         }
         Err(err) => {
-            println!("Failed to get topic status: {}", err);
+            println!("Failed to get topic status: {err}");
         }
     }
 

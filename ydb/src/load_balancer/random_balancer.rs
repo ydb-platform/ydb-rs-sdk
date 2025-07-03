@@ -29,8 +29,7 @@ impl LoadBalancer for RandomLoadBalancer {
         let nodes = self.discovery_state.get_nodes(&service);
         match nodes {
             None => Err(YdbError::Custom(format!(
-                "no endpoints for service: '{}'",
-                service
+                "no endpoints for service: '{service}'"
             ))),
             Some(nodes) => {
                 if !nodes.is_empty() {
@@ -39,8 +38,7 @@ impl LoadBalancer for RandomLoadBalancer {
                     Ok(node.uri.clone())
                 } else {
                     Err(YdbError::Custom(format!(
-                        "empty endpoint list for service: {}",
-                        service
+                        "empty endpoint list for service: {service}"
                     )))
                 }
             }
