@@ -133,6 +133,7 @@ impl From<RawInitRequest> for stream_read_message::InitRequest {
             consumer: value.consumer,
             reader_name: value.reader_name,
             direct_read: false,
+            auto_partitioning_support: false,
         }
     }
 }

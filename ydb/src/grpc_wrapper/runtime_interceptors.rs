@@ -8,7 +8,7 @@ use std::task::{Context, Poll};
 use tonic::transport::Channel;
 
 pub(crate) type InterceptorResult<T> = std::result::Result<T, InterceptorError>;
-pub(crate) type InterceptorRequest = http::Request<tonic::body::BoxBody>;
+pub(crate) type InterceptorRequest = http::Request<tonic::body::Body>;
 
 #[derive(Clone)]
 pub(crate) struct InterceptedChannel {

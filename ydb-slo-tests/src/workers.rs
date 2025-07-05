@@ -2,7 +2,7 @@ use crate::args::RunArgs;
 use crate::generator::Generator;
 use crate::row::{RowID, TestRow};
 use async_trait::async_trait;
-use rand::Rng;
+use rand::{rng, Rng};
 use ratelimit::Ratelimiter;
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,7 +37,7 @@ impl<RW: ReadWriter> Workers<RW> {
                 continue;
             }
 
-            let row_id = rand::thread_rng().gen_range(0..self.config.initial_data_count);
+            let row_id = rng().random_range(0..self.config.initial_data_count);
 
             let read_result = timeout(
                 Duration::from_millis(self.config.read_timeout),

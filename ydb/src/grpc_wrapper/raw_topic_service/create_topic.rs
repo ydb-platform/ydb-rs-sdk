@@ -38,7 +38,8 @@ impl RawCreateTopicRequest {
             path,
             partitioning_settings: RawPartitioningSettings {
                 min_active_partitions: options.min_active_partitions,
-                partition_count_limit: options.partition_count_limit,
+                max_active_partitions: options.max_active_partitions,
+                auto_partitioning_settings: options.auto_partitioning_settings,
             },
             retention_period: options.retention_period.map(|x| x.into()),
             retention_storage_mb: options.retention_storage_mb,

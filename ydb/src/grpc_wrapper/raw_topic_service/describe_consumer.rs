@@ -66,7 +66,7 @@ impl TryFrom<DescribeConsumerResult> for RawDescribeConsumerResult {
             "consumer is absent in result".to_string(),
         ))?;
 
-        let consumer_stats = consumer.consumer_stats.clone().map(|stats| {
+        let consumer_stats = consumer.consumer_stats.map(|stats| {
             crate::grpc_wrapper::raw_topic_service::common::consumer::RawConsumerStats {
                 min_partitions_last_read_time: stats
                     .min_partitions_last_read_time

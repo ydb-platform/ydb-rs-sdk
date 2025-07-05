@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
-use rand::RngCore;
-use tokio::{
-    sync::mpsc::{self, UnboundedSender},
-    task::JoinHandle,
-};
+use rand::{rng, RngCore};
+use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
 use ydb_grpc::ydb_proto::coordination::{
@@ -77,7 +74,7 @@ impl CoordinationSession {
             .await?;
 
         let mut protection_key = vec![0; 16];
-        rand::thread_rng().fill_bytes(&mut protection_key);
+        rng().fill_bytes(&mut protection_key);
 
         let session_start_request = SessionStart {
             path: path.clone(),
@@ -186,8 +183,7 @@ impl CoordinationSession {
         let options = DescribeOptionsBuilder::default()
             .with_owners(true)
             .with_waiters(true)
-            .build()
-            .unwrap();
+            .build()?;
 
         self.describe_semaphore_with_params(name, options).await
     }
@@ -290,7 +286,7 @@ impl CoordinationSession {
 
     async fn receive_messages_loop_iteration(
         server_messages_receiver: &mut AsyncGrpcStreamWrapper<SessionRequest, SessionResponse>,
-        raw_sender: &UnboundedSender<SessionRequest>,
+        raw_sender: &mpsc::UnboundedSender<SessionRequest>,
         method_controllers: &MethodControllers,
     ) -> YdbResult<()> {
         let response = server_messages_receiver
@@ -358,7 +354,14 @@ impl CoordinationSession {
                         .get_response(semaphore_released)
                         .await?;
                 }
-                _ => todo!(),
+                RawSessionResponse::DescribeSemaphoreChanged(_) => {
+                    // TODO: handle semaphore change notifications
+                    // This could be used to notify clients about semaphore state changes
+                }
+                RawSessionResponse::SessionStopped(_) => {
+                    // Session has been stopped by the server
+                    return Err(YdbError::Custom("Session stopped by server".to_string()));
+                }
             },
             Err(some_err) => {
                 return Err(YdbError::from(some_err));

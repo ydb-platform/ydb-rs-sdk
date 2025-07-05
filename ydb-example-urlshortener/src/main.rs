@@ -18,11 +18,11 @@ async fn main() {
     let db = match timeout(Duration::from_secs(3), db::init_db()).await {
         Ok(Ok(db)) => db,
         Ok(Err(err)) => {
-            log::error!("Can't connect to ydb: {}", err);
+            log::error!("Can't connect to ydb: {err}");
             exit(1)
         }
         Err(err) => {
-            log::error!("Can't connect to ydb by timeout: {}", err);
+            log::error!("Can't connect to ydb by timeout: {err}");
             exit(1)
         }
     };

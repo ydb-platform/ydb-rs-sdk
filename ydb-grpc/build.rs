@@ -57,7 +57,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "google.protobuf.Any",
             "#[derive(serde::Serialize, serde::Deserialize)]",
         )
-        .compile_with_config(cfg, COMPILE_FILES, INCLUDE_DIRS)?;
+        .compile_protos_with_config(cfg, COMPILE_FILES, INCLUDE_DIRS)?;
 
     // let descriptor_bytes = std::fs::read(descriptor_file).unwrap();
     // pbjson_build::Builder::new()
@@ -74,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn clean_dst_dir(dst: &str) -> Result<(), Box<dyn std::error::Error>> {
     for file in fs::read_dir(dst)? {
         let fname = file?.file_name().to_str().unwrap().to_owned();
-        let fpath = format!("{}/{}", dst, fname);
+        let fpath = format!("{dst}/{fname}");
         if fname == "lib.rs" || fname == "mod.rs" {
             println!("truncate file: {}", &fpath);
             fs::File::create(&fpath)?;
@@ -92,7 +92,7 @@ fn fix_generated_files(dir: &str) -> io::Result<()> {
         let item = item?;
         let item_path = item.path().to_str().unwrap_or("<empty>");
         if !item.metadata()?.is_file() {
-            println!("skip not file: '{}'", item_path);
+            println!("skip not file: '{item_path}'");
             continue;
         }
         fix_generated_file(item.path())?;

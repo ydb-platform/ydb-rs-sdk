@@ -160,14 +160,16 @@ impl From<AlterConsumer> for RawAlterConsumer {
 #[derive(Debug, Clone, Default)]
 pub struct PartitioningSettings {
     pub min_active_partitions: i64,
-    pub partition_count_limit: i64,
+    pub max_active_partitions: i64,
+    pub auto_partitioning_settings: Option<ydb_grpc::ydb_proto::topic::AutoPartitioningSettings>,
 }
 
 impl From<RawPartitioningSettings> for PartitioningSettings {
     fn from(value: RawPartitioningSettings) -> Self {
         Self {
             min_active_partitions: value.min_active_partitions,
-            partition_count_limit: value.partition_count_limit,
+            max_active_partitions: value.max_active_partitions,
+            auto_partitioning_settings: value.auto_partitioning_settings,
         }
     }
 }
@@ -176,7 +178,8 @@ impl From<PartitioningSettings> for RawPartitioningSettings {
     fn from(value: PartitioningSettings) -> Self {
         Self {
             min_active_partitions: value.min_active_partitions,
-            partition_count_limit: value.partition_count_limit,
+            max_active_partitions: value.max_active_partitions,
+            auto_partitioning_settings: value.auto_partitioning_settings,
         }
     }
 }

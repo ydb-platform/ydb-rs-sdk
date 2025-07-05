@@ -137,7 +137,7 @@ async fn describe_topic_test() -> YdbResult<()> {
     assert_eq!(topic_description.consumers.len(), consumers.len());
 
     // when `read_from` was not set, server returns zero timestamp
-    consumers[1].read_from = Some(SystemTime::UNIX_EPOCH);
+    consumers[1].read_from = Some(std::time::SystemTime::UNIX_EPOCH);
 
     for (expected, got) in consumers.iter().zip(topic_description.consumers.iter()) {
         assert_eq!(expected.name, got.name);
@@ -266,7 +266,7 @@ async fn send_message_test() -> YdbResult<()> {
             break 'wait_topic_dropped;
         }
         info!("waiting previous topic dropped...");
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 
     topic_client
