@@ -27,7 +27,7 @@ impl TryFrom<i32> for RawConsistencyMode {
     type Error = RawError;
 
     fn try_from(value: i32) -> RawResult<Self> {
-        let value = ConsistencyMode::from_i32(value).ok_or(RawError::ProtobufDecodeError(
+        let value = ConsistencyMode::try_from(value).map_err(|_| RawError::ProtobufDecodeError(
             format!("invalid consistency mode: {value}"),
         ))?;
         match value {
@@ -60,9 +60,9 @@ impl TryFrom<i32> for RawRateLimiterCountersMode {
     type Error = RawError;
 
     fn try_from(value: i32) -> RawResult<Self> {
-        let value = RateLimiterCountersMode::from_i32(value).ok_or(
-            RawError::ProtobufDecodeError(format!("invalid rate limiter counters mode: {value}")),
-        )?;
+        let value = RateLimiterCountersMode::try_from(value).map_err(|_| {
+            RawError::ProtobufDecodeError(format!("invalid rate limiter counters mode: {value}"))
+        })?;
         match value {
             RateLimiterCountersMode::Unset => Ok(RawRateLimiterCountersMode::Unset),
             RateLimiterCountersMode::Aggregated => Ok(RawRateLimiterCountersMode::Aggregated),
