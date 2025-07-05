@@ -13,7 +13,7 @@ rust-version = "1.81.0"
 async-trait = "0.1"
 base64 = { version = "0.22" }
 clap = { version = "=4.2.7", features = ["derive"] }
-rand = { version = "0.8" } # same as in tower dependency
+rand = { version = "0.9", features = ["alloc"] } # same as in tower dependency
 rand_core = { version = "0.6" }
 ratelimit = { version = "0.10" }
 tokio = { version = "=1.38.1" }

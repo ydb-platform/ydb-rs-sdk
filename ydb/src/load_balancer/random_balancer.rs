@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use http::Uri;
+use rand::{rng, Rng};
 
 use crate::{
     grpc_wrapper::raw_services::Service, waiter::WaiterImpl, DiscoveryState, Waiter, YdbError,
@@ -33,7 +34,7 @@ impl LoadBalancer for RandomLoadBalancer {
             ))),
             Some(nodes) => {
                 if !nodes.is_empty() {
-                    let index = rand::random::<usize>() % nodes.len();
+                    let index = rng().random_range(0..nodes.len());
                     let node = &nodes[index % nodes.len()];
                     Ok(node.uri.clone())
                 } else {
