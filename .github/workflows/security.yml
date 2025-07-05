@@ -54,8 +54,12 @@ jobs:
       if: matrix.rust_version == 'RUST_VERSION_NEW'
       run: cargo install --locked cargo-audit cargo-pants
 
-    - name: Security check
+    - name: Cargo audit
       if: matrix.rust_version == 'RUST_VERSION_NEW'
       run: |
         cargo audit
+
+    - name: Cargi pants
+      if: matrix.rust_version == 'RUST_VERSION_NEW'
+      run: |
         cargo pants
