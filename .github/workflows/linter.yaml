@@ -1,0 +1,51 @@
+name: Linter
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+  RUST_VERSION_NEW: "1.88.0"
+
+jobs:
+  check-code-style:
+    strategy:
+      fail-fast: false
+      matrix:
+        rust_version: [ "RUST_VERSION_NEW" ]
+
+    runs-on: ubuntu-24.04
+
+    steps:
+    - name: Install rust
+      uses: dtolnay/rust-toolchain@v1
+      with:
+        toolchain: ${{ env[matrix.rust_version] }}
+        components: clippy, rustfmt
+
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Rust version
+      id: rust_version_step
+      run: |
+        rustc --version
+        cargo --version
+        echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
+        echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
+
+    - name: Rust cache
+      uses: Swatinem/rust-cache@v2
+
+    - name: Rustfmt check
+      run: cargo fmt --check
+
+    - name: Linter
+      run: |
+        cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings

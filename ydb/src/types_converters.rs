@@ -145,8 +145,7 @@ where
         if TryInto::<T>::try_into(value.t).is_err() {
             let vec_item_type = type_name::<i32>();
             return Err(YdbError::from_str(format!(
-                "can't convert list item type '{}' to vec item type '{}'",
-                list_item_type, vec_item_type
+                "can't convert list item type '{list_item_type}' to vec item type '{vec_item_type}'"
             )));
         };
 
@@ -180,8 +179,7 @@ impl TryFrom<Value> for HashMap<String, Value> {
             Value::Struct(value_struct) => value_struct,
             _ => {
                 return Err(YdbError::from_str(format!(
-                    "failed convert {} to HashMap",
-                    kind_name
+                    "failed convert {kind_name} to HashMap"
                 )))
             }
         };

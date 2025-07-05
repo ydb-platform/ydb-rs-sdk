@@ -233,16 +233,15 @@ async fn copy_table() -> YdbResult<()> {
     let table_client = client.table_client();
 
     let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-    let table_name = format!("temp_table_{}", rand_str);
-    let copy_table_name = format!("copy_{}", table_name);
+    let table_name = format!("temp_table_{rand_str}");
+    let copy_table_name = format!("copy_{table_name}");
 
     table_client
         .retry_with_session(RetryOptions::new(), |session| async {
             let mut session = session; // force borrow for lifetime of t inside closure
             session
                 .execute_schema_query(format!(
-                    "CREATE TABLE {} (id Int64, vInt64 Int64, PRIMARY KEY (id))",
-                    table_name
+                    "CREATE TABLE {table_name} (id Int64, vInt64 Int64, PRIMARY KEY (id))"
                 ))
                 .await?;
 
@@ -256,7 +255,7 @@ async fn copy_table() -> YdbResult<()> {
     let mut interactive_tx = table_client.create_interactive_transaction();
 
     interactive_tx
-        .query(format!("UPSERT INTO {} (id, vInt64) VALUES (1, 2)", table_name).into())
+        .query(format!("UPSERT INTO {table_name} (id, vInt64) VALUES (1, 2)").into())
         .await?;
 
     interactive_tx.commit().await?;
@@ -264,14 +263,14 @@ async fn copy_table() -> YdbResult<()> {
     let database_path = client.database();
     table_client
         .copy_table(
-            format!("{}/{}", database_path, table_name),
-            format!("{}/{}", database_path, copy_table_name),
+            format!("{database_path}/{table_name}"),
+            format!("{database_path}/{copy_table_name}"),
         )
         .await
         .unwrap();
 
     let res = transaction
-        .query(format!("SELECT vInt64 FROM {} WHERE id=1", copy_table_name).into())
+        .query(format!("SELECT vInt64 FROM {copy_table_name} WHERE id=1").into())
         .await?;
 
     assert_eq!(
@@ -290,7 +289,7 @@ async fn copy_table() -> YdbResult<()> {
             .retry_with_session(RetryOptions::new(), |session| async {
                 let mut session = session; // force borrow for lifetime of t inside closure
                 session
-                    .execute_schema_query(format!("DROP TABLE {}", target))
+                    .execute_schema_query(format!("DROP TABLE {target}"))
                     .await?;
 
                 Ok(())
@@ -310,16 +309,15 @@ async fn copy_tables() -> YdbResult<()> {
     let table_client = client.table_client();
 
     let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-    let table_name = format!("temp_table_{}", rand_str);
-    let copy_table_name = format!("copy_{}", table_name);
+    let table_name = format!("temp_table_{rand_str}");
+    let copy_table_name = format!("copy_{table_name}");
 
     table_client
         .retry_with_session(RetryOptions::new(), |session| async {
             let mut session = session; // force borrow for lifetime of t inside closure
             session
                 .execute_schema_query(format!(
-                    "CREATE TABLE {} (id Int64, vInt64 Int64, PRIMARY KEY (id))",
-                    table_name
+                    "CREATE TABLE {table_name} (id Int64, vInt64 Int64, PRIMARY KEY (id))"
                 ))
                 .await?;
 
@@ -333,7 +331,7 @@ async fn copy_tables() -> YdbResult<()> {
     let mut interactive_tx = table_client.create_interactive_transaction();
 
     interactive_tx
-        .query(format!("UPSERT INTO {} (id, vInt64) VALUES (1, 2)", table_name).into())
+        .query(format!("UPSERT INTO {table_name} (id, vInt64) VALUES (1, 2)").into())
         .await?;
 
     interactive_tx.commit().await?;
@@ -341,15 +339,15 @@ async fn copy_tables() -> YdbResult<()> {
     let database_path = client.database();
     table_client
         .copy_tables(vec![CopyTableItem::new(
-            format!("{}/{}", database_path, table_name),
-            format!("{}/{}", database_path, copy_table_name),
+            format!("{database_path}/{table_name}"),
+            format!("{database_path}/{copy_table_name}"),
             true,
         )])
         .await
         .unwrap();
 
     let res = transaction
-        .query(format!("SELECT vInt64 FROM {} WHERE id=1", copy_table_name).into())
+        .query(format!("SELECT vInt64 FROM {copy_table_name} WHERE id=1").into())
         .await?;
 
     assert_eq!(
@@ -368,7 +366,7 @@ async fn copy_tables() -> YdbResult<()> {
             .retry_with_session(RetryOptions::new(), |session| async {
                 let mut session = session; // force borrow for lifetime of t inside closure
                 session
-                    .execute_schema_query(format!("DROP TABLE {}", target))
+                    .execute_schema_query(format!("DROP TABLE {target}"))
                     .await?;
 
                 Ok(())
@@ -418,7 +416,7 @@ async fn retry_test() -> YdbResult<()> {
 
     match res {
         Ok(val) => assert_eq!(val, 3),
-        Err(err) => panic!("retry test failed with error result: {:?}", err),
+        Err(err) => panic!("retry test failed with error result: {err:?}"),
     }
 
     Ok(())
@@ -439,8 +437,7 @@ async fn scheme_query() -> YdbResult<()> {
             let mut session = session; // force borrow for lifetime of t inside closure
             session
                 .execute_schema_query(format!(
-                    "CREATE TABLE {} (id String, PRIMARY KEY (id))",
-                    table_name
+                    "CREATE TABLE {table_name} (id String, PRIMARY KEY (id))"
                 ))
                 .await?;
 
@@ -453,7 +450,7 @@ async fn scheme_query() -> YdbResult<()> {
         .retry_with_session(RetryOptions::new(), |session| async {
             let mut session = session; // force borrow for lifetime of t inside closure
             session
-                .execute_schema_query(format!("DROP TABLE {}", table_name))
+                .execute_schema_query(format!("DROP TABLE {table_name}"))
                 .await?;
 
             Ok(())
@@ -861,9 +858,9 @@ FROM
                         assert_eq!(id, expected_id);
                         sum += id
                     }
-                    id => panic!("unexpected ydb boxed_id type: {:?}", id),
+                    id => panic!("unexpected ydb boxed_id type: {id:?}"),
                 },
-                id => panic!("unexpected ydb id type: {:?}", id),
+                id => panic!("unexpected ydb id type: {id:?}"),
             };
 
             match row.remove_field_by_name("val")? {
@@ -871,9 +868,9 @@ FROM
                     Value::Bytes(content) => {
                         assert_eq!(gen_value_by_id(expected_id), Vec::<u8>::from(content))
                     }
-                    val => panic!("unexpected ydb id type: {:?}", val),
+                    val => panic!("unexpected ydb id type: {val:?}"),
                 },
-                val => panic!("unexpected ydb boxed_id type: {:?}", val),
+                val => panic!("unexpected ydb boxed_id type: {val:?}"),
             };
 
             expected_id += 1;

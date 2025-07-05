@@ -1,6 +1,8 @@
 use super::list_types::{Codec, TopicDescription};
 use crate::client::TimeoutSettings;
+use crate::client_common::TokenCache;
 use crate::client_topic::list_types::{AlterConsumer, Consumer, MeteringMode};
+use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
 use crate::client_topic::topicwriter::writer::TopicWriter;
 use crate::client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
@@ -9,6 +11,7 @@ use crate::errors;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::alter_topic::RawAlterTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
+use crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsumerRequest;
 use crate::grpc_wrapper::raw_topic_service::describe_topic::RawDescribeTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::drop_topic::RawDropTopicRequest;
 use crate::YdbError::InternalError;
@@ -94,25 +97,38 @@ pub struct DescribeTopicOptions {
     pub include_location: bool,
 }
 
+#[derive(Builder)]
+#[builder(build_fn(error = "errors::YdbError"))]
+pub struct DescribeConsumerOptions {
+    // Use DescribeConsumerOptionsBuilder
+    #[builder(default)]
+    pub include_stats: bool,
+    #[builder(default)]
+    pub include_location: bool,
+}
+
 impl From<UninitializedFieldError> for errors::YdbError {
     fn from(ufe: UninitializedFieldError) -> Self {
-        InternalError(format!("Error during build type: {}", ufe))
+        InternalError(format!("Error during build type: {ufe}"))
     }
 }
 
 pub struct TopicClient {
     timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
+    token_cache: TokenCache,
 }
 
 impl TopicClient {
     pub(crate) fn new(
         timeouts: TimeoutSettings,
         connection_manager: GrpcConnectionManager,
+        token_cache: TokenCache,
     ) -> Self {
         Self {
             timeouts,
             connection_manager,
+            token_cache,
         }
     }
 
@@ -136,6 +152,26 @@ impl TopicClient {
         service.alter_topic(req).await?;
 
         Ok(())
+    }
+
+    pub async fn describe_consumer(
+        &mut self,
+        path: String,
+        consumer: String,
+        options: DescribeConsumerOptions,
+    ) -> YdbResult<super::list_types::ConsumerDescription> {
+        let req = RawDescribeConsumerRequest::new(
+            path,
+            consumer,
+            self.timeouts.operation_params(),
+            options,
+        );
+
+        let mut service = self.raw_client_connection().await?;
+        let result = service.describe_consumer(req).await?;
+        let description = super::list_types::ConsumerDescription::from(result);
+
+        Ok(description)
     }
 
     pub async fn describe_topic(
@@ -162,6 +198,20 @@ impl TopicClient {
         service.delete_topic(req).await?;
 
         Ok(())
+    }
+
+    pub async fn create_reader(
+        &mut self,
+        consumer: String,
+        topic: impl Into<TopicSelectors>,
+    ) -> YdbResult<TopicReader> {
+        TopicReader::new(
+            consumer,
+            topic.into(),
+            self.connection_manager.clone(),
+            self.token_cache.clone(),
+        )
+        .await
     }
 
     pub async fn create_writer_with_params(

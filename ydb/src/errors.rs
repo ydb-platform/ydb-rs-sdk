@@ -35,7 +35,7 @@ impl YdbOrCustomerError {
     pub fn to_ydb_error(self) -> YdbError {
         match self {
             Self::YDB(err) => err,
-            Self::Customer(err) => YdbError::custom(format!("{}", err)),
+            Self::Customer(err) => YdbError::custom(format!("{err}")),
         }
     }
 }
@@ -328,7 +328,7 @@ to_custom_ydb_err!(
 
 impl From<Box<dyn std::any::Any + Send>> for YdbError {
     fn from(e: Box<dyn std::any::Any + Send>) -> Self {
-        YdbError::Custom(format!("{:?}", e))
+        YdbError::Custom(format!("{e:?}"))
     }
 }
 
@@ -347,11 +347,11 @@ impl From<tonic::Status> for YdbError {
 impl From<RawError> for YdbError {
     fn from(e: RawError) -> Self {
         match e {
-            RawError::Custom(message) => YdbError::Custom(format!("raw custom error: {}", message)),
+            RawError::Custom(message) => YdbError::Custom(format!("raw custom error: {message}")),
             RawError::ProtobufDecodeError(message) => {
-                YdbError::Custom(format!("decode protobuf error: {}", message))
+                YdbError::Custom(format!("decode protobuf error: {message}"))
             }
-            RawError::TonicStatus(s) => YdbError::TransportGRPCStatus(Arc::new(s)),
+            RawError::TonicStatus(s) => YdbError::TransportGRPCStatus(Arc::new(*s)),
             RawError::YdbStatus(status_error) => YdbError::YdbStatusError(status_error),
         }
     }

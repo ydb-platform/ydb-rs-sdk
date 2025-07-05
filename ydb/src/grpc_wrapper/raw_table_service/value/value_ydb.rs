@@ -208,15 +208,13 @@ impl TryFrom<RawTypedValue> for Value {
     fn try_from(value: RawTypedValue) -> Result<Self, Self::Error> {
         fn types_mismatch(t: RawType, v: RawValue) -> Result<Value, RawError> {
             Err(RawError::custom(format!(
-                "unexpected combination of type '{:?}' and value '{:?}'",
-                t, v
+                "unexpected combination of type '{t:?}' and value '{v:?}'"
             )))
         }
 
         fn type_unimplemented(t: RawType) -> Result<Value, RawError> {
             Err(RawError::custom(format!(
-                "unimplemented raw to internal rust type conversion for type: {:?}",
-                t
+                "unimplemented raw to internal rust type conversion for type: {t:?}"
             )))
         }
 
@@ -301,8 +299,7 @@ impl TryFrom<RawTypedValue> for Value {
                     Ok(val) => val,
                     Err(err) => {
                         return Err(RawError::custom(format!(
-                            "can't create optional value from rawtype: {}",
-                            err
+                            "can't create optional value from rawtype: {err}"
                         )))
                     }
                 }
@@ -331,8 +328,7 @@ impl TryFrom<RawTypedValue> for Value {
                     Ok(val) => val,
                     Err(err) => {
                         return Err(RawError::custom(format!(
-                            "can't create list value from rawtype: {}",
-                            err
+                            "can't create list value from rawtype: {err}"
                         )))
                     }
                 }

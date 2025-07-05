@@ -57,7 +57,11 @@ impl Client {
 
     /// Create instance of client for topic service
     pub fn topic_client(&self) -> TopicClient {
-        TopicClient::new(self.timeouts, self.connection_manager.clone())
+        TopicClient::new(
+            self.timeouts,
+            self.connection_manager.clone(),
+            self.credentials.token_cache.clone(),
+        )
     }
 
     /// Create instance of client for coordination service

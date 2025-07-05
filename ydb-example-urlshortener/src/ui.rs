@@ -22,7 +22,7 @@ async fn get_url(table_client: TableClient, params: GetUrl) -> Result<impl Reply
     match db::insert(&table_client, hash.clone(), url).await {
         Ok(_) => Ok(warp::reply::with_status(hash, StatusCode::OK)),
         Err(err) => Ok(warp::reply::with_status(
-            format!("failed create short url: {}", err),
+            format!("failed create short url: {err}"),
             StatusCode::INTERNAL_SERVER_ERROR,
         )),
     }
@@ -47,7 +47,7 @@ async fn redirect(
         Ok(url) => match Uri::from_str(url.as_str()) {
             Ok(uri) => Box::new(warp::redirect::redirect(uri).into_response()),
             Err(err) => Box::new(warp::reply::with_status(
-                format!("failed parse long url: {}", err),
+                format!("failed parse long url: {err}"),
                 StatusCode::NOT_FOUND,
             )),
         },
@@ -56,7 +56,7 @@ async fn redirect(
             StatusCode::NOT_FOUND,
         )),
         Err(err) => Box::new(warp::reply::with_status(
-            format!("error while check short url: {}", err),
+            format!("error while check short url: {err}"),
             StatusCode::INTERNAL_SERVER_ERROR,
         )),
     };

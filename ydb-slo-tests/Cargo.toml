@@ -18,7 +18,7 @@ rand_core = { version = "0.6" }
 ratelimit = { version = "0.10" }
 tokio = { version = "=1.38.1" }
 tokio-util = { version = "=0.7.11", features = ["rt"] }
-ydb = { path = "../ydb" }
+ydb = { version = "0.9.7", path="../ydb"}
 
 [[example]]
 name = "native"

@@ -50,7 +50,7 @@ impl<RW: ReadWriter> Workers<RW> {
                     continue;
                 }
                 Ok(Err(err)) => {
-                    println!("read failed: {}", err);
+                    println!("read failed: {err}");
                     return;
                 }
                 Err(_) => {
@@ -89,7 +89,7 @@ impl<RW: ReadWriter> Workers<RW> {
                     continue;
                 }
                 Ok(Err(err)) => {
-                    println!("write failed: {}", err);
+                    println!("write failed: {err}");
                     return;
                 }
                 Err(_) => {

@@ -15,6 +15,12 @@ use tracing::trace;
 use ydb_grpc::ydb_proto::table::transaction_settings::TxMode;
 use ydb_grpc::ydb_proto::table::{OnlineModeSettings, SerializableModeSettings};
 
+#[derive(Clone, Debug)]
+pub struct TransactionInfo {
+    pub(crate) transaction_id: String,
+    pub(crate) session_id: String,
+}
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Mode {
     OnlineReadonly,
@@ -48,6 +54,11 @@ pub trait Transaction: Send + Sync {
     async fn query(&mut self, query: Query) -> YdbResult<QueryResult>;
     async fn commit(&mut self) -> YdbResult<()>;
     async fn rollback(&mut self) -> YdbResult<()>;
+    async fn transaction_info(&mut self) -> YdbResult<TransactionInfo> {
+        Err(YdbError::custom(
+            "Transaction info not available for this transaction type",
+        ))
+    }
 }
 
 // TODO: operations timeout
@@ -151,6 +162,13 @@ impl SerializableReadWriteTx {
     pub(crate) fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
         self.error_on_truncate_response = error_on_truncate;
         self
+    }
+
+    // Private method for transaction initialization using "workaround"
+    async fn begin_transaction(&mut self) -> YdbResult<()> {
+        // Call query with simple request to create transaction
+        let _ = self.query(Query::new("SELECT 1")).await?;
+        Ok(())
     }
 }
 
@@ -286,5 +304,17 @@ impl Transaction for SerializableReadWriteTx {
         self.rollbacked = true;
 
         return session.rollback_transaction(tx_id).await;
+    }
+
+    async fn transaction_info(&mut self) -> YdbResult<TransactionInfo> {
+        // If transaction_id or session_id are missing, create transaction
+        if self.id.is_none() || self.session.is_none() {
+            self.begin_transaction().await?;
+        }
+
+        Ok(TransactionInfo {
+            transaction_id: self.id.clone().unwrap(),
+            session_id: self.session.as_ref().unwrap().id.clone(),
+        })
     }
 }
