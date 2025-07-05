@@ -9,6 +9,9 @@ description = "Crate contains generated low-level grpc code from YDB API protobu
 repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-grpc"
 rust-version = "1.81.0"
 
+[features]
+regenerate-sources = []
+
 [dependencies]
 prost = "0.13"
 serde = { version = "1", features = ["derive"] }
@@ -21,6 +24,3 @@ tonic = { version = "0.13", features = [
 prost-build = "0.13"
 tonic-build = "0.13"
 walkdir = "2"
-
-[features]
-regenerate-sources = []
