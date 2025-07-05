@@ -27,9 +27,9 @@ impl TryFrom<i32> for RawConsistencyMode {
     type Error = RawError;
 
     fn try_from(value: i32) -> RawResult<Self> {
-        let value = ConsistencyMode::try_from(value).map_err(|_| RawError::ProtobufDecodeError(
-            format!("invalid consistency mode: {value}"),
-        ))?;
+        let value = ConsistencyMode::try_from(value).map_err(|_| {
+            RawError::ProtobufDecodeError(format!("invalid consistency mode: {value}"))
+        })?;
         match value {
             ConsistencyMode::Unset => Ok(RawConsistencyMode::Unset),
             ConsistencyMode::Strict => Ok(RawConsistencyMode::Strict),
