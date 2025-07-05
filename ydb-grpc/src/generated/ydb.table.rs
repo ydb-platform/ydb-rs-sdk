@@ -585,6 +585,9 @@ pub struct PartitionStats {
     /// Approximate size of shard (bytes)
     #[prost(uint64, tag = "2")]
     pub store_size: u64,
+    /// id of node that serve shard key range
+    #[prost(uint32, tag = "3")]
+    pub leader_node_id: u32,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1359,6 +1362,9 @@ pub struct DescribeTableRequest {
     /// Includes partition statistics (required include_table_statistics)
     #[prost(bool, tag = "7")]
     pub include_partition_stats: bool,
+    /// Includes shard -> node id maping (required include_partition_stats)
+    #[prost(bool, tag = "9")]
+    pub include_shard_nodes_info: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]

@@ -23,11 +23,12 @@ use std::time::Duration;
 #[derive(Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct CreateTopicOptions {
-    // Use CreateTopicOptionsBuilder
     #[builder(default)]
     pub min_active_partitions: i64,
     #[builder(default)]
-    pub partition_count_limit: i64,
+    pub max_active_partitions: i64,
+    #[builder(setter(strip_option), default)]
+    pub auto_partitioning_settings: Option<ydb_grpc::ydb_proto::topic::AutoPartitioningSettings>,
     #[builder(setter(strip_option), default)]
     pub retention_period: Option<Duration>,
     #[builder(default)]
@@ -49,40 +50,31 @@ pub struct CreateTopicOptions {
 #[derive(Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct AlterTopicOptions {
-    // Use AlterTopicOptionsBuilder
     #[builder(setter(strip_option), default)]
     pub set_min_active_partitions: Option<i64>,
-
     #[builder(setter(strip_option), default)]
-    pub set_partition_count_limit: Option<i64>,
-
+    pub set_max_active_partitions: Option<i64>,
+    #[builder(setter(strip_option), default)]
+    pub alter_auto_partitioning_settings:
+        Option<ydb_grpc::ydb_proto::topic::AlterAutoPartitioningSettings>,
     #[builder(setter(strip_option), default)]
     pub set_retention_period: Option<Duration>,
-
     #[builder(setter(strip_option), default)]
     pub set_retention_storage_mb: Option<i64>,
-
     #[builder(setter(strip_option), default)]
     pub set_supported_codecs: Option<Vec<Codec>>,
-
     #[builder(setter(strip_option), default)]
     pub set_partition_write_speed_bytes_per_second: Option<i64>,
-
     #[builder(setter(strip_option), default)]
     pub set_partition_write_burst_bytes: Option<i64>,
-
     #[builder(default)]
     pub alter_attributes: HashMap<String, String>,
-
     #[builder(default)]
     pub add_consumers: Vec<Consumer>,
-
     #[builder(default)]
     pub drop_consumers: Vec<String>,
-
     #[builder(default)]
     pub alter_consumers: Vec<AlterConsumer>,
-
     #[builder(setter(strip_option), default)]
     pub set_metering_mode: Option<MeteringMode>,
 }

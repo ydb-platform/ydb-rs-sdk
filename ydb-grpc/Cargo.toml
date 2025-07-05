@@ -12,15 +12,14 @@ rust-version = "1.81.0"
 [dependencies]
 prost = "0.13"
 serde = { version = "1", features = ["derive"] }
-tonic = { version = "0.12", features = [
-    "tls",
-    "tls-roots",
+tonic = { version = "0.13", features = [
+    "tls-native-roots",
     "tls-webpki-roots",
 ] }
 
 [build-dependencies]
 prost-build = "0.13"
-tonic-build = "0.12"
+tonic-build = "0.13"
 walkdir = "2"
 
 [features]

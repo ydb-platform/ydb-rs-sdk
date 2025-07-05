@@ -441,7 +441,10 @@ pub mod stream_read_message {
         /// Issues if any.
         #[prost(message, repeated, tag = "2")]
         pub issues: ::prost::alloc::vec::Vec<super::super::issue::IssueMessage>,
-        #[prost(oneof = "from_server::ServerMessage", tags = "3, 4, 5, 6, 7, 8, 9, 10")]
+        #[prost(
+            oneof = "from_server::ServerMessage",
+            tags = "3, 4, 5, 6, 7, 8, 9, 10, 11"
+        )]
         pub server_message: ::core::option::Option<from_server::ServerMessage>,
     }
     /// Nested message and enum types in `FromServer`.
@@ -467,6 +470,8 @@ pub mod stream_read_message {
             StopPartitionSessionRequest(super::StopPartitionSessionRequest),
             #[prost(message, tag = "10")]
             UpdatePartitionSession(super::UpdatePartitionSession),
+            #[prost(message, tag = "11")]
+            EndPartitionSession(super::EndPartitionSession),
         }
     }
     /// Handshake request.
@@ -488,6 +493,9 @@ pub mod stream_read_message {
         /// Direct reading from a partition node.
         #[prost(bool, tag = "4")]
         pub direct_read: bool,
+        /// Indicates that the SDK supports auto partitioning.
+        #[prost(bool, tag = "5")]
+        pub auto_partitioning_support: bool,
     }
     /// Nested message and enum types in `InitRequest`.
     pub mod init_request {
@@ -720,7 +728,7 @@ pub mod stream_read_message {
         #[prost(message, optional, tag = "4")]
         pub partition_location: ::core::option::Option<super::PartitionLocation>,
     }
-    /// Signal for server that cient is ready to recive data for partition.
+    /// Signal for server that client is ready to recive data for partition.
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, Copy, PartialEq, ::prost::Message)]
     pub struct StartPartitionSessionResponse {
@@ -802,6 +810,24 @@ pub mod stream_read_message {
         #[prost(int64, tag = "2")]
         pub direct_read_id: i64,
     }
+    /// Signal from server that client has finished reading the partition and all messages have been read.
+    /// Once a partition has been finished no further messages will ever arrive to that partition.
+    /// This command is a hint to the client to commit offsets, after which the child partitions will be balanced independently in different reading sessions.
+    /// Unlike StopPartitionSessionRequest, the client does not have to close the reading session.
+    /// Client should not send a response to the command.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct EndPartitionSession {
+        /// Partition session identifier.
+        #[prost(int64, tag = "1")]
+        pub partition_session_id: i64,
+        /// Ids of partitions which were merged with the ended partition.
+        #[prost(int64, repeated, tag = "2")]
+        pub adjacent_partition_ids: ::prost::alloc::vec::Vec<i64>,
+        /// Ids of partitions which was formed when the ended partition was split or merged.
+        #[prost(int64, repeated, tag = "3")]
+        pub child_partition_ids: ::prost::alloc::vec::Vec<i64>,
+    }
 }
 /// Messages for bidirectional streaming rpc StreamDirectRead
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -810,8 +836,9 @@ pub struct StreamDirectReadMessage {}
 /// Nested message and enum types in `StreamDirectReadMessage`.
 pub mod stream_direct_read_message {
     /// Client-server message for direct read session.
-    ///      InitDirectRead - command from client to create and start a direct read session.
-    ///      StartDirectReadPartitionSession - command from client to create and start a direct read partition session.
+    ///      InitRequest - command from client to create and start a direct read session.
+    ///      StartDirectReadPartitionSessionRequest - command from client to create and start a direct read partition session.
+    ///          Client signals it is ready to get data from partition.
     ///      UpdateTokenRequest - request to update auth token
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
@@ -825,14 +852,18 @@ pub mod stream_direct_read_message {
         #[derive(Clone, PartialEq, ::prost::Oneof)]
         pub enum ClientMessage {
             #[prost(message, tag = "1")]
-            InitDirectRead(super::InitDirectRead),
+            InitRequest(super::InitRequest),
             #[prost(message, tag = "2")]
-            StartDirectReadPartitionSession(super::StartDirectReadPartitionSession),
+            StartDirectReadPartitionSessionRequest(
+                super::StartDirectReadPartitionSessionRequest,
+            ),
             #[prost(message, tag = "3")]
             UpdateTokenRequest(super::super::UpdateTokenRequest),
         }
     }
     /// Server-client message for direct read session.
+    ///      InitResponse - correct handshake response.
+    ///      StartDirectReadPartitionSessionResponse - Response to StartDirectReadPartitionSessionRequest.
     ///      DirectReadResponse - portion of message data.
     ///      StopDirectReadPartitionSession - command from server to stop a direct read partition session.
     ///      UpdateTokenResponse - acknowledgment of token update.
@@ -845,7 +876,7 @@ pub mod stream_direct_read_message {
         /// Issues if any.
         #[prost(message, repeated, tag = "2")]
         pub issues: ::prost::alloc::vec::Vec<super::super::issue::IssueMessage>,
-        #[prost(oneof = "from_server::ServerMessage", tags = "3, 4, 5")]
+        #[prost(oneof = "from_server::ServerMessage", tags = "6, 7, 3, 4, 5")]
         pub server_message: ::core::option::Option<from_server::ServerMessage>,
     }
     /// Nested message and enum types in `FromServer`.
@@ -853,6 +884,12 @@ pub mod stream_direct_read_message {
         #[derive(serde::Serialize, serde::Deserialize)]
         #[derive(Clone, PartialEq, ::prost::Oneof)]
         pub enum ServerMessage {
+            #[prost(message, tag = "6")]
+            InitResponse(super::InitResponse),
+            #[prost(message, tag = "7")]
+            StartDirectReadPartitionSessionResponse(
+                super::StartDirectReadPartitionSessionResponse,
+            ),
             #[prost(message, tag = "3")]
             StopDirectReadPartitionSession(super::StopDirectReadPartitionSession),
             #[prost(message, tag = "4")]
@@ -865,21 +902,21 @@ pub mod stream_direct_read_message {
     /// Server should not send a response to the command.
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct InitDirectRead {
+    pub struct InitRequest {
         /// Read session identifier.
         #[prost(string, tag = "1")]
         pub session_id: ::prost::alloc::string::String,
         /// Topics that will be read by this session.
         #[prost(message, repeated, tag = "2")]
         pub topics_read_settings: ::prost::alloc::vec::Vec<
-            init_direct_read::TopicReadSettings,
+            init_request::TopicReadSettings,
         >,
         /// Path of consumer that is used for reading by this session.
         #[prost(string, tag = "3")]
         pub consumer: ::prost::alloc::string::String,
     }
-    /// Nested message and enum types in `InitDirectRead`.
-    pub mod init_direct_read {
+    /// Nested message and enum types in `InitRequest`.
+    pub mod init_request {
         #[derive(serde::Serialize, serde::Deserialize)]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct TopicReadSettings {
@@ -888,11 +925,14 @@ pub mod stream_direct_read_message {
             pub path: ::prost::alloc::string::String,
         }
     }
-    /// Command from client to create and start a direct read partition session.
-    /// Server should not send a response to the command.
+    /// Response to the handshake.
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, Copy, PartialEq, ::prost::Message)]
-    pub struct StartDirectReadPartitionSession {
+    pub struct InitResponse {}
+    /// Command from client to create and start a direct read partition session.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    pub struct StartDirectReadPartitionSessionRequest {
         /// Partition session identifier.
         #[prost(int64, tag = "1")]
         pub partition_session_id: i64,
@@ -901,6 +941,17 @@ pub mod stream_direct_read_message {
         pub last_direct_read_id: i64,
         /// Partition generation.
         #[prost(int64, tag = "3")]
+        pub generation: i64,
+    }
+    /// Signal for server that client is ready to receive data for partition.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    pub struct StartDirectReadPartitionSessionResponse {
+        /// Partition session identifier of partition to start read.
+        #[prost(int64, tag = "1")]
+        pub partition_session_id: i64,
+        /// Partition generation.
+        #[prost(int64, tag = "2")]
         pub generation: i64,
     }
     /// Command from server to stop a direct read partition session.
@@ -917,6 +968,9 @@ pub mod stream_direct_read_message {
         /// Partition session identifier.
         #[prost(int64, tag = "3")]
         pub partition_session_id: i64,
+        /// Partition generation.
+        #[prost(int64, tag = "4")]
+        pub generation: i64,
     }
     /// Messages that have been read directly from the partition node.
     /// It's a response to StreamRead.ReadRequest
@@ -934,6 +988,10 @@ pub mod stream_direct_read_message {
         pub partition_data: ::core::option::Option<
             super::stream_read_message::read_response::PartitionData,
         >,
+        /// Total size in bytes of this response as calculated by server.
+        /// See ReadRequest comment above.
+        #[prost(int64, tag = "4")]
+        pub bytes_size: i64,
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1018,6 +1076,9 @@ pub struct CommitOffsetRequest {
     /// Processed offset.
     #[prost(int64, tag = "5")]
     pub offset: i64,
+    /// Read session identifier from StreamRead RPC.
+    #[prost(string, tag = "6")]
+    pub read_session_id: ::prost::alloc::string::String,
 }
 /// Commit offset response sent from server to client.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1092,6 +1153,11 @@ pub mod consumer {
         pub max_write_time_lag: ::core::option::Option<
             super::super::super::google::protobuf::Duration,
         >,
+        /// The difference between the write timestamp of the last commited message and the current time.
+        #[prost(message, optional, tag = "5")]
+        pub max_committed_time_lag: ::core::option::Option<
+            super::super::super::google::protobuf::Duration,
+        >,
         /// Bytes read statistics.
         #[prost(message, optional, tag = "4")]
         pub bytes_read: ::core::option::Option<super::MultipleWindowsStat>,
@@ -1129,14 +1195,52 @@ pub struct AlterConsumer {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct PartitioningSettings {
-    /// Minimum partition count auto merge would stop working at.
+    /// Auto merge would stop working when the partitions count reaches min_active_partitions
     /// Zero value means default - 1.
     #[prost(int64, tag = "1")]
     pub min_active_partitions: i64,
+    /// Auto split would stop working when the partitions count reaches max_active_partitions
+    /// Zero value means default - 1.
+    #[prost(int64, tag = "3")]
+    pub max_active_partitions: i64,
     /// Limit for total partition count, including active (open for write) and read-only partitions.
     /// Zero value means default - 100.
+    /// Use max_active_partitions
+    #[deprecated]
     #[prost(int64, tag = "2")]
     pub partition_count_limit: i64,
+    /// Settings for the partitions count auto partitioning.
+    #[prost(message, optional, tag = "4")]
+    pub auto_partitioning_settings: ::core::option::Option<AutoPartitioningSettings>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct AutoPartitioningSettings {
+    /// Strategy of auto partitioning.
+    #[prost(enumeration = "AutoPartitioningStrategy", tag = "1")]
+    pub strategy: i32,
+    /// Partition write speed auto partitioning options.
+    #[prost(message, optional, tag = "2")]
+    pub partition_write_speed: ::core::option::Option<
+        AutoPartitioningWriteSpeedStrategy,
+    >,
+}
+/// Partition will be auto partitioned up (divided into 2 partitions)
+/// after write speed to the partition exceeds up_utilization_percent (in percentage of maximum write speed to the partition) for the period of time stabilization_window
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct AutoPartitioningWriteSpeedStrategy {
+    /// Zero value means default - 300.
+    #[prost(message, optional, tag = "1")]
+    pub stabilization_window: ::core::option::Option<
+        super::super::google::protobuf::Duration,
+    >,
+    /// Zero value means default - 90.
+    #[prost(int32, tag = "2")]
+    pub up_utilization_percent: i32,
+    /// Zero value means default - 30.
+    #[prost(int32, tag = "3")]
+    pub down_utilization_percent: i32,
 }
 /// Partitioning settings for topic.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1146,10 +1250,54 @@ pub struct AlterPartitioningSettings {
     /// Zero value means default - 1.
     #[prost(int64, optional, tag = "1")]
     pub set_min_active_partitions: ::core::option::Option<i64>,
+    /// Maximum partition count auto merge would stop working at.
+    /// Zero value means default - 1.
+    #[prost(int64, optional, tag = "3")]
+    pub set_max_active_partitions: ::core::option::Option<i64>,
     /// Limit for total partition count, including active (open for write) and read-only partitions.
     /// Zero value means default - 100.
+    /// Use set_max_active_partitions
+    #[deprecated]
     #[prost(int64, optional, tag = "2")]
     pub set_partition_count_limit: ::core::option::Option<i64>,
+    /// Settings for auto partitioning the partition number
+    #[prost(message, optional, tag = "4")]
+    pub alter_auto_partitioning_settings: ::core::option::Option<
+        AlterAutoPartitioningSettings,
+    >,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct AlterAutoPartitioningSettings {
+    /// Strategy of auto partitioning
+    #[prost(enumeration = "AutoPartitioningStrategy", optional, tag = "1")]
+    pub set_strategy: ::core::option::Option<i32>,
+    /// Auto partitioning write speed options.
+    #[prost(message, optional, tag = "2")]
+    pub set_partition_write_speed: ::core::option::Option<
+        AlterAutoPartitioningWriteSpeedStrategy,
+    >,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct AlterAutoPartitioningWriteSpeedStrategy {
+    /// The time of exceeding the threshold value, after which the partition will be
+    /// auto partitioning.
+    /// Zero value means default - 300.
+    #[prost(message, optional, tag = "1")]
+    pub set_stabilization_window: ::core::option::Option<
+        super::super::google::protobuf::Duration,
+    >,
+    /// The threshold value of the write speed to the partition as a percentage, when exceeded,
+    /// the partition will be auto split.
+    /// Zero value means default - 90.
+    #[prost(int32, optional, tag = "2")]
+    pub set_up_utilization_percent: ::core::option::Option<i32>,
+    /// The threshold value of the write speed to the partition as a percentage, if it is not reached,
+    /// the partition will be auto merged.
+    /// Zero value means default - 30.
+    #[prost(int32, optional, tag = "3")]
+    pub set_down_utilization_percent: ::core::option::Option<i32>,
 }
 /// Create topic request sent from client to server.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1250,6 +1398,16 @@ pub struct DescribeTopicResponse {
     #[prost(message, optional, tag = "1")]
     pub operation: ::core::option::Option<super::operations::Operation>,
 }
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartitionKeyRange {
+    /// Inclusive left border. Emptiness means -inf.
+    #[prost(bytes = "vec", optional, tag = "1")]
+    pub from_bound: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    /// Exclusive right border. Emptiness means +inf.
+    #[prost(bytes = "vec", optional, tag = "2")]
+    pub to_bound: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
 /// Describe topic result message that will be inside DescribeTopicResponse.operation.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1330,6 +1488,8 @@ pub mod describe_topic_result {
         /// Partition location, filled only when include_location in request is true.
         #[prost(message, optional, tag = "6")]
         pub partition_location: ::core::option::Option<super::PartitionLocation>,
+        #[prost(message, optional, tag = "7")]
+        pub key_range: ::core::option::Option<super::PartitionKeyRange>,
     }
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, Copy, PartialEq, ::prost::Message)]
@@ -1380,7 +1540,7 @@ pub struct DescribePartitionResponse {
     #[prost(message, optional, tag = "1")]
     pub operation: ::core::option::Option<super::operations::Operation>,
 }
-/// Describe partition result message that will be inside DescribeTopicResponse.operation.
+/// Describe partition result message that will be inside DescribePartitionResponse.operation.
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DescribePartitionResult {
@@ -1485,6 +1645,11 @@ pub mod describe_consumer_result {
         /// Maximum of differences between write timestamp and create timestamp for all messages, read during last minute.
         #[prost(message, optional, tag = "7")]
         pub max_write_time_lag: ::core::option::Option<
+            super::super::super::google::protobuf::Duration,
+        >,
+        /// The difference between the write timestamp of the last commited message and the current time.
+        #[prost(message, optional, tag = "13")]
+        pub max_committed_time_lag: ::core::option::Option<
             super::super::super::google::protobuf::Duration,
         >,
         /// How much bytes were read during several windows statistics from this partition.
@@ -1650,6 +1815,47 @@ impl Codec {
             "CODEC_LZOP" => Some(Self::Lzop),
             "CODEC_ZSTD" => Some(Self::Zstd),
             "CODEC_CUSTOM" => Some(Self::Custom),
+            _ => None,
+        }
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum AutoPartitioningStrategy {
+    /// The auto partitioning algorithm is not specified. The default value will be used.
+    Unspecified = 0,
+    /// The auto partitioning is disabled.
+    Disabled = 1,
+    /// The auto partitioning algorithm will increase partitions count depending on the load characteristics.
+    /// The auto partitioning algorithm will never decrease the number of partitions.
+    ScaleUp = 2,
+    /// The auto partitioning algorithm will both increase and decrease partitions count depending on the load characteristics.
+    ScaleUpAndDown = 3,
+    /// The auto partitioning is paused.
+    Paused = 4,
+}
+impl AutoPartitioningStrategy {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "AUTO_PARTITIONING_STRATEGY_UNSPECIFIED",
+            Self::Disabled => "AUTO_PARTITIONING_STRATEGY_DISABLED",
+            Self::ScaleUp => "AUTO_PARTITIONING_STRATEGY_SCALE_UP",
+            Self::ScaleUpAndDown => "AUTO_PARTITIONING_STRATEGY_SCALE_UP_AND_DOWN",
+            Self::Paused => "AUTO_PARTITIONING_STRATEGY_PAUSED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "AUTO_PARTITIONING_STRATEGY_UNSPECIFIED" => Some(Self::Unspecified),
+            "AUTO_PARTITIONING_STRATEGY_DISABLED" => Some(Self::Disabled),
+            "AUTO_PARTITIONING_STRATEGY_SCALE_UP" => Some(Self::ScaleUp),
+            "AUTO_PARTITIONING_STRATEGY_SCALE_UP_AND_DOWN" => Some(Self::ScaleUpAndDown),
+            "AUTO_PARTITIONING_STRATEGY_PAUSED" => Some(Self::Paused),
             _ => None,
         }
     }

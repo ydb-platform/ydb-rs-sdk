@@ -354,7 +354,14 @@ impl CoordinationSession {
                         .get_response(semaphore_released)
                         .await?;
                 }
-                _ => todo!(),
+                RawSessionResponse::DescribeSemaphoreChanged(_) => {
+                    // TODO: handle semaphore change notifications
+                    // This could be used to notify clients about semaphore state changes
+                }
+                RawSessionResponse::SessionStopped(_) => {
+                    // Session has been stopped by the server
+                    return Err(YdbError::Custom("Session stopped by server".to_string()));
+                }
             },
             Err(some_err) => {
                 return Err(YdbError::from(some_err));

@@ -46,7 +46,7 @@ strum = { version = "0.27", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 tokio-util = "0.7"
-tonic = { version = "0.12", features = ["tls"] }
+tonic = { version = "0.13", features = ["tls-native-roots"] }
 tower = "0.5"
 tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = "0.3"
