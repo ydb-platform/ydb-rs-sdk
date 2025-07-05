@@ -42,9 +42,6 @@ jobs:
       with:
         key: ${{ env[matrix.rust_version] }}
 
-    - name: Show YDB server version
-      run: docker ps; docker exec ydb /ydbd -V
-
     - name: Rust version
       id: rust_version_step
       run: |
