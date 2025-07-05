@@ -11,7 +11,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
-  RUST_VERSION_OLD: "1.81.0" # aka MSRV
+  RUST_VERSION_OLD: "1.82" # aka MSRV
   RUST_VERSION_NEW: "stable"
 
 jobs:
