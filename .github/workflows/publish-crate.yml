@@ -1,7 +1,7 @@
 name: Publish rust crate to crates.io
 env:
   CARGO_TERM_COLOR: always
-  RUST_VERSION: 1.86.0
+  RUST_VERSION: 1.88.0
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 on:
@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   publishCrate:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-24.04
     env:
       GIT_EMAIL: ${{ github.actor }}@users.noreply.github.com
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

@@ -114,12 +114,19 @@ pub use client_coordination::session::session_options::{SessionOptions, SessionO
 // full enum pub types
 pub use client_topic::client::{
     AlterTopicOptions, AlterTopicOptionsBuilder, CreateTopicOptions, CreateTopicOptionsBuilder,
-    DescribeTopicOptions, DescribeTopicOptionsBuilder, TopicClient,
+    DescribeConsumerOptions, DescribeConsumerOptionsBuilder, DescribeTopicOptions,
+    DescribeTopicOptionsBuilder, TopicClient,
 };
 pub use client_topic::list_types::{
-    AlterConsumer, AlterConsumerBuilder, Codec, Consumer, ConsumerBuilder, MeteringMode,
-    PartitionInfo, PartitionLocation, PartitionStats, PartitioningSettings, TopicDescription,
-    TopicStats,
+    AlterConsumer, AlterConsumerBuilder, Codec, Consumer, ConsumerBuilder, ConsumerDescription,
+    MeteringMode, PartitionInfo, PartitionLocation, PartitionStats, PartitioningSettings,
+    TopicDescription, TopicStats,
+};
+// full enum pub types
+pub use client_topic::topicreader::messages::{TopicReaderBatch, TopicReaderMessage};
+// full enum pub types
+pub use client_topic::topicreader::reader::{
+    TopicReader, TopicReaderCommitMarker, TopicSelector, TopicSelectors,
 };
 // full enum pub types
 pub use client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMessageBuilder};
@@ -148,7 +155,7 @@ pub use query::Query;
 // full enum pub types
 pub use result::{QueryResult, ResultSet, ResultSetRowsIter, Row, StreamResult};
 // full enum pub types
-pub use transaction::{Mode, Transaction};
+pub use transaction::{Mode, Transaction, TransactionInfo};
 // full enum pub types
 pub use waiter::Waiter;
 // full enum pub types

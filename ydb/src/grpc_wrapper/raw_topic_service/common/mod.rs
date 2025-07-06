@@ -5,3 +5,4 @@ pub(crate) mod multiple_window_stat;
 pub(crate) mod partition;
 pub(crate) mod partitioning_settings;
 pub(crate) mod topic;
+pub(crate) mod update_token;

@@ -36,7 +36,8 @@ impl TryFrom<FromServer> for RawServerMessage {
         }
 
         let message = value.server_message.ok_or(RawError::Custom(
-            "Server message is absent in streaming response body".to_string(),
+            "Server message is absent in streaming response body for topic writer stream"
+                .to_string(),
         ))?;
 
         let raw_message = match message {

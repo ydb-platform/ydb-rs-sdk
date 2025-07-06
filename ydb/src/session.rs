@@ -217,7 +217,7 @@ impl Session {
         if let SessionStatus::Ready = res.session_status {
             Ok(())
         } else {
-            let err = YdbError::from_str(format!("bad status while session ping: {:?}", res));
+            let err = YdbError::from_str(format!("bad status while session ping: {res:?}"));
             self.handle_error(&err);
             Err(err)
         }

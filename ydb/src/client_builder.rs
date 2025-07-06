@@ -39,8 +39,7 @@ pub(crate) fn register(param_name: &str, handler: ParamHandler) -> YdbResult<()>
     let mut lock = PARAM_HANDLERS.lock()?;
     if lock.contains_key(param_name) {
         return Err(YdbError::Custom(format!(
-            "param handler already exist for '{}'",
-            param_name
+            "param handler already exist for '{param_name}'"
         )));
     };
 
@@ -97,8 +96,7 @@ fn token_metadata(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
             }
             _ => {
                 return Err(YdbError::Custom(format!(
-                    "unknown metadata format: '{}'",
-                    value
+                    "unknown metadata format: '{value}'"
                 )))
             }
         }

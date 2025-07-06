@@ -230,9 +230,9 @@ async fn detect_fastest_addr_just_some() -> YdbResult<()> {
     let l2_addr = l2.local_addr()?;
     let l3_addr = l3.local_addr()?;
 
-    println!("Listener №1 on: {}", l1_addr);
-    println!("Listener №2 on: {}", l2_addr);
-    println!("Listener №3 on: {}", l3_addr);
+    println!("Listener №1 on: {l1_addr}");
+    println!("Listener №2 on: {l2_addr}");
+    println!("Listener №3 on: {l3_addr}");
 
     let nodes = [
         l1_addr.to_string(),
@@ -262,9 +262,9 @@ async fn detect_fastest_addr_with_fault() -> YdbResult<()> {
     let l2_addr = l2.local_addr()?;
     let l3_addr = l3.local_addr()?;
 
-    println!("Listener №1 on: {}", l1_addr);
-    println!("Listener №2 on: {}", l2_addr);
-    println!("Listener №3 on: {}", l3_addr);
+    println!("Listener №1 on: {l1_addr}");
+    println!("Listener №2 on: {l2_addr}");
+    println!("Listener №3 on: {l3_addr}");
 
     let nodes = [
         l1_addr.to_string(),
@@ -296,9 +296,9 @@ async fn detect_fastest_addr_one_alive() -> YdbResult<()> {
     let l2_addr = l2.local_addr()?;
     let l3_addr = l3.local_addr()?;
 
-    println!("Listener №1 on: {}", l1_addr);
-    println!("Listener №2 on: {}", l2_addr);
-    println!("Listener №3 on: {}", l3_addr);
+    println!("Listener №1 on: {l1_addr}");
+    println!("Listener №2 on: {l2_addr}");
+    println!("Listener №3 on: {l3_addr}");
 
     let nodes = [
         l1_addr.to_string(),
@@ -331,9 +331,9 @@ async fn detect_fastest_addr_timeout() -> YdbResult<()> {
     let l2_addr = l2.local_addr()?;
     let l3_addr = l3.local_addr()?;
 
-    println!("Listener №1 on: {}", l1_addr);
-    println!("Listener №2 on: {}", l2_addr);
-    println!("Listener №3 on: {}", l3_addr);
+    println!("Listener №1 on: {l1_addr}");
+    println!("Listener №2 on: {l2_addr}");
+    println!("Listener №3 on: {l3_addr}");
 
     let nodes = [
         l1_addr.to_string(),
@@ -385,9 +385,9 @@ async fn adjusting_dc() -> YdbResult<()> {
     let l2_addr = l2.local_addr()?;
     let l3_addr = l3.local_addr()?;
 
-    println!("Listener №1 on: {}", l1_addr);
-    println!("Listener №2 on: {}", l2_addr);
-    println!("Listener №3 on: {}", l3_addr);
+    println!("Listener №1 on: {l1_addr}");
+    println!("Listener №2 on: {l2_addr}");
+    println!("Listener №3 on: {l3_addr}");
 
     let discovery_state = Arc::new(DiscoveryState::default());
     let balancer_state = Arc::new(RwLock::new(BalancerState::default()));
@@ -529,8 +529,8 @@ async fn nearest_dc_balancer_integration() -> YdbResult<()> {
     let l1_addr = l1.local_addr()?;
     let l2_addr = l2.local_addr()?;
 
-    println!("Listener №1 on: {}", l1_addr);
-    println!("Listener №2 on: {}", l2_addr);
+    println!("Listener №1 on: {l1_addr}");
+    println!("Listener №2 on: {l2_addr}");
 
     let balancer = NearestDCBalancer::new(BalancerConfig {
         fallback_strategy: FallbackStrategy::Error,

@@ -333,16 +333,14 @@ impl TopicWriter {
 
         self.writer_loop.await.map_err(|err| {
             YdbError::custom(format!(
-                "error while wait finish writer_loop on stop: {}",
-                err
+                "error while wait finish writer_loop on stop: {err}"
             ))
         })?; // TODO: handle ERROR
         trace!("Writer loop stopped");
 
         self.receive_messages_loop.await.map_err(|err| {
             YdbError::custom(format!(
-                "error while wait finish receive_messages_loop on stop: {}",
-                err
+                "error while wait finish receive_messages_loop on stop: {err}"
             ))
         })?; // TODO: handle ERROR
         trace!("Message receive stopped");
@@ -407,9 +405,7 @@ impl TopicWriter {
             .borrow_mut()
             .send(message)
             .await
-            .map_err(|err| {
-                YdbError::custom(format!("can't send the message to channel: {}", err))
-            })?;
+            .map_err(|err| YdbError::custom(format!("can't send the message to channel: {err}")))?;
 
         let reception_type = wait_ack.map_or(
             TopicWriterReceptionType::NoConfirmationExpected,

@@ -262,7 +262,7 @@ impl Value {
     pub fn list_from(example_value: Value, values: Vec<Value>) -> YdbResult<Self> {
         for (index, value) in values.iter().enumerate() {
             if std::mem::discriminant(&example_value) != std::mem::discriminant(value) {
-                return Err(YdbError::Custom(format!("failed list_from: type and value has different enum-types. index: {}, type: '{:?}', value: '{:?}'", index, example_value, value)));
+                return Err(YdbError::Custom(format!("failed list_from: type and value has different enum-types. index: {index}, type: '{example_value:?}', value: '{value:?}'")));
             }
         }
 
@@ -275,7 +275,7 @@ impl Value {
     pub(crate) fn optional_from(t: Value, value: Option<Value>) -> YdbResult<Self> {
         if let Some(value) = &value {
             if std::mem::discriminant(&t) != std::mem::discriminant(value) {
-                return Err(YdbError::Custom(format!("failed optional_from: type and value has different enum-types. type: '{:?}', value: '{:?}'", t, value)));
+                return Err(YdbError::Custom(format!("failed optional_from: type and value has different enum-types. type: '{t:?}', value: '{value:?}'")));
             }
         }
         Ok(Value::Optional(Box::new(ValueOptional { t, value })))
