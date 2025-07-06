@@ -24,6 +24,13 @@ impl<RequestT, ResponseT> AsyncGrpcStreamWrapper<RequestT, ResponseT> {
     where
         Message: Into<RequestT>,
     {
+        self.send_nowait(message)
+    }
+
+    pub(crate) fn send_nowait<Message>(&mut self, message: Message) -> RawResult<()>
+    where
+        Message: Into<RequestT>,
+    {
         Ok(self.from_client_grpc.send(message.into())?)
     }
 

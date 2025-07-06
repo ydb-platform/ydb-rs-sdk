@@ -1,4 +1,7 @@
 use std::process::exit;
+use std::time::Duration;
+use tokio::time::timeout;
+use tracing::log;
 
 mod db;
 mod ui;
@@ -12,10 +15,14 @@ async fn main() {
         // sets this to be the default, global collector for this application.
         .init();
 
-    let db = match db::init_db().await {
-        Ok(db) => db,
+    let db = match timeout(Duration::from_secs(3), db::init_db()).await {
+        Ok(Ok(db)) => db,
+        Ok(Err(err)) => {
+            log::error!("Can't connect to ydb: {}", err);
+            exit(1)
+        }
         Err(err) => {
-            println!("Failed ydb init: {}", err);
+            log::error!("Can't connect to ydb by timeout: {}", err);
             exit(1)
         }
     };

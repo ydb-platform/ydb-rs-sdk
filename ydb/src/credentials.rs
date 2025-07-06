@@ -212,7 +212,7 @@ impl Credentials for AccessTokenCredentials {
         } else {
             ("xxx", "xxx")
         };
-        format!("static token: {}...{}", begin, end)
+        format!("static token: {begin}...{end}")
     }
 }
 
@@ -240,8 +240,7 @@ impl CommandLineCredentials {
 
         if cmd_parts.is_empty() {
             return Err(YdbError::Custom(format!(
-                "can't split get token command: '{}'",
-                cmd
+                "can't split get token command: '{cmd}'"
             )));
         }
 
@@ -285,7 +284,7 @@ impl Credentials for CommandLineCredentials {
                 desc
             }
             Err(err) => {
-                format!("err: {}", err)
+                format!("err: {err}")
             }
         };
 
@@ -411,7 +410,7 @@ impl ServiceAccountCredentials {
             &claims,
             &EncodingKey::from_rsa_pem(private_key).map_err(|e| YdbError::custom(e.to_string()))?,
         )
-        .map_err(|e| YdbError::custom(format!("can't build jwt: {}", e)))?;
+        .map_err(|e| YdbError::custom(format!("can't build jwt: {e}")))?;
 
         debug!("Token was built");
         Ok(token)
@@ -504,15 +503,6 @@ impl Default for GCEMetadata {
 
 impl Credentials for GCEMetadata {
     fn create_token(&self) -> YdbResult<TokenInfo> {
-        http::Request::builder()
-            .uri(self.uri.clone())
-            .header("Metadata-Flavor", "Google");
-        let mut request =
-            reqwest::blocking::Request::new(reqwest::Method::GET, self.uri.parse().unwrap());
-        request
-            .headers_mut()
-            .insert("Metadata-Flavor", "Google".parse().unwrap());
-
         #[derive(Deserialize)]
         struct TokenResponse {
             access_token: String,

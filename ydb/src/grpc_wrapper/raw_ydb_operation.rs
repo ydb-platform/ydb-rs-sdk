@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub(crate) struct RawOperationParams {
     operation_mode: OperationMode,
     operation_timeout: Option<crate::grpc_wrapper::raw_common_types::Duration>,
@@ -34,7 +34,7 @@ impl From<RawOperationParams> for ydb_grpc::ydb_proto::operations::OperationPara
     }
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub(crate) enum OperationMode {
     _Unspecified,
     Sync,

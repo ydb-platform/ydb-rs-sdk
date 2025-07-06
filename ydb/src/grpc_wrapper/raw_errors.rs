@@ -9,7 +9,7 @@ pub(crate) enum RawError {
     Custom(String),
     ProtobufDecodeError(String),
     YdbStatus(crate::YdbStatusError),
-    TonicStatus(tonic::Status),
+    TonicStatus(Box<tonic::Status>),
 }
 
 impl RawError {
@@ -24,15 +24,14 @@ impl RawError {
 impl<T> From<tokio::sync::mpsc::error::SendError<T>> for RawError {
     fn from(value: tokio::sync::mpsc::error::SendError<T>) -> Self {
         Self::Custom(format!(
-            "Internal error while sending message via mpsc channel: {}",
-            value
+            "Internal error while sending message via mpsc channel: {value}"
         ))
     }
 }
 
 impl From<tonic::Status> for RawError {
     fn from(s: tonic::Status) -> Self {
-        Self::TonicStatus(s)
+        Self::TonicStatus(Box::new(s))
     }
 }
 

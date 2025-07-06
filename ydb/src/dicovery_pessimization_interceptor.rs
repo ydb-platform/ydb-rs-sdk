@@ -71,8 +71,7 @@ impl GrpcInterceptor for DiscoveryPessimizationInterceptor {
             parts.path_and_query = Some(PathAndQuery::from_static(""));
             let uri = Uri::from_parts(parts).map_err(|err| {
                 InterceptorError::custom(format!(
-                    "failed to trim uri path for send node pessimize err: '{:?}'",
-                    err
+                    "failed to trim uri path for send node pessimize err: '{err:?}'"
                 ))
             })?;
 

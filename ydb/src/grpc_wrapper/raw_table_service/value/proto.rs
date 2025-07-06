@@ -211,8 +211,7 @@ impl TryFrom<ydb_grpc::ydb_proto::ResultSet> for RawResultSet {
             .map(|item_row| match item_row {
                 RawValue::Items(items) => Ok(items),
                 item => Err(RawError::custom(format!(
-                    "unexpected item type while parse rawset, expect items: {:?}",
-                    item
+                    "unexpected item type while parse rawset, expect items: {item:?}"
                 ))),
             })
             .try_collect()?;

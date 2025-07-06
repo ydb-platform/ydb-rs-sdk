@@ -19,8 +19,7 @@ fn convert_ydb_raw_grpc() -> RawResult<()> {
     for value in values {
         if let Err(err) = check_value(value.clone()) {
             return Err(RawError::custom(format!(
-                "bad check for value: '{:?}': {}",
-                value, err
+                "bad check for value: '{value:?}': {err}"
             )));
         }
     }

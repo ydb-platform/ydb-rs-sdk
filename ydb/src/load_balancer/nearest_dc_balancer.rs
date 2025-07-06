@@ -163,8 +163,7 @@ impl NearestDCBalancer {
         };
         match self.config.fallback_strategy.borrow() {
             FallbackStrategy::Error => Err(YdbError::custom(format!(
-                "no available endpoints for service:{}",
-                service
+                "no available endpoints for service:{service}"
             ))),
             FallbackStrategy::BalanceWithOther(balancer) => {
                 info!("trying fallback balancer...");

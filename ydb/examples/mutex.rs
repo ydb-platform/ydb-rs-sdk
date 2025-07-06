@@ -1,9 +1,10 @@
 use std::time::Duration;
 
 use tokio::task::JoinHandle;
-
+use tokio::time::timeout;
 use ydb::{
-    ClientBuilder, CoordinationSession, NodeConfigBuilder, SessionOptionsBuilder, YdbResult,
+    ClientBuilder, CoordinationSession, NodeConfigBuilder, SessionOptionsBuilder, YdbError,
+    YdbResult,
 };
 
 async fn mutex_work(session: CoordinationSession) {
@@ -26,7 +27,12 @@ async fn mutex_work(session: CoordinationSession) {
 async fn main() -> YdbResult<()> {
     let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
         .client()?;
-    client.wait().await?;
+
+    if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
+        res?
+    } else {
+        return Err(YdbError::from("Connection timeout"));
+    };
 
     let mut coordination_client = client.coordination_client();
 
