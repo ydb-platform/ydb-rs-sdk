@@ -32,10 +32,10 @@ impl From<i32> for MessageSkipReason {
     fn from(value: i32) -> Self {
         use write_response::write_ack::skipped::Reason;
 
-        match Reason::from_i32(value) {
-            Some(Reason::Unspecified) => MessageSkipReason::Unspecified,
-            Some(Reason::AlreadyWritten) => MessageSkipReason::AlreadyWritten,
-            None => MessageSkipReason::UnknownReasonCode(value),
+        match Reason::try_from(value) {
+            Ok(Reason::Unspecified) => MessageSkipReason::Unspecified,
+            Ok(Reason::AlreadyWritten) => MessageSkipReason::AlreadyWritten,
+            Err(_) => MessageSkipReason::UnknownReasonCode(value),
         }
     }
 }

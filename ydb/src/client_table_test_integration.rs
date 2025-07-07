@@ -1,11 +1,13 @@
+use rand::distr::Alphanumeric;
 use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::sync::Arc;
 use std::time;
 use std::time::UNIX_EPOCH;
-use tokio::sync::Mutex as AsyncMutex;
 
-use rand::distributions::{Alphanumeric, DistString};
+use rand::rng;
+use rand::Rng;
+use tokio::sync::Mutex as AsyncMutex;
 use tonic::{Code, Status};
 use tracing::trace;
 use tracing_test::traced_test;
@@ -232,7 +234,11 @@ async fn copy_table() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
 
-    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let rand_str: String = rng()
+        .sample_iter(Alphanumeric)
+        .take(16)
+        .map(char::from)
+        .collect();
     let table_name = format!("temp_table_{rand_str}");
     let copy_table_name = format!("copy_{table_name}");
 
@@ -308,7 +314,11 @@ async fn copy_tables() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
 
-    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let rand_str: String = rng()
+        .sample_iter(Alphanumeric)
+        .take(16)
+        .map(char::from)
+        .collect();
     let table_name = format!("temp_table_{rand_str}");
     let copy_table_name = format!("copy_{table_name}");
 

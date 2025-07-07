@@ -7,25 +7,20 @@ edition = "2021"
 license = "Apache-2.0"
 description = "Crate contains generated low-level grpc code from YDB API protobuf, used as base for ydb crate"
 repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-grpc"
-rust-version = "1.68.0"
+rust-version = "1.81.0"
+
+[features]
+regenerate-sources = []
 
 [dependencies]
-prost = "0.11.2"
-prost-types = "0.11.2"
-pbjson = "0.5.1"
-pbjson-types = { version = "0.5.1" }
-serde = { version = "1.0", features = ["derive"] }
-tonic = { version = "0.8.2", features = [
-    "tls",
-    "tls-roots",
+prost = "0.13"
+serde = { version = "1", features = ["derive"] }
+tonic = { version = "0.13", features = [
+    "tls-native-roots",
     "tls-webpki-roots",
 ] }
 
 [build-dependencies]
-prost-build = "0.11.2"
-pbjson-build = "0.5.1"
-tonic-build = "0.8.0"
+prost-build = "0.13"
+tonic-build = "0.13"
 walkdir = "2"
-
-[features]
-regenerate-sources = []

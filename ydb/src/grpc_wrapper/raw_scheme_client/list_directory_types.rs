@@ -19,8 +19,8 @@ impl From<RawListDirectoryRequest> for ydb_grpc::ydb_proto::scheme::ListDirector
 
 #[derive(Debug)]
 pub(crate) struct RawListDirectoryResult {
-    pub(crate) _self_item: crate::SchemeEntry,
-    pub(crate) children: Vec<crate::SchemeEntry>,
+    pub(crate) _self_item: SchemeEntry,
+    pub(crate) children: Vec<SchemeEntry>,
 }
 
 impl TryFrom<ydb_grpc::ydb_proto::scheme::ListDirectoryResult> for RawListDirectoryResult {
@@ -69,24 +69,24 @@ pub(crate) fn from_grpc_to_scheme_entry(value: ydb_grpc::ydb_proto::scheme::Entr
 
 fn from_grpc_code_to_scheme_entry_type(value: i32) -> SchemeEntryType {
     use ydb_grpc::ydb_proto::scheme::entry::Type as grpcT;
-    match grpcT::from_i32(value) {
-        Some(grpcT::Unspecified) => SchemeEntryType::Unspecified,
-        Some(grpcT::Directory) => SchemeEntryType::Directory,
-        Some(grpcT::Table) => SchemeEntryType::Table,
-        Some(grpcT::ColumnStore) => SchemeEntryType::ColumnStrore,
-        Some(grpcT::ColumnTable) => SchemeEntryType::ColumnTable,
-        Some(grpcT::PersQueueGroup) => SchemeEntryType::PersQueueGroup,
-        Some(grpcT::Database) => SchemeEntryType::Database,
-        Some(grpcT::RtmrVolume) => SchemeEntryType::RtmrVolume,
-        Some(grpcT::BlockStoreVolume) => SchemeEntryType::BlockStoreVolume,
-        Some(grpcT::CoordinationNode) => SchemeEntryType::CoordinationNode,
-        Some(grpcT::Sequence) => SchemeEntryType::Sequence,
-        Some(grpcT::Replication) => SchemeEntryType::Replication,
-        Some(grpcT::Topic) => SchemeEntryType::Topic,
-        Some(grpcT::ExternalDataSource) => SchemeEntryType::ExternalDataSource,
-        Some(grpcT::ExternalTable) => SchemeEntryType::ExternalTable,
-        Some(grpcT::View) => SchemeEntryType::View,
-        None => SchemeEntryType::Unknown(value),
+    match grpcT::try_from(value) {
+        Ok(grpcT::Unspecified) => SchemeEntryType::Unspecified,
+        Ok(grpcT::Directory) => SchemeEntryType::Directory,
+        Ok(grpcT::Table) => SchemeEntryType::Table,
+        Ok(grpcT::ColumnStore) => SchemeEntryType::ColumnStrore,
+        Ok(grpcT::ColumnTable) => SchemeEntryType::ColumnTable,
+        Ok(grpcT::PersQueueGroup) => SchemeEntryType::PersQueueGroup,
+        Ok(grpcT::Database) => SchemeEntryType::Database,
+        Ok(grpcT::RtmrVolume) => SchemeEntryType::RtmrVolume,
+        Ok(grpcT::BlockStoreVolume) => SchemeEntryType::BlockStoreVolume,
+        Ok(grpcT::CoordinationNode) => SchemeEntryType::CoordinationNode,
+        Ok(grpcT::Sequence) => SchemeEntryType::Sequence,
+        Ok(grpcT::Replication) => SchemeEntryType::Replication,
+        Ok(grpcT::Topic) => SchemeEntryType::Topic,
+        Ok(grpcT::ExternalDataSource) => SchemeEntryType::ExternalDataSource,
+        Ok(grpcT::ExternalTable) => SchemeEntryType::ExternalTable,
+        Ok(grpcT::View) => SchemeEntryType::View,
+        Err(_) => SchemeEntryType::Unknown(value),
     }
 }
 

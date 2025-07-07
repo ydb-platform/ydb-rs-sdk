@@ -25,7 +25,7 @@ pub(crate) enum RawStatusCode {
 
 impl From<i32> for RawStatusCode {
     fn from(value: i32) -> Self {
-        if let Some(status) = ydb_grpc::ydb_proto::status_ids::StatusCode::from_i32(value) {
+        if let Ok(status) = ydb_grpc::ydb_proto::status_ids::StatusCode::try_from(value) {
             match status {
                 ydb_grpc::ydb_proto::status_ids::StatusCode::Unspecified => Self::Unspecified,
                 ydb_grpc::ydb_proto::status_ids::StatusCode::Success => Self::Success,

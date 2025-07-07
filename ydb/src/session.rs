@@ -71,7 +71,7 @@ impl Session {
     pub(crate) fn handle_error(&mut self, err: &YdbError) {
         if let YdbError::YdbStatusError(err) = err {
             use ydb_grpc::ydb_proto::status_ids::StatusCode;
-            if let Some(status) = StatusCode::from_i32(err.operation_status) {
+            if let Ok(status) = StatusCode::try_from(err.operation_status) {
                 if status == StatusCode::BadSession || status == StatusCode::SessionExpired {
                     self.can_pooled = false;
                 }
@@ -151,7 +151,7 @@ impl Session {
         };
         debug!(
             "request: {}",
-            crate::trace_helpers::ensure_len_string(serde_json::to_string(&req)?)
+            ensure_len_string(serde_json::to_string(&req)?)
         );
         let mut channel = self.get_channel().await?;
         let resp = channel.stream_execute_scan_query(req).await?;

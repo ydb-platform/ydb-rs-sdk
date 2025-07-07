@@ -34,11 +34,13 @@ impl RawAlterTopicRequest {
         options: AlterTopicOptions,
     ) -> Self {
         let alter_partitioning_settings = if options.set_min_active_partitions.is_some()
-            || options.set_partition_count_limit.is_some()
+            || options.set_max_active_partitions.is_some()
+            || options.alter_auto_partitioning_settings.is_some()
         {
             Some(RawAlterPartitioningSettings {
                 set_min_active_partitions: options.set_min_active_partitions,
-                set_partition_count_limit: options.set_partition_count_limit,
+                set_max_active_partitions: options.set_max_active_partitions,
+                alter_auto_partitioning_settings: options.alter_auto_partitioning_settings,
             })
         } else {
             None

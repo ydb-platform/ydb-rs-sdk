@@ -13,9 +13,9 @@ impl TryFrom<i32> for RawMeteringMode {
     type Error = RawError;
 
     fn try_from(value: i32) -> RawResult<Self> {
-        let value = MeteringMode::from_i32(value).ok_or(RawError::ProtobufDecodeError(format!(
-            "invalid metering mode: {value}"
-        )))?;
+        let value = MeteringMode::try_from(value).map_err(|e| {
+            RawError::ProtobufDecodeError(format!("invalid metering mode: {value} ({e})"))
+        })?;
         match value {
             MeteringMode::Unspecified => Ok(RawMeteringMode::Unspecified),
             MeteringMode::ReservedCapacity => Ok(RawMeteringMode::ReservedCapacity),

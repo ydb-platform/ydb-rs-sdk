@@ -11,8 +11,8 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
-  RUST_VERSION_OLD: "1.68.0"
-  RUST_VERSION_NEW: "1.88.0"
+  RUST_VERSION_OLD: "1.82" # aka MSRV
+  RUST_VERSION_NEW: "stable"
 
 jobs:
   tests:
@@ -37,18 +37,30 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-    - name: Show YDB server version
-      run: docker ps; docker exec ydb /ydbd -V
-
-    - name: Install rust
-      uses: dtolnay/rust-toolchain@v1
-      with:
-        toolchain: ${{ env[matrix.rust_version] }}
-
     - name: Checkout
       uses: actions/checkout@v4
       with:
         submodules: true
+
+    - name: Install nightly rust
+      if: matrix.rust_version == 'RUST_VERSION_NEW'
+      uses: dtolnay/rust-toolchain@nightly
+      with:
+        components: clippy, rustfmt
+
+    - name: Install stable rust
+      uses: dtolnay/rust-toolchain@master # as described in https://github.com/dtolnay/rust-toolchain/blob/master/README.md?plain=1#L45
+      with:
+        toolchain: ${{ env[matrix.rust_version] }}
+        components: clippy, rustfmt
+
+    - name: Rust cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        key: ${{ env[matrix.rust_version] }}
+
+    - name: Show YDB server version
+      run: docker ps; docker exec ydb /ydbd -V
 
     - name: Rust version
       id: rust_version_step
@@ -56,10 +68,7 @@ jobs:
         rustc --version
         cargo --version
         echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
-        echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
-
-    - name: Rust cache
-      uses: Swatinem/rust-cache@v2
+        echo "name=version::$(rustc --version | cut -d ' ' -f 2)" >> $GITHUB_OUTPUT
 
     - name: Run tests
       env:

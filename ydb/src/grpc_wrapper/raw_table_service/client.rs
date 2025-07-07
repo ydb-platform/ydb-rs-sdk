@@ -45,7 +45,7 @@ impl RawTableClient {
         request_with_result!(
             self.service.commit_transaction,
             req => ydb_grpc::ydb_proto::table::CommitTransactionRequest,
-            ydb_grpc::ydb_proto::table::CommitTransactionResult => crate::grpc_wrapper::raw_table_service::commit_transaction::RawCommitTransactionResult
+            ydb_grpc::ydb_proto::table::CommitTransactionResult => RawCommitTransactionResult
         );
     }
 
@@ -133,11 +133,11 @@ impl From<i32> for SessionStatus {
     fn from(value: i32) -> Self {
         use ydb_grpc::ydb_proto::table::keep_alive_result;
 
-        match keep_alive_result::SessionStatus::from_i32(value) {
-            Some(keep_alive_result::SessionStatus::Ready) => SessionStatus::Ready,
-            Some(keep_alive_result::SessionStatus::Busy) => SessionStatus::Busy,
-            Some(keep_alive_result::SessionStatus::Unspecified) => SessionStatus::Unspecified,
-            None => SessionStatus::Unknown(value),
+        match keep_alive_result::SessionStatus::try_from(value) {
+            Ok(keep_alive_result::SessionStatus::Ready) => SessionStatus::Ready,
+            Ok(keep_alive_result::SessionStatus::Busy) => SessionStatus::Busy,
+            Ok(keep_alive_result::SessionStatus::Unspecified) => SessionStatus::Unspecified,
+            Err(_) => SessionStatus::Unknown(value),
         }
     }
 }
