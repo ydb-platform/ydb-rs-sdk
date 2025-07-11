@@ -32,10 +32,10 @@ Steps to reproduce the behavior:
 <!-- Describe what the behavior would be without the bug. --> 
 
 **Environment (please complete the following information):**
- - OS: ``` description ```
- - Rust version: ``` version ```
- - SDK version: ``` version ```
- - YDB Server version (if known): ```version ```
+ - OS: <!-- description -->
+ - Rust version: <!-- version -->
+ - SDK version: <!-- version -->
+ - YDB Server version (if known): <!-- version -->
 
 **Additional context**
 
