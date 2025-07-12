@@ -17,6 +17,7 @@ use std::future::Future;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::task::{Context, Poll};
 use std::time::Instant;
 use std::time::{Duration, UNIX_EPOCH};
@@ -35,6 +36,8 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::init_request::Partitioning
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::{message_data, MessageData};
 use ydb_grpc::ydb_proto::topic::stream_write_message::{InitRequest, WriteRequest};
 
+const POISONED_MUTEX: &str = "Poisoned mutex!";
+
 pub(crate) enum TopicWriterMode {
     Working,
     FinishedWithError(YdbError),
@@ -49,7 +52,7 @@ pub struct TopicWriter {
     pub(crate) producer_id: Option<String>,
     pub(crate) partition_id: i64,
     pub(crate) session_id: String,
-    pub(crate) last_seq_num_handled: i64,
+    pub(crate) last_seq_num_handled:  AtomicI64,
     pub(crate) write_request_messages_chunk_size: usize,
     pub(crate) write_request_send_messages_period: Duration,
 
@@ -197,7 +200,7 @@ impl TopicWriter {
             producer_id: Some(producer_id.clone()),
             partition_id: init_response.partition_id,
             session_id: init_response.session_id,
-            last_seq_num_handled: init_response.last_seq_no,
+            last_seq_num_handled: AtomicI64::from(init_response.last_seq_no),
             write_request_messages_chunk_size: writer_options.write_request_messages_chunk_size,
             write_request_send_messages_period: writer_options.write_request_send_messages_period,
             auto_set_seq_no: writer_options.auto_seq_no,
@@ -347,13 +350,13 @@ impl TopicWriter {
         Ok(())
     }
 
-    pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
+    pub async fn write(&self, message: TopicWriterMessage) -> YdbResult<()> {
         self.write_message(message, None).await?;
         Ok(())
     }
 
     pub async fn write_with_ack(
-        &mut self,
+        &self,
         message: TopicWriterMessage,
     ) -> YdbResult<MessageWriteStatus> {
         let (tx, rx): (
@@ -366,7 +369,7 @@ impl TopicWriter {
     }
 
     pub async fn write_with_ack_future(
-        &mut self,
+        &self,
         _message: TopicWriterMessage,
     ) -> YdbResult<AckFuture> {
         let (tx, rx): (
@@ -379,7 +382,7 @@ impl TopicWriter {
     }
 
     async fn write_message(
-        &mut self,
+        &self,
         mut message: TopicWriterMessage,
         wait_ack: Option<tokio::sync::oneshot::Sender<MessageWriteStatus>>,
     ) -> YdbResult<()> {
@@ -391,18 +394,18 @@ impl TopicWriter {
                     "force set message seqno possible only if auto_set_seq_no disabled",
                 ));
             }
-            message.seq_no = Some(self.last_seq_num_handled + 1);
+            let last_seq_num_handled = self.last_seq_num_handled.load(Ordering::Relaxed);
+            message.seq_no = Some(last_seq_num_handled + 1);
         };
 
         let message_seqno = if let Some(mess_seqno) = message.seq_no {
-            self.last_seq_num_handled = mess_seqno;
+            self.last_seq_num_handled.store(mess_seqno, Ordering::Relaxed);
             mess_seqno
         } else {
             return Err(YdbError::custom("need to set message seq_no"));
         };
 
         self.writer_message_sender
-            .borrow_mut()
             .send(message)
             .await
             .map_err(|err| YdbError::custom(format!("can't send the message to channel: {err}")))?;
@@ -414,7 +417,7 @@ impl TopicWriter {
 
         {
             // bracket needs for release mutex as soon as possible - before await
-            let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
+            let mut reception_queue = self.confirmation_reception_queue.lock().expect(POISONED_MUTEX);
             reception_queue.add_ticket(TopicWriterReceptionTicket::new(
                 message_seqno,
                 reception_type,
@@ -428,7 +431,7 @@ impl TopicWriter {
         self.is_cancelled().await?;
 
         let flush_op_completed = {
-            let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
+            let mut reception_queue = self.confirmation_reception_queue.lock().expect(POISONED_MUTEX);
             reception_queue.init_flush_op()?
         };
 
@@ -436,7 +439,7 @@ impl TopicWriter {
     }
 
     async fn is_cancelled(&self) -> YdbResult<()> {
-        let state = self.writer_state.lock().unwrap();
+        let state = self.writer_state.lock().expect(POISONED_MUTEX);
         match state.deref() {
             TopicWriterMode::Working => Ok(()),
             TopicWriterMode::FinishedWithError(err) => Err(err.clone()),

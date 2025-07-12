@@ -283,7 +283,7 @@ async fn send_message_test() -> YdbResult<()> {
     trace!("topic created");
 
     // manual seq
-    let mut writer_manual = topic_client
+    let writer_manual = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .auto_seq_no(false)
@@ -316,7 +316,7 @@ async fn send_message_test() -> YdbResult<()> {
     writer_manual.stop().await?;
 
     // quto-seq
-    let mut writer = topic_client
+    let writer = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .auto_seq_no(true)
@@ -535,7 +535,7 @@ async fn read_topic_message() -> YdbResult<()> {
     debug!("topic created");
 
     // manual seq
-    let mut writer_manual = topic_client
+    let writer_manual = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .auto_seq_no(false)
@@ -675,7 +675,7 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
     debug!("topic created");
 
     // Create writer with manual sequence numbers
-    let mut writer_manual = topic_client
+    let writer_manual = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .auto_seq_no(false)

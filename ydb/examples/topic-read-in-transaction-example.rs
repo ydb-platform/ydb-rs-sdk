@@ -221,7 +221,7 @@ async fn setup_environment(client: &ydb::Client) -> YdbResult<()> {
 
     // Create topic writer with explicit sequence number control
     // Auto sequence numbers are disabled to ensure deterministic test data
-    let mut writer = topic_client
+    let writer = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .auto_seq_no(false) // We control sequence numbers for predictable tests
