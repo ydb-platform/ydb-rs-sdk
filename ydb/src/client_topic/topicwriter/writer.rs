@@ -16,8 +16,8 @@ use std::borrow::{Borrow, BorrowMut};
 use std::future::Future;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Instant;
 use std::time::{Duration, UNIX_EPOCH};
@@ -52,7 +52,7 @@ pub struct TopicWriter {
     pub(crate) producer_id: Option<String>,
     pub(crate) partition_id: i64,
     pub(crate) session_id: String,
-    pub(crate) last_seq_num_handled:  AtomicI64,
+    pub(crate) last_seq_num_handled: AtomicI64,
     pub(crate) write_request_messages_chunk_size: usize,
     pub(crate) write_request_send_messages_period: Duration,
 
@@ -399,7 +399,8 @@ impl TopicWriter {
         };
 
         let message_seqno = if let Some(mess_seqno) = message.seq_no {
-            self.last_seq_num_handled.store(mess_seqno, Ordering::Relaxed);
+            self.last_seq_num_handled
+                .store(mess_seqno, Ordering::Relaxed);
             mess_seqno
         } else {
             return Err(YdbError::custom("need to set message seq_no"));
@@ -417,7 +418,10 @@ impl TopicWriter {
 
         {
             // bracket needs for release mutex as soon as possible - before await
-            let mut reception_queue = self.confirmation_reception_queue.lock().expect(POISONED_MUTEX);
+            let mut reception_queue = self
+                .confirmation_reception_queue
+                .lock()
+                .expect(POISONED_MUTEX);
             reception_queue.add_ticket(TopicWriterReceptionTicket::new(
                 message_seqno,
                 reception_type,
@@ -431,7 +435,10 @@ impl TopicWriter {
         self.is_cancelled().await?;
 
         let flush_op_completed = {
-            let mut reception_queue = self.confirmation_reception_queue.lock().expect(POISONED_MUTEX);
+            let mut reception_queue = self
+                .confirmation_reception_queue
+                .lock()
+                .expect(POISONED_MUTEX);
             reception_queue.init_flush_op()?
         };
 
