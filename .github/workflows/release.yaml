@@ -1,0 +1,81 @@
+name: Publish Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on tags starting with 'v'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Needed to get git history for changelog
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Get tag
+        id: tag
+        run: echo "TAG=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Get previous tag
+        id: previous-tag
+        run: |
+          git fetch --tags
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 ${{ steps.tag.outputs.TAG }}^ 2>/dev/null || echo "")
+          echo "PREVIOUS_TAG=${PREVIOUS_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          if [ -z "${{ steps.previous-tag.outputs.PREVIOUS_TAG }}" ]; then
+            CHANGELOG="Initial release"
+          else
+            CHANGELOG=$(git log --pretty=format:"- %s" ${{ steps.previous-tag.outputs.PREVIOUS_TAG }}..${{ steps.tag.outputs.TAG }} || echo "No changes found")
+          fi
+          FULL_CHANGELOG="Full Changelog: [${{ steps.previous-tag.outputs.PREVIOUS_TAG }}...${{ steps.tag.outputs.TAG }}](https://github.com/${{ github.repository }}/compare/${{ steps.previous-tag.outputs.PREVIOUS_TAG }}...${{ steps.tag.outputs.TAG }})"
+          echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "$FULL_CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Install GitHub CLI
+        run: |
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update && sudo apt install gh -y
+
+      - name: Check if release candidate
+        id: is-rc
+        run: |
+          if [[ "${{ steps.tag.outputs.TAG }}" == *-rc* ]]; then
+            echo "RELEASE_CANDIDATE=true" >> $GITHUB_OUTPUT
+          else
+            echo "RELEASE_CANDIDATE=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create release
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ "${{ steps.is-rc.outputs.RELEASE_CANDIDATE }}" = "true" ]; then
+            gh release create -d "${{ steps.tag.outputs.TAG }}" -t "${{ steps.tag.outputs.TAG }}" --notes "${{ steps.changelog.outputs.CHANGELOG }}"
+          else
+            gh release create "${{ steps.tag.outputs.TAG }}" -t "${{ steps.tag.outputs.TAG }}" --notes "${{ steps.changelog.outputs.CHANGELOG }}"
+          fi
+
+      - name: Build and publish artifacts (optional)
+        run: |
+          cargo build --release
+          gh release upload ${{ steps.tag.outputs.TAG }} target/release/your-binary
