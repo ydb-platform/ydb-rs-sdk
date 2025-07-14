@@ -76,6 +76,8 @@ jobs:
           fi
 
       - name: Build and publish artifacts (optional)
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         run: |
           cargo build --release
-          gh release upload ${{ steps.tag.outputs.TAG }} target/release/your-binary
+          gh release upload ${{ steps.tag.outputs.TAG }} target/release/ydb
