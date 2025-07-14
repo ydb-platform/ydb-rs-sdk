@@ -88,7 +88,7 @@ fn connect_lazy(uri: Uri, tls_config: &Option<ClientTlsConfig>) -> YdbResult<Cha
             None => endpoint.tls_config(ClientTlsConfig::new())?,
         };
     };
-    endpoint = endpoint.tcp_keepalive(Some(Duration::from_secs(15))); // tcp keepalive similar to default in golang lib
+    endpoint = endpoint.http2_keep_alive_interval(Duration::from_secs(10));
 
     Ok(endpoint.connect_lazy())
 }
