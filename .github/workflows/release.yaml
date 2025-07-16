@@ -41,7 +41,8 @@ jobs:
           if [ -z "${{ steps.previous-tag.outputs.PREVIOUS_TAG }}" ]; then
             CHANGELOG="Initial release"
           else
-            CHANGELOG=$(git log --pretty=format:"- %s" ${{ steps.previous-tag.outputs.PREVIOUS_TAG }}..${{ steps.tag.outputs.TAG }} || echo "No changes found")
+            CHANGELOG=$(git log --merges --pretty=format:"- %s by @%an in #%H" ${{ steps.previous-tag.outputs.PREVIOUS_TAG }}..${{ steps.tag.outputs.TAG }} | \
+              sed -E 's/Merge pull request #([0-9]+).* by @(.*) in #([a-f0-9]+)/- \2 in #\1/' || echo "No changes found")
           fi
           FULL_CHANGELOG="Full Changelog: [${{ steps.previous-tag.outputs.PREVIOUS_TAG }}...${{ steps.tag.outputs.TAG }}](https://github.com/${{ github.repository }}/compare/${{ steps.previous-tag.outputs.PREVIOUS_TAG }}...${{ steps.tag.outputs.TAG }})"
           echo "CHANGELOG<<EOF" >> $GITHUB_OUTPUT
