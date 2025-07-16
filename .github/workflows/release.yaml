@@ -3,7 +3,7 @@ name: Publish Release
 on:
   push:
     tags:
-      - 'v*' # Trigger on tags starting with 'v'
+      - 'ydb-*' # Trigger on tags starting with 'ydb-'
 
 env:
   CARGO_TERM_COLOR: always
