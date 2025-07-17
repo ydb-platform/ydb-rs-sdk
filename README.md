@@ -72,3 +72,5 @@ To run it:
 Crates follow to semver 2.0 https://semver.org/spec/v2.0.0.html.
 For version 0.X.Y: X increments for expected backwards incompatible changes, Y increments for any compatible changes (fixes, extend api without broke compatible).
 For incompatible changes creates github release with describe incompatibles.
+
+for example 1234
