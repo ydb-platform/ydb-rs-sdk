@@ -51,10 +51,14 @@ jobs:
       - name: Load crate version from file
         id: get-version
         run: |
-          echo "crate-version=$(cat .crate-version)" >> "$GITHUB_OUTPUT"
+          if [[ -f .crate-version ]]; then
+            echo "crate-version=$(cat .crate-version)" >> "$GITHUB_OUTPUT"
+          else
+            echo "No version bump, skipping release."
+          fi
           
   release:
-    if: ${{ github.event.inputs.crate == 'ydb' }}
+    if: needs.publishCrate.outputs.crate-version != '' && github.event.inputs.crate == 'ydb'
     needs: publishCrate
     runs-on: ubuntu-latest
     steps:
