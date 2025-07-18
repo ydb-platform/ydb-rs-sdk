@@ -51,8 +51,8 @@ jobs:
       - name: Load crate version from file
         id: get-crate-version-ydb
         run: |
-          if [[ -f .crate-version/ydb ]]; then
-            echo "crate-version-ydb=$(cat .crate-version/ydb)" >> "$GITHUB_OUTPUT"
+          if [[ -f .crate-versions/ydb ]]; then
+            echo "crate-version-ydb=$(cat .crate-versions/ydb)" >> "$GITHUB_OUTPUT"
           else
             echo "No version bump for crate ydb, skipping release."
           fi
