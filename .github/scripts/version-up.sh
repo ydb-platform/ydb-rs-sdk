@@ -127,3 +127,7 @@ done
 
 # git push after publish crate - for run CI build check after all changed crates will published in crates repo
 git push
+
+if [[ "$CRATE_NAME" == "ydb" ]]; then
+  echo "$VERSION" > .crate-version
+fi
