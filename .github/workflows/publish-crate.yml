@@ -49,16 +49,16 @@ jobs:
         run: ./.github/scripts/version-up.sh "${{ github.event.inputs.crate }}" "${{ github.event.inputs.version-part }}" "$GIT_EMAIL"
 
       - name: Load crate version from file
-        id: get-version
+        id: get-crate-version-ydb
         run: |
-          if [[ -f .crate-version ]]; then
-            echo "crate-version=$(cat .crate-version)" >> "$GITHUB_OUTPUT"
+          if [[ -f .crate-version/ydb ]]; then
+            echo "crate-version-ydb=$(cat .crate-version/ydb)" >> "$GITHUB_OUTPUT"
           else
-            echo "No version bump, skipping release."
+            echo "No version bump for crate ydb, skipping release."
           fi
           
   release:
-    if: needs.publishCrate.outputs.crate-version != '' && github.event.inputs.crate == 'ydb'
+    if: github.event.inputs.crate == 'ydb'
     needs: publishCrate
     runs-on: ubuntu-latest
     steps:
@@ -69,7 +69,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="ydb-${{ needs.publishCrate.outputs.crate-version }}"
+          TAG="ydb-${{ needs.publishCrate.outputs.crate-version-ydb }}"
           echo "Creating release for tag $TAG"
           gh release create "$TAG" \
             --title "$TAG" \

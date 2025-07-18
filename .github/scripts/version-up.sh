@@ -93,6 +93,9 @@ function bump_version() {
   GIT_TAGS+=("$CRATE_NAME-$VERSION")
   CRATES+=("$CRATE_NAME")
 
+  mkdir -p .crate-versions
+  echo "$VERSION" > ".crate-versions/$CRATE_NAME"
+
   case "$CRATE_NAME" in
     ydb)
       version_dep_set "ydb" "$VERSION"
@@ -127,7 +130,3 @@ done
 
 # git push after publish crate - for run CI build check after all changed crates will published in crates repo
 git push
-
-if [[ "$CRATE_NAME" == "ydb" ]]; then
-  echo "$VERSION" > .crate-version
-fi
