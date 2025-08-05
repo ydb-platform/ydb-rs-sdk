@@ -244,19 +244,23 @@ impl TryFrom<RawTypedValue> for Value {
             (RawType::Date, RawValue::UInt32(v)) => Value::Date(
                 SystemTime::UNIX_EPOCH + Duration::from_secs((v as u64) * SECONDS_PER_DAY),
             ),
+            (t @ RawType::Date32, _) => return type_unimplemented(t),
             (t @ RawType::Date, v) => return types_mismatch(t, v),
             (RawType::DateTime, RawValue::UInt32(v)) => {
                 Value::DateTime(SystemTime::UNIX_EPOCH + Duration::from_secs(v.into()))
             }
             (t @ RawType::DateTime, v) => return types_mismatch(t, v),
+            (t @ RawType::DateTime64, _) => return type_unimplemented(t),
             (RawType::Timestamp, RawValue::UInt64(v)) => {
                 Value::Timestamp(SystemTime::UNIX_EPOCH + Duration::from_micros(v))
             }
             (t @ RawType::Timestamp, v) => return types_mismatch(t, v),
+            (t @ RawType::Timestamp64, _) => return type_unimplemented(t),
             (RawType::Interval, RawValue::Int64(v)) => {
                 Value::Interval(SignedInterval::from_nanos(v))
             }
             (t @ RawType::Interval, v) => return types_mismatch(t, v),
+            (t @ RawType::Interval64, _) => return type_unimplemented(t),
             (t @ RawType::TzDate, _) => return type_unimplemented(t),
             (t @ RawType::TzDatetime, _) => return type_unimplemented(t),
             (t @ RawType::TzTimestamp, _) => return type_unimplemented(t),
