@@ -1,7 +1,7 @@
 [package]
 publish = true
 name = "ydb"
-version = "0.9.10"
+version = "0.9.11"
 authors = ["rekby <timofey.koolin@gmail.com>"]
 edition = "2021"
 license = "Apache-2.0"
