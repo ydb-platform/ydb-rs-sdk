@@ -9,6 +9,7 @@ use crate::{grpc_wrapper, CoordinationSession, SessionOptions, YdbResult};
 
 use super::list_types::{NodeConfig, NodeDescription};
 
+#[derive(Clone)]
 pub struct CoordinationClient {
     timeouts: TimeoutSettings,
 
@@ -99,11 +100,5 @@ impl CoordinationClient {
                 grpc_wrapper::raw_coordination_service::client::RawCoordinationClient::new,
             )
             .await
-    }
-}
-
-impl Clone for CoordinationClient {
-    fn clone(&self) -> Self {
-        unimplemented!()
     }
 }

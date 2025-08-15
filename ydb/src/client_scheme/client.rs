@@ -7,6 +7,7 @@ use crate::grpc_wrapper::raw_scheme_client::client::{
 use crate::grpc_wrapper::raw_scheme_client::list_directory_types::RawListDirectoryRequest;
 use crate::{grpc_wrapper, YdbResult};
 
+#[derive(Clone)]
 pub struct SchemeClient {
     timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,

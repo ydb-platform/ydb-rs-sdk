@@ -113,6 +113,7 @@ impl From<UninitializedFieldError> for errors::YdbError {
     }
 }
 
+#[derive(Clone)]
 pub struct TopicClient {
     timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
