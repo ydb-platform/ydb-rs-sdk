@@ -31,6 +31,8 @@ permissions:
 jobs:
   publishCrate:
     runs-on: ubuntu-24.04
+    outputs:
+      crate-version-ydb: ${{ steps.get-crate-version-ydb.outputs.crate_version_ydb }}
     env:
       GIT_EMAIL: ${{ github.actor }}@users.noreply.github.com
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -52,11 +54,12 @@ jobs:
         id: get-crate-version-ydb
         run: |
           if [[ -f .crate-versions/ydb ]]; then
-            echo "crate-version-ydb=$(cat .crate-versions/ydb)" >> "$GITHUB_OUTPUT"
+            version=$(cat .crate-versions/ydb)
+            echo "crate_version_ydb=$version" >> "$GITHUB_OUTPUT"
           else
             echo "No version bump for crate ydb, skipping release."
           fi
-          
+
   release:
     if: github.event.inputs.crate == 'ydb'
     needs: publishCrate
