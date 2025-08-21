@@ -4,6 +4,7 @@ use crate::errors::*;
 use crate::session::Session;
 use crate::session_pool::SessionPool;
 use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
+use crate::types::Value;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
 
@@ -248,6 +249,21 @@ impl TableClient {
         self.retry(|| async {
             let mut session = self.create_session().await?;
             session.execute_schema_query(query.to_string()).await
+        })
+        .await
+    }
+
+    /// Execute bulk upsert with retry policy
+    pub async fn retry_execute_bulk_upsert(
+        &self,
+        table_path: String,
+        rows: Value,
+    ) -> YdbResult<()> {
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            session
+                .execute_bulk_upsert(table_path.clone(), rows.clone())
+                .await
         })
         .await
     }
