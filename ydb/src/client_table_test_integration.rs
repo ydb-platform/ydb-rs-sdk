@@ -9,6 +9,7 @@ use rand::distributions::{Alphanumeric, DistString};
 use tonic::{Code, Status};
 use tracing::trace;
 use tracing_test::traced_test;
+use ydb_grpc::ydb_proto::table;
 
 use crate::client_table::RetryOptions;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
@@ -18,7 +19,7 @@ use crate::test_integration_helper::create_client;
 use crate::transaction::Mode;
 use crate::transaction::Transaction;
 use crate::types::{Value, ValueList, ValueStruct};
-use crate::{ydb_params, Bytes, TableClient};
+use crate::{ydb_params, ydb_struct, Bytes, TableClient};
 
 #[tokio::test]
 #[traced_test]
@@ -882,5 +883,90 @@ FROM
 
     // TODO: need improove for non flap in tests for will strong more then 1
     assert!(result_set_count > 1); // ensure get multiply results
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn bulk_upsert() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let table_name = "bulk_upsert";
+
+    table_client
+        .retry_execute_scheme_query(format!(
+            "
+                CREATE TABLE {} (
+                    id Int64,
+                    val String,
+                    PRIMARY KEY (id)
+                );
+            ",
+            table_name,
+        ))
+        .await?;
+
+    let my_optional_value: Option<String> = Some("hello".to_string());
+    let ydb_value: Value = my_optional_value.into();
+
+    let fields: Vec<(String, Value)> = vec![
+        ("id".to_string(), 1_i64.into()),
+        ("val".to_string(), ydb_value.clone()),
+    ];
+
+    let rows = vec![
+        ydb_struct!(
+            "id" => 1_i64,
+            "val" => "test",
+        ),
+        ydb_struct!(
+            "id" => 2_i64,
+            "val" => Value::Null,
+        ),
+    ];
+
+    table_client
+        .retry_execute_bulk_upsert(
+            format!("/local/{}", table_name),
+            crate::types::BulkRows::new(fields, rows),
+        )
+        .await?;
+
+    let read = table_client
+        .retry_transaction(|t| async {
+            let mut t = t;
+            let res = t
+                .query(Query::new("SELECT * FROM test ORDER BY id"))
+                .await?;
+            Ok(res)
+        })
+        .await?;
+
+    let read_rows_id: YdbResult<Vec<i64>> = read
+        .into_only_result()?
+        .rows()
+        .map(|mut row| {
+            let val = row.remove_field_by_name("id")?;
+            let res: i64 = val.try_into()?;
+            Ok(res)
+        })
+        .collect();
+    let read_rows_id = read_rows_id?;
+
+    assert_eq!(vec![1, 2], read_rows_id);
+
+    table_client
+        .retry_with_session(RetryOptions::new(), |session| async {
+            let mut session = session; // force borrow for lifetime of t inside closure
+            session
+                .execute_schema_query(format!("DROP TABLE {table_name}"))
+                .await?;
+
+            Ok(())
+        })
+        .await
+        .unwrap();
+
     Ok(())
 }
