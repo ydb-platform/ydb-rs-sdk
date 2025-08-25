@@ -3,6 +3,7 @@ use crate::client_table::TableServiceClientType;
 use crate::errors::{YdbError, YdbResult};
 use crate::query::Query;
 use crate::result::{QueryResult, StreamResult};
+use crate::types::Value;
 use derivative::Derivative;
 use itertools::Itertools;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -14,6 +15,7 @@ use crate::grpc_wrapper::raw_table_service::client::{
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
 use crate::grpc_wrapper::raw_errors::RawResult;
+use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertRequest;
 use crate::grpc_wrapper::raw_table_service::commit_transaction::RawCommitTransactionRequest;
 use crate::grpc_wrapper::raw_table_service::copy_table::{
     RawCopyTableRequest, RawCopyTablesRequest,
@@ -111,6 +113,21 @@ impl Session {
                 operation_params: self.timeouts.operation_params(),
             })
             .await;
+        self.handle_raw_result(res)?;
+        Ok(())
+    }
+
+    pub(crate) async fn execute_bulk_upsert(
+        &mut self,
+        table_path: String,
+        rows: Value,
+    ) -> YdbResult<()> {
+        let req = RawBulkUpsertRequest {
+            table: table_path,
+            rows: rows.to_typed_value()?,
+            operation_params: self.timeouts.operation_params(),
+        };
+        let res = self.get_table_client().await?.bulk_upsert(req).await;
         self.handle_raw_result(res)?;
         Ok(())
     }

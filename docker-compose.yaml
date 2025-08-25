@@ -3,6 +3,7 @@ services:
   ydb:
     image: cr.yandex/yc/yandex-docker-local-ydb:latest
     hostname: localhost # for good discovery
+    platform: linux/amd64
     environment:
       YDB_ANONYMOUS_CREDENTIALS: 1
     ports:

@@ -1,3 +1,4 @@
+pub(crate) mod bulk_upsert;
 pub(crate) mod client;
 pub(crate) mod commit_transaction;
 pub(crate) mod copy_table;
