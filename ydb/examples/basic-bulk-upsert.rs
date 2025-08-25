@@ -25,19 +25,16 @@ async fn main() -> YdbResult<()> {
         )
         .await?;
 
-    let my_optional_value: Option<String> = Some("hello".to_string());
-    let ydb_value: Value = my_optional_value.into();
-
     let fields: Vec<(String, Value)> = vec![
-        ("id".to_string(), 1_i64.into()),
-        ("val".to_string(), ydb_value.clone()),
+        ("id".to_string(), Value::Int64(0)),
+        ("val".to_string(), Option::<String>::None.into()),
     ];
 
     // Create vec of structs, there values will insert to table
-    let rows = vec![
+    let rows: Vec<Value> = vec![
         ydb_struct!(
             "id" => 1_i64,
-            "val" => "test",
+            "val" => Value::Text("test".to_string()),
         ),
         ydb_struct!(
             "id" => 2_i64,

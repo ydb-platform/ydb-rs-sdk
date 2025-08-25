@@ -9,7 +9,6 @@ use rand::distributions::{Alphanumeric, DistString};
 use tonic::{Code, Status};
 use tracing::trace;
 use tracing_test::traced_test;
-use ydb_grpc::ydb_proto::table;
 
 use crate::client_table::RetryOptions;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
@@ -897,38 +896,34 @@ async fn bulk_upsert() -> YdbResult<()> {
     table_client
         .retry_execute_scheme_query(format!(
             "
-                CREATE TABLE {} (
-                    id Int64,
-                    val String,
+                CREATE TABLE {table_name} (
+                    id Int64 NOT NULL,
+                    val Utf8,
                     PRIMARY KEY (id)
                 );
-            ",
-            table_name,
+            "
         ))
         .await?;
 
-    let my_optional_value: Option<String> = Some("hello".to_string());
-    let ydb_value: Value = my_optional_value.into();
-
     let fields: Vec<(String, Value)> = vec![
-        ("id".to_string(), 1_i64.into()),
-        ("val".to_string(), ydb_value.clone()),
+        ("id".to_string(), Value::Int64(0)),
+        ("val".to_string(), Option::<String>::None.into()),
     ];
 
     let rows = vec![
         ydb_struct!(
-            "id" => 1_i64,
-            "val" => "test",
+            "id" => 3_i64,
+            "val" => Value::Text("test".to_string()),
         ),
         ydb_struct!(
-            "id" => 2_i64,
+            "id" => 6_i64,
             "val" => Value::Null,
         ),
     ];
 
     table_client
         .retry_execute_bulk_upsert(
-            format!("/local/{}", table_name),
+            format!("/local/{table_name}"),
             crate::types::BulkRows::new(fields, rows),
         )
         .await?;
@@ -937,7 +932,9 @@ async fn bulk_upsert() -> YdbResult<()> {
         .retry_transaction(|t| async {
             let mut t = t;
             let res = t
-                .query(Query::new("SELECT * FROM test ORDER BY id"))
+                .query(Query::new(format!(
+                    "SELECT * FROM {table_name} ORDER BY id"
+                )))
                 .await?;
             Ok(res)
         })
@@ -954,7 +951,7 @@ async fn bulk_upsert() -> YdbResult<()> {
         .collect();
     let read_rows_id = read_rows_id?;
 
-    assert_eq!(vec![1, 2], read_rows_id);
+    assert_eq!(vec![3, 6], read_rows_id);
 
     table_client
         .retry_with_session(RetryOptions::new(), |session| async {
