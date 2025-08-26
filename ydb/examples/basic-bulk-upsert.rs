@@ -1,6 +1,6 @@
 use std::time::Duration;
 use tokio::time::timeout;
-use ydb::{ydb_struct, BulkRows, ClientBuilder, Query, Value, YdbError, YdbResult};
+use ydb::{ydb_struct, ClientBuilder, Query, Value, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -14,21 +14,18 @@ async fn main() -> YdbResult<()> {
     };
 
     let table_client = client.table_client();
+    let table_name = "test";
+
     let _ = table_client
-        .retry_execute_scheme_query("DROP TABLE test")
+        .retry_execute_scheme_query(format!("DROP TABLE {table_name}"))
         .await; // ignore drop error
 
     // create table
     table_client
-        .retry_execute_scheme_query(
-            "CREATE TABLE test (id Int64 NOT NULL, val Utf8, PRIMARY KEY(id))",
-        )
+        .retry_execute_scheme_query(format!(
+            "CREATE TABLE {table_name} (id Int64 NOT NULL, val Utf8, PRIMARY KEY(id))",
+        ))
         .await?;
-
-    let fields: Vec<(String, Value)> = vec![
-        ("id".to_string(), Value::Int64(0)),
-        ("val".to_string(), Option::<String>::None.into()),
-    ];
 
     // Create vec of structs, there values will insert to table
     let rows: Vec<Value> = vec![
@@ -43,14 +40,16 @@ async fn main() -> YdbResult<()> {
     ];
 
     table_client
-        .retry_execute_bulk_upsert("/local/test".to_string(), BulkRows::new(fields, rows))
+        .retry_execute_bulk_upsert(format!("/local/{table_name}").to_string(), rows)
         .await?;
 
     let read = table_client
         .retry_transaction(|t| async {
             let mut t = t;
             let res = t
-                .query(Query::new("SELECT * FROM test ORDER BY id"))
+                .query(Query::new(format!(
+                    "SELECT * FROM {table_name} ORDER BY id"
+                )))
                 .await?;
             Ok(res)
         })

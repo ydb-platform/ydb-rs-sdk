@@ -208,34 +208,6 @@ impl Default for Box<ValueOptional> {
     }
 }
 
-/// A helper type to construct a `Value::List` of `Value::Struct`s.
-#[derive(Clone, Debug, PartialEq)]
-pub struct BulkRows {
-    fields: Vec<(String, Value)>,
-    rows: Vec<Value>,
-}
-
-impl BulkRows {
-    /// Creates a new `BulkRows`.
-    ///
-    /// - `fields`: Defines the structure. A vector of (name, type_template) tuples.
-    /// - `rows`: The data for each struct. A vector of struct value is a row.
-    pub fn new(fields: Vec<(String, Value)>, rows: Vec<Value>) -> Self {
-        Self { fields, rows }
-    }
-}
-
-impl TryFrom<BulkRows> for Value {
-    type Error = YdbError;
-
-    fn try_from(list_of_structs: BulkRows) -> Result<Self, Self::Error> {
-        Value::list_from(
-            Value::struct_from_fields(list_of_structs.fields),
-            list_of_structs.rows,
-        )
-    }
-}
-
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum Sign {
     #[default]

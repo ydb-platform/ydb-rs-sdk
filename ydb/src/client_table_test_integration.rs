@@ -905,11 +905,6 @@ async fn bulk_upsert() -> YdbResult<()> {
         ))
         .await?;
 
-    let fields: Vec<(String, Value)> = vec![
-        ("id".to_string(), Value::Int64(0)),
-        ("val".to_string(), Option::<String>::None.into()),
-    ];
-
     let rows = vec![
         ydb_struct!(
             "id" => 3_i64,
@@ -922,10 +917,7 @@ async fn bulk_upsert() -> YdbResult<()> {
     ];
 
     table_client
-        .retry_execute_bulk_upsert(
-            format!("/local/{table_name}"),
-            crate::types::BulkRows::new(fields, rows),
-        )
+        .retry_execute_bulk_upsert(format!("/local/{table_name}"), rows)
         .await?;
 
     let read = table_client

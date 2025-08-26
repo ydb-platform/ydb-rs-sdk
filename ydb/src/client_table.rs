@@ -4,7 +4,7 @@ use crate::errors::*;
 use crate::session::Session;
 use crate::session_pool::SessionPool;
 use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
-use crate::types::{BulkRows, Value};
+use crate::types::Value;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
 
@@ -257,14 +257,25 @@ impl TableClient {
     pub async fn retry_execute_bulk_upsert(
         &self,
         table_path: String,
-        bulk_rows: BulkRows,
+        rows: Vec<Value>,
     ) -> YdbResult<()> {
-        let rows: Value = bulk_rows.try_into()?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+
+        let examle_value = rows[0].clone();
+        if !matches!(&examle_value, Value::Struct(_)) {
+            return Err(YdbError::Custom(
+                "expected ValueStruct type for items".to_string(),
+            ));
+        }
+
+        let value = Value::list_from(examle_value, rows)?;
 
         self.retry(|| async {
             let mut session = self.create_session().await?;
             session
-                .execute_bulk_upsert(table_path.clone(), rows.clone())
+                .execute_bulk_upsert(table_path.clone(), value.clone())
                 .await
         })
         .await
