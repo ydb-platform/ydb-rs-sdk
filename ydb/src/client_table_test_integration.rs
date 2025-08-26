@@ -18,7 +18,7 @@ use crate::test_integration_helper::create_client;
 use crate::transaction::Mode;
 use crate::transaction::Transaction;
 use crate::types::{Value, ValueList, ValueStruct};
-use crate::{ydb_params, Bytes, TableClient};
+use crate::{ydb_params, ydb_struct, Bytes, TableClient};
 
 #[tokio::test]
 #[traced_test]
@@ -882,5 +882,80 @@ FROM
 
     // TODO: need improove for non flap in tests for will strong more then 1
     assert!(result_set_count > 1); // ensure get multiply results
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn bulk_upsert() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let table_name = "bulk_upsert";
+
+    table_client
+        .retry_execute_scheme_query(format!(
+            "
+                CREATE TABLE {table_name} (
+                    id Int64 NOT NULL,
+                    val Utf8,
+                    PRIMARY KEY (id)
+                );
+            "
+        ))
+        .await?;
+
+    let rows = vec![
+        ydb_struct!(
+            "id" => 3_i64,
+            "val" => Value::Text("test".to_string()),
+        ),
+        ydb_struct!(
+            "id" => 6_i64,
+            "val" => Value::Null,
+        ),
+    ];
+
+    table_client
+        .retry_execute_bulk_upsert(format!("/local/{table_name}"), rows)
+        .await?;
+
+    let read = table_client
+        .retry_transaction(|t| async {
+            let mut t = t;
+            let res = t
+                .query(Query::new(format!(
+                    "SELECT * FROM {table_name} ORDER BY id"
+                )))
+                .await?;
+            Ok(res)
+        })
+        .await?;
+
+    let read_rows_id: YdbResult<Vec<i64>> = read
+        .into_only_result()?
+        .rows()
+        .map(|mut row| {
+            let val = row.remove_field_by_name("id")?;
+            let res: i64 = val.try_into()?;
+            Ok(res)
+        })
+        .collect();
+    let read_rows_id = read_rows_id?;
+
+    assert_eq!(vec![3, 6], read_rows_id);
+
+    table_client
+        .retry_with_session(RetryOptions::new(), |session| async {
+            let mut session = session; // force borrow for lifetime of t inside closure
+            session
+                .execute_schema_query(format!("DROP TABLE {table_name}"))
+                .await?;
+
+            Ok(())
+        })
+        .await
+        .unwrap();
+
     Ok(())
 }

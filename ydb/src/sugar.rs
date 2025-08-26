@@ -44,7 +44,7 @@ macro_rules! ydb_struct {
     (
         $($field_name:expr => $val:expr),+ $(,)?
     ) => {
-        ydb::Value::struct_from_fields(vec![
+        $crate::Value::struct_from_fields(vec![
             $( ($field_name.into(), $val.into()), )+
         ])
     }
