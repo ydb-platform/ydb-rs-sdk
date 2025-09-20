@@ -9,7 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
-  RUST_VERSION_NEW: "1.88.0"
+  RUST_VERSION_NEW: "1.90.0"
 
 jobs:
   check-code-style:

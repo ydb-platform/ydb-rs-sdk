@@ -73,8 +73,8 @@ impl<TBalancer: LoadBalancer> State<TBalancer> {
         cert_path: Option<String>,
     ) -> Self {
         let mut cp = ConnectionPool::new();
-        if cert_path.is_some() {
-            cp = cp.load_certificate(cert_path.unwrap());
+        if let Some(cert_path) = cert_path {
+            cp = cp.load_certificate(cert_path);
         }
 
         State {
