@@ -435,8 +435,7 @@ impl TableClient {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
+    pub fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
         self.error_on_truncate = error_on_truncate;
         self
     }
