@@ -10,18 +10,16 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
+use crate::retry::{NoRetrier, Retry, RetryParams, TimeoutRetrier};
 use crate::table_service_types::{CopyTableItem, TableDescription};
+use crate::types_converters::try_vec_to_list_of_structs;
 use crate::{Query, StreamResult};
-use num::pow;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{instrument, trace};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
-
-const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
-const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
 
 pub(crate) type TableServiceClientType = TableServiceClient<InterceptedChannel>;
 
@@ -125,23 +123,6 @@ pub struct TableClient {
     transaction_options: TransactionOptions,
     idempotent_operation: bool,
     timeouts: TimeoutSettings,
-}
-
-/// Tries to construct [`Value::List`] of [`Value::Struct`] from `values`.
-/// If `values` are empty (no example value), return None.
-/// If any of values is not [`Value::Struct`] or differs from others by structure, returns [`YdbError`]
-fn try_vec_to_list_of_structs(values: Vec<Value>) -> YdbResult<Option<Value>> {
-    let Some(example_value) = values.first().cloned() else {
-        return Ok(None);
-    };
-
-    if !matches!(example_value, Value::Struct(_)) {
-        return Err(YdbError::Custom(
-            "expected ValueStruct type for items".to_string(),
-        ));
-    }
-
-    Ok(Some(Value::list_from(example_value, values)?))
 }
 
 impl TableClient {
@@ -594,96 +575,5 @@ impl TableClient {
         })
         .await
         .map_err(YdbOrCustomerError::to_ydb_error)
-    }
-}
-
-#[derive(Debug)]
-struct RetryParams {
-    pub(crate) attempt: usize,
-    pub(crate) time_from_start: Duration,
-}
-
-// May be extend in feature
-#[derive(Default, Debug)]
-struct RetryDecision {
-    pub(crate) allow_retry: bool,
-    pub(crate) wait_timeout: Duration,
-}
-
-trait Retry: Send + Sync {
-    fn wait_duration(&self, params: RetryParams) -> RetryDecision;
-}
-
-#[derive(Debug)]
-struct TimeoutRetrier {
-    timeout: Duration,
-}
-
-impl Default for TimeoutRetrier {
-    fn default() -> Self {
-        Self {
-            timeout: DEFAULT_RETRY_TIMEOUT,
-        }
-    }
-}
-
-impl Retry for TimeoutRetrier {
-    #[instrument(ret)]
-    fn wait_duration(&self, params: RetryParams) -> RetryDecision {
-        let mut res = RetryDecision::default();
-        if params.time_from_start < self.timeout {
-            if params.attempt > 0 {
-                res.wait_timeout =
-                    Duration::from_millis(pow(INITIAL_RETRY_BACKOFF_MILLISECONDS, params.attempt));
-            }
-            res.allow_retry = (params.time_from_start + res.wait_timeout) < self.timeout;
-        };
-
-        res
-    }
-}
-
-struct NoRetrier {}
-
-impl Retry for NoRetrier {
-    #[instrument(skip_all)]
-    fn wait_duration(&self, _: RetryParams) -> RetryDecision {
-        RetryDecision {
-            allow_retry: false,
-            wait_timeout: Duration::default(),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::ydb_struct;
-
-    use super::*;
-
-    #[test]
-    fn try_vec_empty() {
-        assert!(matches!(try_vec_to_list_of_structs(vec![]), Ok(None)));
-    }
-
-    #[test]
-    fn try_vec_same_structure() {
-        let values = vec![ydb_struct!("id" => 1), ydb_struct!("id" => 2)];
-        assert!(matches!(try_vec_to_list_of_structs(values), Ok(Some(_))));
-    }
-
-    #[test]
-    fn try_vec_different_structure() {
-        let values = vec![ydb_struct!("id" => 1), ydb_struct!("key" => 2)];
-        assert!(try_vec_to_list_of_structs(values).is_err());
-    }
-
-    #[test]
-    fn try_vec_non_struct() {
-        let values = vec![ydb_struct!("id" => 1), 42i64.into()];
-        assert!(try_vec_to_list_of_structs(values).is_err());
-
-        let values = vec![1i64.into()];
-        assert!(try_vec_to_list_of_structs(values).is_err());
     }
 }
