@@ -210,7 +210,7 @@ impl TopicWriter {
             write_request_send_messages_period: writer_options.write_request_send_messages_period,
             auto_set_seq_no: writer_options.auto_seq_no,
             codecs_from_server: init_response.supported_codecs,
-            retrier: retrier, // TODO: allow as parameter?
+            retrier, // TODO: allow as parameter?
             writer_message_sender: messages_sender,
             writer_loop,
             receive_messages_loop,
@@ -276,7 +276,7 @@ impl TopicWriter {
         if !messages.is_empty() {
             // TODO: if messages aren't sent, save for next write_loop_iteration() call?
             trace!("Sending topic message to grpc stream...");
-            return match TopicWriter::retry(&retrier, || async {
+            return match TopicWriter::retry(retrier, || async {
                 task_params
                     .request_stream
                     .send(stream_write_message::FromClient {
