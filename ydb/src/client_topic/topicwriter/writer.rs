@@ -23,8 +23,8 @@ use std::time::Instant;
 use std::time::{Duration, UNIX_EPOCH};
 
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::error::SendError;
+use tokio::sync::mpsc::Receiver;
 use tokio::task::JoinHandle;
 
 use tokio::time::timeout;
@@ -144,7 +144,7 @@ impl TopicWriter {
             producer_id: Some(producer_id.clone()),
             request_stream: stream.clone_sender(),
         };
-        let retrier: Arc<Box<dyn Retry>> = Arc::new(Box::new(TimeoutRetrier::default()));  // TODO: allow as parameter?
+        let retrier: Arc<Box<dyn Retry>> = Arc::new(Box::new(TimeoutRetrier::default())); // TODO: allow as parameter?
 
         let writer_loop_retrier = retrier.clone();
         let writer_loop = tokio::spawn(async move {
@@ -210,7 +210,7 @@ impl TopicWriter {
             write_request_send_messages_period: writer_options.write_request_send_messages_period,
             auto_set_seq_no: writer_options.auto_seq_no,
             codecs_from_server: init_response.supported_codecs,
-            retrier: retrier,  // TODO: allow as parameter?
+            retrier: retrier, // TODO: allow as parameter?
             writer_message_sender: messages_sender,
             writer_loop,
             receive_messages_loop,
@@ -276,10 +276,8 @@ impl TopicWriter {
         if !messages.is_empty() {
             // TODO: if messages aren't sent, save for next write_loop_iteration() call?
             trace!("Sending topic message to grpc stream...");
-            return match TopicWriter::retry(
-                &retrier,
-                || async {
-                    task_params
+            return match TopicWriter::retry(&retrier, || async {
+                task_params
                     .request_stream
                     .send(stream_write_message::FromClient {
                         client_message: Some(ClientMessage::WriteRequest(WriteRequest {
@@ -288,8 +286,9 @@ impl TopicWriter {
                             tx: None,
                         })),
                     })
-                },
-            ).await {
+            })
+            .await
+            {
                 Ok(_) => Ok(()),
                 Err(err) => Err(YdbError::Transport(err.to_string())),
             };
@@ -302,7 +301,8 @@ impl TopicWriter {
         callback: impl Fn() -> CallbackFuture,
     ) -> Result<CallbackResult, SendError<stream_write_message::FromClient>>
     where
-        CallbackFuture: Future<Output = Result<CallbackResult, SendError<stream_write_message::FromClient>>>,
+        CallbackFuture:
+            Future<Output = Result<CallbackResult, SendError<stream_write_message::FromClient>>>,
     {
         let mut attempt: usize = 0;
         let start = Instant::now();

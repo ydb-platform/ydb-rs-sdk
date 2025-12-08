@@ -1,5 +1,5 @@
-use std::time::Duration;
 use num::pow;
+use std::time::Duration;
 use tracing::instrument;
 
 const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
