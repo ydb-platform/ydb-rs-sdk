@@ -68,6 +68,7 @@ mod load_balancer;
 mod pub_traits;
 pub(crate) mod query;
 pub(crate) mod result;
+mod retry;
 mod session;
 mod session_pool;
 mod sugar;
