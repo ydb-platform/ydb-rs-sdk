@@ -10,6 +10,7 @@ use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
 use crate::grpc_wrapper::raw_topic_service::stream_write::init::RawInitResponse;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
+use crate::retry::{Retry, RetryParams, TimeoutRetrier};
 use crate::{grpc_wrapper, YdbError, YdbResult};
 use std::borrow::{Borrow, BorrowMut};
 
@@ -23,6 +24,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
+use tokio::sync::mpsc::error::SendError;
 use tokio::task::JoinHandle;
 
 use tokio::time::timeout;
@@ -56,6 +58,7 @@ pub struct TopicWriter {
     pub(crate) auto_set_seq_no: bool,
     pub(crate) codecs_from_server: RawSupportedCodecs,
 
+    retrier: Arc<Box<dyn Retry>>,
     writer_message_sender: mpsc::Sender<TopicWriterMessage>,
     writer_loop: JoinHandle<()>,
     receive_messages_loop: JoinHandle<()>,
@@ -141,12 +144,16 @@ impl TopicWriter {
             producer_id: Some(producer_id.clone()),
             request_stream: stream.clone_sender(),
         };
+        let retrier: Arc<Box<dyn Retry>> = Arc::new(Box::new(TimeoutRetrier::default()));  // TODO: allow as parameter?
+
+        let writer_loop_retrier = retrier.clone();
         let writer_loop = tokio::spawn(async move {
             let mut message_receiver = messages_receiver; // force move inside
             let task_params = writer_loop_task_params; // force move inside
 
             loop {
                 match TopicWriter::write_loop_iteration(
+                    &writer_loop_retrier,
                     message_receiver.borrow_mut(),
                     task_params.borrow(),
                 )
@@ -165,6 +172,7 @@ impl TopicWriter {
                 }
             }
         });
+
         let receive_messages_loop = tokio::spawn(async move {
             let mut stream = stream; // force move inside
             let mut reception_queue = message_loop_reception_queue; // force move inside
@@ -202,6 +210,7 @@ impl TopicWriter {
             write_request_send_messages_period: writer_options.write_request_send_messages_period,
             auto_set_seq_no: writer_options.auto_seq_no,
             codecs_from_server: init_response.supported_codecs,
+            retrier: retrier,  // TODO: allow as parameter?
             writer_message_sender: messages_sender,
             writer_loop,
             receive_messages_loop,
@@ -213,13 +222,14 @@ impl TopicWriter {
     }
 
     async fn write_loop_iteration(
+        retrier: &Arc<Box<dyn Retry>>,
         messages_receiver: &mut Receiver<TopicWriterMessage>,
         task_params: &WriterPeriodicTaskParams,
     ) -> YdbResult<()> {
         let start = Instant::now();
         let mut messages = vec![];
 
-        // wait messages loop
+        // wait for messages loop
         'messages_loop: loop {
             let elapsed = start.elapsed();
             if messages.len() >= task_params.write_request_messages_chunk_size
@@ -264,19 +274,55 @@ impl TopicWriter {
         }
 
         if !messages.is_empty() {
+            // TODO: if messages aren't sent, save for next write_loop_iteration() call?
             trace!("Sending topic message to grpc stream...");
-            task_params
-                .request_stream
-                .send(stream_write_message::FromClient {
-                    client_message: Some(ClientMessage::WriteRequest(WriteRequest {
-                        messages,
-                        codec: 1,
-                        tx: None,
-                    })),
-                })
-                .unwrap(); // TODO: HANDLE ERROR
+            return match TopicWriter::retry(
+                &retrier,
+                || async {
+                    task_params
+                    .request_stream
+                    .send(stream_write_message::FromClient {
+                        client_message: Some(ClientMessage::WriteRequest(WriteRequest {
+                            messages: messages.clone(),
+                            codec: 1,
+                            tx: None,
+                        })),
+                    })
+                },
+            ).await {
+                Ok(_) => Ok(()),
+                Err(err) => Err(YdbError::Transport(err.to_string())),
+            };
         }
         Ok(())
+    }
+
+    async fn retry<CallbackFuture, CallbackResult>(
+        retrier: &Arc<Box<dyn Retry>>,
+        callback: impl Fn() -> CallbackFuture,
+    ) -> Result<CallbackResult, SendError<stream_write_message::FromClient>>
+    where
+        CallbackFuture: Future<Output = Result<CallbackResult, SendError<stream_write_message::FromClient>>>,
+    {
+        let mut attempt: usize = 0;
+        let start = Instant::now();
+        loop {
+            attempt += 1;
+            let last_err = match callback().await {
+                Ok(res) => return Ok(res),
+                Err(err) => err,
+            };
+
+            let now = std::time::Instant::now();
+            let retry_decision = retrier.wait_duration(RetryParams {
+                attempt,
+                time_from_start: now.duration_since(start),
+            });
+            if !retry_decision.allow_retry {
+                return Err(last_err);
+            }
+            tokio::time::sleep(retry_decision.wait_timeout).await;
+        }
     }
 
     async fn receive_messages_loop_iteration(
