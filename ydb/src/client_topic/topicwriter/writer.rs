@@ -23,7 +23,6 @@ use std::time::Instant;
 use std::time::{Duration, UNIX_EPOCH};
 
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::Receiver;
 use tokio::task::JoinHandle;
 
@@ -92,7 +91,9 @@ struct WriterPeriodicTaskParams {
     write_request_messages_chunk_size: usize,
     write_request_send_messages_period: Duration,
     producer_id: Option<String>,
-    request_stream: mpsc::UnboundedSender<stream_write_message::FromClient>,
+    request_stream: Arc<Mutex<mpsc::UnboundedSender<stream_write_message::FromClient>>>,
+    connection_manager: GrpcConnectionManager,
+    init_request: InitRequest,
 }
 
 impl TopicWriter {
@@ -120,7 +121,7 @@ impl TopicWriter {
             partitioning: Some(Partitioning::MessageGroupId(producer_id.clone())),
         };
 
-        let mut stream = topic_service.stream_write(init_request_body).await?;
+        let mut stream = topic_service.stream_write(init_request_body.clone()).await?;
         let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
 
         let (messages_sender, messages_receiver): (
@@ -142,7 +143,9 @@ impl TopicWriter {
             write_request_messages_chunk_size: writer_options.write_request_messages_chunk_size,
             write_request_send_messages_period: writer_options.write_request_send_messages_period,
             producer_id: Some(producer_id.clone()),
-            request_stream: stream.clone_sender(),
+            request_stream: Arc::new(Mutex::new(stream.clone_sender())),
+            connection_manager: connection_manager.clone(),
+            init_request: init_request_body,
         };
         let retrier: Arc<Box<dyn Retry>> = Arc::new(Box::new(TimeoutRetrier::default())); // TODO: allow as parameter?
 
@@ -210,7 +213,7 @@ impl TopicWriter {
             write_request_send_messages_period: writer_options.write_request_send_messages_period,
             auto_set_seq_no: writer_options.auto_seq_no,
             codecs_from_server: init_response.supported_codecs,
-            retrier, // TODO: allow as parameter?
+            retrier,
             writer_message_sender: messages_sender,
             writer_loop,
             receive_messages_loop,
@@ -275,18 +278,8 @@ impl TopicWriter {
 
         if !messages.is_empty() {
             // TODO: if messages aren't sent, save for next write_loop_iteration() call?
-            trace!("Sending topic message to grpc stream...");
-            return match TopicWriter::retry(retrier, || async {
-                task_params
-                    .request_stream
-                    .send(stream_write_message::FromClient {
-                        client_message: Some(ClientMessage::WriteRequest(WriteRequest {
-                            messages: messages.clone(),
-                            codec: 1,
-                            tx: None,
-                        })),
-                    })
-            })
+            trace!("Sending topic message to grpc stream");
+            return match TopicWriter::retry_send_messages(retrier, task_params, &messages)
             .await
             {
                 Ok(_) => Ok(()),
@@ -296,21 +289,39 @@ impl TopicWriter {
         Ok(())
     }
 
-    async fn retry<CallbackFuture, CallbackResult>(
+    async fn retry_send_messages(
         retrier: &Arc<Box<dyn Retry>>,
-        callback: impl Fn() -> CallbackFuture,
-    ) -> Result<CallbackResult, SendError<stream_write_message::FromClient>>
-    where
-        CallbackFuture:
-            Future<Output = Result<CallbackResult, SendError<stream_write_message::FromClient>>>,
-    {
+        task_params: &WriterPeriodicTaskParams,
+        messages: &Vec<MessageData>,
+    ) -> YdbResult<()> {
         let mut attempt: usize = 0;
         let start = Instant::now();
+        let mut reconnection_err: Option<YdbError> = None;
+
         loop {
             attempt += 1;
-            let last_err = match callback().await {
-                Ok(res) => return Ok(res),
-                Err(err) => err,
+
+            let last_err = match reconnection_err {
+                Some(err) => err,
+                None => {
+                    let send_result = {
+                        let request_stream = task_params.request_stream.lock().unwrap();
+                        request_stream.send(stream_write_message::FromClient {
+                            client_message: Some(ClientMessage::WriteRequest(WriteRequest {
+                                messages: messages.clone(),
+                                codec: 1,
+                                tx: None,
+                            })),
+                        })
+                    };
+
+                    match send_result {
+                        Ok(_) => {
+                            return Ok(())
+                        },
+                        Err(err) => YdbError::Transport(err.to_string()),
+                    }
+                }
             };
 
             let now = std::time::Instant::now();
@@ -322,7 +333,41 @@ impl TopicWriter {
                 return Err(last_err);
             }
             tokio::time::sleep(retry_decision.wait_timeout).await;
+
+            match TopicWriter::reconnect(task_params).await {
+                Ok(_) => {
+                    trace!("Reconnect is successful, retrying send");
+                    reconnection_err = None;
+                }
+                Err(err) => {
+                    warn!("Reconnect has failed: {}", err);
+                    reconnection_err = Some(err);
+                }
+            }
         }
+    }
+
+    async fn reconnect(
+        task_params: &WriterPeriodicTaskParams,
+    ) -> YdbResult<()> {
+
+        let mut topic_service = task_params
+            .connection_manager
+            .get_auth_service(grpc_wrapper::raw_topic_service::client::RawTopicClient::new)
+            .await?;
+
+        let mut stream = topic_service
+            .stream_write(task_params.init_request.clone())
+            .await?;
+
+        let _init_response = RawInitResponse::try_from(
+            stream.receive::<RawServerMessage>().await?
+        )?;
+
+        let mut request_stream = task_params.request_stream.lock().unwrap();
+        *request_stream = stream.clone_sender();
+
+        Ok(())
     }
 
     async fn receive_messages_loop_iteration(
