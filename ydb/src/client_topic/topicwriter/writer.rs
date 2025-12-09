@@ -121,7 +121,9 @@ impl TopicWriter {
             partitioning: Some(Partitioning::MessageGroupId(producer_id.clone())),
         };
 
-        let mut stream = topic_service.stream_write(init_request_body.clone()).await?;
+        let mut stream = topic_service
+            .stream_write(init_request_body.clone())
+            .await?;
         let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
 
         let (messages_sender, messages_receiver): (
@@ -279,9 +281,10 @@ impl TopicWriter {
         if !messages.is_empty() {
             // TODO: if messages aren't sent, save for next write_loop_iteration() call?
             trace!("Sending topic message to grpc stream");
-            return match TopicWriter::retry_send_messages(retrier, task_params, &messages)
-            .await
-            {
+            let retry_res =
+                TopicWriter::retry_send_messages(retrier, task_params, messages.to_owned()).await;
+
+            return match retry_res {
                 Ok(_) => Ok(()),
                 Err(err) => Err(YdbError::Transport(err.to_string())),
             };
@@ -292,7 +295,7 @@ impl TopicWriter {
     async fn retry_send_messages(
         retrier: &Arc<Box<dyn Retry>>,
         task_params: &WriterPeriodicTaskParams,
-        messages: &Vec<MessageData>,
+        messages: Vec<MessageData>,
     ) -> YdbResult<()> {
         let mut attempt: usize = 0;
         let start = Instant::now();
@@ -308,7 +311,7 @@ impl TopicWriter {
                         let request_stream = task_params.request_stream.lock().unwrap();
                         request_stream.send(stream_write_message::FromClient {
                             client_message: Some(ClientMessage::WriteRequest(WriteRequest {
-                                messages: messages.clone(),
+                                messages: messages.to_owned(),
                                 codec: 1,
                                 tx: None,
                             })),
@@ -316,9 +319,7 @@ impl TopicWriter {
                     };
 
                     match send_result {
-                        Ok(_) => {
-                            return Ok(())
-                        },
+                        Ok(_) => return Ok(()),
                         Err(err) => YdbError::Transport(err.to_string()),
                     }
                 }
@@ -347,10 +348,7 @@ impl TopicWriter {
         }
     }
 
-    async fn reconnect(
-        task_params: &WriterPeriodicTaskParams,
-    ) -> YdbResult<()> {
-
+    async fn reconnect(task_params: &WriterPeriodicTaskParams) -> YdbResult<()> {
         let mut topic_service = task_params
             .connection_manager
             .get_auth_service(grpc_wrapper::raw_topic_service::client::RawTopicClient::new)
@@ -360,9 +358,8 @@ impl TopicWriter {
             .stream_write(task_params.init_request.clone())
             .await?;
 
-        let _init_response = RawInitResponse::try_from(
-            stream.receive::<RawServerMessage>().await?
-        )?;
+        let _init_response =
+            RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
 
         let mut request_stream = task_params.request_stream.lock().unwrap();
         *request_stream = stream.clone_sender();
