@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Instant;
 use std::time::{Duration, UNIX_EPOCH};
+use tokio::sync::Mutex as TokioMutex;
 
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
@@ -91,7 +92,14 @@ struct WriterPeriodicTaskParams {
     write_request_messages_chunk_size: usize,
     write_request_send_messages_period: Duration,
     producer_id: Option<String>,
-    request_stream: Arc<Mutex<mpsc::UnboundedSender<stream_write_message::FromClient>>>,
+    stream: Arc<
+        TokioMutex<
+            AsyncGrpcStreamWrapper<
+                stream_write_message::FromClient,
+                stream_write_message::FromServer,
+            >,
+        >,
+    >,
     connection_manager: GrpcConnectionManager,
     init_request: InitRequest,
 }
@@ -141,11 +149,13 @@ impl TopicWriter {
         let writer_state_ref_message_receive_loop = topic_writer_state.clone();
         let message_loop_reception_queue = confirmation_reception_queue.clone();
 
+        let shared_stream = Arc::new(TokioMutex::new(stream));
+
         let writer_loop_task_params = WriterPeriodicTaskParams {
             write_request_messages_chunk_size: writer_options.write_request_messages_chunk_size,
             write_request_send_messages_period: writer_options.write_request_send_messages_period,
             producer_id: Some(producer_id.clone()),
-            request_stream: Arc::new(Mutex::new(stream.clone_sender())),
+            stream: shared_stream.clone(),
             connection_manager: connection_manager.clone(),
             init_request: init_request_body,
         };
@@ -178,16 +188,20 @@ impl TopicWriter {
             }
         });
 
+        let receive_messages_loop_stream = shared_stream.clone();
         let receive_messages_loop = tokio::spawn(async move {
-            let mut stream = stream; // force move inside
             let mut reception_queue = message_loop_reception_queue; // force move inside
 
             loop {
                 tokio::select! {
                     _ = message_receive_loop_cancellation_token.cancelled() => { return ; }
-                    message_receive_it_res = TopicWriter::receive_messages_loop_iteration(
-                                                          stream.borrow_mut(),
-                                                          reception_queue.borrow_mut()) => {
+                    message_receive_it_res = async {
+                        let mut stream = receive_messages_loop_stream.lock().await;
+                        TopicWriter::receive_messages_loop_iteration(
+                            stream.borrow_mut(),
+                            reception_queue.borrow_mut()
+                        ).await
+                    } => {
                         match message_receive_it_res {
                             Ok(_) => {}
                             Err(receive_message_iteration_error) => {
@@ -308,8 +322,8 @@ impl TopicWriter {
                 Some(err) => err,
                 None => {
                     let send_result = {
-                        let request_stream = task_params.request_stream.lock().unwrap();
-                        request_stream.send(stream_write_message::FromClient {
+                        let mut stream = task_params.stream.lock().await;
+                        stream.send_nowait(stream_write_message::FromClient {
                             client_message: Some(ClientMessage::WriteRequest(WriteRequest {
                                 messages: messages.to_owned(),
                                 codec: 1,
@@ -361,8 +375,9 @@ impl TopicWriter {
         let _init_response =
             RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
 
-        let mut request_stream = task_params.request_stream.lock().unwrap();
-        *request_stream = stream.clone_sender();
+        // Update the shared stream so both write and receive loops use the new connection
+        let mut shared_stream = task_params.stream.lock().await;
+        *shared_stream = stream;
 
         Ok(())
     }
