@@ -9,7 +9,7 @@ use crate::types::Value;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
-use crate::table_service_types::CopyTableItem;
+use crate::retry::{NoRetrier, Retry, RetryParams, TimeoutRetrier};
 use crate::table_service_types::{CopyTableItem, TableDescription};
 use crate::{Query, StreamResult};
 use std::future::Future;
