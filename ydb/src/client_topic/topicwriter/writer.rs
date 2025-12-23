@@ -10,7 +10,7 @@ use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
 use crate::grpc_wrapper::raw_topic_service::stream_write::init::RawInitResponse;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
-use crate::retry::{Retry, RetryParams, TimeoutRetrier};
+use crate::retry::{Retry, RetryParams};
 use crate::{grpc_wrapper, YdbError, YdbResult};
 use std::borrow::{Borrow, BorrowMut};
 
@@ -179,72 +179,7 @@ impl TopicWriter {
         })
     }
 
-    async fn write_loop_iteration(
-        retrier: &Arc<Box<dyn Retry>>,
-        messages_receiver: &mut Receiver<TopicWriterMessage>,
-        task_params: &WriterPeriodicTaskParams,
-    ) -> YdbResult<()> {
-        let start = Instant::now();
-        let mut messages = vec![];
-
-        // wait for messages loop
-        'messages_loop: loop {
-            let elapsed = start.elapsed();
-            if messages.len() >= task_params.write_request_messages_chunk_size
-                || !messages.is_empty() && elapsed >= task_params.write_request_send_messages_period
-            {
-                break;
-            }
-
-            match timeout(
-                task_params.write_request_send_messages_period - elapsed,
-                messages_receiver.recv(),
-            )
-            .await
-            {
-                Ok(Some(message)) => {
-                    let data_size = message.data.len() as i64;
-                    messages.push(MessageData {
-                        seq_no: message
-                            .seq_no
-                            .ok_or_else(|| YdbError::custom("empty message seq_no"))?,
-                        created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
-                            seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs()
-                                as i64,
-                            nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
-                        }),
-                        metadata_items: vec![],
-                        data: message.data,
-                        uncompressed_size: data_size,
-                        partitioning: Some(message_data::Partitioning::MessageGroupId(
-                            task_params.producer_id.clone().unwrap_or_default(),
-                        )),
-                    });
-                }
-                Ok(None) => {
-                    trace!("Channel has been closed. Stop topic send messages loop.");
-                    return Ok(());
-                }
-                Err(_elapsed) => {
-                    break 'messages_loop;
-                }
-            }
-        }
-
-        if !messages.is_empty() {
-            // TODO: if messages aren't sent, save for next write_loop_iteration() call?
-            trace!("Sending topic message to grpc stream");
-            let retry_res =
-                TopicWriter::retry_send_messages(retrier, task_params, messages.to_owned()).await;
-
-            return match retry_res {
-                Ok(_) => Ok(()),
-                Err(err) => Err(YdbError::Transport(err.to_string())),
-            };
-        }
-        Ok(())
-    }
-
+    // TODO: nuke this method
     async fn retry_send_messages(
         retrier: &Arc<Box<dyn Retry>>,
         task_params: &WriterPeriodicTaskParams,
@@ -428,7 +363,7 @@ impl TopicWriter {
 }
 
 struct Reconnector {
-    pub(crate) messages_to_send: Vec<MessageData>,
+    pub(crate) messages: Arc<TokioMutex<Vec<MessageData>>>,
     writer_loop: JoinHandle<()>,
     receive_messages_loop: JoinHandle<()>,
     cancellation_token: CancellationToken,
@@ -480,31 +415,43 @@ impl Reconnector {
             connection_manager: connection_manager.clone(),
             init_request: init_request_body,
         };
-        let retrier: Arc<Box<dyn Retry>> = Arc::new(Box::new(TimeoutRetrier::default())); // TODO: allow as parameter?
 
-        let writer_loop_retrier = retrier.clone();
+        let messages = Arc::new(TokioMutex::new(Vec::<MessageData>::new()));
+        let writer_loop_messages = messages.clone();
+
         let writer_loop = tokio::spawn(async move {
             let mut message_receiver = messages_receiver; // force move inside
             let task_params = writer_loop_task_params; // force move inside
+            let mut want_reconnect_tx = Some(want_reconnect_tx); // force move inside + wrap in Option
 
             loop {
-                match TopicWriter::write_loop_iteration(
-                    &writer_loop_retrier,
+                if writer_loop_cancellation_token.is_cancelled() {
+                    break;
+                }
+
+                let Err(writer_iteration_error) = Reconnector::write_loop_iteration(
+                    &writer_loop_messages,
                     message_receiver.borrow_mut(),
                     task_params.borrow(),
                 )
                 .await
-                {
-                    Ok(()) => {}
-                    Err(writer_iteration_error) => {
-                        writer_loop_cancellation_token.cancel();
-                        let mut writer_state = writer_state_ref_writer_loop.lock().unwrap(); // TODO handle error
-                        *writer_state = TopicWriterMode::FinishedWithError(writer_iteration_error);
-                        return;
-                    }
-                }
-                if writer_loop_cancellation_token.is_cancelled() {
-                    break;
+                else {
+                    continue;
+                };
+
+                writer_loop_cancellation_token.cancel();
+                let mut writer_state = writer_state_ref_writer_loop.lock().unwrap(); // TODO: handle error
+
+                *writer_state = TopicWriterMode::FinishedWithError(writer_iteration_error.clone());
+
+                let Some(tx) = want_reconnect_tx.take() else {
+                    continue;
+                };
+
+                if let Err(err) = tx.send(writer_iteration_error.clone()) {
+                    *writer_state = TopicWriterMode::FinishedWithError(
+                        YdbError::custom(format!("can't send error to reconnector: {err} (original error: {writer_iteration_error})"))
+                    );
                 }
             }
         });
@@ -541,11 +488,113 @@ impl Reconnector {
         });
 
         Ok(Self {
-            messages_to_send: vec![],
+            messages,
             writer_loop,
             receive_messages_loop,
             cancellation_token,
         })
+    }
+
+    async fn write_loop_iteration(
+        messages: &Arc<TokioMutex<Vec<MessageData>>>,
+        messages_receiver: &mut Receiver<TopicWriterMessage>,
+        task_params: &WriterPeriodicTaskParams,
+    ) -> YdbResult<()> {
+        let start = Instant::now();
+
+        // wait for messages loop
+        'messages_loop: loop {
+            let elapsed = start.elapsed();
+            let messages_len = {
+                let messages_guard = messages.lock().await;
+                messages_guard.len()
+            };
+            let messages_is_empty = messages_len == 0;
+
+            if messages_len >= task_params.write_request_messages_chunk_size
+                || !messages_is_empty && elapsed >= task_params.write_request_send_messages_period
+            {
+                break;
+            }
+
+            match timeout(
+                task_params.write_request_send_messages_period - elapsed,
+                messages_receiver.recv(),
+            )
+            .await
+            {
+                Ok(Some(message)) => {
+                    let data_size = message.data.len() as i64;
+                    let mut messages_guard = messages.lock().await;
+                    messages_guard.push(MessageData {
+                        seq_no: message
+                            .seq_no
+                            .ok_or_else(|| YdbError::custom("empty message seq_no"))?,
+                        created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
+                            seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs()
+                                as i64,
+                            nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
+                        }),
+                        metadata_items: vec![],
+                        data: message.data,
+                        uncompressed_size: data_size,
+                        partitioning: Some(message_data::Partitioning::MessageGroupId(
+                            task_params.producer_id.clone().unwrap_or_default(),
+                        )),
+                    });
+                }
+                Ok(None) => {
+                    trace!("Channel has been closed. Stop topic send messages loop.");
+                    return Ok(());
+                }
+                Err(_elapsed) => {
+                    break 'messages_loop;
+                }
+            }
+        }
+
+        let messages_to_send = {
+            let mut messages_guard = messages.lock().await;
+            if messages_guard.is_empty() {
+                return Ok(());
+            }
+            // Here we preventively assume that all messages are read ("clear, restore if failed").
+            // - If write succeeds, then it's all right and we just keep going
+            // - If write fails, then we put these unwirtten messages back WITH taking into account messages that might've been written into messages.
+            //
+            // The "clone, clear if success" approach is dangerous because we can lose messages that are appended in another coroutine.
+            messages_guard.drain(..).collect::<Vec<MessageData>>()
+        };
+
+        if messages_to_send.is_empty() {
+            return Ok(());
+        }
+
+        trace!("Sending topic message to grpc stream");
+        let mut stream = task_params.stream.lock().await;
+        let send_result = stream.send_nowait(stream_write_message::FromClient {
+            client_message: Some(ClientMessage::WriteRequest(WriteRequest {
+                messages: messages_to_send.clone(),
+                codec: 1,
+                tx: None,
+            })),
+        });
+
+        match send_result {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                // If sending fails, put messages back for next iteration
+                let mut messages_guard = messages.lock().await;
+
+                // Prepend failed messages back to the front
+                let mut failed = messages_to_send;
+                failed.append(&mut messages_guard.drain(..).collect());
+                *messages_guard = failed;
+
+                let err_message = err.borrow().to_string();
+                Err(YdbError::Transport(err_message))
+            }
+        }
     }
 
     async fn receive_messages_loop_iteration(
@@ -603,14 +652,14 @@ impl Reconnector {
             YdbError::custom(format!(
                 "error while wait finish writer_loop on stop: {err}"
             ))
-        })?; // TODO: handle ERROR
+        })?; // TODO: handle error
         trace!("Writer loop stopped");
 
         self.receive_messages_loop.await.map_err(|err| {
             YdbError::custom(format!(
                 "error while wait finish receive_messages_loop on stop: {err}"
             ))
-        })?; // TODO: handle ERROR
+        })?; // TODO: handle error
         trace!("Message receive stopped");
         Ok(())
     }
