@@ -116,6 +116,7 @@ impl TopicWriter {
 
         let reconnector_loop = tokio::spawn(async move {
             loop {
+                // TODO: rename
                 let (want_reconnect_sender, want_reconnect_receiver): (
                     tokio::sync::oneshot::Sender<YdbError>,
                     tokio::sync::oneshot::Receiver<YdbError>,
