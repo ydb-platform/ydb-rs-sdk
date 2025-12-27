@@ -37,7 +37,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::init_request::Partitioning
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::{message_data, MessageData};
 use ydb_grpc::ydb_proto::topic::stream_write_message::{InitRequest, WriteRequest};
 
-pub(crate) enum TopicWriterMode {
+pub(crate) enum TopicWriterState {
     Working,
     FinishedWithError(YdbError),
 }
@@ -61,7 +61,7 @@ pub struct TopicWriter {
     writer_message_sender: mpsc::Sender<TopicWriterMessage>,
 
     cancellation_token: CancellationToken,
-    writer_state: Arc<Mutex<TopicWriterMode>>,
+    writer_state: Arc<Mutex<TopicWriterState>>,
 
     confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
 
@@ -114,6 +114,8 @@ impl TopicWriter {
 
         let cancellation_token = CancellationToken::new();
 
+        let topic_writer_state = Arc::new(Mutex::new(TopicWriterState::Working));
+
         let reconnector_loop = tokio::spawn(async move {
             loop {
                 // TODO: rename
@@ -133,6 +135,7 @@ impl TopicWriter {
                     producer_id,
                     messages_receiver,
                     want_reconnect_sender,
+                    topic_writer_state,
                 )
                 .await
                 {
@@ -257,15 +260,6 @@ impl TopicWriter {
         Ok(())
     }
 
-    pub async fn stop(self) -> YdbResult<()> {
-        trace!("Stopping...");
-
-        self.flush().await?;
-        self.cancellation_token.cancel();
-
-        Ok(())
-    }
-
     pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
         self.write_message(message, None).await?;
         Ok(())
@@ -357,9 +351,25 @@ impl TopicWriter {
     async fn is_cancelled(&self) -> YdbResult<()> {
         let state = self.writer_state.lock().unwrap();
         match state.deref() {
-            TopicWriterMode::Working => Ok(()),
-            TopicWriterMode::FinishedWithError(err) => Err(err.clone()),
+            TopicWriterState::Working => Ok(()),
+            TopicWriterState::FinishedWithError(err) => Err(err.clone()),
         }
+    }
+
+    pub async fn stop(self) -> YdbResult<()> {
+        trace!("Stopping...");
+
+        self.flush().await?;
+        self.cancellation_token.cancel();
+
+        self.reconnector_loop.await.map_err(|err| {
+            YdbError::custom(format!(
+                "stop: error while waiting for reconnector_loop to finish: {err}"
+            ))
+        })?; // TODO: handle error
+        trace!("Reconnector loop stopped");
+
+        Ok(())
     }
 }
 
@@ -377,6 +387,7 @@ impl Reconnector {
         producer_id: String,
         messages_receiver: mpsc::Receiver<TopicWriterMessage>,
         want_reconnect_tx: tokio::sync::oneshot::Sender<YdbError>,
+        topic_writer_state: Arc<Mutex<TopicWriterState>>,
     ) -> YdbResult<Self> {
         let init_request_body = InitRequest {
             path: writer_options.topic_path.clone(),
@@ -396,7 +407,6 @@ impl Reconnector {
         let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
 
         let cancellation_token = CancellationToken::new();
-        let topic_writer_state = Arc::new(Mutex::new(TopicWriterMode::Working));
         let confirmation_reception_queue = Arc::new(Mutex::new(TopicWriterReceptionQueue::new()));
 
         let writer_loop_cancellation_token = cancellation_token.clone();
@@ -443,14 +453,14 @@ impl Reconnector {
                 writer_loop_cancellation_token.cancel();
                 let mut writer_state = writer_state_ref_writer_loop.lock().unwrap(); // TODO: handle error
 
-                *writer_state = TopicWriterMode::FinishedWithError(writer_iteration_error.clone());
+                *writer_state = TopicWriterState::FinishedWithError(writer_iteration_error.clone());
 
                 let Some(tx) = want_reconnect_tx.take() else {
                     continue;
                 };
 
                 if let Err(err) = tx.send(writer_iteration_error.clone()) {
-                    *writer_state = TopicWriterMode::FinishedWithError(
+                    *writer_state = TopicWriterState::FinishedWithError(
                         YdbError::custom(format!("can't send error to reconnector: {err} (original error: {writer_iteration_error})"))
                     );
                 }
@@ -479,7 +489,7 @@ impl Reconnector {
                                 let mut writer_state =
                                     writer_state_ref_message_receive_loop.lock().unwrap(); // TODO handle error
                                 *writer_state =
-                                    TopicWriterMode::FinishedWithError(receive_message_iteration_error);
+                                    TopicWriterState::FinishedWithError(receive_message_iteration_error);
                                 return ;
                             }
                         }
@@ -651,17 +661,17 @@ impl Reconnector {
 
         self.writer_loop.await.map_err(|err| {
             YdbError::custom(format!(
-                "error while wait finish writer_loop on stop: {err}"
+                "stop: error while waiting for writer_loop to finish: {err}"
             ))
         })?; // TODO: handle error
         trace!("Writer loop stopped");
 
         self.receive_messages_loop.await.map_err(|err| {
             YdbError::custom(format!(
-                "error while wait finish receive_messages_loop on stop: {err}"
+                "stop: error while waiting for receive_messages_loop to finish: {err}"
             ))
         })?; // TODO: handle error
-        trace!("Message receive stopped");
+        trace!("Message receive loop stopped");
         Ok(())
     }
 }
