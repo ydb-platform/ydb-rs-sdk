@@ -57,7 +57,7 @@ pub struct TopicWriter {
     pub(crate) auto_set_seq_no: bool,
     pub(crate) codecs_from_server: RawSupportedCodecs,
 
-    writer_message_sender: mpsc::Sender<TopicWriterMessage>,
+    writer_message_sender: Arc<TokioMutex<mpsc::Sender<TopicWriterMessage>>>,
 
     cancellation_token: CancellationToken,
     writer_state: Arc<Mutex<TopicWriterState>>,
@@ -113,28 +113,37 @@ impl TopicWriter {
 
         let cancellation_token = CancellationToken::new();
 
-        let topic_writer_state = Arc::new(Mutex::new(TopicWriterState::Working));
+        let writer_state = Arc::new(Mutex::new(TopicWriterState::Working));
 
+        let (initial_messages_sender, initial_messages_receiver): (
+            mpsc::Sender<TopicWriterMessage>,
+            mpsc::Receiver<TopicWriterMessage>,
+        ) = mpsc::channel(32_usize);
+        let writer_message_sender = Arc::new(TokioMutex::new(initial_messages_sender));
+        let reconnector_loop_writer_message_sender = writer_message_sender.clone();
+
+        let confirmation_reception_queue = Arc::new(Mutex::new(TopicWriterReceptionQueue::new()));
+        let reconnector_loop_confirmation_reception_queue = confirmation_reception_queue.clone();
+        
         let reconnector_loop = tokio::spawn(async move {
+            let mut messages_receiver = initial_messages_receiver;
+            let mut confirmation_reception_queue = reconnector_loop_confirmation_reception_queue;  // force move inside
+
             loop {
-                // TODO: rename
+                // TODO: rename?
                 let (want_reconnect_sender, want_reconnect_receiver): (
                     tokio::sync::oneshot::Sender<YdbError>,
                     tokio::sync::oneshot::Receiver<YdbError>,
                 ) = tokio::sync::oneshot::channel();
 
-                let (messages_sender, messages_receiver): (
-                    mpsc::Sender<TopicWriterMessage>,
-                    mpsc::Receiver<TopicWriterMessage>,
-                ) = mpsc::channel(32_usize);
-
                 let reconnector = match Reconnector::new(
                     writer_options,
                     connection_manager,
                     producer_id,
+                    reconnector_loop_confirmation_reception_queue,
                     messages_receiver,
                     want_reconnect_sender,
-                    topic_writer_state,
+                    writer_state,
                 )
                 .await
                 {
@@ -161,9 +170,22 @@ impl TopicWriter {
                         }
                     }
                 }
+
+                let (new_messages_sender, new_messages_receiver): (
+                    mpsc::Sender<TopicWriterMessage>,
+                    mpsc::Receiver<TopicWriterMessage>,
+                ) = mpsc::channel(32_usize);
+                
+                {
+                    let mut sender_guard = reconnector_loop_writer_message_sender.lock().await;
+                    *sender_guard = new_messages_sender;
+                }
+                messages_receiver = new_messages_receiver;
+
             }
         });
 
+        // TODO: somehow retrieve partition_id, session_id, codecs_from_server from reconnector_loop?
         Ok(Self {
             path: writer_options.topic_path.clone(),
             producer_id: Some(producer_id.clone()),
@@ -174,9 +196,9 @@ impl TopicWriter {
             write_request_send_messages_period: writer_options.write_request_send_messages_period,
             auto_set_seq_no: writer_options.auto_seq_no,
             codecs_from_server: init_response.supported_codecs,
-            writer_message_sender: messages_sender,
+            writer_message_sender,
             cancellation_token,
-            writer_state: topic_writer_state,
+            writer_state,
             confirmation_reception_queue,
             reconnector_loop,
         })
@@ -314,7 +336,8 @@ impl TopicWriter {
         };
 
         self.writer_message_sender
-            .borrow_mut()
+            .lock()
+            .await
             .send(message)
             .await
             .map_err(|err| YdbError::custom(format!("can't send the message to channel: {err}")))?;
@@ -384,6 +407,7 @@ impl Reconnector {
         writer_options: TopicWriterOptions,
         connection_manager: GrpcConnectionManager,
         producer_id: String,
+        confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
         messages_receiver: mpsc::Receiver<TopicWriterMessage>,
         want_reconnect_tx: tokio::sync::oneshot::Sender<YdbError>,
         topic_writer_state: Arc<Mutex<TopicWriterState>>,
@@ -410,7 +434,6 @@ impl Reconnector {
         let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
 
         let cancellation_token = CancellationToken::new();
-        let confirmation_reception_queue = Arc::new(Mutex::new(TopicWriterReceptionQueue::new()));
 
         let writer_loop_cancellation_token = cancellation_token.clone();
         let writer_state_ref_writer_loop = topic_writer_state.clone();
