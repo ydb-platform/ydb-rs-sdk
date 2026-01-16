@@ -24,6 +24,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use tokio::sync::Mutex as TokioMutex;
 
 use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 use tokio::sync::mpsc::Receiver;
 use tokio::task::JoinHandle;
 
@@ -48,14 +49,11 @@ pub(crate) enum TopicWriterState {
 pub struct TopicWriter {
     pub(crate) path: String,
     pub(crate) producer_id: Option<String>,
-    pub(crate) partition_id: i64,
-    pub(crate) session_id: String,
-    pub(crate) last_seq_num_handled: i64,
     pub(crate) write_request_messages_chunk_size: usize,
     pub(crate) write_request_send_messages_period: Duration,
 
     pub(crate) auto_set_seq_no: bool,
-    pub(crate) codecs_from_server: RawSupportedCodecs,
+    pub(crate) init_state: Arc<TokioMutex<ConnectionInfo>>,
 
     writer_message_sender: Arc<TokioMutex<mpsc::Sender<TopicWriterMessage>>>,
 
@@ -69,7 +67,7 @@ pub struct TopicWriter {
 
 #[allow(dead_code)]
 pub struct AckFuture {
-    receiver: tokio::sync::oneshot::Receiver<MessageWriteStatus>,
+    receiver: oneshot::Receiver<MessageWriteStatus>,
 }
 
 impl Future for AckFuture {
@@ -102,8 +100,15 @@ struct WriterPeriodicTaskParams {
     init_request: InitRequest,
 }
 
-impl TopicWriter {
+#[derive(Clone, Debug)]
+pub(crate) struct ConnectionInfo {
+    partition_id: i64,
+    session_id: String,
+    last_seq_num_handled: i64,
+    codecs_from_server: RawSupportedCodecs,
+}
 
+impl TopicWriter {
     pub(crate) async fn new(
         writer_options: TopicWriterOptions,
         connection_manager: GrpcConnectionManager,
@@ -126,6 +131,15 @@ impl TopicWriter {
 
         let confirmation_reception_queue = Arc::new(Mutex::new(TopicWriterReceptionQueue::new()));
         let reconnector_loop_confirmation_reception_queue = confirmation_reception_queue.clone();
+        let connection_info = Arc::new(TokioMutex::new(ConnectionInfo {
+            partition_id: 0,
+            session_id: String::new(),
+            last_seq_num_handled: 0,
+            codecs_from_server: RawSupportedCodecs::default(),
+        }));
+        let reconnector_loop_connection_info = connection_info.clone();
+        let (connection_info_filled_tx, connection_info_filled_rx) = oneshot::channel::<YdbResult<()>>();
+        
 
         let reconnector_loop_writer_options = writer_options.clone();
         let reconnector_loop_producer_id = producer_id.clone();
@@ -133,15 +147,18 @@ impl TopicWriter {
         let reconnector_loop_cancellation_token = cancellation_token.clone();
 
         let reconnector_loop = tokio::spawn(async move {
+            let connection_info = reconnector_loop_connection_info;
             let mut messages_receiver = initial_messages_receiver;
             let connection_manager = connection_manager;
+            let mut connection_info_filled_tx = Some(connection_info_filled_tx);
+            let messages = Arc::new(TokioMutex::new(Vec::<MessageData>::new()));
 
             loop {
                 // TODO: rename?
                 let (want_reconnect_sender, want_reconnect_receiver): (
-                    tokio::sync::oneshot::Sender<YdbError>,
-                    tokio::sync::oneshot::Receiver<YdbError>,
-                ) = tokio::sync::oneshot::channel();
+                    oneshot::Sender<YdbError>,
+                    oneshot::Receiver<YdbError>,
+                ) = oneshot::channel();
 
                 let reconnector = match Reconnector::new(
                     reconnector_loop_writer_options.clone(),
@@ -151,6 +168,8 @@ impl TopicWriter {
                     messages_receiver,
                     want_reconnect_sender,
                     reconnector_loop_writer_state.clone(),
+                    connection_info.clone(),
+                    messages.clone(),
                 )
                 .await
                 {
@@ -162,6 +181,11 @@ impl TopicWriter {
                     }
                 };
 
+                if let Some(tx) = connection_info_filled_tx.take() {
+                    let _ = tx.send(Ok(()));
+                };
+
+                // TODO: check if retry is needed (function is somewhere in src/client_table.rs)
                 tokio::select! {
                     _ = reconnector_loop_cancellation_token.cancelled() => {
                         let _ = reconnector.stop().await;
@@ -184,18 +208,19 @@ impl TopicWriter {
             }
         });
 
-        // TODO: somehow retrieve partition_id, session_id, codecs_from_server from reconnector_loop?
+        match connection_info_filled_rx.await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => return Err(err),
+            Err(_) => return Err(YdbError::custom("connection info filled channel closed")),
+        };
+
         Ok(Self {
             path: writer_options.topic_path.clone(),
             producer_id: Some(producer_id.clone()),
-            // TODO: placeholder values until init_response is plumbed through.
-            partition_id: 0,
-            session_id: String::new(),
-            last_seq_num_handled: 0,
             write_request_messages_chunk_size: writer_options.write_request_messages_chunk_size,
             write_request_send_messages_period: writer_options.write_request_send_messages_period,
             auto_set_seq_no: writer_options.auto_seq_no,
-            codecs_from_server: RawSupportedCodecs::default(),
+            init_state: connection_info,
             writer_message_sender,
             cancellation_token,
             writer_state,
@@ -305,9 +330,9 @@ impl TopicWriter {
         message: TopicWriterMessage,
     ) -> YdbResult<MessageWriteStatus> {
         let (tx, rx): (
-            tokio::sync::oneshot::Sender<MessageWriteStatus>,
-            tokio::sync::oneshot::Receiver<MessageWriteStatus>,
-        ) = tokio::sync::oneshot::channel();
+            oneshot::Sender<MessageWriteStatus>,
+            oneshot::Receiver<MessageWriteStatus>,
+        ) = oneshot::channel();
 
         self.write_message(message, Some(tx)).await?;
         Ok(rx.await?)
@@ -318,9 +343,9 @@ impl TopicWriter {
         _message: TopicWriterMessage,
     ) -> YdbResult<AckFuture> {
         let (tx, rx): (
-            tokio::sync::oneshot::Sender<MessageWriteStatus>,
-            tokio::sync::oneshot::Receiver<MessageWriteStatus>,
-        ) = tokio::sync::oneshot::channel();
+            oneshot::Sender<MessageWriteStatus>,
+            oneshot::Receiver<MessageWriteStatus>,
+        ) = oneshot::channel();
 
         self.write_message(_message, Some(tx)).await?;
         Ok(AckFuture { receiver: rx })
@@ -329,21 +354,22 @@ impl TopicWriter {
     async fn write_message(
         &mut self,
         mut message: TopicWriterMessage,
-        wait_ack: Option<tokio::sync::oneshot::Sender<MessageWriteStatus>>,
+        wait_ack: Option<oneshot::Sender<MessageWriteStatus>>,
     ) -> YdbResult<()> {
         self.is_cancelled().await?;
 
+        let mut init_state = self.init_state.lock().await;
         if self.auto_set_seq_no {
             if message.seq_no.is_some() {
                 return Err(YdbError::custom(
                     "force set message seqno possible only if auto_set_seq_no disabled",
                 ));
             }
-            message.seq_no = Some(self.last_seq_num_handled + 1);
+            message.seq_no = Some(init_state.last_seq_num_handled + 1);
         };
 
         let message_seqno = if let Some(mess_seqno) = message.seq_no {
-            self.last_seq_num_handled = mess_seqno;
+            init_state.last_seq_num_handled = mess_seqno;
             mess_seqno
         } else {
             return Err(YdbError::custom("need to set message seq_no"));
@@ -410,7 +436,6 @@ impl TopicWriter {
 }
 
 struct Reconnector {
-    pub(crate) messages: Arc<TokioMutex<Vec<MessageData>>>,
     writer_loop: JoinHandle<()>,
     receive_messages_loop: JoinHandle<()>,
     cancellation_token: CancellationToken,
@@ -423,8 +448,10 @@ impl Reconnector {
         producer_id: String,
         confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
         messages_receiver: mpsc::Receiver<TopicWriterMessage>,
-        want_reconnect_tx: tokio::sync::oneshot::Sender<YdbError>,
+        want_reconnect_tx: oneshot::Sender<YdbError>,
         topic_writer_state: Arc<Mutex<TopicWriterState>>,
+        init_state: Arc<TokioMutex<ConnectionInfo>>,
+        messages: Arc<TokioMutex<Vec<MessageData>>>,
     ) -> YdbResult<Self> {
         let init_request_body = InitRequest {
             path: writer_options.topic_path.clone(),
@@ -445,7 +472,15 @@ impl Reconnector {
         let mut stream = topic_service
             .stream_write(init_request_body.clone())
             .await?;
-        let _init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
+        let init_response =
+            RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
+        {
+            let mut guard = init_state.lock().await;
+            guard.partition_id = init_response.partition_id;
+            guard.session_id = init_response.session_id;
+            guard.last_seq_num_handled = init_response.last_seq_no;
+            guard.codecs_from_server = init_response.supported_codecs;
+        }
 
         let cancellation_token = CancellationToken::new();
 
@@ -467,7 +502,6 @@ impl Reconnector {
             init_request: init_request_body,
         };
 
-        let messages = Arc::new(TokioMutex::new(Vec::<MessageData>::new()));
         let writer_loop_messages = messages.clone();
 
         let writer_loop = tokio::spawn(async move {
@@ -539,7 +573,6 @@ impl Reconnector {
         });
 
         Ok(Self {
-            messages,
             writer_loop,
             receive_messages_loop,
             cancellation_token,
