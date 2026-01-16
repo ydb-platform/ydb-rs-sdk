@@ -97,20 +97,22 @@ struct WriterPeriodicTaskParams {
             >,
         >,
     >,
+    // TODO: ???
     connection_manager: GrpcConnectionManager,
+    // TODO: ???
     init_request: InitRequest,
 }
 
 impl TopicWriter {
+
     pub(crate) async fn new(
         writer_options: TopicWriterOptions,
         connection_manager: GrpcConnectionManager,
     ) -> YdbResult<Self> {
-        let producer_id = if let Some(id) = writer_options.producer_id {
-            id
-        } else {
-            uuid::Uuid::new_v4().to_string()
-        };
+        let producer_id = writer_options
+            .producer_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         let cancellation_token = CancellationToken::new();
 
@@ -125,10 +127,15 @@ impl TopicWriter {
 
         let confirmation_reception_queue = Arc::new(Mutex::new(TopicWriterReceptionQueue::new()));
         let reconnector_loop_confirmation_reception_queue = confirmation_reception_queue.clone();
-        
+
+        let reconnector_loop_writer_options = writer_options.clone();
+        let reconnector_loop_producer_id = producer_id.clone();
+        let reconnector_loop_writer_state = writer_state.clone();
+        let reconnector_loop_cancellation_token = cancellation_token.clone();
+
         let reconnector_loop = tokio::spawn(async move {
             let mut messages_receiver = initial_messages_receiver;
-            let mut confirmation_reception_queue = reconnector_loop_confirmation_reception_queue;  // force move inside
+            let connection_manager = connection_manager;
 
             loop {
                 // TODO: rename?
@@ -138,26 +145,27 @@ impl TopicWriter {
                 ) = tokio::sync::oneshot::channel();
 
                 let reconnector = match Reconnector::new(
-                    writer_options,
-                    connection_manager,
-                    producer_id,
-                    reconnector_loop_confirmation_reception_queue,
+                    reconnector_loop_writer_options.clone(),
+                    connection_manager.clone(),
+                    reconnector_loop_producer_id.clone(),
+                    reconnector_loop_confirmation_reception_queue.clone(),
                     messages_receiver,
                     want_reconnect_sender,
-                    writer_state,
+                    reconnector_loop_writer_state.clone(),
                 )
                 .await
                 {
                     Ok(reconnector) => reconnector,
                     Err(err) => {
                         println!("Error creating reconnector: {}", err);
+                        messages_receiver = TopicWriter::recreate_message_channel(&reconnector_loop_writer_message_sender).await;
                         continue;
                     }
                 };
 
                 tokio::select! {
-                    _ = cancellation_token.cancelled() => {
-                        reconnector.stop().await;
+                    _ = reconnector_loop_cancellation_token.cancelled() => {
+                        let _ = reconnector.stop().await;
                         break;
                     }
                     err = want_reconnect_receiver => {
@@ -172,16 +180,7 @@ impl TopicWriter {
                     }
                 }
 
-                let (new_messages_sender, new_messages_receiver): (
-                    mpsc::Sender<TopicWriterMessage>,
-                    mpsc::Receiver<TopicWriterMessage>,
-                ) = mpsc::channel(32_usize);
-                
-                {
-                    let mut sender_guard = reconnector_loop_writer_message_sender.lock().await;
-                    *sender_guard = new_messages_sender;
-                }
-                messages_receiver = new_messages_receiver;
+                messages_receiver = TopicWriter::recreate_message_channel(&reconnector_loop_writer_message_sender).await;
 
             }
         });
@@ -190,19 +189,34 @@ impl TopicWriter {
         Ok(Self {
             path: writer_options.topic_path.clone(),
             producer_id: Some(producer_id.clone()),
-            partition_id: init_response.partition_id,
-            session_id: init_response.session_id,
-            last_seq_num_handled: init_response.last_seq_no,
+            // TODO: placeholder values until init_response is plumbed through.
+            partition_id: 0,
+            session_id: String::new(),
+            last_seq_num_handled: 0,
             write_request_messages_chunk_size: writer_options.write_request_messages_chunk_size,
             write_request_send_messages_period: writer_options.write_request_send_messages_period,
             auto_set_seq_no: writer_options.auto_seq_no,
-            codecs_from_server: init_response.supported_codecs,
+            codecs_from_server: RawSupportedCodecs::default(),
             writer_message_sender,
             cancellation_token,
             writer_state,
             confirmation_reception_queue,
             reconnector_loop,
         })
+    }
+
+    async fn recreate_message_channel(
+        writer_message_sender: &Arc<TokioMutex<mpsc::Sender<TopicWriterMessage>>>,
+    ) -> mpsc::Receiver<TopicWriterMessage> {
+        let (new_messages_sender, new_messages_receiver): (
+            mpsc::Sender<TopicWriterMessage>,
+            mpsc::Receiver<TopicWriterMessage>,
+        ) = mpsc::channel(32_usize);
+        {
+            let mut sender_guard = writer_message_sender.lock().await;
+            *sender_guard = new_messages_sender;
+        }
+        new_messages_receiver
     }
 
     // TODO: nuke this method
@@ -428,7 +442,7 @@ impl Reconnector {
         let mut stream = topic_service
             .stream_write(init_request_body.clone())
             .await?;
-        let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
+        let _init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
 
         let cancellation_token = CancellationToken::new();
 
