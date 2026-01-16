@@ -24,8 +24,8 @@ use std::time::{Duration, UNIX_EPOCH};
 use tokio::sync::Mutex as TokioMutex;
 
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use tokio::sync::mpsc::Receiver;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use tokio::time::timeout;
@@ -138,8 +138,8 @@ impl TopicWriter {
             codecs_from_server: RawSupportedCodecs::default(),
         }));
         let reconnector_loop_connection_info = connection_info.clone();
-        let (connection_info_filled_tx, connection_info_filled_rx) = oneshot::channel::<YdbResult<()>>();
-        
+        let (connection_info_filled_tx, connection_info_filled_rx) =
+            oneshot::channel::<YdbResult<()>>();
 
         let reconnector_loop_writer_options = writer_options.clone();
         let reconnector_loop_producer_id = producer_id.clone();
@@ -161,22 +161,27 @@ impl TopicWriter {
                 ) = oneshot::channel();
 
                 let reconnector = match Reconnector::new(
-                    reconnector_loop_writer_options.clone(),
+                    ReconnectorParams {
+                        writer_options: reconnector_loop_writer_options.clone(),
+                        producer_id: reconnector_loop_producer_id.clone(),
+                        messages: messages.clone(),
+                    },
                     connection_manager.clone(),
-                    reconnector_loop_producer_id.clone(),
+                    connection_info.clone(),
                     reconnector_loop_confirmation_reception_queue.clone(),
+                    reconnector_loop_writer_state.clone(),
                     messages_receiver,
                     want_reconnect_sender,
-                    reconnector_loop_writer_state.clone(),
-                    connection_info.clone(),
-                    messages.clone(),
                 )
                 .await
                 {
                     Ok(reconnector) => reconnector,
                     Err(err) => {
                         println!("Error creating reconnector: {}", err);
-                        messages_receiver = TopicWriter::recreate_message_channel(&reconnector_loop_writer_message_sender).await;
+                        messages_receiver = TopicWriter::recreate_message_channel(
+                            &reconnector_loop_writer_message_sender,
+                        )
+                        .await;
                         continue;
                     }
                 };
@@ -203,8 +208,9 @@ impl TopicWriter {
                     }
                 }
 
-                messages_receiver = TopicWriter::recreate_message_channel(&reconnector_loop_writer_message_sender).await;
-
+                messages_receiver =
+                    TopicWriter::recreate_message_channel(&reconnector_loop_writer_message_sender)
+                        .await;
             }
         });
 
@@ -441,27 +447,36 @@ struct Reconnector {
     cancellation_token: CancellationToken,
 }
 
+struct ReconnectorParams {
+    writer_options: TopicWriterOptions,
+    producer_id: String,
+    messages: Arc<TokioMutex<Vec<MessageData>>>,
+}
+
 impl Reconnector {
     pub async fn new(
-        writer_options: TopicWriterOptions,
+        params: ReconnectorParams,
         connection_manager: GrpcConnectionManager,
-        producer_id: String,
+        connection_info: Arc<TokioMutex<ConnectionInfo>>,
         confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
+        topic_writer_state: Arc<Mutex<TopicWriterState>>,
         messages_receiver: mpsc::Receiver<TopicWriterMessage>,
         want_reconnect_tx: oneshot::Sender<YdbError>,
-        topic_writer_state: Arc<Mutex<TopicWriterState>>,
-        init_state: Arc<TokioMutex<ConnectionInfo>>,
-        messages: Arc<TokioMutex<Vec<MessageData>>>,
     ) -> YdbResult<Self> {
         let init_request_body = InitRequest {
-            path: writer_options.topic_path.clone(),
-            producer_id: producer_id.clone(),
-            write_session_meta: writer_options.session_metadata.clone().unwrap_or_default(),
-            get_last_seq_no: writer_options.auto_seq_no,
+            path: params.writer_options.topic_path.clone(),
+            producer_id: params.producer_id.clone(),
+            write_session_meta: params
+                .writer_options
+                .session_metadata
+                .clone()
+                .unwrap_or_default(),
+            get_last_seq_no: params.writer_options.auto_seq_no,
             partitioning: Some(
-                writer_options
+                params
+                    .writer_options
                     .partitioning
-                    .to_grpc_init_partitioning(producer_id.clone()),
+                    .to_grpc_init_partitioning(params.producer_id.clone()),
             ),
         };
 
@@ -472,10 +487,9 @@ impl Reconnector {
         let mut stream = topic_service
             .stream_write(init_request_body.clone())
             .await?;
-        let init_response =
-            RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
+        let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
         {
-            let mut guard = init_state.lock().await;
+            let mut guard = connection_info.lock().await;
             guard.partition_id = init_response.partition_id;
             guard.session_id = init_response.session_id;
             guard.last_seq_num_handled = init_response.last_seq_no;
@@ -485,24 +499,28 @@ impl Reconnector {
         let cancellation_token = CancellationToken::new();
 
         let writer_loop_cancellation_token = cancellation_token.clone();
-        let writer_state_ref_writer_loop = topic_writer_state.clone();
+        let writer_loop_writer_state = topic_writer_state.clone();
 
         let message_receive_loop_cancellation_token = cancellation_token.clone();
-        let writer_state_ref_message_receive_loop = topic_writer_state.clone();
+        let message_receive_loop_writer_state = topic_writer_state.clone();
         let message_loop_reception_queue = confirmation_reception_queue.clone();
 
         let shared_stream = Arc::new(TokioMutex::new(stream));
 
         let writer_loop_task_params = WriterPeriodicTaskParams {
-            write_request_messages_chunk_size: writer_options.write_request_messages_chunk_size,
-            write_request_send_messages_period: writer_options.write_request_send_messages_period,
-            producer_id: Some(producer_id.clone()),
+            write_request_messages_chunk_size: params
+                .writer_options
+                .write_request_messages_chunk_size,
+            write_request_send_messages_period: params
+                .writer_options
+                .write_request_send_messages_period,
+            producer_id: Some(params.producer_id.clone()),
             stream: shared_stream.clone(),
             connection_manager: connection_manager.clone(),
             init_request: init_request_body,
         };
 
-        let writer_loop_messages = messages.clone();
+        let writer_loop_messages = params.messages.clone();
 
         let writer_loop = tokio::spawn(async move {
             let mut message_receiver = messages_receiver; // force move inside
@@ -525,7 +543,7 @@ impl Reconnector {
                 };
 
                 writer_loop_cancellation_token.cancel();
-                let mut writer_state = writer_state_ref_writer_loop.lock().unwrap(); // TODO: handle error
+                let mut writer_state = writer_loop_writer_state.lock().unwrap(); // TODO: handle error
 
                 *writer_state = TopicWriterState::FinishedWithError(writer_iteration_error.clone());
 
@@ -561,7 +579,7 @@ impl Reconnector {
                                 message_receive_loop_cancellation_token.cancel();
                                 warn!("error receive message for topic writer receiver stream loop: {}", &receive_message_iteration_error);
                                 let mut writer_state =
-                                    writer_state_ref_message_receive_loop.lock().unwrap(); // TODO handle error
+                                    message_receive_loop_writer_state.lock().unwrap(); // TODO handle error
                                 *writer_state =
                                     TopicWriterState::FinishedWithError(receive_message_iteration_error);
                                 return ;
