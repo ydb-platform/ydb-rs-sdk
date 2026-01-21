@@ -4,13 +4,13 @@ use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
 use crate::client_topic::topicwriter::writer_reception_queue::{
     TopicWriterReceptionQueue, TopicWriterReceptionTicket, TopicWriterReceptionType,
 };
+use crate::errors::NeedRetry;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
 use crate::grpc_wrapper::raw_topic_service::stream_write::init::RawInitResponse;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
-use crate::retry::{Retry, RetryParams};
 use crate::{grpc_wrapper, YdbError, YdbResult};
 use std::borrow::{Borrow, BorrowMut};
 
@@ -28,7 +28,7 @@ use tokio::sync::mpsc::Receiver;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::log::trace;
 use tracing::warn;
@@ -80,24 +80,6 @@ impl Future for AckFuture {
             Poll::Pending => Poll::Pending,
         }
     }
-}
-
-struct WriterPeriodicTaskParams {
-    write_request_messages_chunk_size: usize,
-    write_request_send_messages_period: Duration,
-    producer_id: Option<String>,
-    stream: Arc<
-        TokioMutex<
-            AsyncGrpcStreamWrapper<
-                stream_write_message::FromClient,
-                stream_write_message::FromServer,
-            >,
-        >,
-    >,
-    // TODO: ???
-    connection_manager: GrpcConnectionManager,
-    // TODO: ???
-    init_request: InitRequest,
 }
 
 #[derive(Clone, Debug)]
@@ -190,21 +172,30 @@ impl TopicWriter {
                     let _ = tx.send(Ok(()));
                 };
 
-                // TODO: check if retry is needed (function is somewhere in src/client_table.rs)
                 tokio::select! {
                     _ = reconnector_loop_cancellation_token.cancelled() => {
                         let _ = reconnector.stop().await;
                         break;
                     }
                     err = want_reconnect_receiver => {
-                        match err {
-                            Ok(err) => {
-                                println!("Error, trying to reconnect: {}", err);
-                            }
+                        let err = match err {
+                            Ok(err) => err,
                             Err(chan_err) => {
+                                // TODO: ???
                                 println!("Channel error: {}", chan_err);
+                                let _ = reconnector.stop().await;  // TODO: handle error
+                                break;
                             }
-                        }
+                        };
+
+                        if TopicWriter::is_retry_allowed(&err) {
+                            println!("Error, trying to reconnect: {}", err);
+                            sleep(TopicWriter::retry_wait_duration()).await;
+                        } else {
+                            println!("Unknown error: {}", err);
+                            let _ = reconnector.stop().await;  // TODO: handle error
+                            break;
+                        };
                     }
                 }
 
@@ -249,81 +240,17 @@ impl TopicWriter {
         new_messages_receiver
     }
 
-    // TODO: nuke this method
-    async fn retry_send_messages(
-        retrier: &Arc<Box<dyn Retry>>,
-        task_params: &WriterPeriodicTaskParams,
-        messages: Vec<MessageData>,
-    ) -> YdbResult<()> {
-        let mut attempt: usize = 0;
-        let start = Instant::now();
-        let mut reconnection_err: Option<YdbError> = None;
-
-        loop {
-            attempt += 1;
-
-            let last_err = match reconnection_err {
-                Some(err) => err,
-                None => {
-                    let send_result = {
-                        let mut stream = task_params.stream.lock().await;
-                        stream.send_nowait(stream_write_message::FromClient {
-                            client_message: Some(ClientMessage::WriteRequest(WriteRequest {
-                                messages: messages.to_owned(),
-                                codec: 1,
-                                tx: None,
-                            })),
-                        })
-                    };
-
-                    match send_result {
-                        Ok(_) => return Ok(()),
-                        Err(err) => YdbError::Transport(err.to_string()),
-                    }
-                }
-            };
-
-            let now = std::time::Instant::now();
-            let retry_decision = retrier.wait_duration(RetryParams {
-                attempt,
-                time_from_start: now.duration_since(start),
-            });
-            if !retry_decision.allow_retry {
-                return Err(last_err);
-            }
-            tokio::time::sleep(retry_decision.wait_timeout).await;
-
-            match TopicWriter::reconnect(task_params).await {
-                Ok(_) => {
-                    trace!("Reconnect is successful, retrying send");
-                    reconnection_err = None;
-                }
-                Err(err) => {
-                    warn!("Reconnect has failed: {}", err);
-                    reconnection_err = Some(err);
-                }
-            }
+    fn is_retry_allowed(err: &YdbError) -> bool {
+        match err.need_retry() {
+            NeedRetry::True => true,
+            NeedRetry::IdempotentOnly => false, // TODO: ???
+            NeedRetry::False => false,
         }
     }
 
-    async fn reconnect(task_params: &WriterPeriodicTaskParams) -> YdbResult<()> {
-        let mut topic_service = task_params
-            .connection_manager
-            .get_auth_service(grpc_wrapper::raw_topic_service::client::RawTopicClient::new)
-            .await?;
-
-        let mut stream = topic_service
-            .stream_write(task_params.init_request.clone())
-            .await?;
-
-        let _init_response =
-            RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
-
-        // Update the shared stream so both write and receive loops use the new connection
-        let mut shared_stream = task_params.stream.lock().await;
-        *shared_stream = stream;
-
-        Ok(())
+    fn retry_wait_duration() -> Duration {
+        // TODO: fine now, but smarter approach is needed
+        Duration::from_secs(1)
     }
 
     pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
@@ -453,6 +380,20 @@ struct ReconnectorParams {
     messages: Arc<TokioMutex<Vec<MessageData>>>,
 }
 
+struct WriterPeriodicTaskParams {
+    write_request_messages_chunk_size: usize,
+    write_request_send_messages_period: Duration,
+    producer_id: Option<String>,
+    stream: Arc<
+        TokioMutex<
+            AsyncGrpcStreamWrapper<
+                stream_write_message::FromClient,
+                stream_write_message::FromServer,
+            >,
+        >,
+    >,
+}
+
 impl Reconnector {
     pub async fn new(
         params: ReconnectorParams,
@@ -516,8 +457,6 @@ impl Reconnector {
                 .write_request_send_messages_period,
             producer_id: Some(params.producer_id.clone()),
             stream: shared_stream.clone(),
-            connection_manager: connection_manager.clone(),
-            init_request: init_request_body,
         };
 
         let writer_loop_messages = params.messages.clone();
@@ -548,7 +487,7 @@ impl Reconnector {
                 *writer_state = TopicWriterState::FinishedWithError(writer_iteration_error.clone());
 
                 let Some(tx) = want_reconnect_tx.take() else {
-                    continue;
+                    break;
                 };
 
                 if let Err(err) = tx.send(writer_iteration_error.clone()) {
