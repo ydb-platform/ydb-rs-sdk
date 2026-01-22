@@ -390,14 +390,7 @@ struct WriterPeriodicTaskParams {
     write_request_messages_chunk_size: usize,
     write_request_send_messages_period: Duration,
     producer_id: Option<String>,
-    stream: Arc<
-        TokioMutex<
-            AsyncGrpcStreamWrapper<
-                stream_write_message::FromClient,
-                stream_write_message::FromServer,
-            >,
-        >,
-    >,
+    request_stream: mpsc::UnboundedSender<stream_write_message::FromClient>,
 }
 
 impl Reconnector {
@@ -452,8 +445,6 @@ impl Reconnector {
         let message_receive_loop_writer_state = writer_state.clone();
         let message_loop_reception_queue = confirmation_reception_queue.clone();
 
-        let shared_stream = Arc::new(TokioMutex::new(stream));
-
         let writer_loop_task_params = WriterPeriodicTaskParams {
             write_request_messages_chunk_size: params
                 .writer_options
@@ -462,7 +453,7 @@ impl Reconnector {
                 .writer_options
                 .write_request_send_messages_period,
             producer_id: Some(params.producer_id.clone()),
-            stream: shared_stream.clone(),
+            request_stream: stream.clone_sender(),
         };
 
         let writer_loop_messages = params.messages.clone();
@@ -504,15 +495,14 @@ impl Reconnector {
             }
         });
 
-        let receive_messages_loop_stream = shared_stream.clone();
         let receive_messages_loop = tokio::spawn(async move {
+            let mut stream = stream; // force move inside
             let mut reception_queue = message_loop_reception_queue; // force move inside
 
             loop {
                 tokio::select! {
                     _ = message_receive_loop_cancellation_token.cancelled() => { return ; }
                     message_receive_it_res = async {
-                        let mut stream = receive_messages_loop_stream.lock().await;
                         Reconnector::receive_messages_loop_iteration(
                             stream.borrow_mut(),
                             reception_queue.borrow_mut()
@@ -535,6 +525,7 @@ impl Reconnector {
             }
         });
 
+
         Ok(Self {
             writer_loop,
             receive_messages_loop,
@@ -548,6 +539,7 @@ impl Reconnector {
         task_params: &WriterPeriodicTaskParams,
     ) -> YdbResult<()> {
         let start = Instant::now();
+
 
         // wait for messages loop
         'messages_loop: loop {
@@ -600,6 +592,7 @@ impl Reconnector {
             }
         }
 
+
         let messages_to_send = {
             let mut messages_guard = messages.lock().await;
             if messages_guard.is_empty() {
@@ -613,13 +606,14 @@ impl Reconnector {
             messages_guard.drain(..).collect::<Vec<MessageData>>()
         };
 
+
         if messages_to_send.is_empty() {
             return Ok(());
         }
 
+
         trace!("Sending topic message to grpc stream");
-        let mut stream = task_params.stream.lock().await;
-        let send_result = stream.send_nowait(stream_write_message::FromClient {
+        let send_result = task_params.request_stream.send(stream_write_message::FromClient {
             client_message: Some(ClientMessage::WriteRequest(WriteRequest {
                 messages: messages_to_send.clone(),
                 codec: 1,
