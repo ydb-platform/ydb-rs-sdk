@@ -607,7 +607,6 @@ impl Reconnector {
             return Ok(());
         }
 
-
         trace!("Sending topic message to grpc stream");
         let send_result = task_params.request_stream.send(stream_write_message::FromClient {
             client_message: Some(ClientMessage::WriteRequest(WriteRequest {
