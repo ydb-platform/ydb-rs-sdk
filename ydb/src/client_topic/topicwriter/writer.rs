@@ -525,7 +525,6 @@ impl Reconnector {
             }
         });
 
-
         Ok(Self {
             writer_loop,
             receive_messages_loop,
@@ -539,7 +538,6 @@ impl Reconnector {
         task_params: &WriterPeriodicTaskParams,
     ) -> YdbResult<()> {
         let start = Instant::now();
-
 
         // wait for messages loop
         'messages_loop: loop {
@@ -592,7 +590,6 @@ impl Reconnector {
             }
         }
 
-
         let messages_to_send = {
             let mut messages_guard = messages.lock().await;
             if messages_guard.is_empty() {
@@ -606,19 +603,20 @@ impl Reconnector {
             messages_guard.drain(..).collect::<Vec<MessageData>>()
         };
 
-
         if messages_to_send.is_empty() {
             return Ok(());
         }
 
         trace!("Sending topic message to grpc stream");
-        let send_result = task_params.request_stream.send(stream_write_message::FromClient {
-            client_message: Some(ClientMessage::WriteRequest(WriteRequest {
-                messages: messages_to_send.clone(),
-                codec: 1,
-                tx: None,
-            })),
-        });
+        let send_result = task_params
+            .request_stream
+            .send(stream_write_message::FromClient {
+                client_message: Some(ClientMessage::WriteRequest(WriteRequest {
+                    messages: messages_to_send.clone(),
+                    codec: 1,
+                    tx: None,
+                })),
+            });
 
         match send_result {
             Ok(_) => Ok(()),
