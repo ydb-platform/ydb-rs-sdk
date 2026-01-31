@@ -21,7 +21,6 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Instant;
 use std::time::{Duration, UNIX_EPOCH};
-use tokio::sync::Mutex as TokioMutex;
 
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Receiver;
@@ -54,9 +53,9 @@ pub struct TopicWriter {
     pub(crate) write_request_send_messages_period: Duration,
 
     pub(crate) auto_set_seq_no: bool,
-    pub(crate) init_state: Arc<TokioMutex<ConnectionInfo>>,
+    pub(crate) init_state: Arc<Mutex<ConnectionInfo>>,
 
-    writer_message_sender: Arc<TokioMutex<mpsc::Sender<TopicWriterMessage>>>,
+    writer_message_sender: Arc<Mutex<mpsc::Sender<TopicWriterMessage>>>,
 
     cancellation_token: CancellationToken,
     writer_state: Arc<Mutex<TopicWriterState>>,
@@ -97,9 +96,9 @@ struct ReconnectorLoopParams {
     connection_manager: GrpcConnectionManager,
     writer_state: Arc<Mutex<TopicWriterState>>,
     cancellation_token: CancellationToken,
-    writer_message_sender: Arc<TokioMutex<mpsc::Sender<TopicWriterMessage>>>,
+    writer_message_sender: Arc<Mutex<mpsc::Sender<TopicWriterMessage>>>,
     confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
-    connection_info: Arc<TokioMutex<ConnectionInfo>>,
+    connection_info: Arc<Mutex<ConnectionInfo>>,
     initial_messages_receiver: mpsc::Receiver<TopicWriterMessage>,
 }
 
@@ -118,10 +117,10 @@ impl TopicWriter {
         let writer_state = Arc::new(Mutex::new(TopicWriterState::Working));
 
         let (initial_messages_sender, initial_messages_receiver) = mpsc::channel(32_usize);
-        let writer_message_sender = Arc::new(TokioMutex::new(initial_messages_sender));
+        let writer_message_sender = Arc::new(Mutex::new(initial_messages_sender));
 
         let confirmation_reception_queue = Arc::new(Mutex::new(TopicWriterReceptionQueue::new()));
-        let connection_info = Arc::new(TokioMutex::new(ConnectionInfo {
+        let connection_info = Arc::new(Mutex::new(ConnectionInfo {
             partition_id: 0,
             session_id: String::new(),
             last_seq_num_handled: 0,
@@ -161,7 +160,7 @@ impl TopicWriter {
         let reconnector_loop = tokio::spawn(async move {
             let mut messages_receiver = params.initial_messages_receiver;
             let mut connection_info_filled_tx = Some(connection_info_filled_tx);
-            let messages = Arc::new(TokioMutex::new(Vec::<MessageData>::new()));
+            let messages = Arc::new(Mutex::new(Vec::<MessageData>::new()));
 
             loop {
                 let (want_reconnect_sender, want_reconnect_receiver) = oneshot::channel();
@@ -243,11 +242,11 @@ impl TopicWriter {
     }
 
     async fn recreate_message_channel(
-        writer_message_sender: &Arc<TokioMutex<mpsc::Sender<TopicWriterMessage>>>,
+        writer_message_sender: &Arc<Mutex<mpsc::Sender<TopicWriterMessage>>>,
     ) -> mpsc::Receiver<TopicWriterMessage> {
         let (new_messages_sender, new_messages_receiver) = mpsc::channel(32_usize);
         {
-            let mut sender_guard = writer_message_sender.lock().await;
+            let mut sender_guard = writer_message_sender.lock().unwrap(); // TODO: handle
             *sender_guard = new_messages_sender;
         }
         new_messages_receiver
@@ -298,7 +297,7 @@ impl TopicWriter {
     ) -> YdbResult<()> {
         self.is_cancelled().await?;
 
-        let mut init_state = self.init_state.lock().await;
+        let mut init_state = self.init_state.lock().unwrap(); // TODO: handle
         if self.auto_set_seq_no {
             if message.seq_no.is_some() {
                 return Err(YdbError::custom(
@@ -317,7 +316,7 @@ impl TopicWriter {
 
         self.writer_message_sender
             .lock()
-            .await
+            .unwrap() // TODO: handle
             .send(message)
             .await
             .map_err(|err| YdbError::custom(format!("can't send the message to channel: {err}")))?;
@@ -384,7 +383,7 @@ struct Reconnector {
 struct ReconnectorParams {
     writer_options: TopicWriterOptions,
     producer_id: String,
-    messages: Arc<TokioMutex<Vec<MessageData>>>,
+    messages: Arc<Mutex<Vec<MessageData>>>,
 }
 
 struct WriterPeriodicTaskParams {
@@ -398,7 +397,7 @@ impl Reconnector {
     pub async fn new(
         params: ReconnectorParams,
         connection_manager: GrpcConnectionManager,
-        connection_info: Arc<TokioMutex<ConnectionInfo>>,
+        connection_info: Arc<Mutex<ConnectionInfo>>,
         confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
         writer_state: Arc<Mutex<TopicWriterState>>,
         messages_receiver: mpsc::Receiver<TopicWriterMessage>,
@@ -425,7 +424,7 @@ impl Reconnector {
             .await?;
         let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
         {
-            let mut guard = connection_info.lock().await;
+            let mut guard = connection_info.lock().unwrap(); // TODO: handle
             guard.partition_id = init_response.partition_id;
             guard.session_id = init_response.session_id;
             guard.last_seq_num_handled = init_response.last_seq_no;
@@ -529,7 +528,7 @@ impl Reconnector {
     }
 
     async fn write_loop_iteration(
-        messages: &Arc<TokioMutex<Vec<MessageData>>>,
+        messages: &Arc<Mutex<Vec<MessageData>>>,
         messages_receiver: &mut Receiver<TopicWriterMessage>,
         task_params: &WriterPeriodicTaskParams,
     ) -> YdbResult<()> {
@@ -539,7 +538,7 @@ impl Reconnector {
         'messages_loop: loop {
             let elapsed = start.elapsed();
             let messages_len = {
-                let messages_guard = messages.lock().await;
+                let messages_guard = messages.lock().unwrap(); // TODO: handle
                 messages_guard.len()
             };
             let messages_is_empty = messages_len == 0;
@@ -558,7 +557,7 @@ impl Reconnector {
             {
                 Ok(Some(message)) => {
                     let data_size = message.data.len() as i64;
-                    let mut messages_guard = messages.lock().await;
+                    let mut messages_guard = messages.lock().unwrap(); // TODO: handle
                     messages_guard.push(MessageData {
                         seq_no: message
                             .seq_no
@@ -587,7 +586,7 @@ impl Reconnector {
         }
 
         let messages_to_send = {
-            let mut messages_guard = messages.lock().await;
+            let mut messages_guard = messages.lock().unwrap(); // TODO: handle
             if messages_guard.is_empty() {
                 return Ok(());
             }
@@ -618,7 +617,7 @@ impl Reconnector {
             Ok(_) => Ok(()),
             Err(err) => {
                 // If sending fails, put messages back for next iteration
-                let mut messages_guard = messages.lock().await;
+                let mut messages_guard = messages.lock().unwrap(); // TODO: handle
 
                 // Prepend failed messages back to the front
                 let mut failed = messages_to_send;
