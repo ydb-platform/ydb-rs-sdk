@@ -142,7 +142,7 @@ impl TopicWriter {
 
         Ok(Self {
             path: writer_options.topic_path.clone(),
-            producer_id: Some(producer_id.clone()),
+            producer_id: Some(producer_id),
             write_request_messages_chunk_size: writer_options.write_request_messages_chunk_size,
             write_request_send_messages_period: writer_options.write_request_send_messages_period,
             auto_set_seq_no: writer_options.auto_seq_no,
@@ -161,7 +161,7 @@ impl TopicWriter {
         let reconnector_loop = tokio::spawn(async move {
             let mut messages_receiver = params.initial_messages_receiver;
             let mut connection_info_filled_tx = Some(connection_info_filled_tx);
-            let messages = Arc::new(Mutex::new(Vec::<MessageData>::new()));
+            let messages = Arc::new(TokioMutex::new(Vec::<MessageData>::new()));
 
             loop {
                 let (want_reconnect_sender, want_reconnect_receiver) = oneshot::channel();
@@ -385,7 +385,7 @@ struct Reconnector {
 struct ReconnectorParams {
     writer_options: TopicWriterOptions,
     producer_id: String,
-    messages: Arc<Mutex<Vec<MessageData>>>,
+    messages: Arc<TokioMutex<Vec<MessageData>>>,
 }
 
 struct WriterPeriodicTaskParams {
@@ -530,7 +530,7 @@ impl Reconnector {
     }
 
     async fn write_loop_iteration(
-        messages: &Arc<Mutex<Vec<MessageData>>>,
+        messages: &Arc<TokioMutex<Vec<MessageData>>>,
         messages_receiver: &mut Receiver<TopicWriterMessage>,
         task_params: &WriterPeriodicTaskParams,
     ) -> YdbResult<()> {
@@ -539,14 +539,14 @@ impl Reconnector {
         // wait for messages loop
         'messages_loop: loop {
             let elapsed = start.elapsed();
-            let messages_len = {
-                let messages_guard = messages.lock().unwrap(); // TODO: handle
-                messages_guard.len()
+            let (messages_len, messages_is_empty) = {
+                let messages_guard = messages.lock().await;
+                let len = messages_guard.len();
+                (len, len == 0)
             };
-            let messages_is_empty = messages_len == 0;
 
             if messages_len >= task_params.write_request_messages_chunk_size
-                || !messages_is_empty && elapsed >= task_params.write_request_send_messages_period
+                || (!messages_is_empty && elapsed >= task_params.write_request_send_messages_period)
             {
                 break;
             }
@@ -559,7 +559,7 @@ impl Reconnector {
             {
                 Ok(Some(message)) => {
                     let data_size = message.data.len() as i64;
-                    let mut messages_guard = messages.lock().unwrap(); // TODO: handle
+                    let mut messages_guard = messages.lock().await;
                     messages_guard.push(MessageData {
                         seq_no: message
                             .seq_no
@@ -588,7 +588,7 @@ impl Reconnector {
         }
 
         let messages_to_send = {
-            let mut messages_guard = messages.lock().unwrap(); // TODO: handle
+            let mut messages_guard = messages.lock().await;
             if messages_guard.is_empty() {
                 return Ok(());
             }
@@ -619,11 +619,11 @@ impl Reconnector {
             Ok(_) => Ok(()),
             Err(err) => {
                 // If sending fails, put messages back for next iteration
-                let mut messages_guard = messages.lock().unwrap(); // TODO: handle
+                let mut messages_guard = messages.lock().await;
 
                 // Prepend failed messages back to the front
                 let mut failed = messages_to_send;
-                failed.append(&mut messages_guard.drain(..).collect());
+                failed.extend(messages_guard.drain(..));
                 *messages_guard = failed;
 
                 let err_message = err.borrow().to_string();
