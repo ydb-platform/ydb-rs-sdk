@@ -613,7 +613,7 @@ impl Reconnector {
             .request_stream
             .send(stream_write_message::FromClient {
                 client_message: Some(ClientMessage::WriteRequest(WriteRequest {
-                    messages: messages_to_send.clone(),
+                    messages: messages_to_send,
                     codec: 1,
                     tx: None,
                 })),
@@ -626,11 +626,14 @@ impl Reconnector {
                 let mut messages_guard = messages.lock().await;
 
                 // Prepend failed messages back to the front
-                let mut failed = messages_to_send;
+                let err_message = err.to_string();
+                let mut failed = match err.0.client_message {
+                    Some(ClientMessage::WriteRequest(write_request)) => write_request.messages,
+                    _ => Vec::new(),
+                };
                 failed.extend(messages_guard.drain(..));
                 *messages_guard = failed;
 
-                let err_message = err.borrow().to_string();
                 Err(YdbError::Transport(err_message))
             }
         }
