@@ -51,9 +51,11 @@ pub struct TopicWriter {
     pub(crate) producer_id: Option<String>,
     pub(crate) write_request_messages_chunk_size: usize,
     pub(crate) write_request_send_messages_period: Duration,
-
+    
     pub(crate) auto_set_seq_no: bool,
     pub(crate) init_state: Arc<TokioMutex<ConnectionInfo>>,
+    
+    pub(crate) flush_timeout: Duration,
 
     writer_message_sender: Arc<TokioMutex<mpsc::Sender<TopicWriterMessage>>>,
 
@@ -146,6 +148,7 @@ impl TopicWriter {
             write_request_send_messages_period: writer_options.write_request_send_messages_period,
             auto_set_seq_no: writer_options.auto_seq_no,
             init_state: connection_info,
+            flush_timeout: writer_options.flush_timeout,
             writer_message_sender,
             cancellation_token,
             writer_state,
@@ -160,6 +163,7 @@ impl TopicWriter {
         let reconnection_loop = tokio::spawn(async move {
             let mut messages_receiver = params.initial_messages_receiver;
             let mut connection_info_filled_tx = Some(connection_info_filled_tx);
+            // TODO: buffer might grow quite big if reconnection keeps failing.
             let messages = Arc::new(TokioMutex::new(Vec::<MessageData>::new()));
 
             loop {
@@ -183,6 +187,15 @@ impl TopicWriter {
                     Ok(supervisor) => supervisor,
                     Err(err) => {
                         trace!("Error creating write loop supervisor: {}", err);
+                        if TopicWriter::is_retry_allowed(&err) {
+                            TopicWriter::wait_before_reconnect(&err).await;
+                            messages_receiver = TopicWriter::recreate_message_channel(
+                                &params.writer_message_sender,
+                            )
+                            .await;
+                            continue;
+                        }
+
                         if let Some(tx) = connection_info_filled_tx.take() {
                             let _ = tx.send(Err(err.clone()));
                         }
@@ -217,8 +230,7 @@ impl TopicWriter {
                         };
 
                         if TopicWriter::is_retry_allowed(&err) {
-                            trace!("Error, trying to reconnect: {}", err);
-                            sleep(TopicWriter::retry_wait_duration()).await;
+                            TopicWriter::wait_before_reconnect(&err).await;
                         } else {
                             trace!("Unknown error: {}", err);
                             let _ = supervisor.stop().await;  // TODO: handle error
@@ -263,6 +275,11 @@ impl TopicWriter {
     fn retry_wait_duration() -> Duration {
         // TODO: fine now, but smarter approach is needed
         Duration::from_secs(1)
+    }
+
+    async fn wait_before_reconnect(err: &YdbError) {
+        trace!("Error, trying to reconnect: {}", err);
+        sleep(TopicWriter::retry_wait_duration()).await;
     }
 
     pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
@@ -361,8 +378,15 @@ impl TopicWriter {
     pub async fn stop(self) -> YdbResult<()> {
         trace!("Stopping...");
 
-        self.flush().await?;
         self.cancellation_token.cancel();
+        match timeout(self.flush_timeout, self.flush()).await {
+            Ok(result) => result?,
+            Err(_) => {
+                return Err(YdbError::custom(
+                    "flush timed out while stopping topic writer",
+                ))
+            }
+        }
 
         self.reconnection_loop.await.map_err(|err| {
             YdbError::custom(format!(

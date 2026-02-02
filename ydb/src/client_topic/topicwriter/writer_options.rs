@@ -29,6 +29,8 @@ pub struct TopicWriterOptions {
     pub(crate) codec: Option<Codec>, // in case of no specified codec, codec is auto-selected
     #[builder(setter(strip_option), default)]
     pub(crate) custom_encoders: Option<HashMap<Codec, EncoderFunc>>,
+    #[builder(default = "Duration::from_secs(3)")]
+    pub(crate) flush_timeout: Duration,
 
     #[builder(default = "TopicWriterConnectionOptionsBuilder::default().build()?")]
     pub(crate) connection_options: TopicWriterConnectionOptions,
