@@ -51,11 +51,11 @@ pub struct TopicWriter {
     pub(crate) producer_id: Option<String>,
     pub(crate) write_request_messages_chunk_size: usize,
     pub(crate) write_request_send_messages_period: Duration,
-    
+
     pub(crate) auto_set_seq_no: bool,
     pub(crate) init_state: Arc<TokioMutex<ConnectionInfo>>,
-    
-    pub(crate) flush_timeout: Duration,
+
+    flush_timeout: Duration,
 
     writer_message_sender: Arc<TokioMutex<mpsc::Sender<TopicWriterMessage>>>,
 
@@ -378,7 +378,6 @@ impl TopicWriter {
     pub async fn stop(self) -> YdbResult<()> {
         trace!("Stopping...");
 
-        self.cancellation_token.cancel();
         match timeout(self.flush_timeout, self.flush()).await {
             Ok(result) => result?,
             Err(_) => {
@@ -387,6 +386,7 @@ impl TopicWriter {
                 ))
             }
         }
+        self.cancellation_token.cancel();
 
         self.reconnection_loop.await.map_err(|err| {
             YdbError::custom(format!(
