@@ -595,7 +595,7 @@ impl WriteSupervisor {
             }
             // Here we preventively assume that all messages are read ("clear, restore if failed").
             // - If write succeeds, then it's all right and we just keep going
-            // - If write fails, then we put these unwirtten messages back WITH taking into account messages that might've been written into messages.
+            // - If write fails, then we put these unwritten messages back WITH taking into account messages that might've been written into messages.
             //
             // The "clone, clear if success" approach is dangerous because we can lose messages that are appended in another coroutine.
             messages_guard.drain(..).collect::<Vec<MessageData>>()
