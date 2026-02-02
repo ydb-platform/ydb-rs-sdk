@@ -43,9 +43,8 @@ pub(crate) enum TopicWriterState {
     FinishedWithError(YdbError),
 }
 
-/// TopicWriter at initial state of implementation
-/// it really doesn't ready for use. For example
-/// It isn't handle lost connection to the server and have some unimplemented method.
+/// TopicWriter is currently in development.
+/// It is mostly usable, but has some unimplemented features.
 #[allow(dead_code)]
 pub struct TopicWriter {
     pub(crate) path: String,
@@ -63,7 +62,7 @@ pub struct TopicWriter {
 
     confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
 
-    reconnector_loop: JoinHandle<()>,
+    reconnection_loop: JoinHandle<()>,
 }
 
 #[allow(dead_code)]
@@ -91,7 +90,7 @@ pub(crate) struct ConnectionInfo {
     codecs_from_server: RawSupportedCodecs,
 }
 
-struct ReconnectorLoopParams {
+struct ReconnectionLoopParams {
     writer_options: TopicWriterOptions,
     producer_id: String,
     connection_manager: GrpcConnectionManager,
@@ -127,7 +126,7 @@ impl TopicWriter {
             last_seq_num_handled: 0,
             codecs_from_server: RawSupportedCodecs::default(),
         }));
-        let reconnector_loop = TopicWriter::spawn_reconnector_loop(ReconnectorLoopParams {
+        let reconnection_loop = TopicWriter::spawn_reconnection_loop(ReconnectionLoopParams {
             writer_options: writer_options.clone(),
             producer_id: producer_id.clone(),
             connection_manager,
@@ -151,14 +150,14 @@ impl TopicWriter {
             cancellation_token,
             writer_state,
             confirmation_reception_queue,
-            reconnector_loop,
+            reconnection_loop,
         })
     }
 
-    async fn spawn_reconnector_loop(params: ReconnectorLoopParams) -> YdbResult<JoinHandle<()>> {
+    async fn spawn_reconnection_loop(params: ReconnectionLoopParams) -> YdbResult<JoinHandle<()>> {
         let (connection_info_filled_tx, connection_info_filled_rx) =
             oneshot::channel::<YdbResult<()>>();
-        let reconnector_loop = tokio::spawn(async move {
+        let reconnection_loop = tokio::spawn(async move {
             let mut messages_receiver = params.initial_messages_receiver;
             let mut connection_info_filled_tx = Some(connection_info_filled_tx);
             let messages = Arc::new(TokioMutex::new(Vec::<MessageData>::new()));
@@ -166,8 +165,8 @@ impl TopicWriter {
             loop {
                 let (want_reconnect_sender, want_reconnect_receiver) = oneshot::channel();
 
-                let reconnector = match Reconnector::new(
-                    ReconnectorParams {
+                let supervisor = match WriteSupervisor::new(
+                    WriteSupervisorParams {
                         writer_options: params.writer_options.clone(),
                         producer_id: params.producer_id.clone(),
                         messages: messages.clone(),
@@ -181,9 +180,9 @@ impl TopicWriter {
                 )
                 .await
                 {
-                    Ok(reconnector) => reconnector,
+                    Ok(supervisor) => supervisor,
                     Err(err) => {
-                        trace!("Error creating reconnector: {}", err);
+                        trace!("Error creating write loop supervisor: {}", err);
                         if let Some(tx) = connection_info_filled_tx.take() {
                             let _ = tx.send(Err(err.clone()));
                         }
@@ -199,7 +198,7 @@ impl TopicWriter {
 
                 tokio::select! {
                     _ = params.cancellation_token.cancelled() => {
-                        let _ = reconnector.stop().await;
+                        let _ = supervisor.stop().await;
                         break;
                     }
                     err = want_reconnect_receiver => {
@@ -208,10 +207,10 @@ impl TopicWriter {
                             Err(chan_err) => {
                                 // TODO: ???
                                 trace!("Channel error: {}", chan_err);
-                                let _ = reconnector.stop().await;  // TODO: handle error
+                                let _ = supervisor.stop().await;  // TODO: handle error
                                 let mut writer_state = params.writer_state.lock().unwrap();
                                 *writer_state = TopicWriterState::FinishedWithError(
-                                    YdbError::custom(format!("reconnector channel closed: {chan_err}")),
+                                    YdbError::custom(format!("write supervisor channel closed: {chan_err}")),
                                 );
                                 break;
                             }
@@ -222,7 +221,7 @@ impl TopicWriter {
                             sleep(TopicWriter::retry_wait_duration()).await;
                         } else {
                             trace!("Unknown error: {}", err);
-                            let _ = reconnector.stop().await;  // TODO: handle error
+                            let _ = supervisor.stop().await;  // TODO: handle error
                             let mut writer_state = params.writer_state.lock().unwrap();
                             *writer_state = TopicWriterState::FinishedWithError(err);
                             break;
@@ -236,7 +235,7 @@ impl TopicWriter {
         });
 
         match connection_info_filled_rx.await {
-            Ok(Ok(())) => Ok(reconnector_loop),
+            Ok(Ok(())) => Ok(reconnection_loop),
             Ok(Err(err)) => Err(err),
             Err(_) => Err(YdbError::custom("connection info filled channel closed")),
         }
@@ -365,24 +364,26 @@ impl TopicWriter {
         self.flush().await?;
         self.cancellation_token.cancel();
 
-        self.reconnector_loop.await.map_err(|err| {
+        self.reconnection_loop.await.map_err(|err| {
             YdbError::custom(format!(
-                "stop: error while waiting for reconnector_loop to finish: {err}"
+                "stop: error while waiting for reconnection_loop to finish: {err}"
             ))
         })?; // TODO: handle error
-        trace!("Reconnector loop stopped");
+        trace!("Reconnection loop stopped");
 
         Ok(())
     }
 }
 
-struct Reconnector {
+/// A supervisor for the write loop and the receive messages loop.
+/// Is capable of reporting when it wants to reconnect through the want_reconnect_tx channel.
+struct WriteSupervisor {
     writer_loop: JoinHandle<()>,
     receive_messages_loop: JoinHandle<()>,
     cancellation_token: CancellationToken,
 }
 
-struct ReconnectorParams {
+struct WriteSupervisorParams {
     writer_options: TopicWriterOptions,
     producer_id: String,
     messages: Arc<TokioMutex<Vec<MessageData>>>,
@@ -395,9 +396,9 @@ struct WriterPeriodicTaskParams {
     request_stream: mpsc::UnboundedSender<stream_write_message::FromClient>,
 }
 
-impl Reconnector {
+impl WriteSupervisor {
     pub async fn new(
-        params: ReconnectorParams,
+        params: WriteSupervisorParams,
         connection_manager: GrpcConnectionManager,
         connection_info: Arc<TokioMutex<ConnectionInfo>>,
         confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
@@ -465,7 +466,7 @@ impl Reconnector {
                     break;
                 }
 
-                let Err(writer_iteration_error) = Reconnector::write_loop_iteration(
+                let Err(writer_iteration_error) = WriteSupervisor::write_loop_iteration(
                     &writer_loop_messages,
                     message_receiver.borrow_mut(),
                     task_params.borrow(),
@@ -486,7 +487,7 @@ impl Reconnector {
 
                 if let Err(err) = tx.send(writer_iteration_error.clone()) {
                     *writer_state = TopicWriterState::FinishedWithError(
-                        YdbError::custom(format!("can't send error to reconnector: {err} (original error: {writer_iteration_error})"))
+                        YdbError::custom(format!("can't send error to supervisor: {err} (original error: {writer_iteration_error})"))
                     );
                 }
             }
@@ -500,7 +501,7 @@ impl Reconnector {
                 tokio::select! {
                     _ = message_receive_loop_cancellation_token.cancelled() => { return ; }
                     message_receive_it_res = async {
-                        Reconnector::receive_messages_loop_iteration(
+                        WriteSupervisor::receive_messages_loop_iteration(
                             stream.borrow_mut(),
                             reception_queue.borrow_mut()
                         ).await
