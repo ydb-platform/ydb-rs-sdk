@@ -399,7 +399,7 @@ impl TopicWriter {
 }
 
 /// A supervisor for the write loop and the receive messages loop.
-/// Is capable of reporting when it wants to reconnect through the want_reconnect_tx channel.
+/// Reports when it wants to reconnect through the want_reconnect_tx channel.
 struct WriteSupervisor {
     writer_loop: JoinHandle<()>,
     receive_messages_loop: JoinHandle<()>,
