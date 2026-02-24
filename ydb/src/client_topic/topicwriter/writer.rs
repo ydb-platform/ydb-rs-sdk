@@ -53,7 +53,7 @@ pub struct TopicWriter {
     pub(crate) write_request_send_messages_period: Duration,
 
     pub(crate) auto_set_seq_no: bool,
-    pub(crate) init_state: Arc<TokioMutex<ConnectionInfo>>,
+    pub(crate) connection_info: Arc<TokioMutex<ConnectionInfo>>,
 
     flush_timeout: Duration,
 
@@ -147,7 +147,7 @@ impl TopicWriter {
             write_request_messages_chunk_size: writer_options.write_request_messages_chunk_size,
             write_request_send_messages_period: writer_options.write_request_send_messages_period,
             auto_set_seq_no: writer_options.auto_seq_no,
-            init_state: connection_info,
+            connection_info,
             flush_timeout: writer_options.flush_timeout,
             writer_message_sender,
             cancellation_token,
@@ -315,7 +315,7 @@ impl TopicWriter {
         self.is_cancelled().await?;
 
         let message_seqno = {
-            let mut init_state = self.init_state.lock().await;
+            let mut init_state = self.connection_info.lock().await;
             if self.auto_set_seq_no {
                 if message.seq_no.is_some() {
                     return Err(YdbError::custom(
