@@ -11,7 +11,7 @@ pub(crate) struct RetryParams {
     pub(crate) time_from_start: Duration,
 }
 
-// May be extend in feature
+// May be extended in the future
 #[derive(Default, Debug)]
 pub(crate) struct RetryDecision {
     pub(crate) allow_retry: bool,
