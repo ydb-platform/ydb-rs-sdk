@@ -205,6 +205,11 @@ impl TopicWriter {
                     }
                 };
 
+                {
+                    let mut writer_state = params.writer_state.lock().unwrap();
+                    *writer_state = TopicWriterState::Working;
+                }
+
                 if let Some(tx) = connection_info_filled_tx.take() {
                     let _ = tx.send(Ok(()));
                 };
