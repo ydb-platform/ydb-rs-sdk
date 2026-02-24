@@ -87,7 +87,7 @@ impl Future for AckFuture {
 pub(crate) struct ConnectionInfo {
     partition_id: i64,
     session_id: String,
-    last_seq_num_handled: i64,
+    last_seq_no_assigned: i64,
     codecs_from_server: RawSupportedCodecs,
 }
 
@@ -124,7 +124,7 @@ impl TopicWriter {
         let connection_info = Arc::new(TokioMutex::new(ConnectionInfo {
             partition_id: 0,
             session_id: String::new(),
-            last_seq_num_handled: 0,
+            last_seq_no_assigned: 0,
             codecs_from_server: RawSupportedCodecs::default(),
         }));
         let reconnection_loop = TopicWriter::spawn_reconnection_loop(ReconnectionLoopParams {
@@ -321,11 +321,11 @@ impl TopicWriter {
                         "force set message seqno possible only if auto_set_seq_no disabled",
                     ));
                 }
-                message.seq_no = Some(init_state.last_seq_num_handled + 1);
+                message.seq_no = Some(init_state.last_seq_no_assigned + 1);
             };
 
             if let Some(mess_seqno) = message.seq_no {
-                init_state.last_seq_num_handled = mess_seqno;
+                init_state.last_seq_no_assigned = mess_seqno;
                 mess_seqno
             } else {
                 return Err(YdbError::custom("need to set message seq_no"));
@@ -458,7 +458,7 @@ impl WriteSupervisor {
             let mut guard = connection_info.lock().await;
             guard.partition_id = init_response.partition_id;
             guard.session_id = init_response.session_id;
-            guard.last_seq_num_handled = init_response.last_seq_no;
+            guard.last_seq_no_assigned = init_response.last_seq_no;
             guard.codecs_from_server = init_response.supported_codecs;
         }
 
