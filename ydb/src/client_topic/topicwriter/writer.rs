@@ -318,7 +318,7 @@ impl TopicWriter {
         mut message: TopicWriterMessage,
         wait_ack: Option<oneshot::Sender<MessageWriteStatus>>,
     ) -> YdbResult<()> {
-        self.is_cancelled().await?;
+        self.check_working().await?;
 
         let message_seqno = {
             let mut init_state = self.connection_info.lock().await;
@@ -363,7 +363,7 @@ impl TopicWriter {
     }
 
     pub async fn flush(&self) -> YdbResult<()> {
-        self.is_cancelled().await?;
+        self.check_working().await?;
 
         let flush_op_completed = {
             let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
@@ -373,7 +373,7 @@ impl TopicWriter {
         Ok(flush_op_completed.await?)
     }
 
-    async fn is_cancelled(&self) -> YdbResult<()> {
+    async fn check_working(&self) -> YdbResult<()> {
         let state = self.writer_state.lock().unwrap();
         match state.deref() {
             TopicWriterState::Working => Ok(()),
