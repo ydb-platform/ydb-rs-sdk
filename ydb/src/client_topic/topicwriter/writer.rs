@@ -352,7 +352,7 @@ impl TopicWriter {
         );
 
         {
-            // bracket needs for release mutex as soon as possible - before await
+            // brackets are needed for mutex to be released as soon as possible - before await
             let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
             reception_queue.add_ticket(TopicWriterReceptionTicket::new(
                 message_seqno,
