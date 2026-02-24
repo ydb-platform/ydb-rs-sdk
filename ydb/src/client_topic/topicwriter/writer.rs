@@ -166,7 +166,7 @@ impl TopicWriter {
             let messages = Arc::new(TokioMutex::new(Vec::<MessageData>::new()));
 
             loop {
-                let (want_reconnect_sender, want_reconnect_receiver) = oneshot::channel();
+                let (error_sender, error_receiver) = oneshot::channel();
 
                 let supervisor = match WriteSupervisor::new(
                     WriteSupervisorParams {
@@ -179,7 +179,7 @@ impl TopicWriter {
                     params.confirmation_reception_queue.clone(),
                     params.writer_state.clone(),
                     messages_receiver,
-                    want_reconnect_sender,
+                    error_sender,
                 )
                 .await
                 {
@@ -213,7 +213,7 @@ impl TopicWriter {
                         let _ = supervisor.stop().await;
                         break;
                     }
-                    err = want_reconnect_receiver => {
+                    err = error_receiver => {
                         let err = match err {
                             Ok(err) => err,
                             Err(chan_err) => {
@@ -399,7 +399,7 @@ impl TopicWriter {
 }
 
 /// A supervisor for the write loop and the receive messages loop.
-/// Reports when it wants to reconnect through the want_reconnect_tx channel.
+/// Reports an error through the error_tx channel.
 struct WriteSupervisor {
     writer_loop: JoinHandle<()>,
     receive_messages_loop: JoinHandle<()>,
@@ -427,7 +427,7 @@ impl WriteSupervisor {
         confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
         writer_state: Arc<Mutex<TopicWriterState>>,
         messages_receiver: mpsc::Receiver<TopicWriterMessage>,
-        want_reconnect_tx: oneshot::Sender<YdbError>,
+        error_tx: oneshot::Sender<YdbError>,
     ) -> YdbResult<Self> {
         let init_request_body = InitRequest {
             path: params.writer_options.topic_path.clone(),
@@ -487,7 +487,7 @@ impl WriteSupervisor {
         let writer_loop = tokio::spawn(async move {
             let mut message_receiver = messages_receiver; // force move inside
             let task_params = writer_loop_task_params; // force move inside
-            let mut want_reconnect_tx = Some(want_reconnect_tx); // force move inside + wrap in Option
+            let mut error_tx = Some(error_tx); // force move inside + wrap in Option
 
             loop {
                 if writer_loop_cancellation_token.is_cancelled() {
@@ -509,7 +509,7 @@ impl WriteSupervisor {
 
                 *writer_state = TopicWriterState::FinishedWithError(writer_iteration_error.clone());
 
-                let Some(tx) = want_reconnect_tx.take() else {
+                let Some(tx) = error_tx.take() else {
                     break;
                 };
 
