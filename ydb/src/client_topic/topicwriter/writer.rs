@@ -169,8 +169,8 @@ impl TopicWriter {
             loop {
                 let (error_sender, error_receiver) = oneshot::channel();
 
-                let supervisor = match WriteSupervisor::new(
-                    WriteSupervisorParams {
+                let stream_writer = match StreamWriter::new(
+                    StreamWriterParams {
                         writer_options: params.writer_options.clone(),
                         producer_id: params.producer_id.clone(),
                         messages: messages.clone(),
@@ -184,9 +184,9 @@ impl TopicWriter {
                 )
                 .await
                 {
-                    Ok(supervisor) => supervisor,
+                    Ok(stream_writer) => stream_writer,
                     Err(err) => {
-                        trace!("Error creating write loop supervisor: {}", err);
+                        trace!("Error creating stream writer: {}", err);
                         if TopicWriter::is_retry_allowed(&err) {
                             TopicWriter::wait_before_reconnect(&err).await;
                             messages_receiver = TopicWriter::recreate_message_channel(
@@ -216,7 +216,7 @@ impl TopicWriter {
 
                 tokio::select! {
                     _ = params.cancellation_token.cancelled() => {
-                        let _ = supervisor.stop().await;
+                        let _ = stream_writer.stop().await;
                         break;
                     }
                     err = error_receiver => {
@@ -225,10 +225,10 @@ impl TopicWriter {
                             Err(chan_err) => {
                                 // TODO: ???
                                 trace!("Channel error: {}", chan_err);
-                                let _ = supervisor.stop().await;  // TODO: handle error
+                                let _ = stream_writer.stop().await;  // TODO: handle error
                                 let mut writer_state = params.writer_state.lock().unwrap();
                                 *writer_state = TopicWriterState::FinishedWithError(
-                                    YdbError::custom(format!("write supervisor channel closed: {chan_err}")),
+                                    YdbError::custom(format!("stream writer channel closed: {chan_err}")),
                                 );
                                 break;
                             }
@@ -238,7 +238,7 @@ impl TopicWriter {
                             TopicWriter::wait_before_reconnect(&err).await;
                         } else {
                             trace!("Unknown error: {}", err);
-                            let _ = supervisor.stop().await;  // TODO: handle error
+                            let _ = stream_writer.stop().await;  // TODO: handle error
                             let mut writer_state = params.writer_state.lock().unwrap();
                             *writer_state = TopicWriterState::FinishedWithError(err);
                             break;
@@ -406,30 +406,30 @@ impl TopicWriter {
     }
 }
 
-/// A supervisor for the write loop and the receive messages loop.
-/// Reports an error through the error_tx channel.
-struct WriteSupervisor {
+/// Manages the gRPC stream communications: write loop and receive-messages loop.
+/// Reports error via error_tx.
+struct StreamWriter {
     writer_loop: JoinHandle<()>,
     receive_messages_loop: JoinHandle<()>,
     cancellation_token: CancellationToken,
 }
 
-struct WriteSupervisorParams {
+struct StreamWriterParams {
     writer_options: TopicWriterOptions,
     producer_id: String,
     messages: Arc<TokioMutex<Vec<MessageData>>>,
 }
 
-struct WriterPeriodicTaskParams {
+struct WriterLoopParams {
     write_request_messages_chunk_size: usize,
     write_request_send_messages_period: Duration,
     producer_id: Option<String>,
     request_stream: mpsc::UnboundedSender<stream_write_message::FromClient>,
 }
 
-impl WriteSupervisor {
+impl StreamWriter {
     pub async fn new(
-        params: WriteSupervisorParams,
+        params: StreamWriterParams,
         connection_manager: GrpcConnectionManager,
         connection_info: Arc<TokioMutex<ConnectionInfo>>,
         confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
@@ -474,7 +474,7 @@ impl WriteSupervisor {
         let message_receive_loop_writer_state = writer_state.clone();
         let message_loop_reception_queue = confirmation_reception_queue.clone();
 
-        let writer_loop_task_params = WriterPeriodicTaskParams {
+        let writer_loop_task_params = WriterLoopParams {
             write_request_messages_chunk_size: params
                 .writer_options
                 .write_request_messages_chunk_size,
@@ -497,7 +497,7 @@ impl WriteSupervisor {
                     break;
                 }
 
-                let Err(writer_iteration_error) = WriteSupervisor::write_loop_iteration(
+                let Err(writer_iteration_error) = StreamWriter::write_loop_iteration(
                     &writer_loop_messages,
                     message_receiver.borrow_mut(),
                     task_params.borrow(),
@@ -518,7 +518,7 @@ impl WriteSupervisor {
 
                 if let Err(err) = tx.send(writer_iteration_error.clone()) {
                     *writer_state = TopicWriterState::FinishedWithError(
-                        YdbError::custom(format!("can't send error to supervisor: {err} (original error: {writer_iteration_error})"))
+                        YdbError::custom(format!("can't send error to stream writer: {err} (original error: {writer_iteration_error})"))
                     );
                 }
             }
@@ -532,7 +532,7 @@ impl WriteSupervisor {
                 tokio::select! {
                     _ = message_receive_loop_cancellation_token.cancelled() => { return ; }
                     message_receive_it_res = async {
-                        WriteSupervisor::receive_messages_loop_iteration(
+                        StreamWriter::receive_messages_loop_iteration(
                             stream.borrow_mut(),
                             reception_queue.borrow_mut()
                         ).await
@@ -564,7 +564,7 @@ impl WriteSupervisor {
     async fn write_loop_iteration(
         messages: &Arc<TokioMutex<Vec<MessageData>>>,
         messages_receiver: &mut Receiver<TopicWriterMessage>,
-        task_params: &WriterPeriodicTaskParams,
+        task_params: &WriterLoopParams,
     ) -> YdbResult<()> {
         let start = Instant::now();
 
