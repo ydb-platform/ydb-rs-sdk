@@ -384,22 +384,25 @@ impl TopicWriter {
     pub async fn stop(self) -> YdbResult<()> {
         trace!("Stopping...");
 
-        match timeout(self.flush_timeout, self.flush()).await {
-            Ok(result) => result?,
-            Err(_) => {
-                return Err(YdbError::custom(
-                    "flush timed out while stopping topic writer",
-                ))
-            }
-        }
-        self.cancellation_token.cancel();
+        let flush_result = match timeout(self.flush_timeout, self.flush()).await {
+            Ok(result) => result,
+            Err(_) => Err(YdbError::custom(
+                "stop: flush() timed out while stopping topic writer",
+            )),
+        };
 
-        self.reconnection_loop.await.map_err(|err| {
+        self.cancellation_token.cancel();
+        let loop_result = self.reconnection_loop.await.map_err(|err| {
             YdbError::custom(format!(
                 "stop: error while waiting for reconnection_loop to finish: {err}"
             ))
-        })?; // TODO: handle error
+        });
+
         trace!("Reconnection loop stopped");
+
+        // First clean up all resources, then return result.
+        flush_result?;
+        loop_result?;
 
         Ok(())
     }
