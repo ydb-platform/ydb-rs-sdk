@@ -8,12 +8,14 @@ use crate::errors::NeedRetry;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
-use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
-use crate::grpc_wrapper::raw_topic_service::stream_write::init::RawInitResponse;
-use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
-use crate::{grpc_wrapper, YdbError, YdbResult};
-use std::borrow::{Borrow, BorrowMut};
+use crate::grpc_wrapper::raw_topic_service::{
+    client::RawTopicClient, common::codecs::RawSupportedCodecs,
+    stream_write::init::RawInitResponse, stream_write::RawServerMessage,
+};
+use crate::retry::{Retry, RetryParams, TimeoutRetrier};
+use crate::{YdbError, YdbResult};
 
+use std::borrow::{Borrow, BorrowMut};
 use std::future::Future;
 use std::ops::Deref;
 use std::pin::Pin;
@@ -102,6 +104,7 @@ struct ReconnectionLoopParams {
     confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
     connection_info: Arc<TokioMutex<ConnectionInfo>>,
     initial_messages_receiver: mpsc::Receiver<TopicWriterMessage>,
+    retrier: Arc<dyn Retry>,
 }
 
 impl TopicWriter {
@@ -128,6 +131,12 @@ impl TopicWriter {
             last_seq_no_assigned: 0,
             codecs_from_server: RawSupportedCodecs::default(),
         }));
+        let retrier = writer_options.retrier.clone().unwrap_or_else(|| {
+            Arc::new(TimeoutRetrier {
+                timeout: Duration::from_secs(30),
+            })
+        });
+
         let reconnection_loop = TopicWriter::spawn_reconnection_loop(ReconnectionLoopParams {
             writer_options: writer_options.clone(),
             producer_id: producer_id.clone(),
@@ -138,6 +147,7 @@ impl TopicWriter {
             confirmation_reception_queue: confirmation_reception_queue.clone(),
             connection_info: connection_info.clone(),
             initial_messages_receiver,
+            retrier,
         })
         .await?;
 
@@ -165,6 +175,9 @@ impl TopicWriter {
             let mut connection_info_filled_tx = Some(connection_info_filled_tx);
             // TODO: buffer might grow quite big if reconnection keeps failing.
             let messages = Arc::new(TokioMutex::new(Vec::<MessageData>::new()));
+            let retrier = params.retrier.clone();
+
+            let mut attempt = 0;
 
             loop {
                 let (error_sender, error_receiver) = oneshot::channel();
@@ -187,8 +200,11 @@ impl TopicWriter {
                     Ok(stream_writer) => stream_writer,
                     Err(err) => {
                         trace!("Error creating stream writer: {}", err);
-                        if TopicWriter::is_retry_allowed(&err) {
-                            TopicWriter::wait_before_reconnect(&err).await;
+                        attempt += 1;
+                        if let Some(wait_timeout) =
+                            TopicWriter::get_timeout_before_reconnect(&retrier, &err, attempt)
+                        {
+                            TopicWriter::wait_before_reconnect(wait_timeout, &err).await;
                             messages_receiver = TopicWriter::recreate_message_channel(
                                 &params.writer_message_sender,
                             )
@@ -234,8 +250,13 @@ impl TopicWriter {
                             }
                         };
 
-                        if TopicWriter::is_retry_allowed(&err) {
-                            TopicWriter::wait_before_reconnect(&err).await;
+                        attempt += 1;
+                        if let Some(wait_timeout) = TopicWriter::get_timeout_before_reconnect(
+                            &retrier,
+                            &err,
+                            attempt,
+                        ) {
+                            TopicWriter::wait_before_reconnect(wait_timeout, &err).await;
                         } else {
                             trace!("Unknown error: {}", err);
                             let _ = stream_writer.stop().await;  // TODO: handle error
@@ -279,14 +300,31 @@ impl TopicWriter {
         }
     }
 
-    fn retry_wait_duration() -> Duration {
-        // TODO: fine now, but smarter approach is needed
-        Duration::from_secs(1)
+    // Decides whether reconnect is allowed and returns a wait timeout if it is.
+    fn get_timeout_before_reconnect(
+        retrier: &Arc<dyn Retry>,
+        err: &YdbError,
+        attempt: usize,
+    ) -> Option<Duration> {
+        if !TopicWriter::is_retry_allowed(err) {
+            return None;
+        }
+
+        let decision = retrier.wait_duration(RetryParams {
+            attempt,
+            time_from_start: Duration::from_secs(0), // TODO: from start of what?
+        });
+
+        if !decision.allow_retry {
+            return None;
+        }
+
+        Some(decision.wait_timeout)
     }
 
-    async fn wait_before_reconnect(err: &YdbError) {
+    async fn wait_before_reconnect(wait_timeout: Duration, err: &YdbError) {
         trace!("Error, trying to reconnect: {}", err);
-        sleep(TopicWriter::retry_wait_duration()).await;
+        sleep(wait_timeout).await;
     }
 
     pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
@@ -453,7 +491,7 @@ impl StreamWriter {
         };
 
         let mut topic_service = connection_manager
-            .get_auth_service(grpc_wrapper::raw_topic_service::client::RawTopicClient::new)
+            .get_auth_service(RawTopicClient::new)
             .await?;
 
         let mut stream = topic_service
