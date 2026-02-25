@@ -1,9 +1,11 @@
 use crate::client_topic::list_types::Codec;
 use crate::client_topic::topicwriter::partitioning::PartitioningStrategy;
 use crate::errors;
+use crate::retry::{Retry, TimeoutRetrier};
 use derive_builder::Builder;
 use prost::bytes::Bytes;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 type EncoderFunc = fn(Bytes) -> Bytes;
@@ -34,6 +36,9 @@ pub struct TopicWriterOptions {
     pub(crate) custom_encoders: Option<HashMap<Codec, EncoderFunc>>,
     #[builder(default = "Duration::from_secs(3)")]
     pub(crate) flush_timeout: Duration,
+
+    #[builder(default = "Some(Arc::new(TimeoutRetrier { timeout: Duration::from_secs(30) } ))")]
+    pub(crate) retrier: Option<Arc<dyn Retry>>,
 
     #[builder(default = "TopicWriterConnectionOptionsBuilder::default().build()?")]
     pub(crate) connection_options: TopicWriterConnectionOptions,

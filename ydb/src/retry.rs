@@ -1,9 +1,10 @@
-use num::pow;
 use std::time::Duration;
 use tracing::instrument;
 
 const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
-const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
+const BACKOFF_RETRY_MAX_WAIT_DURATION: Duration = Duration::from_secs(10);
+const BACKOFF_RETRY_MAX_WAIT_DURATION_MILLISECONDS: u64 =
+    BACKOFF_RETRY_MAX_WAIT_DURATION.as_millis() as u64;
 
 #[derive(Debug)]
 pub(crate) struct RetryParams {
@@ -41,8 +42,10 @@ impl Retry for TimeoutRetrier {
         let mut res = RetryDecision::default();
         if params.time_from_start < self.timeout {
             if params.attempt > 0 {
-                res.wait_timeout =
-                    Duration::from_millis(pow(INITIAL_RETRY_BACKOFF_MILLISECONDS, params.attempt));
+                let duration_milliseconds = 2u64
+                    .pow(params.attempt as u32)
+                    .min(BACKOFF_RETRY_MAX_WAIT_DURATION_MILLISECONDS);
+                res.wait_timeout = Duration::from_millis(duration_milliseconds);
             }
             res.allow_retry = (params.time_from_start + res.wait_timeout) < self.timeout;
         };
