@@ -474,11 +474,16 @@ impl StreamWriter {
 
         let cancellation_token = CancellationToken::new();
 
+        // Both loops share the same oneshot error channel.
+        let shared_error_tx = Arc::new(TokioMutex::new(Some(error_tx)));
+
         let writer_loop_cancellation_token = cancellation_token.clone();
         let writer_loop_writer_state = writer_state.clone();
+        let writer_loop_error_tx = shared_error_tx.clone();
 
         let message_receive_loop_cancellation_token = cancellation_token.clone();
         let message_receive_loop_writer_state = writer_state.clone();
+        let message_receive_loop_error_tx = shared_error_tx.clone();
         let message_loop_reception_queue = confirmation_reception_queue.clone();
 
         let writer_loop_task_params = WriterLoopParams {
@@ -497,7 +502,6 @@ impl StreamWriter {
         let writer_loop = tokio::spawn(async move {
             let mut message_receiver = messages_receiver; // force move inside
             let task_params = writer_loop_task_params; // force move inside
-            let mut error_tx = Some(error_tx); // force move inside + wrap in Option
 
             loop {
                 if writer_loop_cancellation_token.is_cancelled() {
@@ -515,19 +519,27 @@ impl StreamWriter {
                 };
 
                 writer_loop_cancellation_token.cancel();
-                let mut writer_state = writer_loop_writer_state.lock().unwrap(); // TODO: handle error
+                {
+                    // TODO: handle error
+                    let mut writer_state = writer_loop_writer_state.lock().unwrap();
+                    *writer_state =
+                        TopicWriterState::FinishedWithError(writer_iteration_error.clone());
+                }
 
-                *writer_state = TopicWriterState::FinishedWithError(writer_iteration_error.clone());
-
-                let Some(tx) = error_tx.take() else {
+                let Some(tx) = writer_loop_error_tx.lock().await.take() else {
                     break;
                 };
 
-                if let Err(err) = tx.send(writer_iteration_error.clone()) {
-                    *writer_state = TopicWriterState::FinishedWithError(
-                        YdbError::custom(format!("can't send error to stream writer: {err} (original error: {writer_iteration_error})"))
-                    );
-                }
+                let Err(send_err) = tx.send(writer_iteration_error.clone()) else {
+                    break;
+                };
+
+                // TODO: handle error
+                let mut writer_state = writer_loop_writer_state.lock().unwrap();
+                *writer_state = TopicWriterState::FinishedWithError(YdbError::custom(format!(
+                    "can't send error to stream writer: {send_err} (original error: {writer_iteration_error})"
+                )));
+                break;
             }
         });
 
@@ -537,25 +549,44 @@ impl StreamWriter {
 
             loop {
                 tokio::select! {
-                    _ = message_receive_loop_cancellation_token.cancelled() => { return ; }
+                    _ = message_receive_loop_cancellation_token.cancelled() => { return; }
                     message_receive_it_res = async {
                         StreamWriter::receive_messages_loop_iteration(
                             stream.borrow_mut(),
-                            reception_queue.borrow_mut()
+                            reception_queue.borrow_mut(),
                         ).await
                     } => {
-                        match message_receive_it_res {
-                            Ok(_) => {}
-                            Err(receive_message_iteration_error) => {
-                                message_receive_loop_cancellation_token.cancel();
-                                warn!("error receive message for topic writer receiver stream loop: {}", &receive_message_iteration_error);
-                                let mut writer_state =
-                                    message_receive_loop_writer_state.lock().unwrap(); // TODO handle error
-                                *writer_state =
-                                    TopicWriterState::FinishedWithError(receive_message_iteration_error);
-                                return ;
-                            }
+                        let Err(receive_message_it_error) = message_receive_it_res else {
+                            continue;
+                        };
+
+                        message_receive_loop_cancellation_token.cancel();
+                        warn!(
+                            "error receiving message in topic writer receiver stream loop: {}",
+                            &receive_message_it_error
+                        );
+
+                        {
+                            // TODO handle error
+                            let mut writer_state = message_receive_loop_writer_state.lock().unwrap();
+                            *writer_state =
+                                TopicWriterState::FinishedWithError(receive_message_it_error.clone());
                         }
+
+                        let Some(tx) = message_receive_loop_error_tx.lock().await.take() else {
+                            break;
+                        };
+
+                        let Err(send_err) = tx.send(receive_message_it_error.clone()) else {
+                            break;
+                        };
+
+                        // TODO: handle error
+                        let mut writer_state = message_receive_loop_writer_state.lock().unwrap();
+                        *writer_state = TopicWriterState::FinishedWithError(YdbError::custom(format!(
+                            "can't send error to stream writer: {send_err} (original error: {receive_message_it_error})"
+                        )));
+                        break;
                     }
                 }
             }
