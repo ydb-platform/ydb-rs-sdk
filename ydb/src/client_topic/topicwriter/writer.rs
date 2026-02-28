@@ -190,7 +190,6 @@ impl TopicWriter {
                     params.connection_manager.clone(),
                     params.connection_info.clone(),
                     params.confirmation_reception_queue.clone(),
-                    params.writer_state.clone(),
                     messages_receiver,
                     error_sender,
                 )
@@ -473,7 +472,6 @@ impl StreamWriter {
         connection_manager: GrpcConnectionManager,
         connection_info: Arc<TokioMutex<ConnectionInfo>>,
         confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
-        writer_state: Arc<Mutex<TopicWriterState>>,
         messages_receiver: mpsc::Receiver<TopicWriterMessage>,
         error_tx: oneshot::Sender<YdbError>,
     ) -> YdbResult<Self> {
@@ -516,11 +514,9 @@ impl StreamWriter {
         let shared_error_tx = Arc::new(TokioMutex::new(Some(error_tx)));
 
         let writer_loop_cancellation_token = cancellation_token.clone();
-        let writer_loop_writer_state = writer_state.clone();
         let writer_loop_error_tx = shared_error_tx.clone();
 
         let message_receive_loop_cancellation_token = cancellation_token.clone();
-        let message_receive_loop_writer_state = writer_state.clone();
         let message_receive_loop_error_tx = shared_error_tx.clone();
         let message_loop_reception_queue = confirmation_reception_queue.clone();
 
@@ -557,12 +553,6 @@ impl StreamWriter {
                 };
 
                 writer_loop_cancellation_token.cancel();
-                {
-                    // TODO: handle error
-                    let mut writer_state = writer_loop_writer_state.lock().unwrap();
-                    *writer_state =
-                        TopicWriterState::FinishedWithError(writer_iteration_error.clone());
-                }
 
                 let Some(tx) = writer_loop_error_tx.lock().await.take() else {
                     break;
@@ -572,11 +562,7 @@ impl StreamWriter {
                     break;
                 };
 
-                // TODO: handle error
-                let mut writer_state = writer_loop_writer_state.lock().unwrap();
-                *writer_state = TopicWriterState::FinishedWithError(YdbError::custom(format!(
-                    "can't send error to stream writer: {send_err} (original error: {writer_iteration_error})"
-                )));
+                warn!("can't send error to stream writer: {send_err} (original error: {writer_iteration_error})");
                 break;
             }
         });
@@ -604,13 +590,6 @@ impl StreamWriter {
                             &receive_message_it_error
                         );
 
-                        {
-                            // TODO handle error
-                            let mut writer_state = message_receive_loop_writer_state.lock().unwrap();
-                            *writer_state =
-                                TopicWriterState::FinishedWithError(receive_message_it_error.clone());
-                        }
-
                         let Some(tx) = message_receive_loop_error_tx.lock().await.take() else {
                             break;
                         };
@@ -619,11 +598,7 @@ impl StreamWriter {
                             break;
                         };
 
-                        // TODO: handle error
-                        let mut writer_state = message_receive_loop_writer_state.lock().unwrap();
-                        *writer_state = TopicWriterState::FinishedWithError(YdbError::custom(format!(
-                            "can't send error to stream writer: {send_err} (original error: {receive_message_it_error})"
-                        )));
+                        warn!("can't send error to stream writer: {send_err} (original error: {receive_message_it_error})");
                         break;
                     }
                 }
