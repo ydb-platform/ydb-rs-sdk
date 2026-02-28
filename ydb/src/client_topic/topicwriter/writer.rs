@@ -7,25 +7,21 @@ use std::time::Duration;
 
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
-use tokio::time::{sleep, timeout};
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::log::trace;
-
-use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
-use crate::client_topic::topicwriter::stream_writer::{StreamWriter, StreamWriterParams};
+use crate::client_topic::topicwriter::reconnector::{Reconnector, ReconnectorParams};
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
 use crate::client_topic::topicwriter::writer_reception_queue::{
     TopicWriterReceptionQueue, TopicWriterReceptionTicket, TopicWriterReceptionType,
 };
-use crate::errors::NeedRetry;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
-use crate::retry::{Retry, RetryParams, TimeoutRetrier};
+use crate::retry::TimeoutRetrier;
 use crate::{YdbError, YdbResult};
 
 pub(crate) enum TopicWriterState {
@@ -54,7 +50,7 @@ pub struct TopicWriter {
 
     confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
 
-    reconnection_loop: JoinHandle<()>,
+    reconnector: Reconnector,
 }
 
 #[allow(dead_code)]
@@ -74,19 +70,6 @@ impl Future for AckFuture {
     }
 }
 
-struct ReconnectionLoopParams {
-    writer_options: TopicWriterOptions,
-    producer_id: String,
-    connection_manager: GrpcConnectionManager,
-    writer_state: Arc<Mutex<TopicWriterState>>,
-    cancellation_token: CancellationToken,
-    writer_message_sender: Arc<TokioMutex<mpsc::Sender<TopicWriterMessage>>>,
-    confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
-    connection_info: Arc<TokioMutex<ConnectionInfo>>,
-    initial_messages_receiver: mpsc::Receiver<TopicWriterMessage>,
-    retrier: Arc<dyn Retry>,
-}
-
 impl TopicWriter {
     pub(crate) async fn new(
         writer_options: TopicWriterOptions,
@@ -101,9 +84,6 @@ impl TopicWriter {
 
         let writer_state = Arc::new(Mutex::new(TopicWriterState::Working));
 
-        let (initial_messages_sender, initial_messages_receiver) = mpsc::channel(32_usize);
-        let writer_message_sender = Arc::new(TokioMutex::new(initial_messages_sender));
-
         let confirmation_reception_queue = Arc::new(Mutex::new(TopicWriterReceptionQueue::new()));
         let connection_info = Arc::new(TokioMutex::new(ConnectionInfo {
             partition_id: 0,
@@ -117,19 +97,19 @@ impl TopicWriter {
             })
         });
 
-        let reconnection_loop = TopicWriter::spawn_reconnection_loop(ReconnectionLoopParams {
+        let reconnector = Reconnector::new(ReconnectorParams {
             writer_options: writer_options.clone(),
             producer_id: producer_id.clone(),
             connection_manager,
             writer_state: writer_state.clone(),
             cancellation_token: cancellation_token.clone(),
-            writer_message_sender: writer_message_sender.clone(),
             confirmation_reception_queue: confirmation_reception_queue.clone(),
             connection_info: connection_info.clone(),
-            initial_messages_receiver,
             retrier,
         })
         .await?;
+
+        let writer_message_sender = reconnector.get_writer_message_sender();
 
         Ok(Self {
             path: writer_options.topic_path.clone(),
@@ -143,167 +123,8 @@ impl TopicWriter {
             cancellation_token,
             writer_state,
             confirmation_reception_queue,
-            reconnection_loop,
+            reconnector,
         })
-    }
-
-    async fn spawn_reconnection_loop(params: ReconnectionLoopParams) -> YdbResult<JoinHandle<()>> {
-        let (connection_info_filled_tx, connection_info_filled_rx) =
-            oneshot::channel::<YdbResult<()>>();
-        let reconnection_loop = tokio::spawn(async move {
-            let mut messages_receiver = params.initial_messages_receiver;
-            let mut connection_info_filled_tx = Some(connection_info_filled_tx);
-            // TODO: buffer might grow quite big if reconnection keeps failing.
-            let messages = Arc::new(TokioMutex::new(Vec::<MessageData>::new()));
-            let retrier = params.retrier.clone();
-
-            let mut attempt = 0;
-
-            loop {
-                let (error_sender, error_receiver) = oneshot::channel();
-
-                let stream_writer = match StreamWriter::new(
-                    StreamWriterParams {
-                        writer_options: params.writer_options.clone(),
-                        producer_id: params.producer_id.clone(),
-                        messages: messages.clone(),
-                    },
-                    params.connection_manager.clone(),
-                    params.connection_info.clone(),
-                    params.confirmation_reception_queue.clone(),
-                    messages_receiver,
-                    error_sender,
-                )
-                .await
-                {
-                    Ok(stream_writer) => stream_writer,
-                    Err(err) => {
-                        trace!("Error creating stream writer: {}", err);
-                        attempt += 1;
-                        if let Some(wait_timeout) =
-                            TopicWriter::get_timeout_before_reconnect(&retrier, &err, attempt)
-                        {
-                            TopicWriter::wait_before_reconnect(wait_timeout, &err).await;
-                            messages_receiver = TopicWriter::recreate_message_channel(
-                                &params.writer_message_sender,
-                            )
-                            .await;
-                            continue;
-                        }
-
-                        if let Some(tx) = connection_info_filled_tx.take() {
-                            let _ = tx.send(Err(err.clone()));
-                        }
-                        let mut writer_state = params.writer_state.lock().unwrap();
-                        *writer_state = TopicWriterState::FinishedWithError(err);
-                        break;
-                    }
-                };
-
-                {
-                    let mut writer_state = params.writer_state.lock().unwrap();
-                    *writer_state = TopicWriterState::Working;
-                }
-
-                if let Some(tx) = connection_info_filled_tx.take() {
-                    let _ = tx.send(Ok(()));
-                };
-
-                tokio::select! {
-                    _ = params.cancellation_token.cancelled() => {
-                        let _ = stream_writer.stop().await;
-                        break;
-                    }
-                    err = error_receiver => {
-                        let err = match err {
-                            Ok(err) => err,
-                            Err(chan_err) => {
-                                // TODO: ???
-                                trace!("Channel error: {}", chan_err);
-                                let _ = stream_writer.stop().await;  // TODO: handle error
-                                let mut writer_state = params.writer_state.lock().unwrap();
-                                *writer_state = TopicWriterState::FinishedWithError(
-                                    YdbError::custom(format!("stream writer channel closed: {chan_err}")),
-                                );
-                                break;
-                            }
-                        };
-
-                        attempt += 1;
-                        if let Some(wait_timeout) = TopicWriter::get_timeout_before_reconnect(
-                            &retrier,
-                            &err,
-                            attempt,
-                        ) {
-                            TopicWriter::wait_before_reconnect(wait_timeout, &err).await;
-                        } else {
-                            trace!("Unknown error: {}", err);
-                            let _ = stream_writer.stop().await;  // TODO: handle error
-                            let mut writer_state = params.writer_state.lock().unwrap();
-                            *writer_state = TopicWriterState::FinishedWithError(err);
-                            break;
-                        };
-                    }
-                }
-
-                messages_receiver =
-                    TopicWriter::recreate_message_channel(&params.writer_message_sender).await;
-            }
-        });
-
-        match connection_info_filled_rx.await {
-            Ok(Ok(())) => Ok(reconnection_loop),
-            Ok(Err(err)) => Err(err),
-            Err(_) => Err(YdbError::custom("connection info filled channel closed")),
-        }
-    }
-
-    async fn recreate_message_channel(
-        writer_message_sender: &Arc<TokioMutex<mpsc::Sender<TopicWriterMessage>>>,
-    ) -> mpsc::Receiver<TopicWriterMessage> {
-        let (new_messages_sender, new_messages_receiver) = mpsc::channel(32_usize);
-        {
-            let mut sender_guard = writer_message_sender.lock().await;
-            *sender_guard = new_messages_sender;
-        }
-        new_messages_receiver
-    }
-
-    fn is_retry_allowed(err: &YdbError) -> bool {
-        match err.need_retry() {
-            NeedRetry::True => true,
-            // IdempotentOnly errors are retriable because the
-            // 'Write to Topic With seq_no deduplication' operation is idempotent.
-            NeedRetry::IdempotentOnly => true,
-            NeedRetry::False => false,
-        }
-    }
-
-    // Decides whether reconnect is allowed and returns a wait timeout if it is.
-    fn get_timeout_before_reconnect(
-        retrier: &Arc<dyn Retry>,
-        err: &YdbError,
-        attempt: usize,
-    ) -> Option<Duration> {
-        if !TopicWriter::is_retry_allowed(err) {
-            return None;
-        }
-
-        let decision = retrier.wait_duration(RetryParams {
-            attempt,
-            time_from_start: Duration::from_secs(0), // TODO: from start of what?
-        });
-
-        if !decision.allow_retry {
-            return None;
-        }
-
-        Some(decision.wait_timeout)
-    }
-
-    async fn wait_before_reconnect(wait_timeout: Duration, err: &YdbError) {
-        trace!("Error, trying to reconnect: {}", err);
-        sleep(wait_timeout).await;
     }
 
     pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
@@ -410,9 +231,9 @@ impl TopicWriter {
         };
 
         self.cancellation_token.cancel();
-        let loop_result = self.reconnection_loop.await.map_err(|err| {
+        let loop_result = self.reconnector.stop().await.map_err(|err| {
             YdbError::custom(format!(
-                "stop: error while waiting for reconnection_loop to finish: {err}"
+                "stop: error while waiting for reconnector to finish: {err}"
             ))
         });
 
