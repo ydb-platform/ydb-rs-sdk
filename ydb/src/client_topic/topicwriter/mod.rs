@@ -1,5 +1,6 @@
 pub mod connection;
 pub mod message;
+pub mod message_queue;
 pub mod message_write_status;
 pub mod partitioning;
 pub mod reconnector;
