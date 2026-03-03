@@ -100,13 +100,18 @@ impl Reconnector {
 
         let reconnection_loop = tokio::spawn(async move {
             let mut connection_info_filled_tx = Some(connection_info_filled_tx);
-            let message_queue = Arc::new(MessageQueue::new());
+            let message_queue = Arc::new(Mutex::new(MessageQueue::new()));
             let mut messages_receiver = initial_messages_receiver;
 
             let mut attempt = 0;
 
             loop {
                 let (error_sender, error_receiver) = oneshot::channel();
+
+                {
+                    let mut message_queue_guard = message_queue.lock().unwrap();
+                    message_queue_guard.reset_progress();
+                }
 
                 let stream_writer = match StreamWriter::new(
                     StreamWriterParams {
