@@ -18,6 +18,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::{InitRequest, WriteRequest
 
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
+use crate::client_topic::topicwriter::message_queue::MessageQueue;
 use crate::client_topic::topicwriter::message_write_status::WriteAck;
 use crate::client_topic::topicwriter::writer_reception_queue::TopicWriterReceptionQueue;
 use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -38,7 +39,7 @@ pub(crate) struct StreamWriter {
 pub(crate) struct StreamWriterParams {
     pub(crate) writer_options: TopicWriterOptions,
     pub(crate) producer_id: String,
-    pub(crate) messages: Arc<TokioMutex<Vec<MessageData>>>,
+    pub(crate) message_queue: Arc<MessageQueue>,
 }
 
 struct WriterLoopParams {
@@ -108,11 +109,10 @@ impl StreamWriter {
             request_stream: stream.clone_sender(),
         };
 
-        let writer_loop_messages = params.messages.clone();
-
         let writer_loop = tokio::spawn(async move {
             let mut message_receiver = messages_receiver; // force move inside
             let task_params = writer_loop_task_params; // force move inside
+            let message_queue = params.message_queue;
 
             loop {
                 if writer_loop_cancellation_token.is_cancelled() {
@@ -120,7 +120,7 @@ impl StreamWriter {
                 }
 
                 let Err(writer_iteration_error) = StreamWriter::write_loop_iteration(
-                    &writer_loop_messages,
+                    message_queue,
                     message_receiver.borrow_mut(),
                     task_params.borrow(),
                 )
@@ -190,7 +190,7 @@ impl StreamWriter {
     }
 
     async fn write_loop_iteration(
-        messages: &Arc<TokioMutex<Vec<MessageData>>>,
+        message_queue: &Arc<MessageQueue>,
         messages_receiver: &mut Receiver<TopicWriterMessage>,
         task_params: &WriterLoopParams,
     ) -> YdbResult<()> {
@@ -198,10 +198,10 @@ impl StreamWriter {
 
         // wait for messages loop
         'messages_loop: loop {
+            let messages = message_queue.get_messages_to_be_sent();
             let elapsed = start.elapsed();
             let (messages_len, messages_is_empty) = {
-                let messages_guard = messages.lock().await;
-                let len = messages_guard.len();
+                let len = messages.len();
                 (len, len == 0)
             };
 
@@ -211,6 +211,11 @@ impl StreamWriter {
                 break;
             }
 
+            // TODO: IT MUST NOT BE HERE - writing a message to the queue should be in a separate loop (maybe even on the Reconnector level)
+
+            // TODO: Getting messages from the queue and checking length should be a single operation.
+            // Maybe there should be a Queue method like get_messages_to_be_sent_if_length_is_greater_than()
+            // And then check if it for once returns Some(messages). If it doesn't after a timeout, just call get_messages_to_be_sent().
             match timeout(
                 task_params.write_request_send_messages_period - elapsed,
                 messages_receiver.recv(),
@@ -219,7 +224,7 @@ impl StreamWriter {
             {
                 Ok(Some(message)) => {
                     let data_size = message.data.len() as i64;
-                    let mut messages_guard = messages.lock().await;
+                    let mut messages_guard = messages;
                     messages_guard.push(MessageData {
                         seq_no: message
                             .seq_no
