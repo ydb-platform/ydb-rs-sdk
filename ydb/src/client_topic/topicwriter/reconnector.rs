@@ -7,9 +7,9 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::log::trace;
-use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
+use crate::client_topic::topicwriter::message_queue::MessageQueue;
 use crate::client_topic::topicwriter::stream_writer::{StreamWriter, StreamWriterParams};
 use crate::client_topic::topicwriter::writer::TopicWriterState;
 use crate::client_topic::topicwriter::writer_reception_queue::TopicWriterReceptionQueue;
@@ -100,7 +100,7 @@ impl Reconnector {
 
         let reconnection_loop = tokio::spawn(async move {
             let mut connection_info_filled_tx = Some(connection_info_filled_tx);
-            let messages = Arc::new(TokioMutex::new(Vec::<MessageData>::new()));
+            let message_queue = Arc::new(MessageQueue::new());
             let mut messages_receiver = initial_messages_receiver;
 
             let mut attempt = 0;
@@ -112,7 +112,7 @@ impl Reconnector {
                     StreamWriterParams {
                         writer_options: helper.writer_options.clone(),
                         producer_id: helper.producer_id.clone(),
-                        messages: messages.clone(),
+                        message_queue: message_queue.clone(),
                     },
                     helper.connection_manager.clone(),
                     helper.connection_info.clone(),
