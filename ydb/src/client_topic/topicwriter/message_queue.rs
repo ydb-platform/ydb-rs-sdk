@@ -19,7 +19,7 @@ pub(crate) struct MessageQueue {
     last_sent_order_no: u64,
 }
 
-// TODO: mutex!!!
+// TODO: either outer or inner lock (outer preferred for more complex operations)
 // TODO: check that the new message has a greater seq_no (add last_seq_no)
 impl MessageQueue {
     pub(crate) fn new() -> Self {
@@ -42,21 +42,54 @@ impl MessageQueue {
             .insert(self.last_written_order_no, message);
     }
 
-    pub(crate) fn get_messages_to_be_sent(&mut self) -> Vec<MessageData> {
-        let _guard = self.mutex.lock().unwrap();
-
-        let length: usize = self.last_written_order_no as usize - self.last_sent_order_no as usize;
+    fn do_get_messages_to_send(
+        last_sent_order_no: &mut u64,
+        last_written_order_no: u64,
+        messages_by_order_no: &HashMap<u64, MessageData>,
+    ) -> Vec<MessageData> {
+        let length: usize = last_written_order_no as usize - *last_sent_order_no as usize;
         let mut messages = Vec::with_capacity(length);
-        while self.last_sent_order_no != self.last_written_order_no {
-            self.last_sent_order_no += 1;
+        while *last_sent_order_no != last_written_order_no {
+            *last_sent_order_no += 1;
 
-            let Some(message) = self.messages_by_order_no.get(&self.last_sent_order_no) else {
+            let Some(message) = messages_by_order_no.get(last_sent_order_no) else {
                 continue;
             };
 
             messages.push(message.clone());
         }
         messages
+    }
+
+    pub(crate) fn get_messages_to_send(&mut self) -> Vec<MessageData> {
+        let _guard = self.mutex.lock().unwrap();
+
+        MessageQueue::do_get_messages_to_send(
+            &mut self.last_sent_order_no,
+            self.last_written_order_no,
+            &self.messages_by_order_no,
+        )
+    }
+
+    pub(crate) fn get_messages_to_send_if_big_enough(
+        &mut self,
+        target: usize,
+    ) -> (Option<Vec<MessageData>>, usize) {
+        let _guard = self.mutex.lock().unwrap();
+
+        let length: usize = self.last_written_order_no as usize - self.last_sent_order_no as usize;
+        if length < target {
+            return (None, length);
+        }
+
+        (
+            Some(MessageQueue::do_get_messages_to_send(
+                &mut self.last_sent_order_no,
+                self.last_written_order_no,
+                &self.messages_by_order_no,
+            )),
+            length,
+        )
     }
 
     pub(crate) fn reset_progress(&mut self) {
