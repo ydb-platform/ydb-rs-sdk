@@ -244,6 +244,7 @@ struct ReconnectorLoopHelper {
 }
 
 impl ReconnectorLoopHelper {
+    // TODO: don't lose data when recreating the channel!!!
     async fn recreate_message_channel(&self) -> mpsc::Receiver<TopicWriterMessageWithAck> {
         let (new_messages_sender, new_messages_receiver) = mpsc::channel(32_usize);
         {
