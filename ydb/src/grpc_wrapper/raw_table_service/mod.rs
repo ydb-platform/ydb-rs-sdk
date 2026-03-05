@@ -5,6 +5,7 @@ pub(crate) mod copy_table;
 pub(crate) mod create_session;
 pub(crate) mod execute_data_query;
 pub(crate) mod execute_scheme_query;
+pub(crate) mod explain_data_query;
 pub(crate) mod keepalive;
 pub(crate) mod query_stats;
 pub(crate) mod rollback_transaction;

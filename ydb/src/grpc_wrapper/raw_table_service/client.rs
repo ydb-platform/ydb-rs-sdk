@@ -15,6 +15,9 @@ use crate::grpc_wrapper::raw_table_service::execute_data_query::{
     RawExecuteDataQueryRequest, RawExecuteDataQueryResult,
 };
 use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
+use crate::grpc_wrapper::raw_table_service::explain_data_query::{
+    RawExplainDataQueryRequest, RawExplainDataQueryResult,
+};
 use crate::grpc_wrapper::raw_table_service::keepalive::{RawKeepAliveRequest, RawKeepAliveResult};
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
@@ -70,6 +73,17 @@ impl RawTableClient {
             self.service.execute_data_query,
             req => ydb_grpc::ydb_proto::table::ExecuteDataQueryRequest,
             ydb_grpc::ydb_proto::table::ExecuteQueryResult => RawExecuteDataQueryResult
+        );
+    }
+
+    pub async fn explain_data_query(
+        &mut self,
+        req: RawExplainDataQueryRequest,
+    ) -> RawResult<RawExplainDataQueryResult> {
+        request_with_result!(
+            self.service.explain_data_query,
+            req => ydb_grpc::ydb_proto::table::ExplainDataQueryRequest,
+            ydb_grpc::ydb_proto::table::ExplainQueryResult => RawExplainDataQueryResult
         );
     }
 

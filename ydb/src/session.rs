@@ -2,7 +2,7 @@ use crate::client::TimeoutSettings;
 use crate::client_table::TableServiceClientType;
 use crate::errors::{YdbError, YdbResult};
 use crate::query::Query;
-use crate::result::{QueryResult, StreamResult};
+use crate::result::{ExplainResult, QueryResult, StreamResult};
 use crate::types::Value;
 use derivative::Derivative;
 use itertools::Itertools;
@@ -22,6 +22,7 @@ use crate::grpc_wrapper::raw_table_service::copy_table::{
 };
 use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryRequest;
 use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
+use crate::grpc_wrapper::raw_table_service::explain_data_query::RawExplainDataQueryRequest;
 use crate::grpc_wrapper::raw_table_service::keepalive::RawKeepAliveRequest;
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::table_service_types::CopyTableItem;
@@ -156,6 +157,33 @@ impl Session {
             return Err(YdbError::from_str("result of query was truncated"));
         }
         QueryResult::from_raw_result(error_on_truncated, res)
+    }
+
+    #[tracing::instrument(skip(self, query), fields(req_number=req_number()))]
+    pub(crate) async fn explain_data_query(
+        &mut self,
+        query: String,
+        collect_full_diagnostics: bool,
+    ) -> YdbResult<ExplainResult> {
+        let req = RawExplainDataQueryRequest {
+            session_id: self.id.clone(),
+            yql_text: query,
+            operation_params: self.timeouts.operation_params(),
+            collect_full_diagnostics,
+        };
+
+        trace!(
+            "request: {}",
+            ensure_len_string(serde_json::to_string(&req)?)
+        );
+
+        let res = self.get_table_client().await?.explain_data_query(req).await;
+        let res = self.handle_raw_result(res)?;
+        trace!(
+            "result: {}",
+            ensure_len_string(serde_json::to_string(&res)?)
+        );
+        Ok(res.into())
     }
 
     #[tracing::instrument(skip(self, query), fields(req_number=req_number()))]
