@@ -229,41 +229,6 @@ impl StreamWriter {
         })
     }
 
-    async fn process_new_messages_loop_iteration(
-        message_queue: &Arc<Mutex<MessageQueue>>,
-        messages_receiver: &mut Receiver<TopicWriterMessage>,
-        producer_id: String,
-        duration: Duration,
-    ) -> YdbResult<()> {
-        match timeout(duration, messages_receiver.recv()).await {
-            Ok(Some(message)) => {
-                let data_size = message.data.len() as i64;
-                let mut message_queue_guard = message_queue.lock().unwrap();
-                message_queue_guard.add_message(MessageData {
-                    seq_no: message
-                        .seq_no
-                        .ok_or_else(|| YdbError::custom("empty message seq_no"))?,
-                    created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
-                        seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs() as i64,
-                        nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
-                    }),
-                    metadata_items: vec![],
-                    data: message.data,
-                    uncompressed_size: data_size,
-                    partitioning: Some(message_data::Partitioning::MessageGroupId(
-                        producer_id.clone(),
-                    )),
-                });
-            }
-            Ok(None) => {
-                trace!("Channel has been closed. Stop topic send messages loop.");
-            }
-            Err(_elapsed) => {}
-        };
-
-        Ok(())
-    }
-
     async fn get_messages_to_send(
         message_queue: &Arc<Mutex<MessageQueue>>,
         size_threshold: usize,
@@ -376,6 +341,41 @@ impl StreamWriter {
                 return Err(YdbError::from(some_err));
             }
         }
+        Ok(())
+    }
+
+    async fn process_new_messages_loop_iteration(
+        message_queue: &Arc<Mutex<MessageQueue>>,
+        messages_receiver: &mut Receiver<TopicWriterMessage>,
+        producer_id: String,
+        duration: Duration,
+    ) -> YdbResult<()> {
+        match timeout(duration, messages_receiver.recv()).await {
+            Ok(Some(message)) => {
+                let data_size = message.data.len() as i64;
+                let mut message_queue_guard = message_queue.lock().unwrap();
+                message_queue_guard.add_message(MessageData {
+                    seq_no: message
+                        .seq_no
+                        .ok_or_else(|| YdbError::custom("empty message seq_no"))?,
+                    created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
+                        seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs() as i64,
+                        nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
+                    }),
+                    metadata_items: vec![],
+                    data: message.data,
+                    uncompressed_size: data_size,
+                    partitioning: Some(message_data::Partitioning::MessageGroupId(
+                        producer_id.clone(),
+                    )),
+                })?;
+            }
+            Ok(None) => {
+                trace!("Channel has been closed. Stop topic send messages loop.");
+            }
+            Err(_elapsed) => {}
+        };
+
         Ok(())
     }
 
