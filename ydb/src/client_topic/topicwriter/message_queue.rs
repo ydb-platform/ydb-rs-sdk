@@ -5,7 +5,9 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData
 use crate::{YdbError, YdbResult};
 
 pub(crate) struct MessageQueue {
+    // order_no -> message
     messages_by_order_no: HashMap<u64, MessageData>,
+    // seq_no -> order_no
     order_nos_by_seq_no: HashMap<i64, u64>,
 
     // order number of the last message that has been added to the queue
