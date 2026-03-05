@@ -245,10 +245,10 @@ impl TableClient {
 
     /// Execute scheme query with retry policy
     pub async fn retry_execute_scheme_query<T: Into<String>>(&self, query: T) -> YdbResult<()> {
-        let query = Arc::new(query.into());
+        let query = query.into();
         self.retry(|| async {
             let mut session = self.create_session().await?;
-            session.execute_schema_query(query.to_string()).await
+            session.execute_schema_query(query.clone()).await
         })
         .await
     }
