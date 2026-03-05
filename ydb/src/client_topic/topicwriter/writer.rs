@@ -12,13 +12,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::log::trace;
 
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
-use crate::client_topic::topicwriter::message::TopicWriterMessage;
+use crate::client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMessageWithAck};
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
 use crate::client_topic::topicwriter::reconnector::{Reconnector, ReconnectorParams};
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
-use crate::client_topic::topicwriter::writer_reception_queue::{
-    TopicWriterReceptionQueue, TopicWriterReceptionTicket, TopicWriterReceptionType,
-};
+use crate::client_topic::topicwriter::writer_reception_queue::TopicWriterReceptionQueue;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
 use crate::retry::TimeoutRetrier;
@@ -43,7 +41,7 @@ pub struct TopicWriter {
 
     flush_timeout: Duration,
 
-    writer_message_sender: Arc<TokioMutex<mpsc::Sender<TopicWriterMessage>>>,
+    writer_message_sender: Arc<TokioMutex<mpsc::Sender<TopicWriterMessageWithAck>>>,
 
     cancellation_token: CancellationToken,
     writer_state: Arc<Mutex<TopicWriterState>>,
@@ -159,44 +157,30 @@ impl TopicWriter {
     ) -> YdbResult<()> {
         self.check_working().await?;
 
-        let message_seqno = {
-            let mut connection_info = self.connection_info.lock().await;
-            if self.auto_set_seq_no {
-                if message.seq_no.is_some() {
-                    return Err(YdbError::custom(
-                        "force set message seqno possible only if auto_set_seq_no disabled",
-                    ));
-                }
-                message.seq_no = Some(connection_info.last_seq_no_assigned + 1);
-            };
-
-            if let Some(mess_seqno) = message.seq_no {
-                connection_info.last_seq_no_assigned = mess_seqno;
-                mess_seqno
-            } else {
-                return Err(YdbError::custom("need to set message seq_no"));
+        let mut connection_info = self.connection_info.lock().await;
+        if self.auto_set_seq_no {
+            if message.seq_no.is_some() {
+                return Err(YdbError::custom(
+                    "force set message seqno is only possible if auto_set_seq_no is disabled",
+                ));
             }
+            message.seq_no = Some(connection_info.last_seq_no_assigned + 1);
         };
+
+        if let Some(mess_seqno) = message.seq_no {
+            connection_info.last_seq_no_assigned = mess_seqno;
+        } else {
+            return Err(YdbError::custom("empty message seq_no is provided"));
+        }
 
         let sender = { self.writer_message_sender.lock().await.clone() };
         sender
-            .send(message)
+            .send(TopicWriterMessageWithAck {
+                message: message,
+                ack: wait_ack,
+            })
             .await
             .map_err(|err| YdbError::custom(format!("can't send the message to channel: {err}")))?;
-
-        let reception_type = wait_ack.map_or(
-            TopicWriterReceptionType::NoConfirmationExpected,
-            TopicWriterReceptionType::AwaitingConfirmation,
-        );
-
-        {
-            // brackets are needed for mutex to be released as soon as possible - before await
-            let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
-            reception_queue.add_ticket(TopicWriterReceptionTicket::new(
-                message_seqno,
-                reception_type,
-            ));
-        }
 
         Ok(())
     }
