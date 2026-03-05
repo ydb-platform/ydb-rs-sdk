@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::log::trace;
 
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
+use crate::client_topic::topicwriter::message::TopicWriterMessageWithAck;
 use crate::client_topic::topicwriter::message_queue::MessageQueue;
 use crate::client_topic::topicwriter::stream_writer::{StreamWriter, StreamWriterParams};
 use crate::client_topic::topicwriter::writer::TopicWriterState;
@@ -16,9 +17,7 @@ use crate::client_topic::topicwriter::writer_reception_queue::TopicWriterRecepti
 use crate::errors::NeedRetry;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::retry::{Retry, RetryParams};
-use crate::TopicWriterOptions;
-use crate::YdbResult;
-use crate::{TopicWriterMessage, YdbError};
+use crate::{TopicWriterOptions, YdbError, YdbResult};
 
 pub(crate) struct ReconnectorParams {
     pub(crate) writer_options: TopicWriterOptions,
@@ -40,7 +39,7 @@ enum ReconnectorState {
 pub(crate) struct Reconnector {
     state: Arc<TokioMutex<ReconnectorState>>,
     loop_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
-    messages_sender: Arc<TokioMutex<mpsc::Sender<TopicWriterMessage>>>,
+    messages_sender: Arc<TokioMutex<mpsc::Sender<TopicWriterMessageWithAck>>>,
 }
 
 impl Reconnector {
@@ -87,13 +86,13 @@ impl Reconnector {
 
     pub(crate) fn get_writer_message_sender(
         &self,
-    ) -> Arc<TokioMutex<mpsc::Sender<TopicWriterMessage>>> {
+    ) -> Arc<TokioMutex<mpsc::Sender<TopicWriterMessageWithAck>>> {
         self.messages_sender.clone()
     }
 
     async fn start_loop(
         helper: ReconnectorLoopHelper,
-        initial_messages_receiver: mpsc::Receiver<TopicWriterMessage>,
+        initial_messages_receiver: mpsc::Receiver<TopicWriterMessageWithAck>,
     ) -> YdbResult<JoinHandle<()>> {
         let (connection_info_filled_tx, connection_info_filled_rx) =
             oneshot::channel::<YdbResult<()>>();
@@ -237,7 +236,7 @@ struct ReconnectorLoopHelper {
     connection_info: Arc<TokioMutex<ConnectionInfo>>,
     retrier: Arc<dyn Retry>,
     cancellation_token: CancellationToken,
-    writer_message_sender: Arc<TokioMutex<mpsc::Sender<TopicWriterMessage>>>,
+    writer_message_sender: Arc<TokioMutex<mpsc::Sender<TopicWriterMessageWithAck>>>,
     writer_state: Arc<Mutex<TopicWriterState>>,
     writer_options: TopicWriterOptions,
     producer_id: String,
@@ -245,7 +244,7 @@ struct ReconnectorLoopHelper {
 }
 
 impl ReconnectorLoopHelper {
-    async fn recreate_message_channel(&self) -> mpsc::Receiver<TopicWriterMessage> {
+    async fn recreate_message_channel(&self) -> mpsc::Receiver<TopicWriterMessageWithAck> {
         let (new_messages_sender, new_messages_receiver) = mpsc::channel(32_usize);
         {
             let mut sender_guard = self.writer_message_sender.lock().await;
