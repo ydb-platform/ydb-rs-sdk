@@ -368,7 +368,7 @@ impl StreamWriter {
                 {
                     let mut message_queue_guard = message_queue.lock().unwrap();
                     message_queue_guard.add_message(MessageData {
-                        seq_no: seq_no,
+                        seq_no,
                         created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
                             seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs()
                                 as i64,

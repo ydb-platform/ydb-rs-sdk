@@ -176,7 +176,7 @@ impl TopicWriter {
         let sender = { self.writer_message_sender.lock().await.clone() };
         sender
             .send(TopicWriterMessageWithAck {
-                message: message,
+                message,
                 ack: wait_ack,
             })
             .await
