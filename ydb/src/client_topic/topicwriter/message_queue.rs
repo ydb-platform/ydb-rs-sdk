@@ -18,6 +18,8 @@ pub(crate) struct MessageQueue {
     last_sent_order_no: u64,
 }
 
+// TODO: add a method to wait for all messages to be sent and use this method in stop() / flush()
+// TODO: add a method to prevent adding new messages and use this method in stop() / flush()
 impl MessageQueue {
     pub(crate) fn new() -> Self {
         Self {
