@@ -18,7 +18,6 @@ pub(crate) struct MessageQueue {
     last_sent_order_no: u64,
 }
 
-// TODO: check that the new message has a greater seq_no (add last_seq_no)
 impl MessageQueue {
     pub(crate) fn new() -> Self {
         Self {
