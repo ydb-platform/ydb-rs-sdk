@@ -11,6 +11,9 @@ use crate::grpc_wrapper::raw_table_service::copy_table::{
 use crate::grpc_wrapper::raw_table_service::create_session::{
     RawCreateSessionRequest, RawCreateSessionResult,
 };
+use crate::grpc_wrapper::raw_table_service::describe_table::{
+    RawDescribeTableRequest, RawDescribeTableResult,
+};
 use crate::grpc_wrapper::raw_table_service::execute_data_query::{
     RawExecuteDataQueryRequest, RawExecuteDataQueryResult,
 };
@@ -119,6 +122,17 @@ impl RawTableClient {
         request_without_result!(
             self.service.bulk_upsert,
             req => ydb_grpc::ydb_proto::table::BulkUpsertRequest
+        );
+    }
+
+    pub async fn describe_table(
+        &mut self,
+        req: RawDescribeTableRequest,
+    ) -> RawResult<RawDescribeTableResult> {
+        request_with_result!(
+            self.service.describe_table,
+            req => ydb_grpc::ydb_proto::table::DescribeTableRequest,
+            ydb_grpc::ydb_proto::table::DescribeTableResult => RawDescribeTableResult
         );
     }
 }

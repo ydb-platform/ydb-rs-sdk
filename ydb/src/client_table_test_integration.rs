@@ -13,7 +13,7 @@ use tracing_test::traced_test;
 use crate::client_table::RetryOptions;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::query::Query;
-use crate::table_service_types::CopyTableItem;
+use crate::table_service_types::{ColumnType, CopyTableItem, IndexType, StoreType};
 use crate::test_integration_helper::create_client;
 use crate::transaction::Mode;
 use crate::transaction::Transaction;
@@ -956,6 +956,94 @@ async fn bulk_upsert() -> YdbResult<()> {
         })
         .await
         .unwrap();
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn describe_table() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let table_name = "temp_describe_test";
+
+    table_client
+        .retry_with_session(RetryOptions::new(), |session| async {
+            let mut session = session;
+            session
+                .execute_schema_query(format!(
+                    "
+                CREATE TABLE {table_name} (
+                    id Utf8 NOT NULL,
+                    id_hash Uint32 NOT NULL,
+                    timestamp Timestamp,
+                    host Utf8,
+                    message Utf8,
+                    level Int32,
+                    payload JsonDocument,
+                    optional_field Int32,
+                    price Decimal(22, 9),
+                    PRIMARY KEY(id_hash, id),
+                    INDEX idx_timestamp GLOBAL ON (timestamp),
+                    INDEX idx_host GLOBAL ON (host)
+                );
+            "
+                ))
+                .await?;
+            Ok(())
+        })
+        .await?;
+
+    let database_path = client.database();
+    let table_desc = table_client
+        .describe_table(format!("{database_path}/{table_name}"))
+        .await?;
+
+    trace!("describe_table result: {:?}", table_desc);
+
+    assert_eq!(table_desc.path, format!("{database_path}/{table_name}"));
+    assert_eq!(table_desc.columns.len(), 9);
+    assert_eq!(table_desc.primary_key, vec!["id_hash", "id"]);
+    assert_eq!(table_desc.indexes.len(), 2);
+    assert_eq!(table_desc.store_type, StoreType::Unspecified);
+
+    let id_col = table_desc.columns.iter().find(|c| c.name == "id").unwrap();
+    assert_eq!(id_col.column_type, ColumnType::Utf8);
+
+    let id_hash_col = table_desc
+        .columns
+        .iter()
+        .find(|c| c.name == "id_hash")
+        .unwrap();
+    assert_eq!(id_hash_col.column_type, ColumnType::Uint32);
+
+    let price_col = table_desc
+        .columns
+        .iter()
+        .find(|c| c.name == "price")
+        .unwrap();
+    assert_eq!(
+        price_col.column_type,
+        ColumnType::Optional(Box::new(ColumnType::Decimal {
+            precision: 22,
+            scale: 9
+        }))
+    );
+
+    for idx in &table_desc.indexes {
+        assert_eq!(idx.index_type, IndexType::Global);
+    }
+
+    table_client
+        .retry_with_session(RetryOptions::new(), |session| async {
+            let mut session = session;
+            session
+                .execute_schema_query(format!("DROP TABLE {table_name}"))
+                .await?;
+            Ok(())
+        })
+        .await?;
 
     Ok(())
 }
