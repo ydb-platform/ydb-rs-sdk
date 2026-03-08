@@ -13,6 +13,7 @@ use tracing::log::trace;
 
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMessageWithAck};
+use crate::client_topic::topicwriter::message_queue::MessageQueue;
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
 use crate::client_topic::topicwriter::reconnector::{Reconnector, ReconnectorParams};
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
@@ -47,6 +48,7 @@ pub struct TopicWriter {
     writer_state: Arc<Mutex<TopicWriterState>>,
 
     confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
+    message_queue: Arc<Mutex<MessageQueue>>,
 
     reconnector: Reconnector,
 }
@@ -81,6 +83,7 @@ impl TopicWriter {
         let cancellation_token = CancellationToken::new();
 
         let writer_state = Arc::new(Mutex::new(TopicWriterState::Working));
+        let message_queue = Arc::new(Mutex::new(MessageQueue::new()));
 
         let confirmation_reception_queue = Arc::new(Mutex::new(TopicWriterReceptionQueue::new()));
         let connection_info = Arc::new(TokioMutex::new(ConnectionInfo {
@@ -102,6 +105,7 @@ impl TopicWriter {
             writer_state: writer_state.clone(),
             cancellation_token: cancellation_token.clone(),
             confirmation_reception_queue: confirmation_reception_queue.clone(),
+            message_queue: message_queue.clone(),
             connection_info: connection_info.clone(),
             retrier,
         })
@@ -121,6 +125,7 @@ impl TopicWriter {
             cancellation_token,
             writer_state,
             confirmation_reception_queue,
+            message_queue,
             reconnector,
         })
     }
@@ -192,6 +197,11 @@ impl TopicWriter {
             let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
             reception_queue.init_flush_op()?
         };
+
+        {
+            let mut message_queue = self.message_queue.lock().unwrap();
+            message_queue.close();
+        }
 
         Ok(flush_op_completed.await?)
     }

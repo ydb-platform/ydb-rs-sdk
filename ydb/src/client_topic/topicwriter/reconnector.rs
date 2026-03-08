@@ -26,6 +26,7 @@ pub(crate) struct ReconnectorParams {
     pub(crate) writer_state: Arc<Mutex<TopicWriterState>>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
+    pub(crate) message_queue: Arc<Mutex<MessageQueue>>,
     pub(crate) connection_info: Arc<TokioMutex<ConnectionInfo>>,
     pub(crate) retrier: Arc<dyn Retry>,
 }
@@ -66,6 +67,7 @@ impl Reconnector {
                 writer_message_sender: messages_sender.clone(),
             },
             initial_messages_receiver,
+            params.message_queue,
         )
         .await
         {
@@ -93,14 +95,15 @@ impl Reconnector {
     async fn start_loop(
         helper: ReconnectorLoopHelper,
         initial_messages_receiver: mpsc::Receiver<TopicWriterMessageWithAck>,
+        message_queue: Arc<Mutex<MessageQueue>>,
     ) -> YdbResult<JoinHandle<()>> {
         let (connection_info_filled_tx, connection_info_filled_rx) =
             oneshot::channel::<YdbResult<()>>();
 
         let reconnection_loop = tokio::spawn(async move {
             let mut connection_info_filled_tx = Some(connection_info_filled_tx);
-            let message_queue = Arc::new(Mutex::new(MessageQueue::new()));
             let mut messages_receiver = initial_messages_receiver;
+            let message_queue = message_queue;
 
             let mut attempt = 0;
 
