@@ -35,7 +35,9 @@ impl MessageQueue {
 
     pub(crate) fn add_message(&mut self, message: MessageData) -> YdbResult<()> {
         if !self.is_open {
-            return Err(YdbError::Custom("message queue is closed".to_string()));
+            return Err(YdbError::Custom(
+                "message queue is closed for new messages".to_string(),
+            ));
         }
 
         let seq_no = message.seq_no;
@@ -128,7 +130,7 @@ impl MessageQueue {
         self.last_written_order_no = *min_order_no - 1;
     }
 
-    pub(crate) fn close(&mut self) {
+    pub(crate) fn close_for_new_messages(&mut self) {
         self.is_open = false;
     }
 }
