@@ -16,10 +16,11 @@ pub(crate) struct MessageQueue {
     last_written_seq_no: i64,
     // order number of the last message that has been 'sent'
     last_sent_order_no: u64,
+
+    is_open: bool,
 }
 
 // TODO: add a method to wait for all messages to be sent and use this method in stop() / flush()
-// TODO: add a method to prevent adding new messages and use this method in stop() / flush()
 impl MessageQueue {
     pub(crate) fn new() -> Self {
         Self {
@@ -28,10 +29,15 @@ impl MessageQueue {
             last_written_order_no: 0,
             last_written_seq_no: -1,
             last_sent_order_no: 0,
+            is_open: true,
         }
     }
 
     pub(crate) fn add_message(&mut self, message: MessageData) -> YdbResult<()> {
+        if !self.is_open {
+            return Err(YdbError::Custom("message queue is closed".to_string()));
+        }
+
         let seq_no = message.seq_no;
         self.check_message_seq_no(seq_no)?;
 
@@ -102,14 +108,6 @@ impl MessageQueue {
         )
     }
 
-    pub(crate) fn reset_progress(&mut self) {
-        let Some(min_order_no) = self.order_nos_by_seq_no.values().min() else {
-            return;
-        };
-
-        self.last_written_order_no = *min_order_no - 1;
-    }
-
     pub(crate) fn acknowledge_message(&mut self, seq_no: i64) -> YdbResult<()> {
         let Some(order_no) = self.order_nos_by_seq_no.remove(&seq_no) else {
             return Err(YdbError::Custom(format!(
@@ -120,5 +118,17 @@ impl MessageQueue {
         self.messages_by_order_no.remove(&order_no);
 
         Ok(())
+    }
+
+    pub(crate) fn reset_progress(&mut self) {
+        let Some(min_order_no) = self.order_nos_by_seq_no.values().min() else {
+            return;
+        };
+
+        self.last_written_order_no = *min_order_no - 1;
+    }
+
+    pub(crate) fn close(&mut self) {
+        self.is_open = false;
     }
 }
