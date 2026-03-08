@@ -200,7 +200,7 @@ impl TopicWriter {
 
         {
             let mut message_queue = self.message_queue.lock().unwrap();
-            message_queue.close();
+            message_queue.close_for_new_messages();
         }
 
         Ok(flush_op_completed.await?)
