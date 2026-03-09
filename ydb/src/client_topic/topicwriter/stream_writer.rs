@@ -17,7 +17,9 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::{InitRequest, WriteRequest
 
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message::TopicWriterMessageWithAck;
-use crate::client_topic::topicwriter::message_queue::MessageQueue;
+use crate::client_topic::topicwriter::message_queue::{
+    GetMessagesToSendWithLengthThresholdResult, MessageQueue,
+};
 use crate::client_topic::topicwriter::message_write_status::WriteAck;
 use crate::client_topic::topicwriter::writer_reception_queue::{
     TopicWriterReceptionQueue, TopicWriterReceptionTicket, TopicWriterReceptionType,
@@ -242,31 +244,33 @@ impl StreamWriter {
         message_queue: &Arc<Mutex<MessageQueue>>,
         size_threshold: usize,
         send_messages_period: Duration,
-    ) -> Option<Vec<MessageData>> {
+    ) -> YdbResult<Vec<MessageData>> {
         let start = Instant::now();
 
         loop {
-            let (maybe_messages, length) = {
+            {
                 let mut message_queue_guard = message_queue.lock().unwrap();
-                message_queue_guard.get_messages_to_send_if_big_enough(size_threshold)
-            };
 
-            match maybe_messages {
-                Some(messages) => return Some(messages),
-                None => {
-                    let elapsed = start.elapsed();
-                    if elapsed >= send_messages_period {
-                        if length != 0 {
-                            let mut message_queue_guard = message_queue.lock().unwrap();
-                            return Some(message_queue_guard.get_messages_to_send());
-                        }
-                        return None;
+                let elapsed = start.elapsed();
+                if elapsed >= send_messages_period {
+                    return message_queue_guard.get_messages_to_send();
+                }
+
+                match message_queue_guard.get_messages_to_send_with_length_threshold(size_threshold)
+                {
+                    GetMessagesToSendWithLengthThresholdResult::Ok(messages) => {
+                        return Ok(messages);
                     }
-                    let remaining = send_messages_period.saturating_sub(elapsed);
-                    // TODO: mitigate without bombarding message_queue mutex
-                    sleep(remaining.min(Duration::from_millis(50))).await;
+                    GetMessagesToSendWithLengthThresholdResult::NotEnoughMessages => {}
+                    GetMessagesToSendWithLengthThresholdResult::Err(error) => {
+                        return Err(error);
+                    }
                 }
             }
+
+            // TODO: mitigate without bombarding message_queue mutex
+            let remaining = send_messages_period.saturating_sub(start.elapsed());
+            sleep(remaining.min(Duration::from_millis(50))).await;
         }
     }
 
@@ -279,10 +283,7 @@ impl StreamWriter {
             task_params.write_request_messages_chunk_size,
             task_params.write_request_send_messages_period,
         )
-        .await;
-        let Some(messages_to_send) = messages_to_send else {
-            return Ok(());
-        };
+        .await?;
         if messages_to_send.is_empty() {
             return Ok(());
         }
