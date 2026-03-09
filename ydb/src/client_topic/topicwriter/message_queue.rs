@@ -401,14 +401,13 @@ mod tests {
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].seq_no, 8);
         assert_eq!(msgs[1].seq_no, 9);
+
         assert_eq!(q.last_sent_index, Some(1));
-
         assert_eq!(q.get_length_of_messages_to_send().unwrap(), 0);
-
         q.reset_progress();
         assert_eq!(q.last_sent_index, None);
-
         assert_eq!(q.get_length_of_messages_to_send().unwrap(), 2);
+
         let again = q.get_messages_to_send().unwrap();
         assert_eq!(again.len(), 2);
         assert_eq!(again[0].seq_no, 8);
