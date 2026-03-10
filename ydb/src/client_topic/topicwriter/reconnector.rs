@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::{mpsc, oneshot};
@@ -97,14 +97,14 @@ impl Reconnector {
         initial_messages_receiver: mpsc::Receiver<TopicWriterMessageWithAck>,
         message_queue: Arc<Mutex<MessageQueue>>,
     ) -> YdbResult<JoinHandle<()>> {
-        let (connection_info_filled_tx, connection_info_filled_rx) =
-            oneshot::channel::<YdbResult<()>>();
+        let (connection_info_filled_tx, connection_info_filled_rx) = oneshot::channel::<()>();
 
         let reconnection_loop = tokio::spawn(async move {
             let mut connection_info_filled_tx = Some(connection_info_filled_tx);
             let mut messages_receiver = initial_messages_receiver;
             let message_queue = message_queue;
 
+            let mut reconnect_start_time = Instant::now();
             let mut attempt = 0;
 
             loop {
@@ -133,17 +133,16 @@ impl Reconnector {
                     Err(err) => {
                         trace!("Error creating stream writer: {}", err);
                         attempt += 1;
-                        if let Some(wait_timeout) =
-                            helper.get_timeout_before_reconnect(&err, attempt)
-                        {
+                        if let Some(wait_timeout) = helper.get_timeout_before_reconnect(
+                            &err,
+                            attempt,
+                            reconnect_start_time.elapsed(),
+                        ) {
                             ReconnectorLoopHelper::wait_before_reconnect(wait_timeout, &err).await;
                             messages_receiver = helper.recreate_message_channel().await;
                             continue;
                         }
 
-                        if let Some(tx) = connection_info_filled_tx.take() {
-                            let _ = tx.send(Err(err.clone()));
-                        }
                         let mut writer_state = helper.writer_state.lock().unwrap();
                         *writer_state = TopicWriterState::FinishedWithError(err);
                         break;
@@ -156,8 +155,9 @@ impl Reconnector {
                 }
 
                 if let Some(tx) = connection_info_filled_tx.take() {
-                    let _ = tx.send(Ok(()));
+                    let _ = tx.send(());
                 };
+                attempt = 0;
 
                 tokio::select! {
                     _ = helper.cancellation_token.cancelled() => {
@@ -180,9 +180,11 @@ impl Reconnector {
                         };
 
                         attempt += 1;
+                        reconnect_start_time = Instant::now();
                         if let Some(wait_timeout) = helper.get_timeout_before_reconnect(
                             &err,
                             attempt,
+                            reconnect_start_time.elapsed(),
                         ) {
                             ReconnectorLoopHelper::wait_before_reconnect(wait_timeout, &err).await;
                         } else {
@@ -200,8 +202,7 @@ impl Reconnector {
         });
 
         match connection_info_filled_rx.await {
-            Ok(Ok(())) => Ok(reconnection_loop),
-            Ok(Err(err)) => Err(err),
+            Ok(_) => Ok(reconnection_loop),
             Err(err) => Err(YdbError::custom(format!(
                 "connection_info_filled channel closed: {err}"
             ))),
@@ -269,14 +270,19 @@ impl ReconnectorLoopHelper {
     }
 
     // Decides whether reconnect is allowed and returns a wait timeout if it is.
-    fn get_timeout_before_reconnect(&self, err: &YdbError, attempt: usize) -> Option<Duration> {
+    fn get_timeout_before_reconnect(
+        &self,
+        err: &YdbError,
+        attempt: usize,
+        time_from_start: Duration,
+    ) -> Option<Duration> {
         if !ReconnectorLoopHelper::is_retry_allowed(err) {
             return None;
         }
 
         let decision = self.retrier.wait_duration(RetryParams {
             attempt,
-            time_from_start: Duration::from_secs(0), // TODO: from start of what?
+            time_from_start,
         });
 
         if !decision.allow_retry {

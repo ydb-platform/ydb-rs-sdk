@@ -1,6 +1,6 @@
 use crate::client_topic::list_types::Codec;
 use crate::errors;
-use crate::retry::{Retry, TimeoutRetrier};
+use crate::retry::{IndefiniteRetrier, Retry};
 use derive_builder::Builder;
 use prost::bytes::Bytes;
 use std::collections::HashMap;
@@ -34,7 +34,7 @@ pub struct TopicWriterOptions {
     #[builder(default = "Duration::from_secs(3)")]
     pub(crate) flush_timeout: Duration,
 
-    #[builder(default = "Some(Arc::new(TimeoutRetrier { timeout: Duration::from_secs(30) } ))")]
+    #[builder(default = "Some(Arc::new(IndefiniteRetrier{ }))")]
     pub(crate) retrier: Option<Arc<dyn Retry>>,
 
     #[builder(default = "TopicWriterConnectionOptionsBuilder::default().build()?")]
