@@ -25,6 +25,7 @@ use crate::{YdbError, YdbResult};
 
 pub(crate) enum TopicWriterState {
     Working,
+    Reconnecting,
     FinishedWithError(YdbError),
 }
 
@@ -210,6 +211,7 @@ impl TopicWriter {
         let state = self.writer_state.lock().unwrap();
         match state.deref() {
             TopicWriterState::Working => Ok(()),
+            TopicWriterState::Reconnecting => Ok(()),
             TopicWriterState::FinishedWithError(err) => Err(err.clone()),
         }
     }

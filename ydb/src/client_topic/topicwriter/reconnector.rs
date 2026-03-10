@@ -132,6 +132,7 @@ impl Reconnector {
                     Ok(stream_writer) => stream_writer,
                     Err(err) => {
                         trace!("Error creating stream writer: {}", err);
+                        helper.set_writer_state(TopicWriterState::Reconnecting);
                         attempt += 1;
                         if let Some(wait_timeout) = helper.get_timeout_before_reconnect(
                             &err,
@@ -165,9 +166,7 @@ impl Reconnector {
                                 // TODO: ???
                                 trace!("Channel error: {}", chan_err);
                                 let _ = stream_writer.stop().await;  // TODO: handle error
-                                helper.set_writer_state(TopicWriterState::FinishedWithError(
-                                    YdbError::custom(format!("stream writer channel closed: {chan_err}")),
-                                ));
+                                helper.set_writer_state(TopicWriterState::Reconnecting);
                                 break;
                             }
                         };
@@ -183,7 +182,7 @@ impl Reconnector {
                         } else {
                             trace!("Unknown error: {}", err);
                             let _ = stream_writer.stop().await;  // TODO: handle error
-                            helper.set_writer_state(TopicWriterState::FinishedWithError(err));
+                            helper.set_writer_state(TopicWriterState::Reconnecting);
                             break;
                         };
                     }
