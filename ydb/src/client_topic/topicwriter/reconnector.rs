@@ -149,7 +149,6 @@ impl Reconnector {
                 };
 
                 helper.set_writer_state(TopicWriterState::Working);
-                attempt = 0;
                 if let Some(tx) = connection_info_filled_tx.take() {
                     let _ = tx.send(());
                 };
@@ -173,8 +172,8 @@ impl Reconnector {
                             }
                         };
 
-                        attempt += 1;
                         reconnect_start_time = Instant::now();
+                        attempt = 0;
                         if let Some(wait_timeout) = helper.get_timeout_before_reconnect(
                             &err,
                             attempt,
