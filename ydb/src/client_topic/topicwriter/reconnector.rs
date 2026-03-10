@@ -143,21 +143,16 @@ impl Reconnector {
                             continue;
                         }
 
-                        let mut writer_state = helper.writer_state.lock().unwrap();
-                        *writer_state = TopicWriterState::FinishedWithError(err);
+                        helper.set_writer_state(TopicWriterState::FinishedWithError(err));
                         break;
                     }
                 };
 
-                {
-                    let mut writer_state = helper.writer_state.lock().unwrap();
-                    *writer_state = TopicWriterState::Working;
-                }
-
+                helper.set_writer_state(TopicWriterState::Working);
+                attempt = 0;
                 if let Some(tx) = connection_info_filled_tx.take() {
                     let _ = tx.send(());
                 };
-                attempt = 0;
 
                 tokio::select! {
                     _ = helper.cancellation_token.cancelled() => {
@@ -171,10 +166,9 @@ impl Reconnector {
                                 // TODO: ???
                                 trace!("Channel error: {}", chan_err);
                                 let _ = stream_writer.stop().await;  // TODO: handle error
-                                let mut writer_state = helper.writer_state.lock().unwrap();
-                                *writer_state = TopicWriterState::FinishedWithError(
+                                helper.set_writer_state(TopicWriterState::FinishedWithError(
                                     YdbError::custom(format!("stream writer channel closed: {chan_err}")),
-                                );
+                                ));
                                 break;
                             }
                         };
@@ -190,8 +184,7 @@ impl Reconnector {
                         } else {
                             trace!("Unknown error: {}", err);
                             let _ = stream_writer.stop().await;  // TODO: handle error
-                            let mut writer_state = helper.writer_state.lock().unwrap();
-                            *writer_state = TopicWriterState::FinishedWithError(err);
+                            helper.set_writer_state(TopicWriterState::FinishedWithError(err));
                             break;
                         };
                     }
@@ -295,5 +288,10 @@ impl ReconnectorLoopHelper {
     async fn wait_before_reconnect(wait_timeout: Duration, err: &YdbError) {
         trace!("Error, trying to reconnect: {}", err);
         sleep(wait_timeout).await;
+    }
+
+    fn set_writer_state(&self, new_state: TopicWriterState) {
+        let mut writer_state = self.writer_state.lock().unwrap();
+        *writer_state = new_state;
     }
 }
