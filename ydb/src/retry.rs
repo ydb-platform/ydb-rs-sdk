@@ -23,6 +23,17 @@ pub(crate) trait Retry: Send + Sync {
     fn wait_duration(&self, params: RetryParams) -> RetryDecision;
 }
 
+fn exponential_backoff_retry_wait_duration(attempt: usize) -> Duration {
+    if attempt == 0 {
+        return Duration::default();
+    }
+
+    let duration_milliseconds = 2u64
+        .pow(attempt as u32)
+        .min(BACKOFF_RETRY_MAX_WAIT_DURATION_MILLISECONDS);
+    Duration::from_millis(duration_milliseconds)
+}
+
 #[derive(Debug)]
 pub(crate) struct TimeoutRetrier {
     pub(crate) timeout: Duration,
@@ -41,16 +52,23 @@ impl Retry for TimeoutRetrier {
     fn wait_duration(&self, params: RetryParams) -> RetryDecision {
         let mut res = RetryDecision::default();
         if params.time_from_start < self.timeout {
-            if params.attempt > 0 {
-                let duration_milliseconds = 2u64
-                    .pow(params.attempt as u32)
-                    .min(BACKOFF_RETRY_MAX_WAIT_DURATION_MILLISECONDS);
-                res.wait_timeout = Duration::from_millis(duration_milliseconds);
-            }
+            res.wait_timeout = exponential_backoff_retry_wait_duration(params.attempt);
             res.allow_retry = (params.time_from_start + res.wait_timeout) < self.timeout;
         };
 
         res
+    }
+}
+
+pub(crate) struct IndefiniteRetrier {}
+
+impl Retry for IndefiniteRetrier {
+    #[instrument(skip_all)]
+    fn wait_duration(&self, params: RetryParams) -> RetryDecision {
+        RetryDecision {
+            allow_retry: true,
+            wait_timeout: exponential_backoff_retry_wait_duration(params.attempt),
+        }
     }
 }
 
