@@ -151,8 +151,7 @@ pub use client_table::{RetryOptions, TableClient, TransactionOptions};
 
 // full enum pub types
 pub use table_service_types::{
-    ColumnDescription, ColumnType, IndexDescription, IndexStatus, IndexType, StoreType,
-    StructField, TableDescription, VariantType,
+    ColumnDescription, IndexDescription, IndexStatus, IndexType, StoreType, TableDescription,
 };
 
 // full enum pub types

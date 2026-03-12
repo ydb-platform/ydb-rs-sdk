@@ -25,9 +25,7 @@ use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQu
 use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
 use crate::grpc_wrapper::raw_table_service::keepalive::RawKeepAliveRequest;
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
-use crate::table_service_types::{
-    ColumnDescription, CopyTableItem, IndexDescription, TableDescription,
-};
+use crate::table_service_types::{ColumnDescription, CopyTableItem, TableDescription};
 use crate::trace_helpers::ensure_len_string;
 use tracing::{debug, trace};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
@@ -238,32 +236,25 @@ impl Session {
         let columns = raw_result
             .columns
             .into_iter()
-            .map(|raw_col| ColumnDescription {
-                name: raw_col.name,
-                column_type: raw_col.column_type.into(),
-                not_null: raw_col.not_null,
-                family: if raw_col.family.is_empty() {
-                    None
-                } else {
-                    Some(raw_col.family)
-                },
+            .map(|raw_col| -> YdbResult<ColumnDescription> {
+                Ok(ColumnDescription {
+                    name: raw_col.name,
+                    type_value: raw_col
+                        .column_type
+                        .into_value_example()
+                        .map_err(|e| YdbError::Convert(e.to_string()))?,
+                    family: (!raw_col.family.is_empty()).then_some(raw_col.family),
+                })
             })
-            .collect();
+            .collect::<YdbResult<Vec<_>>>()?;
 
         let indexes = raw_result
             .indexes
             .into_iter()
-            .map(|raw_idx| IndexDescription {
-                name: raw_idx.name,
-                index_columns: raw_idx.index_columns,
-                data_columns: raw_idx.data_columns,
-                status: raw_idx.status.into(),
-                index_type: raw_idx.index_type.into(),
-            })
+            .map(|idx| idx.into())
             .collect();
 
         Ok(TableDescription {
-            path,
             columns,
             primary_key: raw_result.primary_key,
             indexes,

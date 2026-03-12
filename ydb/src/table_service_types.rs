@@ -24,14 +24,8 @@ impl From<CopyTableItem> for RawCopyTableItem {
     }
 }
 
-use crate::grpc_wrapper::raw_table_service::value::r#type::{
-    RawType, VariantType as RawVariantType,
-};
-
 #[derive(Debug, Clone)]
 pub struct TableDescription {
-    /// Full path to the table
-    pub path: String,
     /// List of table columns
     pub columns: Vec<ColumnDescription>,
     /// List of primary key column names
@@ -44,148 +38,12 @@ pub struct TableDescription {
 
 #[derive(Debug, Clone)]
 pub struct ColumnDescription {
+    /// Column name
     pub name: String,
-    pub column_type: ColumnType,
-    pub not_null: bool,
+    /// Column type, represented as an example Value
+    pub type_value: crate::Value,
+    /// Column family name
     pub family: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ColumnType {
-    Bool,
-    Int8,
-    Uint8,
-    Int16,
-    Uint16,
-    Int32,
-    Uint32,
-    Int64,
-    Uint64,
-    Float,
-    Double,
-    Date,
-    DateTime,
-    Timestamp,
-    Interval,
-    TzDate,
-    TzDatetime,
-    TzTimestamp,
-    Bytes,
-    Utf8,
-    Yson,
-    Json,
-    Uuid,
-    JsonDocument,
-    DyNumber,
-    Decimal {
-        precision: u8,
-        scale: i16,
-    },
-    Optional(Box<ColumnType>),
-    List(Box<ColumnType>),
-    Tuple(Vec<ColumnType>),
-    Struct(Vec<StructField>),
-    Dict {
-        key: Box<ColumnType>,
-        value: Box<ColumnType>,
-    },
-    Variant(Box<VariantType>),
-    Tagged {
-        tag: String,
-        item_type: Box<ColumnType>,
-    },
-    Void,
-    Null,
-    EmptyList,
-    EmptyDict,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StructField {
-    pub name: String,
-    pub field_type: ColumnType,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VariantType {
-    Tuple(Vec<ColumnType>),
-    Struct(Vec<StructField>),
-}
-
-impl From<RawType> for ColumnType {
-    fn from(raw: RawType) -> Self {
-        match raw {
-            RawType::Bool => ColumnType::Bool,
-            RawType::Int8 => ColumnType::Int8,
-            RawType::Uint8 => ColumnType::Uint8,
-            RawType::Int16 => ColumnType::Int16,
-            RawType::Uint16 => ColumnType::Uint16,
-            RawType::Int32 => ColumnType::Int32,
-            RawType::Uint32 => ColumnType::Uint32,
-            RawType::Int64 => ColumnType::Int64,
-            RawType::Uint64 => ColumnType::Uint64,
-            RawType::Float => ColumnType::Float,
-            RawType::Double => ColumnType::Double,
-            RawType::Date => ColumnType::Date,
-            RawType::DateTime => ColumnType::DateTime,
-            RawType::Timestamp => ColumnType::Timestamp,
-            RawType::Interval => ColumnType::Interval,
-            RawType::TzDate => ColumnType::TzDate,
-            RawType::TzDatetime => ColumnType::TzDatetime,
-            RawType::TzTimestamp => ColumnType::TzTimestamp,
-            RawType::Bytes => ColumnType::Bytes,
-            RawType::UTF8 => ColumnType::Utf8,
-            RawType::Yson => ColumnType::Yson,
-            RawType::Json => ColumnType::Json,
-            RawType::Uuid => ColumnType::Uuid,
-            RawType::JSONDocument => ColumnType::JsonDocument,
-            RawType::DyNumber => ColumnType::DyNumber,
-            RawType::Decimal(dec) => ColumnType::Decimal {
-                precision: dec.precision,
-                scale: dec.scale,
-            },
-            RawType::Optional(inner) => ColumnType::Optional(Box::new((*inner).into())),
-            RawType::List(inner) => ColumnType::List(Box::new((*inner).into())),
-            RawType::Tuple(tuple) => {
-                ColumnType::Tuple(tuple.elements.into_iter().map(|t| t.into()).collect())
-            }
-            RawType::Struct(st) => ColumnType::Struct(
-                st.members
-                    .into_iter()
-                    .map(|m| StructField {
-                        name: m.name,
-                        field_type: m.member_type.into(),
-                    })
-                    .collect(),
-            ),
-            RawType::Dict(dict) => ColumnType::Dict {
-                key: Box::new(dict.key.into()),
-                value: Box::new(dict.payload.into()),
-            },
-            RawType::Variant(variant) => ColumnType::Variant(Box::new(match variant {
-                RawVariantType::Tuple(tuple) => {
-                    VariantType::Tuple(tuple.elements.into_iter().map(|t| t.into()).collect())
-                }
-                RawVariantType::Struct(st) => VariantType::Struct(
-                    st.members
-                        .into_iter()
-                        .map(|m| StructField {
-                            name: m.name,
-                            field_type: m.member_type.into(),
-                        })
-                        .collect(),
-                ),
-            })),
-            RawType::Tagged(tagged) => ColumnType::Tagged {
-                tag: tagged.tag,
-                item_type: Box::new(tagged.item_type.into()),
-            },
-            RawType::Void => ColumnType::Void,
-            RawType::Null => ColumnType::Null,
-            RawType::EmptyList => ColumnType::EmptyList,
-            RawType::EmptyDict => ColumnType::EmptyDict,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +53,22 @@ pub struct IndexDescription {
     pub data_columns: Vec<String>,
     pub status: IndexStatus,
     pub index_type: IndexType,
+}
+
+impl From<crate::grpc_wrapper::raw_table_service::describe_table::RawIndexDescription>
+    for IndexDescription
+{
+    fn from(
+        raw: crate::grpc_wrapper::raw_table_service::describe_table::RawIndexDescription,
+    ) -> Self {
+        Self {
+            name: raw.name,
+            index_columns: raw.index_columns,
+            data_columns: raw.data_columns,
+            status: raw.status.into(),
+            index_type: raw.index_type.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
