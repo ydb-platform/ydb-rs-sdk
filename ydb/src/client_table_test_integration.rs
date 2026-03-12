@@ -1011,14 +1011,14 @@ async fn describe_table() -> YdbResult<()> {
     assert_eq!(table_desc.store_type, StoreType::Unspecified);
 
     let id_col = table_desc.columns.iter().find(|c| c.name == "id").unwrap();
-    assert!(matches!(id_col.type_value, Value::Text(_)));
+    assert!(matches!(id_col.type_value, Ok(Value::Text(_))));
 
     let id_hash_col = table_desc
         .columns
         .iter()
         .find(|c| c.name == "id_hash")
         .unwrap();
-    assert!(matches!(id_hash_col.type_value, Value::Uint32(_)));
+    assert!(matches!(id_hash_col.type_value, Ok(Value::Uint32(_))));
 
     let price_col = table_desc
         .columns
@@ -1026,11 +1026,12 @@ async fn describe_table() -> YdbResult<()> {
         .find(|c| c.name == "price")
         .unwrap();
     match &price_col.type_value {
-        Value::Optional(opt) => match &opt.t {
+        Ok(Value::Optional(opt)) => match &opt.t {
             Value::Decimal(_) => {}
             _ => panic!("Expected Optional<Decimal>"),
         },
-        _ => panic!("Expected Optional type for price"),
+        Err(e) => panic!("Type conversion failed: {:?}", e),
+        _ => panic!("Expected Ok(Optional<Decimal>)"),
     }
 
     for idx in &table_desc.indexes {

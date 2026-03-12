@@ -36,12 +36,20 @@ pub struct TableDescription {
     pub store_type: StoreType,
 }
 
+/// Error description of an unknown/unsupported column type
+#[derive(Debug, Clone)]
+pub struct UnknownTypeDescription {
+    pub error: String,
+}
+
+/// Description of a table column
 #[derive(Debug, Clone)]
 pub struct ColumnDescription {
     /// Column name
     pub name: String,
     /// Column type, represented as an example Value
-    pub type_value: crate::Value,
+    /// Err if the type has not been converted to Value
+    pub type_value: Result<crate::Value, UnknownTypeDescription>,
     /// Column family name
     pub family: Option<String>,
 }

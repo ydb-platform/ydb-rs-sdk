@@ -236,17 +236,16 @@ impl Session {
         let columns = raw_result
             .columns
             .into_iter()
-            .map(|raw_col| -> YdbResult<ColumnDescription> {
-                Ok(ColumnDescription {
-                    name: raw_col.name,
-                    type_value: raw_col
-                        .column_type
-                        .into_value_example()
-                        .map_err(|e| YdbError::Convert(e.to_string()))?,
-                    family: (!raw_col.family.is_empty()).then_some(raw_col.family),
-                })
+            .map(|raw_col| ColumnDescription {
+                name: raw_col.name,
+                type_value: raw_col.column_type.into_value_example().map_err(|e| {
+                    crate::table_service_types::UnknownTypeDescription {
+                        error: e.to_string(),
+                    }
+                }),
+                family: (!raw_col.family.is_empty()).then_some(raw_col.family),
             })
-            .collect::<YdbResult<Vec<_>>>()?;
+            .collect();
 
         let indexes = raw_result
             .indexes
