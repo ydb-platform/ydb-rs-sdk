@@ -51,7 +51,7 @@ pub struct ColumnDescription {
     /// Err if the type has not been converted to Value
     pub type_value: Result<crate::Value, UnknownTypeDescription>,
     /// Column family name
-    pub family: Option<String>,
+    pub family: String,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +80,7 @@ impl From<crate::grpc_wrapper::raw_table_service::describe_table::RawIndexDescri
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 pub enum IndexType {
     Unspecified,
     Global,
@@ -100,6 +101,7 @@ impl From<crate::grpc_wrapper::raw_table_service::describe_table::RawIndexType> 
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 pub enum IndexStatus {
     Unspecified,
     Ready,
@@ -118,6 +120,7 @@ impl From<crate::grpc_wrapper::raw_table_service::describe_table::RawIndexStatus
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 pub enum StoreType {
     Unspecified,
     Row,

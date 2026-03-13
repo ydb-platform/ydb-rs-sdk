@@ -243,7 +243,7 @@ impl Session {
                         error: e.to_string(),
                     }
                 }),
-                family: (!raw_col.family.is_empty()).then_some(raw_col.family),
+                family: raw_col.family,
             })
             .collect();
 
