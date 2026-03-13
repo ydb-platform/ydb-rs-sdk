@@ -56,6 +56,7 @@ async fn main() -> YdbResult<()> {
  println!("sum: {}", sum);
     return Ok(());
 }
+
 ```
 
 For more examples, check out the [URL shortener application](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-example-urlshortener) or [many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples).
