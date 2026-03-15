@@ -26,7 +26,7 @@ pub(crate) struct ReconnectorParams {
     pub(crate) writer_state: Arc<Mutex<TopicWriterState>>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
-    pub(crate) message_queue: Arc<Mutex<MessageQueue>>,
+    pub(crate) message_queue: MessageQueue,
     pub(crate) connection_info: Arc<TokioMutex<ConnectionInfo>>,
     pub(crate) retrier: Arc<dyn Retry>,
 }
@@ -95,7 +95,7 @@ impl Reconnector {
     async fn start_loop(
         helper: ReconnectorLoopHelper,
         initial_messages_receiver: mpsc::Receiver<TopicWriterMessageWithAck>,
-        message_queue: Arc<Mutex<MessageQueue>>,
+        message_queue: MessageQueue,
     ) -> YdbResult<JoinHandle<()>> {
         let (connection_info_filled_tx, connection_info_filled_rx) = oneshot::channel::<()>();
 
@@ -110,10 +110,7 @@ impl Reconnector {
             loop {
                 let (error_sender, error_receiver) = oneshot::channel();
 
-                {
-                    let mut message_queue_guard = message_queue.lock().unwrap();
-                    message_queue_guard.reset_progress();
-                }
+                message_queue.reset_progress();
 
                 let stream_writer = match StreamWriter::new(
                     StreamWriterParams {
