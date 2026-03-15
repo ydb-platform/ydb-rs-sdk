@@ -1,12 +1,12 @@
 use std::borrow::{Borrow, BorrowMut};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, timeout};
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::log::{trace, warn};
 
@@ -17,9 +17,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::{InitRequest, WriteRequest
 
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message::TopicWriterMessageWithAck;
-use crate::client_topic::topicwriter::message_queue::{
-    GetMessagesToSendWithLengthThresholdResult, MessageQueue,
-};
+use crate::client_topic::topicwriter::message_queue::{GetMessagesToSendResult, MessageQueue};
 use crate::client_topic::topicwriter::message_write_status::WriteAck;
 use crate::client_topic::topicwriter::writer_reception_queue::{
     TopicWriterReceptionQueue, TopicWriterReceptionTicket, TopicWriterReceptionType,
@@ -43,7 +41,7 @@ pub(crate) struct StreamWriter {
 pub(crate) struct StreamWriterParams {
     pub(crate) writer_options: TopicWriterOptions,
     pub(crate) producer_id: String,
-    pub(crate) message_queue: Arc<Mutex<MessageQueue>>,
+    pub(crate) message_queue: MessageQueue,
 }
 
 struct WriterLoopParams {
@@ -115,7 +113,7 @@ impl StreamWriter {
         let message_receive_loop_cancellation_token = cancellation_token.clone();
         let message_receive_loop_error_tx = shared_error_tx.clone();
         let message_receive_loop_message_queue = params.message_queue.clone();
-        let message_loop_reception_queue = confirmation_reception_queue.clone();
+        let message_receive_loop_reception_queue = confirmation_reception_queue.clone();
 
         let process_new_messages_loop_cancellation_token = cancellation_token.clone();
         let process_new_messages_loop_error_tx = shared_error_tx.clone();
@@ -153,7 +151,7 @@ impl StreamWriter {
 
         let receive_messages_loop = tokio::spawn(async move {
             let mut stream = stream; // force move inside
-            let mut reception_queue = message_loop_reception_queue; // force move inside
+            let reception_queue = message_receive_loop_reception_queue; // force move inside
             let message_queue = message_receive_loop_message_queue;
 
             loop {
@@ -162,7 +160,7 @@ impl StreamWriter {
                     message_receive_it_res = StreamWriter::receive_messages_loop_iteration(
                         &message_queue,
                         stream.borrow_mut(),
-                        reception_queue.borrow_mut(),
+                        &reception_queue,
                     ) => {
                         let Err(receive_message_it_error) = message_receive_it_res else {
                             continue;
@@ -240,50 +238,21 @@ impl StreamWriter {
         })
     }
 
-    async fn get_messages_to_send(
-        message_queue: &Arc<Mutex<MessageQueue>>,
-        size_threshold: usize,
-        send_messages_period: Duration,
-    ) -> YdbResult<Vec<MessageData>> {
-        let start = Instant::now();
-
-        loop {
-            {
-                let mut message_queue_guard = message_queue.lock().unwrap();
-
-                let elapsed = start.elapsed();
-                if elapsed >= send_messages_period {
-                    return message_queue_guard.get_messages_to_send();
-                }
-
-                match message_queue_guard.get_messages_to_send_with_length_threshold(size_threshold)
-                {
-                    GetMessagesToSendWithLengthThresholdResult::Ok(messages) => {
-                        return Ok(messages);
-                    }
-                    GetMessagesToSendWithLengthThresholdResult::NotEnoughMessages => {}
-                    GetMessagesToSendWithLengthThresholdResult::Err(error) => {
-                        return Err(error);
-                    }
-                }
-            }
-
-            // TODO: mitigate without bombarding message_queue mutex
-            let remaining = send_messages_period.saturating_sub(start.elapsed());
-            sleep(remaining.min(Duration::from_millis(50))).await;
-        }
-    }
-
     async fn write_loop_iteration(
-        message_queue: &Arc<Mutex<MessageQueue>>,
+        message_queue: &MessageQueue,
         task_params: &WriterLoopParams,
     ) -> YdbResult<()> {
-        let messages_to_send = StreamWriter::get_messages_to_send(
-            message_queue,
-            task_params.write_request_messages_chunk_size,
-            task_params.write_request_send_messages_period,
-        )
-        .await?;
+        let messages_to_send = match message_queue
+            .get_messages_to_send(
+                task_params.write_request_messages_chunk_size,
+                task_params.write_request_send_messages_period,
+            )
+            .await
+        {
+            GetMessagesToSendResult::Ok(messages) => messages,
+            GetMessagesToSendResult::NotEnoughMessages => return Ok(()),
+            GetMessagesToSendResult::Err(err) => return Err(err),
+        };
         if messages_to_send.is_empty() {
             return Ok(());
         }
@@ -304,7 +273,7 @@ impl StreamWriter {
     }
 
     async fn receive_messages_loop_iteration(
-        message_queue: &Arc<Mutex<MessageQueue>>,
+        message_queue: &MessageQueue,
         server_messages_receiver: &mut AsyncGrpcStreamWrapper<
             stream_write_message::FromClient,
             stream_write_message::FromServer,
@@ -321,28 +290,30 @@ impl StreamWriter {
                 RawServerMessage::Write(write_response_body) => {
                     for raw_ack in write_response_body.acks {
                         let write_ack = WriteAck::from(raw_ack);
-                        let mut reception_queue = confirmation_reception_queue.lock().unwrap();
-                        let reception_ticket = reception_queue.try_get_ticket();
-                        match reception_ticket {
-                            None => {
-                                return Err(YdbError::Custom(
-                                    "Expected reception ticket to be actually present".to_string(),
-                                ));
-                            }
-                            Some(ticket) => {
-                                if write_ack.seq_no != ticket.get_seq_no() {
-                                    return Err(YdbError::custom(format!(
-                                        "Reception ticket and write ack seq_no mismatch. Seqno from ack: {}, expected: {}",
-                                        write_ack.seq_no, ticket.get_seq_no()
-                                    )));
+                        let ticket = {
+                            let mut reception_queue = confirmation_reception_queue.lock().unwrap();
+                            let reception_ticket = reception_queue.try_get_ticket();
+                            match reception_ticket {
+                                None => {
+                                    return Err(YdbError::Custom(
+                                        "Expected reception ticket to be actually present"
+                                            .to_string(),
+                                    ));
                                 }
-                                {
-                                    let mut message_queue_guard = message_queue.lock().unwrap();
-                                    message_queue_guard.acknowledge_message(write_ack.seq_no)?;
+                                Some(ticket) => {
+                                    if write_ack.seq_no != ticket.get_seq_no() {
+                                        return Err(YdbError::custom(format!(
+                                            "Reception ticket and write ack seq_no mismatch. Seqno from ack: {}, expected: {}",
+                                            write_ack.seq_no,
+                                            ticket.get_seq_no()
+                                        )));
+                                    }
+                                    ticket
                                 }
-                                ticket.send_confirmation_if_needed(write_ack.status);
                             }
-                        }
+                        };
+                        message_queue.acknowledge_message(write_ack.seq_no)?;
+                        ticket.send_confirmation_if_needed(write_ack.status);
                     }
                 }
                 RawServerMessage::UpdateToken(_update_token_response_body) => {}
@@ -355,7 +326,7 @@ impl StreamWriter {
     }
 
     async fn process_new_messages_loop_iteration(
-        message_queue: &Arc<Mutex<MessageQueue>>,
+        message_queue: &MessageQueue,
         messages_receiver: &mut Receiver<TopicWriterMessageWithAck>,
         confirmation_reception_queue: &Arc<Mutex<TopicWriterReceptionQueue>>,
         producer_id: String,
@@ -370,24 +341,6 @@ impl StreamWriter {
                     .seq_no
                     .ok_or_else(|| YdbError::custom("empty message seq_no is provided"))?;
 
-                {
-                    let mut message_queue_guard = message_queue.lock().unwrap();
-                    message_queue_guard.add_message(MessageData {
-                        seq_no,
-                        created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
-                            seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs()
-                                as i64,
-                            nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
-                        }),
-                        metadata_items: vec![],
-                        data: message.data,
-                        uncompressed_size: data_size,
-                        partitioning: Some(message_data::Partitioning::MessageGroupId(
-                            producer_id.clone(),
-                        )),
-                    })?;
-                }
-
                 let ack = message_with_ack.ack;
                 let reception_type = ack.map_or(
                     TopicWriterReceptionType::NoConfirmationExpected,
@@ -399,6 +352,20 @@ impl StreamWriter {
                     reception_queue
                         .add_ticket(TopicWriterReceptionTicket::new(seq_no, reception_type));
                 }
+
+                message_queue.add_message(MessageData {
+                    seq_no,
+                    created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
+                        seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs() as i64,
+                        nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
+                    }),
+                    metadata_items: vec![],
+                    data: message.data,
+                    uncompressed_size: data_size,
+                    partitioning: Some(message_data::Partitioning::MessageGroupId(
+                        producer_id.clone(),
+                    )),
+                })?;
             }
             Ok(None) => {
                 trace!("Channel has been closed. Stop topic send messages loop.");
