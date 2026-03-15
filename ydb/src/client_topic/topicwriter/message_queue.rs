@@ -44,7 +44,7 @@ impl MessageQueue {
 
     fn get_messages_to_send_without_threshold(&self) -> YdbResult<Vec<MessageData>> {
         let mut inner = self.inner.lock().unwrap();
-        inner.get_messages_to_send()
+        inner.get_messages_to_send_without_threshold()
     }
 
     fn get_messages_to_send_with_length_threshold(
@@ -55,14 +55,17 @@ impl MessageQueue {
         inner.get_messages_to_send_with_length_threshold(length_threshold)
     }
 
-    async fn get_messages_to_send_loop(&self, length_threshold: usize) -> GetMessagesToSendResult {
+    async fn get_messages_to_send_loop(
+        &self,
+        length_threshold: usize,
+    ) -> YdbResult<Vec<MessageData>> {
         loop {
             tokio::select! {
                 _ = self.new_message_added.notified() => {
                     match self.get_messages_to_send_with_length_threshold(length_threshold) {
-                        success @ GetMessagesToSendResult::Ok(_) => return success,
+                        GetMessagesToSendResult::Ok(messages) => return Ok(messages),
                         GetMessagesToSendResult::NotEnoughMessages => continue,
-                        error @ GetMessagesToSendResult::Err(_) => return error,
+                        GetMessagesToSendResult::Err(error) => return Err(error),
                     }
                 }
             }
@@ -73,13 +76,10 @@ impl MessageQueue {
         &self,
         length_threshold: usize,
         duration: Duration,
-    ) -> GetMessagesToSendResult {
+    ) -> YdbResult<Vec<MessageData>> {
         match timeout(duration, self.get_messages_to_send_loop(length_threshold)).await {
             Ok(result) => result,
-            Err(_) => match self.get_messages_to_send_without_threshold() {
-                Ok(messages) => GetMessagesToSendResult::Ok(messages),
-                Err(error) => GetMessagesToSendResult::Err(error),
-            },
+            Err(_) => self.get_messages_to_send_without_threshold(),
         }
     }
 
@@ -143,7 +143,7 @@ struct MessageQueueInner {
 }
 
 #[derive(Debug)]
-pub(crate) enum GetMessagesToSendResult {
+enum GetMessagesToSendResult {
     Ok(Vec<MessageData>),
     // TODO: In the future, when the batch is checked by the serialized size (not the length), this
     // variant has to be changed accordingly.
@@ -226,7 +226,7 @@ impl MessageQueueInner {
         result
     }
 
-    fn get_messages_to_send(&mut self) -> YdbResult<Vec<MessageData>> {
+    fn get_messages_to_send_without_threshold(&mut self) -> YdbResult<Vec<MessageData>> {
         let length = self.get_length_of_messages_to_send()?;
 
         Ok(MessageQueueInner::do_get_messages_to_send(
@@ -431,7 +431,7 @@ mod tests {
         q.add_message(create_message(3, vec![10])).unwrap();
         q.add_message(create_message(4, vec![20])).unwrap();
 
-        let batch = q.get_messages_to_send().unwrap();
+        let batch = q.get_messages_to_send_without_threshold().unwrap();
 
         assert_eq!(batch.len(), 2);
         assert_eq!(batch[0].seq_no, 3);
@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn get_messages_to_send_empty_queue_returns_empty() {
         let mut q = create_queue();
-        let msgs = q.get_messages_to_send().unwrap();
+        let msgs = q.get_messages_to_send_without_threshold().unwrap();
         assert!(msgs.is_empty());
     }
 
@@ -502,7 +502,7 @@ mod tests {
         q.add_message(create_message(5, vec![])).unwrap();
         q.add_message(create_message(6, vec![])).unwrap();
         q.add_message(create_message(7, vec![])).unwrap();
-        let _ = q.get_messages_to_send().unwrap();
+        let _ = q.get_messages_to_send_without_threshold().unwrap();
 
         q.acknowledge_message(5).unwrap();
 
@@ -527,7 +527,7 @@ mod tests {
     fn acknowledge_message_errors_when_seq_no_mismatch() {
         let mut q = create_queue();
         q.add_message(create_message(1, vec![])).unwrap();
-        let _ = q.get_messages_to_send().unwrap();
+        let _ = q.get_messages_to_send_without_threshold().unwrap();
 
         let err = q.acknowledge_message(99).unwrap_err();
 
@@ -541,7 +541,7 @@ mod tests {
         q.add_message(create_message(8, vec![])).unwrap();
         q.add_message(create_message(9, vec![])).unwrap();
 
-        let msgs = q.get_messages_to_send().unwrap();
+        let msgs = q.get_messages_to_send_without_threshold().unwrap();
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].seq_no, 8);
         assert_eq!(msgs[1].seq_no, 9);
@@ -552,7 +552,7 @@ mod tests {
         assert_eq!(q.last_sent_index, None);
         assert_eq!(q.get_length_of_messages_to_send().unwrap(), 2);
 
-        let again = q.get_messages_to_send().unwrap();
+        let again = q.get_messages_to_send_without_threshold().unwrap();
         assert_eq!(again.len(), 2);
         assert_eq!(again[0].seq_no, 8);
         assert_eq!(again[1].seq_no, 9);
