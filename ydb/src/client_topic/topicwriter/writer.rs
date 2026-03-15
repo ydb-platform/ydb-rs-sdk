@@ -49,7 +49,7 @@ pub struct TopicWriter {
     writer_state: Arc<Mutex<TopicWriterState>>,
 
     confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
-    message_queue: Arc<Mutex<MessageQueue>>,
+    message_queue: MessageQueue,
 
     reconnector: Reconnector,
 }
@@ -84,7 +84,7 @@ impl TopicWriter {
         let cancellation_token = CancellationToken::new();
 
         let writer_state = Arc::new(Mutex::new(TopicWriterState::Working));
-        let message_queue = Arc::new(Mutex::new(MessageQueue::new()));
+        let message_queue = MessageQueue::new();
 
         let confirmation_reception_queue = Arc::new(Mutex::new(TopicWriterReceptionQueue::new()));
         let connection_info = Arc::new(TokioMutex::new(ConnectionInfo {
@@ -199,10 +199,8 @@ impl TopicWriter {
             reception_queue.init_flush_op()?
         };
 
-        {
-            let mut message_queue = self.message_queue.lock().unwrap();
-            message_queue.close_for_new_messages();
-        }
+        self.message_queue.close_for_new_messages();
+        self.message_queue.wait().await;
 
         Ok(flush_op_completed.await?)
     }
