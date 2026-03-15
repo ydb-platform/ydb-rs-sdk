@@ -18,7 +18,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::{InitRequest, WriteRequest
 
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message::TopicWriterMessageWithAck;
-use crate::client_topic::topicwriter::message_queue::{GetMessagesToSendResult, MessageQueue};
+use crate::client_topic::topicwriter::message_queue::MessageQueue;
 use crate::client_topic::topicwriter::message_write_status::WriteAck;
 use crate::client_topic::topicwriter::writer_reception_queue::{
     TopicWriterReceptionQueue, TopicWriterReceptionTicket, TopicWriterReceptionType,
@@ -245,9 +245,8 @@ impl StreamWriter {
             )
             .await
         {
-            GetMessagesToSendResult::Ok(messages) => messages,
-            GetMessagesToSendResult::NotEnoughMessages => return Ok(()),
-            GetMessagesToSendResult::Err(err) => return Err(err),
+            Ok(messages) => messages,
+            Err(err) => return Err(err),
         };
         if messages_to_send.is_empty() {
             return Ok(());
