@@ -315,57 +315,60 @@ mod tests {
         }
     }
 
-    fn create_queue() -> MessageQueueInner {
+    async fn create_queue() -> (MessageQueueInner, tokio::task::JoinHandle<()>) {
         let new_message_added = Arc::new(Notify::new());
-        let (message_acknowledged_tx, _) = mpsc::unbounded_channel();
-        MessageQueueInner::new(new_message_added, message_acknowledged_tx)
+        let (message_acknowledged_tx, mut message_acknowledged_rx) = mpsc::unbounded_channel();
+        let queue = MessageQueueInner::new(new_message_added, message_acknowledged_tx);
+        let indefinite_reader_handle =
+            tokio::spawn(async move { while message_acknowledged_rx.recv().await.is_some() {} });
+        (queue, indefinite_reader_handle)
     }
 
-    #[test]
-    fn new_creates_empty_queue() {
-        let q = create_queue();
+    #[tokio::test]
+    async fn new_creates_empty_queue() {
+        let (q, _reader) = create_queue().await;
         assert_eq!(q.last_written_index, None);
         assert_eq!(q.last_written_seq_no, -1);
         assert_eq!(q.last_sent_index, None);
         assert!(q.is_open_for_new_messages);
     }
 
-    #[test]
-    fn get_length_of_messages_to_send_empty() {
-        let q = create_queue();
+    #[tokio::test]
+    async fn get_length_of_messages_to_send_empty() {
+        let (q, _reader) = create_queue().await;
         match q.get_length_of_messages_to_send() {
             Ok(length) => assert_eq!(length, 0),
             Err(error) => panic!("{}", error.to_string()),
         }
     }
 
-    #[test]
-    fn get_length_of_messages_to_send_with_some_added_and_none_sent() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn get_length_of_messages_to_send_with_some_added_and_none_sent() {
+        let (mut q, _reader) = create_queue().await;
         q.last_written_index = Some(4);
         q.last_sent_index = None;
         assert_eq!(q.get_length_of_messages_to_send().unwrap(), 5);
     }
 
-    #[test]
-    fn get_length_of_messages_to_send_with_some_added_and_one_sent() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn get_length_of_messages_to_send_with_some_added_and_one_sent() {
+        let (mut q, _reader) = create_queue().await;
         q.last_written_index = Some(4);
         q.last_sent_index = Some(0);
         assert_eq!(q.get_length_of_messages_to_send().unwrap(), 4);
     }
 
-    #[test]
-    fn get_length_of_messages_to_send_with_some_added_and_same_sent() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn get_length_of_messages_to_send_with_some_added_and_same_sent() {
+        let (mut q, _reader) = create_queue().await;
         q.last_written_index = Some(4);
         q.last_sent_index = Some(4);
         assert_eq!(q.get_length_of_messages_to_send().unwrap(), 0);
     }
 
-    #[test]
-    fn get_length_of_messages_to_send_with_none_added_and_some_sent() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn get_length_of_messages_to_send_with_none_added_and_some_sent() {
+        let (mut q, _reader) = create_queue().await;
         q.last_written_index = None;
         q.last_sent_index = Some(4);
         let err = q.get_length_of_messages_to_send().unwrap_err();
@@ -374,28 +377,27 @@ mod tests {
             .contains("last_sent_index is bigger than last_written_index"));
     }
 
-    #[test]
-    fn add_message_appends_and_updates_fields() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn add_message_appends_and_updates_fields() {
+        let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(10, vec![1, 2, 3])).unwrap();
         q.add_message(create_message(11, vec![4, 5])).unwrap();
 
         assert_eq!(q.get_length_of_messages_to_send().unwrap(), 2);
-        let msgs = q.messages;
-        assert_eq!(msgs.len(), 2);
-        assert_eq!(msgs[0].seq_no, 10);
-        assert_eq!(msgs[0].data, vec![1, 2, 3]);
-        assert_eq!(msgs[1].seq_no, 11);
-        assert_eq!(msgs[1].data, vec![4, 5]);
+        assert_eq!(q.messages.len(), 2);
+        assert_eq!(q.messages[0].seq_no, 10);
+        assert_eq!(q.messages[0].data, vec![1, 2, 3]);
+        assert_eq!(q.messages[1].seq_no, 11);
+        assert_eq!(q.messages[1].data, vec![4, 5]);
 
         assert_eq!(q.last_written_index, Some(1));
         assert_eq!(q.last_written_seq_no, 11);
         assert_eq!(q.last_sent_index, None);
     }
 
-    #[test]
-    fn add_message_rejects_duplicate_seq_no() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn add_message_rejects_duplicate_seq_no() {
+        let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(4, vec![])).unwrap();
 
         let err = q.add_message(create_message(4, vec![])).unwrap_err();
@@ -404,9 +406,9 @@ mod tests {
         assert!(err.to_string().contains("not newer than the last written"));
     }
 
-    #[test]
-    fn add_message_rejects_out_of_order_seq_no() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn add_message_rejects_out_of_order_seq_no() {
+        let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(10, vec![])).unwrap();
 
         let err = q.add_message(create_message(7, vec![])).unwrap_err();
@@ -415,9 +417,9 @@ mod tests {
         assert!(err.to_string().contains("not newer than the last written"));
     }
 
-    #[test]
-    fn add_message_rejects_when_queue_closed_for_new_messages() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn add_message_rejects_when_queue_closed_for_new_messages() {
+        let (mut q, _reader) = create_queue().await;
         q.close_for_new_messages();
 
         let err = q.add_message(create_message(1, vec![])).unwrap_err();
@@ -425,9 +427,9 @@ mod tests {
         assert!(err.to_string().contains("closed for new messages"));
     }
 
-    #[test]
-    fn get_messages_to_send_returns_all_and_advances_last_sent_index() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn get_messages_to_send_returns_all_and_advances_last_sent_index() {
+        let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(3, vec![10])).unwrap();
         q.add_message(create_message(4, vec![20])).unwrap();
 
@@ -443,16 +445,16 @@ mod tests {
         assert_eq!(q.last_written_seq_no, 4);
     }
 
-    #[test]
-    fn get_messages_to_send_empty_queue_returns_empty() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn get_messages_to_send_empty_queue_returns_empty() {
+        let (mut q, _reader) = create_queue().await;
         let msgs = q.get_messages_to_send_without_threshold().unwrap();
         assert!(msgs.is_empty());
     }
 
-    #[test]
-    fn get_messages_to_send_with_length_threshold_not_enough_messages() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn get_messages_to_send_with_length_threshold_not_enough_messages() {
+        let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(1, vec![])).unwrap();
 
         let result = q.get_messages_to_send_with_length_threshold(2);
@@ -463,9 +465,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn get_messages_to_send_with_length_threshold_ok_when_at_threshold() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn get_messages_to_send_with_length_threshold_ok_when_at_threshold() {
+        let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(11, vec![])).unwrap();
         q.add_message(create_message(12, vec![])).unwrap();
 
@@ -481,9 +483,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn get_messages_to_send_with_length_threshold_ok_when_above_threshold() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn get_messages_to_send_with_length_threshold_ok_when_above_threshold() {
+        let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(1, vec![])).unwrap();
         q.add_message(create_message(2, vec![])).unwrap();
         q.add_message(create_message(3, vec![])).unwrap();
@@ -496,9 +498,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn acknowledge_message_removes_front_when_seq_no_matches() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn acknowledge_message_removes_front_when_seq_no_matches() {
+        let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(5, vec![])).unwrap();
         q.add_message(create_message(6, vec![])).unwrap();
         q.add_message(create_message(7, vec![])).unwrap();
@@ -513,9 +515,9 @@ mod tests {
         assert_eq!(q.last_written_seq_no, 7);
     }
 
-    #[test]
-    fn acknowledge_message_returns_error_when_empty() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn acknowledge_message_returns_error_when_empty() {
+        let (mut q, _reader) = create_queue().await;
 
         let err = q.acknowledge_message(8).unwrap_err();
 
@@ -523,9 +525,9 @@ mod tests {
         assert!(err.to_string().contains("seq_no=8"));
     }
 
-    #[test]
-    fn acknowledge_message_errors_when_seq_no_mismatch() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn acknowledge_message_errors_when_seq_no_mismatch() {
+        let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(1, vec![])).unwrap();
         let _ = q.get_messages_to_send_without_threshold().unwrap();
 
@@ -535,9 +537,9 @@ mod tests {
         assert!(err.to_string().contains("seq_no=99"));
     }
 
-    #[test]
-    fn reset_progress_clears_last_sent_so_messages_can_be_resent() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn reset_progress_clears_last_sent_so_messages_can_be_resent() {
+        let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(8, vec![])).unwrap();
         q.add_message(create_message(9, vec![])).unwrap();
 
@@ -559,9 +561,9 @@ mod tests {
         assert_eq!(q.last_sent_index, Some(1));
     }
 
-    #[test]
-    fn close_for_new_messages_prevents_further_adds() {
-        let mut q = create_queue();
+    #[tokio::test]
+    async fn close_for_new_messages_prevents_further_adds() {
+        let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(1, vec![])).unwrap();
 
         q.close_for_new_messages();
