@@ -1,6 +1,11 @@
-use crate::{errors, YdbResult};
-use derive_builder::Builder;
 use std::time;
+
+use derive_builder::Builder;
+use tokio::sync::oneshot;
+
+use crate::{
+    client_topic::topicwriter::message_write_status::MessageWriteStatus, errors, YdbResult,
+};
 
 #[derive(Builder)]
 #[builder(build_fn(error = "errors::YdbError", validate = "Self::validate"))]
@@ -18,4 +23,9 @@ impl TopicWriterMessageBuilder {
     fn validate(&self) -> YdbResult<()> {
         Ok(())
     }
+}
+
+pub(crate) struct TopicWriterMessageWithAck {
+    pub(crate) message: TopicWriterMessage,
+    pub(crate) ack: Option<oneshot::Sender<MessageWriteStatus>>,
 }
