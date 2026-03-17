@@ -1,27 +1,21 @@
 use std::borrow::{Borrow, BorrowMut};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::Duration;
 
-use tokio::sync::mpsc::Receiver;
 use tokio::sync::Mutex as TokioMutex;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::log::{trace, warn};
 
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
-use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::{message_data, MessageData};
 use ydb_grpc::ydb_proto::topic::stream_write_message::{InitRequest, WriteRequest};
 
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
-use crate::client_topic::topicwriter::message::TopicWriterMessageWithAck;
 use crate::client_topic::topicwriter::message_queue::MessageQueue;
 use crate::client_topic::topicwriter::message_write_status::WriteAck;
-use crate::client_topic::topicwriter::writer_reception_queue::{
-    TopicWriterReceptionQueue, TopicWriterReceptionTicket, TopicWriterReceptionType,
-};
+use crate::client_topic::topicwriter::writer_reception_queue::TopicWriterReceptionQueue;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
@@ -34,7 +28,6 @@ use crate::{TopicWriterOptions, YdbError, YdbResult};
 pub(crate) struct StreamWriter {
     writer_loop: JoinHandle<()>,
     receive_messages_loop: JoinHandle<()>,
-    process_new_messages_loop: JoinHandle<()>,
     cancellation_token: CancellationToken,
 }
 
@@ -56,7 +49,6 @@ impl StreamWriter {
         connection_manager: GrpcConnectionManager,
         connection_info: Arc<TokioMutex<ConnectionInfo>>,
         confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
-        messages_receiver: mpsc::Receiver<TopicWriterMessageWithAck>,
         error_tx: oneshot::Sender<YdbError>,
     ) -> YdbResult<Self> {
         let init_request_body = InitRequest {
@@ -114,11 +106,6 @@ impl StreamWriter {
         let message_receive_loop_error_tx = shared_error_tx.clone();
         let message_receive_loop_message_queue = params.message_queue.clone();
         let message_receive_loop_reception_queue = confirmation_reception_queue.clone();
-
-        let process_new_messages_loop_cancellation_token = cancellation_token.clone();
-        let process_new_messages_loop_error_tx = shared_error_tx.clone();
-        let process_new_messages_loop_message_queue = params.message_queue.clone();
-        let process_new_messages_loop_reception_queue = confirmation_reception_queue.clone();
 
         let writer_loop = tokio::spawn(async move {
             let task_params = writer_loop_task_params; // force move inside
@@ -187,54 +174,10 @@ impl StreamWriter {
             }
         });
 
-        let process_new_messages_loop = tokio::spawn(async move {
-            let message_queue = process_new_messages_loop_message_queue;
-            let mut messages_receiver = messages_receiver;
-            let reception_queue = process_new_messages_loop_reception_queue;
-            let producer_id = params.producer_id.clone();
-
-            loop {
-                tokio::select! {
-                    _ = process_new_messages_loop_cancellation_token.cancelled() => {
-                        return;
-                    }
-                    result = StreamWriter::process_new_messages_loop_iteration(
-                        &message_queue,
-                        &mut messages_receiver,
-                        &reception_queue,
-                        producer_id.clone(),
-                        params.writer_options.write_request_send_messages_period,
-                    ) => {
-                        let Err(incoming_messages_it_error) = result else {
-                            continue;
-                        };
-
-                        process_new_messages_loop_cancellation_token.cancel();
-                        warn!(
-                            "error processing a new message to be writte in topic writer stream loop: {}",
-                            &incoming_messages_it_error
-                        );
-
-                        let Some(tx) = process_new_messages_loop_error_tx.lock().await.take() else {
-                            break;
-                        };
-
-                        let Err(send_err) = tx.send(incoming_messages_it_error.clone()) else {
-                            break;
-                        };
-
-                        warn!("can't send error from stream writer process_new_messages_loop: {send_err} (original error: {incoming_messages_it_error})");
-                        break;
-                    }
-                }
-            }
-        });
-
         Ok(Self {
             writer_loop,
             receive_messages_loop,
             cancellation_token,
-            process_new_messages_loop,
         })
     }
 
@@ -324,57 +267,6 @@ impl StreamWriter {
         Ok(())
     }
 
-    async fn process_new_messages_loop_iteration(
-        message_queue: &MessageQueue,
-        messages_receiver: &mut Receiver<TopicWriterMessageWithAck>,
-        confirmation_reception_queue: &Arc<Mutex<TopicWriterReceptionQueue>>,
-        producer_id: String,
-        duration: Duration,
-    ) -> YdbResult<()> {
-        match timeout(duration, messages_receiver.recv()).await {
-            Ok(Some(message_with_ack)) => {
-                let message = message_with_ack.message;
-                let data_size = message.data.len() as i64;
-
-                let seq_no = message
-                    .seq_no
-                    .ok_or_else(|| YdbError::custom("empty message seq_no is provided"))?;
-
-                let ack = message_with_ack.ack;
-                let reception_type = ack.map_or(
-                    TopicWriterReceptionType::NoConfirmationExpected,
-                    TopicWriterReceptionType::AwaitingConfirmation,
-                );
-
-                {
-                    let mut reception_queue = confirmation_reception_queue.lock().unwrap();
-                    reception_queue
-                        .add_ticket(TopicWriterReceptionTicket::new(seq_no, reception_type));
-                }
-
-                message_queue.add_message(MessageData {
-                    seq_no,
-                    created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
-                        seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs() as i64,
-                        nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
-                    }),
-                    metadata_items: vec![],
-                    data: message.data,
-                    uncompressed_size: data_size,
-                    partitioning: Some(message_data::Partitioning::MessageGroupId(
-                        producer_id.clone(),
-                    )),
-                })?;
-            }
-            Ok(None) => {
-                trace!("Channel has been closed. Stop topic send messages loop.");
-            }
-            Err(_elapsed) => {}
-        };
-
-        Ok(())
-    }
-
     pub async fn stop(self) -> YdbResult<()> {
         trace!("Stopping...");
 
@@ -398,19 +290,8 @@ impl StreamWriter {
         });
         trace!("Message receive loop stopped");
 
-        let process_new_messages_loop_result =
-            self.process_new_messages_loop.await.map_err(|err| {
-                let err = YdbError::custom(format!(
-                    "stop: error while waiting for process_new_messages_loop to finish: {err}"
-                ));
-                trace!("{err}");
-                err
-            });
-        trace!("Process new messages loop stopped");
-
         writer_loop_result?;
         receive_messages_loop_result?;
-        process_new_messages_loop_result?;
 
         Ok(())
     }

@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use tokio::sync::oneshot;
 use tokio::sync::Mutex as TokioMutex;
-use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::log::trace;
@@ -42,8 +42,6 @@ pub struct TopicWriter {
     pub(crate) connection_info: Arc<TokioMutex<ConnectionInfo>>,
 
     flush_timeout: Duration,
-
-    writer_message_sender: Arc<TokioMutex<mpsc::Sender<TopicWriterMessageWithAck>>>,
 
     cancellation_token: CancellationToken,
     writer_state: Arc<Mutex<TopicWriterState>>,
@@ -112,8 +110,6 @@ impl TopicWriter {
         })
         .await?;
 
-        let writer_message_sender = reconnector.get_writer_message_sender();
-
         Ok(Self {
             path: writer_options.topic_path.clone(),
             producer_id: Some(producer_id),
@@ -122,7 +118,6 @@ impl TopicWriter {
             auto_set_seq_no: writer_options.auto_seq_no,
             connection_info,
             flush_timeout: writer_options.flush_timeout,
-            writer_message_sender,
             cancellation_token,
             writer_state,
             confirmation_reception_queue,
@@ -179,14 +174,11 @@ impl TopicWriter {
             return Err(YdbError::custom("empty message seq_no is provided"));
         }
 
-        let sender = { self.writer_message_sender.lock().await.clone() };
-        sender
-            .send(TopicWriterMessageWithAck {
+        self.reconnector
+            .add_message_for_processing(TopicWriterMessageWithAck {
                 message,
                 ack: wait_ack,
-            })
-            .await
-            .map_err(|err| YdbError::custom(format!("can't send the message to channel: {err}")))?;
+            })?;
 
         Ok(())
     }
