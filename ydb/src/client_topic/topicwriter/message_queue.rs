@@ -499,6 +499,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_messages_to_send_returns_batch_when_threshold_met() {
+        let q = MessageQueue::new();
+        q.add_message(create_message(1, vec![1])).unwrap();
+        q.add_message(create_message(2, vec![2])).unwrap();
+        q.add_message(create_message(3, vec![3])).unwrap();
+        let msgs = q
+            .get_messages_to_send(2, std::time::Duration::from_millis(10))
+            .await
+            .unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].seq_no, 1);
+        assert_eq!(msgs[1].seq_no, 2);
+        assert_eq!(msgs[2].seq_no, 3);
+    }
+
+    #[tokio::test]
     async fn acknowledge_message_removes_front_when_seq_no_matches() {
         let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(5, vec![])).unwrap();
@@ -571,5 +587,17 @@ mod tests {
         assert!(!q.is_open_for_new_messages);
         let err = q.add_message(create_message(2, vec![])).unwrap_err();
         assert!(err.to_string().contains("closed for new messages"));
+    }
+
+    #[tokio::test]
+    async fn wait_completes_when_empty_after_ack() {
+        let q = MessageQueue::new();
+        q.add_message(create_message(1, vec![])).unwrap();
+        let _ = q
+            .get_messages_to_send(1, std::time::Duration::from_millis(10))
+            .await
+            .unwrap();
+        q.acknowledge_message(1).unwrap();
+        q.wait().await;
     }
 }
