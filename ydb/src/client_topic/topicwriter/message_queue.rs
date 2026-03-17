@@ -151,7 +151,6 @@ enum GetMessagesToSendResult {
     Err(YdbError),
 }
 
-// TODO: add a method to wait for all messages to be sent and use this method in stop() / flush()
 impl MessageQueueInner {
     pub(crate) fn new(
         new_message_added: Arc<Notify>,
