@@ -9,7 +9,7 @@ use crate::types::Value;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
-use crate::table_service_types::CopyTableItem;
+use crate::table_service_types::{CopyTableItem, TableDescription};
 use crate::{Query, StreamResult};
 use num::pow;
 use std::future::Future;
@@ -514,6 +514,16 @@ impl TableClient {
             session.copy_tables(tables.to_vec()).await?;
 
             Ok(())
+        })
+        .await
+        .map_err(YdbOrCustomerError::to_ydb_error)
+    }
+
+    pub async fn describe_table(&self, path: String) -> YdbResult<TableDescription> {
+        self.retry_with_session(RetryOptions::new(), |session| async {
+            let mut session = session;
+            let result = session.describe_table(path.clone()).await?;
+            Ok(result)
         })
         .await
         .map_err(YdbOrCustomerError::to_ydb_error)

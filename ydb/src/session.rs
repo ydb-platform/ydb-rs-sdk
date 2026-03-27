@@ -20,12 +20,13 @@ use crate::grpc_wrapper::raw_table_service::commit_transaction::RawCommitTransac
 use crate::grpc_wrapper::raw_table_service::copy_table::{
     RawCopyTableRequest, RawCopyTablesRequest,
 };
+use crate::grpc_wrapper::raw_table_service::describe_table::RawDescribeTableRequest;
 use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryRequest;
 use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
 use crate::grpc_wrapper::raw_table_service::explain_data_query::RawExplainDataQueryRequest;
 use crate::grpc_wrapper::raw_table_service::keepalive::RawKeepAliveRequest;
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
-use crate::table_service_types::CopyTableItem;
+use crate::table_service_types::{ColumnDescription, CopyTableItem, TableDescription};
 use crate::trace_helpers::ensure_len_string;
 use tracing::{debug, trace};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
@@ -246,6 +247,46 @@ impl Session {
             .await;
 
         self.handle_raw_result(res)
+    }
+
+    pub async fn describe_table(&mut self, path: String) -> YdbResult<TableDescription> {
+        let mut table = self.get_table_client().await?;
+        let res = table
+            .describe_table(RawDescribeTableRequest {
+                session_id: self.id.clone(),
+                path: path.clone(),
+                operation_params: self.timeouts.operation_params(),
+            })
+            .await;
+
+        let raw_result = self.handle_raw_result(res)?;
+
+        let columns = raw_result
+            .columns
+            .into_iter()
+            .map(|raw_col| ColumnDescription {
+                name: raw_col.name,
+                type_value: raw_col.column_type.into_value_example().map_err(|e| {
+                    crate::table_service_types::UnknownTypeDescription {
+                        error: e.to_string(),
+                    }
+                }),
+                family: raw_col.family,
+            })
+            .collect();
+
+        let indexes = raw_result
+            .indexes
+            .into_iter()
+            .map(|idx| idx.into())
+            .collect();
+
+        Ok(TableDescription {
+            columns,
+            primary_key: raw_result.primary_key,
+            indexes,
+            store_type: raw_result.store_type.into(),
+        })
     }
 
     pub(crate) async fn keepalive(&mut self) -> YdbResult<()> {

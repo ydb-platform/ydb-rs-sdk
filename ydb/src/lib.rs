@@ -150,6 +150,12 @@ pub use client_builder::ClientBuilder;
 pub use client_table::{RetryOptions, TableClient, TransactionOptions};
 
 // full enum pub types
+pub use table_service_types::{
+    ColumnDescription, IndexDescription, IndexStatus, IndexType, StoreType, TableDescription,
+    UnknownTypeDescription,
+};
+
+// full enum pub types
 pub use client_scheme::client::SchemeClient;
 pub use client_scheme::list_types::{SchemeEntry, SchemeEntryType, SchemePermissions};
 

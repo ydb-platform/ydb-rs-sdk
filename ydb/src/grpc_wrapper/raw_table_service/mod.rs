@@ -3,6 +3,7 @@ pub(crate) mod client;
 pub(crate) mod commit_transaction;
 pub(crate) mod copy_table;
 pub(crate) mod create_session;
+pub(crate) mod describe_table;
 pub(crate) mod execute_data_query;
 pub(crate) mod execute_scheme_query;
 pub(crate) mod explain_data_query;
