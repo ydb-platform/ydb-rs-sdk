@@ -215,3 +215,24 @@ impl StreamResult {
         Ok(Some(result_set))
     }
 }
+
+#[derive(Debug)]
+pub struct ExplainResult {
+    pub query_ast: String,
+    pub query_plan: String,
+    pub query_full_diagnostics: String,
+}
+
+impl From<crate::grpc_wrapper::raw_table_service::explain_data_query::RawExplainDataQueryResult>
+    for ExplainResult
+{
+    fn from(
+        value: crate::grpc_wrapper::raw_table_service::explain_data_query::RawExplainDataQueryResult,
+    ) -> Self {
+        Self {
+            query_ast: value.query_ast,
+            query_plan: value.query_plan,
+            query_full_diagnostics: value.query_full_diagnostics,
+        }
+    }
+}

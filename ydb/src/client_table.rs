@@ -245,10 +245,51 @@ impl TableClient {
 
     /// Execute scheme query with retry policy
     pub async fn retry_execute_scheme_query<T: Into<String>>(&self, query: T) -> YdbResult<()> {
-        let query = Arc::new(query.into());
+        let query = query.into();
         self.retry(|| async {
             let mut session = self.create_session().await?;
-            session.execute_schema_query(query.to_string()).await
+            session.execute_schema_query(query.clone()).await
+        })
+        .await
+    }
+
+    /// Execute explain data query with retry policy
+    ///
+    /// # Type Parameters
+    /// - `T`: Any type that can be converted to String (e.g., &str, String)
+    ///
+    /// # Arguments
+    /// - `query`: The YQL query to explain
+    /// - `collect_full_diagnostics`: Boolean flag to enable full diagnostics collection
+    ///
+    /// # Returns
+    /// - `YdbResult<ExplainResult>`: The explain result containing query AST, plan, and diagnostics
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use ydb::YdbResult;
+    /// # #[tokio::main]
+    /// # async fn main() -> YdbResult<()> {
+    /// #   let client = ydb::ClientBuilder::new_from_connection_string("")?.client()?;
+    /// #   client.wait().await?;
+    /// #   let table_client = client.table_client();
+    ///     let result = table_client.retry_explain_data_query("SELECT * FROM my_table", false).await?;
+    ///     println!("Query AST: {}", result.query_ast);
+    ///     println!("Query Plan: {}", result.query_plan);
+    /// #   Ok(())
+    /// # }
+    /// ```
+    pub async fn retry_explain_data_query<T: Into<String>>(
+        &self,
+        query: T,
+        collect_full_diagnostics: bool,
+    ) -> YdbResult<crate::result::ExplainResult> {
+        let query = query.into();
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            session
+                .explain_data_query(query.clone(), collect_full_diagnostics)
+                .await
         })
         .await
     }

@@ -36,6 +36,58 @@ async fn create_session() -> YdbResult<()> {
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
+async fn explain_data_query() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+
+    // Execute explain data query with retry policy using a system query
+    let result = table_client
+        .retry_explain_data_query("SELECT MIN(NodeId) FROM `.sys/nodes`", false)
+        .await?;
+
+    // Verify that we got valid explain results
+    assert!(
+        !result.query_ast.is_empty(),
+        "Query AST should not be empty"
+    );
+    assert!(
+        !result.query_plan.is_empty(),
+        "Query Plan should not be empty"
+    );
+
+    // Query full diagnostics should be empty when not enabled
+    assert!(
+        result.query_full_diagnostics.is_empty(),
+        "Full diagnostics should be empty when not enabled"
+    );
+
+    // Test with full diagnostics enabled
+    let result_with_diagnostics = table_client
+        .retry_explain_data_query("SELECT MIN(NodeId) FROM `.sys/nodes`", true)
+        .await?;
+
+    // Verify that we got valid explain results with diagnostics
+    assert!(
+        !result_with_diagnostics.query_ast.is_empty(),
+        "Query AST should not be empty"
+    );
+    assert!(
+        !result_with_diagnostics.query_plan.is_empty(),
+        "Query Plan should not be empty"
+    );
+
+    // Query full diagnostics should not be empty when enabled
+    assert!(
+        !result_with_diagnostics.query_full_diagnostics.is_empty(),
+        "Full diagnostics should not be empty when enabled"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
 async fn execute_data_query() -> YdbResult<()> {
     let client = create_client().await?;
     let mut transaction = client
