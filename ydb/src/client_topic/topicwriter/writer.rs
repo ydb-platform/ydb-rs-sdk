@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::log::trace;
 
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
-use crate::client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMessageWithAck};
+use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_queue::MessageQueue;
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
 use crate::client_topic::topicwriter::reconnector::{Reconnector, ReconnectorParams};
@@ -175,10 +175,7 @@ impl TopicWriter {
         }
 
         self.reconnector
-            .add_message_for_processing(TopicWriterMessageWithAck {
-                message,
-                ack: wait_ack,
-            })
+            .add_message_for_processing(message, wait_ack)
             .await?;
 
         Ok(())
