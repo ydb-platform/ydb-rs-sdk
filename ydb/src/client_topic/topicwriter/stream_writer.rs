@@ -32,12 +32,6 @@ pub(crate) struct StreamWriter {
     cancellation_token: CancellationToken,
 }
 
-pub(crate) struct StreamWriterParams {
-    pub(crate) writer_options: TopicWriterOptions,
-    pub(crate) producer_id: String,
-    pub(crate) message_queue: MessageQueue,
-}
-
 struct WriterLoopParams {
     write_request_messages_chunk_size: usize,
     write_request_send_messages_period: Duration,
@@ -46,22 +40,20 @@ struct WriterLoopParams {
 
 impl StreamWriter {
     pub async fn new(
-        params: StreamWriterParams,
+        writer_options: TopicWriterOptions,
+        producer_id: String,
+        message_queue: MessageQueue,
         connection_manager: GrpcConnectionManager,
         connection_info: Arc<TokioMutex<ConnectionInfo>>,
         confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
         error_tx: oneshot::Sender<YdbError>,
     ) -> YdbResult<Self> {
         let init_request_body = InitRequest {
-            path: params.writer_options.topic_path.clone(),
-            producer_id: params.producer_id.clone(),
-            write_session_meta: params
-                .writer_options
-                .session_metadata
-                .clone()
-                .unwrap_or_default(),
-            get_last_seq_no: params.writer_options.auto_seq_no,
-            partitioning: Some(Partitioning::MessageGroupId(params.producer_id.clone())),
+            path: writer_options.topic_path.clone(),
+            producer_id: producer_id.clone(),
+            write_session_meta: writer_options.session_metadata.clone().unwrap_or_default(),
+            get_last_seq_no: writer_options.auto_seq_no,
+            partitioning: Some(Partitioning::MessageGroupId(producer_id.clone())),
         };
 
         let mut topic_service = connection_manager
@@ -87,20 +79,16 @@ impl StreamWriter {
 
         let writer_loop_cancellation_token = cancellation_token.clone();
         let writer_loop_error_tx = shared_error_tx.clone();
-        let writer_loop_message_queue = params.message_queue.clone();
+        let writer_loop_message_queue = message_queue.clone();
         let writer_loop_task_params = WriterLoopParams {
-            write_request_messages_chunk_size: params
-                .writer_options
-                .write_request_messages_chunk_size,
-            write_request_send_messages_period: params
-                .writer_options
-                .write_request_send_messages_period,
+            write_request_messages_chunk_size: writer_options.write_request_messages_chunk_size,
+            write_request_send_messages_period: writer_options.write_request_send_messages_period,
             request_stream: stream.clone_sender(),
         };
 
         let message_receive_loop_cancellation_token = cancellation_token.clone();
         let message_receive_loop_error_tx = shared_error_tx.clone();
-        let message_receive_loop_message_queue = params.message_queue.clone();
+        let message_receive_loop_message_queue = message_queue.clone();
         let message_receive_loop_reception_queue = confirmation_reception_queue.clone();
 
         let writer_loop = tokio::spawn(async move {
