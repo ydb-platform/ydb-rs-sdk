@@ -104,7 +104,7 @@ impl Reconnector {
             loop {
                 let (error_sender, error_receiver) = oneshot::channel();
 
-                message_queue.reset_progress();
+                message_queue.reset_progress().await;
 
                 let stream_writer = match StreamWriter::new(
                     StreamWriterParams {
@@ -212,7 +212,7 @@ impl Reconnector {
         }
     }
 
-    pub(crate) fn add_message_for_processing(
+    pub(crate) async fn add_message_for_processing(
         &self,
         message_with_ack: TopicWriterMessageWithAck,
     ) -> YdbResult<()> {
@@ -229,19 +229,21 @@ impl Reconnector {
             TopicWriterReceptionType::AwaitingConfirmation,
         );
 
-        self.message_queue.add_message(MessageData {
-            seq_no,
-            created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
-                seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs() as i64,
-                nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
-            }),
-            metadata_items: vec![],
-            data: message.data,
-            uncompressed_size: data_size,
-            partitioning: Some(message_data::Partitioning::MessageGroupId(
-                self.producer_id.clone(),
-            )),
-        })?;
+        self.message_queue
+            .add_message(MessageData {
+                seq_no,
+                created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
+                    seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs() as i64,
+                    nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
+                }),
+                metadata_items: vec![],
+                data: message.data,
+                uncompressed_size: data_size,
+                partitioning: Some(message_data::Partitioning::MessageGroupId(
+                    self.producer_id.clone(),
+                )),
+            })
+            .await?;
 
         {
             let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
