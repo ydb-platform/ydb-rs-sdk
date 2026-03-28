@@ -92,70 +92,24 @@ impl StreamWriter {
         let message_receive_loop_reception_queue = confirmation_reception_queue.clone();
 
         let writer_loop = tokio::spawn(async move {
-            let task_params = writer_loop_task_params; // force move inside
-            let message_queue = writer_loop_message_queue;
-
-            loop {
-                tokio::select! {
-                    _ = writer_loop_cancellation_token.cancelled() => { return; }
-                    result = StreamWriter::write_loop_iteration(&message_queue, task_params.borrow()) => {
-                        let Err(writer_iteration_error) = result else {
-                            continue;
-                        };
-
-                        writer_loop_cancellation_token.cancel();
-
-                        let Some(tx) = writer_loop_error_tx.lock().await.take() else {
-                            break;
-                        };
-
-                        let Err(send_err) = tx.send(writer_iteration_error.clone()) else {
-                            break;
-                        };
-
-                        warn!("can't send error from stream writer writer_loop: {send_err} (original error: {writer_iteration_error})");
-                        break;
-                    }
-                }
-            }
+            StreamWriter::writer_loop(
+                writer_loop_cancellation_token,
+                writer_loop_error_tx,
+                writer_loop_message_queue,
+                writer_loop_task_params,
+            )
+            .await;
         });
 
         let receive_messages_loop = tokio::spawn(async move {
-            let mut stream = stream; // force move inside
-            let reception_queue = message_receive_loop_reception_queue; // force move inside
-            let message_queue = message_receive_loop_message_queue;
-
-            loop {
-                tokio::select! {
-                    _ = message_receive_loop_cancellation_token.cancelled() => { return; }
-                    message_receive_it_res = StreamWriter::receive_messages_loop_iteration(
-                        &message_queue,
-                        stream.borrow_mut(),
-                        &reception_queue,
-                    ) => {
-                        let Err(receive_message_it_error) = message_receive_it_res else {
-                            continue;
-                        };
-
-                        message_receive_loop_cancellation_token.cancel();
-                        warn!(
-                            "error receiving message in topic writer receiver stream loop: {}",
-                            &receive_message_it_error
-                        );
-
-                        let Some(tx) = message_receive_loop_error_tx.lock().await.take() else {
-                            break;
-                        };
-
-                        let Err(send_err) = tx.send(receive_message_it_error.clone()) else {
-                            break;
-                        };
-
-                        warn!("can't send error from stream writer receive_messages_loop: {send_err} (original error: {receive_message_it_error})");
-                        break;
-                    }
-                }
-            }
+            StreamWriter::receive_messages_loop(
+                message_receive_loop_cancellation_token,
+                message_receive_loop_error_tx,
+                message_receive_loop_message_queue,
+                message_receive_loop_reception_queue,
+                stream,
+            )
+            .await;
         });
 
         Ok(Self {
@@ -165,7 +119,38 @@ impl StreamWriter {
         })
     }
 
-    async fn write_loop_iteration(
+    async fn writer_loop(
+        cancellation_token: CancellationToken,
+        error_tx: Arc<TokioMutex<Option<oneshot::Sender<YdbError>>>>,
+        message_queue: MessageQueue,
+        task_params: WriterLoopParams,
+    ) {
+        loop {
+            tokio::select! {
+                _ = cancellation_token.cancelled() => { return; }
+                result = StreamWriter::writer_loop_iteration(&message_queue, task_params.borrow()) => {
+                    let Err(writer_iteration_error) = result else {
+                        continue;
+                    };
+
+                    cancellation_token.cancel();
+
+                    let Some(tx) = error_tx.lock().await.take() else {
+                        break;
+                    };
+
+                    let Err(send_err) = tx.send(writer_iteration_error.clone()) else {
+                        break;
+                    };
+
+                    warn!("can't send error from stream writer writer_loop: {send_err} (original error: {writer_iteration_error})");
+                    break;
+                }
+            }
+        }
+    }
+
+    async fn writer_loop_iteration(
         message_queue: &MessageQueue,
         task_params: &WriterLoopParams,
     ) -> YdbResult<()> {
@@ -195,6 +180,49 @@ impl StreamWriter {
             }) {
             Ok(_) => Ok(()),
             Err(err) => Err(YdbError::Transport(err.to_string())),
+        }
+    }
+
+    async fn receive_messages_loop(
+        cancellation_token: CancellationToken,
+        error_tx: Arc<TokioMutex<Option<oneshot::Sender<YdbError>>>>,
+        message_queue: MessageQueue,
+        reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
+        mut stream: AsyncGrpcStreamWrapper<
+            stream_write_message::FromClient,
+            stream_write_message::FromServer,
+        >,
+    ) {
+        loop {
+            tokio::select! {
+                _ = cancellation_token.cancelled() => { return; }
+                message_receive_it_res = StreamWriter::receive_messages_loop_iteration(
+                    &message_queue,
+                    stream.borrow_mut(),
+                    &reception_queue,
+                ) => {
+                    let Err(receive_message_it_error) = message_receive_it_res else {
+                        continue;
+                    };
+
+                    cancellation_token.cancel();
+                    warn!(
+                        "error receiving message in topic writer receiver stream loop: {}",
+                        &receive_message_it_error
+                    );
+
+                    let Some(tx) = error_tx.lock().await.take() else {
+                        break;
+                    };
+
+                    let Err(send_err) = tx.send(receive_message_it_error.clone()) else {
+                        break;
+                    };
+
+                    warn!("can't send error from stream writer receive_messages_loop: {send_err} (original error: {receive_message_it_error})");
+                    break;
+                }
+            }
         }
     }
 
