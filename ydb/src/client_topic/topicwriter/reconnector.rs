@@ -10,8 +10,8 @@ use tracing::log::trace;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::{message_data, MessageData};
 
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
-use crate::client_topic::topicwriter::message::TopicWriterMessageWithAck;
 use crate::client_topic::topicwriter::message_queue::MessageQueue;
+use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
 use crate::client_topic::topicwriter::stream_writer::{StreamWriter, StreamWriterParams};
 use crate::client_topic::topicwriter::writer::TopicWriterState;
 use crate::client_topic::topicwriter::writer_reception_queue::{
@@ -20,7 +20,7 @@ use crate::client_topic::topicwriter::writer_reception_queue::{
 use crate::errors::NeedRetry;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::retry::{Retry, RetryParams};
-use crate::{TopicWriterOptions, YdbError, YdbResult};
+use crate::{TopicWriterMessage, TopicWriterOptions, YdbError, YdbResult};
 
 pub(crate) struct ReconnectorParams {
     pub(crate) writer_options: TopicWriterOptions,
@@ -214,16 +214,15 @@ impl Reconnector {
 
     pub(crate) async fn add_message_for_processing(
         &self,
-        message_with_ack: TopicWriterMessageWithAck,
+        message: TopicWriterMessage,
+        ack: Option<oneshot::Sender<MessageWriteStatus>>,
     ) -> YdbResult<()> {
-        let message = message_with_ack.message;
         let data_size = message.data.len() as i64;
 
         let seq_no = message
             .seq_no
             .ok_or_else(|| YdbError::custom("empty message seq_no is provided"))?;
 
-        let ack = message_with_ack.ack;
         let reception_type = ack.map_or(
             TopicWriterReceptionType::NoConfirmationExpected,
             TopicWriterReceptionType::AwaitingConfirmation,
