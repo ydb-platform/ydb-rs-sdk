@@ -94,26 +94,20 @@ impl StreamWriter {
         let message_receive_loop_message_queue = message_queue.clone();
         let message_receive_loop_reception_queue = confirmation_reception_queue.clone();
 
-        let writer_loop = tokio::spawn(async move {
-            StreamWriter::writer_loop(
-                writer_loop_cancellation_token,
-                writer_loop_error_tx,
-                writer_loop_message_queue,
-                writer_loop_task_params,
-            )
-            .await;
-        });
+        let writer_loop = tokio::spawn(StreamWriter::writer_loop(
+            writer_loop_cancellation_token,
+            writer_loop_error_tx,
+            writer_loop_message_queue,
+            writer_loop_task_params,
+        ));
 
-        let receive_messages_loop = tokio::spawn(async move {
-            StreamWriter::receive_messages_loop(
-                message_receive_loop_cancellation_token,
-                message_receive_loop_error_tx,
-                message_receive_loop_message_queue,
-                message_receive_loop_reception_queue,
-                stream,
-            )
-            .await;
-        });
+        let receive_messages_loop = tokio::spawn(StreamWriter::receive_messages_loop(
+            message_receive_loop_cancellation_token,
+            message_receive_loop_error_tx,
+            message_receive_loop_message_queue,
+            message_receive_loop_reception_queue,
+            stream,
+        ));
 
         Ok(Self {
             writer_loop,
