@@ -250,7 +250,7 @@ impl StreamWriter {
                                 }
                             }
                         };
-                        message_queue.acknowledge_message(write_ack.seq_no)?;
+                        message_queue.acknowledge_message(write_ack.seq_no).await?;
                         ticket.send_confirmation_if_needed(write_ack.status);
                     }
                 }
