@@ -7,7 +7,7 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::log::trace;
-use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::{message_data, MessageData};
+use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message_queue::MessageQueue;
@@ -45,7 +45,6 @@ pub(crate) struct Reconnector {
     loop_handle: Arc<TokioMutex<Option<JoinHandle<()>>>>,
     confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
     pub(crate) message_queue: MessageQueue,
-    pub(crate) producer_id: String,
 }
 
 impl Reconnector {
@@ -55,7 +54,6 @@ impl Reconnector {
             loop_handle: Arc::new(TokioMutex::new(None)),
             message_queue: params.message_queue.clone(),
             confirmation_reception_queue: params.confirmation_reception_queue.clone(),
-            producer_id: params.producer_id.clone(),
         };
 
         let loop_join_handle = match Reconnector::start_loop(
@@ -238,9 +236,7 @@ impl Reconnector {
                 metadata_items: vec![],
                 data: message.data,
                 uncompressed_size: data_size,
-                partitioning: Some(message_data::Partitioning::MessageGroupId(
-                    self.producer_id.clone(),
-                )),
+                partitioning: None,
             })
             .await?;
 
