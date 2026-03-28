@@ -1,8 +1,4 @@
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use tokio::{
     sync::{mpsc, Mutex as TokioMutex, Notify},
@@ -16,7 +12,7 @@ use crate::{YdbError, YdbResult};
 
 #[derive(Clone)]
 pub(crate) struct MessageQueue {
-    inner: Arc<Mutex<MessageQueueInner>>,
+    inner: Arc<TokioMutex<MessageQueueInner>>,
 
     new_message_added: Arc<Notify>,
     message_acknowledged_rx: Arc<TokioMutex<mpsc::UnboundedReceiver<()>>>,
@@ -28,7 +24,7 @@ impl MessageQueue {
         let (message_acknowledged_tx, message_acknowledged_rx) = mpsc::unbounded_channel();
 
         Self {
-            inner: Arc::new(Mutex::new(MessageQueueInner::new(
+            inner: Arc::new(TokioMutex::new(MessageQueueInner::new(
                 new_message_added.clone(),
                 message_acknowledged_tx,
             ))),
@@ -37,21 +33,21 @@ impl MessageQueue {
         }
     }
 
-    pub(crate) fn add_message(&self, message: MessageData) -> YdbResult<()> {
-        let mut inner = self.inner.lock().unwrap();
+    pub(crate) async fn add_message(&self, message: MessageData) -> YdbResult<()> {
+        let mut inner = self.inner.lock().await;
         inner.add_message(message)
     }
 
-    fn get_messages_to_send_without_threshold(&self) -> YdbResult<Vec<MessageData>> {
-        let mut inner = self.inner.lock().unwrap();
+    async fn get_messages_to_send_without_threshold(&self) -> YdbResult<Vec<MessageData>> {
+        let mut inner = self.inner.lock().await;
         inner.get_messages_to_send_without_threshold()
     }
 
-    fn get_messages_to_send_with_length_threshold(
+    async fn get_messages_to_send_with_length_threshold(
         &self,
         length_threshold: usize,
     ) -> GetMessagesToSendResult {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock().await;
         inner.get_messages_to_send_with_length_threshold(length_threshold)
     }
 
@@ -62,7 +58,7 @@ impl MessageQueue {
         loop {
             tokio::select! {
                 _ = self.new_message_added.notified() => {
-                    match self.get_messages_to_send_with_length_threshold(length_threshold) {
+                    match self.get_messages_to_send_with_length_threshold(length_threshold).await {
                         GetMessagesToSendResult::Ok(messages) => return Ok(messages),
                         GetMessagesToSendResult::NotEnoughMessages => continue,
                         GetMessagesToSendResult::Err(error) => return Err(error),
@@ -79,32 +75,32 @@ impl MessageQueue {
     ) -> YdbResult<Vec<MessageData>> {
         match timeout(duration, self.get_messages_to_send_loop(length_threshold)).await {
             Ok(result) => result,
-            Err(_) => self.get_messages_to_send_without_threshold(),
+            Err(_) => self.get_messages_to_send_without_threshold().await,
         }
     }
 
-    pub(crate) fn acknowledge_message(&self, seq_no: i64) -> YdbResult<()> {
-        let mut inner = self.inner.lock().unwrap();
+    pub(crate) async fn acknowledge_message(&self, seq_no: i64) -> YdbResult<()> {
+        let mut inner = self.inner.lock().await;
         inner.acknowledge_message(seq_no)
     }
 
-    pub(crate) fn reset_progress(&self) {
-        let mut inner = self.inner.lock().unwrap();
+    pub(crate) async fn reset_progress(&self) {
+        let mut inner = self.inner.lock().await;
         inner.reset_progress()
     }
 
-    pub(crate) fn close_for_new_messages(&self) {
-        let mut inner = self.inner.lock().unwrap();
+    pub(crate) async fn close_for_new_messages(&self) {
+        let mut inner = self.inner.lock().await;
         inner.close_for_new_messages()
     }
 
-    fn is_empty(&self) -> bool {
-        let inner = self.inner.lock().unwrap();
+    async fn is_empty(&self) -> bool {
+        let inner = self.inner.lock().await;
         inner.is_empty()
     }
 
     pub(crate) async fn wait_for_all_messages_to_be_acknowledged(&self) {
-        if self.is_empty() {
+        if self.is_empty().await {
             return;
         }
 
@@ -113,7 +109,7 @@ impl MessageQueue {
         loop {
             tokio::select! {
                 Some(_) = message_acknowledged_rx.recv() => {
-                    if self.is_empty() {
+                    if self.is_empty().await {
                         break;
                     }
                 }
@@ -496,9 +492,9 @@ mod tests {
     #[tokio::test]
     async fn get_messages_to_send_returns_batch_when_threshold_met() {
         let q = MessageQueue::new();
-        q.add_message(create_message(1, vec![1])).unwrap();
-        q.add_message(create_message(2, vec![2])).unwrap();
-        q.add_message(create_message(3, vec![3])).unwrap();
+        q.add_message(create_message(1, vec![1])).await.unwrap();
+        q.add_message(create_message(2, vec![2])).await.unwrap();
+        q.add_message(create_message(3, vec![3])).await.unwrap();
         let msgs = q
             .get_messages_to_send(2, std::time::Duration::from_millis(10))
             .await
@@ -586,12 +582,12 @@ mod tests {
     #[tokio::test]
     async fn wait_for_all_messages_to_be_acknowledged_completes_when_empty_after_ack() {
         let q = MessageQueue::new();
-        q.add_message(create_message(1, vec![])).unwrap();
+        q.add_message(create_message(1, vec![])).await.unwrap();
         let _ = q
             .get_messages_to_send(1, std::time::Duration::from_millis(10))
             .await
             .unwrap();
-        q.acknowledge_message(1).unwrap();
+        q.acknowledge_message(1).await.unwrap();
         q.wait_for_all_messages_to_be_acknowledged().await;
     }
 }

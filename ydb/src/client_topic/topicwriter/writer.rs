@@ -178,7 +178,8 @@ impl TopicWriter {
             .add_message_for_processing(TopicWriterMessageWithAck {
                 message,
                 ack: wait_ack,
-            })?;
+            })
+            .await?;
 
         Ok(())
     }
@@ -191,7 +192,7 @@ impl TopicWriter {
             reception_queue.init_flush_op()?
         };
 
-        self.message_queue.close_for_new_messages();
+        self.message_queue.close_for_new_messages().await;
         self.message_queue
             .wait_for_all_messages_to_be_acknowledged()
             .await;
