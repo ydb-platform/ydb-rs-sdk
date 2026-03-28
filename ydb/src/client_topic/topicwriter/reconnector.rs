@@ -12,7 +12,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message_queue::MessageQueue;
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
-use crate::client_topic::topicwriter::stream_writer::{StreamWriter, StreamWriterParams};
+use crate::client_topic::topicwriter::stream_writer::StreamWriter;
 use crate::client_topic::topicwriter::writer::TopicWriterState;
 use crate::client_topic::topicwriter::writer_reception_queue::{
     TopicWriterReceptionQueue, TopicWriterReceptionTicket, TopicWriterReceptionType,
@@ -105,11 +105,9 @@ impl Reconnector {
                 message_queue.reset_progress().await;
 
                 let stream_writer = match StreamWriter::new(
-                    StreamWriterParams {
-                        writer_options: helper.writer_options.clone(),
-                        producer_id: helper.producer_id.clone(),
-                        message_queue: message_queue.clone(),
-                    },
+                    helper.writer_options.clone(),
+                    helper.producer_id.clone(),
+                    message_queue.clone(),
                     helper.connection_manager.clone(),
                     helper.connection_info.clone(),
                     helper.confirmation_reception_queue.clone(),
