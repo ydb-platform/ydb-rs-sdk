@@ -68,11 +68,11 @@ impl StreamWriter {
             .await?;
         let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
         {
-            let mut guard = connection_info.lock().await;
-            guard.partition_id = init_response.partition_id;
-            guard.session_id = init_response.session_id;
-            guard.last_seq_no_assigned = init_response.last_seq_no;
-            guard.codecs_from_server = init_response.supported_codecs;
+            let mut connection_info = connection_info.lock().await;
+            connection_info.partition_id = init_response.partition_id;
+            connection_info.session_id = init_response.session_id;
+            connection_info.last_seq_no_assigned = init_response.last_seq_no;
+            connection_info.codecs_from_server = init_response.supported_codecs;
         }
 
         let cancellation_token = CancellationToken::new();
