@@ -189,7 +189,6 @@ impl TopicWriter {
             reception_queue.init_flush_op()?
         };
 
-        self.message_queue.close_for_new_messages().await;
         self.message_queue
             .wait_for_all_messages_to_be_acknowledged()
             .await;
@@ -209,6 +208,7 @@ impl TopicWriter {
     pub async fn stop(self) -> YdbResult<()> {
         trace!("Stopping...");
 
+        self.message_queue.close_for_new_messages().await;
         let flush_result = match timeout(self.flush_timeout, self.flush()).await {
             Ok(result) => result,
             Err(_) => Err(YdbError::custom(
