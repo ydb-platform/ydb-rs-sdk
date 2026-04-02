@@ -1,4 +1,5 @@
 use crate::client::Client;
+use crate::types::YdbDecimal;
 use crate::{test_helpers::test_client_builder, ydb_params, Query, Value, YdbResult};
 use uuid::Uuid;
 
@@ -8,6 +9,61 @@ fn test_is_optional() -> YdbResult<()> {
     assert!(Value::optional_from(Value::Bool(false), Some(Value::Bool(false)))?.is_optional());
     assert!(!Value::Bool(false).is_optional());
     Ok(())
+}
+
+#[test]
+fn test_ydb_decimal_preserves_precision_and_scale() {
+    let value = "123.45".parse::<decimal_rs::Decimal>().unwrap();
+    let ydb_dec = YdbDecimal::try_new(value, 22, 9).unwrap();
+    assert_eq!(ydb_dec.precision(), 22);
+    assert_eq!(ydb_dec.scale(), 9);
+}
+
+#[test]
+fn test_ydb_decimal_rejects_precision_overflow() {
+    // 10 digits, precision 5 — should fail
+    let value = "1234567890.12".parse::<decimal_rs::Decimal>().unwrap();
+    let result = YdbDecimal::try_new(value, 5, 2);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_ydb_decimal_rejects_scale_decrease() {
+    // value has scale=3, requested scale=1 — should fail
+    let value = "1.234".parse::<decimal_rs::Decimal>().unwrap();
+    let result = YdbDecimal::try_new(value, 10, 1);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_ydb_decimal_allows_scale_increase() {
+    // value has scale=2, requested scale=9 — should succeed
+    let value = "123.45".parse::<decimal_rs::Decimal>().unwrap();
+    let ydb_dec = YdbDecimal::try_new(value, 22, 9).unwrap();
+    assert_eq!(ydb_dec.scale(), 9);
+    assert_eq!(ydb_dec.precision(), 22);
+}
+
+#[test]
+fn test_ydb_decimal_into_value() {
+    let value = "99.99".parse::<decimal_rs::Decimal>().unwrap();
+    let ydb_dec = YdbDecimal::try_new(value, 10, 2).unwrap();
+    let v: Value = ydb_dec.into();
+    match v {
+        Value::Decimal(d) => {
+            assert_eq!(d.precision(), 10);
+            assert_eq!(d.scale(), 2);
+        }
+        _ => panic!("expected Value::Decimal"),
+    }
+}
+
+#[test]
+fn test_ydb_decimal_new_unsafe() {
+    let value = "1.5".parse::<decimal_rs::Decimal>().unwrap();
+    let ydb_dec = unsafe { YdbDecimal::new_unsafe(value, 22, 9) };
+    assert_eq!(ydb_dec.precision(), 22);
+    assert_eq!(ydb_dec.scale(), 9);
 }
 
 #[tokio::test]

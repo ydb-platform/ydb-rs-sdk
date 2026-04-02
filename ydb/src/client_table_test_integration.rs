@@ -1079,7 +1079,10 @@ async fn describe_table() -> YdbResult<()> {
         .unwrap();
     match &price_col.type_value {
         Ok(Value::Optional(opt)) => match &opt.t {
-            Value::Decimal(_) => {}
+            Value::Decimal(d) => {
+                // Verify that precision and scale are preserved from the schema
+                assert!(d.precision() > 0, "precision should be set from schema");
+            }
             _ => panic!("Expected Optional<Decimal>"),
         },
         Err(e) => panic!("Type conversion failed: {:?}", e),

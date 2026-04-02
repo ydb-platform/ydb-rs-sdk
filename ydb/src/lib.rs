@@ -180,7 +180,7 @@ pub use crate::{
         YdbResultWithCustomerErr, YdbStatusError,
     },
     pub_traits::{Credentials, TokenInfo},
-    types::{Bytes, Sign, SignedInterval, Value, ValueList, ValueOptional, ValueStruct},
+    types::{Bytes, Sign, SignedInterval, Value, ValueList, ValueOptional, ValueStruct, YdbDecimal},
 };
 
 // deprecated types
