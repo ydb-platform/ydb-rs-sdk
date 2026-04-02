@@ -11,8 +11,8 @@ use super::r#type::DecimalType;
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::grpc_wrapper::raw_table_service::value::r#type::{RawType, StructMember, StructType};
 use crate::grpc_wrapper::raw_table_service::value::{RawTypedValue, RawValue};
-use crate::types::SECONDS_PER_DAY;
 use crate::types::YdbDecimal;
+use crate::types::SECONDS_PER_DAY;
 use crate::{Bytes, SignedInterval, Value};
 
 impl TryFrom<crate::Value> for RawTypedValue {
@@ -303,9 +303,7 @@ impl TryFrom<RawTypedValue> for Value {
                         .map_err(|e| RawError::decode_error(e.to_string()))?;
                 // SAFETY: the value comes directly from the server with matching
                 // precision and scale, so no validation is needed.
-                let value = unsafe {
-                    YdbDecimal::new_unsafe(inner, t.precision, t.scale)
-                };
+                let value = unsafe { YdbDecimal::new_unsafe(inner, t.precision, t.scale) };
                 return Ok(Value::Decimal(value));
             }
             (t @ RawType::Decimal(_), v) => return types_mismatch(t, v),

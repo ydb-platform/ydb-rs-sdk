@@ -31,11 +31,7 @@ impl YdbDecimal {
     /// Returns an error if:
     /// - The value cannot be represented within the given precision
     /// - Rescaling would lose significant digits (decrease in scale or precision)
-    pub fn try_new(
-        value: decimal_rs::Decimal,
-        precision: u8,
-        scale: i16,
-    ) -> YdbResult<Self> {
+    pub fn try_new(value: decimal_rs::Decimal, precision: u8, scale: i16) -> YdbResult<Self> {
         let current_scale = value.scale();
         let adjusted = if current_scale != scale {
             if scale < current_scale {
@@ -70,11 +66,7 @@ impl YdbDecimal {
     /// The caller must ensure that the value can be represented within
     /// the given precision and scale. Using incorrect parameters may
     /// cause unexpected behavior when sending values to YDB.
-    pub unsafe fn new_unsafe(
-        value: decimal_rs::Decimal,
-        precision: u8,
-        scale: i16,
-    ) -> Self {
+    pub unsafe fn new_unsafe(value: decimal_rs::Decimal, precision: u8, scale: i16) -> Self {
         Self {
             inner: value,
             precision,
@@ -668,7 +660,8 @@ impl Value {
                         .unwrap(),
                     22,
                     9,
-                ).unwrap(),
+                )
+                .unwrap(),
             ),
             Value::Uuid(uuid::Uuid::now_v7()),
             Value::Uuid(uuid::Uuid::new_v4()),
