@@ -1,4 +1,5 @@
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
+use crate::types::YdbDecimal;
 use crate::{Bytes, SignedInterval, Value, ValueList, ValueOptional, ValueStruct};
 use std::time::SystemTime;
 use ydb_grpc::ydb_proto::r#type::{PrimitiveTypeId, Type as ProtoType};
@@ -165,7 +166,14 @@ impl RawType {
             RawType::Uuid => Value::Uuid(uuid::Uuid::nil()),
             RawType::JSONDocument => Value::JsonDocument(String::default()),
             t @ RawType::DyNumber => return unimplemented_type(t),
-            RawType::Decimal(_) => Value::Decimal(decimal_rs::Decimal::default()),
+            RawType::Decimal(dec) => {
+                // SAFETY: zero value with the schema-declared precision/scale
+                // is always representable.
+                let inner = decimal_rs::Decimal::from_parts(0, dec.scale, false).map_err(|e| {
+                    RawError::custom(format!("failed to create decimal example: {}", e))
+                })?;
+                Value::Decimal(unsafe { YdbDecimal::new_unsafe(inner, dec.precision, dec.scale) })
+            }
             RawType::Optional(inner_type) => Value::Optional(Box::new(ValueOptional {
                 t: (*inner_type).into_value_example()?,
                 value: None,
