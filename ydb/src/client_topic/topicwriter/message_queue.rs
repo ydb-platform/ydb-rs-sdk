@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, sync::Arc, time::Duration};
+use std::{collections::VecDeque, mem::swap, sync::Arc, time::Duration};
 
 use tokio::{
     sync::{mpsc, Mutex as TokioMutex, Notify},
@@ -61,7 +61,7 @@ impl MessageQueue {
                     match self.get_messages_to_send_with_length_threshold(length_threshold).await {
                         GetMessagesToSendResult::Ok(messages) => return Ok(messages),
                         GetMessagesToSendResult::NotEnoughMessages => continue,
-                        GetMessagesToSendResult::Err(error) => return Err(error),
+                        GetMessagesToSendResult::Err(err) => return Err(err),
                     }
                 }
             }
@@ -99,6 +99,7 @@ impl MessageQueue {
         inner.is_empty()
     }
 
+    // TODO: Хочется, чтобы flush() дожидался именно последнего сообщения на момент вызова flush().
     pub(crate) async fn wait_for_all_messages_to_be_acknowledged(&self) {
         if self.is_empty().await {
             return;
@@ -123,12 +124,13 @@ impl MessageQueue {
 }
 
 struct MessageQueueInner {
+    // Messages awaiting to be sent
     messages: VecDeque<MessageData>,
+    // Messages awaiting to be acknowledged
+    sent_messages: VecDeque<MessageData>,
 
-    // sequence number of the last message that has been added to the queue
+    // Sequence number of the last message that has been added to the queue
     last_written_seq_no: i64,
-    // index of the last message that has been 'sent'
-    last_sent_index: Option<usize>,
 
     is_open_for_new_messages: bool,
 
@@ -152,8 +154,8 @@ impl MessageQueueInner {
     ) -> Self {
         Self {
             messages: VecDeque::new(),
+            sent_messages: VecDeque::new(),
             last_written_seq_no: -1,
-            last_sent_index: None,
             is_open_for_new_messages: true,
             new_message_added,
             message_acknowledged_tx,
@@ -189,63 +191,53 @@ impl MessageQueueInner {
         Ok(())
     }
 
-    fn get_length_of_messages_to_send(&self) -> YdbResult<usize> {
-        let len = self.messages.len();
-        match self.last_sent_index {
-            None => Ok(len),
-            Some(sent_idx) if sent_idx >= len => Err(YdbError::from(
-                "message queue: last_sent_index is bigger than the number of messages",
-            )),
-            Some(sent_idx) => Ok(len - 1 - sent_idx),
-        }
+    fn get_length_of_messages_to_send(&self) -> usize {
+        self.messages.len()
     }
 
-    fn do_get_messages_to_send(
-        messages: &VecDeque<MessageData>,
-        last_sent_index: &mut Option<usize>,
-        length: usize,
-    ) -> Vec<MessageData> {
-        let mut result = Vec::with_capacity(length);
-        for _ in 0..length {
-            let idx = last_sent_index.map_or(0, |index| index + 1);
-            result.push(messages[idx].clone());
-            *last_sent_index = Some(idx);
+    fn do_get_messages_to_send(&mut self, length: usize) -> YdbResult<Vec<MessageData>> {
+        if length > self.messages.len() {
+            return Err(YdbError::InternalError(format!(
+                "message queue: requested a batch of {} messages but only {} message(s) are available",
+                length,
+                self.messages.len()
+            )));
         }
-        result
+
+        let mut result = Vec::with_capacity(length);
+
+        for _ in 0..length {
+            let message = self.messages.pop_front().unwrap(); // We check length above, so this is safe.
+            result.push(message.clone());
+            self.sent_messages.push_back(message);
+        }
+
+        Ok(result)
     }
 
     fn get_messages_to_send_without_threshold(&mut self) -> YdbResult<Vec<MessageData>> {
-        let length = self.get_length_of_messages_to_send()?;
-
-        Ok(MessageQueueInner::do_get_messages_to_send(
-            &self.messages,
-            &mut self.last_sent_index,
-            length,
-        ))
+        let length = self.get_length_of_messages_to_send();
+        self.do_get_messages_to_send(length)
     }
 
     fn get_messages_to_send_with_length_threshold(
         &mut self,
         length_threshold: usize,
     ) -> GetMessagesToSendResult {
-        let length = match self.get_length_of_messages_to_send() {
-            Ok(length) => length,
-            Err(error) => return GetMessagesToSendResult::Err(error),
-        };
+        let length = self.get_length_of_messages_to_send();
 
         if length < length_threshold {
             return GetMessagesToSendResult::NotEnoughMessages;
         }
 
-        GetMessagesToSendResult::Ok(MessageQueueInner::do_get_messages_to_send(
-            &self.messages,
-            &mut self.last_sent_index,
-            length,
-        ))
+        match self.do_get_messages_to_send(length) {
+            Ok(messages) => GetMessagesToSendResult::Ok(messages),
+            Err(err) => GetMessagesToSendResult::Err(err),
+        }
     }
 
     fn acknowledge_message(&mut self, seq_no: i64) -> YdbResult<()> {
-        let Some(message) = self.messages.pop_front() else {
+        let Some(message) = self.sent_messages.pop_front() else {
             return Err(YdbError::Custom(format!(
                 "ack unexpected message with seq_no={}",
                 seq_no
@@ -259,18 +251,14 @@ impl MessageQueueInner {
             )));
         }
 
-        self.last_sent_index = match self.last_sent_index {
-            Some(idx) if idx > 0 => Some(idx - 1),
-            _ => None,
-        };
-
         self.message_acknowledged_tx.send(()).unwrap();
 
         Ok(())
     }
 
     fn reset_progress(&mut self) {
-        self.last_sent_index = None;
+        self.sent_messages.append(&mut self.messages);
+        swap(&mut self.messages, &mut self.sent_messages);
     }
 
     fn close_for_new_messages(&mut self) {
@@ -311,63 +299,57 @@ mod tests {
     async fn new_creates_empty_queue() {
         let (q, _reader) = create_queue().await;
         assert_eq!(q.last_written_seq_no, -1);
-        assert_eq!(q.last_sent_index, None);
+        assert!(q.messages.is_empty());
+        assert!(q.sent_messages.is_empty());
         assert!(q.is_open_for_new_messages);
     }
 
     #[tokio::test]
     async fn get_length_of_messages_to_send_empty() {
         let (q, _reader) = create_queue().await;
-        match q.get_length_of_messages_to_send() {
-            Ok(length) => assert_eq!(length, 0),
-            Err(error) => panic!("{}", error.to_string()),
-        }
+        assert_eq!(q.get_length_of_messages_to_send(), 0);
     }
 
     #[tokio::test]
     async fn get_length_of_messages_to_send_with_some_added_and_none_sent() {
         let (mut q, _reader) = create_queue().await;
-        q.messages.push_back(create_message(1, vec![]));
-        q.messages.push_back(create_message(2, vec![]));
-        q.messages.push_back(create_message(3, vec![]));
-        q.messages.push_back(create_message(4, vec![]));
-        q.messages.push_back(create_message(5, vec![]));
-        q.last_sent_index = None;
-        assert_eq!(q.get_length_of_messages_to_send().unwrap(), 5);
+        for i in 1..=5 {
+            q.messages.push_back(create_message(i, vec![]));
+        }
+        assert_eq!(q.get_length_of_messages_to_send(), 5);
     }
 
     #[tokio::test]
     async fn get_length_of_messages_to_send_with_some_added_and_one_sent() {
         let (mut q, _reader) = create_queue().await;
-        q.messages.push_back(create_message(1, vec![]));
-        q.messages.push_back(create_message(2, vec![]));
-        q.messages.push_back(create_message(3, vec![]));
-        q.messages.push_back(create_message(4, vec![]));
-        q.messages.push_back(create_message(5, vec![]));
-        q.last_sent_index = Some(0);
-        assert_eq!(q.get_length_of_messages_to_send().unwrap(), 4);
+        for i in 1..=5 {
+            q.messages.push_back(create_message(i, vec![]));
+        }
+        let one = q.messages.pop_front().unwrap();
+        q.sent_messages.push_back(one);
+        assert_eq!(q.get_length_of_messages_to_send(), 4);
     }
 
     #[tokio::test]
-    async fn get_length_of_messages_to_send_with_some_added_and_same_sent() {
+    async fn get_length_of_messages_to_send_returns_zero_when_all_pending_are_in_sent() {
         let (mut q, _reader) = create_queue().await;
-        q.messages.push_back(create_message(1, vec![]));
-        q.messages.push_back(create_message(2, vec![]));
-        q.messages.push_back(create_message(3, vec![]));
-        q.messages.push_back(create_message(4, vec![]));
-        q.messages.push_back(create_message(5, vec![]));
-        q.last_sent_index = Some(4);
-        assert_eq!(q.get_length_of_messages_to_send().unwrap(), 0);
+        for i in 1..=5 {
+            q.messages.push_back(create_message(i, vec![]));
+        }
+        while let Some(m) = q.messages.pop_front() {
+            q.sent_messages.push_back(m);
+        }
+        assert_eq!(q.get_length_of_messages_to_send(), 0);
     }
 
     #[tokio::test]
     async fn get_length_of_messages_to_send_with_none_added_and_some_sent() {
         let (mut q, _reader) = create_queue().await;
-        q.last_sent_index = Some(4);
-        let err = q.get_length_of_messages_to_send().unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("last_sent_index is bigger than the number of messages"));
+        for i in 1..=3 {
+            q.messages.push_back(create_message(i, vec![]));
+        }
+        assert_eq!(q.messages.len(), 0);
+        assert_eq!(q.get_length_of_messages_to_send(), 0);
     }
 
     #[tokio::test]
@@ -376,7 +358,7 @@ mod tests {
         q.add_message(create_message(10, vec![1, 2, 3])).unwrap();
         q.add_message(create_message(11, vec![4, 5])).unwrap();
 
-        assert_eq!(q.get_length_of_messages_to_send().unwrap(), 2);
+        assert_eq!(q.get_length_of_messages_to_send(), 2);
         assert_eq!(q.messages.len(), 2);
         assert_eq!(q.messages[0].seq_no, 10);
         assert_eq!(q.messages[0].data, vec![1, 2, 3]);
@@ -384,7 +366,6 @@ mod tests {
         assert_eq!(q.messages[1].data, vec![4, 5]);
 
         assert_eq!(q.last_written_seq_no, 11);
-        assert_eq!(q.last_sent_index, None);
     }
 
     #[tokio::test]
@@ -420,7 +401,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_messages_to_send_returns_all_and_advances_last_sent_index() {
+    async fn get_messages_to_send_without_threshold_moves_all_to_sent_messages() {
         let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(3, vec![10])).unwrap();
         q.add_message(create_message(4, vec![20])).unwrap();
@@ -431,8 +412,10 @@ mod tests {
         assert_eq!(batch[0].seq_no, 3);
         assert_eq!(batch[1].seq_no, 4);
 
-        assert_eq!(q.messages.len(), 2);
-        assert_eq!(q.last_sent_index, Some(1));
+        assert!(q.messages.is_empty());
+        assert_eq!(q.sent_messages.len(), 2);
+        assert_eq!(q.sent_messages[0].seq_no, 3);
+        assert_eq!(q.sent_messages[1].seq_no, 4);
         assert_eq!(q.last_written_seq_no, 4);
     }
 
@@ -515,9 +498,11 @@ mod tests {
 
         q.acknowledge_message(5).unwrap();
 
-        assert_eq!(q.get_length_of_messages_to_send().unwrap(), 0);
-        assert_eq!(q.messages.len(), 2);
-        assert_eq!(q.last_sent_index, Some(1));
+        assert_eq!(q.get_length_of_messages_to_send(), 0);
+        assert!(q.messages.is_empty());
+        assert_eq!(q.sent_messages.len(), 2);
+        assert_eq!(q.sent_messages[0].seq_no, 6);
+        assert_eq!(q.sent_messages[1].seq_no, 7);
         assert_eq!(q.last_written_seq_no, 7);
     }
 
@@ -532,7 +517,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn acknowledge_message_errors_when_seq_no_mismatch() {
+    async fn acknowledge_message_errors_when_seq_no_mismatches() {
         let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(1, vec![])).unwrap();
         let _ = q.get_messages_to_send_without_threshold().unwrap();
@@ -544,31 +529,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reset_progress_clears_last_sent_so_messages_can_be_resent() {
+    async fn reset_progress_restores_sent_messages_to_pending() {
         let (mut q, _reader) = create_queue().await;
-        q.add_message(create_message(8, vec![])).unwrap();
-        q.add_message(create_message(9, vec![])).unwrap();
 
-        let msgs = q.get_messages_to_send_without_threshold().unwrap();
-        assert_eq!(msgs.len(), 2);
-        assert_eq!(msgs[0].seq_no, 8);
-        assert_eq!(msgs[1].seq_no, 9);
+        for i in 1..=2 {
+            q.sent_messages.push_back(create_message(i, vec![]));
+        }
+        for i in 3..=5 {
+            q.messages.push_back(create_message(i, vec![]));
+        }
 
-        assert_eq!(q.last_sent_index, Some(1));
-        assert_eq!(q.get_length_of_messages_to_send().unwrap(), 0);
         q.reset_progress();
-        assert_eq!(q.last_sent_index, None);
-        assert_eq!(q.get_length_of_messages_to_send().unwrap(), 2);
 
-        let again = q.get_messages_to_send_without_threshold().unwrap();
-        assert_eq!(again.len(), 2);
-        assert_eq!(again[0].seq_no, 8);
-        assert_eq!(again[1].seq_no, 9);
-        assert_eq!(q.last_sent_index, Some(1));
+        assert!(q.sent_messages.is_empty());
+        assert_eq!(q.messages.len(), 5);
+        assert_eq!(q.messages[0].seq_no, 1);
+        assert_eq!(q.messages[1].seq_no, 2);
+        assert_eq!(q.messages[2].seq_no, 3);
+        assert_eq!(q.messages[3].seq_no, 4);
+        assert_eq!(q.messages[4].seq_no, 5);
     }
 
     #[tokio::test]
-    async fn close_for_new_messages_prevents_further_adds() {
+    async fn close_for_new_messages_prevents_adding_new_messages() {
         let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(1, vec![])).unwrap();
 
