@@ -15,7 +15,7 @@ pub(crate) struct MessageQueue {
     inner: Arc<TokioMutex<MessageQueueInner>>,
 
     new_message_added: Arc<Notify>,
-    message_acknowledged_rx: Arc<TokioMutex<mpsc::UnboundedReceiver<()>>>,
+    message_acknowledged_rx: Arc<TokioMutex<mpsc::UnboundedReceiver<i64>>>,
 }
 
 impl MessageQueue {
@@ -94,23 +94,27 @@ impl MessageQueue {
         inner.close_for_new_messages()
     }
 
-    async fn is_empty(&self) -> bool {
-        let inner = self.inner.lock().await;
-        inner.is_empty()
-    }
-
-    // TODO: Хочется, чтобы flush() дожидался именно последнего сообщения на момент вызова flush().
-    pub(crate) async fn wait_for_all_messages_to_be_acknowledged(&self) {
-        if self.is_empty().await {
+    // Waits for the last message to be acknowledged.
+    // Note that the "last message" is the last message in the queue at the start of the method call.
+    // If more messages are added during the wait, they will not be waited for here.
+    //
+    // Is used for the flush operation.
+    pub(crate) async fn wait_for_messages_to_be_acknowledged(&self) {
+        let last_seq_no = {
+            let inner = self.inner.lock().await;
+            inner.last_added_seq_no
+        };
+        let Some(last_seq_no) = last_seq_no else {
             return;
-        }
+        };
 
         let mut message_acknowledged_rx = self.message_acknowledged_rx.lock().await;
 
         loop {
+            // TODO: cancellation token?
             tokio::select! {
-                Some(_) = message_acknowledged_rx.recv() => {
-                    if self.is_empty().await {
+                Some(seq_no) = message_acknowledged_rx.recv() => {
+                    if seq_no == last_seq_no {
                         break;
                     }
                 }
@@ -130,12 +134,12 @@ struct MessageQueueInner {
     sent_messages: VecDeque<MessageData>,
 
     // Sequence number of the last message that has been added to the queue
-    last_written_seq_no: i64,
+    last_added_seq_no: Option<i64>,
 
     is_open_for_new_messages: bool,
 
     new_message_added: Arc<Notify>,
-    message_acknowledged_tx: mpsc::UnboundedSender<()>,
+    message_acknowledged_tx: mpsc::UnboundedSender<i64>,
 }
 
 #[derive(Debug)]
@@ -150,12 +154,12 @@ enum GetMessagesToSendResult {
 impl MessageQueueInner {
     pub(crate) fn new(
         new_message_added: Arc<Notify>,
-        message_acknowledged_tx: mpsc::UnboundedSender<()>,
+        message_acknowledged_tx: mpsc::UnboundedSender<i64>,
     ) -> Self {
         Self {
             messages: VecDeque::new(),
             sent_messages: VecDeque::new(),
-            last_written_seq_no: -1,
+            last_added_seq_no: None,
             is_open_for_new_messages: true,
             new_message_added,
             message_acknowledged_tx,
@@ -172,7 +176,7 @@ impl MessageQueueInner {
         let seq_no = message.seq_no;
         self.check_message_seq_no(seq_no)?;
 
-        self.last_written_seq_no = seq_no;
+        self.last_added_seq_no = Some(seq_no);
 
         self.messages.push_back(message);
 
@@ -182,13 +186,16 @@ impl MessageQueueInner {
     }
 
     fn check_message_seq_no(&self, seq_no: i64) -> YdbResult<()> {
-        if seq_no <= self.last_written_seq_no {
-            return Err(YdbError::InternalError(format!(
-                "message with seq_no={} is not newer than the last written message",
-                seq_no
-            )));
+        match self.last_added_seq_no {
+            Some(last_added_seq_no) if seq_no <= last_added_seq_no => {
+                Err(YdbError::InternalError(format!(
+                    "message with seq_no={} is not newer than the last written message",
+                    seq_no
+                )))
+            }
+
+            _ => Ok(()),
         }
-        Ok(())
     }
 
     fn get_length_of_messages_to_send(&self) -> usize {
@@ -230,7 +237,7 @@ impl MessageQueueInner {
             return GetMessagesToSendResult::NotEnoughMessages;
         }
 
-        match self.do_get_messages_to_send(length) {
+        match self.do_get_messages_to_send(length_threshold) {
             Ok(messages) => GetMessagesToSendResult::Ok(messages),
             Err(err) => GetMessagesToSendResult::Err(err),
         }
@@ -251,7 +258,11 @@ impl MessageQueueInner {
             )));
         }
 
-        self.message_acknowledged_tx.send(()).unwrap();
+        self.message_acknowledged_tx.send(seq_no).unwrap();
+
+        if self.sent_messages.is_empty() && self.messages.is_empty() {
+            self.last_added_seq_no = None;
+        }
 
         Ok(())
     }
@@ -263,10 +274,6 @@ impl MessageQueueInner {
 
     fn close_for_new_messages(&mut self) {
         self.is_open_for_new_messages = false;
-    }
-
-    fn is_empty(&self) -> bool {
-        self.messages.is_empty()
     }
 }
 
@@ -298,7 +305,7 @@ mod tests {
     #[tokio::test]
     async fn new_creates_empty_queue() {
         let (q, _reader) = create_queue().await;
-        assert_eq!(q.last_written_seq_no, -1);
+        assert!(q.last_added_seq_no.is_none());
         assert!(q.messages.is_empty());
         assert!(q.sent_messages.is_empty());
         assert!(q.is_open_for_new_messages);
@@ -346,9 +353,9 @@ mod tests {
     async fn get_length_of_messages_to_send_with_none_added_and_some_sent() {
         let (mut q, _reader) = create_queue().await;
         for i in 1..=3 {
-            q.messages.push_back(create_message(i, vec![]));
+            q.sent_messages.push_back(create_message(i, vec![]));
         }
-        assert_eq!(q.messages.len(), 0);
+
         assert_eq!(q.get_length_of_messages_to_send(), 0);
     }
 
@@ -365,7 +372,7 @@ mod tests {
         assert_eq!(q.messages[1].seq_no, 11);
         assert_eq!(q.messages[1].data, vec![4, 5]);
 
-        assert_eq!(q.last_written_seq_no, 11);
+        assert_eq!(q.last_added_seq_no, Some(11));
     }
 
     #[tokio::test]
@@ -416,7 +423,7 @@ mod tests {
         assert_eq!(q.sent_messages.len(), 2);
         assert_eq!(q.sent_messages[0].seq_no, 3);
         assert_eq!(q.sent_messages[1].seq_no, 4);
-        assert_eq!(q.last_written_seq_no, 4);
+        assert_eq!(q.last_added_seq_no, Some(4));
     }
 
     #[tokio::test]
@@ -467,7 +474,7 @@ mod tests {
         let result = q.get_messages_to_send_with_length_threshold(2);
 
         match &result {
-            GetMessagesToSendResult::Ok(msgs) => assert_eq!(msgs.len(), 3),
+            GetMessagesToSendResult::Ok(msgs) => assert_eq!(msgs.len(), 2),
             other => panic!("expected Ok(...), got {:?}", other),
         }
     }
@@ -503,7 +510,7 @@ mod tests {
         assert_eq!(q.sent_messages.len(), 2);
         assert_eq!(q.sent_messages[0].seq_no, 6);
         assert_eq!(q.sent_messages[1].seq_no, 7);
-        assert_eq!(q.last_written_seq_no, 7);
+        assert_eq!(q.last_added_seq_no, Some(7));
     }
 
     #[tokio::test]
@@ -563,14 +570,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wait_for_all_messages_to_be_acknowledged_completes_when_empty_after_ack() {
+    async fn wait_for_messages_to_be_acknowledged_completes_when_all_messages_are_acknowledged() {
         let q = MessageQueue::new();
-        q.add_message(create_message(1, vec![])).await.unwrap();
-        let _ = q
-            .get_messages_to_send(1, std::time::Duration::from_millis(10))
-            .await
-            .unwrap();
-        q.acknowledge_message(1).await.unwrap();
-        q.wait_for_all_messages_to_be_acknowledged().await;
+        for i in 1..=5 {
+            q.add_message(create_message(i, vec![])).await.unwrap();
+        }
+        let messages = q.get_messages_to_send_without_threshold().await.unwrap();
+        assert_eq!(messages.len(), 5);
+
+        for i in 1..=5 {
+            q.acknowledge_message(i).await.unwrap();
+        }
+
+        q.wait_for_messages_to_be_acknowledged().await;
     }
 }
