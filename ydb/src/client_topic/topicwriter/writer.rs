@@ -193,7 +193,7 @@ impl TopicWriter {
         };
 
         self.message_queue
-            .wait_for_all_messages_to_be_acknowledged()
+            .wait_for_messages_to_be_acknowledged()
             .await;
 
         Ok(flush_op_completed.await?)
