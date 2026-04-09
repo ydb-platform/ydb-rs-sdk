@@ -166,7 +166,7 @@ impl StreamWriter {
         }
 
         trace!("Sending topic message to grpc stream");
-        match task_params
+        task_params
             .request_stream
             .send(stream_write_message::FromClient {
                 client_message: Some(ClientMessage::WriteRequest(WriteRequest {
@@ -174,10 +174,8 @@ impl StreamWriter {
                     codec: 1,
                     tx: None,
                 })),
-            }) {
-            Ok(_) => Ok(()),
-            Err(err) => Err(YdbError::Transport(err.to_string())),
-        }
+            })
+            .map_or_else(|err| Err(YdbError::Transport(err.to_string())), |_| Ok(()))
     }
 
     async fn receive_messages_loop(
@@ -234,8 +232,8 @@ impl StreamWriter {
         match server_messages_receiver.receive::<RawServerMessage>().await {
             Ok(message) => match message {
                 RawServerMessage::Init(_init_response_body) => {
-                    return Err(YdbError::Custom(
-                        "Unexpected message type in stream reader: init_response".to_string(),
+                    return Err(YdbError::custom(
+                        "Unexpected message type in stream reader: init_response",
                     ));
                 }
                 RawServerMessage::Write(write_response_body) => {
@@ -246,9 +244,8 @@ impl StreamWriter {
                             let reception_ticket = reception_queue.try_get_ticket();
                             match reception_ticket {
                                 None => {
-                                    return Err(YdbError::Custom(
-                                        "Expected reception ticket to be actually present"
-                                            .to_string(),
+                                    return Err(YdbError::custom(
+                                        "Expected reception ticket to be actually present",
                                     ));
                                 }
                                 Some(ticket) => {
