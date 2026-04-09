@@ -1,5 +1,5 @@
 use std::borrow::{Borrow, BorrowMut};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::Mutex as TokioMutex;
@@ -44,7 +44,7 @@ impl StreamWriter {
         message_queue: MessageQueue,
         connection_manager: GrpcConnectionManager,
         connection_info: Arc<TokioMutex<ConnectionInfo>>,
-        confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
+        confirmation_reception_queue: Arc<TokioMutex<TopicWriterReceptionQueue>>,
         error_tx: oneshot::Sender<YdbError>,
     ) -> YdbResult<Self> {
         let init_request_body = InitRequest {
@@ -184,7 +184,7 @@ impl StreamWriter {
         cancellation_token: CancellationToken,
         error_tx: Arc<TokioMutex<Option<oneshot::Sender<YdbError>>>>,
         message_queue: MessageQueue,
-        reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
+        reception_queue: Arc<TokioMutex<TopicWriterReceptionQueue>>,
         mut stream: AsyncGrpcStreamWrapper<
             stream_write_message::FromClient,
             stream_write_message::FromServer,
@@ -229,7 +229,7 @@ impl StreamWriter {
             stream_write_message::FromClient,
             stream_write_message::FromServer,
         >,
-        confirmation_reception_queue: &Arc<Mutex<TopicWriterReceptionQueue>>,
+        confirmation_reception_queue: &Arc<TokioMutex<TopicWriterReceptionQueue>>,
     ) -> YdbResult<()> {
         match server_messages_receiver.receive::<RawServerMessage>().await {
             Ok(message) => match message {
@@ -242,7 +242,7 @@ impl StreamWriter {
                     for raw_ack in write_response_body.acks {
                         let write_ack = WriteAck::from(raw_ack);
                         let ticket = {
-                            let mut reception_queue = confirmation_reception_queue.lock().unwrap();
+                            let mut reception_queue = confirmation_reception_queue.lock().await;
                             let reception_ticket = reception_queue.try_get_ticket();
                             match reception_ticket {
                                 None => {
