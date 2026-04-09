@@ -28,9 +28,11 @@ fn exponential_backoff_retry_wait_duration(attempt: usize) -> Duration {
         return Duration::default();
     }
 
+    let attempt = attempt.min(63);
     let duration_milliseconds = 2u64
         .pow(attempt as u32)
         .min(BACKOFF_RETRY_MAX_WAIT_DURATION_MILLISECONDS);
+
     Duration::from_millis(duration_milliseconds)
 }
 

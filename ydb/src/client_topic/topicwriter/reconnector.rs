@@ -248,12 +248,13 @@ impl Reconnector {
             TopicWriterReceptionType::AwaitingConfirmation,
         );
 
+        let duration = message.created_at.duration_since(UNIX_EPOCH)?;
         self.message_queue
             .add_message(MessageData {
                 seq_no,
                 created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
-                    seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs() as i64,
-                    nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
+                    seconds: duration.as_secs() as i64,
+                    nanos: duration.subsec_nanos() as i32,
                 }),
                 metadata_items: vec![],
                 data: message.data,

@@ -244,13 +244,13 @@ impl MessageQueueInner {
     fn acknowledge_message(&mut self, seq_no: i64) -> YdbResult<()> {
         let Some(message) = self.sent_messages.pop_front() else {
             return Err(YdbError::custom(format!(
-                "ack unexpected message with seq_no={seq_no}",
+                "ack unexpected message with seq_no={seq_no}: queue is empty",
             )));
         };
 
         if message.seq_no != seq_no {
             return Err(YdbError::custom(format!(
-                "ack unexpected message with seq_no={seq_no}",
+                "ack unexpected message with seq_no={seq_no}: message seq_no mismatch",
             )));
         }
 
