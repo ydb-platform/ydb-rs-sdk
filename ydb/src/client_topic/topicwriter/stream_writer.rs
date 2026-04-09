@@ -8,9 +8,9 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::log::{trace, warn};
 
-use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
 use ydb_grpc::ydb_proto::topic::stream_write_message::{InitRequest, WriteRequest};
+use ydb_grpc::ydb_proto::topic::{stream_write_message, Codec};
 
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message_queue::MessageQueue;
@@ -171,7 +171,7 @@ impl StreamWriter {
             .send(stream_write_message::FromClient {
                 client_message: Some(ClientMessage::WriteRequest(WriteRequest {
                     messages: messages_to_send,
-                    codec: 1,
+                    codec: Codec::Raw as i32,
                     tx: None,
                 })),
             })
