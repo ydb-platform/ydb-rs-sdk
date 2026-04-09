@@ -156,10 +156,8 @@ impl TopicWriter {
 
         self.write_message(message, Some(tx)).await?;
 
-        match rx.await {
-            Ok(result) => result,
-            Err(chan_err) => Err(YdbError::from(chan_err)),
-        }
+        rx.await
+            .unwrap_or_else(|chan_err| Err(YdbError::from(chan_err)))
     }
 
     pub async fn write_with_ack_future(

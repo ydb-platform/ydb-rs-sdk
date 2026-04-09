@@ -106,7 +106,7 @@ impl Reconnector {
 
         match done_once_rx.await {
             Ok(_) => Ok(reconnection_loop),
-            Err(err) => Err(YdbError::custom(format!(
+            Err(err) => Err(YdbError::InternalError(format!(
                 "connection_info_filled channel closed: {err}"
             ))),
         }
@@ -136,7 +136,7 @@ impl Reconnector {
 
                 match helper.get_timeout_before_reconnect(attempt, reconnect_start_time.elapsed()) {
                     Some(wait_timeout) => {
-                        trace!("Error, trying to reconnect: {}", err);
+                        trace!("Error, trying to reconnect: {err}");
                         helper
                             .set_writer_state(TopicWriterState::Reconnecting)
                             .await;
@@ -147,8 +147,7 @@ impl Reconnector {
                     }
                     None => {
                         final_error = Some(YdbError::custom(format!(
-                            "Reconnect is not allowed after {} attempts for error: {}",
-                            attempt, err
+                            "Reconnect is not allowed after {attempt} attempts for error: {err}",
                         )));
                         break;
                     }
@@ -169,7 +168,7 @@ impl Reconnector {
                     };
                 }
                 Err(err) => {
-                    trace!("Error creating stream writer: {}", err);
+                    trace!("Error creating stream writer: {err}");
                     stream_writer_err = Some(err);
                     attempt += 1;
                     continue;
@@ -184,7 +183,7 @@ impl Reconnector {
                     let err = match received_err {
                         Ok(err) => err,
                         Err(chan_err) => {
-                            final_error = Some(YdbError::custom(format!("Channel error: {}", chan_err)));
+                            final_error = Some(YdbError::custom(format!("Channel error: {chan_err}")));
                             break;
                         }
                     };
@@ -200,11 +199,8 @@ impl Reconnector {
         }
 
         if let Some(final_error) = final_error {
-            match fatal_error_tx.send(final_error.clone()) {
-                Ok(_) => {}
-                Err(err) => {
-                    error!("can't send fatal error to TopicWriter: channel is closed: {err}");
-                }
+            if let Err(err) = fatal_error_tx.send(final_error.clone()) {
+                error!("can't send fatal error to TopicWriter: channel is closed: {err}");
             }
 
             helper
