@@ -1,12 +1,12 @@
 use std::future::Future;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use tokio::sync::oneshot;
-use tokio::sync::Mutex as TokioMutex;
+use tokio::sync::{oneshot, Mutex as TokioMutex, RwLock as TokioRwLock};
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::log::trace;
@@ -37,24 +37,27 @@ pub struct TopicWriter {
     pub(crate) producer_id: Option<String>,
     pub(crate) write_request_messages_chunk_size: usize,
     pub(crate) write_request_send_messages_period: Duration,
-
     pub(crate) auto_set_seq_no: bool,
-    pub(crate) connection_info: Arc<TokioMutex<ConnectionInfo>>,
 
     flush_timeout: Duration,
 
     cancellation_token: CancellationToken,
-    writer_state: Arc<Mutex<TopicWriterState>>,
 
-    confirmation_reception_queue: Arc<Mutex<TopicWriterReceptionQueue>>,
+    connection_info: Arc<TokioMutex<ConnectionInfo>>,
+    writer_state: Arc<TokioMutex<TopicWriterState>>,
+    fatal_error: Arc<TokioRwLock<Option<YdbError>>>,
+
+    confirmation_reception_queue: Arc<TokioMutex<TopicWriterReceptionQueue>>,
     message_queue: MessageQueue,
+
+    wait_for_fatal_error_handle: JoinHandle<()>,
 
     reconnector: Reconnector,
 }
 
 #[allow(dead_code)]
 pub struct AckFuture {
-    receiver: oneshot::Receiver<MessageWriteStatus>,
+    receiver: oneshot::Receiver<YdbResult<MessageWriteStatus>>,
 }
 
 impl Future for AckFuture {
@@ -62,7 +65,8 @@ impl Future for AckFuture {
 
     fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
         match Pin::new(&mut self.receiver).poll(_cx) {
-            Poll::Ready(Ok(result)) => Poll::Ready(Ok(result)),
+            // Inner value is already Ok(status) or Err(from send_error_if_needed).
+            Poll::Ready(Ok(write_result)) => Poll::Ready(write_result),
             Poll::Ready(Err(_)) => Poll::Ready(Err(YdbError::custom("message writer was closed"))),
             Poll::Pending => Poll::Pending,
         }
@@ -81,10 +85,11 @@ impl TopicWriter {
 
         let cancellation_token = CancellationToken::new();
 
-        let writer_state = Arc::new(Mutex::new(TopicWriterState::Working));
+        let writer_state = Arc::new(TokioMutex::new(TopicWriterState::Working));
         let message_queue = MessageQueue::new();
 
-        let confirmation_reception_queue = Arc::new(Mutex::new(TopicWriterReceptionQueue::new()));
+        let confirmation_reception_queue =
+            Arc::new(TokioMutex::new(TopicWriterReceptionQueue::new()));
         let connection_info = Arc::new(TokioMutex::new(ConnectionInfo {
             partition_id: 0,
             session_id: String::new(),
@@ -97,6 +102,15 @@ impl TopicWriter {
             })
         });
 
+        let fatal_error = Arc::new(TokioRwLock::new(None));
+        let (fatal_error_tx, fatal_error_rx) = oneshot::channel();
+        let wait_for_fatal_error_handle = tokio::spawn(TopicWriter::wait_for_fatal_error(
+            cancellation_token.clone(),
+            fatal_error_rx,
+            confirmation_reception_queue.clone(),
+            fatal_error.clone(),
+        ));
+
         let reconnector = Reconnector::new(ReconnectorParams {
             writer_options: writer_options.clone(),
             producer_id: producer_id.clone(),
@@ -107,6 +121,7 @@ impl TopicWriter {
             message_queue: message_queue.clone(),
             connection_info: connection_info.clone(),
             retrier,
+            fatal_error_tx,
         })
         .await?;
 
@@ -123,6 +138,8 @@ impl TopicWriter {
             confirmation_reception_queue,
             message_queue,
             reconnector,
+            wait_for_fatal_error_handle,
+            fatal_error,
         })
     }
 
@@ -131,9 +148,6 @@ impl TopicWriter {
         Ok(())
     }
 
-    // TODO: В случае нетрабельной ошибки, мы хотим ее сохранить (например, "пропал" топик).
-    // Для новых вызовов методов - возвращаем эту ошибку.
-    // Для старых - хотим через канал (уже есть, снизу, oneshot::channel()) возвращать эту ошибку ожидающим.
     pub async fn write_with_ack(
         &mut self,
         message: TopicWriterMessage,
@@ -141,7 +155,11 @@ impl TopicWriter {
         let (tx, rx) = oneshot::channel();
 
         self.write_message(message, Some(tx)).await?;
-        Ok(rx.await?)
+
+        match rx.await {
+            Ok(result) => result,
+            Err(chan_err) => Err(YdbError::from(chan_err)),
+        }
     }
 
     pub async fn write_with_ack_future(
@@ -151,13 +169,14 @@ impl TopicWriter {
         let (tx, rx) = oneshot::channel();
 
         self.write_message(_message, Some(tx)).await?;
+
         Ok(AckFuture { receiver: rx })
     }
 
     async fn write_message(
         &mut self,
         mut message: TopicWriterMessage,
-        wait_ack: Option<oneshot::Sender<MessageWriteStatus>>,
+        wait_ack: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     ) -> YdbResult<()> {
         self.check_working().await?;
 
@@ -188,23 +207,46 @@ impl TopicWriter {
         self.check_working().await?;
 
         let flush_op_completed = {
-            let mut reception_queue = self.confirmation_reception_queue.lock().unwrap();
+            let mut reception_queue = self.confirmation_reception_queue.lock().await;
             reception_queue.init_flush_op()?
         };
 
         self.message_queue
-            .wait_for_messages_to_be_acknowledged()
+            .wait_for_messages_to_be_acknowledged(&self.cancellation_token)
             .await;
 
         Ok(flush_op_completed.await?)
     }
 
     async fn check_working(&self) -> YdbResult<()> {
-        let state = self.writer_state.lock().unwrap();
+        let state = self.writer_state.lock().await;
         match state.deref() {
             TopicWriterState::Working => Ok(()),
             TopicWriterState::Reconnecting => Ok(()),
             TopicWriterState::FinishedWithError(err) => Err(err.clone()),
+        }
+    }
+
+    async fn wait_for_fatal_error(
+        cancellation_token: CancellationToken,
+        fatal_error_rx: oneshot::Receiver<YdbError>,
+        confirmation_reception_queue: Arc<TokioMutex<TopicWriterReceptionQueue>>,
+        fatal_error: Arc<TokioRwLock<Option<YdbError>>>,
+    ) {
+        tokio::select! {
+            _ = cancellation_token.cancelled() => {}
+            result = fatal_error_rx => {
+                let err = result.unwrap_or_else(YdbError::from);
+
+                {
+                    let mut fatal_error = fatal_error.write().await;
+                    *fatal_error = Some(err.clone());
+                }
+                {
+                    let mut reception_queue = confirmation_reception_queue.lock().await;
+                    reception_queue.send_error_to_tickets_and_clear(err);
+                }
+            }
         }
     }
 
@@ -220,9 +262,15 @@ impl TopicWriter {
         };
 
         self.cancellation_token.cancel();
-        let loop_result = self.reconnector.stop().await.map_err(|err| {
+        let reconnector_result = self.reconnector.stop().await.map_err(|err| {
             YdbError::custom(format!(
                 "stop: error while waiting for reconnector to finish: {err}"
+            ))
+        });
+
+        let wait_for_fatal_error_result = self.wait_for_fatal_error_handle.await.map_err(|err| {
+            YdbError::custom(format!(
+                "stop: error while waiting for wait_for_fatal_error to finish: {err}"
             ))
         });
 
@@ -230,7 +278,8 @@ impl TopicWriter {
 
         // First clean up all resources, then return result.
         flush_result?;
-        loop_result?;
+        reconnector_result?;
+        wait_for_fatal_error_result?;
 
         Ok(())
     }

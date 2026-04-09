@@ -4,6 +4,7 @@ use tokio::{
     sync::{mpsc, Mutex as TokioMutex, Notify},
     time::timeout,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::log::trace;
 
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
@@ -99,7 +100,10 @@ impl MessageQueue {
     // If more messages are added during the wait, they will not be waited for here.
     //
     // Is used for the flush operation.
-    pub(crate) async fn wait_for_messages_to_be_acknowledged(&self) {
+    pub(crate) async fn wait_for_messages_to_be_acknowledged(
+        &self,
+        cancellation_token: &CancellationToken,
+    ) {
         let last_seq_no = {
             let inner = self.inner.lock().await;
             inner.last_added_seq_no
@@ -111,8 +115,10 @@ impl MessageQueue {
         let mut message_acknowledged_rx = self.message_acknowledged_rx.lock().await;
 
         loop {
-            // TODO: cancellation token?
             tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    break;
+                }
                 Some(seq_no) = message_acknowledged_rx.recv() => {
                     if seq_no == last_seq_no {
                         break;
@@ -582,6 +588,7 @@ mod tests {
             q.acknowledge_message(i).await.unwrap();
         }
 
-        q.wait_for_messages_to_be_acknowledged().await;
+        q.wait_for_messages_to_be_acknowledged(&CancellationToken::new())
+            .await;
     }
 }
