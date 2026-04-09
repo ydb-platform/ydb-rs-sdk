@@ -174,9 +174,7 @@ impl MessageQueueInner {
 
     fn add_message(&mut self, message: MessageData) -> YdbResult<()> {
         if !self.is_open_for_new_messages {
-            return Err(YdbError::Custom(
-                "message queue is closed for new messages".to_string(),
-            ));
+            return Err(YdbError::custom("message queue is closed for new messages"));
         }
 
         let seq_no = message.seq_no;
@@ -193,13 +191,9 @@ impl MessageQueueInner {
 
     fn check_message_seq_no(&self, seq_no: i64) -> YdbResult<()> {
         match self.last_added_seq_no {
-            Some(last_added_seq_no) if seq_no <= last_added_seq_no => {
-                Err(YdbError::InternalError(format!(
-                    "message with seq_no={} is not newer than the last written message",
-                    seq_no
-                )))
-            }
-
+            Some(last_added_seq_no) if seq_no <= last_added_seq_no => Err(YdbError::custom(
+                format!("message with seq_no={seq_no} is not newer than the last written message",),
+            )),
             _ => Ok(()),
         }
     }
@@ -243,24 +237,20 @@ impl MessageQueueInner {
             return GetMessagesToSendResult::NotEnoughMessages;
         }
 
-        match self.do_get_messages_to_send(length_threshold) {
-            Ok(messages) => GetMessagesToSendResult::Ok(messages),
-            Err(err) => GetMessagesToSendResult::Err(err),
-        }
+        self.do_get_messages_to_send(length_threshold)
+            .map_or_else(GetMessagesToSendResult::Err, GetMessagesToSendResult::Ok)
     }
 
     fn acknowledge_message(&mut self, seq_no: i64) -> YdbResult<()> {
         let Some(message) = self.sent_messages.pop_front() else {
-            return Err(YdbError::Custom(format!(
-                "ack unexpected message with seq_no={}",
-                seq_no
+            return Err(YdbError::custom(format!(
+                "ack unexpected message with seq_no={seq_no}",
             )));
         };
 
         if message.seq_no != seq_no {
-            return Err(YdbError::Custom(format!(
-                "ack unexpected message with seq_no={}",
-                seq_no
+            return Err(YdbError::custom(format!(
+                "ack unexpected message with seq_no={seq_no}",
             )));
         }
 
