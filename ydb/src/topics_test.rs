@@ -11,7 +11,8 @@ use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::test_integration_helper::create_client;
 use crate::{
     client_topic::client::{AlterTopicOptionsBuilder, CreateTopicOptionsBuilder},
-    PartitioningStrategy, TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError, YdbResult,
+    PartitioningStrategy, TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError,
+    YdbResult,
 };
 use crate::{Codec, DescribeTopicOptionsBuilder};
 use tracing::{debug, info, trace, warn};
