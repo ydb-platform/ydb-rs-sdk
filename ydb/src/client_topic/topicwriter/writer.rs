@@ -31,7 +31,6 @@ use tracing::log::trace;
 use tracing::warn;
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
-use ydb_grpc::ydb_proto::topic::stream_write_message::init_request::Partitioning;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::{message_data, MessageData};
 use ydb_grpc::ydb_proto::topic::stream_write_message::{InitRequest, WriteRequest};
 
@@ -114,7 +113,11 @@ impl TopicWriter {
             producer_id: producer_id.clone(),
             write_session_meta: writer_options.session_metadata.clone().unwrap_or_default(),
             get_last_seq_no: writer_options.auto_seq_no,
-            partitioning: Some(Partitioning::MessageGroupId(producer_id.clone())),
+            partitioning: Some(
+                writer_options
+                    .partitioning
+                    .to_grpc_init_partitioning(producer_id.clone()),
+            ),
         };
 
         let mut stream = topic_service.stream_write(init_request_body).await?;
