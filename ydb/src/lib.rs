@@ -134,6 +134,8 @@ pub use client_topic::topicreader::reader::{
 // full enum pub types
 pub use client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMessageBuilder};
 // full enum pub types
+pub use client_topic::topicwriter::partitioning::PartitioningStrategy;
+// full enum pub types
 pub use client_topic::topicwriter::writer::TopicWriter;
 // full enum pub types
 pub use client_topic::topicwriter::writer_options::{

@@ -11,7 +11,7 @@ use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::test_integration_helper::create_client;
 use crate::{
     client_topic::client::{AlterTopicOptionsBuilder, CreateTopicOptionsBuilder},
-    TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError, YdbResult,
+    PartitioningStrategy, TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError, YdbResult,
 };
 use crate::{Codec, DescribeTopicOptionsBuilder};
 use tracing::{debug, info, trace, warn};
@@ -1047,6 +1047,120 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
     );
 
     info!("✓ All validations passed! Successfully read {} messages in transaction with comprehensive field validation", expected_messages.len());
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn write_to_specific_partition() -> YdbResult<()> {
+    use std::collections::HashMap;
+
+    let client = create_client().await?;
+    let database_path = client.database();
+    let topic_name = "write_to_specific_partition".to_string();
+    let topic_path = format!("{database_path}/{topic_name}");
+    let consumer_name = "test-consumer".to_string();
+
+    let mut topic_client = client.topic_client();
+    let _ = topic_client.drop_topic(topic_path.clone()).await;
+
+    'wait_topic_dropped: loop {
+        let mut scheme = client.scheme_client();
+        let res = scheme.list_directory(database_path.clone()).await?;
+        if !res.iter().any(|item| item.name == topic_name) {
+            break 'wait_topic_dropped;
+        }
+        info!("waiting previous topic dropped...");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    topic_client
+        .create_topic(
+            topic_path.clone(),
+            CreateTopicOptionsBuilder::default()
+                .min_active_partitions(2)
+                .consumers(vec![ConsumerBuilder::default()
+                    .name(consumer_name.clone())
+                    .build()?])
+                .build()?,
+        )
+        .await?;
+
+    let description = topic_client
+        .describe_topic(
+            topic_path.clone(),
+            DescribeTopicOptionsBuilder::default().build()?,
+        )
+        .await?;
+    assert_eq!(
+        description.partitions.len(),
+        2,
+        "topic must have 2 partitions"
+    );
+
+    // Write one tagged message to each target partition via explicit PartitionId strategy.
+    for target_partition in [0i64, 1i64] {
+        let payload = format!("msg-for-partition-{target_partition}");
+        let mut writer = topic_client
+            .create_writer_with_params(
+                TopicWriterOptionsBuilder::default()
+                    .topic_path(topic_path.clone())
+                    .producer_id(format!("producer-p{target_partition}"))
+                    .partitioning(PartitioningStrategy::PartitionId(target_partition))
+                    .build()?,
+            )
+            .await?;
+
+        writer
+            .write_with_ack(
+                TopicWriterMessageBuilder::default()
+                    .data(payload.clone().into_bytes())
+                    .build()?,
+            )
+            .await?;
+        writer.stop().await?;
+        debug!("wrote {} and stopped writer", payload);
+    }
+
+    // Read both messages back. A single reader session may need multiple batches
+    // to receive messages from both partitions.
+    let mut reader = topic_client
+        .create_reader(consumer_name.clone(), topic_path.clone())
+        .await?;
+
+    let mut observed: HashMap<String, i64> = HashMap::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while observed.len() < 2 {
+        if std::time::Instant::now() > deadline {
+            panic!(
+                "timeout waiting for messages from both partitions, observed: {:?}",
+                observed
+            );
+        }
+        let batch = reader.read_batch().await?;
+        for mut msg in batch.messages {
+            let partition_id = msg.get_partition_id();
+            let data = msg.read_and_take().await?.unwrap();
+            let text = String::from_utf8(data).unwrap();
+            debug!("received {} from partition {}", text, partition_id);
+            observed.insert(text, partition_id);
+        }
+    }
+
+    assert_eq!(
+        observed.get("msg-for-partition-0").copied(),
+        Some(0),
+        "message targeted to partition 0 must be read from partition 0, observed: {:?}",
+        observed
+    );
+    assert_eq!(
+        observed.get("msg-for-partition-1").copied(),
+        Some(1),
+        "message targeted to partition 1 must be read from partition 1, observed: {:?}",
+        observed
+    );
 
     Ok(())
 }
