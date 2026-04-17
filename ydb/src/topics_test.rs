@@ -1165,3 +1165,112 @@ async fn write_to_specific_partition() -> YdbResult<()> {
 
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+#[traced_test]
+#[ignore] // need YDB access
+async fn read_batch_merges_and_respects_hard_limit() -> YdbResult<()> {
+    use crate::TopicReaderOptionsBuilder;
+
+    timeout(Duration::from_secs(10), async {
+        let client = create_client().await?;
+        let database_path = client.database();
+        let topic_name = "read_batch_merges_and_respects_hard_limit".to_string();
+        let topic_path = format!("{database_path}/{topic_name}");
+        let producer_id = "test-producer".to_string();
+        let consumer_name = "test-consumer".to_string();
+
+        let mut topic_client = client.topic_client();
+        let _ = topic_client.drop_topic(topic_path.clone()).await;
+
+        'wait_topic_dropped: loop {
+            let mut scheme = client.scheme_client();
+            let res = scheme.list_directory(database_path.clone()).await?;
+            if !res.iter().any(|item| item.name == topic_name) {
+                break 'wait_topic_dropped;
+            }
+            info!("waiting previous topic dropped...");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        topic_client
+            .create_topic(
+                topic_path.clone(),
+                CreateTopicOptionsBuilder::default()
+                    .min_active_partitions(1)
+                    .consumers(vec![ConsumerBuilder::default()
+                        .name(consumer_name.clone())
+                        .build()?])
+                    .build()?,
+            )
+            .await?;
+
+        const TOTAL: usize = 10;
+        const BATCH_SIZE: usize = 3;
+
+        let mut writer = topic_client
+            .create_writer_with_params(
+                TopicWriterOptionsBuilder::default()
+                    .topic_path(topic_path.clone())
+                    .producer_id(producer_id.clone())
+                    .build()?,
+            )
+            .await?;
+        for i in 0..TOTAL {
+            writer
+                .write(
+                    TopicWriterMessageBuilder::default()
+                        .data(format!("msg-{i}").into_bytes())
+                        .build()?,
+                )
+                .await?;
+        }
+        writer.stop().await?;
+
+        let options = TopicReaderOptionsBuilder::default()
+            .consumer(consumer_name.clone())
+            .topic(topic_path.clone().into())
+            .batch_size(BATCH_SIZE)
+            .build()?;
+
+        let mut reader = topic_client.create_reader_with_params(options).await?;
+
+        // Let the background receive_loop fill the buffer before reading.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let mut total_read = 0usize;
+        let mut any_merge = false;
+        let mut last_offset: Option<i64> = None;
+
+        while total_read < TOTAL {
+            let batch = reader.read_batch().await?;
+
+            assert!(
+                batch.messages.len() <= BATCH_SIZE,
+                "hard limit violated: got {} > {}",
+                batch.messages.len(),
+                BATCH_SIZE
+            );
+            if batch.messages.len() > 1 {
+                any_merge = true;
+            }
+            for msg in &batch.messages {
+                if let Some(prev) = last_offset {
+                    assert!(
+                        msg.offset > prev,
+                        "offsets must be monotonically increasing"
+                    );
+                }
+                last_offset = Some(msg.offset);
+            }
+            total_read += batch.messages.len();
+        }
+
+        assert_eq!(total_read, TOTAL);
+        assert!(any_merge, "expected at least one batch with >1 messages");
+
+        Ok(())
+    })
+    .await
+    .map_err(|_| YdbError::Custom("test timed out after 10s".to_string()))?
+}
