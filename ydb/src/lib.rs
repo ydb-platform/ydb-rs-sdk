@@ -132,6 +132,10 @@ pub use client_topic::topicreader::reader::{
     TopicReader, TopicReaderCommitMarker, TopicSelector, TopicSelectors,
 };
 // full enum pub types
+pub use client_topic::topicreader::reader_options::{
+    TopicReaderOptions, TopicReaderOptionsBuilder,
+};
+// full enum pub types
 pub use client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMessageBuilder};
 // full enum pub types
 pub use client_topic::topicwriter::partitioning::PartitioningStrategy;
