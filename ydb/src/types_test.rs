@@ -288,6 +288,85 @@ fn type_cases() -> Vec<TypeCase> {
     // microseconds, so the value the server sees is 1000× the intended one.
     // Adding round-trip cases here would either fail or document the bug.
 
+    // ---- Date32 (signed days from epoch); YDB range covers negative values ----
+    cases.push(TypeCase::new(
+        "Date32",
+        Value::Date32(0),
+        "1970-01-01",
+    ));
+    cases.push(TypeCase::new(
+        "Date32",
+        Value::Date32(19_737),
+        "2024-01-15",
+    ));
+    cases.push(TypeCase::new(
+        "Date32",
+        Value::Date32(-1),
+        "1969-12-31",
+    ));
+
+    // ---- Datetime64 (signed seconds from epoch) ----
+    cases.push(TypeCase::new(
+        "Datetime64",
+        Value::Datetime64(0),
+        "1970-01-01T00:00:00Z",
+    ));
+    cases.push(TypeCase::new(
+        "Datetime64",
+        Value::Datetime64(1_705_320_645),
+        "2024-01-15T12:10:45Z",
+    ));
+    cases.push(TypeCase::new(
+        "Datetime64",
+        Value::Datetime64(-1),
+        "1969-12-31T23:59:59Z",
+    ));
+
+    // ---- Timestamp64 (signed microseconds from epoch) ----
+    cases.push(TypeCase::new(
+        "Timestamp64",
+        Value::Timestamp64(0),
+        "1970-01-01T00:00:00Z",
+    ));
+    cases.push(TypeCase::new(
+        "Timestamp64",
+        Value::Timestamp64(1),
+        "1970-01-01T00:00:00.000001Z",
+    ));
+    cases.push(TypeCase::new(
+        "Timestamp64",
+        Value::Timestamp64(1_705_320_645_123_456),
+        "2024-01-15T12:10:45.123456Z",
+    ));
+    cases.push(TypeCase::new(
+        "Timestamp64",
+        Value::Timestamp64(-1),
+        "1969-12-31T23:59:59.999999Z",
+    ));
+
+    // ---- Interval64 (signed microseconds duration) ----
+    // YDB CAST(Interval64 AS Utf8) produces an ISO-8601 duration string.
+    // Test values are taken from the Go SDK integration tests, so the
+    // canonical form is verified against a known-good reference.
+    // 5h30m45.000123s
+    cases.push(TypeCase::new(
+        "Interval64",
+        Value::Interval64(19_845_000_123),
+        "PT5H30M45.000123S",
+    ));
+    // -(2h15m30s)
+    cases.push(TypeCase::new(
+        "Interval64",
+        Value::Interval64(-8_130_000_000),
+        "-PT2H15M30S",
+    ));
+    // 7h45m30.999999s
+    cases.push(TypeCase::new(
+        "Interval64",
+        Value::Interval64(27_930_999_999),
+        "PT7H45M30.999999S",
+    ));
+
     // ---- Utf8 (Text) / String (Bytes) ----
     // Empty, ASCII, multi-byte UTF-8, special chars (newline/tab/quote).
     for s in ["", "hello", "привет", "a\nb", "a\tb", "a\"b"] {

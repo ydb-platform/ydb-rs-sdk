@@ -176,6 +176,14 @@ pub enum Value {
     DateTime(std::time::SystemTime),
     Timestamp(std::time::SystemTime),
     Interval(SignedInterval),
+    /// Signed days from UNIX epoch.
+    Date32(i32),
+    /// Signed seconds from UNIX epoch.
+    Datetime64(i64),
+    /// Signed microseconds from UNIX epoch.
+    Timestamp64(i64),
+    /// Signed microseconds duration.
+    Interval64(i64)
 
     // It named String at server, but server String type contains binary data https://ydb.tech/docs/en/yql/reference/types/primitive#string
     Bytes(Bytes),
@@ -505,6 +513,10 @@ impl Value {
                 ),
             ),
             Self::Interval(val) => proto_typed_value(pt::Interval, pv::Int64Value(val.as_nanos()?)),
+            Self::Date32(val) => proto_typed_value(pt::Date32, pv::Int32Value(val)),
+            Self::Datetime64(val) => proto_typed_value(pt::Datetime64, pv::Int64Value(val)),
+            Self::Timestamp64(val) => proto_typed_value(pt::Timestamp64, pv::Int64Value(val)),
+            Self::Interval64(val) => proto_typed_value(pt::Interval64, pv::Int64Value(val)),
             Self::Bytes(val) => proto_typed_value(pt::String, pv::BytesValue(val.into())),
             Self::Text(val) => proto_typed_value(pt::Utf8, pv::TextValue(val)),
             Self::Yson(val) => proto_typed_value(pt::Yson, pv::BytesValue(val.into())),
@@ -709,6 +721,11 @@ impl Value {
             sign: Sign::Minus,
             duration: Duration::from_secs(1),
         })); // -1 second interval
+
+        values.push(Value::Date32(0));
+        values.push(Value::Datetime64(0));
+        values.push(Value::Timestamp64(0));
+        values.push(Value::Interval64(0));
 
         values.push(Value::optional_from(Value::Int8(0), None).unwrap());
         values.push(Value::optional_from(Value::Int8(0), Some(Value::Int8(1))).unwrap());

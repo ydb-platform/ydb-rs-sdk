@@ -101,6 +101,22 @@ impl TryFrom<crate::Value> for RawTypedValue {
                 r#type: RawType::Interval,
                 value: RawValue::Int64(v.as_nanos()?),
             },
+            Value::Date32(v) => RawTypedValue {
+                r#type: RawType::Date32,
+                value: RawValue::Int32(v),
+            },
+            Value::Datetime64(v) => RawTypedValue {
+                r#type: RawType::Datetime64,
+                value: RawValue::Int64(v),
+            },
+            Value::Timestamp64(v) => RawTypedValue {
+                r#type: RawType::Timestamp64,
+                value: RawValue::Int64(v),
+            },
+            Value::Interval64(v) => RawTypedValue {
+                r#type: RawType::Interval64,
+                value: RawValue::Int64(v),
+            },
             Value::Bytes(v) => RawTypedValue {
                 r#type: RawType::Bytes,
                 value: RawValue::Bytes(v.into()),
@@ -270,6 +286,14 @@ impl TryFrom<RawTypedValue> for Value {
                 Value::Interval(SignedInterval::from_nanos(v))
             }
             (t @ RawType::Interval, v) => return types_mismatch(t, v),
+            (RawType::Date32, RawValue::Int32(v)) => Value::Date32(v),
+            (t @ RawType::Date32, v) => return types_mismatch(t, v),
+            (RawType::Datetime64, RawValue::Int64(v)) => Value::Datetime64(v),
+            (t @ RawType::Datetime64, v) => return types_mismatch(t, v),
+            (RawType::Timestamp64, RawValue::Int64(v)) => Value::Timestamp64(v),
+            (t @ RawType::Timestamp64, v) => return types_mismatch(t, v),
+            (RawType::Interval64, RawValue::Int64(v)) => Value::Interval64(v),
+            (t @ RawType::Interval64, v) => return types_mismatch(t, v),
             (t @ RawType::TzDate, _) => return type_unimplemented(t),
             (t @ RawType::TzDatetime, _) => return type_unimplemented(t),
             (t @ RawType::TzTimestamp, _) => return type_unimplemented(t),
