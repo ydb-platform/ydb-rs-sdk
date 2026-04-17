@@ -122,17 +122,15 @@ impl StreamWriter {
                         continue;
                     };
 
-                    cancellation_token.cancel();
+                    warn!(
+                        "error sending message in topic writer writer loop: {}",
+                        &writer_iteration_error
+                    );
 
-                    let Some(tx) = error_tx.lock().await.take() else {
-                        break;
-                    };
+                    if let Err(send_err) = StreamWriter::loop_iteration_error(cancellation_token, error_tx, writer_iteration_error).await {
+                        warn!("can't send error from stream writer writer_loop: {send_err}");
+                    }
 
-                    let Err(send_err) = tx.send(writer_iteration_error.clone()) else {
-                        break;
-                    };
-
-                    warn!("can't send error from stream writer writer_loop: {send_err} (original error: {writer_iteration_error})");
                     break;
                 }
             }
@@ -192,21 +190,14 @@ impl StreamWriter {
                         continue;
                     };
 
-                    cancellation_token.cancel();
                     warn!(
                         "error receiving message in topic writer receiver stream loop: {}",
                         &receive_message_it_error
                     );
 
-                    let Some(tx) = error_tx.lock().await.take() else {
-                        break;
-                    };
-
-                    let Err(send_err) = tx.send(receive_message_it_error.clone()) else {
-                        break;
-                    };
-
-                    warn!("can't send error from stream writer receive_messages_loop: {send_err} (original error: {receive_message_it_error})");
+                    if let Err(send_err) = StreamWriter::loop_iteration_error(cancellation_token, error_tx, receive_message_it_error).await {
+                        warn!("can't send error from stream writer receive_messages_loop: {send_err}");
+                    }
                     break;
                 }
             }
@@ -236,23 +227,21 @@ impl StreamWriter {
                                 let mut writer_state = writer_state.lock().await;
                                 writer_state.confirmation_reception_queue.try_get_ticket()
                             };
-                            match reception_ticket {
-                                None => {
-                                    return Err(YdbError::custom(
-                                        "Expected reception ticket to be actually present",
-                                    ));
-                                }
-                                Some(ticket) => {
-                                    if write_ack.seq_no != ticket.get_seq_no() {
-                                        return Err(YdbError::custom(format!(
-                                            "Reception ticket and write ack seq_no mismatch. Seqno from ack: {}, expected: {}",
-                                            write_ack.seq_no,
-                                            ticket.get_seq_no()
-                                        )));
-                                    }
-                                    ticket
-                                }
+
+                            let Some(reception_ticket) = reception_ticket else {
+                                return Err(YdbError::custom(
+                                    "Expected reception ticket to be actually present",
+                                ));
+                            };
+
+                            if write_ack.seq_no != reception_ticket.get_seq_no() {
+                                return Err(YdbError::custom(format!(
+                                    "Reception ticket and write ack seq_no mismatch. Seqno from ack: {}, expected: {}",
+                                    write_ack.seq_no,
+                                    reception_ticket.get_seq_no(),
+                                )));
                             }
+                            reception_ticket
                         };
                         message_queue.acknowledge_message(write_ack.seq_no).await?;
                         ticket.send_confirmation_if_needed(write_ack.status);
@@ -265,6 +254,20 @@ impl StreamWriter {
             }
         }
         Ok(())
+    }
+
+    async fn loop_iteration_error(
+        cancellation_token: CancellationToken,
+        error_tx: Arc<TokioMutex<Option<oneshot::Sender<YdbError>>>>,
+        error: YdbError,
+    ) -> Result<(), YdbError> {
+        cancellation_token.cancel();
+
+        let Some(tx) = error_tx.lock().await.take() else {
+            return Ok(());
+        };
+
+        tx.send(error)
     }
 
     pub async fn stop(self) -> YdbResult<()> {
