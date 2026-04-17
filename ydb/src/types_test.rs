@@ -285,10 +285,104 @@ fn type_cases() -> Vec<TypeCase> {
         "2105-12-31T23:59:59.999999Z",
     ));
 
-    // Interval is intentionally NOT covered here: the SDK currently encodes
-    // SignedInterval via `as_nanos()`, but the YDB wire format uses
-    // microseconds, so the value the server sees is 1000× the intended one.
-    // Adding round-trip cases here would either fail or document the bug.
+    // ---- Interval (signed microsecond duration, bounded to Timestamp domain) ----
+    // Wire format: int64 microseconds. YDB validates with exclusive bounds
+    // `(-MAX_TIMESTAMP, MAX_TIMESTAMP)` where
+    // `MAX_TIMESTAMP = 86_400_000_000 * 49_673 = 4_291_747_200_000_000 µs`;
+    // i.e. accepted values are `-INTERVAL_MAX ..= INTERVAL_MAX` where
+    // `INTERVAL_MAX = MAX_TIMESTAMP - 1`. Source:
+    // `yql/essentials/public/udf/udf_data_type.h`.
+    const INTERVAL_MAX: u64 = 86_400_000_000 * 49_673 - 1;
+    cases.push(TypeCase::new(
+        "Interval",
+        Value::IntervalMicros(SignedInterval {
+            sign: Sign::Plus,
+            duration: Duration::from_micros(1),
+        }),
+        "PT0.000001S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval",
+        Value::IntervalMicros(SignedInterval {
+            sign: Sign::Minus,
+            duration: Duration::from_micros(1),
+        }),
+        "-PT0.000001S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval",
+        Value::IntervalMicros(SignedInterval {
+            sign: Sign::Plus,
+            duration: Duration::from_micros(999_999),
+        }),
+        "PT0.999999S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval",
+        Value::IntervalMicros(SignedInterval {
+            sign: Sign::Plus,
+            duration: Duration::from_secs(1),
+        }),
+        "PT1S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval",
+        Value::IntervalMicros(SignedInterval {
+            sign: Sign::Minus,
+            duration: Duration::from_secs(1),
+        }),
+        "-PT1S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval",
+        Value::IntervalMicros(SignedInterval {
+            sign: Sign::Plus,
+            duration: Duration::from_micros(19_845_000_123),
+        }),
+        "PT5H30M45.000123S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval",
+        Value::IntervalMicros(SignedInterval {
+            sign: Sign::Minus,
+            duration: Duration::from_micros(8_130_000_000),
+        }),
+        "-PT2H15M30S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval",
+        Value::IntervalMicros(SignedInterval {
+            sign: Sign::Plus,
+            duration: Duration::from_micros(86_399_999_999),
+        }),
+        "PT23H59M59.999999S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval",
+        Value::IntervalMicros(SignedInterval {
+            sign: Sign::Minus,
+            duration: Duration::from_micros(86_399_999_999),
+        }),
+        "-PT23H59M59.999999S",
+    ));
+    // Server extreme bounds (±INTERVAL_MAX = ±(MAX_TIMESTAMP - 1 µs) =
+    // ±4_291_747_199_999_999 µs = ±(49_672 days, 23h59m59.999999s)).
+    cases.push(TypeCase::new(
+        "Interval",
+        Value::IntervalMicros(SignedInterval {
+            sign: Sign::Plus,
+            duration: Duration::from_micros(INTERVAL_MAX),
+        }),
+        "P49672DT23H59M59.999999S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval",
+        Value::IntervalMicros(SignedInterval {
+            sign: Sign::Minus,
+            duration: Duration::from_micros(INTERVAL_MAX),
+        }),
+        "-P49672DT23H59M59.999999S",
+    ));
 
     // ---- Date32 (signed days from epoch) ----
     // YDB Date32 range per `yql/essentials/public/udf/udf_data_type.h`:

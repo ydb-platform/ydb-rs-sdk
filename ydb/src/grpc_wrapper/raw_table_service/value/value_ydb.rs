@@ -101,9 +101,9 @@ impl TryFrom<crate::Value> for RawTypedValue {
                         .try_into()?,
                 ),
             },
-            Value::Interval(v) => RawTypedValue {
+            Value::IntervalMicros(v) => RawTypedValue {
                 r#type: RawType::Interval,
-                value: RawValue::Int64(v.as_nanos()?),
+                value: RawValue::Int64(v.as_micros()?),
             },
             Value::Date32(v) => RawTypedValue {
                 r#type: RawType::Date32,
@@ -287,7 +287,7 @@ impl TryFrom<RawTypedValue> for Value {
             }
             (t @ RawType::Timestamp, v) => return types_mismatch(t, v),
             (RawType::Interval, RawValue::Int64(v)) => {
-                Value::Interval(SignedInterval::from_nanos(v))
+                Value::IntervalMicros(SignedInterval::from_micros(v))
             }
             (t @ RawType::Interval, v) => return types_mismatch(t, v),
             (RawType::Date32, RawValue::Int32(v)) => Value::Date32(signed_days_to_system_time(v)),

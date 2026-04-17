@@ -182,13 +182,13 @@ pub enum Value {
     /// Range: 1970-01-01T00:00:00.000000Z .. 2105-12-31T23:59:59.999999Z.
     Timestamp(SystemTime),
     /// Signed duration, microsecond granularity on the YDB wire.
-    /// Wire format: `int64` microseconds. Range: roughly ±136 years
-    /// (bounded to match the `Timestamp` domain).
-    ///
-    /// Note: current SDK encodes this field in *nanoseconds* instead of
-    /// microseconds (known bug); the server sees values 1000× larger than
-    /// intended.
-    Interval(SignedInterval),
+    /// Wire format: `int64` microseconds.
+    /// YDB range (exclusive): `(-MAX_TIMESTAMP, MAX_TIMESTAMP)` where
+    /// `MAX_TIMESTAMP = 86_400_000_000 * 49_673 = 4_291_747_200_000_000 µs`;
+    /// i.e. valid values are `-4_291_747_199_999_999 .. 4_291_747_199_999_999`
+    /// inclusive (≈ ±136 years). Source:
+    /// `yql/essentials/public/udf/udf_data_type.h`.
+    IntervalMicros(SignedInterval),
     /// Signed date, day granularity. Wire format: `int32` days from UNIX epoch.
     /// YDB range: `-53_375_809` .. `53_375_807` days inclusive (year -144169-01-01 ..
     /// 148107-12-31). Source: `yql/essentials/public/udf/udf_data_type.h`.
@@ -357,15 +357,6 @@ pub struct SignedInterval {
 }
 
 impl SignedInterval {
-    pub(crate) fn as_nanos(self) -> std::result::Result<i64, TryFromIntError> {
-        let nanos: i64 = self.duration.as_nanos().try_into()?;
-        let res = match self.sign {
-            Sign::Plus => nanos,
-            Sign::Minus => -nanos,
-        };
-        Ok(res)
-    }
-
     pub(crate) fn as_micros(self) -> std::result::Result<i64, TryFromIntError> {
         let micros: i64 = self.duration.as_micros().try_into()?;
         let res = match self.sign {
@@ -385,19 +376,6 @@ impl SignedInterval {
         Self {
             sign,
             duration: Duration::from_micros(micros),
-        }
-    }
-
-    pub(crate) fn from_nanos(nanos: i64) -> Self {
-        let (sign, nanos) = if nanos >= 0 {
-            (Sign::Plus, nanos as u64)
-        } else {
-            (Sign::Minus, (-nanos) as u64)
-        };
-
-        Self {
-            sign,
-            duration: Duration::from_nanos(nanos),
         }
     }
 }
@@ -627,7 +605,9 @@ impl Value {
                         .try_into()?,
                 ),
             ),
-            Self::Interval(val) => proto_typed_value(pt::Interval, pv::Int64Value(val.as_nanos()?)),
+            Self::IntervalMicros(val) => {
+                proto_typed_value(pt::Interval, pv::Int64Value(val.as_micros()?))
+            }
             Self::Date32(val) => {
                 proto_typed_value(pt::Date32, pv::Int32Value(system_time_to_signed_days(val)?))
             }
@@ -837,12 +817,12 @@ impl Value {
             SystemTime::UNIX_EPOCH.add(std::time::Duration::from_micros(16340005230000123)),
         )); //Tue Oct 12 00:00:00.000123 UTC 2021
 
-        values.push(Value::Interval(SignedInterval {
+        values.push(Value::IntervalMicros(SignedInterval {
             sign: Sign::Plus,
             duration: Duration::from_secs(1),
         })); // 1 second interval
 
-        values.push(Value::Interval(SignedInterval {
+        values.push(Value::IntervalMicros(SignedInterval {
             sign: Sign::Minus,
             duration: Duration::from_secs(1),
         })); // -1 second interval
