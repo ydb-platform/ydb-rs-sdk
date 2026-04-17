@@ -97,7 +97,43 @@ simple_convert!(
 simple_convert!(f32, Value::Float);
 simple_convert!(f64, Value::Double, Value::Float);
 simple_convert!(SystemTime, Value::Timestamp, Value::Date, Value::DateTime);
-simple_convert!(decimal_rs::Decimal, Value::Decimal);
+// No implicit From<decimal_rs::Decimal> for Value: precision and scale cannot be
+// unambiguously derived from a bare Decimal. Use YdbDecimal::try_new() to construct
+
+impl TryFrom<Value> for decimal_rs::Decimal {
+    type Error = YdbError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Decimal(val) => Ok(val.into()),
+            value => Err(YdbError::Convert(format!(
+                "failed to convert from {} to decimal_rs::Decimal",
+                value.kind_static(),
+            ))),
+        }
+    }
+}
+
+impl TryFrom<Value> for Option<decimal_rs::Decimal> {
+    type Error = YdbError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Optional(opt_val) => {
+                <decimal_rs::Decimal as TryFrom<Value>>::try_from(opt_val.t)?;
+
+                match opt_val.value {
+                    Some(val) => {
+                        let res_val: decimal_rs::Decimal = val.try_into()?;
+                        Ok(Some(res_val))
+                    }
+                    None => Ok(None),
+                }
+            }
+            value => Ok(Some(value.try_into()?)),
+        }
+    }
+}
 simple_convert!(uuid::Uuid, Value::Uuid);
 
 // Impl additional Value From

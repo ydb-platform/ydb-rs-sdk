@@ -1,4 +1,5 @@
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
+use crate::types::YdbDecimal;
 use crate::{Bytes, SignedInterval, Value, ValueList, ValueOptional, ValueStruct};
 use std::time::SystemTime;
 use ydb_grpc::ydb_proto::r#type::{PrimitiveTypeId, Type as ProtoType};
@@ -51,8 +52,8 @@ pub(crate) enum RawType {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub(crate) struct DecimalType {
-    pub precision: u8,
-    pub scale: i16,
+    pub precision: u32,
+    pub scale: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
@@ -165,7 +166,15 @@ impl RawType {
             RawType::Uuid => Value::Uuid(uuid::Uuid::nil()),
             RawType::JSONDocument => Value::JsonDocument(String::default()),
             t @ RawType::DyNumber => return unimplemented_type(t),
-            RawType::Decimal(_) => Value::Decimal(decimal_rs::Decimal::default()),
+            RawType::Decimal(dec) => {
+                let scale_i16 = i16::try_from(dec.scale).map_err(|_| {
+                    RawError::custom(format!("scale {} does not fit into i16", dec.scale))
+                })?;
+                let inner = decimal_rs::Decimal::from_parts(0, scale_i16, false).map_err(|e| {
+                    RawError::custom(format!("failed to create decimal example: {}", e))
+                })?;
+                Value::Decimal(YdbDecimal::new_unchecked(inner, dec.precision, dec.scale))
+            }
             RawType::Optional(inner_type) => Value::Optional(Box::new(ValueOptional {
                 t: (*inner_type).into_value_example()?,
                 value: None,
@@ -211,8 +220,8 @@ impl TryFrom<ydb_grpc::ydb_proto::Type> for RawType {
         let res: Self = match t {
             ProtoType::TypeId(type_id) => return RawType::try_from_primitive_type_id(type_id),
             ProtoType::DecimalType(decimal) => RawType::Decimal(DecimalType {
-                precision: u8::try_from(decimal.precision)?,
-                scale: i16::try_from(decimal.scale)?,
+                precision: decimal.precision,
+                scale: decimal.scale,
             }),
             ProtoType::OptionalType(optional_type) => {
                 if let Some(item) = optional_type.item {
@@ -367,8 +376,8 @@ impl From<RawType> for ydb_grpc::ydb_proto::Type {
             RawType::JSONDocument => ProtoType::TypeId(PrimitiveTypeId::JsonDocument as i32),
             RawType::DyNumber => ProtoType::TypeId(PrimitiveTypeId::Dynumber as i32),
             RawType::Decimal(decimal) => ProtoType::DecimalType(ydb_grpc::ydb_proto::DecimalType {
-                precision: decimal.precision as u32,
-                scale: decimal.scale as u32,
+                precision: decimal.precision,
+                scale: decimal.scale,
             }),
             RawType::Optional(nested) => {
                 ProtoType::OptionalType(Box::new(ydb_grpc::ydb_proto::OptionalType {

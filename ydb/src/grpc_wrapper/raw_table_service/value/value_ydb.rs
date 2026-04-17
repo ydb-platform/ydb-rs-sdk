@@ -11,6 +11,7 @@ use super::r#type::DecimalType;
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::grpc_wrapper::raw_table_service::value::r#type::{RawType, StructMember, StructType};
 use crate::grpc_wrapper::raw_table_service::value::{RawTypedValue, RawValue};
+use crate::types::YdbDecimal;
 use crate::types::SECONDS_PER_DAY;
 use crate::{Bytes, SignedInterval, Value};
 
@@ -121,15 +122,14 @@ impl TryFrom<crate::Value> for RawTypedValue {
                 value: RawValue::Text(v),
             },
             Value::Decimal(v) => {
-                let (int_val, _scale, negative) = v.into_parts();
+                let precision = v.precision();
+                let scale = v.scale();
+                let (int_val, _scale, negative) = v.decimal().into_parts();
                 let int_value = (if negative { -1 } else { 1 }) * (int_val as i128);
                 let (high, low) = split_to_parts(int_value as u128);
 
                 RawTypedValue {
-                    r#type: RawType::Decimal(DecimalType {
-                        precision: v.precision(),
-                        scale: v.scale(),
-                    }),
+                    r#type: RawType::Decimal(DecimalType { precision, scale }),
                     value: RawValue::HighLow128(high, low),
                 }
             }
@@ -296,10 +296,14 @@ impl TryFrom<RawTypedValue> for Value {
             (t @ RawType::DyNumber, _) => return type_unimplemented(t),
             (RawType::Decimal(t), RawValue::HighLow128(high, low)) => {
                 let int_val = merge_parts(high, low) as i128;
+                let scale_i16 = i16::try_from(t.scale).map_err(|_| {
+                    RawError::decode_error(format!("scale {} does not fit into i16", t.scale))
+                })?;
 
-                let value =
-                    decimal_rs::Decimal::from_parts(int_val.unsigned_abs(), t.scale, int_val < 0)
+                let inner =
+                    decimal_rs::Decimal::from_parts(int_val.unsigned_abs(), scale_i16, int_val < 0)
                         .map_err(|e| RawError::decode_error(e.to_string()))?;
+                let value = YdbDecimal::new_unchecked(inner, t.precision, t.scale);
                 return Ok(Value::Decimal(value));
             }
             (t @ RawType::Decimal(_), v) => return types_mismatch(t, v),

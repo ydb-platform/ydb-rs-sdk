@@ -12,6 +12,104 @@ use ydb_grpc::ydb_proto;
 
 pub(crate) const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 
+/// A decimal value with explicit YQL type parameters (precision and scale).
+///
+/// In YQL, `Decimal(p, s)` values with different precision or scale are
+/// considered distinct, incompatible types. This wrapper preserves both
+/// parameters alongside the numeric value.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct YdbDecimal {
+    inner: decimal_rs::Decimal,
+    precision: u32,
+    scale: u32,
+}
+
+impl YdbDecimal {
+    /// Creates a new `YdbDecimal` with validation.
+    ///
+    /// Rescaling up (increasing scale) is allowed via `normalize_to_scale`.
+    /// Returns an error if:
+    /// - The value cannot be represented within the given precision
+    /// - Rescaling would lose significant digits (decrease in scale or precision)
+    pub fn try_new(value: decimal_rs::Decimal, precision: u32, scale: u32) -> YdbResult<Self> {
+        let scale_i16: i16 = scale
+            .try_into()
+            .map_err(|_| YdbError::Convert(format!("scale {} does not fit into i16", scale)))?;
+        let current_scale = value.scale();
+        let adjusted = if current_scale != scale_i16 {
+            if scale_i16 < current_scale {
+                return Err(YdbError::Convert(format!(
+                    "cannot decrease decimal scale from {} to {}",
+                    current_scale, scale
+                )));
+            }
+            value.normalize_to_scale(scale_i16)
+        } else {
+            value
+        };
+
+        let digit_count = adjusted.precision() as u32;
+        if digit_count > precision {
+            return Err(YdbError::Convert(format!(
+                "decimal value has {} digits, which exceeds precision {}",
+                digit_count, precision
+            )));
+        }
+
+        Ok(Self {
+            inner: adjusted,
+            precision,
+            scale,
+        })
+    }
+
+    /// Creates a new `YdbDecimal` without validation.
+    ///
+    /// The caller must ensure that the value can be represented within
+    /// the given precision and scale. Using incorrect parameters may
+    /// cause unexpected behavior when sending values to YDB.
+    pub(crate) fn new_unchecked(value: decimal_rs::Decimal, precision: u32, scale: u32) -> Self {
+        Self {
+            inner: value,
+            precision,
+            scale,
+        }
+    }
+
+    /// Returns the precision (maximum number of digits).
+    pub fn precision(&self) -> u32 {
+        self.precision
+    }
+
+    /// Returns the scale (number of digits after the decimal point).
+    pub fn scale(&self) -> u32 {
+        self.scale
+    }
+
+    /// Returns a reference to the underlying decimal value.
+    pub fn decimal(&self) -> &decimal_rs::Decimal {
+        &self.inner
+    }
+}
+
+impl std::fmt::Display for YdbDecimal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.inner, f)
+    }
+}
+
+impl From<YdbDecimal> for decimal_rs::Decimal {
+    fn from(d: YdbDecimal) -> Self {
+        d.inner
+    }
+}
+
+impl From<YdbDecimal> for Value {
+    fn from(d: YdbDecimal) -> Self {
+        Value::Decimal(d)
+    }
+}
+
 /// Internal represent database value for send to or received from database.
 ///
 /// That enum will be grow, when add support of new types
@@ -92,7 +190,7 @@ pub enum Value {
     List(Box<ValueList>),
     Struct(ValueStruct),
 
-    Decimal(decimal_rs::Decimal),
+    Decimal(YdbDecimal),
     Uuid(uuid::Uuid),
 }
 
@@ -421,18 +519,18 @@ impl Value {
         Ok(res)
     }
 
-    fn to_typed_decimal(val: decimal_rs::Decimal) -> YdbResult<ydb_proto::TypedValue> {
+    fn to_typed_decimal(val: YdbDecimal) -> YdbResult<ydb_proto::TypedValue> {
+        let precision = val.precision();
+        let scale = val.scale();
+        let text = val.decimal().to_string();
         Ok(ydb_proto::TypedValue {
             r#type: Some(ydb_proto::Type {
                 r#type: Some(ydb_proto::r#type::Type::DecimalType(
-                    ydb_proto::DecimalType {
-                        precision: val.precision().into(),
-                        scale: val.scale().try_into()?,
-                    },
+                    ydb_proto::DecimalType { precision, scale },
                 )),
             }),
             value: Some(ydb_proto::Value {
-                value: Some(ydb_proto::value::Value::TextValue(val.to_string())),
+                value: Some(ydb_proto::value::Value::TextValue(text)),
                 ..ydb_proto::Value::default()
             }),
         })
@@ -565,9 +663,14 @@ impl Value {
             Value::JsonDocument("{}".into()),
             Value::Yson("1;2;3;".into()),
             Value::Decimal(
-                "123456789.987654321"
-                    .parse::<decimal_rs::Decimal>()
-                    .unwrap(),
+                YdbDecimal::try_new(
+                    "123456789.987654321"
+                        .parse::<decimal_rs::Decimal>()
+                        .unwrap(),
+                    22,
+                    9,
+                )
+                .unwrap(),
             ),
             Value::Uuid(uuid::Uuid::now_v7()),
             Value::Uuid(uuid::Uuid::new_v4()),
