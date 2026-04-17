@@ -3,6 +3,9 @@ use crate::client::TimeoutSettings;
 use crate::client_common::TokenCache;
 use crate::client_topic::list_types::{AlterConsumer, Consumer, MeteringMode};
 use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
+use crate::client_topic::topicreader::reader_options::{
+    TopicReaderOptions, TopicReaderOptionsBuilder,
+};
 use crate::client_topic::topicwriter::writer::TopicWriter;
 use crate::client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
@@ -206,9 +209,24 @@ impl TopicClient {
         consumer: String,
         topic: impl Into<TopicSelectors>,
     ) -> YdbResult<TopicReader> {
+        let options = TopicReaderOptionsBuilder::default()
+            .consumer(consumer)
+            .topic(topic.into())
+            .build()?;
         TopicReader::new(
-            consumer,
-            topic.into(),
+            options,
+            self.connection_manager.clone(),
+            self.token_cache.clone(),
+        )
+        .await
+    }
+
+    pub async fn create_reader_with_params(
+        &mut self,
+        options: TopicReaderOptions,
+    ) -> YdbResult<TopicReader> {
+        TopicReader::new(
+            options,
             self.connection_manager.clone(),
             self.token_cache.clone(),
         )

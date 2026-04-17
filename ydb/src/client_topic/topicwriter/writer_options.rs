@@ -1,4 +1,5 @@
 use crate::client_topic::list_types::Codec;
+use crate::client_topic::topicwriter::partitioning::PartitioningStrategy;
 use crate::errors;
 use derive_builder::Builder;
 use prost::bytes::Bytes;
@@ -15,6 +16,8 @@ pub struct TopicWriterOptions {
 
     #[builder(setter(strip_option), default)]
     pub(crate) producer_id: Option<String>,
+    #[builder(default)]
+    pub(crate) partitioning: PartitioningStrategy,
     #[builder(setter(strip_option), default)]
     pub(crate) session_metadata: Option<HashMap<String, String>>,
     #[builder(default = "true")]
