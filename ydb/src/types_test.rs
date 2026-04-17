@@ -326,7 +326,11 @@ fn type_cases() -> Vec<TypeCase> {
         r#"{"a":1}"#,
         r#"{"a":[1,2,{"b":"c"}]}"#,
     ] {
-        cases.push(TypeCase::new("JsonDocument", Value::JsonDocument(s.into()), s));
+        cases.push(TypeCase::new(
+            "JsonDocument",
+            Value::JsonDocument(s.into()),
+            s,
+        ));
     }
 
     // Yson is intentionally NOT covered here: YDB does not implement
@@ -340,13 +344,11 @@ fn type_cases() -> Vec<TypeCase> {
     // Includes the magnitude edges (nil, max) and synthetic v4-/v7-shaped values
     // that match what `Uuid::new_v4()` / `Uuid::now_v7()` would produce structurally.
     for u in [
-        Uuid::nil(),                                              // all-zero
-        Uuid::from_u128(u128::MAX),                               // all-ones
-        Uuid::from_u128(0x1234567890abcdef1234567890abcdef),      // arbitrary fixed
-        Uuid::parse_str("12345678-1234-4abc-89ab-1234567890ab")
-            .expect("v4-shaped uuid"),                            // version=4 nibble, variant=10
-        Uuid::parse_str("12345678-1234-7abc-89ab-1234567890ab")
-            .expect("v7-shaped uuid"),                            // version=7 nibble, variant=10
+        Uuid::nil(),                                         // all-zero
+        Uuid::from_u128(u128::MAX),                          // all-ones
+        Uuid::from_u128(0x1234567890abcdef1234567890abcdef), // arbitrary fixed
+        Uuid::parse_str("12345678-1234-4abc-89ab-1234567890ab").expect("v4-shaped uuid"), // version=4 nibble, variant=10
+        Uuid::parse_str("12345678-1234-7abc-89ab-1234567890ab").expect("v7-shaped uuid"), // version=7 nibble, variant=10
     ] {
         let text = u.to_string();
         cases.push(TypeCase::new("Uuid", Value::Uuid(u), text));
@@ -412,8 +414,9 @@ fn type_cases() -> Vec<TypeCase> {
             let parsed: decimal_rs::Decimal = raw
                 .parse()
                 .unwrap_or_else(|e| panic!("parse decimal {raw:?}: {e}"));
-            let ydb_dec = YdbDecimal::try_new(parsed, *precision, *scale)
-                .unwrap_or_else(|e| panic!("YdbDecimal::try_new({raw:?}, {precision}, {scale}): {e}"));
+            let ydb_dec = YdbDecimal::try_new(parsed, *precision, *scale).unwrap_or_else(|e| {
+                panic!("YdbDecimal::try_new({raw:?}, {precision}, {scale}): {e}")
+            });
             let text = ydb_dec.to_string();
             let yql_type = format!("Decimal({precision}, {scale})");
             cases.push(TypeCase::new(yql_type, Value::Decimal(ydb_dec), text));
@@ -525,9 +528,9 @@ select cast($val AS {t}) AS db_result",
 
 fn unwrap_optional(v: Value, yql_type: &str, text: &str) -> YdbResult<Value> {
     match v {
-        Value::Optional(opt) => opt.value.ok_or_else(|| {
-            YdbError::Custom(format!("got NULL for {yql_type} from text {text:?}"))
-        }),
+        Value::Optional(opt) => opt
+            .value
+            .ok_or_else(|| YdbError::Custom(format!("got NULL for {yql_type} from text {text:?}"))),
         other => Ok(other),
     }
 }
