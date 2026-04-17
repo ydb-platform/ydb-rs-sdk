@@ -624,7 +624,7 @@ mod tests {
 
     fn make_session(partition_session_id: i64, partition_id: i64, topic: &str, start_offset: i64) -> PartitionSession {
         PartitionSession {
-            partition_session_id: partition_session_id,
+            partition_session_id,
             partition_id,
             topic: topic.to_string(),
             next_commit_offset_start: start_offset,
@@ -764,7 +764,7 @@ mod tests {
 
     fn make_raw_partition_data(partition_session_id: i64, batches: Vec<RawBatch>) -> RawPartitionData {
         RawPartitionData {
-            partition_session_id: partition_session_id,
+            partition_session_id,
             batches: batches.into_iter().collect(),
         }
     }
