@@ -59,9 +59,9 @@ fn test_ydb_decimal_into_value() {
 }
 
 #[test]
-fn test_ydb_decimal_new_unsafe() {
+fn test_ydb_decimal_new_unchecked() {
     let value = "1.5".parse::<decimal_rs::Decimal>().unwrap();
-    let ydb_dec = unsafe { YdbDecimal::new_unsafe(value, 22, 9) };
+    let ydb_dec = YdbDecimal::new_unchecked(value, 22, 9);
     assert_eq!(ydb_dec.precision(), 22);
     assert_eq!(ydb_dec.scale(), 9);
 }

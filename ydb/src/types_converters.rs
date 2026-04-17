@@ -97,15 +97,15 @@ simple_convert!(
 simple_convert!(f32, Value::Float);
 simple_convert!(f64, Value::Double, Value::Float);
 simple_convert!(SystemTime, Value::Timestamp, Value::Date, Value::DateTime);
-// decimal_rs::Decimal conversion removed: use YdbDecimal::try_new() to construct
-// Value::Decimal with explicit precision and scale.
+// No implicit From<decimal_rs::Decimal> for Value: precision and scale cannot be
+// unambiguously derived from a bare Decimal. Use YdbDecimal::try_new() to construct
 
 impl TryFrom<Value> for decimal_rs::Decimal {
     type Error = YdbError;
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Decimal(val) => Ok(val.into_inner()),
+            Value::Decimal(val) => Ok(val.into()),
             value => Err(YdbError::Convert(format!(
                 "failed to convert from {} to decimal_rs::Decimal",
                 value.kind_static(),

@@ -17,11 +17,11 @@ pub(crate) const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 /// In YQL, `Decimal(p, s)` values with different precision or scale are
 /// considered distinct, incompatible types. This wrapper preserves both
 /// parameters alongside the numeric value.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct YdbDecimal {
-    pub(crate) inner: decimal_rs::Decimal,
-    precision: u8,
-    scale: i16,
+    inner: decimal_rs::Decimal,
+    precision: u32,
+    scale: u32,
 }
 
 impl YdbDecimal {
@@ -31,21 +31,24 @@ impl YdbDecimal {
     /// Returns an error if:
     /// - The value cannot be represented within the given precision
     /// - Rescaling would lose significant digits (decrease in scale or precision)
-    pub fn try_new(value: decimal_rs::Decimal, precision: u8, scale: i16) -> YdbResult<Self> {
+    pub fn try_new(value: decimal_rs::Decimal, precision: u32, scale: u32) -> YdbResult<Self> {
+        let scale_i16: i16 = scale
+            .try_into()
+            .map_err(|_| YdbError::Convert(format!("scale {} does not fit into i16", scale)))?;
         let current_scale = value.scale();
-        let adjusted = if current_scale != scale {
-            if scale < current_scale {
+        let adjusted = if current_scale != scale_i16 {
+            if scale_i16 < current_scale {
                 return Err(YdbError::Convert(format!(
                     "cannot decrease decimal scale from {} to {}",
                     current_scale, scale
                 )));
             }
-            value.normalize_to_scale(scale)
+            value.normalize_to_scale(scale_i16)
         } else {
             value
         };
 
-        let digit_count = adjusted.precision();
+        let digit_count = adjusted.precision() as u32;
         if digit_count > precision {
             return Err(YdbError::Convert(format!(
                 "decimal value has {} digits, which exceeds precision {}",
@@ -62,11 +65,10 @@ impl YdbDecimal {
 
     /// Creates a new `YdbDecimal` without validation.
     ///
-    /// # Safety
     /// The caller must ensure that the value can be represented within
     /// the given precision and scale. Using incorrect parameters may
     /// cause unexpected behavior when sending values to YDB.
-    pub unsafe fn new_unsafe(value: decimal_rs::Decimal, precision: u8, scale: i16) -> Self {
+    pub(crate) fn new_unchecked(value: decimal_rs::Decimal, precision: u32, scale: u32) -> Self {
         Self {
             inner: value,
             precision,
@@ -75,23 +77,30 @@ impl YdbDecimal {
     }
 
     /// Returns the precision (maximum number of digits).
-    pub fn precision(&self) -> u8 {
+    pub fn precision(&self) -> u32 {
         self.precision
     }
 
     /// Returns the scale (number of digits after the decimal point).
-    pub fn scale(&self) -> i16 {
+    pub fn scale(&self) -> u32 {
         self.scale
     }
 
     /// Returns a reference to the underlying decimal value.
-    pub fn value(&self) -> &decimal_rs::Decimal {
+    pub fn decimal(&self) -> &decimal_rs::Decimal {
         &self.inner
     }
+}
 
-    /// Consumes self and returns the underlying decimal value.
-    pub fn into_inner(self) -> decimal_rs::Decimal {
-        self.inner
+impl std::fmt::Display for YdbDecimal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.inner, f)
+    }
+}
+
+impl From<YdbDecimal> for decimal_rs::Decimal {
+    fn from(d: YdbDecimal) -> Self {
+        d.inner
     }
 }
 
@@ -511,17 +520,17 @@ impl Value {
     }
 
     fn to_typed_decimal(val: YdbDecimal) -> YdbResult<ydb_proto::TypedValue> {
+        let precision = val.precision();
+        let scale = val.scale();
+        let text = val.decimal().to_string();
         Ok(ydb_proto::TypedValue {
             r#type: Some(ydb_proto::Type {
                 r#type: Some(ydb_proto::r#type::Type::DecimalType(
-                    ydb_proto::DecimalType {
-                        precision: val.precision().into(),
-                        scale: val.scale().try_into()?,
-                    },
+                    ydb_proto::DecimalType { precision, scale },
                 )),
             }),
             value: Some(ydb_proto::Value {
-                value: Some(ydb_proto::value::Value::TextValue(val.inner.to_string())),
+                value: Some(ydb_proto::value::Value::TextValue(text)),
                 ..ydb_proto::Value::default()
             }),
         })
