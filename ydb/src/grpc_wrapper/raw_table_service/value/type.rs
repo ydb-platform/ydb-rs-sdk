@@ -175,10 +175,13 @@ impl RawType {
                 })?;
                 Value::Decimal(YdbDecimal::new_unchecked(inner, dec.precision, dec.scale))
             }
-            RawType::Optional(inner_type) => Value::Optional(Box::new(ValueOptional {
-                t: (*inner_type).into_value_example()?,
-                value: None,
-            })),
+            RawType::Optional(inner_type) => {
+                let inner_example = (*inner_type).into_value_example()?;
+                Value::Optional(Box::new(ValueOptional {
+                    t: inner_example.clone(),
+                    value: Some(inner_example),
+                }))
+            }
             RawType::List(inner_type) => Value::List(Box::new(ValueList {
                 t: inner_type.into_value_example()?,
                 values: Vec::default(),
