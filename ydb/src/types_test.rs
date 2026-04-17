@@ -1,4 +1,5 @@
 use crate::client::Client;
+use crate::errors::YdbError;
 use crate::types::YdbDecimal;
 use crate::{test_helpers::test_client_builder, ydb_params, Query, Value, YdbResult};
 use uuid::Uuid;
@@ -196,5 +197,139 @@ async fn check_text_as_uuid_serialization(client: &Client, test_uuid: Uuid) -> Y
         .await?;
 
     assert_eq!(Some(test_uuid), db_result);
+    Ok(())
+}
+
+#[derive(Debug)]
+struct DecimalCase {
+    precision: u32,
+    scale: u32,
+    value: &'static str,
+}
+
+const DECIMAL_CASES: &[DecimalCase] = &[
+    // Decimal(22, 9) — canonical YDB type
+    DecimalCase { precision: 22, scale: 9, value: "0" },
+    DecimalCase { precision: 22, scale: 9, value: "1" },
+    DecimalCase { precision: 22, scale: 9, value: "-1" },
+    DecimalCase { precision: 22, scale: 9, value: "0.000000001" },
+    DecimalCase { precision: 22, scale: 9, value: "-0.000000001" },
+    DecimalCase { precision: 22, scale: 9, value: "9999999999999.999999999" },
+    DecimalCase { precision: 22, scale: 9, value: "-9999999999999.999999999" },
+
+    // Decimal(35, 0) — max precision, integer only
+    DecimalCase { precision: 35, scale: 0, value: "0" },
+    DecimalCase { precision: 35, scale: 0, value: "1" },
+    DecimalCase { precision: 35, scale: 0, value: "-1" },
+    DecimalCase { precision: 35, scale: 0,
+        value:  "99999999999999999999999999999999999" },
+    DecimalCase { precision: 35, scale: 0,
+        value: "-99999999999999999999999999999999999" },
+
+    // Decimal(35, 17) — max precision, mixed
+    DecimalCase { precision: 35, scale: 17, value: "0" },
+    DecimalCase { precision: 35, scale: 17, value: "1" },
+    DecimalCase { precision: 35, scale: 17, value: "-1" },
+    DecimalCase { precision: 35, scale: 17, value:  "0.00000000000000001" },
+    DecimalCase { precision: 35, scale: 17, value: "-0.00000000000000001" },
+    DecimalCase { precision: 35, scale: 17,
+        value:  "999999999999999999.99999999999999999" },
+    DecimalCase { precision: 35, scale: 17,
+        value: "-999999999999999999.99999999999999999" },
+
+    // Decimal(35, 35) — max precision, fractional only; |x| < 1
+    DecimalCase { precision: 35, scale: 35, value: "0" },
+    DecimalCase { precision: 35, scale: 35,
+        value:  "0.00000000000000000000000000000000001" },
+    DecimalCase { precision: 35, scale: 35,
+        value: "-0.00000000000000000000000000000000001" },
+    DecimalCase { precision: 35, scale: 35,
+        value:  "0.99999999999999999999999999999999999" },
+    DecimalCase { precision: 35, scale: 35,
+        value: "-0.99999999999999999999999999999999999" },
+];
+
+async fn check_decimal_roundtrip(client: &Client, case: &DecimalCase) -> YdbResult<()> {
+    let parsed: decimal_rs::Decimal = case
+        .value
+        .parse()
+        .map_err(|e| YdbError::Custom(format!("parse {:?}: {e}", case.value)))?;
+    let ydb_dec = YdbDecimal::try_new(parsed, case.precision, case.scale)?;
+    let expected_str = ydb_dec.to_string();
+    let expected_val: decimal_rs::Decimal = ydb_dec.clone().into();
+
+    let decimal_as_text_query = format!(
+        "\
+declare $val AS Decimal({p}, {s});
+select cast(cast($val AS Decimal({p}, {s})) AS Utf8) AS db_result",
+        p = case.precision,
+        s = case.scale,
+    );
+    let (db_text,): (Option<String>,) = client
+        .table_client()
+        .retry_transaction(|mut t| {
+            let q = decimal_as_text_query.clone();
+            let d = ydb_dec.clone();
+            async move {
+                let res = t
+                    .query(Query::new(q).with_params(ydb_params! {
+                        "$val" => Value::Decimal(d),
+                    }))
+                    .await?;
+                let mut row = res.into_only_row()?;
+                let v: Option<String> = row.remove_field_by_name("db_result")?.try_into()?;
+                Ok((v,))
+            }
+        })
+        .await?;
+    assert_eq!(
+        Some(expected_str.clone()),
+        db_text,
+        "Decimal→Utf8 mismatch for case {case:?}",
+    );
+
+    let text_as_decimal_query = format!(
+        "\
+declare $val AS Text;
+select cast($val AS Decimal({p}, {s})) AS db_result",
+        p = case.precision,
+        s = case.scale,
+    );
+    let (db_decimal,): (Option<decimal_rs::Decimal>,) = client
+        .table_client()
+        .retry_transaction(|mut t| {
+            let q = text_as_decimal_query.clone();
+            let s = case.value.to_string();
+            async move {
+                let res = t
+                    .query(Query::new(q).with_params(ydb_params! {
+                        "$val" => s,
+                    }))
+                    .await?;
+                let mut row = res.into_only_row()?;
+                let v: Option<decimal_rs::Decimal> =
+                    row.remove_field_by_name("db_result")?.try_into()?;
+                Ok((v,))
+            }
+        })
+        .await?;
+    assert_eq!(
+        Some(expected_val),
+        db_decimal,
+        "Text→Decimal mismatch for case {case:?}",
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "needs YDB access"]
+async fn test_decimal_serialization() -> YdbResult<()> {
+    let client = test_client_builder().client()?;
+    client.wait().await?;
+
+    for case in DECIMAL_CASES {
+        check_decimal_roundtrip(&client, case).await?;
+    }
     Ok(())
 }
