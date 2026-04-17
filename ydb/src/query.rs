@@ -1,4 +1,5 @@
 use crate::errors::YdbResult;
+use crate::grpc_wrapper::raw_table_service::value::RawTypedValue;
 use crate::types::Value;
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -95,7 +96,8 @@ impl Query {
         let mut params = HashMap::with_capacity(self.parameters.len());
 
         for (name, val) in self.parameters.into_iter() {
-            params.insert(name, val.to_typed_value()?);
+            let raw: RawTypedValue = val.try_into()?;
+            params.insert(name, raw.into());
         }
         Ok(params)
     }

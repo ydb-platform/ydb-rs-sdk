@@ -159,7 +159,7 @@ impl RawType {
             RawType::Date => Value::Date(SystemTime::UNIX_EPOCH),
             RawType::DateTime => Value::DateTime(SystemTime::UNIX_EPOCH),
             RawType::Timestamp => Value::Timestamp(SystemTime::UNIX_EPOCH),
-            RawType::Interval => Value::Interval(SignedInterval::default()),
+            RawType::Interval => Value::IntervalMicros(SignedInterval::default()),
             RawType::Date32 => Value::Date32(SystemTime::UNIX_EPOCH),
             RawType::Datetime64 => Value::Datetime64(SystemTime::UNIX_EPOCH),
             RawType::Timestamp64 => Value::Timestamp64(SystemTime::UNIX_EPOCH),

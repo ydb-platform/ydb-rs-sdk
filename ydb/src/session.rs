@@ -124,9 +124,11 @@ impl Session {
         table_path: String,
         rows: Value,
     ) -> YdbResult<()> {
+        let raw_rows: crate::grpc_wrapper::raw_table_service::value::RawTypedValue =
+            rows.try_into()?;
         let req = RawBulkUpsertRequest {
             table: table_path,
-            rows: rows.to_typed_value()?,
+            rows: raw_rows.into(),
             operation_params: self.timeouts.operation_params(),
         };
         let res = self.get_table_client().await?.bulk_upsert(req).await;

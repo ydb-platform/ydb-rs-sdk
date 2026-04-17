@@ -8,7 +8,6 @@ use std::fmt::Debug;
 use std::num::TryFromIntError;
 use std::time::{Duration, SystemTime};
 use strum::{EnumCount, EnumDiscriminants, EnumIter, IntoStaticStr};
-use ydb_grpc::ydb_proto;
 
 pub(crate) const SECONDS_PER_DAY: u64 = 60 * 60 * 24;
 
@@ -182,13 +181,13 @@ pub enum Value {
     /// Range: 1970-01-01T00:00:00.000000Z .. 2105-12-31T23:59:59.999999Z.
     Timestamp(SystemTime),
     /// Signed duration, microsecond granularity on the YDB wire.
-    /// Wire format: `int64` microseconds. Range: roughly ±136 years
-    /// (bounded to match the `Timestamp` domain).
-    ///
-    /// Note: current SDK encodes this field in *nanoseconds* instead of
-    /// microseconds (known bug); the server sees values 1000× larger than
-    /// intended.
-    Interval(SignedInterval),
+    /// Wire format: `int64` microseconds.
+    /// YDB range (exclusive): `(-MAX_TIMESTAMP, MAX_TIMESTAMP)` where
+    /// `MAX_TIMESTAMP = 86_400_000_000 * 49_673 = 4_291_747_200_000_000 µs`;
+    /// i.e. valid values are `-4_291_747_199_999_999 .. 4_291_747_199_999_999`
+    /// inclusive (≈ ±136 years). Source:
+    /// `yql/essentials/public/udf/udf_data_type.h`.
+    IntervalMicros(SignedInterval),
     /// Signed date, day granularity. Wire format: `int32` days from UNIX epoch.
     /// YDB range: `-53_375_809` .. `53_375_807` days inclusive (year -144169-01-01 ..
     /// 148107-12-31). Source: `yql/essentials/public/udf/udf_data_type.h`.
@@ -357,15 +356,6 @@ pub struct SignedInterval {
 }
 
 impl SignedInterval {
-    pub(crate) fn as_nanos(self) -> std::result::Result<i64, TryFromIntError> {
-        let nanos: i64 = self.duration.as_nanos().try_into()?;
-        let res = match self.sign {
-            Sign::Plus => nanos,
-            Sign::Minus => -nanos,
-        };
-        Ok(res)
-    }
-
     pub(crate) fn as_micros(self) -> std::result::Result<i64, TryFromIntError> {
         let micros: i64 = self.duration.as_micros().try_into()?;
         let res = match self.sign {
@@ -385,19 +375,6 @@ impl SignedInterval {
         Self {
             sign,
             duration: Duration::from_micros(micros),
-        }
-    }
-
-    pub(crate) fn from_nanos(nanos: i64) -> Self {
-        let (sign, nanos) = if nanos >= 0 {
-            (Sign::Plus, nanos as u64)
-        } else {
-            (Sign::Minus, (-nanos) as u64)
-        };
-
-        Self {
-            sign,
-            duration: Duration::from_nanos(nanos),
         }
     }
 }
@@ -545,236 +522,6 @@ impl Value {
         }
     }
 
-    #[allow(clippy::wrong_self_convention)]
-    pub(crate) fn to_typed_value(self) -> YdbResult<ydb_proto::TypedValue> {
-        use ydb_proto::r#type::PrimitiveTypeId as pt;
-        use ydb_proto::value::Value as pv;
-
-        fn proto_typed_value(t: pt, v: pv) -> ydb_proto::TypedValue {
-            ydb_proto::TypedValue {
-                r#type: Some(ydb_proto::Type {
-                    r#type: Some(ydb_proto::r#type::Type::TypeId(t.into())),
-                }),
-                value: Some(ydb_proto::Value {
-                    value: Some(v),
-                    ..ydb_proto::Value::default()
-                }),
-            }
-        }
-
-        #[allow(unreachable_patterns)]
-        let res = match self {
-            Self::Void => ydb_proto::TypedValue {
-                r#type: Some(ydb_proto::Type {
-                    r#type: Some(ydb_proto::r#type::Type::VoidType(
-                        prost_types::NullValue::NullValue.into(),
-                    )),
-                }),
-                value: Some(ydb_proto::Value {
-                    value: Some(ydb_proto::value::Value::NullFlagValue(
-                        prost_types::NullValue::NullValue.into(),
-                    )),
-                    ..ydb_proto::Value::default()
-                }),
-            },
-            Self::Null => ydb_proto::TypedValue {
-                r#type: Some(ydb_proto::Type {
-                    r#type: Some(ydb_proto::r#type::Type::NullType(0)),
-                }),
-                value: Some(ydb_proto::Value {
-                    value: Some(ydb_proto::value::Value::NullFlagValue(
-                        prost_types::NullValue::NullValue.into(),
-                    )),
-                    ..ydb_proto::Value::default()
-                }),
-            },
-            Self::Bool(val) => proto_typed_value(pt::Bool, pv::BoolValue(val)),
-            Self::Int8(val) => proto_typed_value(pt::Int8, pv::Int32Value(val.into())),
-            Self::Uint8(val) => proto_typed_value(pt::Uint8, pv::Uint32Value(val.into())),
-            Self::Int16(val) => proto_typed_value(pt::Int16, pv::Int32Value(val.into())),
-            Self::Uint16(val) => proto_typed_value(pt::Uint16, pv::Uint32Value(val.into())),
-            Self::Int32(val) => proto_typed_value(pt::Int32, pv::Int32Value(val)),
-            Self::Uint32(val) => proto_typed_value(pt::Uint32, pv::Uint32Value(val)),
-            Self::Int64(val) => proto_typed_value(pt::Int64, pv::Int64Value(val)),
-            Self::Uint64(val) => proto_typed_value(pt::Uint64, pv::Uint64Value(val)),
-            Self::Float(val) => proto_typed_value(pt::Float, pv::FloatValue(val)),
-            Self::Double(val) => proto_typed_value(pt::Double, pv::DoubleValue(val)),
-            Self::Date(val) => proto_typed_value(
-                pt::Date,
-                pv::Uint32Value(
-                    (val.duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs()
-                        / SECONDS_PER_DAY)
-                        .try_into()?,
-                ),
-            ),
-            Self::DateTime(val) => proto_typed_value(
-                pt::Datetime,
-                pv::Uint32Value(
-                    val.duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap()
-                        .as_secs()
-                        .try_into()?,
-                ),
-            ),
-            Self::Timestamp(val) => proto_typed_value(
-                pt::Timestamp,
-                pv::Uint64Value(
-                    val.duration_since(SystemTime::UNIX_EPOCH)
-                        .unwrap()
-                        .as_micros()
-                        .try_into()?,
-                ),
-            ),
-            Self::Interval(val) => proto_typed_value(pt::Interval, pv::Int64Value(val.as_nanos()?)),
-            Self::Date32(val) => {
-                proto_typed_value(pt::Date32, pv::Int32Value(system_time_to_signed_days(val)?))
-            }
-            Self::Datetime64(val) => proto_typed_value(
-                pt::Datetime64,
-                pv::Int64Value(system_time_to_signed_secs(val)?),
-            ),
-            Self::Timestamp64(val) => proto_typed_value(
-                pt::Timestamp64,
-                pv::Int64Value(system_time_to_signed_micros(val)?),
-            ),
-            Self::Interval64(val) => {
-                proto_typed_value(pt::Interval64, pv::Int64Value(val.as_micros()?))
-            }
-            Self::Bytes(val) => proto_typed_value(pt::String, pv::BytesValue(val.into())),
-            Self::Text(val) => proto_typed_value(pt::Utf8, pv::TextValue(val)),
-            Self::Yson(val) => proto_typed_value(pt::Yson, pv::BytesValue(val.into())),
-            Self::Json(val) => proto_typed_value(pt::Json, pv::TextValue(val)),
-            Self::JsonDocument(val) => proto_typed_value(pt::JsonDocument, pv::TextValue(val)),
-            Self::Optional(val) => Self::to_typed_optional(*val)?,
-            Self::List(items) => Self::to_typed_value_list(*items)?,
-            Value::Struct(s) => { Self::to_typed_struct(s) }?,
-            Self::Decimal(val) => Self::to_typed_decimal(val)?,
-            Self::Uuid(val) => Self::to_typed_uuid(val)?,
-        };
-        Ok(res)
-    }
-
-    fn to_typed_decimal(val: YdbDecimal) -> YdbResult<ydb_proto::TypedValue> {
-        let precision = val.precision();
-        let scale = val.scale();
-        let text = val.decimal().to_string();
-        Ok(ydb_proto::TypedValue {
-            r#type: Some(ydb_proto::Type {
-                r#type: Some(ydb_proto::r#type::Type::DecimalType(
-                    ydb_proto::DecimalType { precision, scale },
-                )),
-            }),
-            value: Some(ydb_proto::Value {
-                value: Some(ydb_proto::value::Value::TextValue(text)),
-                ..ydb_proto::Value::default()
-            }),
-        })
-    }
-
-    fn to_typed_uuid(val: uuid::Uuid) -> YdbResult<ydb_proto::TypedValue> {
-        use ydb_proto::r#type::PrimitiveTypeId as pt;
-        use ydb_proto::value::Value as pv;
-
-        let (high, low) = val.as_u64_pair();
-
-        let high = high.swap_bytes();
-        let low = low.swap_bytes();
-
-        Ok(ydb_proto::TypedValue {
-            r#type: Some(ydb_proto::Type {
-                r#type: Some(ydb_proto::r#type::Type::TypeId(pt::Uuid.into())),
-            }),
-            value: Some(ydb_proto::Value {
-                value: Some(pv::Low128(low)),
-                high_128: high,
-                ..ydb_proto::Value::default()
-            }),
-        })
-    }
-
-    fn to_typed_optional(optional: ValueOptional) -> YdbResult<ydb_proto::TypedValue> {
-        if let Value::Optional(_opt) = optional.t {
-            unimplemented!("nested optional")
-        }
-
-        let val = match optional.value {
-            Some(val) => val.to_typed_value()?.value.unwrap(),
-            None => ydb_proto::Value {
-                value: Some(ydb_proto::value::Value::NullFlagValue(0)),
-                ..ydb_proto::Value::default()
-            },
-        };
-        Ok(ydb_proto::TypedValue {
-            r#type: Some(ydb_proto::Type {
-                r#type: Some(ydb_proto::r#type::Type::OptionalType(Box::new(
-                    ydb_proto::OptionalType {
-                        item: Some(Box::new(optional.t.to_typed_value()?.r#type.unwrap())),
-                    },
-                ))),
-            }),
-            value: Some(val),
-        })
-    }
-
-    fn to_typed_struct(s: ValueStruct) -> YdbResult<ydb_proto::TypedValue> {
-        let mut members: Vec<ydb_proto::StructMember> = Vec::with_capacity(s.fields_name.len());
-        let mut items: Vec<ydb_proto::Value> = Vec::with_capacity(s.fields_name.len());
-        for (index, v) in s.values.into_iter().enumerate() {
-            let typed_val = v.to_typed_value()?;
-            members.push(ydb_proto::StructMember {
-                name: s.fields_name[index].clone(),
-                r#type: typed_val.r#type,
-            });
-            items.push(typed_val.value.unwrap());
-        }
-
-        Ok(ydb_proto::TypedValue {
-            r#type: Some(ydb_proto::Type {
-                r#type: Some(ydb_proto::r#type::Type::StructType(ydb_proto::StructType {
-                    members,
-                })),
-            }),
-            value: Some(ydb_proto::Value {
-                items,
-                ..ydb_proto::Value::default()
-            }),
-        })
-    }
-
-    #[allow(clippy::boxed_local)]
-    fn to_typed_value_list(ydb_list: ValueList) -> YdbResult<ydb_proto::TypedValue> {
-        let ydb_list_type = ydb_list.t;
-        let proto_items_result: Vec<YdbResult<ydb_proto::TypedValue>> = ydb_list
-            .values
-            .into_iter()
-            .map(|item| item.to_typed_value())
-            .collect();
-
-        let mut proto_items = Vec::with_capacity(proto_items_result.len());
-        for item in proto_items_result.into_iter() {
-            proto_items.push(item?);
-        }
-
-        Ok(ydb_proto::TypedValue {
-            r#type: Some(ydb_proto::Type {
-                r#type: Some(ydb_proto::r#type::Type::ListType(Box::new(
-                    ydb_proto::ListType {
-                        item: Some(Box::new(ydb_list_type.to_typed_value()?.r#type.unwrap())),
-                    },
-                ))),
-            }),
-            value: Some(ydb_proto::Value {
-                items: proto_items
-                    .into_iter()
-                    .map(|item| item.value.unwrap())
-                    .collect(),
-                ..ydb_proto::Value::default()
-            }),
-        })
-    }
-
     #[cfg(test)]
     pub(crate) fn examples_for_test() -> Vec<Value> {
         use std::{collections::HashSet, ops::Add};
@@ -837,12 +584,12 @@ impl Value {
             SystemTime::UNIX_EPOCH.add(std::time::Duration::from_micros(16340005230000123)),
         )); //Tue Oct 12 00:00:00.000123 UTC 2021
 
-        values.push(Value::Interval(SignedInterval {
+        values.push(Value::IntervalMicros(SignedInterval {
             sign: Sign::Plus,
             duration: Duration::from_secs(1),
         })); // 1 second interval
 
-        values.push(Value::Interval(SignedInterval {
+        values.push(Value::IntervalMicros(SignedInterval {
             sign: Sign::Minus,
             duration: Duration::from_secs(1),
         })); // -1 second interval
