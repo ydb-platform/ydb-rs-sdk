@@ -172,10 +172,46 @@ pub enum Value {
     Uint64(u64),
     Float(f32),
     Double(f64),
-    Date(std::time::SystemTime),
-    DateTime(std::time::SystemTime),
-    Timestamp(std::time::SystemTime),
+    /// Date, day granularity. Wire format: `uint32` days since UNIX epoch.
+    /// Range: 1970-01-01 .. 2105-12-31.
+    Date(SystemTime),
+    /// Datetime, second granularity. Wire format: `uint32` seconds since UNIX epoch.
+    /// Range: 1970-01-01T00:00:00Z .. 2106-02-07T06:28:15Z.
+    DateTime(SystemTime),
+    /// Timestamp, microsecond granularity. Wire format: `uint64` microseconds since UNIX epoch.
+    /// Range: 1970-01-01T00:00:00.000000Z .. 2105-12-31T23:59:59.999999Z.
+    Timestamp(SystemTime),
+    /// Signed duration, microsecond granularity on the YDB wire.
+    /// Wire format: `int64` microseconds. Range: roughly ±136 years
+    /// (bounded to match the `Timestamp` domain).
+    ///
+    /// Note: current SDK encodes this field in *nanoseconds* instead of
+    /// microseconds (known bug); the server sees values 1000× larger than
+    /// intended.
     Interval(SignedInterval),
+    /// Signed date, day granularity. Wire format: `int32` days from UNIX epoch.
+    /// YDB range: `-53_375_809` .. `53_375_807` days inclusive (year -144169-01-01 ..
+    /// 148107-12-31). Source: `yql/essentials/public/udf/udf_data_type.h`.
+    /// On Windows, `SystemTime` cannot represent dates before 1601-01-01.
+    Date32(SystemTime),
+    /// Signed datetime, second granularity. Wire format: `int64` seconds from UNIX epoch.
+    /// YDB range: `-4_611_669_897_600` .. `4_611_669_811_199` seconds inclusive
+    /// (year -144169-01-01T00:00:00 .. 148107-12-31T23:59:59). Source:
+    /// `yql/essentials/public/udf/udf_data_type.h`.
+    /// On Windows, `SystemTime` cannot represent dates before 1601-01-01.
+    Datetime64(SystemTime),
+    /// Signed timestamp, microsecond granularity. Wire format: `int64` microseconds from UNIX epoch.
+    /// YDB range: `-4_611_669_897_600_000_000` .. `4_611_669_811_199_999_999` µs inclusive
+    /// (year -144169-01-01T00:00:00.000000 .. 148107-12-31T23:59:59.999999). Source:
+    /// `yql/essentials/public/udf/udf_data_type.h`.
+    /// On Windows, `SystemTime` cannot represent dates before 1601-01-01.
+    Timestamp64(SystemTime),
+    /// Signed duration, microsecond granularity. Wire format: `int64` microseconds.
+    /// YDB range: ±`9_223_339_708_799_999_999` µs (≈ ±292 270 years), derived as
+    /// `MAX_TIMESTAMP64 - MIN_TIMESTAMP64`. Source:
+    /// `yql/essentials/public/udf/udf_data_type.h`.
+    /// Sub-microsecond precision of the inner `Duration` is truncated on the wire.
+    Interval64(SignedInterval),
 
     // It named String at server, but server String type contains binary data https://ydb.tech/docs/en/yql/reference/types/primitive#string
     Bytes(Bytes),
@@ -330,6 +366,28 @@ impl SignedInterval {
         Ok(res)
     }
 
+    pub(crate) fn as_micros(self) -> std::result::Result<i64, TryFromIntError> {
+        let micros: i64 = self.duration.as_micros().try_into()?;
+        let res = match self.sign {
+            Sign::Plus => micros,
+            Sign::Minus => -micros,
+        };
+        Ok(res)
+    }
+
+    pub(crate) fn from_micros(micros: i64) -> Self {
+        let (sign, micros) = if micros >= 0 {
+            (Sign::Plus, micros as u64)
+        } else {
+            (Sign::Minus, micros.unsigned_abs())
+        };
+
+        Self {
+            sign,
+            duration: Duration::from_micros(micros),
+        }
+    }
+
     pub(crate) fn from_nanos(nanos: i64) -> Self {
         let (sign, nanos) = if nanos >= 0 {
             (Sign::Plus, nanos as u64)
@@ -342,6 +400,71 @@ impl SignedInterval {
             duration: Duration::from_nanos(nanos),
         }
     }
+}
+
+/// Encodes a `SystemTime` as seconds from the UNIX epoch with sign. Seconds are
+/// floored, so values before the epoch that fall inside a second still round
+/// toward minus infinity (same semantics as YDB signed date types).
+pub(crate) fn system_time_to_signed_secs(
+    t: SystemTime,
+) -> std::result::Result<i64, TryFromIntError> {
+    match t.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(d) => d.as_secs().try_into(),
+        Err(err) => {
+            let back = err.duration();
+            let mut secs: i64 = back.as_secs().try_into()?;
+            if back.subsec_nanos() > 0 {
+                secs += 1;
+            }
+            Ok(-secs)
+        }
+    }
+}
+
+pub(crate) fn signed_secs_to_system_time(secs: i64) -> SystemTime {
+    if secs >= 0 {
+        SystemTime::UNIX_EPOCH + Duration::from_secs(secs as u64)
+    } else {
+        SystemTime::UNIX_EPOCH - Duration::from_secs(secs.unsigned_abs())
+    }
+}
+
+pub(crate) fn system_time_to_signed_micros(
+    t: SystemTime,
+) -> std::result::Result<i64, TryFromIntError> {
+    match t.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(d) => d.as_micros().try_into(),
+        Err(err) => {
+            let back = err.duration();
+            let mut micros: i64 = back.as_micros().try_into()?;
+            // Sub-microsecond precision rounds toward minus infinity.
+            if (back.subsec_nanos() % 1000) > 0 {
+                micros += 1;
+            }
+            Ok(-micros)
+        }
+    }
+}
+
+pub(crate) fn signed_micros_to_system_time(micros: i64) -> SystemTime {
+    if micros >= 0 {
+        SystemTime::UNIX_EPOCH + Duration::from_micros(micros as u64)
+    } else {
+        SystemTime::UNIX_EPOCH - Duration::from_micros(micros.unsigned_abs())
+    }
+}
+
+pub(crate) fn system_time_to_signed_days(
+    t: SystemTime,
+) -> std::result::Result<i32, TryFromIntError> {
+    let secs = system_time_to_signed_secs(t)?;
+    let days = secs.div_euclid(SECONDS_PER_DAY as i64);
+    days.try_into()
+}
+
+pub(crate) fn signed_days_to_system_time(days: i32) -> SystemTime {
+    let secs = (days as i64).saturating_mul(SECONDS_PER_DAY as i64);
+    signed_secs_to_system_time(secs)
 }
 
 impl Value {
@@ -505,6 +628,20 @@ impl Value {
                 ),
             ),
             Self::Interval(val) => proto_typed_value(pt::Interval, pv::Int64Value(val.as_nanos()?)),
+            Self::Date32(val) => {
+                proto_typed_value(pt::Date32, pv::Int32Value(system_time_to_signed_days(val)?))
+            }
+            Self::Datetime64(val) => proto_typed_value(
+                pt::Datetime64,
+                pv::Int64Value(system_time_to_signed_secs(val)?),
+            ),
+            Self::Timestamp64(val) => proto_typed_value(
+                pt::Timestamp64,
+                pv::Int64Value(system_time_to_signed_micros(val)?),
+            ),
+            Self::Interval64(val) => {
+                proto_typed_value(pt::Interval64, pv::Int64Value(val.as_micros()?))
+            }
             Self::Bytes(val) => proto_typed_value(pt::String, pv::BytesValue(val.into())),
             Self::Text(val) => proto_typed_value(pt::Utf8, pv::TextValue(val)),
             Self::Yson(val) => proto_typed_value(pt::Yson, pv::BytesValue(val.into())),
@@ -709,6 +846,29 @@ impl Value {
             sign: Sign::Minus,
             duration: Duration::from_secs(1),
         })); // -1 second interval
+
+        // Date32/Datetime64/Timestamp64 can represent pre-epoch times too.
+        // Include a post-epoch and a pre-epoch sample to exercise sign paths.
+        values.push(Value::Date32(SystemTime::UNIX_EPOCH));
+        values.push(Value::Date32(
+            SystemTime::UNIX_EPOCH - Duration::from_secs(SECONDS_PER_DAY),
+        ));
+        values.push(Value::Datetime64(SystemTime::UNIX_EPOCH));
+        values.push(Value::Datetime64(
+            SystemTime::UNIX_EPOCH - Duration::from_secs(1),
+        ));
+        values.push(Value::Timestamp64(SystemTime::UNIX_EPOCH));
+        values.push(Value::Timestamp64(
+            SystemTime::UNIX_EPOCH - Duration::from_micros(1),
+        ));
+        values.push(Value::Interval64(SignedInterval {
+            sign: Sign::Plus,
+            duration: Duration::from_micros(1),
+        }));
+        values.push(Value::Interval64(SignedInterval {
+            sign: Sign::Minus,
+            duration: Duration::from_micros(1),
+        }));
 
         values.push(Value::optional_from(Value::Int8(0), None).unwrap());
         values.push(Value::optional_from(Value::Int8(0), Some(Value::Int8(1))).unwrap());

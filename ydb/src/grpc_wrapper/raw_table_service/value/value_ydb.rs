@@ -12,7 +12,11 @@ use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::grpc_wrapper::raw_table_service::value::r#type::{RawType, StructMember, StructType};
 use crate::grpc_wrapper::raw_table_service::value::{RawTypedValue, RawValue};
 use crate::types::YdbDecimal;
-use crate::types::SECONDS_PER_DAY;
+use crate::types::{
+    signed_days_to_system_time, signed_micros_to_system_time, signed_secs_to_system_time,
+    system_time_to_signed_days, system_time_to_signed_micros, system_time_to_signed_secs,
+    SECONDS_PER_DAY,
+};
 use crate::{Bytes, SignedInterval, Value};
 
 impl TryFrom<crate::Value> for RawTypedValue {
@@ -100,6 +104,22 @@ impl TryFrom<crate::Value> for RawTypedValue {
             Value::Interval(v) => RawTypedValue {
                 r#type: RawType::Interval,
                 value: RawValue::Int64(v.as_nanos()?),
+            },
+            Value::Date32(v) => RawTypedValue {
+                r#type: RawType::Date32,
+                value: RawValue::Int32(system_time_to_signed_days(v)?),
+            },
+            Value::Datetime64(v) => RawTypedValue {
+                r#type: RawType::Datetime64,
+                value: RawValue::Int64(system_time_to_signed_secs(v)?),
+            },
+            Value::Timestamp64(v) => RawTypedValue {
+                r#type: RawType::Timestamp64,
+                value: RawValue::Int64(system_time_to_signed_micros(v)?),
+            },
+            Value::Interval64(v) => RawTypedValue {
+                r#type: RawType::Interval64,
+                value: RawValue::Int64(v.as_micros()?),
             },
             Value::Bytes(v) => RawTypedValue {
                 r#type: RawType::Bytes,
@@ -270,6 +290,20 @@ impl TryFrom<RawTypedValue> for Value {
                 Value::Interval(SignedInterval::from_nanos(v))
             }
             (t @ RawType::Interval, v) => return types_mismatch(t, v),
+            (RawType::Date32, RawValue::Int32(v)) => Value::Date32(signed_days_to_system_time(v)),
+            (t @ RawType::Date32, v) => return types_mismatch(t, v),
+            (RawType::Datetime64, RawValue::Int64(v)) => {
+                Value::Datetime64(signed_secs_to_system_time(v))
+            }
+            (t @ RawType::Datetime64, v) => return types_mismatch(t, v),
+            (RawType::Timestamp64, RawValue::Int64(v)) => {
+                Value::Timestamp64(signed_micros_to_system_time(v))
+            }
+            (t @ RawType::Timestamp64, v) => return types_mismatch(t, v),
+            (RawType::Interval64, RawValue::Int64(v)) => {
+                Value::Interval64(SignedInterval::from_micros(v))
+            }
+            (t @ RawType::Interval64, v) => return types_mismatch(t, v),
             (t @ RawType::TzDate, _) => return type_unimplemented(t),
             (t @ RawType::TzDatetime, _) => return type_unimplemented(t),
             (t @ RawType::TzTimestamp, _) => return type_unimplemented(t),

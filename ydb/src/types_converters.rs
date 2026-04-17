@@ -96,7 +96,15 @@ simple_convert!(
 );
 simple_convert!(f32, Value::Float);
 simple_convert!(f64, Value::Double, Value::Float);
-simple_convert!(SystemTime, Value::Timestamp, Value::Date, Value::DateTime);
+simple_convert!(
+    SystemTime,
+    Value::Timestamp,
+    Value::Date,
+    Value::DateTime,
+    Value::Timestamp64,
+    Value::Date32,
+    Value::Datetime64,
+);
 // No implicit From<decimal_rs::Decimal> for Value: precision and scale cannot be
 // unambiguously derived from a bare Decimal. Use YdbDecimal::try_new() to construct
 
