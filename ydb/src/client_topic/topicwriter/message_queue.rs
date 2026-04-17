@@ -57,14 +57,14 @@ impl MessageQueue {
         length_threshold: usize,
     ) -> YdbResult<Vec<MessageData>> {
         loop {
-            tokio::select! {
-                _ = self.new_message_added.notified() => {
-                    match self.get_messages_to_send_with_length_threshold(length_threshold).await {
-                        GetMessagesToSendResult::Ok(messages) => return Ok(messages),
-                        GetMessagesToSendResult::NotEnoughMessages => continue,
-                        GetMessagesToSendResult::Err(err) => return Err(err),
-                    }
-                }
+            _ = self.new_message_added.notified().await;
+            match self
+                .get_messages_to_send_with_length_threshold(length_threshold)
+                .await
+            {
+                GetMessagesToSendResult::Ok(messages) => return Ok(messages),
+                GetMessagesToSendResult::NotEnoughMessages => continue,
+                GetMessagesToSendResult::Err(err) => return Err(err),
             }
         }
     }

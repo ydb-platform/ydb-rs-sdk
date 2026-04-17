@@ -60,7 +60,7 @@ impl Reconnector {
             writer_state: params.writer_state.clone(),
         };
 
-        let loop_join_handle: JoinHandle<()> = match Reconnector::start_reconnection_loop(
+        let loop_join_handle: JoinHandle<()> = Reconnector::start_reconnection_loop(
             ReconnectorLoopHelper {
                 connection_manager: params.connection_manager,
                 retrier: params.retrier,
@@ -72,11 +72,7 @@ impl Reconnector {
             params.message_queue,
             params.fatal_error_tx,
         )
-        .await
-        {
-            Ok(handle) => handle,
-            Err(err) => return Err(err),
-        };
+        .await?;
 
         {
             let mut state = r.state.lock().await;
@@ -104,7 +100,7 @@ impl Reconnector {
         match done_once_rx.await {
             Ok(_) => Ok(reconnection_loop),
             Err(err) => Err(YdbError::InternalError(format!(
-                "connection_info_filled channel closed: {err}"
+                "reconnector done_once channel closed: {err}"
             ))),
         }
     }
@@ -114,7 +110,7 @@ impl Reconnector {
         message_queue: MessageQueue,
         done_once_tx: oneshot::Sender<()>,
         fatal_error_tx: oneshot::Sender<YdbError>,
-    ) -> () {
+    ) {
         let mut reconnect_start_time = Instant::now();
         let mut attempt = 0;
         let mut done_once_tx = Some(done_once_tx);
@@ -321,11 +317,7 @@ impl ReconnectorLoopHelper {
             time_from_start,
         });
 
-        if !decision.allow_retry {
-            return None;
-        }
-
-        Some(decision.wait_timeout)
+        decision.allow_retry.then_some(decision.wait_timeout)
     }
 
     async fn wait_before_reconnect(&self, wait_timeout: Duration) -> WaitBeforeReconnectResult {

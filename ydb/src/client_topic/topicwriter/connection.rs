@@ -1,7 +1,7 @@
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
 
 #[allow(dead_code)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ConnectionInfo {
     pub(crate) partition_id: i64,
     pub(crate) session_id: String,

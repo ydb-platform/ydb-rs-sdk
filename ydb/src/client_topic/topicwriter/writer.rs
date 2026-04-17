@@ -18,7 +18,6 @@ use crate::client_topic::topicwriter::reconnector::{Reconnector, ReconnectorPara
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
 use crate::client_topic::topicwriter::writer_reception_queue::TopicWriterReceptionQueue;
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
 use crate::retry::TimeoutRetrier;
 use crate::{YdbError, YdbResult};
 
@@ -90,12 +89,7 @@ impl TopicWriter {
         let state = Arc::new(TokioMutex::new(WriterState {
             status: TopicWriterStatus::Working,
             confirmation_reception_queue: TopicWriterReceptionQueue::new(),
-            connection_info: ConnectionInfo {
-                partition_id: 0,
-                session_id: String::new(),
-                last_seq_no_assigned: 0,
-                codecs_from_server: RawSupportedCodecs::default(),
-            },
+            connection_info: ConnectionInfo::default(),
         }));
 
         let retrier = writer_options.retrier.clone().unwrap_or_else(|| {
@@ -142,8 +136,7 @@ impl TopicWriter {
     }
 
     pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
-        self.write_message(message, None).await?;
-        Ok(())
+        self.write_message(message, None).await
     }
 
     pub async fn write_with_ack(
@@ -160,11 +153,11 @@ impl TopicWriter {
 
     pub async fn write_with_ack_future(
         &mut self,
-        _message: TopicWriterMessage,
+        message: TopicWriterMessage,
     ) -> YdbResult<AckFuture> {
         let (tx, rx) = oneshot::channel();
 
-        self.write_message(_message, Some(tx)).await?;
+        self.write_message(message, Some(tx)).await?;
 
         Ok(AckFuture { receiver: rx })
     }

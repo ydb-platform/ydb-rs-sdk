@@ -58,7 +58,7 @@ pub(crate) struct TopicWriterReceptionQueue {
 }
 
 impl TopicWriterReceptionQueue {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             message_receipt_signals_queue: VecDeque::new(),
             flush_finished_sender: None,
@@ -86,7 +86,7 @@ impl TopicWriterReceptionQueue {
         }
     }
 
-    pub fn try_get_ticket(&mut self) -> Option<TopicWriterReceptionTicket> {
+    pub(crate) fn try_get_ticket(&mut self) -> Option<TopicWriterReceptionTicket> {
         let maybe_ticket = self.message_receipt_signals_queue.pop_front();
         match maybe_ticket.as_ref() {
             None => {
@@ -106,12 +106,12 @@ impl TopicWriterReceptionQueue {
         maybe_ticket
     }
 
-    pub fn add_ticket(&mut self, reception_ticket: TopicWriterReceptionTicket) {
+    pub(crate) fn add_ticket(&mut self, reception_ticket: TopicWriterReceptionTicket) {
         self.message_receipt_signals_queue
             .push_back(reception_ticket);
     }
 
-    pub fn send_error_to_tickets_and_clear(&mut self, error: YdbError) {
+    pub(crate) fn send_error_to_tickets_and_clear(&mut self, error: YdbError) {
         while let Some(ticket) = self.message_receipt_signals_queue.pop_front() {
             ticket.send_error_if_needed(error.clone());
         }
