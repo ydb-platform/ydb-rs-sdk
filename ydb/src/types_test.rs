@@ -1,7 +1,9 @@
 use crate::client::Client;
 use crate::errors::YdbError;
 use crate::types::{Bytes, YdbDecimal};
-use crate::{test_helpers::test_client_builder, ydb_params, Query, Value, YdbResult};
+use crate::{
+    test_helpers::test_client_builder, ydb_params, Query, Sign, SignedInterval, Value, YdbResult,
+};
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
@@ -288,83 +290,271 @@ fn type_cases() -> Vec<TypeCase> {
     // microseconds, so the value the server sees is 1000× the intended one.
     // Adding round-trip cases here would either fail or document the bug.
 
-    // ---- Date32 (signed days from epoch); YDB range covers negative values ----
+    // ---- Date32 (signed days from epoch) ----
+    // YDB Date32 range per `yql/essentials/public/udf/udf_data_type.h`:
+    //   MIN_DATE32 = -53_375_809 (year -144169-01-01)
+    //   MAX_DATE32 =  53_375_807 (year 148107-12-31)
+    // Cases: epoch, ±1 day, 2024-01-15, 0001-01-01 / 9999-12-31 (4-digit year edge),
+    // and the server extreme bounds.
+    const DATE32_EPOCH_TO_9999_12_31_SECS: u64 = 2_932_896 * 86_400;
+    const DATE32_0001_01_01_TO_EPOCH_SECS: u64 = 719_162 * 86_400;
+    const DATE32_MIN_DAYS_TO_EPOCH_SECS: u64 = 53_375_809 * 86_400;
+    const DATE32_EPOCH_TO_MAX_DAYS_SECS: u64 = 53_375_807 * 86_400;
     cases.push(TypeCase::new(
         "Date32",
-        Value::Date32(0),
+        Value::Date32(SystemTime::UNIX_EPOCH),
         "1970-01-01",
     ));
     cases.push(TypeCase::new(
         "Date32",
-        Value::Date32(19_737),
+        Value::Date32(SystemTime::UNIX_EPOCH + Duration::from_secs(19_737 * 86_400)),
         "2024-01-15",
     ));
     cases.push(TypeCase::new(
         "Date32",
-        Value::Date32(-1),
+        Value::Date32(SystemTime::UNIX_EPOCH - Duration::from_secs(86_400)),
         "1969-12-31",
+    ));
+    cases.push(TypeCase::new(
+        "Date32",
+        Value::Date32(SystemTime::UNIX_EPOCH + Duration::from_secs(86_400)),
+        "1970-01-02",
+    ));
+    cases.push(TypeCase::new(
+        "Date32",
+        Value::Date32(
+            SystemTime::UNIX_EPOCH + Duration::from_secs(DATE32_EPOCH_TO_9999_12_31_SECS),
+        ),
+        "9999-12-31",
+    ));
+    cases.push(TypeCase::new(
+        "Date32",
+        Value::Date32(
+            SystemTime::UNIX_EPOCH - Duration::from_secs(DATE32_0001_01_01_TO_EPOCH_SECS),
+        ),
+        "1-01-01",
+    ));
+    // Server extreme bounds (MIN_DATE32 / MAX_DATE32)
+    cases.push(TypeCase::new(
+        "Date32",
+        Value::Date32(SystemTime::UNIX_EPOCH - Duration::from_secs(DATE32_MIN_DAYS_TO_EPOCH_SECS)),
+        "-144169-01-01",
+    ));
+    cases.push(TypeCase::new(
+        "Date32",
+        Value::Date32(SystemTime::UNIX_EPOCH + Duration::from_secs(DATE32_EPOCH_TO_MAX_DAYS_SECS)),
+        "148107-12-31",
     ));
 
     // ---- Datetime64 (signed seconds from epoch) ----
+    // YDB Datetime64 range per `udf_data_type.h`:
+    //   MIN_DATETIME64 = -4_611_669_897_600 (year -144169-01-01T00:00:00)
+    //   MAX_DATETIME64 =  4_611_669_811_199 (year 148107-12-31T23:59:59)
+    const DATETIME64_EPOCH_TO_9999_12_31_END_SECS: u64 =
+        DATE32_EPOCH_TO_9999_12_31_SECS + 23 * 3600 + 59 * 60 + 59;
+    const DATETIME64_MAX: u64 = 4_611_669_811_199;
+    const DATETIME64_MIN_ABS: u64 = 4_611_669_897_600;
     cases.push(TypeCase::new(
         "Datetime64",
-        Value::Datetime64(0),
+        Value::Datetime64(SystemTime::UNIX_EPOCH),
         "1970-01-01T00:00:00Z",
     ));
     cases.push(TypeCase::new(
         "Datetime64",
-        Value::Datetime64(1_705_320_645),
+        Value::Datetime64(SystemTime::UNIX_EPOCH + Duration::from_secs(1_705_320_645)),
         "2024-01-15T12:10:45Z",
     ));
     cases.push(TypeCase::new(
         "Datetime64",
-        Value::Datetime64(-1),
+        Value::Datetime64(SystemTime::UNIX_EPOCH - Duration::from_secs(1)),
         "1969-12-31T23:59:59Z",
+    ));
+    cases.push(TypeCase::new(
+        "Datetime64",
+        Value::Datetime64(SystemTime::UNIX_EPOCH + Duration::from_secs(1)),
+        "1970-01-01T00:00:01Z",
+    ));
+    cases.push(TypeCase::new(
+        "Datetime64",
+        Value::Datetime64(
+            SystemTime::UNIX_EPOCH + Duration::from_secs(DATETIME64_EPOCH_TO_9999_12_31_END_SECS),
+        ),
+        "9999-12-31T23:59:59Z",
+    ));
+    cases.push(TypeCase::new(
+        "Datetime64",
+        Value::Datetime64(
+            SystemTime::UNIX_EPOCH - Duration::from_secs(DATE32_0001_01_01_TO_EPOCH_SECS),
+        ),
+        "1-01-01T00:00:00Z",
+    ));
+    // Server extreme bounds (MIN_DATETIME64 / MAX_DATETIME64)
+    cases.push(TypeCase::new(
+        "Datetime64",
+        Value::Datetime64(SystemTime::UNIX_EPOCH - Duration::from_secs(DATETIME64_MIN_ABS)),
+        "-144169-01-01T00:00:00Z",
+    ));
+    cases.push(TypeCase::new(
+        "Datetime64",
+        Value::Datetime64(SystemTime::UNIX_EPOCH + Duration::from_secs(DATETIME64_MAX)),
+        "148107-12-31T23:59:59Z",
     ));
 
     // ---- Timestamp64 (signed microseconds from epoch) ----
+    // YDB Timestamp64 range per `udf_data_type.h`:
+    //   MIN_TIMESTAMP64 = -4_611_669_897_600_000_000 (year -144169-01-01T00:00:00.000000)
+    //   MAX_TIMESTAMP64 =  4_611_669_811_199_999_999 (year 148107-12-31T23:59:59.999999)
+    const TIMESTAMP64_EPOCH_TO_9999_12_31_END_MICROS: u64 =
+        DATETIME64_EPOCH_TO_9999_12_31_END_SECS * 1_000_000 + 999_999;
+    const TIMESTAMP64_0001_01_01_TO_EPOCH_MICROS: u64 = DATE32_0001_01_01_TO_EPOCH_SECS * 1_000_000;
+    const TIMESTAMP64_MAX: u64 = 4_611_669_811_199_999_999;
+    const TIMESTAMP64_MIN_ABS: u64 = 4_611_669_897_600_000_000;
     cases.push(TypeCase::new(
         "Timestamp64",
-        Value::Timestamp64(0),
+        Value::Timestamp64(SystemTime::UNIX_EPOCH),
         "1970-01-01T00:00:00Z",
     ));
     cases.push(TypeCase::new(
         "Timestamp64",
-        Value::Timestamp64(1),
+        Value::Timestamp64(SystemTime::UNIX_EPOCH + Duration::from_micros(1)),
         "1970-01-01T00:00:00.000001Z",
     ));
     cases.push(TypeCase::new(
         "Timestamp64",
-        Value::Timestamp64(1_705_320_645_123_456),
+        Value::Timestamp64(SystemTime::UNIX_EPOCH + Duration::from_micros(1_705_320_645_123_456)),
         "2024-01-15T12:10:45.123456Z",
     ));
     cases.push(TypeCase::new(
         "Timestamp64",
-        Value::Timestamp64(-1),
+        Value::Timestamp64(SystemTime::UNIX_EPOCH - Duration::from_micros(1)),
         "1969-12-31T23:59:59.999999Z",
     ));
+    cases.push(TypeCase::new(
+        "Timestamp64",
+        Value::Timestamp64(
+            SystemTime::UNIX_EPOCH
+                + Duration::from_micros(TIMESTAMP64_EPOCH_TO_9999_12_31_END_MICROS),
+        ),
+        "9999-12-31T23:59:59.999999Z",
+    ));
+    cases.push(TypeCase::new(
+        "Timestamp64",
+        Value::Timestamp64(
+            SystemTime::UNIX_EPOCH - Duration::from_micros(TIMESTAMP64_0001_01_01_TO_EPOCH_MICROS),
+        ),
+        "1-01-01T00:00:00Z",
+    ));
+    // Server extreme bounds (MIN_TIMESTAMP64 / MAX_TIMESTAMP64)
+    cases.push(TypeCase::new(
+        "Timestamp64",
+        Value::Timestamp64(SystemTime::UNIX_EPOCH - Duration::from_micros(TIMESTAMP64_MIN_ABS)),
+        "-144169-01-01T00:00:00Z",
+    ));
+    cases.push(TypeCase::new(
+        "Timestamp64",
+        Value::Timestamp64(SystemTime::UNIX_EPOCH + Duration::from_micros(TIMESTAMP64_MAX)),
+        "148107-12-31T23:59:59.999999Z",
+    ));
 
-    // ---- Interval64 (signed microseconds duration) ----
+    // ---- Interval64 (signed microsecond duration) ----
+    // YDB Interval64 range per `udf_data_type.h`:
+    //   MAX_INTERVAL64 = MAX_TIMESTAMP64 - MIN_TIMESTAMP64 = 9_223_339_708_799_999_999 µs
+    //   (≈ ±292 270 years). Range: [-MAX_INTERVAL64, +MAX_INTERVAL64] inclusive.
+    const INTERVAL64_MAX: u64 = 9_223_339_708_799_999_999;
     // YDB CAST(Interval64 AS Utf8) produces an ISO-8601 duration string.
-    // Test values are taken from the Go SDK integration tests, so the
-    // canonical form is verified against a known-good reference.
-    // 5h30m45.000123s
+    // Values taken from the Go SDK integration tests are used as a known-good
+    // reference. Boundaries: ±1 microsecond, ±(1 second − 1 microsecond),
+    // and ±(1 day − 1 microsecond) — the largest sub-day interval fitting
+    // a predictable H/M/S format.
     cases.push(TypeCase::new(
         "Interval64",
-        Value::Interval64(19_845_000_123),
+        Value::Interval64(SignedInterval {
+            sign: Sign::Plus,
+            duration: Duration::from_micros(19_845_000_123),
+        }),
         "PT5H30M45.000123S",
     ));
-    // -(2h15m30s)
     cases.push(TypeCase::new(
         "Interval64",
-        Value::Interval64(-8_130_000_000),
+        Value::Interval64(SignedInterval {
+            sign: Sign::Minus,
+            duration: Duration::from_micros(8_130_000_000),
+        }),
         "-PT2H15M30S",
     ));
-    // 7h45m30.999999s
     cases.push(TypeCase::new(
         "Interval64",
-        Value::Interval64(27_930_999_999),
+        Value::Interval64(SignedInterval {
+            sign: Sign::Plus,
+            duration: Duration::from_micros(27_930_999_999),
+        }),
         "PT7H45M30.999999S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval64",
+        Value::Interval64(SignedInterval {
+            sign: Sign::Plus,
+            duration: Duration::from_micros(1),
+        }),
+        "PT0.000001S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval64",
+        Value::Interval64(SignedInterval {
+            sign: Sign::Minus,
+            duration: Duration::from_micros(1),
+        }),
+        "-PT0.000001S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval64",
+        Value::Interval64(SignedInterval {
+            sign: Sign::Plus,
+            duration: Duration::from_micros(999_999),
+        }),
+        "PT0.999999S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval64",
+        Value::Interval64(SignedInterval {
+            sign: Sign::Minus,
+            duration: Duration::from_micros(999_999),
+        }),
+        "-PT0.999999S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval64",
+        Value::Interval64(SignedInterval {
+            sign: Sign::Plus,
+            duration: Duration::from_micros(86_399_999_999),
+        }),
+        "PT23H59M59.999999S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval64",
+        Value::Interval64(SignedInterval {
+            sign: Sign::Minus,
+            duration: Duration::from_micros(86_399_999_999),
+        }),
+        "-PT23H59M59.999999S",
+    ));
+    // Server extreme bounds (±MAX_INTERVAL64). Expected text is derived from the
+    // ISO-8601 duration format. Fill in once the server returns the canonical form.
+    cases.push(TypeCase::new(
+        "Interval64",
+        Value::Interval64(SignedInterval {
+            sign: Sign::Plus,
+            duration: Duration::from_micros(INTERVAL64_MAX),
+        }),
+        "P106751616DT23H59M59.999999S",
+    ));
+    cases.push(TypeCase::new(
+        "Interval64",
+        Value::Interval64(SignedInterval {
+            sign: Sign::Minus,
+            duration: Duration::from_micros(INTERVAL64_MAX),
+        }),
+        "-P106751616DT23H59M59.999999S",
     ));
 
     // ---- Utf8 (Text) / String (Bytes) ----
