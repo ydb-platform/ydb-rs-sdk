@@ -392,11 +392,9 @@ fn handle_incoming(
             sessions.remove(&request.partition_session_id);
             send_on_stream(
                 sender,
-                RawFromClientOneOf::StopPartitionSessionResponse(
-                    RawStopPartitionSessionResponse {
-                        partition_session_id: request.partition_session_id,
-                    },
-                ),
+                RawFromClientOneOf::StopPartitionSessionResponse(RawStopPartitionSessionResponse {
+                    partition_session_id: request.partition_session_id,
+                }),
             )?;
         }
         RawFromServer::UnsupportedMessage(mess) => {
@@ -622,7 +620,12 @@ mod tests {
 
     // ---- test helpers ----
 
-    fn make_session(partition_session_id: i64, partition_id: i64, topic: &str, start_offset: i64) -> PartitionSession {
+    fn make_session(
+        partition_session_id: i64,
+        partition_id: i64,
+        topic: &str,
+        start_offset: i64,
+    ) -> PartitionSession {
         PartitionSession {
             partition_session_id,
             partition_id,
@@ -762,7 +765,10 @@ mod tests {
 
     // ---- handle_read_response ----
 
-    fn make_raw_partition_data(partition_session_id: i64, batches: Vec<RawBatch>) -> RawPartitionData {
+    fn make_raw_partition_data(
+        partition_session_id: i64,
+        batches: Vec<RawBatch>,
+    ) -> RawPartitionData {
         RawPartitionData {
             partition_session_id,
             batches: batches.into_iter().collect(),
@@ -798,10 +804,7 @@ mod tests {
         sessions.insert(2, make_session(2, 22, "t-b", 0));
         sessions.insert(3, make_session(3, 33, "t-a2", 0));
 
-        let pd_a1 = make_raw_partition_data(
-            1,
-            vec![make_raw_batch(0, 2), make_raw_batch(2, 2)],
-        );
+        let pd_a1 = make_raw_partition_data(1, vec![make_raw_batch(0, 2), make_raw_batch(2, 2)]);
         let pd_b = make_raw_partition_data(2, vec![make_raw_batch(0, 3)]);
         let pd_a2 = make_raw_partition_data(3, vec![make_raw_batch(0, 2)]);
 
@@ -996,9 +999,10 @@ mod tests {
     async fn test_read_batch_private_awaits_notify_then_reads() {
         let (reader, _rx, shared) = TestReader::new(1000);
 
-        let handle = tokio::spawn(async move {
-            reader.read_batch_private().await.map(|b| b.messages.len())
-        });
+        let handle =
+            tokio::spawn(
+                async move { reader.read_batch_private().await.map(|b| b.messages.len()) },
+            );
 
         tokio::time::sleep(Duration::from_millis(20)).await;
 
@@ -1040,12 +1044,9 @@ mod tests {
         let (reader, _rx, shared) = TestReader::new(1000);
         shared.closed.store(true, Ordering::Release);
 
-        let res = tokio::time::timeout(
-            Duration::from_millis(200),
-            reader.read_batch_private(),
-        )
-        .await
-        .expect("should not hang on closed=true without notify");
+        let res = tokio::time::timeout(Duration::from_millis(200), reader.read_batch_private())
+            .await
+            .expect("should not hang on closed=true without notify");
         assert!(res.is_err());
     }
 
@@ -1072,22 +1073,24 @@ mod tests {
 
     #[test]
     fn test_topic_reader_options_default_batch_size_is_1000() {
-        let opts = crate::client_topic::topicreader::reader_options::TopicReaderOptionsBuilder::default()
-            .consumer("c".to_string())
-            .topic(TopicSelectors::from("t"))
-            .build()
-            .unwrap();
+        let opts =
+            crate::client_topic::topicreader::reader_options::TopicReaderOptionsBuilder::default()
+                .consumer("c".to_string())
+                .topic(TopicSelectors::from("t"))
+                .build()
+                .unwrap();
         assert_eq!(opts.batch_size, 1000);
     }
 
     #[test]
     fn test_topic_reader_options_custom_batch_size() {
-        let opts = crate::client_topic::topicreader::reader_options::TopicReaderOptionsBuilder::default()
-            .consumer("c".to_string())
-            .topic(TopicSelectors::from("t"))
-            .batch_size(42)
-            .build()
-            .unwrap();
+        let opts =
+            crate::client_topic::topicreader::reader_options::TopicReaderOptionsBuilder::default()
+                .consumer("c".to_string())
+                .topic(TopicSelectors::from("t"))
+                .batch_size(42)
+                .build()
+                .unwrap();
         assert_eq!(opts.batch_size, 42);
     }
 }
