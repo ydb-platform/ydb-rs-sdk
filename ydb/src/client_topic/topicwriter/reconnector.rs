@@ -300,12 +300,12 @@ impl ReconnectionLoop {
     }
 
     async fn handle_error(&mut self, err: YdbError) -> ReconnectionLoopStatus {
-        trace!("Error, trying to reconnect: {err}");
-
         if !ReconnectionHelper::is_retry_allowed(&err) {
             trace!("Reconnect is not allowed for error: {err}");
             return ReconnectionLoopStatus::Exit(Some(err));
         }
+
+        trace!("Error, trying to reconnect: {err}");
 
         let Some(wait_timeout) = self
             .helper
@@ -367,7 +367,7 @@ impl ReconnectionLoop {
                     ReconnectionLoopStatus::HandleError(err)
                 },
                 Err(chan_err) => ReconnectionLoopStatus::Exit(Some(YdbError::custom(format!("Channel error: {chan_err}"))))
-            }
+            },
         }
     }
 }
