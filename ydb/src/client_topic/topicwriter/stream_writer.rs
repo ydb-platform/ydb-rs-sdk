@@ -54,7 +54,7 @@ impl StreamWriter {
             partitioning: Some(
                 writer_options
                     .partitioning
-                    .to_grpc_init_partitioning(params.producer_id.clone()),
+                    .to_grpc_init_partitioning(producer_id.clone()),
             ),
         };
 
