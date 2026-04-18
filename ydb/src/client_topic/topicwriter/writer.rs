@@ -169,6 +169,10 @@ impl TopicWriter {
     ) -> YdbResult<()> {
         self.check_working().await?;
 
+        if let Some(err) = self.fatal_error.read().await.as_ref() {
+            return Err(err.clone());
+        }
+
         {
             let mut state = self.state.lock().await;
             if self.auto_set_seq_no {
