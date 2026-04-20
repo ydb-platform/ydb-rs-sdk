@@ -1,6 +1,8 @@
-use crate::{errors, YdbResult};
-use derive_builder::Builder;
 use std::time;
+
+use derive_builder::Builder;
+
+use crate::{errors, YdbResult};
 
 #[derive(Builder)]
 #[builder(build_fn(error = "errors::YdbError", validate = "Self::validate"))]
