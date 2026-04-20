@@ -98,14 +98,8 @@ impl TopicWriter {
             })
         });
 
-        let fatal_error = Arc::new(TokioRwLock::new(None));
         let (fatal_error_tx, fatal_error_rx) = oneshot::channel();
-        let wait_for_fatal_error_handle = tokio::spawn(TopicWriter::wait_for_fatal_error(
-            cancellation_token.clone(),
-            fatal_error_rx,
-            state.clone(),
-            fatal_error.clone(),
-        ));
+        let (init_tx, init_rx) = oneshot::channel();
 
         let reconnector = Reconnector::new(ReconnectorParams {
             writer_options: writer_options.clone(),
@@ -115,9 +109,28 @@ impl TopicWriter {
             cancellation_token: cancellation_token.clone(),
             message_queue: message_queue.clone(),
             retrier,
+            init_tx,
             fatal_error_tx,
         })
-        .await?;
+        .await;
+
+        match init_rx.await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                return Err(err);
+            }
+            Err(err) => {
+                return Err(YdbError::from(err));
+            }
+        }
+
+        let fatal_error = Arc::new(TokioRwLock::new(None));
+        let wait_for_fatal_error_handle = tokio::spawn(TopicWriter::wait_for_fatal_error(
+            cancellation_token.clone(),
+            fatal_error_rx,
+            state.clone(),
+            fatal_error.clone(),
+        ));
 
         Ok(Self {
             path: writer_options.topic_path.clone(),

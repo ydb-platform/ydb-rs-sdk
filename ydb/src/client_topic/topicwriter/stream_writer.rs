@@ -222,28 +222,41 @@ impl StreamWriter {
                 RawServerMessage::Write(write_response_body) => {
                     for raw_ack in write_response_body.acks {
                         let write_ack = WriteAck::from(raw_ack);
-                        let ticket = {
-                            let reception_ticket = {
-                                let mut writer_state = writer_state.lock().await;
-                                writer_state.confirmation_reception_queue.try_get_ticket()
-                            };
-
-                            let Some(reception_ticket) = reception_ticket else {
-                                return Err(YdbError::custom(
-                                    "Expected reception ticket to be actually present",
-                                ));
-                            };
-
-                            if write_ack.seq_no != reception_ticket.get_seq_no() {
-                                return Err(YdbError::custom(format!(
-                                    "Reception ticket and write ack seq_no mismatch. Seqno from ack: {}, expected: {}",
-                                    write_ack.seq_no,
-                                    reception_ticket.get_seq_no(),
-                                )));
-                            }
-                            reception_ticket
+                        let expected_seq_no = {
+                            let writer_state = writer_state.lock().await;
+                            writer_state
+                                .confirmation_reception_queue
+                                .peek_ticket_seq_no()
                         };
-                        message_queue.acknowledge_message(write_ack.seq_no).await?;
+
+                        let Some(expected_seq_no) = expected_seq_no else {
+                            return Err(YdbError::custom(
+                                "Expected reception ticket to be actually present",
+                            ));
+                        };
+                        if write_ack.seq_no != expected_seq_no {
+                            return Err(YdbError::custom(format!(
+                                "Reception ticket and write ack seq_no mismatch. Seqno from ack: {}, expected: {}",
+                                write_ack.seq_no,
+                                expected_seq_no,
+                            )));
+                        }
+                        match message_queue.acknowledge_message(write_ack.seq_no).await {
+                            Ok(_) => {}
+                            Err(err) => {
+                                return Err(err);
+                            }
+                        };
+
+                        let ticket = {
+                            let mut writer_state = writer_state.lock().await;
+                            writer_state.confirmation_reception_queue.try_get_ticket()
+                        };
+                        let Some(ticket) = ticket else {
+                            return Err(YdbError::custom(
+                                "Reception ticket is missing after message queue ack",
+                            ));
+                        };
                         ticket.send_confirmation_if_needed(write_ack.status);
                     }
                 }

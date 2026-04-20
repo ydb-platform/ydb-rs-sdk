@@ -86,6 +86,12 @@ impl TopicWriterReceptionQueue {
         }
     }
 
+    pub(crate) fn peek_ticket_seq_no(&self) -> Option<i64> {
+        self.message_receipt_signals_queue
+            .front()
+            .map(TopicWriterReceptionTicket::get_seq_no)
+    }
+
     pub(crate) fn try_get_ticket(&mut self) -> Option<TopicWriterReceptionTicket> {
         let maybe_ticket = self.message_receipt_signals_queue.pop_front();
         match maybe_ticket.as_ref() {
