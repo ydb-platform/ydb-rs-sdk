@@ -29,6 +29,7 @@ pub(crate) struct ReconnectorParams {
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) message_queue: MessageQueue,
     pub(crate) retrier: Arc<dyn Retry>,
+    pub(crate) init_tx: oneshot::Sender<YdbResult<()>>,
     pub(crate) fatal_error_tx: oneshot::Sender<YdbError>,
 }
 
@@ -50,7 +51,7 @@ pub(crate) struct Reconnector {
 }
 
 impl Reconnector {
-    pub(crate) async fn new(params: ReconnectorParams) -> YdbResult<Self> {
+    pub(crate) async fn new(params: ReconnectorParams) -> Self {
         let r = Reconnector {
             state: Arc::new(TokioMutex::new(ReconnectorState {
                 status: ReconnectorStatus::Created,
@@ -60,7 +61,7 @@ impl Reconnector {
             writer_state: params.writer_state.clone(),
         };
 
-        let loop_join_handle: JoinHandle<()> = Reconnector::start_reconnection_loop(
+        let loop_join_handle = Reconnector::start_reconnection_loop(
             ReconnectionHelper {
                 connection_manager: params.connection_manager,
                 retrier: params.retrier,
@@ -71,8 +72,9 @@ impl Reconnector {
             },
             params.message_queue,
             params.fatal_error_tx,
+            params.init_tx,
         )
-        .await?;
+        .await;
 
         {
             let mut state = r.state.lock().await;
@@ -80,28 +82,20 @@ impl Reconnector {
             state.status = ReconnectorStatus::Working;
         }
 
-        Ok(r)
+        r
     }
 
     async fn start_reconnection_loop(
         helper: ReconnectionHelper,
         message_queue: MessageQueue,
         fatal_error_tx: oneshot::Sender<YdbError>,
-    ) -> YdbResult<JoinHandle<()>> {
-        let (done_once_tx, done_once_rx) = oneshot::channel();
-
-        let handle = tokio::spawn(async move {
-            ReconnectionLoop::new(helper, message_queue, done_once_tx)
+        init_tx: oneshot::Sender<YdbResult<()>>,
+    ) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            ReconnectionLoop::new(helper, message_queue, init_tx)
                 .run(fatal_error_tx)
                 .await
-        });
-
-        match done_once_rx.await {
-            Ok(_) => Ok(handle),
-            Err(err) => Err(YdbError::InternalError(format!(
-                "reconnector done_once channel closed: {err}"
-            ))),
-        }
+        })
     }
 
     pub(crate) async fn add_message_for_processing(
@@ -241,7 +235,7 @@ struct ReconnectionLoop {
 
     reconnect_start_time: Instant,
     attempt: usize,
-    done_once_tx: Option<oneshot::Sender<()>>,
+    init_tx: Option<oneshot::Sender<YdbResult<()>>>,
     stream_writer: Option<StreamWriter>,
 }
 
@@ -256,14 +250,14 @@ impl ReconnectionLoop {
     fn new(
         helper: ReconnectionHelper,
         message_queue: MessageQueue,
-        done_once_tx: oneshot::Sender<()>,
+        init_tx: oneshot::Sender<YdbResult<()>>,
     ) -> Self {
         Self {
             helper,
             message_queue,
             reconnect_start_time: Instant::now(),
             attempt: 0,
-            done_once_tx: Some(done_once_tx),
+            init_tx: Some(init_tx),
             stream_writer: None,
         }
     }
@@ -341,8 +335,8 @@ impl ReconnectionLoop {
                     .set_writer_status(TopicWriterStatus::Working)
                     .await;
 
-                if let Some(tx) = self.done_once_tx.take() {
-                    let _ = tx.send(());
+                if let Some(tx) = self.init_tx.take() {
+                    let _ = tx.send(Ok(()));
                 };
 
                 ReconnectionLoopStatus::WaitForErrorOrCancellation(error_receiver)
@@ -350,6 +344,11 @@ impl ReconnectionLoop {
             Err(err) => {
                 trace!("Error creating stream writer: {err}");
                 self.attempt += 1;
+
+                if let Some(tx) = self.init_tx.take() {
+                    let _ = tx.send(Err(err.clone()));
+                };
+
                 ReconnectionLoopStatus::HandleError(err)
             }
         }
