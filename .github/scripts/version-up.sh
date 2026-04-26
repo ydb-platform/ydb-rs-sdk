@@ -114,8 +114,9 @@ function bump_version() {
 
 bump_version "$CRATE_NAME" "$VERSION_PART"
 
-# actualize Cargo.lock
-cargo build --workspace --all-targets
+# actualize Cargo.lock without compiling: only updates lock entries for
+# workspace members whose versions just changed; external deps stay pinned.
+cargo update --workspace
 
 git diff
 
