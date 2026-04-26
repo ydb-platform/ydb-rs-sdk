@@ -1,7 +1,7 @@
 use crate::client_common::{DBCredentials, TokenCache};
 use crate::credentials::{
-    credencials_ref, AccessTokenCredentials, CredentialsRef, GCEMetadata, ServiceAccountCredentials,
-    StaticCredentials,
+    credencials_ref, AccessTokenCredentials, CredentialsRef, GCEMetadata,
+    ServiceAccountCredentials, StaticCredentials,
 };
 use crate::dicovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
 use crate::discovery::{Discovery, StaticDiscovery, TimerDiscovery};
@@ -190,8 +190,7 @@ fn token_file(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientB
                 value.as_ref()
             ))
         })?;
-        client_builder.credentials =
-            credencials_ref(AccessTokenCredentials::from(token.trim()));
+        client_builder.credentials = credencials_ref(AccessTokenCredentials::from(token.trim()));
         break;
     }
     Ok(client_builder)
@@ -437,10 +436,7 @@ mod test {
             .map_err(|e| YdbError::Custom(format!("write tempfile: {e}")))?;
         drop(f);
 
-        let conn = format!(
-            "grpc://asd:222/qwe?token_file={}",
-            path.to_str().unwrap()
-        );
+        let conn = format!("grpc://asd:222/qwe?token_file={}", path.to_str().unwrap());
         let builder = ClientBuilder::new_from_connection_string(&conn)?;
         let token = builder.credentials.create_token()?;
         let _ = std::fs::remove_file(&path);
