@@ -1,9 +1,10 @@
 use crate::client_common::{DBCredentials, TokenCache};
 use crate::credentials::{
-    credencials_ref, AccessTokenCredentials, CredentialsRef, GCEMetadata, StaticCredentials,
+    credencials_ref, AccessTokenCredentials, CredentialsRef, GCEMetadata, ServiceAccountCredentials,
+    StaticCredentials,
 };
 use crate::dicovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
-use crate::discovery::{Discovery, TimerDiscovery};
+use crate::discovery::{Discovery, StaticDiscovery, TimerDiscovery};
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
@@ -29,6 +30,9 @@ static PARAM_HANDLERS: Lazy<Mutex<HashMap<String, ParamHandler>>> = Lazy::new(||
         m.insert("token_metadata".to_string(), token_metadata);
         m.insert("token_static_password".to_string(), token_static_password);
         m.insert("ca_certificate".to_string(), ca_certificate);
+        m.insert("sa_key_file".to_string(), sa_key_file);
+        m.insert("token_file".to_string(), token_file);
+        m.insert("use_discovery".to_string(), use_discovery);
         m
     })
 });
@@ -175,12 +179,62 @@ fn ca_certificate(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
     Ok(client_builder)
 }
 
+fn token_file(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
+    for (key, value) in url::Url::parse(uri)?.query_pairs() {
+        if key != "token_file" {
+            continue;
+        };
+        let token = std::fs::read_to_string(value.as_ref()).map_err(|err| {
+            YdbError::Custom(format!(
+                "failed to read token file '{}': {err}",
+                value.as_ref()
+            ))
+        })?;
+        client_builder.credentials =
+            credencials_ref(AccessTokenCredentials::from(token.trim()));
+        break;
+    }
+    Ok(client_builder)
+}
+
+fn sa_key_file(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
+    for (key, value) in url::Url::parse(uri)?.query_pairs() {
+        if key != "sa_key_file" {
+            continue;
+        };
+        client_builder.credentials =
+            credencials_ref(ServiceAccountCredentials::from_file(value.as_ref())?);
+        break;
+    }
+    Ok(client_builder)
+}
+
+fn use_discovery(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
+    for (key, value) in url::Url::parse(uri)?.query_pairs() {
+        if key != "use_discovery" {
+            continue;
+        };
+        match value.as_ref() {
+            "true" | "1" | "" => client_builder.discovery_enabled = true,
+            "false" | "0" => client_builder.discovery_enabled = false,
+            other => {
+                return Err(YdbError::Custom(format!(
+                    "unknown value for use_discovery: '{other}', expected true/false"
+                )))
+            }
+        }
+        break;
+    }
+    Ok(client_builder)
+}
+
 pub struct ClientBuilder {
     pub(crate) credentials: CredentialsRef,
     pub(crate) database: String,
     discovery_interval: Duration,
     pub(crate) endpoint: String,
     discovery: Option<Box<dyn Discovery>>,
+    discovery_enabled: bool,
     pub cert_path: Option<String>,
 }
 
@@ -220,8 +274,11 @@ impl ClientBuilder {
             self.cert_path.clone(),
         );
 
-        let discovery = match self.discovery {
+        let discovery: Box<dyn Discovery> = match self.discovery {
             Some(discovery_box) => discovery_box,
+            None if !self.discovery_enabled => {
+                Box::new(StaticDiscovery::new_from_str(self.endpoint.as_str())?)
+            }
             None => Box::new(TimerDiscovery::new(
                 discovery_connection_manager,
                 self.endpoint.as_str(),
@@ -285,6 +342,7 @@ impl ClientBuilder {
             discovery_interval: Duration::from_secs(60),
             endpoint: "grpc://localhost:2135".to_string(),
             discovery: None,
+            discovery_enabled: true,
             cert_path: None,
         }
     }
@@ -328,6 +386,76 @@ mod test {
         let builder = ClientBuilder::new_from_connection_string("http://asd:222/?database=/qwe2")?;
         assert_eq!(builder.database, "/qwe2".to_string());
         Ok(())
+    }
+
+    #[test]
+    fn use_discovery_default_true() -> YdbResult<()> {
+        let builder = ClientBuilder::new_from_connection_string("grpc://asd:222/qwe")?;
+        assert!(builder.discovery_enabled);
+        Ok(())
+    }
+
+    #[test]
+    fn use_discovery_false_disables() -> YdbResult<()> {
+        let builder =
+            ClientBuilder::new_from_connection_string("grpc://asd:222/qwe?use_discovery=false")?;
+        assert!(!builder.discovery_enabled);
+        Ok(())
+    }
+
+    #[test]
+    fn use_discovery_true_keeps_default() -> YdbResult<()> {
+        let builder =
+            ClientBuilder::new_from_connection_string("grpc://asd:222/qwe?use_discovery=true")?;
+        assert!(builder.discovery_enabled);
+        Ok(())
+    }
+
+    #[test]
+    fn use_discovery_invalid() {
+        let res =
+            ClientBuilder::new_from_connection_string("grpc://asd:222/qwe?use_discovery=maybe");
+        assert!(matches!(res, Err(YdbError::Custom(_))));
+    }
+
+    #[test]
+    fn sa_key_file_missing() {
+        let res = ClientBuilder::new_from_connection_string(
+            "grpc://asd:222/qwe?sa_key_file=/nonexistent/path/sa.json",
+        );
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn token_file_reads_and_trims() -> YdbResult<()> {
+        use std::io::Write;
+        let mut path = std::env::temp_dir();
+        path.push(format!("ydb_rs_token_test_{}.txt", std::process::id()));
+        let mut f = std::fs::File::create(&path)
+            .map_err(|e| YdbError::Custom(format!("create tempfile: {e}")))?;
+        f.write_all(b"  my-secret-token\n")
+            .map_err(|e| YdbError::Custom(format!("write tempfile: {e}")))?;
+        drop(f);
+
+        let conn = format!(
+            "grpc://asd:222/qwe?token_file={}",
+            path.to_str().unwrap()
+        );
+        let builder = ClientBuilder::new_from_connection_string(&conn)?;
+        let token = builder.credentials.create_token()?;
+        let _ = std::fs::remove_file(&path);
+
+        use secrecy::ExposeSecret;
+        assert_eq!(token.token.expose_secret(), "my-secret-token");
+        Ok(())
+    }
+
+    #[test]
+    fn token_file_missing() {
+        let res = ClientBuilder::new_from_connection_string(
+            "grpc://asd:222/qwe?token_file=/nonexistent/path/token.txt",
+        );
+        assert!(matches!(res, Err(YdbError::Custom(_))));
     }
 
     #[test]
