@@ -24,6 +24,11 @@ on:
         options:
           - patch
           - minor
+      release-title:
+        description: "Optional release title suffix (appended after the tag). Leave empty to use only the tag."
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -71,9 +76,15 @@ jobs:
       - name: Create GitHub Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TITLE_SUFFIX: ${{ github.event.inputs.release-title }}
         run: |
           TAG="ydb-${{ needs.publishCrate.outputs.crate-version-ydb }}"
-          echo "Creating release for tag $TAG"
+          if [[ -n "$RELEASE_TITLE_SUFFIX" ]]; then
+            TITLE="$TAG $RELEASE_TITLE_SUFFIX"
+          else
+            TITLE="$TAG"
+          fi
+          echo "Creating release for tag $TAG with title: $TITLE"
           gh release create "$TAG" \
-            --title "$TAG" \
+            --title "$TITLE" \
             --generate-notes
