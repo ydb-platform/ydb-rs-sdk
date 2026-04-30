@@ -299,7 +299,6 @@ impl ReconnectionLoop {
             return ReconnectionLoopStatus::Exit(Some(err));
         }
 
-        println!("Error, trying to reconnect: {err}");
         trace!("Error, trying to reconnect: {err}");
 
         let Some(wait_timeout) = self
