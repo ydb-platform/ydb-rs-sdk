@@ -1279,6 +1279,10 @@ async fn read_batch_merges_and_respects_hard_limit() -> YdbResult<()> {
 #[traced_test]
 #[ignore] // need YDB access
 async fn topic_writer_reconnects() -> YdbResult<()> {
+    const MSGS_BEFORE_OUTAGE: usize = 5;
+    const MSGS_AFTER_OUTAGE: usize = 5;
+    const MSG_COUNT: usize = MSGS_BEFORE_OUTAGE + MSGS_AFTER_OUTAGE;
+
     let client = create_client().await?;
     let database_path = client.database();
     let topic_name = "topic_writer_reconnects".to_string();
@@ -1286,6 +1290,10 @@ async fn topic_writer_reconnects() -> YdbResult<()> {
     let producer_id = "test-producer".to_string();
     let consumer_name = "test-consumer".to_string();
     let mut topic_client = client.topic_client();
+
+    let payloads: Vec<Vec<u8>> = (0..MSG_COUNT)
+        .map(|i| format!("topic_writer_reconnect:{i}").into_bytes())
+        .collect();
 
     let _ = topic_client.drop_topic(topic_path.clone()).await;
     'wait_topic_dropped: loop {
@@ -1331,52 +1339,67 @@ async fn topic_writer_reconnects() -> YdbResult<()> {
         )
         .await?;
 
-    writer
-        .write_with_ack(
-            TopicWriterMessageBuilder::default()
-                .data(b"before-proxy-drop".to_vec())
-                .build()?,
-        )
-        .await?;
+    for payload in payloads.iter().take(MSGS_BEFORE_OUTAGE) {
+        writer
+            .write_with_ack(
+                TopicWriterMessageBuilder::default()
+                    .data(payload.clone())
+                    .build()?,
+            )
+            .await?;
+    }
 
     proxy.set_allow_forward(false);
     tokio::time::sleep(Duration::from_millis(200)).await;
     proxy.set_allow_forward(true);
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    timeout(
-        Duration::from_secs(60),
-        writer.write_with_ack(
-            TopicWriterMessageBuilder::default()
-                .data(b"after-proxy-drop".to_vec())
-                .build()?,
-        ),
-    )
+    timeout(Duration::from_secs(60), async {
+        for payload in payloads
+            .iter()
+            .skip(MSGS_BEFORE_OUTAGE)
+            .take(MSGS_AFTER_OUTAGE)
+        {
+            writer
+                .write_with_ack(
+                    TopicWriterMessageBuilder::default()
+                        .data(payload.clone())
+                        .build()?,
+                )
+                .await?;
+        }
+        YdbResult::Ok(())
+    })
     .await
-    .map_err(|_| YdbError::custom("timeout waiting for write after reconnect"))??;
+    .map_err(|_| YdbError::custom("timeout waiting for writes after reconnect"))??;
 
     writer.stop().await?;
 
     let mut reader = topic_client
         .create_reader(consumer_name.clone(), topic_path.clone())
         .await?;
-    let mut seen_before = false;
-    let mut seen_after = false;
+
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while (!seen_before || !seen_after) && std::time::Instant::now() < deadline {
+    let mut expected_idx = 0usize;
+    while expected_idx < MSG_COUNT && std::time::Instant::now() < deadline {
         let batch = reader.read_batch().await?;
         for mut msg in batch.messages {
             let body = msg.read_and_take().await?.unwrap();
-            match body.as_slice() {
-                b"before-proxy-drop" => seen_before = true,
-                b"after-proxy-drop" => seen_after = true,
-                _ => {}
-            }
+            assert!(
+                expected_idx < MSG_COUNT,
+                "unexpected extra message after {MSG_COUNT} payloads: {body:?}"
+            );
+            assert_eq!(
+                body, payloads[expected_idx],
+                "messages must arrive in write order (index {expected_idx})"
+            );
+            expected_idx += 1;
         }
     }
-    assert!(
-        seen_before && seen_after,
-        "expected both payloads via direct reader, before={seen_before} after={seen_after}"
+
+    assert_eq!(
+        expected_idx, MSG_COUNT,
+        "timed out or truncated read: got {expected_idx} of {MSG_COUNT} messages"
     );
     Ok(())
 }
