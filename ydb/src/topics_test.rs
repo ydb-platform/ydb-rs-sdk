@@ -1278,24 +1278,25 @@ async fn read_batch_merges_and_respects_hard_limit() -> YdbResult<()> {
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
-async fn topic_writer_reconnects_after_proxy_drop() -> YdbResult<()> {
-    let direct = create_client().await?;
-    let database_path = direct.database();
-    let topic_name = "topic_writer_proxy_reconnect".to_string();
+async fn topic_writer_reconnects() -> YdbResult<()> {
+    let client = create_client().await?;
+    let database_path = client.database();
+    let topic_name = "topic_writer_reconnects".to_string();
     let topic_path = format!("{database_path}/{topic_name}");
-    let producer_id = "proxy-reconnect-producer".to_string();
-    let consumer_name = "proxy-reconnect-consumer".to_string();
-    let mut topic_client_direct = direct.topic_client();
-    let _ = topic_client_direct.drop_topic(topic_path.clone()).await;
+    let producer_id = "test-producer".to_string();
+    let consumer_name = "test-consumer".to_string();
+    let mut topic_client = client.topic_client();
+
+    let _ = topic_client.drop_topic(topic_path.clone()).await;
     'wait_topic_dropped: loop {
-        let mut scheme = direct.scheme_client();
+        let mut scheme = client.scheme_client();
         let res = scheme.list_directory(database_path.clone()).await?;
         if !res.iter().any(|item| item.name == topic_name) {
             break 'wait_topic_dropped;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    topic_client_direct
+    topic_client
         .create_topic(
             topic_path.clone(),
             CreateTopicOptionsBuilder::default()
@@ -1305,21 +1306,23 @@ async fn topic_writer_reconnects_after_proxy_drop() -> YdbResult<()> {
                 .build()?,
         )
         .await?;
+
     let proxy = TcpForwardProxy::start(CONNECTION_STRING.as_str()).await?;
     let proxy_port = proxy.listen_addr().port();
     let base = url::Url::parse(CONNECTION_STRING.as_str())
         .map_err(|e| YdbError::custom(format!("parse CONNECTION_STRING: {e}")))?;
     let scheme = base.scheme();
-    let conn_through_proxy = format!("{scheme}://127.0.0.1:{proxy_port}{}", direct.database());
+    let conn_through_proxy = format!("{scheme}://127.0.0.1:{proxy_port}{}", client.database());
 
-    let discovery_uri = format!("{scheme}://127.0.0.1:{proxy_port}");
-    let discovery = StaticDiscovery::new_from_str(discovery_uri.as_str())?;
-    let proxied = ClientBuilder::new_from_connection_string(&conn_through_proxy)?
+    let discovery =
+        StaticDiscovery::new_from_str(format!("{scheme}://127.0.0.1:{proxy_port}").as_str())?;
+    let proxied_client = ClientBuilder::new_from_connection_string(&conn_through_proxy)?
         .with_discovery(discovery)
         .client()?;
-    proxied.wait().await?;
-    let mut topic_client = proxied.topic_client();
-    let mut writer = topic_client
+    proxied_client.wait().await?;
+
+    let mut proxied_topic_client = proxied_client.topic_client();
+    let mut writer = proxied_topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
@@ -1327,6 +1330,7 @@ async fn topic_writer_reconnects_after_proxy_drop() -> YdbResult<()> {
                 .build()?,
         )
         .await?;
+
     writer
         .write_with_ack(
             TopicWriterMessageBuilder::default()
@@ -1334,10 +1338,12 @@ async fn topic_writer_reconnects_after_proxy_drop() -> YdbResult<()> {
                 .build()?,
         )
         .await?;
-    proxy.set_forwarding(false);
+
+    proxy.set_allow_forward(false);
     tokio::time::sleep(Duration::from_millis(200)).await;
-    proxy.set_forwarding(true);
+    proxy.set_allow_forward(true);
     tokio::time::sleep(Duration::from_millis(100)).await;
+
     timeout(
         Duration::from_secs(60),
         writer.write_with_ack(
@@ -1348,8 +1354,10 @@ async fn topic_writer_reconnects_after_proxy_drop() -> YdbResult<()> {
     )
     .await
     .map_err(|_| YdbError::custom("timeout waiting for write after reconnect"))??;
+
     writer.stop().await?;
-    let mut reader = topic_client_direct
+
+    let mut reader = topic_client
         .create_reader(consumer_name.clone(), topic_path.clone())
         .await?;
     let mut seen_before = false;

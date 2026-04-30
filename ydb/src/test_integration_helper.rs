@@ -65,33 +65,81 @@ pub(crate) async fn create_custom_ca_client() -> YdbResult<Arc<Client>> {
 
 pub(crate) struct TcpForwardProxy {
     listen_addr: SocketAddr,
-    allow_forward: watch::Sender<bool>,
+    allow_tx: watch::Sender<bool>,
     accept_loop: JoinHandle<()>,
 }
 
 impl TcpForwardProxy {
     /// `connection_string` is the same format as `YDB_CONNECTION_STRING` / `test_helpers::CONNECTION_STRING`.
     pub(crate) async fn start(connection_string: &str) -> YdbResult<Self> {
-        let target = ydb_grpc_socket_addr(connection_string).await?;
+        let target = ydb_connection_string_to_socket_addr(connection_string).await?;
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
-            .map_err(|e| YdbError::custom(format!("TcpForwardingProxy bind: {e}")))?;
+            .map_err(|e| YdbError::custom(format!("TcpForwardProxy bind: {e}")))?;
         let listen_addr = listener
             .local_addr()
-            .map_err(|e| YdbError::custom(format!("TcpForwardingProxy local_addr: {e}")))?;
-        let (allow_forward, allow_rx) = watch::channel(true);
-        let accept_loop = tokio::spawn(accept_loop(listener, target, allow_rx));
+            .map_err(|e| YdbError::custom(format!("TcpForwardProxy local_addr: {e}")))?;
+
+        let (allow_tx, allow_rx) = watch::channel(true);
+        let accept_loop = tokio::spawn(Self::accept_loop(listener, target, allow_rx));
+
         Ok(Self {
             listen_addr,
-            allow_forward,
+            allow_tx,
             accept_loop,
         })
     }
+
     pub(crate) fn listen_addr(&self) -> SocketAddr {
         self.listen_addr
     }
-    pub(crate) fn set_forwarding(&self, enabled: bool) {
-        let _ = self.allow_forward.send(enabled);
+
+    pub(crate) fn set_allow_forward(&self, allow: bool) {
+        let _ = self.allow_tx.send(allow);
+    }
+
+    async fn accept_loop(
+        listener: TcpListener,
+        target: SocketAddr,
+        allow_rx: watch::Receiver<bool>,
+    ) {
+        loop {
+            let Ok((inbound, _)) = listener.accept().await else {
+                break;
+            };
+
+            if !*allow_rx.borrow() {
+                continue;
+            }
+
+            tokio::spawn(Self::forward(inbound, target, allow_rx.clone()));
+        }
+    }
+
+    async fn forward(
+        mut inbound: TcpStream,
+        target: SocketAddr,
+        mut allow_rx: watch::Receiver<bool>,
+    ) {
+        let Ok(mut outbound) = TcpStream::connect(target).await else {
+            return;
+        };
+
+        tokio::select! {
+            _ = Self::wait_for_not_allowed(&mut allow_rx) => {}
+            _ = copy_bidirectional(&mut inbound, &mut outbound) => {}
+        }
+    }
+
+    async fn wait_for_not_allowed(allow_rx: &mut watch::Receiver<bool>) {
+        loop {
+            if !*allow_rx.borrow() {
+                return;
+            }
+            if allow_rx.changed().await.is_err() {
+                return;
+            }
+        }
     }
 }
 
@@ -100,58 +148,23 @@ impl Drop for TcpForwardProxy {
         self.accept_loop.abort();
     }
 }
-async fn accept_loop(listener: TcpListener, target: SocketAddr, allow_rx: watch::Receiver<bool>) {
-    loop {
-        let (inbound, _) = match listener.accept().await {
-            Ok(x) => x,
-            Err(_) => break,
-        };
-        if !*allow_rx.borrow() {
-            drop(inbound);
-            continue;
-        }
-        let allow_rx_conn = allow_rx.clone();
-        tokio::spawn(forward_one(inbound, target, allow_rx_conn));
-    }
-}
-async fn forward_one(
-    mut inbound: TcpStream,
-    target: SocketAddr,
-    mut allow_rx: watch::Receiver<bool>,
-) {
-    let mut outbound = match TcpStream::connect(target).await {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    tokio::select! {
-        _ = wait_forwarding_disabled(&mut allow_rx) => {}
-        _ = copy_bidirectional(&mut inbound, &mut outbound) => {}
-    }
-}
-async fn wait_forwarding_disabled(allow_rx: &mut watch::Receiver<bool>) {
-    loop {
-        if !*allow_rx.borrow() {
-            return;
-        }
-        if allow_rx.changed().await.is_err() {
-            return;
-        }
-    }
-}
 
-async fn ydb_grpc_socket_addr(connection_string: &str) -> YdbResult<SocketAddr> {
-    let u = url::Url::parse(connection_string)
+async fn ydb_connection_string_to_socket_addr(connection_string: &str) -> YdbResult<SocketAddr> {
+    let url = url::Url::parse(connection_string)
         .map_err(|e| YdbError::custom(format!("invalid connection string: {e}")))?;
-    let host = u
+    let host = url
         .host_str()
         .ok_or_else(|| YdbError::custom("connection string: missing host"))?
         .to_string();
-    let port = u
+    let port = url
         .port()
         .ok_or_else(|| YdbError::custom("connection string: missing port"))?;
+
+    // For some reason, it doesn't work without this.
     if host.eq_ignore_ascii_case("localhost") {
         return Ok(SocketAddr::from(([127, 0, 0, 1], port)));
     }
+
     let mut addrs = tokio::net::lookup_host((host.as_str(), port))
         .await
         .map_err(|e| YdbError::custom(format!("lookup_host: {e}")))?;
