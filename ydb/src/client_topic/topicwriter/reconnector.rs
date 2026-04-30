@@ -299,6 +299,7 @@ impl ReconnectionLoop {
             return ReconnectionLoopStatus::Exit(Some(err));
         }
 
+        println!("Error, trying to reconnect: {err}");
         trace!("Error, trying to reconnect: {err}");
 
         let Some(wait_timeout) = self
@@ -322,6 +323,10 @@ impl ReconnectionLoop {
     }
 
     async fn recreate_stream_writer(&mut self) -> ReconnectionLoopStatus {
+        if self.helper.cancellation_token.is_cancelled() {
+            return ReconnectionLoopStatus::Exit(None);
+        }
+
         let (error_sender, error_receiver) = oneshot::channel();
         match self
             .helper
