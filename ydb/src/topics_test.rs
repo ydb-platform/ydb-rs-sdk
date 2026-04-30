@@ -1,6 +1,6 @@
 use futures_util::StreamExt;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing_test::traced_test;
@@ -1304,6 +1304,7 @@ async fn topic_writer_reconnects() -> YdbResult<()> {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+
     topic_client
         .create_topic(
             topic_path.clone(),
@@ -1316,17 +1317,24 @@ async fn topic_writer_reconnects() -> YdbResult<()> {
         .await?;
 
     let proxy = TcpForwardProxy::start(CONNECTION_STRING.as_str()).await?;
-    let proxy_port = proxy.listen_addr().port();
-    let base = url::Url::parse(CONNECTION_STRING.as_str())
-        .map_err(|e| YdbError::custom(format!("parse CONNECTION_STRING: {e}")))?;
-    let scheme = base.scheme();
-    let conn_through_proxy = format!("{scheme}://127.0.0.1:{proxy_port}{}", client.database());
+    let proxy_listen_port = proxy.listen_addr().port();
 
-    let discovery =
-        StaticDiscovery::new_from_str(format!("{scheme}://127.0.0.1:{proxy_port}").as_str())?;
-    let proxied_client = ClientBuilder::new_from_connection_string(&conn_through_proxy)?
-        .with_discovery(discovery)
-        .client()?;
+    let connection_url = url::Url::parse(CONNECTION_STRING.as_str()).map_err(|err| {
+        YdbError::custom(format!(
+            "topic_writer_reconnects: failed to parse CONNECTION_STRING: {err}"
+        ))
+    })?;
+    let scheme = connection_url.scheme();
+
+    let discovery = StaticDiscovery::new_from_str(
+        format!("{scheme}://127.0.0.1:{proxy_listen_port}").as_str(),
+    )?;
+    let proxied_client = ClientBuilder::new_from_connection_string(format!(
+        "{scheme}://127.0.0.1:{proxy_listen_port}{}",
+        client.database()
+    ))?
+    .with_discovery(discovery)
+    .client()?;
     proxied_client.wait().await?;
 
     let mut proxied_topic_client = proxied_client.topic_client();
@@ -1371,7 +1379,9 @@ async fn topic_writer_reconnects() -> YdbResult<()> {
         YdbResult::Ok(())
     })
     .await
-    .map_err(|_| YdbError::custom("timeout waiting for writes after reconnect"))??;
+    .map_err(|_| {
+        YdbError::custom("topic_writer_reconnects: timed out waiting for writes after reconnect")
+    })??;
 
     writer.stop().await?;
 
@@ -1379,27 +1389,29 @@ async fn topic_writer_reconnects() -> YdbResult<()> {
         .create_reader(consumer_name.clone(), topic_path.clone())
         .await?;
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    let mut expected_idx = 0usize;
-    while expected_idx < MSG_COUNT && std::time::Instant::now() < deadline {
+    let read_deadline = Instant::now() + Duration::from_secs(30);
+    let mut expected_index = 0usize;
+    while expected_index < MSG_COUNT && Instant::now() < read_deadline {
         let batch = reader.read_batch().await?;
         for mut msg in batch.messages {
             let body = msg.read_and_take().await?.unwrap();
+
             assert!(
-                expected_idx < MSG_COUNT,
+                expected_index < MSG_COUNT,
                 "unexpected extra message after {MSG_COUNT} payloads: {body:?}"
             );
             assert_eq!(
-                body, payloads[expected_idx],
-                "messages must arrive in write order (index {expected_idx})"
+                body, payloads[expected_index],
+                "messages must arrive in write order (index {expected_index})"
             );
-            expected_idx += 1;
+            expected_index += 1;
         }
     }
 
     assert_eq!(
-        expected_idx, MSG_COUNT,
-        "timed out or truncated read: got {expected_idx} of {MSG_COUNT} messages"
+        expected_index, MSG_COUNT,
+        "timed out or truncated read: got {expected_index} of {MSG_COUNT} messages"
     );
+
     Ok(())
 }

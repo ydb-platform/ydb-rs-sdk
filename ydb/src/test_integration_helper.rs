@@ -66,7 +66,7 @@ pub(crate) async fn create_custom_ca_client() -> YdbResult<Arc<Client>> {
 pub(crate) struct TcpForwardProxy {
     listen_addr: SocketAddr,
     allow_tx: watch::Sender<bool>,
-    accept_loop: JoinHandle<()>,
+    accept_loop_handle: JoinHandle<()>,
 }
 
 impl TcpForwardProxy {
@@ -86,7 +86,7 @@ impl TcpForwardProxy {
         Ok(Self {
             listen_addr,
             allow_tx,
-            accept_loop,
+            accept_loop_handle: accept_loop,
         })
     }
 
@@ -145,20 +145,23 @@ impl TcpForwardProxy {
 
 impl Drop for TcpForwardProxy {
     fn drop(&mut self) {
-        self.accept_loop.abort();
+        self.accept_loop_handle.abort();
     }
 }
 
 async fn ydb_connection_string_to_socket_addr(connection_string: &str) -> YdbResult<SocketAddr> {
-    let url = url::Url::parse(connection_string)
-        .map_err(|e| YdbError::custom(format!("invalid connection string: {e}")))?;
+    let url = url::Url::parse(connection_string).map_err(|err| {
+        YdbError::custom(format!(
+            "tcp_forward_proxy: invalid connection string: {err}"
+        ))
+    })?;
     let host = url
         .host_str()
-        .ok_or_else(|| YdbError::custom("connection string: missing host"))?
+        .ok_or_else(|| YdbError::custom("tcp_forward_proxy: connection string has no host"))?
         .to_string();
     let port = url
         .port()
-        .ok_or_else(|| YdbError::custom("connection string: missing port"))?;
+        .ok_or_else(|| YdbError::custom("tcp_forward_proxy: connection string has no port"))?;
 
     // For some reason, it doesn't work without this.
     if host.eq_ignore_ascii_case("localhost") {
@@ -167,8 +170,9 @@ async fn ydb_connection_string_to_socket_addr(connection_string: &str) -> YdbRes
 
     let mut addrs = tokio::net::lookup_host((host.as_str(), port))
         .await
-        .map_err(|e| YdbError::custom(format!("lookup_host: {e}")))?;
+        .map_err(|err| YdbError::custom(format!("tcp_forward_proxy: lookup_host failed: {err}")))?;
+
     addrs
         .next()
-        .ok_or_else(|| YdbError::custom("connection string: no resolved addresses"))
+        .ok_or_else(|| YdbError::custom("tcp_forward_proxy: host resolved to no addresses"))
 }
