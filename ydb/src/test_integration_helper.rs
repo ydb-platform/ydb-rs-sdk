@@ -70,7 +70,6 @@ pub(crate) struct TcpForwardProxy {
 }
 
 impl TcpForwardProxy {
-    /// `connection_string` is the same format as `YDB_CONNECTION_STRING` / `test_helpers::CONNECTION_STRING`.
     pub(crate) async fn start(connection_string: &str) -> YdbResult<Self> {
         let target = ydb_connection_string_to_socket_addr(connection_string).await?;
         let listener = TcpListener::bind("127.0.0.1:0")
