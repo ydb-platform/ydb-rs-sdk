@@ -63,8 +63,8 @@ pub struct AckFuture {
 impl Future for AckFuture {
     type Output = YdbResult<MessageWriteStatus>;
 
-    fn poll(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match Pin::new(&mut self.receiver).poll(_cx) {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        match Pin::new(&mut self.receiver).poll(cx) {
             // Inner value is already Ok(status) or Err(from send_error_if_needed).
             Poll::Ready(Ok(write_result)) => Poll::Ready(write_result),
             Poll::Ready(Err(_)) => Poll::Ready(Err(YdbError::custom("message writer was closed"))),
