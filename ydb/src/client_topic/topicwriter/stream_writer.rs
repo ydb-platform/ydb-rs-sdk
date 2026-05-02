@@ -1,4 +1,3 @@
-use std::borrow::{Borrow, BorrowMut};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -117,7 +116,7 @@ impl StreamWriter {
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => { return; }
-                result = StreamWriter::writer_loop_iteration(&message_queue, task_params.borrow()) => {
+                result = StreamWriter::writer_loop_iteration(&message_queue, &task_params) => {
                     let Err(writer_iteration_error) = result else {
                         continue;
                     };
@@ -141,16 +140,12 @@ impl StreamWriter {
         message_queue: &MessageQueue,
         task_params: &WriterLoopParams,
     ) -> YdbResult<()> {
-        let messages_to_send = match message_queue
+        let messages_to_send = message_queue
             .get_messages_to_send(
                 task_params.write_request_messages_chunk_size,
                 task_params.write_request_send_messages_period,
             )
-            .await
-        {
-            Ok(messages) => messages,
-            Err(err) => return Err(err),
-        };
+            .await?;
         if messages_to_send.is_empty() {
             return Ok(());
         }
@@ -183,7 +178,7 @@ impl StreamWriter {
                 _ = cancellation_token.cancelled() => { return; }
                 message_receive_it_res = StreamWriter::receive_messages_loop_iteration(
                     &message_queue,
-                    stream.borrow_mut(),
+                    &mut stream,
                     &writer_state,
                 ) => {
                     let Err(receive_message_it_error) = message_receive_it_res else {

@@ -125,14 +125,16 @@ impl TcpForwardProxy {
         };
 
         tokio::select! {
-            _ = Self::wait_for_not_allowed(&mut allow_rx) => {}
+            _ = Self::wait_for_forwarding_disabled(&mut allow_rx) => {}
             _ = copy_bidirectional(&mut inbound, &mut outbound) => {}
         }
     }
 
-    async fn wait_for_not_allowed(allow_rx: &mut watch::Receiver<bool>) {
+    /// Waits until forwarding is disabled (or the watch::Sender is dropped).
+    async fn wait_for_forwarding_disabled(allow_rx: &mut watch::Receiver<bool>) {
         loop {
-            if !*allow_rx.borrow() {
+            let forwarding_allowed = *allow_rx.borrow();
+            if !forwarding_allowed {
                 return;
             }
             if allow_rx.changed().await.is_err() {
