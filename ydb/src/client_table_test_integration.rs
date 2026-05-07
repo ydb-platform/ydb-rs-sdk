@@ -1056,11 +1056,7 @@ async fn bulk_upsert_arrow() -> YdbResult<()> {
         crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(&batch)?;
 
     table_client
-        .retry_execute_bulk_upsert_arrow(
-            format!("/local/{}", table_name),
-            schema_bytes,
-            data_bytes,
-        )
+        .retry_execute_bulk_upsert_arrow(format!("/local/{}", table_name), schema_bytes, data_bytes)
         .await?;
 
     let table_name_for_query = table_name.clone();
@@ -1083,12 +1079,8 @@ async fn bulk_upsert_arrow() -> YdbResult<()> {
             let id_val = row.remove_field_by_name("id")?;
             let id: Option<i64> = id_val.try_into()?;
             let id = id.ok_or_else(|| YdbError::Custom("id is null".to_string()))?;
-            
-            let val: Option<String> = row
-                .remove_field_by_name("val")?
-                .try_into()
-                .ok()
-                .flatten();
+
+            let val: Option<String> = row.remove_field_by_name("val")?.try_into().ok().flatten();
             Ok((id, val))
         })
         .collect::<YdbResult<Vec<_>>>()?;
@@ -1131,11 +1123,7 @@ async fn bulk_upsert_arrow_empty_batch() -> YdbResult<()> {
         ))
         .await?;
 
-    let schema = Arc::new(Schema::new(vec![Field::new(
-        "id",
-        DataType::Int64,
-        false,
-    )]));
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
 
     let batch = RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(Vec::<i64>::new()))])
         .map_err(|e| YdbError::Custom(format!("Arrow error: {}", e)))?;
@@ -1144,11 +1132,7 @@ async fn bulk_upsert_arrow_empty_batch() -> YdbResult<()> {
         crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(&batch)?;
 
     table_client
-        .retry_execute_bulk_upsert_arrow(
-            format!("/local/{}", table_name),
-            schema_bytes,
-            data_bytes,
-        )
+        .retry_execute_bulk_upsert_arrow(format!("/local/{}", table_name), schema_bytes, data_bytes)
         .await?;
 
     let result = table_client

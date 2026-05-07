@@ -1,10 +1,10 @@
+use arrow::array::{Int64Array, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
 use ydb::{ClientBuilder, Query, YdbError, YdbResult};
-use arrow::array::{Int64Array, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -61,11 +61,7 @@ async fn main() -> YdbResult<()> {
     );
 
     table_client
-        .retry_execute_bulk_upsert_arrow(
-            format!("/local/{table_name}"),
-            schema_bytes,
-            data_bytes,
-        )
+        .retry_execute_bulk_upsert_arrow(format!("/local/{table_name}"), schema_bytes, data_bytes)
         .await?;
 
     println!("Bulk upsert completed successfully!");
@@ -84,10 +80,13 @@ async fn main() -> YdbResult<()> {
 
     println!("\nReading back data:");
     for mut row in read.into_only_result()?.rows() {
-        let id_opt: Option<i64> = row.remove_field_by_name("id")?.try_into().ok()
+        let id_opt: Option<i64> = row
+            .remove_field_by_name("id")?
+            .try_into()
+            .ok()
             .ok_or_else(|| YdbError::Custom("Failed to read id".to_string()))?;
         let id = id_opt.ok_or_else(|| YdbError::Custom("id is null".to_string()))?;
-        
+
         let val: Option<String> = row.remove_field_by_name("val")?.try_into().ok().flatten();
         println!("  id: {}, val: {:?}", id, val);
     }

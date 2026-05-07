@@ -1,7 +1,9 @@
 use crate::client::TimeoutSettings;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
-use crate::grpc_wrapper::raw_table_service::bulk_upsert::{RawBulkUpsertRequest, RawBulkUpsertArrowRequest};
+use crate::grpc_wrapper::raw_table_service::bulk_upsert::{
+    RawBulkUpsertArrowRequest, RawBulkUpsertRequest,
+};
 use crate::grpc_wrapper::raw_table_service::commit_transaction::{
     RawCommitTransactionRequest, RawCommitTransactionResult,
 };

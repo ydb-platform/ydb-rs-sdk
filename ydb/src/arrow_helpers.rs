@@ -15,11 +15,8 @@ pub fn serialize_record_batch_for_bulk_upsert(
     let gen = IpcDataGenerator::default();
     let mut tracker = DictionaryTracker::new(false);
 
-    let encoded_schema = gen.schema_to_bytes_with_dictionary_tracker(
-        &batch.schema(),
-        &mut tracker,
-        &options,
-    );
+    let encoded_schema =
+        gen.schema_to_bytes_with_dictionary_tracker(&batch.schema(), &mut tracker, &options);
 
     let (encoded_dictionaries, encoded_batch) = gen
         .encoded_batch(batch, &mut tracker, &options)
@@ -83,8 +80,9 @@ mod tests {
     fn test_serialize_empty_batch() -> YdbResult<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
 
-        let batch = RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![] as Vec<i64>))])
-            .map_err(|e| YdbError::Custom(format!("Failed to create batch: {}", e)))?;
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![] as Vec<i64>))])
+                .map_err(|e| YdbError::Custom(format!("Failed to create batch: {}", e)))?;
 
         let (schema_bytes, data_bytes) = serialize_record_batch_for_bulk_upsert(&batch)?;
 
