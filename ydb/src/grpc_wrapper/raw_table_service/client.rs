@@ -1,7 +1,7 @@
 use crate::client::TimeoutSettings;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
-use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertRequest;
+use crate::grpc_wrapper::raw_table_service::bulk_upsert::{RawBulkUpsertRequest, RawBulkUpsertArrowRequest};
 use crate::grpc_wrapper::raw_table_service::commit_transaction::{
     RawCommitTransactionRequest, RawCommitTransactionResult,
 };
@@ -133,6 +133,13 @@ impl RawTableClient {
     }
 
     pub async fn bulk_upsert(&mut self, req: RawBulkUpsertRequest) -> RawResult<()> {
+        request_without_result!(
+            self.service.bulk_upsert,
+            req => ydb_grpc::ydb_proto::table::BulkUpsertRequest
+        );
+    }
+
+    pub async fn bulk_upsert_arrow(&mut self, req: RawBulkUpsertArrowRequest) -> RawResult<()> {
         request_without_result!(
             self.service.bulk_upsert,
             req => ydb_grpc::ydb_proto::table::BulkUpsertRequest

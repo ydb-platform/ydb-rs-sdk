@@ -5,6 +5,9 @@ use std::time;
 use std::time::UNIX_EPOCH;
 use tokio::sync::Mutex as AsyncMutex;
 
+use arrow::array::{Int64Array, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
 use rand::distributions::{Alphanumeric, DistString};
 use tonic::{Code, Status};
 use tracing::trace;
@@ -1008,6 +1011,182 @@ async fn bulk_upsert() -> YdbResult<()> {
         })
         .await
         .unwrap();
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn bulk_upsert_arrow() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_name = format!("arrow_test_{}", rand_str);
+
+    table_client
+        .retry_execute_scheme_query(format!(
+            "CREATE TABLE {} (id Int64, val Utf8, PRIMARY KEY (id))",
+            table_name
+        ))
+        .await?;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("val", DataType::Utf8, true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5])),
+            Arc::new(StringArray::from(vec![
+                Some("Alice"),
+                Some("Bob"),
+                None,
+                Some("David"),
+                Some("Eve"),
+            ])),
+        ],
+    )
+    .map_err(|e| YdbError::Custom(format!("Arrow error: {}", e)))?;
+
+    let (schema_bytes, data_bytes) =
+        crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(&batch)?;
+
+    table_client
+        .retry_execute_bulk_upsert_arrow(
+            format!("/local/{}", table_name),
+            schema_bytes,
+            data_bytes,
+        )
+        .await?;
+
+    let table_name_for_query = table_name.clone();
+    let result = table_client
+        .retry_transaction(|tx| {
+            let table_name = table_name_for_query.clone();
+            async move {
+                let mut tx = tx;
+                let query = Query::new(format!("SELECT id, val FROM {} ORDER BY id", table_name));
+                let res = tx.query(query).await?;
+                Ok(res)
+            }
+        })
+        .await?;
+
+    let rows: Vec<(i64, Option<String>)> = result
+        .into_only_result()?
+        .rows()
+        .map(|mut row| {
+            let id_val = row.remove_field_by_name("id")?;
+            let id: Option<i64> = id_val.try_into()?;
+            let id = id.ok_or_else(|| YdbError::Custom("id is null".to_string()))?;
+            
+            let val: Option<String> = row
+                .remove_field_by_name("val")?
+                .try_into()
+                .ok()
+                .flatten();
+            Ok((id, val))
+        })
+        .collect::<YdbResult<Vec<_>>>()?;
+
+    assert_eq!(rows.len(), 5);
+    assert_eq!(rows[0], (1, Some("Alice".to_string())));
+    assert_eq!(rows[1], (2, Some("Bob".to_string())));
+    assert_eq!(rows[2], (3, None));
+    assert_eq!(rows[3], (4, Some("David".to_string())));
+    assert_eq!(rows[4], (5, Some("Eve".to_string())));
+
+    table_client
+        .retry_with_session(RetryOptions::new(), |session| async {
+            let mut session = session;
+            let table_name = table_name.clone();
+            session
+                .execute_schema_query(format!("DROP TABLE {}", table_name))
+                .await?;
+            Ok(())
+        })
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn bulk_upsert_arrow_empty_batch() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_name = format!("arrow_empty_{}", rand_str);
+
+    table_client
+        .retry_execute_scheme_query(format!(
+            "CREATE TABLE {} (id Int64, PRIMARY KEY (id))",
+            table_name
+        ))
+        .await?;
+
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "id",
+        DataType::Int64,
+        false,
+    )]));
+
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(Vec::<i64>::new()))])
+        .map_err(|e| YdbError::Custom(format!("Arrow error: {}", e)))?;
+
+    let (schema_bytes, data_bytes) =
+        crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(&batch)?;
+
+    table_client
+        .retry_execute_bulk_upsert_arrow(
+            format!("/local/{}", table_name),
+            schema_bytes,
+            data_bytes,
+        )
+        .await?;
+
+    let result = table_client
+        .retry_transaction(|tx| {
+            let table_name = table_name.clone();
+            async move {
+                let mut tx = tx;
+                let res = tx
+                    .query(Query::new(format!(
+                        "SELECT COUNT(*) as cnt FROM {}",
+                        table_name
+                    )))
+                    .await?;
+                Ok(res)
+            }
+        })
+        .await?;
+
+    let count: u64 = result
+        .into_only_result()?
+        .rows()
+        .next()
+        .unwrap()
+        .remove_field_by_name("cnt")?
+        .try_into()?;
+
+    assert_eq!(count, 0);
+
+    table_client
+        .retry_with_session(RetryOptions::new(), |session| async {
+            let mut session = session;
+            let table_name = table_name.clone();
+            session
+                .execute_schema_query(format!("DROP TABLE {}", table_name))
+                .await?;
+            Ok(())
+        })
+        .await?;
 
     Ok(())
 }

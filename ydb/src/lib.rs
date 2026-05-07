@@ -72,6 +72,8 @@ mod session;
 mod session_pool;
 mod sugar;
 
+pub mod arrow_helpers;
+
 #[cfg(test)]
 pub(crate) mod auth_test;
 
@@ -190,6 +192,8 @@ pub use crate::{
         Bytes, Sign, SignedInterval, Value, ValueList, ValueOptional, ValueStruct, YdbDecimal,
     },
 };
+
+pub use arrow_helpers::serialize_record_batch_for_bulk_upsert;
 
 // deprecated types
 

@@ -18,3 +18,27 @@ impl From<RawBulkUpsertRequest> for BulkUpsertRequest {
         }
     }
 }
+
+pub(crate) struct RawBulkUpsertArrowRequest {
+    pub table: String,
+    pub arrow_schema: Vec<u8>,
+    pub arrow_data: Vec<u8>,
+    pub operation_params: RawOperationParams,
+}
+
+impl From<RawBulkUpsertArrowRequest> for BulkUpsertRequest {
+    fn from(value: RawBulkUpsertArrowRequest) -> Self {
+        use ydb_grpc::ydb_proto::formats::ArrowBatchSettings;
+        use ydb_grpc::ydb_proto::table::bulk_upsert_request::DataFormat;
+
+        Self {
+            table: value.table,
+            rows: None,
+            data: value.arrow_data,
+            data_format: Some(DataFormat::ArrowBatchSettings(ArrowBatchSettings {
+                schema: value.arrow_schema,
+            })),
+            operation_params: Some(value.operation_params.into()),
+        }
+    }
+}

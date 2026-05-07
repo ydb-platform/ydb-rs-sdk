@@ -322,6 +322,30 @@ impl TableClient {
         .await
     }
 
+    /// Execute bulk upsert with Arrow format with retry policy
+    pub async fn retry_execute_bulk_upsert_arrow(
+        &self,
+        table_path: String,
+        arrow_schema: Vec<u8>,
+        arrow_data: Vec<u8>,
+    ) -> YdbResult<()> {
+        if arrow_data.is_empty() {
+            return Ok(());
+        }
+
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            session
+                .execute_bulk_upsert_arrow(
+                    table_path.clone(),
+                    arrow_schema.clone(),
+                    arrow_data.clone(),
+                )
+                .await
+        })
+        .await
+    }
+
     /// Retry callback in transaction
     ///
     /// retries callback as retry policy.
