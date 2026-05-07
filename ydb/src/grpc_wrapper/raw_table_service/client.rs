@@ -3,7 +3,9 @@ use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_table_service::alter_table::RawAlterTableRequest;
-use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertRequest;
+use crate::grpc_wrapper::raw_table_service::bulk_upsert::{
+    RawBulkUpsertArrowRequest, RawBulkUpsertRequest,
+};
 use crate::grpc_wrapper::raw_table_service::commit_transaction::{
     RawCommitTransactionRequest, RawCommitTransactionResult,
 };
@@ -167,6 +169,14 @@ impl RawTableClient {
 
     #[instrument(name = "ydb.grpc.BulkUpsert", skip_all, fields(db.system.name = "ydb", ydb.table.path = %req.table), err)]
     pub async fn bulk_upsert(&mut self, req: RawBulkUpsertRequest) -> RawResult<()> {
+        request_without_result!(
+            self.service.bulk_upsert,
+            req => ydb_grpc::ydb_proto::table::BulkUpsertRequest
+        );
+    }
+
+    #[instrument(name = "ydb.grpc.BulkUpsertArrow", skip_all, fields(db.system.name = "ydb", ydb.table.path = %req.table), err)]
+    pub async fn bulk_upsert_arrow(&mut self, req: RawBulkUpsertArrowRequest) -> RawResult<()> {
         request_without_result!(
             self.service.bulk_upsert,
             req => ydb_grpc::ydb_proto::table::BulkUpsertRequest

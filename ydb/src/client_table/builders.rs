@@ -64,6 +64,27 @@ pub struct BulkUpsertBuilder<'a> {
     pub(crate) opts: TableCallOptions,
 }
 
+pub struct BulkUpsertArrowBuilder<'a> {
+    pub(crate) client: &'a TableClient,
+    pub(crate) table_path: String,
+    pub(crate) batch: arrow_array::RecordBatch,
+    pub(crate) opts: TableCallOptions,
+}
+
+impl_table_call_builder!(BulkUpsertArrowBuilder);
+
+impl<'a> IntoFuture for BulkUpsertArrowBuilder<'a> {
+    type Output = YdbResult<()>;
+    type IntoFuture = BoxFuture<'a, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(
+            self.client
+                .bulk_upsert_arrow_call(self.table_path, self.batch, self.opts),
+        )
+    }
+}
+
 impl_table_call_builder!(BulkUpsertBuilder);
 
 impl<'a> IntoFuture for BulkUpsertBuilder<'a> {

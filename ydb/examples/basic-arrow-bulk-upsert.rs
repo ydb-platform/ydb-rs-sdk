@@ -1,0 +1,75 @@
+#![recursion_limit = "256"]
+use arrow_array::{Int64Array, RecordBatch, StringArray};
+use arrow_schema::{DataType, Field, Schema};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::time::timeout;
+use ydb::{ClientBuilder, YdbError, YdbResult};
+
+#[tokio::main]
+async fn main() -> YdbResult<()> {
+    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
+        .client()?;
+
+    if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
+        res?
+    } else {
+        return Err(YdbError::from("Connection timeout"));
+    };
+
+    let table_client = client.table_client();
+    let table_name = "arrow_test";
+    let mut query_client = client.query_client();
+
+    query_client
+        .exec(format!("DROP TABLE IF EXISTS {table_name}"))
+        .await?;
+    query_client
+        .exec(format!(
+            "CREATE TABLE {table_name} (id Int64 NOT NULL, val Utf8, PRIMARY KEY(id))",
+        ))
+        .await?;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("val", DataType::Utf8, true),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5])),
+            Arc::new(StringArray::from(vec![
+                Some("Alice"),
+                Some("Bob"),
+                None,
+                Some("David"),
+                Some("Eve"),
+            ])),
+        ],
+    )
+    .map_err(|e| YdbError::Custom(format!("Failed to create RecordBatch: {}", e)))?;
+
+    println!("Inserting {} rows using Arrow format...", batch.num_rows());
+
+    table_client
+        .bulk_upsert_arrow(format!("/local/{table_name}"), batch)
+        .await?;
+
+    println!("Bulk upsert completed successfully!");
+
+    let read = query_client
+        .query_result_set(format!("SELECT * FROM {table_name} ORDER BY id"))
+        .await?;
+
+    println!("\nReading back data:");
+    for mut row in read.rows() {
+        let id: i64 = row.remove_field_by_name("id")?.try_into()?;
+        let val: Option<String> = row.remove_field_by_name("val")?.try_into()?;
+        println!("  id: {}, val: {:?}", id, val);
+    }
+
+    println!("\nOK - Arrow bulk upsert example completed successfully!");
+
+    Ok(())
+}
