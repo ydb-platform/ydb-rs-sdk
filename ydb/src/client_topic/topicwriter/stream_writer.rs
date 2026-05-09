@@ -236,12 +236,7 @@ impl StreamWriter {
                                 expected_seq_no,
                             )));
                         }
-                        match message_queue.acknowledge_message(write_ack.seq_no).await {
-                            Ok(_) => {}
-                            Err(err) => {
-                                return Err(err);
-                            }
-                        };
+                        message_queue.acknowledge_message(write_ack.seq_no).await?;
 
                         let ticket = {
                             let mut writer_state = writer_state.lock().await;
