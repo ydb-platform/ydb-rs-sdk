@@ -145,7 +145,7 @@ impl StreamWriter {
                 task_params.write_request_messages_chunk_size,
                 task_params.write_request_send_messages_period,
             )
-            .await?;
+            .await;
         if messages_to_send.is_empty() {
             return Ok(());
         }
