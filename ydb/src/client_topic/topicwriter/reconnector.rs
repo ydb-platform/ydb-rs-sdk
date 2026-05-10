@@ -195,7 +195,7 @@ impl ReconnectionHelper {
     fn is_retry_allowed(err: &YdbError) -> bool {
         match err.need_retry() {
             NeedRetry::True => true,
-            // IdempotentOnly errors are retriable because the
+            // IdempotentOnly errors are retryable because the
             // 'Write to Topic With seq_no deduplication' operation is idempotent.
             NeedRetry::IdempotentOnly => true,
             NeedRetry::False => false,
