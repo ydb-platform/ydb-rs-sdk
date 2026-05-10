@@ -1,12 +1,15 @@
+use crate::client_topic::compression::{CodecRegistry, ErrorHandlingStrategy};
 use crate::client_topic::list_types::Codec;
 use crate::client_topic::topicwriter::partitioning::PartitioningStrategy;
 use crate::errors;
 use derive_builder::Builder;
-use prost::bytes::Bytes;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
-type EncoderFunc = fn(Bytes) -> Bytes;
+fn default_codec_registry() -> Arc<CodecRegistry> {
+    Arc::new(CodecRegistry::new())
+}
 
 #[allow(dead_code)]
 #[derive(Builder, Clone)]
@@ -29,9 +32,11 @@ pub struct TopicWriterOptions {
     #[builder(default = "Duration::from_secs(1)")]
     pub(crate) write_request_send_messages_period: Duration,
     #[builder(setter(strip_option), default)]
-    pub(crate) codec: Option<Codec>, // in case of no specified codec, codec is auto-selected
-    #[builder(setter(strip_option), default)]
-    pub(crate) custom_encoders: Option<HashMap<Codec, EncoderFunc>>,
+    pub(crate) codec: Option<Codec>,
+    #[builder(default = "default_codec_registry()")]
+    pub(crate) codec_registry: Arc<CodecRegistry>,
+    #[builder(default = "ErrorHandlingStrategy::FailFast")]
+    pub(crate) compression_error_strategy: ErrorHandlingStrategy,
 
     #[builder(default = "TopicWriterConnectionOptionsBuilder::default().build()?")]
     pub(crate) connection_options: TopicWriterConnectionOptions,

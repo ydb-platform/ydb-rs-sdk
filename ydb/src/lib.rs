@@ -131,7 +131,6 @@ pub use client_topic::topicreader::messages::{TopicReaderBatch, TopicReaderMessa
 pub use client_topic::topicreader::reader::{
     TopicReader, TopicReaderCommitMarker, TopicSelector, TopicSelectors,
 };
-// full enum pub types
 pub use client_topic::topicreader::reader_options::{
     TopicReaderOptions, TopicReaderOptionsBuilder,
 };
@@ -142,6 +141,7 @@ pub use client_topic::topicwriter::partitioning::PartitioningStrategy;
 // full enum pub types
 pub use client_topic::topicwriter::writer::TopicWriter;
 // full enum pub types
+pub use client_topic::compression::{CodecRegistry, ErrorHandlingStrategy};
 pub use client_topic::topicwriter::writer_options::{
     TopicWriterConnectionOptions, TopicWriterOptions, TopicWriterOptionsBuilder,
     TopicWriterRetrySettings,

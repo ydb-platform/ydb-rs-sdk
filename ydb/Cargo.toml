@@ -54,6 +54,7 @@ tower = "0.4"
 url = "2.2"
 uuid = { version = "1.17.0", features = ["v4", "v7"] }
 ydb-grpc = { version = "0.2.0", path="../ydb-grpc"}
+flate2 = "1.1.9"
 
 [dev-dependencies]
 async_once = "0.2"

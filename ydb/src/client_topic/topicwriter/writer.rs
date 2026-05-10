@@ -1,3 +1,4 @@
+use crate::client_topic::compression::CompressionWorker;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_write_status::{MessageWriteStatus, WriteAck};
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
@@ -10,7 +11,7 @@ use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
 use crate::grpc_wrapper::raw_topic_service::stream_write::init::RawInitResponse;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
-use crate::{grpc_wrapper, YdbError, YdbResult};
+use crate::{grpc_wrapper, Codec, YdbError, YdbResult};
 use std::borrow::{Borrow, BorrowMut};
 
 use std::future::Future;
@@ -22,7 +23,6 @@ use std::time::Instant;
 use std::time::{Duration, UNIX_EPOCH};
 
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::Receiver;
 use tokio::task::JoinHandle;
 
 use tokio::time::timeout;
@@ -55,7 +55,7 @@ pub struct TopicWriter {
     pub(crate) auto_set_seq_no: bool,
     pub(crate) codecs_from_server: RawSupportedCodecs,
 
-    writer_message_sender: mpsc::Sender<TopicWriterMessage>,
+    compression_worker: CompressionWorker,
     writer_loop: JoinHandle<()>,
     receive_messages_loop: JoinHandle<()>,
 
@@ -123,10 +123,12 @@ impl TopicWriter {
         let mut stream = topic_service.stream_write(init_request_body).await?;
         let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
 
-        let (messages_sender, messages_receiver): (
-            mpsc::Sender<TopicWriterMessage>,
-            mpsc::Receiver<TopicWriterMessage>,
-        ) = mpsc::channel(32_usize);
+        let (compression_worker, mut compression_receiver) = CompressionWorker::new(
+            writer_options.codec,
+            writer_options.codec_registry.clone(),
+            writer_options.compression_error_strategy.clone(),
+        );
+
         let cancellation_token = CancellationToken::new();
         let topic_writer_state = Arc::new(Mutex::new(TopicWriterMode::Working));
         let confirmation_reception_queue = Arc::new(Mutex::new(TopicWriterReceptionQueue::new()));
@@ -145,12 +147,11 @@ impl TopicWriter {
             request_stream: stream.clone_sender(),
         };
         let writer_loop = tokio::spawn(async move {
-            let mut message_receiver = messages_receiver; // force move inside
             let task_params = writer_loop_task_params; // force move inside
 
             loop {
                 match TopicWriter::write_loop_iteration(
-                    message_receiver.borrow_mut(),
+                    &mut compression_receiver,
                     task_params.borrow(),
                 )
                 .await
@@ -205,7 +206,7 @@ impl TopicWriter {
             write_request_send_messages_period: writer_options.write_request_send_messages_period,
             auto_set_seq_no: writer_options.auto_seq_no,
             codecs_from_server: init_response.supported_codecs,
-            writer_message_sender: messages_sender,
+            compression_worker,
             writer_loop,
             receive_messages_loop,
             cancellation_token,
@@ -215,11 +216,34 @@ impl TopicWriter {
         })
     }
 
+    fn send_write_request(
+        task_params: &WriterPeriodicTaskParams,
+        messages: Vec<MessageData>,
+        codec: Codec,
+    ) -> YdbResult<()> {
+        if messages.is_empty() {
+            return Ok(());
+        }
+
+        trace!("Sending topic message to grpc stream...");
+        task_params
+            .request_stream
+            .send(stream_write_message::FromClient {
+                client_message: Some(ClientMessage::WriteRequest(WriteRequest {
+                    messages,
+                    codec: codec.code,
+                    tx: None,
+                })),
+            })
+            .map_err(|err| YdbError::Custom(format!("Error sending write request: {}", err)))
+    }
+
     async fn write_loop_iteration(
-        messages_receiver: &mut Receiver<TopicWriterMessage>,
+        compression_receiver: &mut mpsc::UnboundedReceiver<YdbResult<Vec<TopicWriterMessage>>>,
         task_params: &WriterPeriodicTaskParams,
     ) -> YdbResult<()> {
         let start = Instant::now();
+        let mut current_codec = None;
         let mut messages = vec![];
 
         // wait messages loop
@@ -233,28 +257,48 @@ impl TopicWriter {
 
             match timeout(
                 task_params.write_request_send_messages_period - elapsed,
-                messages_receiver.recv(),
+                compression_receiver.recv(),
             )
             .await
             {
-                Ok(Some(message)) => {
-                    let data_size = message.data.len() as i64;
-                    messages.push(MessageData {
-                        seq_no: message
-                            .seq_no
-                            .ok_or_else(|| YdbError::custom("empty message seq_no"))?,
-                        created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
-                            seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs()
-                                as i64,
-                            nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
-                        }),
-                        metadata_items: vec![],
-                        data: message.data,
-                        uncompressed_size: data_size,
-                        partitioning: Some(message_data::Partitioning::MessageGroupId(
-                            task_params.producer_id.clone().unwrap_or_default(),
-                        )),
-                    });
+                Ok(Some(batch_result)) => {
+                    for message in batch_result? {
+                        let message_codec = message.codec.unwrap_or(Codec::RAW);
+                        if current_codec.is_some() && current_codec.unwrap() != message_codec {
+                            Self::send_write_request(
+                                task_params,
+                                messages,
+                                current_codec.unwrap(),
+                            )?;
+                            messages = vec![];
+                        }
+                        current_codec = Some(message_codec);
+
+                        messages.push(MessageData {
+                            seq_no: message
+                                .seq_no
+                                .ok_or_else(|| YdbError::custom("empty message seq_no"))?,
+                            created_at: Some(
+                                ydb_grpc::google_proto_workaround::protobuf::Timestamp {
+                                    seconds: message
+                                        .created_at
+                                        .duration_since(UNIX_EPOCH)?
+                                        .as_secs()
+                                        as i64,
+                                    nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos()
+                                        as i32,
+                                },
+                            ),
+                            metadata_items: vec![],
+                            uncompressed_size: message
+                                .uncompressed_size
+                                .unwrap_or(message.data.len() as i64),
+                            data: message.data,
+                            partitioning: Some(message_data::Partitioning::MessageGroupId(
+                                task_params.producer_id.clone().unwrap_or_default(),
+                            )),
+                        });
+                    }
                 }
                 Ok(None) => {
                     trace!("Channel has been closed. Stop topic send messages loop.");
@@ -266,18 +310,8 @@ impl TopicWriter {
             }
         }
 
-        if !messages.is_empty() {
-            trace!("Sending topic message to grpc stream...");
-            task_params
-                .request_stream
-                .send(stream_write_message::FromClient {
-                    client_message: Some(ClientMessage::WriteRequest(WriteRequest {
-                        messages,
-                        codec: 1,
-                        tx: None,
-                    })),
-                })
-                .unwrap(); // TODO: HANDLE ERROR
+        if let Some(codec) = current_codec {
+            Self::send_write_request(task_params, messages, codec)?;
         }
         Ok(())
     }
@@ -404,11 +438,12 @@ impl TopicWriter {
             return Err(YdbError::custom("need to set message seq_no"));
         };
 
-        self.writer_message_sender
-            .borrow_mut()
-            .send(message)
+        self.compression_worker
+            .process_batch(vec![message])
             .await
-            .map_err(|err| YdbError::custom(format!("can't send the message to channel: {err}")))?;
+            .map_err(|err| {
+                YdbError::custom(format!("can't submit message to compression: {err}"))
+            })?;
 
         let reception_type = wait_ack.map_or(
             TopicWriterReceptionType::NoConfirmationExpected,
