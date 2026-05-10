@@ -2,7 +2,7 @@ use std::{collections::VecDeque, mem::swap, sync::Arc, time::Duration};
 
 use tokio::{
     sync::{mpsc, Mutex as TokioMutex, Notify},
-    time::timeout,
+    time::{sleep_until, Instant},
 };
 use tokio_util::sync::CancellationToken;
 use tracing::log::trace;
@@ -39,45 +39,49 @@ impl MessageQueue {
         inner.add_message(message)
     }
 
-    async fn get_messages_to_send_without_threshold(&self) -> YdbResult<Vec<MessageData>> {
-        let mut inner = self.inner.lock().await;
-        inner.get_messages_to_send_without_threshold()
-    }
-
-    async fn get_messages_to_send_with_length_threshold(
+    async fn append_message_to_send_buffer(
         &self,
-        length_threshold: usize,
-    ) -> GetMessagesToSendResult {
+        send_buffer: &mut Vec<MessageData>,
+        threshold: usize,
+    ) -> AppendMessageToSendBufferResult {
         let mut inner = self.inner.lock().await;
-        inner.get_messages_to_send_with_length_threshold(length_threshold)
-    }
-
-    async fn get_messages_to_send_loop(
-        &self,
-        length_threshold: usize,
-    ) -> YdbResult<Vec<MessageData>> {
-        loop {
-            _ = self.new_message_added.notified().await;
-            match self
-                .get_messages_to_send_with_length_threshold(length_threshold)
-                .await
-            {
-                GetMessagesToSendResult::Ok(messages) => return Ok(messages),
-                GetMessagesToSendResult::NotEnoughMessages => continue,
-                GetMessagesToSendResult::Err(err) => return Err(err),
-            }
-        }
+        inner.append_message_to_send_buffer(send_buffer, threshold)
     }
 
     pub(crate) async fn get_messages_to_send(
         &self,
-        length_threshold: usize,
+        threshold: usize,
         duration: Duration,
-    ) -> YdbResult<Vec<MessageData>> {
-        match timeout(duration, self.get_messages_to_send_loop(length_threshold)).await {
-            Ok(result) => result,
-            Err(_) => self.get_messages_to_send_without_threshold().await,
+    ) -> Vec<MessageData> {
+        let mut messages = Vec::new();
+        if threshold == 0 {
+            return messages;
         }
+
+        let timeout = Instant::now() + duration;
+        loop {
+            // Append while we can
+            loop {
+                match self
+                    .append_message_to_send_buffer(&mut messages, threshold)
+                    .await
+                {
+                    AppendMessageToSendBufferResult::Full => return messages,
+                    // Looks like there are no messages
+                    AppendMessageToSendBufferResult::CouldNotGetMessage => break,
+                    AppendMessageToSendBufferResult::UnderThreshold => {}
+                }
+            }
+
+            // Wait for new messages or timeout
+            tokio::select! {
+                biased;
+                _ = self.new_message_added.notified() => {}
+                _ = sleep_until(timeout) => break,
+            }
+        }
+
+        messages
     }
 
     pub(crate) async fn acknowledge_message(&self, seq_no: i64) -> YdbResult<()> {
@@ -149,12 +153,10 @@ struct MessageQueueInner {
 }
 
 #[derive(Debug)]
-enum GetMessagesToSendResult {
-    Ok(Vec<MessageData>),
-    // TODO: In the future, when the batch is checked by the serialized size (not the length), this
-    // variant has to be changed accordingly.
-    NotEnoughMessages,
-    Err(YdbError),
+enum AppendMessageToSendBufferResult {
+    Full,
+    UnderThreshold,
+    CouldNotGetMessage,
 }
 
 impl MessageQueueInner {
@@ -184,7 +186,7 @@ impl MessageQueueInner {
 
         self.messages.push_back(message);
 
-        self.new_message_added.notify_waiters();
+        self.new_message_added.notify_one();
 
         Ok(())
     }
@@ -198,47 +200,35 @@ impl MessageQueueInner {
         }
     }
 
-    fn get_length_of_messages_to_send(&self) -> usize {
-        self.messages.len()
+    fn would_buffer_exceed_threshold_with_item(
+        buffer: &Vec<MessageData>,
+        _item: &MessageData,
+        threshold: usize,
+    ) -> bool {
+        buffer.len() + 1 > threshold
     }
 
-    fn do_get_messages_to_send(&mut self, length: usize) -> YdbResult<Vec<MessageData>> {
-        if length > self.messages.len() {
-            return Err(YdbError::InternalError(format!(
-                "message queue: requested a batch of {} messages but only {} message(s) are available",
-                length,
-                self.messages.len()
-            )));
-        }
-
-        let mut result = Vec::with_capacity(length);
-
-        for _ in 0..length {
-            let message = self.messages.pop_front().unwrap(); // We check length above, so this is safe.
-            result.push(message.clone());
-            self.sent_messages.push_back(message);
-        }
-
-        Ok(result)
-    }
-
-    fn get_messages_to_send_without_threshold(&mut self) -> YdbResult<Vec<MessageData>> {
-        let length = self.get_length_of_messages_to_send();
-        self.do_get_messages_to_send(length)
-    }
-
-    fn get_messages_to_send_with_length_threshold(
+    fn append_message_to_send_buffer(
         &mut self,
-        length_threshold: usize,
-    ) -> GetMessagesToSendResult {
-        let length = self.get_length_of_messages_to_send();
-
-        if length < length_threshold {
-            return GetMessagesToSendResult::NotEnoughMessages;
+        send_buffer: &mut Vec<MessageData>,
+        threshold: usize,
+    ) -> AppendMessageToSendBufferResult {
+        let Some(message) = self.messages.front() else {
+            return AppendMessageToSendBufferResult::CouldNotGetMessage;
+        };
+        if MessageQueueInner::would_buffer_exceed_threshold_with_item(
+            send_buffer,
+            message,
+            threshold,
+        ) {
+            return AppendMessageToSendBufferResult::Full;
         }
 
-        self.do_get_messages_to_send(length_threshold)
-            .map_or_else(GetMessagesToSendResult::Err, GetMessagesToSendResult::Ok)
+        let message = self.messages.pop_front().unwrap();
+        send_buffer.push(message.clone());
+        self.sent_messages.push_back(message);
+
+        AppendMessageToSendBufferResult::UnderThreshold
     }
 
     fn acknowledge_message(&mut self, seq_no: i64) -> YdbResult<()> {
@@ -276,6 +266,7 @@ impl MessageQueueInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{sync::Arc, time::Duration};
     use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
     fn create_message(seq_no: i64, data: Vec<u8>) -> MessageData {
@@ -298,6 +289,10 @@ mod tests {
         (queue, indefinite_reader_handle)
     }
 
+    fn move_all_pending_to_sent(q: &mut MessageQueueInner) {
+        q.sent_messages.append(&mut q.messages);
+    }
+
     #[tokio::test]
     async fn new_creates_empty_queue() {
         let (q, _reader) = create_queue().await;
@@ -308,60 +303,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_length_of_messages_to_send_empty() {
-        let (q, _reader) = create_queue().await;
-        assert_eq!(q.get_length_of_messages_to_send(), 0);
-    }
-
-    #[tokio::test]
-    async fn get_length_of_messages_to_send_with_some_added_and_none_sent() {
-        let (mut q, _reader) = create_queue().await;
-        for i in 1..=5 {
-            q.messages.push_back(create_message(i, vec![]));
-        }
-        assert_eq!(q.get_length_of_messages_to_send(), 5);
-    }
-
-    #[tokio::test]
-    async fn get_length_of_messages_to_send_with_some_added_and_one_sent() {
-        let (mut q, _reader) = create_queue().await;
-        for i in 1..=5 {
-            q.messages.push_back(create_message(i, vec![]));
-        }
-        let one = q.messages.pop_front().unwrap();
-        q.sent_messages.push_back(one);
-        assert_eq!(q.get_length_of_messages_to_send(), 4);
-    }
-
-    #[tokio::test]
-    async fn get_length_of_messages_to_send_returns_zero_when_all_pending_are_in_sent() {
-        let (mut q, _reader) = create_queue().await;
-        for i in 1..=5 {
-            q.messages.push_back(create_message(i, vec![]));
-        }
-        while let Some(m) = q.messages.pop_front() {
-            q.sent_messages.push_back(m);
-        }
-        assert_eq!(q.get_length_of_messages_to_send(), 0);
-    }
-
-    #[tokio::test]
-    async fn get_length_of_messages_to_send_with_none_added_and_some_sent() {
-        let (mut q, _reader) = create_queue().await;
-        for i in 1..=3 {
-            q.sent_messages.push_back(create_message(i, vec![]));
-        }
-
-        assert_eq!(q.get_length_of_messages_to_send(), 0);
-    }
-
-    #[tokio::test]
     async fn add_message_appends_and_updates_fields() {
         let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(10, vec![1, 2, 3])).unwrap();
         q.add_message(create_message(11, vec![4, 5])).unwrap();
 
-        assert_eq!(q.get_length_of_messages_to_send(), 2);
         assert_eq!(q.messages.len(), 2);
         assert_eq!(q.messages[0].seq_no, 10);
         assert_eq!(q.messages[0].data, vec![1, 2, 3]);
@@ -404,91 +350,91 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_messages_to_send_without_threshold_moves_all_to_sent_messages() {
-        let (mut q, _reader) = create_queue().await;
-        q.add_message(create_message(3, vec![10])).unwrap();
-        q.add_message(create_message(4, vec![20])).unwrap();
+    async fn get_messages_to_send_moves_batch_to_sent_and_can_ack() {
+        let q = Arc::new(MessageQueue::new());
 
-        let batch = q.get_messages_to_send_without_threshold().unwrap();
+        let q_collect = Arc::clone(&q);
+        let collect_handle = tokio::spawn(async move {
+            q_collect
+                .get_messages_to_send(10, Duration::from_millis(500))
+                .await
+        });
+        q.add_message(create_message(1, vec![10])).await.unwrap();
+        q.add_message(create_message(2, vec![20])).await.unwrap();
 
+        let batch = collect_handle.await.unwrap();
         assert_eq!(batch.len(), 2);
-        assert_eq!(batch[0].seq_no, 3);
-        assert_eq!(batch[1].seq_no, 4);
+        assert_eq!(batch[0].seq_no, 1);
+        assert_eq!(batch[1].seq_no, 2);
 
-        assert!(q.messages.is_empty());
-        assert_eq!(q.sent_messages.len(), 2);
-        assert_eq!(q.sent_messages[0].seq_no, 3);
-        assert_eq!(q.sent_messages[1].seq_no, 4);
-        assert_eq!(q.last_added_seq_no, Some(4));
+        q.acknowledge_message(1).await.unwrap();
+        q.acknowledge_message(2).await.unwrap();
     }
 
     #[tokio::test]
-    async fn get_messages_to_send_empty_queue_returns_empty() {
-        let (mut q, _reader) = create_queue().await;
-        let msgs = q.get_messages_to_send_without_threshold().unwrap();
+    async fn get_messages_to_send_empty_queue_times_out_empty() {
+        let q = MessageQueue::new();
+        let msgs = q.get_messages_to_send(10, Duration::from_millis(20)).await;
         assert!(msgs.is_empty());
     }
 
     #[tokio::test]
-    async fn get_messages_to_send_with_length_threshold_not_enough_messages() {
-        let (mut q, _reader) = create_queue().await;
-        q.add_message(create_message(1, vec![])).unwrap();
+    async fn get_messages_to_send_collects_one_message_per_add_notification() {
+        let q = Arc::new(MessageQueue::new());
+        let q_collect = Arc::clone(&q);
+        let collect_handle = tokio::spawn(async move {
+            q_collect
+                .get_messages_to_send(10, Duration::from_millis(200))
+                .await
+        });
+        q.add_message(create_message(1, vec![])).await.unwrap();
 
-        let result = q.get_messages_to_send_with_length_threshold(2);
-
-        match &result {
-            GetMessagesToSendResult::NotEnoughMessages => {}
-            _ => panic!("expected NotEnoughMessages, got {:?}", result),
-        }
+        let msgs = collect_handle.await.unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].seq_no, 1);
     }
 
     #[tokio::test]
-    async fn get_messages_to_send_with_length_threshold_ok_when_at_threshold() {
-        let (mut q, _reader) = create_queue().await;
-        q.add_message(create_message(11, vec![])).unwrap();
-        q.add_message(create_message(12, vec![])).unwrap();
+    async fn get_messages_to_send_respects_threshold() {
+        let q = Arc::new(MessageQueue::new());
+        let q_collect = Arc::clone(&q);
+        let collect_handle = tokio::spawn(async move {
+            q_collect
+                .get_messages_to_send(2, Duration::from_millis(500))
+                .await
+        });
+        q.add_message(create_message(1, vec![])).await.unwrap();
+        q.add_message(create_message(2, vec![])).await.unwrap();
+        q.add_message(create_message(3, vec![])).await.unwrap();
 
-        let result = q.get_messages_to_send_with_length_threshold(2);
-
-        match &result {
-            GetMessagesToSendResult::Ok(msgs) => {
-                assert_eq!(msgs.len(), 2);
-                assert_eq!(msgs[0].seq_no, 11);
-                assert_eq!(msgs[1].seq_no, 12);
-            }
-            other => panic!("expected Ok(...), got {:?}", other),
-        }
-    }
-
-    #[tokio::test]
-    async fn get_messages_to_send_with_length_threshold_ok_when_above_threshold() {
-        let (mut q, _reader) = create_queue().await;
-        q.add_message(create_message(1, vec![])).unwrap();
-        q.add_message(create_message(2, vec![])).unwrap();
-        q.add_message(create_message(3, vec![])).unwrap();
-
-        let result = q.get_messages_to_send_with_length_threshold(2);
-
-        match &result {
-            GetMessagesToSendResult::Ok(msgs) => assert_eq!(msgs.len(), 2),
-            other => panic!("expected Ok(...), got {:?}", other),
-        }
-    }
-
-    #[tokio::test]
-    async fn get_messages_to_send_returns_batch_when_threshold_met() {
-        let q = MessageQueue::new();
-        q.add_message(create_message(1, vec![1])).await.unwrap();
-        q.add_message(create_message(2, vec![2])).await.unwrap();
-        q.add_message(create_message(3, vec![3])).await.unwrap();
-        let msgs = q
-            .get_messages_to_send(2, std::time::Duration::from_millis(10))
-            .await
-            .unwrap();
-        assert_eq!(msgs.len(), 3);
+        let msgs = collect_handle.await.unwrap();
+        assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].seq_no, 1);
         assert_eq!(msgs[1].seq_no, 2);
-        assert_eq!(msgs[2].seq_no, 3);
+    }
+
+    #[tokio::test]
+    async fn get_messages_to_send_second_call_drains_remaining_without_new_notify() {
+        let q = Arc::new(MessageQueue::new());
+        let q1 = Arc::clone(&q);
+        let h1 =
+            tokio::spawn(
+                async move { q1.get_messages_to_send(2, Duration::from_millis(500)).await },
+            );
+        q.add_message(create_message(11, vec![])).await.unwrap();
+        q.add_message(create_message(12, vec![])).await.unwrap();
+        q.add_message(create_message(13, vec![])).await.unwrap();
+        let first = h1.await.unwrap();
+        assert_eq!(first.len(), 2);
+
+        let q2 = Arc::clone(&q);
+        let h2 = tokio::spawn(async move {
+            q2.get_messages_to_send(10, Duration::from_millis(500))
+                .await
+        });
+        let second = h2.await.unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].seq_no, 13);
     }
 
     #[tokio::test]
@@ -497,11 +443,11 @@ mod tests {
         q.add_message(create_message(5, vec![])).unwrap();
         q.add_message(create_message(6, vec![])).unwrap();
         q.add_message(create_message(7, vec![])).unwrap();
-        let _ = q.get_messages_to_send_without_threshold().unwrap();
+        move_all_pending_to_sent(&mut q);
 
         q.acknowledge_message(5).unwrap();
 
-        assert_eq!(q.get_length_of_messages_to_send(), 0);
+        assert_eq!(q.messages.len(), 0);
         assert!(q.messages.is_empty());
         assert_eq!(q.sent_messages.len(), 2);
         assert_eq!(q.sent_messages[0].seq_no, 6);
@@ -523,7 +469,7 @@ mod tests {
     async fn acknowledge_message_errors_when_seq_no_mismatches() {
         let (mut q, _reader) = create_queue().await;
         q.add_message(create_message(1, vec![])).unwrap();
-        let _ = q.get_messages_to_send_without_threshold().unwrap();
+        move_all_pending_to_sent(&mut q);
 
         let err = q.acknowledge_message(99).unwrap_err();
 
@@ -567,16 +513,30 @@ mod tests {
 
     #[tokio::test]
     async fn wait_for_messages_to_be_acknowledged_completes_when_all_messages_are_acknowledged() {
-        let q = MessageQueue::new();
+        let q = Arc::new(MessageQueue::new());
+        let q_collect = Arc::clone(&q);
+        let collect_handle = tokio::spawn(async move {
+            q_collect
+                .get_messages_to_send(20, Duration::from_millis(500))
+                .await
+        });
         for i in 1..=5 {
             q.add_message(create_message(i, vec![])).await.unwrap();
         }
-        let messages = q.get_messages_to_send_without_threshold().await.unwrap();
+        let messages = collect_handle.await.unwrap();
         assert_eq!(messages.len(), 5);
 
         for i in 1..=5 {
             q.acknowledge_message(i).await.unwrap();
         }
+
+        q.wait_for_messages_to_be_acknowledged(&CancellationToken::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn wait_for_messages_to_be_acknowledged_completes_with_no_messages() {
+        let q = MessageQueue::new();
 
         q.wait_for_messages_to_be_acknowledged(&CancellationToken::new())
             .await;
