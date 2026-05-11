@@ -201,7 +201,7 @@ impl MessageQueueInner {
     }
 
     fn would_buffer_exceed_threshold_with_item(
-        buffer: &Vec<MessageData>,
+        buffer: &[MessageData],
         _item: &MessageData,
         threshold: usize,
     ) -> bool {
