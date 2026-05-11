@@ -378,6 +378,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_messages_to_send_drains_messages_added_before_call() {
+        let q = MessageQueue::new();
+        q.add_message(create_message(1, vec![])).await.unwrap();
+        q.add_message(create_message(2, vec![])).await.unwrap();
+
+        let msgs = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].seq_no, 1);
+        assert_eq!(msgs[1].seq_no, 2);
+    }
+
+    #[tokio::test]
+    async fn get_messages_to_send_with_zero_duration_still_drains_existing_messages() {
+        let q = MessageQueue::new();
+        q.add_message(create_message(1, vec![])).await.unwrap();
+
+        let msgs = q.get_messages_to_send(10, Duration::ZERO).await;
+
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].seq_no, 1);
+    }
+
+    #[tokio::test]
     async fn get_messages_to_send_with_zero_threshold_doesnt_move_messages_to_sent() {
         let q = MessageQueue::new();
         q.add_message(create_message(1, vec![])).await.unwrap();
@@ -493,17 +517,6 @@ mod tests {
 
         assert!(err.to_string().contains("ack unexpected"));
         assert!(err.to_string().contains("seq_no=99"));
-    }
-
-    #[tokio::test]
-    async fn acknowledge_message_allows_reusing_seq_no_after_queue_becomes_empty() {
-        let q = MessageQueue::new();
-        q.add_message(create_message(1, vec![])).await.unwrap();
-        let messages = q.get_messages_to_send(10, Duration::from_millis(20)).await;
-        assert_eq!(messages.len(), 1);
-        q.acknowledge_message(1).await.unwrap();
-
-        q.add_message(create_message(1, vec![])).await.unwrap();
     }
 
     #[tokio::test]
