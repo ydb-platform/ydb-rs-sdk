@@ -280,13 +280,13 @@ mod tests {
         }
     }
 
-    async fn create_queue() -> (MessageQueueInner, tokio::task::JoinHandle<()>) {
+    fn create_queue() -> (MessageQueueInner, mpsc::UnboundedReceiver<i64>) {
         let new_message_added = Arc::new(Notify::new());
-        let (message_acknowledged_tx, mut message_acknowledged_rx) = mpsc::unbounded_channel();
-        let queue = MessageQueueInner::new(new_message_added, message_acknowledged_tx);
-        let indefinite_reader_handle =
-            tokio::spawn(async move { while message_acknowledged_rx.recv().await.is_some() {} });
-        (queue, indefinite_reader_handle)
+        let (message_acknowledged_tx, message_acknowledged_rx) = mpsc::unbounded_channel();
+        (
+            MessageQueueInner::new(new_message_added, message_acknowledged_tx),
+            message_acknowledged_rx,
+        )
     }
 
     fn move_all_pending_to_sent(q: &mut MessageQueueInner) {
@@ -295,7 +295,7 @@ mod tests {
 
     #[tokio::test]
     async fn new_creates_empty_queue() {
-        let (q, _reader) = create_queue().await;
+        let (q, _rx) = create_queue();
         assert!(q.last_added_seq_no.is_none());
         assert!(q.messages.is_empty());
         assert!(q.sent_messages.is_empty());
@@ -304,7 +304,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_message_appends_and_updates_fields() {
-        let (mut q, _reader) = create_queue().await;
+        let (mut q, _rx) = create_queue();
         q.add_message(create_message(10, vec![1, 2, 3])).unwrap();
         q.add_message(create_message(11, vec![4, 5])).unwrap();
 
@@ -313,16 +313,15 @@ mod tests {
         assert_eq!(q.messages[0].data, vec![1, 2, 3]);
         assert_eq!(q.messages[1].seq_no, 11);
         assert_eq!(q.messages[1].data, vec![4, 5]);
-
         assert_eq!(q.last_added_seq_no, Some(11));
     }
 
     #[tokio::test]
     async fn add_message_rejects_duplicate_seq_no() {
-        let (mut q, _reader) = create_queue().await;
-        q.add_message(create_message(4, vec![])).unwrap();
+        let q = MessageQueue::new();
+        q.add_message(create_message(4, vec![])).await.unwrap();
 
-        let err = q.add_message(create_message(4, vec![])).unwrap_err();
+        let err = q.add_message(create_message(4, vec![])).await.unwrap_err();
 
         assert!(err.to_string().contains("seq_no=4"));
         assert!(err.to_string().contains("not newer than the last written"));
@@ -330,10 +329,10 @@ mod tests {
 
     #[tokio::test]
     async fn add_message_rejects_out_of_order_seq_no() {
-        let (mut q, _reader) = create_queue().await;
-        q.add_message(create_message(10, vec![])).unwrap();
+        let q = MessageQueue::new();
+        q.add_message(create_message(10, vec![])).await.unwrap();
 
-        let err = q.add_message(create_message(7, vec![])).unwrap_err();
+        let err = q.add_message(create_message(7, vec![])).await.unwrap_err();
 
         assert!(err.to_string().contains("seq_no=7"));
         assert!(err.to_string().contains("not newer than the last written"));
@@ -341,10 +340,10 @@ mod tests {
 
     #[tokio::test]
     async fn add_message_rejects_when_queue_closed_for_new_messages() {
-        let (mut q, _reader) = create_queue().await;
-        q.close_for_new_messages();
+        let q = MessageQueue::new();
+        q.close_for_new_messages().await;
 
-        let err = q.add_message(create_message(1, vec![])).unwrap_err();
+        let err = q.add_message(create_message(1, vec![])).await.unwrap_err();
 
         assert!(err.to_string().contains("closed for new messages"));
     }
@@ -457,7 +456,7 @@ mod tests {
 
     #[tokio::test]
     async fn acknowledge_message_removes_front_when_seq_no_matches() {
-        let (mut q, _reader) = create_queue().await;
+        let (mut q, _rx) = create_queue();
         q.add_message(create_message(5, vec![])).unwrap();
         q.add_message(create_message(6, vec![])).unwrap();
         q.add_message(create_message(7, vec![])).unwrap();
@@ -475,9 +474,9 @@ mod tests {
 
     #[tokio::test]
     async fn acknowledge_message_returns_error_when_empty() {
-        let (mut q, _reader) = create_queue().await;
+        let q = MessageQueue::new();
 
-        let err = q.acknowledge_message(8).unwrap_err();
+        let err = q.acknowledge_message(8).await.unwrap_err();
 
         assert!(err.to_string().contains("ack unexpected"));
         assert!(err.to_string().contains("seq_no=8"));
@@ -485,32 +484,31 @@ mod tests {
 
     #[tokio::test]
     async fn acknowledge_message_errors_when_seq_no_mismatches() {
-        let (mut q, _reader) = create_queue().await;
-        q.add_message(create_message(1, vec![])).unwrap();
-        move_all_pending_to_sent(&mut q);
+        let q = MessageQueue::new();
+        q.add_message(create_message(1, vec![])).await.unwrap();
+        let messages = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        assert_eq!(messages.len(), 1);
 
-        let err = q.acknowledge_message(99).unwrap_err();
+        let err = q.acknowledge_message(99).await.unwrap_err();
 
         assert!(err.to_string().contains("ack unexpected"));
         assert!(err.to_string().contains("seq_no=99"));
     }
 
     #[tokio::test]
-    async fn acknowledge_message_clears_last_added_seq_no_when_queue_becomes_empty() {
-        let (mut q, _reader) = create_queue().await;
-        q.add_message(create_message(1, vec![])).unwrap();
-        move_all_pending_to_sent(&mut q);
+    async fn acknowledge_message_allows_reusing_seq_no_after_queue_becomes_empty() {
+        let q = MessageQueue::new();
+        q.add_message(create_message(1, vec![])).await.unwrap();
+        let messages = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        assert_eq!(messages.len(), 1);
+        q.acknowledge_message(1).await.unwrap();
 
-        q.acknowledge_message(1).unwrap();
-
-        assert!(q.messages.is_empty());
-        assert!(q.sent_messages.is_empty());
-        assert!(q.last_added_seq_no.is_none());
+        q.add_message(create_message(1, vec![])).await.unwrap();
     }
 
     #[tokio::test]
     async fn reset_progress_restores_sent_messages_to_pending() {
-        let (mut q, _reader) = create_queue().await;
+        let (mut q, _rx) = create_queue();
 
         for i in 1..=2 {
             q.sent_messages.push_back(create_message(i, vec![]));
@@ -532,13 +530,12 @@ mod tests {
 
     #[tokio::test]
     async fn close_for_new_messages_prevents_adding_new_messages() {
-        let (mut q, _reader) = create_queue().await;
-        q.add_message(create_message(1, vec![])).unwrap();
+        let q = MessageQueue::new();
+        q.add_message(create_message(1, vec![])).await.unwrap();
 
-        q.close_for_new_messages();
+        q.close_for_new_messages().await;
 
-        assert!(!q.is_open_for_new_messages);
-        let err = q.add_message(create_message(2, vec![])).unwrap_err();
+        let err = q.add_message(create_message(2, vec![])).await.unwrap_err();
         assert!(err.to_string().contains("closed for new messages"));
     }
 
