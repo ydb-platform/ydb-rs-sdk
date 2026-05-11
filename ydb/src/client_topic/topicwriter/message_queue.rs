@@ -379,6 +379,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_messages_to_send_with_zero_threshold_doesnt_move_messages_to_sent() {
+        let q = MessageQueue::new();
+        q.add_message(create_message(1, vec![])).await.unwrap();
+        q.add_message(create_message(2, vec![])).await.unwrap();
+
+        let msgs = q.get_messages_to_send(0, Duration::from_millis(500)).await;
+        assert!(msgs.is_empty());
+
+        let err = q.acknowledge_message(1).await.unwrap_err();
+        assert!(err.to_string().contains("queue is empty"));
+
+        let msgs = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].seq_no, 1);
+        assert_eq!(msgs[1].seq_no, 2);
+    }
+
+    #[tokio::test]
     async fn get_messages_to_send_collects_one_message_per_add_notification() {
         let q = Arc::new(MessageQueue::new());
         let q_collect = Arc::clone(&q);
@@ -475,6 +493,19 @@ mod tests {
 
         assert!(err.to_string().contains("ack unexpected"));
         assert!(err.to_string().contains("seq_no=99"));
+    }
+
+    #[tokio::test]
+    async fn acknowledge_message_clears_last_added_seq_no_when_queue_becomes_empty() {
+        let (mut q, _reader) = create_queue().await;
+        q.add_message(create_message(1, vec![])).unwrap();
+        move_all_pending_to_sent(&mut q);
+
+        q.acknowledge_message(1).unwrap();
+
+        assert!(q.messages.is_empty());
+        assert!(q.sent_messages.is_empty());
+        assert!(q.last_added_seq_no.is_none());
     }
 
     #[tokio::test]
