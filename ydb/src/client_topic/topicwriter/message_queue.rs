@@ -202,7 +202,7 @@ impl MessageQueueInner {
 
     fn would_buffer_exceed_threshold_with_item(
         buffer: &[MessageData],
-        _item: &MessageData,
+        _item: &MessageData, // Задел на будущее
         threshold: usize,
     ) -> bool {
         buffer.len() + 1 > threshold
