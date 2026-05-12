@@ -1,6 +1,6 @@
 use futures_util::StreamExt;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 use tracing_test::traced_test;
@@ -8,13 +8,13 @@ use tracing_test::traced_test;
 use crate::client_topic::client::DescribeConsumerOptionsBuilder;
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
-use crate::test_integration_helper::create_client;
+use crate::test_helpers::CONNECTION_STRING;
+use crate::test_integration_helper::{create_client, TcpForwardProxy};
 use crate::{
     client_topic::client::{AlterTopicOptionsBuilder, CreateTopicOptionsBuilder},
-    PartitioningStrategy, TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError,
-    YdbResult,
+    ClientBuilder, Codec, DescribeTopicOptionsBuilder, PartitioningStrategy, StaticDiscovery,
+    TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError, YdbResult,
 };
-use crate::{Codec, DescribeTopicOptionsBuilder};
 use tracing::{debug, info, trace, warn};
 use ydb_grpc::ydb_proto::topic::stream_read_message;
 use ydb_grpc::ydb_proto::topic::stream_read_message::init_request::TopicReadSettings;
@@ -316,7 +316,7 @@ async fn send_message_test() -> YdbResult<()> {
     trace!("sent message test-2");
     writer_manual.stop().await?;
 
-    // quto-seq
+    // auto-seq
     let mut writer = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
@@ -1273,4 +1273,145 @@ async fn read_batch_merges_and_respects_hard_limit() -> YdbResult<()> {
     })
     .await
     .map_err(|_| YdbError::Custom("test timed out after 10s".to_string()))?
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn topic_writer_reconnects() -> YdbResult<()> {
+    const MSGS_BEFORE_OUTAGE: usize = 5;
+    const MSGS_AFTER_OUTAGE: usize = 5;
+    const MSG_COUNT: usize = MSGS_BEFORE_OUTAGE + MSGS_AFTER_OUTAGE;
+
+    let client = create_client().await?;
+    let database_path = client.database();
+    let topic_name = "topic_writer_reconnects".to_string();
+    let topic_path = format!("{database_path}/{topic_name}");
+    let producer_id = "test-producer".to_string();
+    let consumer_name = "test-consumer".to_string();
+    let mut topic_client = client.topic_client();
+
+    let payloads: Vec<Vec<u8>> = (0..MSG_COUNT)
+        .map(|i| format!("topic_writer_reconnect:{i}").into_bytes())
+        .collect();
+
+    let _ = topic_client.drop_topic(topic_path.clone()).await;
+    'wait_topic_dropped: loop {
+        let mut scheme = client.scheme_client();
+        let res = scheme.list_directory(database_path.clone()).await?;
+        if !res.iter().any(|item| item.name == topic_name) {
+            break 'wait_topic_dropped;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    topic_client
+        .create_topic(
+            topic_path.clone(),
+            CreateTopicOptionsBuilder::default()
+                .consumers(vec![ConsumerBuilder::default()
+                    .name(consumer_name.clone())
+                    .build()?])
+                .build()?,
+        )
+        .await?;
+
+    let proxy = TcpForwardProxy::start(CONNECTION_STRING.as_str()).await?;
+    let proxy_listen_port = proxy.listen_addr().port();
+
+    let connection_url = url::Url::parse(CONNECTION_STRING.as_str()).map_err(|err| {
+        YdbError::custom(format!(
+            "topic_writer_reconnects: failed to parse CONNECTION_STRING: {err}"
+        ))
+    })?;
+    let scheme = connection_url.scheme();
+
+    let discovery = StaticDiscovery::new_from_str(
+        format!("{scheme}://127.0.0.1:{proxy_listen_port}").as_str(),
+    )?;
+    let proxied_client = ClientBuilder::new_from_connection_string(format!(
+        "{scheme}://127.0.0.1:{proxy_listen_port}{}",
+        client.database()
+    ))?
+    .with_discovery(discovery)
+    .client()?;
+    proxied_client.wait().await?;
+
+    let mut proxied_topic_client = proxied_client.topic_client();
+    let mut writer = proxied_topic_client
+        .create_writer_with_params(
+            TopicWriterOptionsBuilder::default()
+                .topic_path(topic_path.clone())
+                .producer_id(producer_id.clone())
+                .build()?,
+        )
+        .await?;
+
+    for payload in payloads.iter().take(MSGS_BEFORE_OUTAGE) {
+        writer
+            .write_with_ack(
+                TopicWriterMessageBuilder::default()
+                    .data(payload.clone())
+                    .build()?,
+            )
+            .await?;
+    }
+
+    proxy.set_allow_forward(false);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    proxy.set_allow_forward(true);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    timeout(Duration::from_secs(60), async {
+        for payload in payloads
+            .iter()
+            .skip(MSGS_BEFORE_OUTAGE)
+            .take(MSGS_AFTER_OUTAGE)
+        {
+            writer
+                .write_with_ack(
+                    TopicWriterMessageBuilder::default()
+                        .data(payload.clone())
+                        .build()?,
+                )
+                .await?;
+        }
+        YdbResult::Ok(())
+    })
+    .await
+    .map_err(|_| {
+        YdbError::custom("topic_writer_reconnects: timed out waiting for writes after reconnect")
+    })??;
+
+    writer.stop().await?;
+
+    let mut reader = topic_client
+        .create_reader(consumer_name.clone(), topic_path.clone())
+        .await?;
+
+    let read_deadline = Instant::now() + Duration::from_secs(30);
+    let mut expected_index = 0usize;
+    while expected_index < MSG_COUNT && Instant::now() < read_deadline {
+        let batch = reader.read_batch().await?;
+        for mut msg in batch.messages {
+            let body = msg.read_and_take().await?.unwrap();
+
+            assert!(
+                expected_index < MSG_COUNT,
+                "unexpected extra message after {MSG_COUNT} payloads: {body:?}"
+            );
+            assert_eq!(
+                body, payloads[expected_index],
+                "messages must arrive in write order (index {expected_index})"
+            );
+            expected_index += 1;
+        }
+    }
+
+    assert_eq!(
+        expected_index, MSG_COUNT,
+        "timed out or truncated read: got {expected_index} of {MSG_COUNT} messages"
+    );
+
+    Ok(())
 }

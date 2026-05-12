@@ -1,10 +1,11 @@
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
+use crate::{YdbError, YdbResult};
 
 use std::collections::VecDeque;
 
 pub(crate) enum TopicWriterReceptionType {
-    AwaitingConfirmation(tokio::sync::oneshot::Sender<MessageWriteStatus>),
+    AwaitingConfirmation(tokio::sync::oneshot::Sender<YdbResult<MessageWriteStatus>>),
     NoConfirmationExpected,
 }
 
@@ -39,7 +40,13 @@ impl TopicWriterReceptionTicket {
         if let TopicWriterReceptionType::AwaitingConfirmation(sender) = self.reception_type {
             // drop is workaround for old rust: destructive assigment was unstable until 1.59
             // E0658
-            drop(sender.send(write_status));
+            drop(sender.send(Ok(write_status)));
+        }
+    }
+
+    pub fn send_error_if_needed(self, error: YdbError) {
+        if let TopicWriterReceptionType::AwaitingConfirmation(sender) = self.reception_type {
+            drop(sender.send(Err(error)));
         }
     }
 }
@@ -51,7 +58,7 @@ pub(crate) struct TopicWriterReceptionQueue {
 }
 
 impl TopicWriterReceptionQueue {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             message_receipt_signals_queue: VecDeque::new(),
             flush_finished_sender: None,
@@ -79,7 +86,13 @@ impl TopicWriterReceptionQueue {
         }
     }
 
-    pub fn try_get_ticket(&mut self) -> Option<TopicWriterReceptionTicket> {
+    pub(crate) fn peek_ticket_seq_no(&self) -> Option<i64> {
+        self.message_receipt_signals_queue
+            .front()
+            .map(TopicWriterReceptionTicket::get_seq_no)
+    }
+
+    pub(crate) fn try_get_ticket(&mut self) -> Option<TopicWriterReceptionTicket> {
         let maybe_ticket = self.message_receipt_signals_queue.pop_front();
         match maybe_ticket.as_ref() {
             None => {
@@ -99,8 +112,14 @@ impl TopicWriterReceptionQueue {
         maybe_ticket
     }
 
-    pub fn add_ticket(&mut self, reception_ticket: TopicWriterReceptionTicket) {
+    pub(crate) fn add_ticket(&mut self, reception_ticket: TopicWriterReceptionTicket) {
         self.message_receipt_signals_queue
             .push_back(reception_ticket);
+    }
+
+    pub(crate) fn send_error_to_tickets_and_clear(&mut self, error: YdbError) {
+        while let Some(ticket) = self.message_receipt_signals_queue.pop_front() {
+            ticket.send_error_if_needed(error.clone());
+        }
     }
 }
