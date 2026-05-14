@@ -237,16 +237,23 @@ impl TopicClient {
         &mut self,
         writer_options: TopicWriterOptions,
     ) -> YdbResult<TopicWriter> {
-        TopicWriter::new(writer_options, self.connection_manager.clone()).await
+        let topic_path = writer_options.topic_path.clone();
+        TopicWriter::new(
+            writer_options,
+            self.connection_manager.clone(),
+            // currently custom codecs are returned as 0 from InitRequest, so we pass them separately
+            self.describe_topic(topic_path, DescribeTopicOptionsBuilder::default().build()?).await?.supported_codecs,
+        ).await
     }
 
     pub async fn create_writer(&mut self, path: String) -> YdbResult<TopicWriter> {
         TopicWriter::new(
             TopicWriterOptionsBuilder::default()
-                .topic_path(path)
+                .topic_path(path.clone())
                 .build()
                 .unwrap(),
             self.connection_manager.clone(),
+            self.describe_topic(path, DescribeTopicOptionsBuilder::default().build()?).await?.supported_codecs,
         )
         .await
     }

@@ -12,9 +12,9 @@ use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
 use crate::grpc_wrapper::raw_topic_service::common::partition::RawOffsetsRange;
 use crate::grpc_wrapper::raw_topic_service::common::update_token::RawUpdateTokenRequest;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
-    DecompressedBatch, PartitionCommitOffset, RawBatchWithId, RawCommitOffsetRequest,
-    RawFromClientOneOf, RawFromServer, RawInitRequest, RawReadRequest,
-    RawStartPartitionSessionResponse, RawStopPartitionSessionResponse, RawTopicReadSettings,
+    PartitionCommitOffset, RawBatchWithId, RawCommitOffsetRequest, RawFromClientOneOf,
+    RawFromServer, RawInitRequest, RawReadRequest, RawStartPartitionSessionResponse,
+    RawStopPartitionSessionResponse, RawTopicReadSettings,
 };
 use crate::grpc_wrapper::raw_topic_service::update_offsets_in_transaction::{
     RawPartitionOffsets, RawTopicOffsets, RawTransactionIdentity,
@@ -212,8 +212,11 @@ impl TopicReader {
         let shared = Arc::new(ReaderShared::new());
         let stop_backgroung_work_token = YdbCancellationToken::new();
 
-        let (decompression_worker, decompression_receiver) =
-            DecompressionWorker::new(options.codec_registry, options.compression_error_strategy);
+        let (decompression_worker, decompression_receiver) = DecompressionWorker::new(
+            options.codec_registry,
+            options.compression_error_strategy,
+            options.compression_executor,
+        );
 
         tokio::spawn(receive_loop(
             stream,
@@ -332,7 +335,7 @@ async fn receive_loop(
     shared: Arc<ReaderShared>,
     stop: YdbCancellationToken,
     decompression_worker: DecompressionWorker,
-    mut decompression_receiver: mpsc::UnboundedReceiver<YdbResult<DecompressedBatch>>,
+    mut decompression_receiver: mpsc::UnboundedReceiver<YdbResult<RawBatchWithId>>,
 ) {
     let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
     let tokio_stop = stop.to_tokio_token();
@@ -354,7 +357,7 @@ async fn receive_loop(
                             &mut sessions,
                             &sender_for_responses,
                             &decompression_worker,
-                        ).await {
+                        ) {
                             break Some(e);
                         }
                     }
@@ -374,7 +377,7 @@ async fn receive_loop(
     close_with_error(&shared, err);
 }
 
-async fn handle_incoming(
+fn handle_incoming(
     msg: RawFromServer,
     sessions: &mut HashMap<i64, PartitionSession>,
     sender: &UnboundedSender<FromClient>,
@@ -384,12 +387,12 @@ async fn handle_incoming(
         RawFromServer::ReadResponse(resp) => {
             for partition_data in resp.partition_data {
                 for batch in partition_data.batches {
-                    decompression_worker
-                        .process_batch(RawBatchWithId {
-                            partition_session_id: partition_data.partition_session_id,
-                            batch,
-                        })
-                        .await?;
+                    let read_session_size_bytes = batch.get_read_session_size();
+                    decompression_worker.process_batch(RawBatchWithId {
+                        partition_session_id: partition_data.partition_session_id,
+                        read_session_size_bytes,
+                        batch,
+                    });
                 }
             }
         }
@@ -436,7 +439,7 @@ async fn handle_incoming(
 /// the shared buffer in FIFO order. The `read_session_size_bytes` is stamped on
 /// the last message for flow-control (sent back as ReadRequest).
 fn handle_batch(
-    decompressed: DecompressedBatch,
+    decompressed: RawBatchWithId,
     sessions: &mut HashMap<i64, PartitionSession>,
     shared: &ReaderShared,
 ) {
@@ -801,10 +804,10 @@ mod tests {
             for raw_batch in partition_data.batches {
                 let bytes = raw_batch.get_read_session_size();
                 handle_batch(
-                    DecompressedBatch {
+                    RawBatchWithId {
                         partition_session_id: partition_data.partition_session_id,
-                        batch: raw_batch,
                         read_session_size_bytes: bytes,
+                        batch: raw_batch,
                     },
                     sessions,
                     shared,

@@ -11,7 +11,7 @@ use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
 use crate::grpc_wrapper::raw_topic_service::stream_write::init::RawInitResponse;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
-use crate::{grpc_wrapper, Codec, YdbError, YdbResult};
+use crate::{Codec, ErrorHandlingStrategy, YdbError, YdbResult, grpc_wrapper};
 use std::borrow::{Borrow, BorrowMut};
 
 use std::future::Future;
@@ -27,7 +27,7 @@ use tokio::task::JoinHandle;
 
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use tracing::log::trace;
+use tracing::log::{trace};
 use tracing::warn;
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
@@ -95,6 +95,7 @@ impl TopicWriter {
     pub(crate) async fn new(
         writer_options: TopicWriterOptions,
         connection_manager: GrpcConnectionManager,
+        supported_codecs: Vec<Codec>, // bypass of InitRequest returning 0 for custom codecs
     ) -> YdbResult<Self> {
         //TODO: split to smaller functions
 
@@ -123,11 +124,22 @@ impl TopicWriter {
         let mut stream = topic_service.stream_write(init_request_body).await?;
         let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
 
+        let mut server_codecs: Vec<crate::Codec> = supported_codecs.clone().into();
+        if server_codecs.is_empty() {
+            server_codecs = vec![Codec::RAW, Codec::GZIP]
+        }
+        if !server_codecs.contains(&Codec::RAW) && writer_options.compression_error_strategy == ErrorHandlingStrategy::Skip {
+            return Err(YdbError::custom(format!(
+                "Skip compression error handling strategy requires RAW codec support, topic supports only {:?}", server_codecs)));
+        }
+
         let (compression_worker, mut compression_receiver) = CompressionWorker::new(
             writer_options.codec,
             writer_options.codec_registry.clone(),
             writer_options.compression_error_strategy.clone(),
-        );
+            writer_options.compression_executor.clone(),
+            server_codecs,
+        )?;
 
         let cancellation_token = CancellationToken::new();
         let topic_writer_state = Arc::new(Mutex::new(TopicWriterMode::Working));
@@ -438,12 +450,7 @@ impl TopicWriter {
             return Err(YdbError::custom("need to set message seq_no"));
         };
 
-        self.compression_worker
-            .process_batch(vec![message])
-            .await
-            .map_err(|err| {
-                YdbError::custom(format!("can't submit message to compression: {err}"))
-            })?;
+        self.compression_worker.process_batch(vec![message]);
 
         let reception_type = wait_ack.map_or(
             TopicWriterReceptionType::NoConfirmationExpected,
@@ -470,7 +477,10 @@ impl TopicWriter {
             reception_queue.init_flush_op()?
         };
 
-        Ok(flush_op_completed.await?)
+        tokio::select! {
+            _ = self.cancellation_token.cancelled() => self.is_cancelled().await,
+            _ = flush_op_completed => Ok(()),
+        }
     }
 
     async fn is_cancelled(&self) -> YdbResult<()> {

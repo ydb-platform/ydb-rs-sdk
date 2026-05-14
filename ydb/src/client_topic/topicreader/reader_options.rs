@@ -1,4 +1,6 @@
-use crate::client_topic::compression::{CodecRegistry, ErrorHandlingStrategy};
+use crate::client_topic::compression::{
+    default_executor, CodecRegistry, ErrorHandlingStrategy, Executor,
+};
 use crate::client_topic::topicreader::reader::TopicSelectors;
 use crate::errors;
 use derive_builder::Builder;
@@ -20,4 +22,6 @@ pub struct TopicReaderOptions {
     pub(crate) codec_registry: Arc<CodecRegistry>,
     #[builder(default = "ErrorHandlingStrategy::FailFast")]
     pub(crate) compression_error_strategy: ErrorHandlingStrategy,
+    #[builder(default = "default_executor()")]
+    pub(crate) compression_executor: Arc<dyn Executor>,
 }

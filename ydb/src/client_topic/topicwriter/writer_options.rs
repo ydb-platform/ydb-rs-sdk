@@ -1,4 +1,6 @@
-use crate::client_topic::compression::{CodecRegistry, ErrorHandlingStrategy};
+use crate::client_topic::compression::{
+    default_executor, CodecRegistry, ErrorHandlingStrategy, Executor,
+};
 use crate::client_topic::list_types::Codec;
 use crate::client_topic::topicwriter::partitioning::PartitioningStrategy;
 use crate::errors;
@@ -37,6 +39,8 @@ pub struct TopicWriterOptions {
     pub(crate) codec_registry: Arc<CodecRegistry>,
     #[builder(default = "ErrorHandlingStrategy::FailFast")]
     pub(crate) compression_error_strategy: ErrorHandlingStrategy,
+    #[builder(default = "default_executor()")]
+    pub(crate) compression_executor: Arc<dyn Executor>,
 
     #[builder(default = "TopicWriterConnectionOptionsBuilder::default().build()?")]
     pub(crate) connection_options: TopicWriterConnectionOptions,

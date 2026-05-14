@@ -524,29 +524,35 @@ async fn write_and_read_with_gzip_codec_roundtrip() -> YdbResult<()> {
         )
         .await?;
 
-    let expected = vec![1_u8, 2_u8, 3_u8, 4_u8];
-    writer
-        .write_with_ack(
-            TopicWriterMessageBuilder::default()
-                .data(expected.clone())
-                .build()?,
-        )
-        .await?;
+    let message_count = 20;
+    let mut expected_messages: Vec<Vec<u8>> = Vec::new();
+    for i in 0..message_count {
+        let data: Vec<u8> = format!("gzip-test-message-{i}").into_bytes();
+        expected_messages.push(data.clone());
+        writer
+            .write_with_ack(TopicWriterMessageBuilder::default().data(data).build()?)
+            .await?;
+    }
     writer.stop().await?;
 
     let mut reader = topic_client
         .create_reader(consumer_name, topic_path)
         .await?;
 
-    let mut batch = timeout(Duration::from_secs(30), reader.read_batch())
-        .await
-        .map_err(|err| YdbError::custom(format!("timeout waiting reader batch: {err}")))??;
-    let mut message = batch
-        .messages
-        .pop()
-        .ok_or_else(|| YdbError::custom("empty batch"))?;
+    let mut received_messages: Vec<Vec<u8>> = Vec::new();
+    while received_messages.len() < message_count {
+        let batch = timeout(Duration::from_secs(30), reader.read_batch())
+            .await
+            .map_err(|err| YdbError::custom(format!("timeout waiting reader batch: {err}")))??;
+        for mut message in batch.messages {
+            if let Some(data) = message.read_and_take().await? {
+                received_messages.push(data);
+            }
+        }
+    }
 
-    assert_eq!(message.read_and_take().await?.unwrap(), expected);
+    assert_eq!(received_messages.len(), message_count);
+    assert_eq!(received_messages, expected_messages);
 
     Ok(())
 }

@@ -272,12 +272,6 @@ impl From<stream_read_message::read_response::Batch> for RawBatch {
 pub(crate) struct RawBatchWithId {
     pub partition_session_id: i64,
     pub batch: RawBatch,
-}
-
-#[derive(Debug)]
-pub(crate) struct DecompressedBatch {
-    pub partition_session_id: i64,
-    pub batch: RawBatch,
     pub read_session_size_bytes: i64,
 }
 
