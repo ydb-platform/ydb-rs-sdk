@@ -278,13 +278,11 @@ impl TopicWriter {
                 Ok(Some(batch_result)) => {
                     for message in batch_result? {
                         let message_codec = message.codec.unwrap_or(Codec::RAW);
-                        if current_codec.is_some() && current_codec.unwrap() != message_codec {
-                            Self::send_write_request(
-                                task_params,
-                                messages,
-                                current_codec.unwrap(),
-                            )?;
-                            messages = vec![];
+                        if let Some(codec) = current_codec {
+                            if codec != message_codec {
+                                Self::send_write_request(task_params, messages, codec)?;
+                                messages = vec![];
+                            }
                         }
                         current_codec = Some(message_codec);
 
