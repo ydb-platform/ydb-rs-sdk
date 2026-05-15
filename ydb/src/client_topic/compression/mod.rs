@@ -11,4 +11,4 @@ pub use codec_registry::CodecRegistry;
 pub use compression_worker::CompressionWorker;
 pub use decompression_worker::DecompressionWorker;
 pub use error_strategy::ErrorHandlingStrategy;
-pub use executor::{default_executor, Executor, RayonExecutor};
+pub use executor::{default_executor, Executor, InplaceExecutor, RayonExecutor};

@@ -12,8 +12,8 @@ use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
 use crate::grpc_wrapper::raw_topic_service::common::partition::RawOffsetsRange;
 use crate::grpc_wrapper::raw_topic_service::common::update_token::RawUpdateTokenRequest;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
-    PartitionCommitOffset, RawBatchWithId, RawCommitOffsetRequest, RawFromClientOneOf,
-    RawFromServer, RawInitRequest, RawReadRequest, RawStartPartitionSessionResponse,
+    PartitionCommitOffset, RawCommitOffsetRequest, RawFromClientOneOf, RawFromServer,
+    RawInitRequest, RawReadRequest, RawReadResponse, RawStartPartitionSessionResponse,
     RawStopPartitionSessionResponse, RawTopicReadSettings,
 };
 use crate::grpc_wrapper::raw_topic_service::update_offsets_in_transaction::{
@@ -22,7 +22,7 @@ use crate::grpc_wrapper::raw_topic_service::update_offsets_in_transaction::{
 };
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::transaction::{Transaction, TransactionInfo};
-use crate::{YdbError, YdbResult};
+use crate::{Codec, YdbError, YdbResult};
 use secrecy::ExposeSecret;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -320,6 +320,9 @@ pub(crate) fn cut_prefix(
             Some(m) if m.commit_marker.partition_session_id == session_id => {
                 let m = buffer.pop_front().expect("front() returned Some");
                 bytes += m.bytes_to_release;
+                if m.decompression_failed {
+                    continue;
+                }
                 out.push(m);
             }
             _ => break,
@@ -335,7 +338,7 @@ async fn receive_loop(
     shared: Arc<ReaderShared>,
     stop: YdbCancellationToken,
     decompression_worker: DecompressionWorker,
-    mut decompression_receiver: mpsc::UnboundedReceiver<YdbResult<RawBatchWithId>>,
+    mut decompression_receiver: mpsc::UnboundedReceiver<YdbResult<Vec<TopicReaderMessage>>>,
 ) {
     let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
     let tokio_stop = stop.to_tokio_token();
@@ -366,8 +369,16 @@ async fn receive_loop(
             Some(result) = decompression_receiver.recv() => {
                 match result {
                     Err(e) => break Some(e),
-                    Ok(batch) => {
-                        handle_batch(batch, &mut sessions, &shared);
+                    Ok(messages) => {
+                        {
+                            let mut buf = shared
+                                .buffer
+                                .lock()
+                                .expect("topic reader buffer mutex poisoned");
+                            buf.extend(messages);
+                        }
+                        // push-then-notify: no lost wakeups
+                        shared.notify.notify_one();
                     }
                 }
             }
@@ -385,16 +396,7 @@ fn handle_incoming(
 ) -> YdbResult<()> {
     match msg {
         RawFromServer::ReadResponse(resp) => {
-            for partition_data in resp.partition_data {
-                for batch in partition_data.batches {
-                    let read_session_size_bytes = batch.get_read_session_size();
-                    decompression_worker.process_batch(RawBatchWithId {
-                        partition_session_id: partition_data.partition_session_id,
-                        read_session_size_bytes,
-                        batch,
-                    });
-                }
-            }
+            handle_read_response(resp, sessions, decompression_worker)?
         }
         RawFromServer::InitResponse(resp) => {
             info!("init response for topic reader: {:?}", resp)
@@ -435,47 +437,44 @@ fn handle_incoming(
     Ok(())
 }
 
-/// Converts a decompressed batch into TopicReaderMessages and appends them to
-/// the shared buffer in FIFO order. The `read_session_size_bytes` is stamped on
-/// the last message for flow-control (sent back as ReadRequest).
-fn handle_batch(
-    decompressed: RawBatchWithId,
+/// Parses a RawReadResponse into TopicReaderMessages and appends them to the
+/// shared buffer in FIFO order. The `bytes_to_release` tag is set by
+/// `RawBatch::get_read_session_size()` — non-zero only on the very last message
+/// of the entire response (see `From<ReadResponse> for RawReadResponse`).
+pub(crate) fn handle_read_response(
+    resp: RawReadResponse,
     sessions: &mut HashMap<i64, PartitionSession>,
-    shared: &ReaderShared,
-) {
-    let partition_session_id = decompressed.partition_session_id;
-    let raw_batch = decompressed.batch;
-
-    if raw_batch.message_data.is_empty() {
-        return;
-    }
-
-    let session = match sessions.get_mut(&partition_session_id) {
-        Some(s) => s,
-        None => {
-            error!(
-                "read_response for unknown partition_session_id: {}",
-                partition_session_id
-            );
-            return;
+    decompression_worker: &DecompressionWorker,
+) -> YdbResult<()> {
+    for partition_data in resp.partition_data {
+        let partition_session_id = partition_data.partition_session_id;
+        let session = match sessions.get_mut(&partition_session_id) {
+            Some(s) => s,
+            None => {
+                error!(
+                    "read_response for unknown partition_session_id: {}",
+                    partition_session_id
+                );
+                continue;
+            }
+        };
+        for raw_batch in partition_data.batches {
+            if raw_batch.message_data.is_empty() {
+                continue;
+            }
+            let batch_bytes = raw_batch.get_read_session_size();
+            let codec = Codec {
+                code: raw_batch.codec.code,
+            };
+            let batch = TopicReaderBatch::new(raw_batch, session);
+            let mut messages = batch.messages;
+            if let Some(last) = messages.last_mut() {
+                last.bytes_to_release = batch_bytes;
+            }
+            decompression_worker.process_batch(messages, codec);
         }
-    };
-
-    let batch = TopicReaderBatch::new(raw_batch, session);
-    let mut messages = batch.messages;
-    if let Some(last) = messages.last_mut() {
-        last.bytes_to_release = decompressed.read_session_size_bytes;
     }
-
-    {
-        let mut buf = shared
-            .buffer
-            .lock()
-            .expect("topic reader buffer mutex poisoned");
-        buf.extend(messages);
-    }
-    // push-then-notify: no lost wakeups
-    shared.notify.notify_one();
+    Ok(())
 }
 
 pub(crate) fn close_with_error(shared: &ReaderShared, err: Option<YdbError>) {
@@ -581,12 +580,14 @@ pub struct TopicReaderCommitMarker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client_topic::compression::InplaceExecutor;
     use crate::client_topic::topicreader::messages::TopicReaderBatch;
     use crate::grpc_wrapper::raw_topic_service::common::codecs::RawCodec;
     use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
-        RawBatch, RawMessageData, RawPartitionData, RawReadResponse,
+        RawBatch, RawMessageData, RawPartitionData,
     };
     use crate::grpc_wrapper::raw_topic_service::update_offsets_in_transaction::*;
+    use crate::CodecRegistry;
     use std::time::Duration;
 
     #[test]
@@ -791,30 +792,7 @@ mod tests {
         assert_eq!(bytes_second, 1234);
     }
 
-    // ---- handle_batch (via process_response helper) ----
-
-    /// Test helper: processes a RawReadResponse through handle_batch, mimicking
-    /// the production pipeline for RAW (uncompressed) batches.
-    fn process_response(
-        resp: RawReadResponse,
-        sessions: &mut HashMap<i64, PartitionSession>,
-        shared: &ReaderShared,
-    ) {
-        for partition_data in resp.partition_data {
-            for raw_batch in partition_data.batches {
-                let bytes = raw_batch.get_read_session_size();
-                handle_batch(
-                    RawBatchWithId {
-                        partition_session_id: partition_data.partition_session_id,
-                        read_session_size_bytes: bytes,
-                        batch: raw_batch,
-                    },
-                    sessions,
-                    shared,
-                );
-            }
-        }
-    }
+    // ---- handle_read_response ----
 
     fn make_raw_partition_data(
         partition_session_id: i64,
@@ -847,8 +825,33 @@ mod tests {
         resp
     }
 
+    fn handle_read_response_test(
+        resp: RawReadResponse,
+        sessions: &mut HashMap<i64, PartitionSession>,
+        shared: &ReaderShared,
+    ) -> YdbResult<()> {
+        let (decompression_worker, mut decompression_receiver) = DecompressionWorker::new(
+            Arc::new(CodecRegistry::new()),
+            crate::ErrorHandlingStrategy::FailFast,
+            Arc::new(InplaceExecutor::new()),
+        );
+
+        handle_read_response(resp, sessions, &decompression_worker)?;
+
+        while let Ok(messages) = decompression_receiver.try_recv() {
+            let mut buf = shared
+                .buffer
+                .lock()
+                .expect("topic reader buffer mutex poisoned");
+            buf.extend(messages.unwrap());
+        }
+        shared.notify.notify_one();
+
+        Ok(())
+    }
+
     #[test]
-    fn test_handle_batch_preserves_fifo_across_partition_data() {
+    fn test_handle_read_response_preserves_fifo_across_partition_data() {
         let shared = ReaderShared::new();
         let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
         sessions.insert(1, make_session(1, 11, "t-a", 0));
@@ -860,7 +863,7 @@ mod tests {
         let pd_a2 = make_raw_partition_data(3, vec![make_raw_batch(0, 2)]);
 
         let resp = make_raw_read_response(9999, vec![pd_a1, pd_b, pd_a2]);
-        process_response(resp, &mut sessions, &shared);
+        handle_read_response_test(resp, &mut sessions, &shared).unwrap();
 
         let buf = shared.buffer.lock().unwrap();
         assert_eq!(buf.len(), 9);
@@ -880,7 +883,7 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_batch_skips_empty_batches() {
+    fn test_handle_read_response_skips_empty_batches() {
         let shared = ReaderShared::new();
         let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
         sessions.insert(1, make_session(1, 11, "t", 0));
@@ -895,7 +898,7 @@ mod tests {
         let pd = make_raw_partition_data(1, vec![empty_batch, make_raw_batch(0, 2)]);
         let resp = make_raw_read_response(500, vec![pd]);
 
-        process_response(resp, &mut sessions, &shared);
+        handle_read_response_test(resp, &mut sessions, &shared).unwrap();
 
         let buf = shared.buffer.lock().unwrap();
         assert_eq!(buf.len(), 2);
@@ -905,7 +908,7 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_batch_advances_next_commit_offset_start() {
+    fn test_handle_read_response_advances_next_commit_offset_start() {
         let shared = ReaderShared::new();
         let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
         sessions.insert(1, make_session(1, 11, "t", 100));
@@ -913,13 +916,13 @@ mod tests {
         let pd = make_raw_partition_data(1, vec![make_raw_batch(100, 3)]);
         let resp = make_raw_read_response(10, vec![pd]);
 
-        process_response(resp, &mut sessions, &shared);
+        handle_read_response_test(resp, &mut sessions, &shared).unwrap();
 
         assert_eq!(sessions.get(&1).unwrap().next_commit_offset_start, 103);
     }
 
     #[test]
-    fn test_handle_batch_drops_data_for_unknown_session() {
+    fn test_handle_read_response_drops_data_for_unknown_session() {
         let shared = ReaderShared::new();
         let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
         sessions.insert(1, make_session(1, 11, "t", 0));
@@ -928,7 +931,7 @@ mod tests {
         let pd_known = make_raw_partition_data(1, vec![make_raw_batch(0, 2)]);
         let resp = make_raw_read_response(123, vec![pd_unknown, pd_known]);
 
-        process_response(resp, &mut sessions, &shared);
+        handle_read_response_test(resp, &mut sessions, &shared).unwrap();
 
         let buf = shared.buffer.lock().unwrap();
         assert_eq!(buf.len(), 2);
@@ -938,7 +941,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_batch_notifies_after_push() {
+    async fn test_handle_read_response_notifies_after_push() {
         let shared = Arc::new(ReaderShared::new());
         let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
         sessions.insert(1, make_session(1, 11, "t", 0));
@@ -949,7 +952,7 @@ mod tests {
 
         let pd = make_raw_partition_data(1, vec![make_raw_batch(0, 2)]);
         let resp = make_raw_read_response(100, vec![pd]);
-        process_response(resp, &mut sessions, shared.as_ref());
+        handle_read_response_test(resp, &mut sessions, shared.as_ref()).unwrap();
 
         tokio::time::timeout(Duration::from_millis(100), notified)
             .await

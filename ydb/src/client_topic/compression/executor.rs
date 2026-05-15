@@ -47,3 +47,27 @@ static DEFAULT_EXECUTOR: LazyLock<Arc<dyn Executor>> =
 pub fn default_executor() -> Arc<dyn Executor> {
     DEFAULT_EXECUTOR.clone()
 }
+
+pub struct InplaceExecutor {}
+
+impl InplaceExecutor {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Default for InplaceExecutor {
+    fn default() -> Self {
+        Self {}
+    }
+}
+
+impl Executor for InplaceExecutor {
+    fn available_parallelism(&self) -> usize {
+        1
+    }
+
+    fn execute(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+        task();
+    }
+}
