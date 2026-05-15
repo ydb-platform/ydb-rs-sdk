@@ -269,6 +269,13 @@ impl From<stream_read_message::read_response::Batch> for RawBatch {
 }
 
 #[derive(Debug)]
+pub(crate) struct RawBatchWithId {
+    pub partition_session_id: i64,
+    pub batch: RawBatch,
+    pub read_session_size_bytes: i64,
+}
+
+#[derive(Debug)]
 pub(crate) struct RawMessageData {
     pub offset: i64,
     pub seq_no: i64,

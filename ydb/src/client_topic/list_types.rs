@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::option::Option;
 use std::time::SystemTime;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Copy)]
 pub struct Codec {
     pub code: i32,
 }
