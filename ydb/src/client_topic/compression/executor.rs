@@ -37,7 +37,7 @@ impl Executor for RayonExecutor {
     }
 
     fn execute(&self, task: Box<dyn FnOnce() + Send + 'static>) {
-        self.pool.spawn(move || task());
+        self.pool.spawn(task);
     }
 }
 

@@ -9,7 +9,7 @@ use crate::YdbResult;
 use prost::bytes::Bytes;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{warn};
+use tracing::warn;
 
 pub struct CompressionWorker {
     codec_selector: CodecSelector,

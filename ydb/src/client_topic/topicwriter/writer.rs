@@ -11,7 +11,7 @@ use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs;
 use crate::grpc_wrapper::raw_topic_service::stream_write::init::RawInitResponse;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
-use crate::{Codec, ErrorHandlingStrategy, YdbError, YdbResult, grpc_wrapper};
+use crate::{grpc_wrapper, Codec, ErrorHandlingStrategy, YdbError, YdbResult};
 use std::borrow::{Borrow, BorrowMut};
 
 use std::future::Future;
@@ -27,7 +27,7 @@ use tokio::task::JoinHandle;
 
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use tracing::log::{trace};
+use tracing::log::trace;
 use tracing::warn;
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
@@ -124,11 +124,13 @@ impl TopicWriter {
         let mut stream = topic_service.stream_write(init_request_body).await?;
         let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
 
-        let mut server_codecs: Vec<crate::Codec> = supported_codecs.clone().into();
+        let mut server_codecs: Vec<crate::Codec> = supported_codecs.clone();
         if server_codecs.is_empty() {
             server_codecs = vec![Codec::RAW, Codec::GZIP]
         }
-        if !server_codecs.contains(&Codec::RAW) && writer_options.compression_error_strategy == ErrorHandlingStrategy::Skip {
+        if !server_codecs.contains(&Codec::RAW)
+            && writer_options.compression_error_strategy == ErrorHandlingStrategy::Skip
+        {
             return Err(YdbError::custom(format!(
                 "Skip compression error handling strategy requires RAW codec support, topic supports only {:?}", server_codecs)));
         }

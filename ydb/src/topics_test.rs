@@ -9,12 +9,12 @@ use crate::client_topic::client::DescribeConsumerOptionsBuilder;
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::test_integration_helper::create_client;
-use crate::DescribeTopicOptionsBuilder;
 use crate::{
     client_topic::client::{AlterTopicOptionsBuilder, CreateTopicOptionsBuilder},
-    Codec, PartitioningStrategy, TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError,
+    PartitioningStrategy, TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError,
     YdbResult,
 };
+use crate::{Codec, DescribeTopicOptionsBuilder};
 use tracing::{debug, info, trace, warn};
 use ydb_grpc::ydb_proto::topic::stream_read_message;
 use ydb_grpc::ydb_proto::topic::stream_read_message::init_request::TopicReadSettings;
@@ -488,73 +488,6 @@ async fn start_read_topic(
     });
 
     Ok(topic_messages_rx)
-}
-
-#[tokio::test]
-#[traced_test]
-#[ignore] // need YDB access
-async fn write_and_read_with_gzip_codec_roundtrip() -> YdbResult<()> {
-    let client = create_client().await?;
-    let database_path = client.database();
-    let topic_name = format!("write_read_gzip_{}", uuid::Uuid::new_v4().simple());
-    let topic_path = format!("{database_path}/{topic_name}");
-    let consumer_name = "test-consumer-gzip".to_string();
-
-    let mut topic_client = client.topic_client();
-
-    topic_client
-        .create_topic(
-            topic_path.clone(),
-            CreateTopicOptionsBuilder::default()
-                .supported_codecs(vec![Codec::RAW, Codec::GZIP])
-                .consumers(vec![ConsumerBuilder::default()
-                    .name(consumer_name.clone())
-                    .supported_codecs(vec![Codec::RAW, Codec::GZIP])
-                    .build()?])
-                .build()?,
-        )
-        .await?;
-
-    let mut writer = topic_client
-        .create_writer_with_params(
-            TopicWriterOptionsBuilder::default()
-                .topic_path(topic_path.clone())
-                .codec(Codec::GZIP)
-                .build()?,
-        )
-        .await?;
-
-    let message_count = 20;
-    let mut expected_messages: Vec<Vec<u8>> = Vec::new();
-    for i in 0..message_count {
-        let data: Vec<u8> = format!("gzip-test-message-{i}").into_bytes();
-        expected_messages.push(data.clone());
-        writer
-            .write_with_ack(TopicWriterMessageBuilder::default().data(data).build()?)
-            .await?;
-    }
-    writer.stop().await?;
-
-    let mut reader = topic_client
-        .create_reader(consumer_name, topic_path)
-        .await?;
-
-    let mut received_messages: Vec<Vec<u8>> = Vec::new();
-    while received_messages.len() < message_count {
-        let batch = timeout(Duration::from_secs(30), reader.read_batch())
-            .await
-            .map_err(|err| YdbError::custom(format!("timeout waiting reader batch: {err}")))??;
-        for mut message in batch.messages {
-            if let Some(data) = message.read_and_take().await? {
-                received_messages.push(data);
-            }
-        }
-    }
-
-    assert_eq!(received_messages.len(), message_count);
-    assert_eq!(received_messages, expected_messages);
-
-    Ok(())
 }
 
 #[tokio::test]

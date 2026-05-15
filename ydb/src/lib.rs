@@ -88,9 +88,9 @@ mod table_service_types;
 #[cfg(test)]
 mod test_integration_helper;
 #[cfg(test)]
-pub(crate) mod topics_test;
-#[cfg(test)]
 pub(crate) mod topics_compression_test;
+#[cfg(test)]
+pub(crate) mod topics_test;
 mod trace_helpers;
 mod trait_operation;
 pub(crate) mod transaction;

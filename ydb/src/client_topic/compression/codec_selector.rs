@@ -63,8 +63,8 @@ impl CodecSelector {
 
     pub fn codec(&self) -> Codec {
         match self {
-            Self::Fixed(c) => c.clone(),
-            Self::Auto { current_codec, .. } => current_codec.clone(),
+            Self::Fixed(c) => *c,
+            Self::Auto { current_codec, .. } => *current_codec,
         }
     }
 
