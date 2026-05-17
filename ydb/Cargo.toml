@@ -14,6 +14,9 @@ force-exhaustive-all = [
 ] # The feature disable all non_exhaustive attributes in ydb public interface.
 
 [dependencies]
+arrow = { version = "54", default-features = false }
+arrow-ipc = { version = "54", default-features = false }
+arrow-schema = { version = "54", default-features = false }
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = [
     "clock",

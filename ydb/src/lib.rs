@@ -72,6 +72,10 @@ mod session;
 mod session_pool;
 mod sugar;
 
+pub(crate) mod arrow_helpers;
+
+pub use arrow;
+
 #[cfg(test)]
 pub(crate) mod auth_test;
 
