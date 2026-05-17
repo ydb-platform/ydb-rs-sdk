@@ -665,8 +665,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "335ff9f135e4384c8150d6f27c6daed433577f86b4750418338c01a1a2528592"
 dependencies = [
  "cfg-if",
+ "js-sys",
  "libc",
  "wasi",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1164,11 +1166,12 @@ dependencies = [
 
 [[package]]
 name = "jsonwebtoken"
-version = "9.1.0"
+version = "9.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "155c4d7e39ad04c172c5e3a99c434ea3b4a7ba7960b38ecd562b270b097cce09"
+checksum = "5a87cc7a48537badeae96744432de36f4be2b4a34a05a5ef32e9dd8a1c169dde"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.1",
+ "js-sys",
  "pem",
  "ring",
  "serde",
@@ -1806,7 +1809,7 @@ checksum = "36ea961700fd7260e7fa3701c8287d901b2172c51f9c1421fa0f21d7f7e184b7"
 dependencies = [
  "clocksource",
  "parking_lot",
- "thiserror",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -2175,13 +2178,13 @@ dependencies = [
 
 [[package]]
 name = "simple_asn1"
-version = "0.6.2"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adc4e5204eb1910f40f9cfa375f6f05b68c3abac4b6fd879c8ff5e7ae8a0a085"
+checksum = "297f631f50729c8c99b84667867963997ec0b50f32b2a7dbcab828ef0541e8bb"
 dependencies = [
  "num-bigint",
  "num-traits",
- "thiserror",
+ "thiserror 2.0.18",
  "time",
 ]
 
@@ -2359,7 +2362,16 @@ version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52"
 dependencies = [
- "thiserror-impl",
+ "thiserror-impl 1.0.69",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4"
+dependencies = [
+ "thiserror-impl 2.0.18",
 ]
 
 [[package]]
@@ -2367,6 +2379,17 @@ name = "thiserror-impl"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebc4ee7f67670e9b64d05fa4253e753e016c6c95ff35b89b7941d6b856dec1d5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2744,7 +2767,7 @@ dependencies = [
  "log",
  "rand",
  "sha1",
- "thiserror",
+ "thiserror 1.0.69",
  "url",
  "utf-8",
 ]
@@ -3371,7 +3394,6 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
- "simple_asn1",
  "strum",
  "time",
  "tokio",
