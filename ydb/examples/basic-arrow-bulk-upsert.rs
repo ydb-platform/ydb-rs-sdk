@@ -52,16 +52,8 @@ async fn main() -> YdbResult<()> {
 
     println!("Inserting {} rows using Arrow format...", batch.num_rows());
 
-    let (schema_bytes, data_bytes) = ydb::serialize_record_batch_for_bulk_upsert(&batch)?;
-
-    println!(
-        "Serialized: schema {} bytes, data {} bytes",
-        schema_bytes.len(),
-        data_bytes.len()
-    );
-
     table_client
-        .retry_execute_bulk_upsert_arrow(format!("/local/{table_name}"), schema_bytes, data_bytes)
+        .retry_execute_bulk_upsert_arrow(format!("/local/{table_name}"), batch)
         .await?;
 
     println!("Bulk upsert completed successfully!");

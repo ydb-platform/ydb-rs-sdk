@@ -1021,14 +1021,15 @@ async fn bulk_upsert() -> YdbResult<()> {
 async fn bulk_upsert_arrow() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
+    let table_name = "arrow_test";
 
-    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-    let table_name = format!("arrow_test_{}", rand_str);
+    table_client
+        .retry_execute_scheme_query(format!("DROP TABLE IF EXISTS {table_name}"))
+        .await?;
 
     table_client
         .retry_execute_scheme_query(format!(
-            "CREATE TABLE {} (id Int64, val Utf8, PRIMARY KEY (id))",
-            table_name
+            "CREATE TABLE {table_name} (id Int64, val Utf8, PRIMARY KEY (id))"
         ))
         .await?;
 
@@ -1052,23 +1053,16 @@ async fn bulk_upsert_arrow() -> YdbResult<()> {
     )
     .map_err(|e| YdbError::Custom(format!("Arrow error: {}", e)))?;
 
-    let (schema_bytes, data_bytes) =
-        crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(&batch)?;
-
     table_client
-        .retry_execute_bulk_upsert_arrow(format!("/local/{}", table_name), schema_bytes, data_bytes)
+        .retry_execute_bulk_upsert_arrow(format!("/local/{table_name}"), batch)
         .await?;
 
-    let table_name_for_query = table_name.clone();
     let result = table_client
-        .retry_transaction(|tx| {
-            let table_name = table_name_for_query.clone();
-            async move {
-                let mut tx = tx;
-                let query = Query::new(format!("SELECT id, val FROM {} ORDER BY id", table_name));
-                let res = tx.query(query).await?;
-                Ok(res)
-            }
+        .retry_transaction(|tx| async move {
+            let mut tx = tx;
+            let query = Query::new(format!("SELECT id, val FROM {table_name} ORDER BY id"));
+            let res = tx.query(query).await?;
+            Ok(res)
         })
         .await?;
 
@@ -1092,17 +1086,6 @@ async fn bulk_upsert_arrow() -> YdbResult<()> {
     assert_eq!(rows[3], (4, Some("David".to_string())));
     assert_eq!(rows[4], (5, Some("Eve".to_string())));
 
-    table_client
-        .retry_with_session(RetryOptions::new(), |session| async {
-            let mut session = session;
-            let table_name = table_name.clone();
-            session
-                .execute_schema_query(format!("DROP TABLE {}", table_name))
-                .await?;
-            Ok(())
-        })
-        .await?;
-
     Ok(())
 }
 
@@ -1112,14 +1095,15 @@ async fn bulk_upsert_arrow() -> YdbResult<()> {
 async fn bulk_upsert_arrow_empty_batch() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
+    let table_name = "arrow_empty";
 
-    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-    let table_name = format!("arrow_empty_{}", rand_str);
+    table_client
+        .retry_execute_scheme_query(format!("DROP TABLE IF EXISTS {table_name}"))
+        .await?;
 
     table_client
         .retry_execute_scheme_query(format!(
-            "CREATE TABLE {} (id Int64, PRIMARY KEY (id))",
-            table_name
+            "CREATE TABLE {table_name} (id Int64, PRIMARY KEY (id))"
         ))
         .await?;
 
@@ -1128,26 +1112,19 @@ async fn bulk_upsert_arrow_empty_batch() -> YdbResult<()> {
     let batch = RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(Vec::<i64>::new()))])
         .map_err(|e| YdbError::Custom(format!("Arrow error: {}", e)))?;
 
-    let (schema_bytes, data_bytes) =
-        crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(&batch)?;
-
     table_client
-        .retry_execute_bulk_upsert_arrow(format!("/local/{}", table_name), schema_bytes, data_bytes)
+        .retry_execute_bulk_upsert_arrow(format!("/local/{table_name}"), batch)
         .await?;
 
     let result = table_client
-        .retry_transaction(|tx| {
-            let table_name = table_name.clone();
-            async move {
-                let mut tx = tx;
-                let res = tx
-                    .query(Query::new(format!(
-                        "SELECT COUNT(*) as cnt FROM {}",
-                        table_name
-                    )))
-                    .await?;
-                Ok(res)
-            }
+        .retry_transaction(|tx| async move {
+            let mut tx = tx;
+            let res = tx
+                .query(Query::new(format!(
+                    "SELECT COUNT(*) as cnt FROM {table_name}"
+                )))
+                .await?;
+            Ok(res)
         })
         .await?;
 
@@ -1160,17 +1137,6 @@ async fn bulk_upsert_arrow_empty_batch() -> YdbResult<()> {
         .try_into()?;
 
     assert_eq!(count, 0);
-
-    table_client
-        .retry_with_session(RetryOptions::new(), |session| async {
-            let mut session = session;
-            let table_name = table_name.clone();
-            session
-                .execute_schema_query(format!("DROP TABLE {}", table_name))
-                .await?;
-            Ok(())
-        })
-        .await?;
 
     Ok(())
 }

@@ -322,24 +322,29 @@ impl TableClient {
         .await
     }
 
-    /// Execute bulk upsert with Arrow format with retry policy
+    /// Execute bulk upsert of an Arrow `RecordBatch` with retry policy.
+    ///
+    /// Dictionary-encoded arrays are not supported by the YDB server-side
+    /// converter and will cause this call to fail.
     pub async fn retry_execute_bulk_upsert_arrow(
         &self,
         table_path: String,
-        arrow_schema: Vec<u8>,
-        arrow_data: Vec<u8>,
+        batch: arrow::record_batch::RecordBatch,
     ) -> YdbResult<()> {
-        if arrow_data.is_empty() {
+        if batch.num_rows() == 0 {
             return Ok(());
         }
+
+        let (schema_bytes, data_bytes) =
+            crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(&batch)?;
 
         self.retry(|| async {
             let mut session = self.create_session().await?;
             session
                 .execute_bulk_upsert_arrow(
                     table_path.clone(),
-                    arrow_schema.clone(),
-                    arrow_data.clone(),
+                    schema_bytes.clone(),
+                    data_bytes.clone(),
                 )
                 .await
         })

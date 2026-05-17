@@ -6,10 +6,10 @@ use arrow_ipc::writer::{DictionaryTracker, EncodedData, IpcDataGenerator, IpcWri
 use arrow_ipc::MetadataVersion;
 
 /// Serialize Arrow RecordBatch to IPC format for bulk upsert
-pub fn serialize_record_batch_for_bulk_upsert(
+pub(crate) fn serialize_record_batch_for_bulk_upsert(
     batch: &RecordBatch,
 ) -> YdbResult<(Vec<u8>, Vec<u8>)> {
-    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V4)
+    let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)
         .map_err(|e| YdbError::Custom(format!("Failed to create IPC options: {}", e)))?;
 
     let gen = IpcDataGenerator::default();
