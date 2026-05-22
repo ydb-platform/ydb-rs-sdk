@@ -53,6 +53,7 @@ impl TopicReaderBatch {
                         },
 
                         bytes_to_release: 0,
+                        decompression_failed: false,
                     }
                 })
                 .collect(),
@@ -101,12 +102,13 @@ pub struct TopicReaderMessage {
     pub uncompressed_size: i64, // as sent by sender, server/sdk doesn't check the field. It may be empty or wrong.
 
     producer_id: String,
-    raw_data: Option<Vec<u8>>,
+    pub(crate) raw_data: Option<Vec<u8>>,
     pub(crate) commit_marker: TopicReaderCommitMarker,
 
     // Non-zero only on the last message of a server ReadResponse; carries the
     // response's bytes_size for flow-control (sent back as ReadRequest).
     pub(crate) bytes_to_release: i64,
+    pub(crate) decompression_failed: bool,
 }
 
 impl TopicReaderMessage {
