@@ -29,10 +29,13 @@ impl Default for ConnectTimeouts {
 
 /// Establish a gRPC channel for the given URI.
 ///
-/// For FQDN endpoints that resolve to multiple IP addresses, dials all
-/// addresses in parallel and returns the first successful connection.
-/// Unreachable addresses are skipped, similar to gRPC `round_robin` policy
-/// in ydb-go-sdk.
+/// Hostname endpoints always use a lazy channel keyed by the original FQDN so
+/// tonic re-resolves DNS when the connection is re-established (for example,
+/// after a long-lived client observes a DNS TTL change).
+///
+/// When a hostname resolves to multiple IP addresses, parallel eager dial
+/// probes all of them and skips unreachable addresses. After a working backend
+/// is found, a lazy FQDN channel is returned (the probe connection is dropped).
 pub(crate) async fn connect(
     uri: Uri,
     tls_config: &Option<ClientTlsConfig>,
@@ -55,7 +58,7 @@ pub(crate) async fn connect(
     }
 
     if addrs.len() == 1 {
-        return connect_lazy_to_resolved(addrs[0], uri, tls_config, timeouts);
+        return connect_lazy(uri, tls_config, None, timeouts);
     }
 
     trace!(
@@ -74,18 +77,6 @@ fn connect_lazy(
 ) -> YdbResult<Channel> {
     let endpoint = build_endpoint(uri, tls_config, origin, false, timeouts)?;
     Ok(endpoint.connect_lazy())
-}
-
-fn connect_lazy_to_resolved(
-    addr: SocketAddr,
-    original_uri: Uri,
-    tls_config: &Option<ClientTlsConfig>,
-    timeouts: ConnectTimeouts,
-) -> YdbResult<Channel> {
-    let scheme = original_uri.scheme().cloned().unwrap_or(Scheme::HTTP);
-    let path_and_query = original_uri.path_and_query().map(|pq| pq.as_str());
-    let ip_uri = socket_addr_to_uri(addr, &scheme, path_and_query)?;
-    connect_lazy(ip_uri, tls_config, Some(original_uri), timeouts)
 }
 
 async fn connect_eager(
@@ -172,7 +163,7 @@ pub(crate) async fn parallel_connect(
     let path_and_query = original_uri
         .path_and_query()
         .map(|pq| pq.as_str().to_string());
-    let tls_config = tls_config.clone();
+    let tls_config_owned = tls_config.clone();
     let origin = original_uri.clone();
 
     let mut tasks = JoinSet::new();
@@ -180,7 +171,7 @@ pub(crate) async fn parallel_connect(
     for addr in addrs {
         let scheme = scheme.clone();
         let path_and_query = path_and_query.clone();
-        let tls_config = tls_config.clone();
+        let tls_config = tls_config_owned.clone();
         let origin = origin.clone();
 
         tasks.spawn(async move {
@@ -199,9 +190,11 @@ pub(crate) async fn parallel_connect(
             biased;
             result = tasks.join_next(), if !tasks.is_empty() => {
                 match result {
-                    Some(Ok(Ok(channel))) => {
+                    Some(Ok(Ok(_channel))) => {
                         tasks.abort_all();
-                        return Ok(channel);
+                        // Probe succeeded: use lazy FQDN endpoint so DNS is
+                        // re-resolved on reconnect, not pinned to one IP.
+                        return connect_lazy(original_uri, tls_config, None, timeouts);
                     }
                     Some(Ok(Err(err))) => last_error = Some(err),
                     Some(Err(_)) => {}

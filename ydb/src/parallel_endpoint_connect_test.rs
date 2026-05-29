@@ -78,7 +78,8 @@ async fn parallel_connect_skips_unreachable_ip() -> YdbResult<()> {
     let (shutdown, server_handle) = spawn_mock_grpc_server(live_addr).await;
 
     let dead_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), live_addr.port());
-    let original_uri = Uri::from_static("grpc://ydb.test.local:2135/");
+    let original_uri = Uri::try_from(format!("grpc://localhost:{}/", live_addr.port()))
+        .expect("valid localhost uri");
 
     let channel = parallel_connect(
         vec![dead_addr, live_addr],
