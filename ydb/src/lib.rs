@@ -58,6 +58,7 @@ pub(crate) mod client_table;
 mod client_table_test_integration;
 pub(crate) mod client_topic;
 pub(crate) mod connection_pool;
+pub(crate) mod parallel_endpoint_connect;
 mod credentials;
 pub(crate) mod discovery;
 mod errors;
@@ -101,6 +102,9 @@ mod types_test;
 
 #[cfg(test)]
 mod connection_pool_test;
+
+#[cfg(test)]
+mod parallel_endpoint_connect_test;
 
 pub use client_coordination::client::CoordinationClient;
 pub use client_coordination::list_types::{

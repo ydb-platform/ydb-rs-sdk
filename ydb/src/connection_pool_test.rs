@@ -1,4 +1,5 @@
-use crate::connection_pool::{normalize_uri_scheme, ConnectionPool};
+use crate::connection_pool::ConnectionPool;
+use crate::parallel_endpoint_connect::normalize_uri_scheme;
 use crate::YdbResult;
 use http::uri::{Scheme, Uri};
 
@@ -37,7 +38,7 @@ fn test_normalize_uri_scheme_grpcs_to_https() -> YdbResult<()> {
 #[tokio::test]
 async fn test_connection_creates_new_connection() -> YdbResult<()> {
     let pool = ConnectionPool::new();
-    let uri = Uri::from_static("grpc://localhost:7135/path");
+    let uri = Uri::from_static("grpc://127.0.0.1:7135/path");
 
     let channel = pool.connection(&uri).await?;
     let _ = channel;
@@ -48,7 +49,7 @@ async fn test_connection_creates_new_connection() -> YdbResult<()> {
 #[tokio::test]
 async fn test_connection_connection_reuse() -> YdbResult<()> {
     let pool = ConnectionPool::new();
-    let uri = Uri::from_static("grpcs://localhost:2135/local");
+    let uri = Uri::from_static("grpcs://127.0.0.1:2135/local");
 
     let first_channel = pool.connection(&uri).await?;
 
