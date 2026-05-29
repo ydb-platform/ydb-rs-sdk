@@ -1,4 +1,4 @@
-use crate::parallel_endpoint_connect;
+use crate::parallel_endpoint_connect::{self, ConnectTimeouts};
 use crate::YdbResult;
 use http::Uri;
 use std::collections::HashMap;
@@ -12,6 +12,7 @@ pub(crate) struct ConnectionPool {
     state: Arc<Mutex<ConnectionPoolState>>,
     connecting: Arc<tokio::sync::Mutex<HashMap<Uri, Arc<tokio::sync::OnceCell<Channel>>>>>,
     tls_config: Arc<Option<ClientTlsConfig>>,
+    connect_timeouts: ConnectTimeouts,
 }
 
 impl ConnectionPool {
@@ -20,7 +21,13 @@ impl ConnectionPool {
             state: Arc::new(Mutex::new(ConnectionPoolState::new())),
             connecting: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             tls_config: None.into(),
+            connect_timeouts: ConnectTimeouts::default(),
         }
+    }
+
+    pub(crate) fn with_connect_timeouts(mut self, timeouts: ConnectTimeouts) -> Self {
+        self.connect_timeouts = timeouts;
+        self
     }
 
     pub(crate) fn load_certificate(self, path: String) -> Self {
@@ -55,29 +62,46 @@ impl ConnectionPool {
 
         let tls_config = self.tls_config.clone();
         let uri_owned = uri.clone();
-        let channel = connect_once
+        let timeouts = self.connect_timeouts;
+        let channel_result = connect_once
             .get_or_try_init(|| async move {
-                parallel_endpoint_connect::connect(uri_owned, &tls_config).await
+                parallel_endpoint_connect::connect(uri_owned, &tls_config, timeouts).await
             })
-            .await?
-            .clone();
+            .await
+            .map(|channel| channel.clone())
+            .map_err(|err| err.clone());
 
-        {
-            let mut connecting = self.connecting.lock().await;
-            connecting.remove(uri);
-        }
+        let channel = match channel_result {
+            Ok(channel) => {
+                let channel = {
+                    let mut lock = self.state.lock().unwrap();
+                    if let Some(ci) = lock.connections.get_mut(uri) {
+                        ci.last_usage = now;
+                        ci.channel.clone()
+                    } else {
+                        lock.connections.insert(
+                            uri.clone(),
+                            ConnectionInfo {
+                                last_usage: now,
+                                channel: channel.clone(),
+                            },
+                        );
+                        channel
+                    }
+                };
 
-        let mut lock = self.state.lock().unwrap();
-        if let Some(ci) = lock.connections.get_mut(uri) {
-            ci.last_usage = now;
-            return Ok(ci.channel.clone());
-        }
+                let mut connecting = self.connecting.lock().await;
+                connecting.remove(uri);
 
-        let ci = ConnectionInfo {
-            last_usage: now,
-            channel: channel.clone(),
+                channel
+            }
+            Err(err) => {
+                let mut connecting = self.connecting.lock().await;
+                connecting.remove(uri);
+                return Err(err);
+            }
         };
-        lock.connections.insert(uri.clone(), ci);
+
         Ok(channel)
     }
 }

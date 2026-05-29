@@ -1,5 +1,5 @@
 use crate::connection_pool::ConnectionPool;
-use crate::parallel_endpoint_connect::{connect, parallel_connect};
+use crate::parallel_endpoint_connect::{connect, parallel_connect, ConnectTimeouts};
 use crate::YdbResult;
 use http::Uri;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -65,6 +65,13 @@ async fn reserve_local_addr() -> SocketAddr {
     listener.local_addr().expect("failed to read local addr")
 }
 
+fn test_connect_timeouts() -> ConnectTimeouts {
+    ConnectTimeouts {
+        per_endpoint: Duration::from_millis(500),
+        parallel_overall: Duration::from_millis(750),
+    }
+}
+
 #[tokio::test]
 async fn parallel_connect_skips_unreachable_ip() -> YdbResult<()> {
     let live_addr = reserve_local_addr().await;
@@ -73,7 +80,13 @@ async fn parallel_connect_skips_unreachable_ip() -> YdbResult<()> {
     let dead_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), live_addr.port());
     let original_uri = Uri::from_static("grpc://ydb.test.local:2135/");
 
-    let channel = parallel_connect(vec![dead_addr, live_addr], original_uri, &None).await?;
+    let channel = parallel_connect(
+        vec![dead_addr, live_addr],
+        original_uri,
+        &None,
+        test_connect_timeouts(),
+    )
+    .await?;
     health_check(channel).await?;
 
     shutdown.cancel();
@@ -103,8 +116,13 @@ async fn parallel_connect_fails_when_all_ips_unreachable() {
     drop(another_closed_listener);
 
     let original_uri = Uri::from_static("grpc://ydb.test.local:2135/");
-    let result =
-        parallel_connect(vec![closed_addr, another_closed_addr], original_uri, &None).await;
+    let result = parallel_connect(
+        vec![closed_addr, another_closed_addr],
+        original_uri,
+        &None,
+        test_connect_timeouts(),
+    )
+    .await;
 
     assert!(result.is_err());
 }
@@ -127,7 +145,7 @@ async fn connect_uses_parallel_dial_for_localhost_with_multiple_records() -> Ydb
     let (shutdown, server_handle) = spawn_mock_grpc_server(live_addr).await;
 
     let uri = Uri::try_from(format!("grpc://localhost:{port}/")).expect("valid uri");
-    let channel = connect(uri, &None).await?;
+    let channel = connect(uri, &None, test_connect_timeouts()).await?;
     health_check(channel).await?;
 
     shutdown.cancel();
@@ -155,7 +173,7 @@ async fn connection_pool_parallel_dial_through_localhost() -> YdbResult<()> {
 
     let (shutdown, server_handle) = spawn_mock_grpc_server(live_addr).await;
 
-    let pool = ConnectionPool::new();
+    let pool = ConnectionPool::new().with_connect_timeouts(test_connect_timeouts());
     let uri = Uri::try_from(format!("grpc://localhost:{port}/")).expect("valid uri");
     let channel = pool.connection(&uri).await?;
     health_check(channel).await?;
