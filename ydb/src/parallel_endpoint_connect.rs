@@ -8,13 +8,15 @@ use tokio::task::JoinSet;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tracing::{trace, warn};
 
+const MAX_PARALLEL_DIAL_ADDRESSES: usize = 16;
+
 /// Timeouts for parallel gRPC dial to resolved addresses.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ConnectTimeouts {
     /// Applied to each per-IP `Endpoint::connect()` in parallel dial.
-    pub per_endpoint: Duration,
+    pub(crate) per_endpoint: Duration,
     /// Upper bound for the whole parallel dial race (should exceed `per_endpoint`).
-    pub parallel_overall: Duration,
+    pub(crate) parallel_overall: Duration,
 }
 
 impl Default for ConnectTimeouts {
@@ -174,6 +176,10 @@ pub(crate) async fn parallel_connect(
     tls_config: &Option<ClientTlsConfig>,
     timeouts: ConnectTimeouts,
 ) -> YdbResult<Channel> {
+    let addrs: Vec<SocketAddr> = addrs
+        .into_iter()
+        .take(MAX_PARALLEL_DIAL_ADDRESSES)
+        .collect();
     let scheme = original_uri.scheme().cloned().unwrap_or(Scheme::HTTP);
     let path_and_query = original_uri
         .path_and_query()
@@ -250,7 +256,7 @@ fn parallel_dial_error(errors: &[YdbError], total_addrs: usize, timed_out: bool)
         )
     };
 
-    if failed == 1 {
+    if failed == 1 && !timed_out {
         return errors[0].clone();
     }
 
@@ -422,5 +428,14 @@ mod tests {
     fn parallel_dial_error_timeout_with_no_failures() {
         let err = parallel_dial_error(&[], 2, true);
         assert!(format!("{err:?}").contains("connect timeout: no reachable addresses"));
+    }
+
+    #[test]
+    fn parallel_dial_error_timeout_with_single_failure_includes_timeout_context() {
+        let errors = vec![dial_error("connection refused")];
+        let err = parallel_dial_error(&errors, 3, true);
+        let message = format!("{err:?}");
+        assert!(message.contains("connect timeout: 1/3 addresses failed"));
+        assert!(message.contains("connection refused"));
     }
 }

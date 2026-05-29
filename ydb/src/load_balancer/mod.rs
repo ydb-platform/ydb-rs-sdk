@@ -33,11 +33,18 @@ pub(crate) async fn update_load_balancer(
     mut lb: impl LoadBalancer,
     mut receiver: Receiver<Arc<DiscoveryState>>,
 ) {
+    let mut has_non_empty = false;
+
     loop {
         // clone for prevent block send side while update current lb
         let state = receiver.borrow_and_update().clone();
-        if !state.is_empty() {
+        if state.is_empty() && has_non_empty {
+            // Ignore empty discovery refreshes that would wipe known endpoints.
+        } else {
             let _ = lb.set_discovery_state(&state);
+            if !state.is_empty() {
+                has_non_empty = true;
+            }
         }
         if receiver.changed().await.is_err() {
             break;
