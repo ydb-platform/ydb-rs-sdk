@@ -173,7 +173,7 @@ async fn connection_pool_parallel_dial_through_localhost() -> YdbResult<()> {
 
     let (shutdown, server_handle) = spawn_mock_grpc_server(live_addr).await;
 
-    let pool = ConnectionPool::new().with_connect_timeouts(test_connect_timeouts());
+    let pool = ConnectionPool::with_connect_timeouts(test_connect_timeouts());
     let uri = Uri::try_from(format!("grpc://localhost:{port}/")).expect("valid uri");
     let channel = pool.connection(&uri).await?;
     health_check(channel).await?;

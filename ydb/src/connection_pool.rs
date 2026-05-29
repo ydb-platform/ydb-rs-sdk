@@ -17,28 +17,25 @@ pub(crate) struct ConnectionPool {
 
 impl ConnectionPool {
     pub(crate) fn new() -> Self {
+        Self::with_connect_timeouts(ConnectTimeouts::default())
+    }
+
+    pub(crate) fn with_connect_timeouts(timeouts: ConnectTimeouts) -> Self {
         Self {
             state: Arc::new(Mutex::new(ConnectionPoolState::new())),
             connecting: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             tls_config: None.into(),
-            connect_timeouts: ConnectTimeouts::default(),
+            connect_timeouts: timeouts,
         }
     }
 
-    pub(crate) fn with_connect_timeouts(mut self, timeouts: ConnectTimeouts) -> Self {
-        self.connect_timeouts = timeouts;
-        self
-    }
-
-    pub(crate) fn load_certificate(self, path: String) -> Self {
+    pub(crate) fn load_certificate(mut self, path: String) -> Self {
         let pem = std::fs::read_to_string(path).unwrap();
         trace!("loaded cert: {}", pem);
         let ca = Certificate::from_pem(pem);
         let config = ClientTlsConfig::new().ca_certificate(ca);
-        Self {
-            tls_config: Some(config).into(),
-            ..self
-        }
+        self.tls_config = Some(config).into();
+        self
     }
 
     pub(crate) async fn connection(&self, uri: &Uri) -> YdbResult<Channel> {
@@ -68,8 +65,7 @@ impl ConnectionPool {
                 parallel_endpoint_connect::connect(uri_owned, &tls_config, timeouts).await
             })
             .await
-            .map(|channel| channel.clone())
-            .map_err(|err| err.clone());
+            .cloned();
 
         let channel = match channel_result {
             Ok(channel) => {
