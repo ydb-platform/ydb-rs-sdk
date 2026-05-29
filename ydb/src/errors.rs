@@ -98,6 +98,9 @@ pub enum YdbError {
     /// Error while dial to ydb server
     TransportDial(Arc<tonic::transport::Error>),
 
+    /// Pre-connect dial failure (DNS resolution, parallel dial timeout, etc.)
+    TransportDialFailed(String),
+
     /// Error on transport level of request/response
     Transport(String),
 
@@ -111,6 +114,10 @@ pub enum YdbError {
 impl YdbError {
     pub(crate) fn custom<T: Into<String>>(message: T) -> Self {
         Self::Custom(message.into())
+    }
+
+    pub(crate) fn transport_dial_failed(message: impl Into<String>) -> Self {
+        Self::TransportDialFailed(message.into())
     }
 }
 
@@ -249,6 +256,7 @@ impl YdbError {
             Self::InternalError(_) => NeedRetry::False,
             Self::NoRows => NeedRetry::False,
             Self::TransportDial(_) => NeedRetry::True,
+            Self::TransportDialFailed(_) => NeedRetry::True,
             Self::Transport(_) => IdempotentOnly, // TODO: check when transport error created
             Self::TransportGRPCStatus(status) => {
                 use tonic::Code;

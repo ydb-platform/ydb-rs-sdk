@@ -236,7 +236,7 @@ fn parallel_dial_error(errors: &[YdbError], total_addrs: usize, timed_out: bool)
     };
 
     if failed == 1 {
-        return dial_error(prefix);
+        return errors[0].clone();
     }
 
     let details: Vec<String> = errors.iter().map(|err| format!("{err:?}")).collect();
@@ -270,7 +270,7 @@ async fn resolve_socket_addrs(host: &str, port: u16) -> YdbResult<Vec<SocketAddr
 }
 
 fn dial_error(message: impl Into<String>) -> YdbError {
-    YdbError::Transport(message.into())
+    YdbError::transport_dial_failed(message)
 }
 
 fn uri_port(uri: &Uri) -> u16 {
@@ -377,10 +377,7 @@ mod tests {
     #[test]
     fn dial_errors_are_retryable() {
         let timeout_err = dial_error("connect timeout: no reachable addresses");
-        assert!(matches!(
-            timeout_err.need_retry(),
-            NeedRetry::True | NeedRetry::IdempotentOnly
-        ));
+        assert!(matches!(timeout_err.need_retry(), NeedRetry::True));
     }
 
     #[test]
