@@ -2,14 +2,14 @@ use crate::{YdbError, YdbResult};
 use http::uri::Scheme;
 use http::Uri;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tracing::trace;
 
-/// Timeout for parallel dial when multiple addresses are resolved for one FQDN.
-const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
+const PER_ENDPOINT_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
+const PARALLEL_CONNECT_OVERALL_TIMEOUT: Duration = Duration::from_millis(750);
 
 /// Establish a gRPC channel for the given URI.
 ///
@@ -24,20 +24,18 @@ pub(crate) async fn connect(uri: Uri, tls_config: &Option<ClientTlsConfig>) -> Y
         .ok_or_else(|| YdbError::Custom("URI must have a host".to_string()))?;
 
     if host.parse::<IpAddr>().is_ok() {
-        return connect_lazy(uri.clone(), tls_config, None).await;
+        return connect_lazy(uri.clone(), tls_config, None);
     }
 
     let port = uri_port(&uri);
     let addrs = resolve_socket_addrs(host, port).await?;
 
     if addrs.is_empty() {
-        return Err(YdbError::Custom(format!(
-            "no addresses resolved for host {host}"
-        )));
+        return Err(dial_error(format!("no addresses resolved for host {host}")));
     }
 
     if addrs.len() == 1 {
-        return connect_lazy(uri, tls_config, None).await;
+        return connect_lazy(uri, tls_config, None);
     }
 
     trace!(
@@ -48,12 +46,12 @@ pub(crate) async fn connect(uri: Uri, tls_config: &Option<ClientTlsConfig>) -> Y
     parallel_connect(addrs, uri, tls_config).await
 }
 
-async fn connect_lazy(
+fn connect_lazy(
     uri: Uri,
     tls_config: &Option<ClientTlsConfig>,
     origin: Option<Uri>,
 ) -> YdbResult<Channel> {
-    let endpoint = build_endpoint(uri, tls_config, origin)?;
+    let endpoint = build_endpoint(uri, tls_config, origin, false)?;
     Ok(endpoint.connect_lazy())
 }
 
@@ -62,17 +60,18 @@ async fn connect_eager(
     tls_config: &Option<ClientTlsConfig>,
     origin: Option<Uri>,
 ) -> YdbResult<Channel> {
-    let endpoint = build_endpoint(uri, tls_config, origin)?;
+    let endpoint = build_endpoint(uri, tls_config, origin, true)?;
     endpoint
         .connect()
         .await
-        .map_err(|e| YdbError::Custom(format!("failed to connect: {e}")))
+        .map_err(|e| YdbError::TransportDial(Arc::new(e)))
 }
 
 fn build_endpoint(
     uri: Uri,
     tls_config: &Option<ClientTlsConfig>,
     origin: Option<Uri>,
+    eager: bool,
 ) -> YdbResult<Endpoint> {
     let tls = uri.scheme() == Some(&Scheme::HTTPS);
     let mut endpoint = Endpoint::from(uri.clone());
@@ -88,9 +87,10 @@ fn build_endpoint(
         endpoint = configure_tls_endpoint(endpoint, domain, tls_config)?;
     }
 
-    endpoint = endpoint
-        .http2_keep_alive_interval(Duration::from_secs(10))
-        .connect_timeout(DEFAULT_CONNECT_TIMEOUT);
+    endpoint = endpoint.http2_keep_alive_interval(Duration::from_secs(10));
+    if eager {
+        endpoint = endpoint.connect_timeout(PER_ENDPOINT_CONNECT_TIMEOUT);
+    }
 
     Ok(endpoint)
 }
@@ -135,68 +135,64 @@ pub(crate) async fn parallel_connect(
     let tls_config = tls_config.clone();
     let origin = original_uri.clone();
 
-    let (result_tx, mut result_rx) = mpsc::channel::<YdbResult<Channel>>(1);
     let mut tasks = JoinSet::new();
 
     for addr in addrs {
-        let result_tx = result_tx.clone();
         let scheme = scheme.clone();
         let path_and_query = path_and_query.clone();
         let tls_config = tls_config.clone();
         let origin = origin.clone();
 
         tasks.spawn(async move {
-            let ip_uri = match socket_addr_to_uri(addr, &scheme, path_and_query.as_deref()) {
-                Ok(uri) => uri,
-                Err(err) => {
-                    let _ = result_tx.send(Err(err)).await;
-                    return;
-                }
-            };
-
-            match connect_eager(ip_uri, &tls_config, Some(origin)).await {
-                Ok(channel) => {
-                    let _ = result_tx.send(Ok(channel)).await;
-                }
-                Err(_) => {
-                    // Try other resolved addresses.
-                }
-            }
+            let ip_uri = socket_addr_to_uri(addr, &scheme, path_and_query.as_deref())?;
+            connect_eager(ip_uri, &tls_config, Some(origin)).await
         });
     }
-    drop(result_tx);
 
-    tokio::select! {
-        biased;
-        result = result_rx.recv() => {
-            match result {
-                Some(Ok(channel)) => {
-                    tasks.abort_all();
-                    Ok(channel)
-                }
-                Some(Err(err)) => Err(err),
-                None => {
-                    while tasks.join_next().await.is_some() {}
-                    Err(YdbError::Custom(
-                        "failed to connect to any resolved address".to_string(),
-                    ))
+    let overall_timeout = tokio::time::sleep(PARALLEL_CONNECT_OVERALL_TIMEOUT);
+    tokio::pin!(overall_timeout);
+
+    let mut last_error: Option<YdbError> = None;
+
+    loop {
+        tokio::select! {
+            biased;
+            result = tasks.join_next(), if !tasks.is_empty() => {
+                match result {
+                    Some(Ok(Ok(channel))) => {
+                        tasks.abort_all();
+                        return Ok(channel);
+                    }
+                    Some(Ok(Err(err))) => last_error = Some(err),
+                    Some(Err(_)) => {}
+                    None => break,
                 }
             }
+            _ = &mut overall_timeout => {
+                tasks.abort_all();
+                return Err(last_error.unwrap_or_else(|| {
+                    dial_error("connect timeout: no reachable addresses")
+                }));
+            }
         }
-        _ = tokio::time::sleep(DEFAULT_CONNECT_TIMEOUT) => {
-            tasks.abort_all();
-            Err(YdbError::Custom(
-                "connect timeout: no reachable addresses".to_string(),
-            ))
+
+        if tasks.is_empty() {
+            break;
         }
     }
+
+    Err(last_error.unwrap_or_else(|| dial_error("failed to connect to any resolved address")))
 }
 
 async fn resolve_socket_addrs(host: &str, port: u16) -> YdbResult<Vec<SocketAddr>> {
     tokio::net::lookup_host((host, port))
         .await
         .map(|iter| iter.collect())
-        .map_err(|e| YdbError::Custom(format!("failed to resolve {host}: {e}")))
+        .map_err(|e| dial_error(format!("failed to resolve {host}: {e}")))
+}
+
+fn dial_error(message: impl Into<String>) -> YdbError {
+    YdbError::Transport(message.into())
 }
 
 fn uri_port(uri: &Uri) -> u16 {
@@ -235,6 +231,7 @@ fn socket_addr_to_uri(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::errors::NeedRetry;
     use http::uri::Scheme;
     use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -270,5 +267,14 @@ mod tests {
 
         assert_eq!(uri_port(&http_uri), 80);
         assert_eq!(uri_port(&https_uri), 443);
+    }
+
+    #[test]
+    fn dial_errors_are_retryable() {
+        let timeout_err = dial_error("connect timeout: no reachable addresses");
+        assert!(matches!(
+            timeout_err.need_retry(),
+            NeedRetry::True | NeedRetry::IdempotentOnly
+        ));
     }
 }

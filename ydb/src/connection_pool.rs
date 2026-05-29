@@ -10,6 +10,7 @@ use tracing::trace;
 #[derive(Clone)]
 pub(crate) struct ConnectionPool {
     state: Arc<Mutex<ConnectionPoolState>>,
+    connecting: Arc<tokio::sync::Mutex<HashMap<Uri, Arc<tokio::sync::OnceCell<Channel>>>>>,
     tls_config: Arc<Option<ClientTlsConfig>>,
 }
 
@@ -17,6 +18,7 @@ impl ConnectionPool {
     pub(crate) fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(ConnectionPoolState::new())),
+            connecting: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             tls_config: None.into(),
         }
     }
@@ -43,7 +45,27 @@ impl ConnectionPool {
             }
         }
 
-        let channel = parallel_endpoint_connect::connect(uri.clone(), &self.tls_config).await?;
+        let connect_once = {
+            let mut connecting = self.connecting.lock().await;
+            connecting
+                .entry(uri.clone())
+                .or_insert_with(|| Arc::new(tokio::sync::OnceCell::new()))
+                .clone()
+        };
+
+        let tls_config = self.tls_config.clone();
+        let uri_owned = uri.clone();
+        let channel = connect_once
+            .get_or_try_init(|| async move {
+                parallel_endpoint_connect::connect(uri_owned, &tls_config).await
+            })
+            .await?
+            .clone();
+
+        {
+            let mut connecting = self.connecting.lock().await;
+            connecting.remove(uri);
+        }
 
         let mut lock = self.state.lock().unwrap();
         if let Some(ci) = lock.connections.get_mut(uri) {
