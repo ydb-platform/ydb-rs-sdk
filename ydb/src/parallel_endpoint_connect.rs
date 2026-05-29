@@ -33,8 +33,12 @@ impl Default for ConnectTimeouts {
 ///
 /// Single-address hostname endpoints use a lazy channel keyed by the original
 /// FQDN so tonic can re-resolve DNS when the connection is re-established.
-/// Multi-address hostname endpoints use the parallel eager dial path below and
-/// the resulting channel is connected to the winning concrete IP address.
+///
+/// Multi-address hostname endpoints dial resolved IPs in parallel (up to
+/// [`MAX_PARALLEL_DIAL_ADDRESSES`] at a time, in batches) and cache a channel
+/// connected to the winning concrete IP. That channel does **not** re-resolve
+/// the FQDN on tonic reconnect; a dead IP can persist until discovery
+/// pessimization removes the endpoint or the process creates a new channel.
 pub(crate) async fn connect(
     uri: Uri,
     tls_config: &Option<ClientTlsConfig>,
@@ -170,23 +174,61 @@ pub(crate) fn configure_tls_endpoint(
 ///
 /// `original_uri` must already be scheme-normalized (`http`/`https`); see
 /// [`normalize_uri_scheme`].
+///
+/// Addresses are dialed in batches of [`MAX_PARALLEL_DIAL_ADDRESSES`]; if every
+/// address in a batch is unreachable, the next batch is tried. The returned
+/// channel is pinned to the winning IP (see [`connect`]).
 pub(crate) async fn parallel_connect(
     addrs: Vec<SocketAddr>,
     original_uri: Uri,
     tls_config: &Option<ClientTlsConfig>,
     timeouts: ConnectTimeouts,
 ) -> YdbResult<Channel> {
-    let addrs: Vec<SocketAddr> = addrs
-        .into_iter()
-        .take(MAX_PARALLEL_DIAL_ADDRESSES)
-        .collect();
+    let total_addrs = addrs.len();
+    let mut accumulated_errors: Vec<YdbError> = Vec::new();
+    let mut any_timed_out = false;
+
+    for batch in addrs.chunks(MAX_PARALLEL_DIAL_ADDRESSES) {
+        match parallel_connect_batch(
+            batch.to_vec(),
+            &original_uri,
+            tls_config,
+            timeouts,
+        )
+        .await
+        {
+            Ok(channel) => return Ok(channel),
+            Err(failure) => {
+                any_timed_out |= failure.timed_out;
+                accumulated_errors.extend(failure.errors);
+            }
+        }
+    }
+
+    Err(parallel_dial_error(
+        &accumulated_errors,
+        total_addrs,
+        any_timed_out,
+    ))
+}
+
+struct BatchDialFailure {
+    errors: Vec<YdbError>,
+    timed_out: bool,
+}
+
+async fn parallel_connect_batch(
+    addrs: Vec<SocketAddr>,
+    original_uri: &Uri,
+    tls_config: &Option<ClientTlsConfig>,
+    timeouts: ConnectTimeouts,
+) -> Result<Channel, BatchDialFailure> {
     let scheme = original_uri.scheme().cloned().unwrap_or(Scheme::HTTP);
     let path_and_query = original_uri
         .path_and_query()
         .map(|pq| pq.as_str().to_string());
     let tls_config_owned = tls_config.clone();
     let origin = original_uri.clone();
-    let addrs_len = addrs.len();
 
     let mut tasks = JoinSet::new();
 
@@ -225,7 +267,10 @@ pub(crate) async fn parallel_connect(
             }
             _ = &mut overall_timeout => {
                 tasks.abort_all();
-                return Err(parallel_dial_error(&dial_errors, addrs_len, true));
+                return Err(BatchDialFailure {
+                    errors: dial_errors,
+                    timed_out: true,
+                });
             }
         }
 
@@ -234,7 +279,17 @@ pub(crate) async fn parallel_connect(
         }
     }
 
-    Err(parallel_dial_error(&dial_errors, addrs_len, false))
+    if dial_errors.is_empty() {
+        Err(BatchDialFailure {
+            errors: vec![dial_error("failed to connect to any resolved address")],
+            timed_out: false,
+        })
+    } else {
+        Err(BatchDialFailure {
+            errors: dial_errors,
+            timed_out: false,
+        })
+    }
 }
 
 fn parallel_dial_error(errors: &[YdbError], total_addrs: usize, timed_out: bool) -> YdbError {

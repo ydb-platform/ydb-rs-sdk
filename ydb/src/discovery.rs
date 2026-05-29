@@ -20,7 +20,7 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use crate::grpc_wrapper::raw_discovery_client::{EndpointInfo, GrpcDiscoveryClient};
 use crate::grpc_wrapper::raw_services::Service;
-use tracing::trace;
+use tracing::{trace, warn};
 
 /// Current discovery state
 #[derive(Clone, Debug, PartialEq)]
@@ -68,7 +68,7 @@ impl DiscoveryState {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.nodes.len() == 0
+        self.nodes.is_empty()
     }
 
     // pessimize return true if state was changed
@@ -290,7 +290,8 @@ impl DiscoverySharedState {
             .await?;
         let new_endpoints = Self::list_endpoints_to_node_infos(res)?;
         let new_state = Arc::new(DiscoveryState::new(start, new_endpoints));
-        if new_state.is_empty() {
+        let current_empty = self.discovery_state.read().unwrap().is_empty();
+        if new_state.is_empty() && !current_empty {
             trace!("discovery returned no endpoints, keeping previous state");
         } else {
             self.set_discovery_state(self.discovery_state.write().unwrap(), new_state);
@@ -365,17 +366,30 @@ impl Discovery for DiscoverySharedState {
     }
 }
 
+/// Maximum number of empty discovery updates before [`Waiter::wait`] proceeds anyway.
+const MAX_EMPTY_DISCOVERY_WAITS: u32 = 10;
+
 #[async_trait::async_trait]
 impl Waiter for DiscoverySharedState {
     async fn wait(&self) -> YdbResult<()> {
         trace!("start discovery shared state");
         let mut receiver = self.sender.subscribe();
+        let mut empty_updates = 0u32;
         loop {
             if !receiver.borrow_and_update().is_empty() {
                 trace!("return ok");
                 return Ok(());
             }
             receiver.changed().await?;
+            empty_updates += 1;
+            if empty_updates >= MAX_EMPTY_DISCOVERY_WAITS {
+                warn!(
+                    empty_updates,
+                    "discovery still has no endpoints after repeated updates; \
+                     proceeding without endpoints (check cluster configuration)"
+                );
+                return Ok(());
+            }
         }
     }
 }
