@@ -29,15 +29,10 @@ impl Default for ConnectTimeouts {
 
 /// Establish a gRPC channel for the given URI.
 ///
-/// Hostname endpoints always use a lazy channel keyed by the original FQDN so
-/// tonic re-resolves DNS when the connection is re-established (for example,
-/// after a long-lived client observes a DNS TTL change).
-///
-/// When a hostname resolves to multiple IP addresses, parallel eager dial
-/// races all of them and returns the first successful connection. Unreachable
-/// addresses are skipped. The winning channel connects to a concrete IP with
-/// the original FQDN set as origin for TLS; the pool caches it under the FQDN
-/// URI key.
+/// Single-address hostname endpoints use a lazy channel keyed by the original
+/// FQDN so tonic can re-resolve DNS when the connection is re-established.
+/// Multi-address hostname endpoints use the parallel eager dial path below and
+/// the resulting channel is connected to the winning concrete IP address.
 pub(crate) async fn connect(
     uri: Uri,
     tls_config: &Option<ClientTlsConfig>,
