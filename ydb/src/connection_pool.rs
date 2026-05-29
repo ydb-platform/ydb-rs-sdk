@@ -93,14 +93,14 @@ impl ConnectionPool {
                     }
                 };
 
-                cleanup.disarm();
                 self.remove_connecting_if_same(uri, &connect_once).await;
+                cleanup.disarm();
 
                 channel
             }
             Err(err) => {
-                cleanup.disarm();
                 self.remove_connecting_if_same(uri, &connect_once).await;
+                cleanup.disarm();
                 return Err(err);
             }
         };
