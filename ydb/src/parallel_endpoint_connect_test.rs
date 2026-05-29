@@ -103,12 +103,8 @@ async fn parallel_connect_fails_when_all_ips_unreachable() {
     drop(another_closed_listener);
 
     let original_uri = Uri::from_static("grpc://ydb.test.local:2135/");
-    let result = parallel_connect(
-        vec![closed_addr, another_closed_addr],
-        original_uri,
-        &None,
-    )
-    .await;
+    let result =
+        parallel_connect(vec![closed_addr, another_closed_addr], original_uri, &None).await;
 
     assert!(result.is_err());
 }

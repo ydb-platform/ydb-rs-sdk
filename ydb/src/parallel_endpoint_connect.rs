@@ -115,11 +115,9 @@ pub(crate) fn configure_tls_endpoint(
 ) -> YdbResult<Endpoint> {
     let config = match tls_config {
         Some(config) => config.clone().domain_name(domain.to_string()),
-        None => {
-            ClientTlsConfig::new()
-                .domain_name(domain.to_string())
-                .with_native_roots()
-        }
+        None => ClientTlsConfig::new()
+            .domain_name(domain.to_string())
+            .with_native_roots(),
     };
 
     Ok(endpoint.tls_config(config)?)
@@ -130,10 +128,7 @@ pub(crate) async fn parallel_connect(
     original_uri: Uri,
     tls_config: &Option<ClientTlsConfig>,
 ) -> YdbResult<Channel> {
-    let scheme = original_uri
-        .scheme()
-        .cloned()
-        .unwrap_or(Scheme::HTTP);
+    let scheme = original_uri.scheme().cloned().unwrap_or(Scheme::HTTP);
     let path_and_query = original_uri
         .path_and_query()
         .map(|pq| pq.as_str().to_string());
