@@ -258,24 +258,18 @@ struct DiscoverySharedState {
 
     discovery_process: Mutex<()>,
     discovery_state: RwLock<Arc<DiscoveryState>>,
-
-    state_received: watch::Receiver<bool>,
-    state_received_sender: watch::Sender<bool>,
 }
 
 impl DiscoverySharedState {
     fn new(connection_manager: GrpcConnectionManager, endpoint: &str) -> YdbResult<Self> {
         let state = Arc::new(DiscoveryState::new(std::time::Instant::now(), Vec::new()));
         let (sender, _) = watch::channel(state.clone());
-        let (state_received_sender, state_received) = watch::channel(false);
         Ok(Self {
             connection_manager,
             discovery_uri: http::Uri::from_str(endpoint)?,
             sender,
             discovery_process: Mutex::new(()),
             discovery_state: RwLock::new(state),
-            state_received,
-            state_received_sender,
         })
     }
 
@@ -295,10 +289,12 @@ impl DiscoverySharedState {
             .list_endpoints(self.connection_manager.database().clone())
             .await?;
         let new_endpoints = Self::list_endpoints_to_node_infos(res)?;
-        self.set_discovery_state(
-            self.discovery_state.write().unwrap(),
-            Arc::new(DiscoveryState::new(start, new_endpoints)),
-        );
+        let new_state = Arc::new(DiscoveryState::new(start, new_endpoints));
+        if new_state.is_empty() {
+            trace!("discovery returned no endpoints, keeping previous state");
+        } else {
+            self.set_discovery_state(self.discovery_state.write().unwrap(), new_state);
+        }
 
         // lock until exit
         drop(discovery_lock);
@@ -312,7 +308,6 @@ impl DiscoverySharedState {
     ) {
         *locked_state = new_state.clone();
         let _ = self.sender.send(new_state);
-        let _ = self.state_received_sender.send(true);
     }
 
     #[tracing::instrument(skip(state))]
@@ -374,14 +369,13 @@ impl Discovery for DiscoverySharedState {
 impl Waiter for DiscoverySharedState {
     async fn wait(&self) -> YdbResult<()> {
         trace!("start discovery shared state");
-        let mut channel = self.state_received.clone();
+        let mut receiver = self.sender.subscribe();
         loop {
-            trace!("loop");
-            if *channel.borrow_and_update() {
+            if !receiver.borrow_and_update().is_empty() {
                 trace!("return ok");
                 return Ok(());
             }
-            channel.changed().await?
+            receiver.changed().await?;
         }
     }
 }

@@ -36,7 +36,9 @@ pub(crate) async fn update_load_balancer(
     loop {
         // clone for prevent block send side while update current lb
         let state = receiver.borrow_and_update().clone();
-        let _ = lb.set_discovery_state(&state);
+        if !state.is_empty() {
+            let _ = lb.set_discovery_state(&state);
+        }
         if receiver.changed().await.is_err() {
             break;
         }
