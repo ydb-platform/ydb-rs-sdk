@@ -39,12 +39,10 @@ impl ConnectionPool {
     }
 
     pub(crate) async fn connection(&self, uri: &Uri) -> YdbResult<Channel> {
-        let now = Instant::now();
-
         {
             let mut lock = self.state.lock().unwrap();
             if let Some(ci) = lock.connections.get_mut(uri) {
-                ci.last_usage = now;
+                ci.last_usage = Instant::now();
                 return Ok(ci.channel.clone());
             }
         }
@@ -57,6 +55,12 @@ impl ConnectionPool {
                 .clone()
         };
 
+        let mut cleanup = ConnectingCleanup::new(
+            Arc::clone(&self.connecting),
+            uri.clone(),
+            Arc::clone(&connect_once),
+        );
+
         let tls_config = self.tls_config.clone();
         let uri_owned = uri.clone();
         let timeouts = self.connect_timeouts;
@@ -66,6 +70,9 @@ impl ConnectionPool {
             })
             .await
             .cloned();
+
+        // Timestamp connection establishment, not the initial cache miss.
+        let now = Instant::now();
 
         let channel = match channel_result {
             Ok(channel) => {
@@ -86,11 +93,13 @@ impl ConnectionPool {
                     }
                 };
 
+                cleanup.disarm();
                 self.remove_connecting_if_same(uri, &connect_once).await;
 
                 channel
             }
             Err(err) => {
+                cleanup.disarm();
                 self.remove_connecting_if_same(uri, &connect_once).await;
                 return Err(err);
             }
@@ -104,12 +113,69 @@ impl ConnectionPool {
         uri: &Uri,
         connect_once: &Arc<tokio::sync::OnceCell<Channel>>,
     ) {
-        let mut connecting = self.connecting.lock().await;
-        if connecting
-            .get(uri)
-            .is_some_and(|entry| Arc::ptr_eq(entry, connect_once))
-        {
-            connecting.remove(uri);
+        remove_connecting_entry(
+            Arc::clone(&self.connecting),
+            uri.clone(),
+            Arc::clone(connect_once),
+        )
+        .await;
+    }
+}
+
+async fn remove_connecting_entry(
+    connecting: Arc<tokio::sync::Mutex<HashMap<Uri, Arc<tokio::sync::OnceCell<Channel>>>>>,
+    uri: Uri,
+    connect_once: Arc<tokio::sync::OnceCell<Channel>>,
+) {
+    let mut map = connecting.lock().await;
+    if map
+        .get(&uri)
+        .is_some_and(|entry| Arc::ptr_eq(entry, &connect_once))
+    {
+        map.remove(&uri);
+    }
+}
+
+struct ConnectingCleanup {
+    connecting: Arc<tokio::sync::Mutex<HashMap<Uri, Arc<tokio::sync::OnceCell<Channel>>>>>,
+    uri: Uri,
+    connect_once: Arc<tokio::sync::OnceCell<Channel>>,
+    disarmed: bool,
+}
+
+impl ConnectingCleanup {
+    fn new(
+        connecting: Arc<tokio::sync::Mutex<HashMap<Uri, Arc<tokio::sync::OnceCell<Channel>>>>>,
+        uri: Uri,
+        connect_once: Arc<tokio::sync::OnceCell<Channel>>,
+    ) -> Self {
+        Self {
+            connecting,
+            uri,
+            connect_once,
+            disarmed: false,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl Drop for ConnectingCleanup {
+    fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
+
+        let connecting = Arc::clone(&self.connecting);
+        let uri = self.uri.clone();
+        let connect_once = Arc::clone(&self.connect_once);
+
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::spawn(async move {
+                remove_connecting_entry(connecting, uri, connect_once).await;
+            });
         }
     }
 }

@@ -107,7 +107,7 @@ fn build_endpoint(
         let domain = origin_uri_host(origin.as_ref(), &uri).ok_or_else(|| {
             YdbError::Custom("URI must have a host for TLS connections".to_string())
         })?;
-        endpoint = configure_tls_endpoint(endpoint, strip_ipv6_brackets(domain), tls_config)?;
+        endpoint = configure_tls_endpoint(endpoint, domain, tls_config)?;
     }
 
     endpoint = endpoint.http2_keep_alive_interval(Duration::from_secs(10));
@@ -136,16 +136,16 @@ pub(crate) fn configure_tls_endpoint(
     domain: &str,
     tls_config: &Option<ClientTlsConfig>,
 ) -> YdbResult<Endpoint> {
+    // `domain` may include RFC 3986 brackets for IPv6 literals from `Uri::host()`.
+    let domain = strip_ipv6_brackets(domain);
     let config = match tls_config {
         // Always set domain_name: parallel dial connects by IP and needs the
         // original FQDN for TLS verification/SNI. For FQDN dial the value
         // matches the URI host; a user-provided domain_name is intentionally
         // overridden to keep IP-based and hostname-based paths consistent.
-        Some(config) => config
-            .clone()
-            .domain_name(strip_ipv6_brackets(domain).to_string()),
+        Some(config) => config.clone().domain_name(domain.to_string()),
         None => ClientTlsConfig::new()
-            .domain_name(strip_ipv6_brackets(domain).to_string())
+            .domain_name(domain.to_string())
             .with_native_roots(),
     };
 
@@ -158,12 +158,14 @@ pub(crate) async fn parallel_connect(
     tls_config: &Option<ClientTlsConfig>,
     timeouts: ConnectTimeouts,
 ) -> YdbResult<Channel> {
+    let original_uri = normalize_uri_scheme(original_uri)?;
     let scheme = original_uri.scheme().cloned().unwrap_or(Scheme::HTTP);
     let path_and_query = original_uri
         .path_and_query()
         .map(|pq| pq.as_str().to_string());
     let tls_config_owned = tls_config.clone();
     let origin = original_uri.clone();
+    let addrs_len = addrs.len();
 
     let mut tasks = JoinSet::new();
 
@@ -182,7 +184,7 @@ pub(crate) async fn parallel_connect(
     let overall_timeout = tokio::time::sleep(timeouts.parallel_overall);
     tokio::pin!(overall_timeout);
 
-    let mut last_error: Option<YdbError> = None;
+    let mut dial_errors: Vec<YdbError> = Vec::new();
 
     loop {
         tokio::select! {
@@ -193,7 +195,7 @@ pub(crate) async fn parallel_connect(
                         tasks.abort_all();
                         return Ok(channel);
                     }
-                    Some(Ok(Err(err))) => last_error = Some(err),
+                    Some(Ok(Err(err))) => dial_errors.push(err),
                     Some(Err(join_err)) => {
                         warn!(error = %join_err, "parallel dial task failed unexpectedly");
                     }
@@ -202,9 +204,7 @@ pub(crate) async fn parallel_connect(
             }
             _ = &mut overall_timeout => {
                 tasks.abort_all();
-                return Err(last_error.unwrap_or_else(|| {
-                    dial_error("connect timeout: no reachable addresses")
-                }));
+                return Err(parallel_dial_error(&dial_errors, addrs_len, true));
             }
         }
 
@@ -213,7 +213,34 @@ pub(crate) async fn parallel_connect(
         }
     }
 
-    Err(last_error.unwrap_or_else(|| dial_error("failed to connect to any resolved address")))
+    Err(parallel_dial_error(&dial_errors, addrs_len, false))
+}
+
+fn parallel_dial_error(errors: &[YdbError], total_addrs: usize, timed_out: bool) -> YdbError {
+    if errors.is_empty() {
+        return dial_error(if timed_out {
+            "connect timeout: no reachable addresses"
+        } else {
+            "failed to connect to any resolved address"
+        });
+    }
+
+    let failed = errors.len();
+    let last = format!("{:?}", errors.last().unwrap());
+    let prefix = if timed_out {
+        format!("connect timeout: {failed}/{total_addrs} addresses failed, last error: {last}")
+    } else {
+        format!(
+            "parallel dial failed: {failed}/{total_addrs} addresses unreachable, last error: {last}"
+        )
+    };
+
+    if failed == 1 {
+        return dial_error(prefix);
+    }
+
+    let details: Vec<String> = errors.iter().map(|err| format!("{err:?}")).collect();
+    dial_error(format!("{prefix}; errors: {}", details.join("; ")))
 }
 
 fn strip_ipv6_brackets(host: &str) -> &str {
@@ -360,5 +387,24 @@ mod tests {
     fn default_timeouts_parallel_overall_exceeds_per_endpoint() {
         let timeouts = ConnectTimeouts::default();
         assert!(timeouts.parallel_overall > timeouts.per_endpoint);
+    }
+
+    #[test]
+    fn parallel_dial_error_aggregates_multiple_failures() {
+        let errors = vec![
+            dial_error("connection refused"),
+            dial_error("TLS handshake failed"),
+        ];
+        let err = parallel_dial_error(&errors, 3, false);
+        let message = format!("{err:?}");
+        assert!(message.contains("parallel dial failed: 2/3 addresses unreachable"));
+        assert!(message.contains("connection refused"));
+        assert!(message.contains("TLS handshake failed"));
+    }
+
+    #[test]
+    fn parallel_dial_error_timeout_with_no_failures() {
+        let err = parallel_dial_error(&[], 2, true);
+        assert!(format!("{err:?}").contains("connect timeout: no reachable addresses"));
     }
 }

@@ -59,4 +59,5 @@ ydb-grpc = { version = "0.2.0", path="../ydb-grpc"}
 async_once = "0.2"
 lazy_static = "1.4"
 ntest = "0.7"
+rcgen = "0.13"
 tonic-health = "0.14.2"

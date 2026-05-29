@@ -9,13 +9,20 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
-use tonic::transport::Server;
+use tonic::transport::{Certificate, ClientTlsConfig, Identity, Server, ServerTlsConfig};
 use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::HealthCheckRequest;
 use tonic_health::server::health_reporter;
 
 async fn spawn_mock_grpc_server(
     listener: TcpListener,
+) -> (SocketAddr, CancellationToken, JoinHandle<()>) {
+    spawn_mock_grpc_server_with_tls(listener, None).await
+}
+
+async fn spawn_mock_grpc_server_with_tls(
+    listener: TcpListener,
+    tls_config: Option<ServerTlsConfig>,
 ) -> (SocketAddr, CancellationToken, JoinHandle<()>) {
     let addr = listener
         .local_addr()
@@ -27,8 +34,16 @@ async fn spawn_mock_grpc_server(
     let (_reporter, health_service) = health_reporter();
 
     let handle = tokio::spawn(async move {
-        Server::builder()
-            .add_service(health_service)
+        let server = if let Some(tls_config) = tls_config {
+            Server::builder()
+                .tls_config(tls_config)
+                .expect("valid server TLS config")
+                .add_service(health_service)
+        } else {
+            Server::builder().add_service(health_service)
+        };
+
+        server
             .serve_with_incoming_shutdown(incoming, shutdown_on_cancel.cancelled())
             .await
             .expect("mock gRPC server failed");
@@ -156,6 +171,43 @@ async fn connect_uses_parallel_dial_for_localhost_with_multiple_records() -> Ydb
 
     let uri = Uri::try_from(format!("grpc://localhost:{port}/")).expect("valid uri");
     let channel = connect(uri, &None, test_connect_timeouts()).await?;
+    health_check(channel).await?;
+
+    shutdown.cancel();
+    let _ = timeout(Duration::from_secs(1), server_handle)
+        .await
+        .expect("server shutdown timed out");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn parallel_connect_over_tls_dials_by_ip_with_sni() -> YdbResult<()> {
+    let hostname = "tls-parallel.test";
+    let certified = rcgen::generate_simple_self_signed(vec![hostname.into()])
+        .expect("failed to generate self-signed certificate");
+    let cert_pem = certified.cert.pem();
+    let key_pem = certified.key_pair.serialize_pem();
+    let identity = Identity::from_pem(cert_pem.as_bytes(), key_pem.as_bytes());
+    let server_tls = ServerTlsConfig::new().identity(identity);
+
+    let listener = bind_local_listener().await;
+    let (live_addr, shutdown, server_handle) =
+        spawn_mock_grpc_server_with_tls(listener, Some(server_tls)).await;
+
+    let dead_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), live_addr.port());
+    let original_uri = Uri::try_from(format!("grpcs://{hostname}:{}/", live_addr.port()))
+        .expect("valid grpcs uri");
+    let client_tls =
+        Some(ClientTlsConfig::new().ca_certificate(Certificate::from_pem(cert_pem.as_bytes())));
+
+    let channel = parallel_connect(
+        vec![dead_addr, live_addr],
+        original_uri,
+        &client_tls,
+        test_connect_timeouts(),
+    )
+    .await?;
     health_check(channel).await?;
 
     shutdown.cancel();
