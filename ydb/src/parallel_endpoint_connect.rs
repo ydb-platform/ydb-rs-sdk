@@ -189,14 +189,7 @@ pub(crate) async fn parallel_connect(
     let mut any_timed_out = false;
 
     for batch in addrs.chunks(MAX_PARALLEL_DIAL_ADDRESSES) {
-        match parallel_connect_batch(
-            batch.to_vec(),
-            &original_uri,
-            tls_config,
-            timeouts,
-        )
-        .await
-        {
+        match parallel_connect_batch(batch.to_vec(), &original_uri, tls_config, timeouts).await {
             Ok(channel) => return Ok(channel),
             Err(failure) => {
                 any_timed_out |= failure.timed_out;
