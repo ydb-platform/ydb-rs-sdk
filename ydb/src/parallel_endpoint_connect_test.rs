@@ -7,28 +7,35 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use tokio_stream::wrappers::TcpListenerStream;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::HealthCheckRequest;
 use tonic_health::server::health_reporter;
 
-async fn spawn_mock_grpc_server(addr: SocketAddr) -> (CancellationToken, JoinHandle<()>) {
+async fn spawn_mock_grpc_server(
+    listener: TcpListener,
+) -> (SocketAddr, CancellationToken, JoinHandle<()>) {
+    let addr = listener
+        .local_addr()
+        .expect("failed to read bound listener address");
     let shutdown = CancellationToken::new();
     let shutdown_on_cancel = shutdown.child_token();
+    let incoming = TcpListenerStream::new(listener);
 
     let (_reporter, health_service) = health_reporter();
 
     let handle = tokio::spawn(async move {
         Server::builder()
             .add_service(health_service)
-            .serve_with_shutdown(addr, shutdown_on_cancel.cancelled())
+            .serve_with_incoming_shutdown(incoming, shutdown_on_cancel.cancelled())
             .await
             .expect("mock gRPC server failed");
     });
 
     wait_until_server_accepts(addr).await;
-    (shutdown, handle)
+    (addr, shutdown, handle)
 }
 
 async fn wait_until_server_accepts(addr: SocketAddr) {
@@ -58,11 +65,10 @@ async fn health_check(channel: tonic::transport::Channel) -> YdbResult<()> {
     Ok(())
 }
 
-async fn reserve_local_addr() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0")
+async fn bind_local_listener() -> TcpListener {
+    TcpListener::bind("127.0.0.1:0")
         .await
-        .expect("failed to bind ephemeral port");
-    listener.local_addr().expect("failed to read local addr")
+        .expect("failed to bind ephemeral port")
 }
 
 fn test_connect_timeouts() -> ConnectTimeouts {
@@ -74,8 +80,8 @@ fn test_connect_timeouts() -> ConnectTimeouts {
 
 #[tokio::test]
 async fn parallel_connect_skips_unreachable_ip() -> YdbResult<()> {
-    let live_addr = reserve_local_addr().await;
-    let (shutdown, server_handle) = spawn_mock_grpc_server(live_addr).await;
+    let listener = bind_local_listener().await;
+    let (live_addr, shutdown, server_handle) = spawn_mock_grpc_server(listener).await;
 
     let dead_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), live_addr.port());
     let original_uri = Uri::try_from(format!("grpc://localhost:{}/", live_addr.port()))
@@ -130,8 +136,11 @@ async fn parallel_connect_fails_when_all_ips_unreachable() {
 
 #[tokio::test]
 async fn connect_uses_parallel_dial_for_localhost_with_multiple_records() -> YdbResult<()> {
-    let live_addr = reserve_local_addr().await;
-    let port = live_addr.port();
+    let listener = bind_local_listener().await;
+    let port = listener
+        .local_addr()
+        .expect("failed to read local addr")
+        .port();
 
     let resolved_addrs: Vec<SocketAddr> = tokio::net::lookup_host(("localhost", port))
         .await
@@ -143,7 +152,7 @@ async fn connect_uses_parallel_dial_for_localhost_with_multiple_records() -> Ydb
         return Ok(());
     }
 
-    let (shutdown, server_handle) = spawn_mock_grpc_server(live_addr).await;
+    let (_live_addr, shutdown, server_handle) = spawn_mock_grpc_server(listener).await;
 
     let uri = Uri::try_from(format!("grpc://localhost:{port}/")).expect("valid uri");
     let channel = connect(uri, &None, test_connect_timeouts()).await?;
@@ -159,8 +168,11 @@ async fn connect_uses_parallel_dial_for_localhost_with_multiple_records() -> Ydb
 
 #[tokio::test]
 async fn connection_pool_parallel_dial_through_localhost() -> YdbResult<()> {
-    let live_addr = reserve_local_addr().await;
-    let port = live_addr.port();
+    let listener = bind_local_listener().await;
+    let port = listener
+        .local_addr()
+        .expect("failed to read local addr")
+        .port();
 
     let resolved_addrs: Vec<SocketAddr> = tokio::net::lookup_host(("localhost", port))
         .await
@@ -172,7 +184,7 @@ async fn connection_pool_parallel_dial_through_localhost() -> YdbResult<()> {
         return Ok(());
     }
 
-    let (shutdown, server_handle) = spawn_mock_grpc_server(live_addr).await;
+    let (_live_addr, shutdown, server_handle) = spawn_mock_grpc_server(listener).await;
 
     let pool = ConnectionPool::with_connect_timeouts(test_connect_timeouts());
     let uri = Uri::try_from(format!("grpc://localhost:{port}/")).expect("valid uri");

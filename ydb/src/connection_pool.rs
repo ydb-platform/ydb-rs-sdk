@@ -86,19 +86,31 @@ impl ConnectionPool {
                     }
                 };
 
-                let mut connecting = self.connecting.lock().await;
-                connecting.remove(uri);
+                self.remove_connecting_if_same(uri, &connect_once).await;
 
                 channel
             }
             Err(err) => {
-                let mut connecting = self.connecting.lock().await;
-                connecting.remove(uri);
+                self.remove_connecting_if_same(uri, &connect_once).await;
                 return Err(err);
             }
         };
 
         Ok(channel)
+    }
+
+    async fn remove_connecting_if_same(
+        &self,
+        uri: &Uri,
+        connect_once: &Arc<tokio::sync::OnceCell<Channel>>,
+    ) {
+        let mut connecting = self.connecting.lock().await;
+        if connecting
+            .get(uri)
+            .is_some_and(|entry| Arc::ptr_eq(entry, connect_once))
+        {
+            connecting.remove(uri);
+        }
     }
 }
 

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinSet;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
-use tracing::trace;
+use tracing::{trace, warn};
 
 /// Timeouts for parallel gRPC dial to resolved addresses.
 #[derive(Clone, Copy, Debug)]
@@ -34,8 +34,10 @@ impl Default for ConnectTimeouts {
 /// after a long-lived client observes a DNS TTL change).
 ///
 /// When a hostname resolves to multiple IP addresses, parallel eager dial
-/// probes all of them and skips unreachable addresses. After a working backend
-/// is found, a lazy FQDN channel is returned (the probe connection is dropped).
+/// races all of them and returns the first successful connection. Unreachable
+/// addresses are skipped. The winning channel connects to a concrete IP with
+/// the original FQDN set as origin for TLS; the pool caches it under the FQDN
+/// URI key.
 pub(crate) async fn connect(
     uri: Uri,
     tls_config: &Option<ClientTlsConfig>,
@@ -110,7 +112,7 @@ fn build_endpoint(
         let domain = origin_uri_host(origin.as_ref(), &uri).ok_or_else(|| {
             YdbError::Custom("URI must have a host for TLS connections".to_string())
         })?;
-        endpoint = configure_tls_endpoint(endpoint, domain, tls_config)?;
+        endpoint = configure_tls_endpoint(endpoint, strip_ipv6_brackets(domain), tls_config)?;
     }
 
     endpoint = endpoint.http2_keep_alive_interval(Duration::from_secs(10));
@@ -144,9 +146,11 @@ pub(crate) fn configure_tls_endpoint(
         // original FQDN for TLS verification/SNI. For FQDN dial the value
         // matches the URI host; a user-provided domain_name is intentionally
         // overridden to keep IP-based and hostname-based paths consistent.
-        Some(config) => config.clone().domain_name(domain.to_string()),
+        Some(config) => config
+            .clone()
+            .domain_name(strip_ipv6_brackets(domain).to_string()),
         None => ClientTlsConfig::new()
-            .domain_name(domain.to_string())
+            .domain_name(strip_ipv6_brackets(domain).to_string())
             .with_native_roots(),
     };
 
@@ -190,14 +194,14 @@ pub(crate) async fn parallel_connect(
             biased;
             result = tasks.join_next(), if !tasks.is_empty() => {
                 match result {
-                    Some(Ok(Ok(_channel))) => {
+                    Some(Ok(Ok(channel))) => {
                         tasks.abort_all();
-                        // Probe succeeded: use lazy FQDN endpoint so DNS is
-                        // re-resolved on reconnect, not pinned to one IP.
-                        return connect_lazy(original_uri, tls_config, None, timeouts);
+                        return Ok(channel);
                     }
                     Some(Ok(Err(err))) => last_error = Some(err),
-                    Some(Err(_)) => {}
+                    Some(Err(join_err)) => {
+                        warn!(error = %join_err, "parallel dial task failed unexpectedly");
+                    }
                     None => break,
                 }
             }
@@ -215,6 +219,12 @@ pub(crate) async fn parallel_connect(
     }
 
     Err(last_error.unwrap_or_else(|| dial_error("failed to connect to any resolved address")))
+}
+
+fn strip_ipv6_brackets(host: &str) -> &str {
+    host.strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host)
 }
 
 fn parse_host_as_ip(host: &str) -> Option<IpAddr> {
@@ -280,6 +290,12 @@ mod tests {
     use crate::errors::NeedRetry;
     use http::uri::Scheme;
     use std::net::{Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn strip_ipv6_brackets_removes_brackets() {
+        assert_eq!(strip_ipv6_brackets("[::1]"), "::1");
+        assert_eq!(strip_ipv6_brackets("example.com"), "example.com");
+    }
 
     #[test]
     fn parse_host_as_ip_ipv4() {
