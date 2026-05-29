@@ -44,8 +44,7 @@ pub(crate) async fn connect(
     tls_config: &Option<ClientTlsConfig>,
     timeouts: ConnectTimeouts,
 ) -> YdbResult<Channel> {
-    let port = uri_port(&uri);
-    let uri = normalize_uri_scheme(uri)?;
+    let (uri, port) = normalize_uri_for_connect(uri)?;
     let host = uri
         .host()
         .ok_or_else(|| YdbError::Custom("URI must have a host".to_string()))?;
@@ -145,6 +144,17 @@ pub(crate) fn normalize_uri_scheme(uri: Uri) -> YdbResult<Uri> {
     }
 
     Ok(Uri::from_parts(parts)?)
+}
+
+/// Normalize scheme and extract the connect port as one step.
+///
+/// Port defaults depend on the original scheme (`grpc`/`grpcs` → 2135). They must
+/// be read before [`normalize_uri_scheme`] maps those schemes to `http`/`https`
+/// (which would otherwise default to 80/443).
+pub(crate) fn normalize_uri_for_connect(uri: Uri) -> YdbResult<(Uri, u16)> {
+    let port = uri_port(&uri);
+    let uri = normalize_uri_scheme(uri)?;
+    Ok((uri, port))
 }
 
 pub(crate) fn configure_tls_endpoint(
@@ -255,7 +265,7 @@ async fn parallel_connect_batch(
                     Some(Err(join_err)) => {
                         warn!(error = %join_err, "parallel dial task failed unexpectedly");
                     }
-                    None => break,
+                    None => unreachable!("join_next with empty JoinSet"),
                 }
             }
             _ = &mut overall_timeout => {
@@ -445,6 +455,17 @@ mod tests {
         assert_eq!(uri_port(&grpcs_uri), 2135);
         assert_eq!(uri_port(&http_uri), 80);
         assert_eq!(uri_port(&https_uri), 443);
+    }
+
+    #[test]
+    fn normalize_uri_for_connect_preserves_grpc_port_default() -> YdbResult<()> {
+        let uri = Uri::from_static("grpc://example.com");
+        let (normalized, port) = normalize_uri_for_connect(uri)?;
+
+        assert_eq!(normalized.scheme(), Some(&Scheme::HTTP));
+        assert_eq!(port, 2135);
+
+        Ok(())
     }
 
     #[test]

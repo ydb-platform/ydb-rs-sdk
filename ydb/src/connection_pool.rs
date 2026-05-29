@@ -105,7 +105,8 @@ impl ConnectionPool {
                 channel
             }
             Err(err) => {
-                self.remove_connecting_if_same(uri, &connect_once).await;
+                // Keep the OnceCell in the connecting map so concurrent waiters coalesce
+                // on retries instead of spawning duplicate dials after removal.
                 cleanup.disarm();
                 return Err(err);
             }

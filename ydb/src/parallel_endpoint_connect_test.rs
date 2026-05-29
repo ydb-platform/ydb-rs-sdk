@@ -226,3 +226,34 @@ async fn connection_pool_reaches_mock_server() -> YdbResult<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn connection_pool_resolves_hostname_with_parallel_dial() -> YdbResult<()> {
+    let listener = bind_local_listener().await;
+    let port = listener
+        .local_addr()
+        .expect("failed to read local addr")
+        .port();
+
+    let resolved: Vec<SocketAddr> = tokio::net::lookup_host(("localhost", port))
+        .await
+        .expect("failed to resolve localhost")
+        .collect();
+    if resolved.len() < 2 {
+        return Ok(());
+    }
+
+    let (_live_addr, shutdown, server_handle) = spawn_mock_grpc_server(listener).await;
+
+    let pool = ConnectionPool::with_connect_timeouts(test_connect_timeouts());
+    let uri = Uri::try_from(format!("grpc://localhost:{port}/")).expect("valid uri");
+    let channel = pool.connection(&uri).await?;
+    health_check(channel).await?;
+
+    shutdown.cancel();
+    let _ = timeout(Duration::from_secs(1), server_handle)
+        .await
+        .expect("server shutdown timed out");
+
+    Ok(())
+}
