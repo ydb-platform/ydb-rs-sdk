@@ -1,5 +1,7 @@
 use crate::connection_pool::ConnectionPool;
-use crate::parallel_endpoint_connect::{connect, parallel_connect, ConnectTimeouts};
+use crate::parallel_endpoint_connect::{
+    connect_resolved, normalize_uri_scheme, parallel_connect, ConnectTimeouts,
+};
 use crate::YdbResult;
 use http::Uri;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -13,6 +15,10 @@ use tonic::transport::{Certificate, ClientTlsConfig, Identity, Server, ServerTls
 use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::HealthCheckRequest;
 use tonic_health::server::health_reporter;
+
+fn normalized_test_uri(s: &str) -> Uri {
+    normalize_uri_scheme(Uri::try_from(s).expect("valid uri")).expect("normalize uri")
+}
 
 async fn spawn_mock_grpc_server(
     listener: TcpListener,
@@ -93,14 +99,18 @@ fn test_connect_timeouts() -> ConnectTimeouts {
     }
 }
 
+fn unreachable_local_addr(last_octet: u8) -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, last_octet)), 1)
+}
+
 #[tokio::test]
 async fn parallel_connect_skips_unreachable_ip() -> YdbResult<()> {
     let listener = bind_local_listener().await;
     let (live_addr, shutdown, server_handle) = spawn_mock_grpc_server(listener).await;
 
-    let dead_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), live_addr.port());
-    let original_uri = Uri::try_from(format!("grpc://localhost:{}/", live_addr.port()))
-        .expect("valid localhost uri");
+    let dead_addr = unreachable_local_addr(2);
+    let dead_addr = SocketAddr::new(dead_addr.ip(), live_addr.port());
+    let original_uri = normalized_test_uri(&format!("grpc://localhost:{}/", live_addr.port()));
 
     let channel = parallel_connect(
         vec![dead_addr, live_addr],
@@ -121,25 +131,9 @@ async fn parallel_connect_skips_unreachable_ip() -> YdbResult<()> {
 
 #[tokio::test]
 async fn parallel_connect_fails_when_all_ips_unreachable() {
-    let closed_listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("failed to bind ephemeral port");
-    let closed_addr = closed_listener
-        .local_addr()
-        .expect("failed to read local addr");
-    drop(closed_listener);
-
-    let another_closed_listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("failed to bind ephemeral port");
-    let another_closed_addr = another_closed_listener
-        .local_addr()
-        .expect("failed to read local addr");
-    drop(another_closed_listener);
-
-    let original_uri = Uri::from_static("grpc://ydb.test.local:2135/");
+    let original_uri = normalized_test_uri("grpc://ydb.test.local/");
     let result = parallel_connect(
-        vec![closed_addr, another_closed_addr],
+        vec![unreachable_local_addr(2), unreachable_local_addr(3)],
         original_uri,
         &None,
         test_connect_timeouts(),
@@ -150,27 +144,20 @@ async fn parallel_connect_fails_when_all_ips_unreachable() {
 }
 
 #[tokio::test]
-async fn connect_uses_parallel_dial_for_localhost_with_multiple_records() -> YdbResult<()> {
+async fn connect_resolved_uses_parallel_dial() -> YdbResult<()> {
     let listener = bind_local_listener().await;
-    let port = listener
-        .local_addr()
-        .expect("failed to read local addr")
-        .port();
+    let (live_addr, shutdown, server_handle) = spawn_mock_grpc_server(listener).await;
 
-    let resolved_addrs: Vec<SocketAddr> = tokio::net::lookup_host(("localhost", port))
-        .await
-        .map_err(|e| crate::YdbError::Custom(format!("failed to resolve localhost: {e}")))?
-        .collect();
+    let dead_addr = SocketAddr::new(unreachable_local_addr(2).ip(), live_addr.port());
+    let uri = normalized_test_uri(&format!("grpc://localhost:{}/", live_addr.port()));
 
-    if resolved_addrs.len() < 2 {
-        eprintln!("skip: localhost resolves to a single address on this host");
-        return Ok(());
-    }
-
-    let (_live_addr, shutdown, server_handle) = spawn_mock_grpc_server(listener).await;
-
-    let uri = Uri::try_from(format!("grpc://localhost:{port}/")).expect("valid uri");
-    let channel = connect(uri, &None, test_connect_timeouts()).await?;
+    let channel = connect_resolved(
+        uri,
+        vec![dead_addr, live_addr],
+        &None,
+        test_connect_timeouts(),
+    )
+    .await?;
     health_check(channel).await?;
 
     shutdown.cancel();
@@ -195,9 +182,8 @@ async fn parallel_connect_over_tls_dials_by_ip_with_sni() -> YdbResult<()> {
     let (live_addr, shutdown, server_handle) =
         spawn_mock_grpc_server_with_tls(listener, Some(server_tls)).await;
 
-    let dead_addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), live_addr.port());
-    let original_uri = Uri::try_from(format!("grpcs://{hostname}:{}/", live_addr.port()))
-        .expect("valid grpcs uri");
+    let dead_addr = SocketAddr::new(unreachable_local_addr(2).ip(), live_addr.port());
+    let original_uri = normalized_test_uri(&format!("grpcs://{hostname}:{}/", live_addr.port()));
     let client_tls =
         Some(ClientTlsConfig::new().ca_certificate(Certificate::from_pem(cert_pem.as_bytes())));
 
@@ -219,27 +205,17 @@ async fn parallel_connect_over_tls_dials_by_ip_with_sni() -> YdbResult<()> {
 }
 
 #[tokio::test]
-async fn connection_pool_parallel_dial_through_localhost() -> YdbResult<()> {
+async fn connection_pool_reaches_mock_server() -> YdbResult<()> {
     let listener = bind_local_listener().await;
     let port = listener
         .local_addr()
         .expect("failed to read local addr")
         .port();
 
-    let resolved_addrs: Vec<SocketAddr> = tokio::net::lookup_host(("localhost", port))
-        .await
-        .map_err(|e| crate::YdbError::Custom(format!("failed to resolve localhost: {e}")))?
-        .collect();
-
-    if resolved_addrs.len() < 2 {
-        eprintln!("skip: localhost resolves to a single address on this host");
-        return Ok(());
-    }
-
     let (_live_addr, shutdown, server_handle) = spawn_mock_grpc_server(listener).await;
 
     let pool = ConnectionPool::with_connect_timeouts(test_connect_timeouts());
-    let uri = Uri::try_from(format!("grpc://localhost:{port}/")).expect("valid uri");
+    let uri = Uri::try_from(format!("grpc://127.0.0.1:{port}/")).expect("valid uri");
     let channel = pool.connection(&uri).await?;
     health_check(channel).await?;
 

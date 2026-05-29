@@ -38,6 +38,7 @@ pub(crate) async fn connect(
     tls_config: &Option<ClientTlsConfig>,
     timeouts: ConnectTimeouts,
 ) -> YdbResult<Channel> {
+    let port = uri_port(&uri);
     let uri = normalize_uri_scheme(uri)?;
     let host = uri
         .host()
@@ -47,10 +48,18 @@ pub(crate) async fn connect(
         return connect_lazy(uri.clone(), tls_config, None, timeouts);
     }
 
-    let port = uri_port(&uri);
     let addrs = resolve_socket_addrs(host, port).await?;
+    connect_resolved(uri, addrs, tls_config, timeouts).await
+}
 
+pub(crate) async fn connect_resolved(
+    uri: Uri,
+    addrs: Vec<SocketAddr>,
+    tls_config: &Option<ClientTlsConfig>,
+    timeouts: ConnectTimeouts,
+) -> YdbResult<Channel> {
     if addrs.is_empty() {
+        let host = uri.host().unwrap_or("<unknown>");
         return Err(dial_error(format!("no addresses resolved for host {host}")));
     }
 
@@ -59,7 +68,7 @@ pub(crate) async fn connect(
     }
 
     trace!(
-        host,
+        host = uri.host().unwrap_or("<unknown>"),
         count = addrs.len(),
         "parallel dial to resolved addresses"
     );
@@ -107,7 +116,8 @@ fn build_endpoint(
         let domain = origin_uri_host(origin.as_ref(), &uri).ok_or_else(|| {
             YdbError::Custom("URI must have a host for TLS connections".to_string())
         })?;
-        endpoint = configure_tls_endpoint(endpoint, domain, tls_config)?;
+        let force_domain_name = origin.is_some();
+        endpoint = configure_tls_endpoint(endpoint, domain, tls_config, force_domain_name)?;
     }
 
     endpoint = endpoint.http2_keep_alive_interval(Duration::from_secs(10));
@@ -135,15 +145,17 @@ pub(crate) fn configure_tls_endpoint(
     endpoint: Endpoint,
     domain: &str,
     tls_config: &Option<ClientTlsConfig>,
+    force_domain_name: bool,
 ) -> YdbResult<Endpoint> {
     // `domain` may include RFC 3986 brackets for IPv6 literals from `Uri::host()`.
     let domain = strip_ipv6_brackets(domain);
     let config = match tls_config {
-        // Always set domain_name: parallel dial connects by IP and needs the
-        // original FQDN for TLS verification/SNI. For FQDN dial the value
-        // matches the URI host; a user-provided domain_name is intentionally
-        // overridden to keep IP-based and hostname-based paths consistent.
-        Some(config) => config.clone().domain_name(domain.to_string()),
+        Some(config) if force_domain_name => {
+            // Parallel dial connects by IP; override domain_name so SNI/certificate
+            // verification use the original FQDN from `origin`.
+            config.clone().domain_name(domain.to_string())
+        }
+        Some(config) => config.clone(),
         None => ClientTlsConfig::new()
             .domain_name(domain.to_string())
             .with_native_roots(),
@@ -152,13 +164,16 @@ pub(crate) fn configure_tls_endpoint(
     Ok(endpoint.tls_config(config)?)
 }
 
+/// Parallel eager dial to pre-resolved addresses.
+///
+/// `original_uri` must already be scheme-normalized (`http`/`https`); see
+/// [`normalize_uri_scheme`].
 pub(crate) async fn parallel_connect(
     addrs: Vec<SocketAddr>,
     original_uri: Uri,
     tls_config: &Option<ClientTlsConfig>,
     timeouts: ConnectTimeouts,
 ) -> YdbResult<Channel> {
-    let original_uri = normalize_uri_scheme(original_uri)?;
     let scheme = original_uri.scheme().cloned().unwrap_or(Scheme::HTTP);
     let path_and_query = original_uri
         .path_and_query()
@@ -274,13 +289,13 @@ fn dial_error(message: impl Into<String>) -> YdbError {
 }
 
 fn uri_port(uri: &Uri) -> u16 {
-    uri.port_u16().unwrap_or_else(|| {
-        if uri.scheme() == Some(&Scheme::HTTPS) {
-            443
-        } else {
-            80
-        }
-    })
+    uri.port_u16()
+        .unwrap_or_else(|| match uri.scheme().map(|s| s.as_str()) {
+            Some("grpc") | Some("grpcs") => 2135,
+            Some("https") => 443,
+            Some("http") | None => 80,
+            _ => 80,
+        })
 }
 
 fn origin_uri_host<'a>(origin: Option<&'a Uri>, fallback: &'a Uri) -> Option<&'a str> {
@@ -367,9 +382,13 @@ mod tests {
 
     #[test]
     fn uri_port_defaults_by_scheme() {
+        let grpc_uri = Uri::from_static("grpc://example.com");
+        let grpcs_uri = Uri::from_static("grpcs://example.com");
         let http_uri = Uri::from_static("http://example.com");
         let https_uri = Uri::from_static("https://example.com");
 
+        assert_eq!(uri_port(&grpc_uri), 2135);
+        assert_eq!(uri_port(&grpcs_uri), 2135);
         assert_eq!(uri_port(&http_uri), 80);
         assert_eq!(uri_port(&https_uri), 443);
     }
