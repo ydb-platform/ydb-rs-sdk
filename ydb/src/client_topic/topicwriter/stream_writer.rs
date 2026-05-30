@@ -150,7 +150,7 @@ impl StreamWriter {
             return Ok(());
         }
 
-        trace!("Sending topic message to grpc stream");
+        trace!("sending topic message to grpc stream");
         task_params
             .request_stream
             .send(stream_write_message::FromClient {
@@ -211,7 +211,7 @@ impl StreamWriter {
             Ok(message) => match message {
                 RawServerMessage::Init(_init_response_body) => {
                     return Err(YdbError::custom(
-                        "Unexpected message type in stream reader: init_response",
+                        "unexpected message type in stream reader: init_response",
                     ));
                 }
                 RawServerMessage::Write(write_response_body) => {
@@ -226,12 +226,12 @@ impl StreamWriter {
 
                         let Some(expected_seq_no) = expected_seq_no else {
                             return Err(YdbError::custom(
-                                "Expected reception ticket to be actually present",
+                                "expected reception ticket to be actually present",
                             ));
                         };
                         if write_ack.seq_no != expected_seq_no {
                             return Err(YdbError::custom(format!(
-                                "Reception ticket and write ack seq_no mismatch. Seqno from ack: {}, expected: {}",
+                                "reception ticket and write ack seq_no mismatch. Seqno from ack: {}, expected: {}",
                                 write_ack.seq_no,
                                 expected_seq_no,
                             )));
@@ -241,10 +241,10 @@ impl StreamWriter {
                         let ticket = {
                             let mut writer_state = writer_state.lock().await;
                             writer_state.confirmation_reception_queue.try_get_ticket()
-                        };
+                        }?;
                         let Some(ticket) = ticket else {
                             return Err(YdbError::custom(
-                                "Reception ticket is missing after message queue ack",
+                                "reception ticket is missing after message queue ack",
                             ));
                         };
                         ticket.send_confirmation_if_needed(write_ack.status);
@@ -274,7 +274,7 @@ impl StreamWriter {
     }
 
     pub async fn stop(self) -> YdbResult<()> {
-        trace!("Stopping...");
+        trace!("stopping...");
 
         self.cancellation_token.cancel();
 
@@ -285,7 +285,7 @@ impl StreamWriter {
             trace!("{err}");
             err
         });
-        trace!("Writer loop stopped");
+        trace!("writer loop stopped");
 
         let receive_messages_loop_result = self.receive_messages_loop.await.map_err(|err| {
             let err = YdbError::custom(format!(
@@ -294,7 +294,7 @@ impl StreamWriter {
             trace!("{err}");
             err
         });
-        trace!("Message receive loop stopped");
+        trace!("message receive loop stopped");
 
         writer_loop_result?;
         receive_messages_loop_result?;

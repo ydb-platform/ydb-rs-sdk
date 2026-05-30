@@ -1,5 +1,4 @@
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
-use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::{YdbError, YdbResult};
 
 use std::collections::VecDeque;
@@ -38,7 +37,7 @@ impl TopicWriterReceptionTicket {
 
     pub fn send_confirmation_if_needed(self, write_status: MessageWriteStatus) {
         if let TopicWriterReceptionType::AwaitingConfirmation(sender) = self.reception_type {
-            // drop is workaround for old rust: destructive assigment was unstable until 1.59
+            // drop is workaround for old rust: destructive assignment was unstable until 1.59
             // E0658
             drop(sender.send(Ok(write_status)));
         }
@@ -65,18 +64,20 @@ impl TopicWriterReceptionQueue {
         }
     }
 
-    pub(crate) fn init_flush_op(&mut self) -> RawResult<tokio::sync::oneshot::Receiver<()>> {
+    pub(crate) fn init_flush_op(&mut self) -> YdbResult<tokio::sync::oneshot::Receiver<()>> {
         let (tx, rx): (
             tokio::sync::oneshot::Sender<()>,
             tokio::sync::oneshot::Receiver<()>,
         ) = tokio::sync::oneshot::channel();
         if self.message_receipt_signals_queue.is_empty() {
-            tx.send(()).unwrap();
+            tx.send(()).map_err(|_| {
+                YdbError::custom(format!("init_flush_op: channel unexpectedly closed"))
+            })?;
             return Ok(rx);
         }
         match self.message_receipt_signals_queue.back_mut() {
-            None => Err(RawError::Custom(
-                "Programming error, should not be happening".to_string(),
+            None => Err(YdbError::custom(
+                "init_flush_op: programming error, should not be happening",
             )),
             Some(ticket) => {
                 ticket.enable_flush_flag();
@@ -92,24 +93,26 @@ impl TopicWriterReceptionQueue {
             .map(TopicWriterReceptionTicket::get_seq_no)
     }
 
-    pub(crate) fn try_get_ticket(&mut self) -> Option<TopicWriterReceptionTicket> {
+    pub(crate) fn try_get_ticket(&mut self) -> YdbResult<Option<TopicWriterReceptionTicket>> {
         let maybe_ticket = self.message_receipt_signals_queue.pop_front();
         match maybe_ticket.as_ref() {
-            None => {
-                if self.flush_finished_sender.is_some() {
-                    let sender = std::mem::take(&mut self.flush_finished_sender);
-                    sender.unwrap().send(()).unwrap();
-                }
-            }
+            None => self.send_flush_finished()?,
             Some(ticket) => {
                 if ticket.get_flush_flag() {
-                    println!("Confirmation sent");
-                    let sender = std::mem::take(&mut self.flush_finished_sender);
-                    sender.unwrap().send(()).unwrap();
+                    self.send_flush_finished()?;
                 }
             }
         }
-        maybe_ticket
+        Ok(maybe_ticket)
+    }
+
+    fn send_flush_finished(&mut self) -> YdbResult<()> {
+        if let Some(sender) = self.flush_finished_sender.take() {
+            sender
+                .send(())
+                .map_err(|_| YdbError::custom(format!("send_flush_finished: channel is closed")))?;
+        }
+        Ok(())
     }
 
     pub(crate) fn add_ticket(&mut self, reception_ticket: TopicWriterReceptionTicket) {

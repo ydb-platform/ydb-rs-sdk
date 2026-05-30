@@ -253,8 +253,8 @@ impl YdbError {
             Self::TransportGRPCStatus(status) => {
                 use tonic::Code;
                 match status.code() {
-                    Code::Aborted | Code::ResourceExhausted | Code::Unknown => NeedRetry::True,
-                    Code::Internal | Code::Cancelled | Code::Unavailable => {
+                    Code::Aborted | Code::ResourceExhausted => NeedRetry::True,
+                    Code::Internal | Code::Cancelled | Code::Unavailable | Code::Unknown => {
                         NeedRetry::IdempotentOnly
                     }
                     _ => NeedRetry::False,
