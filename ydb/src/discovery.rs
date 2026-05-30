@@ -383,12 +383,10 @@ impl Waiter for DiscoverySharedState {
             receiver.changed().await?;
             empty_updates += 1;
             if empty_updates >= MAX_EMPTY_DISCOVERY_WAITS {
-                warn!(
-                    empty_updates,
-                    "discovery still has no endpoints after repeated updates; \
-                     proceeding without endpoints (check cluster configuration)"
-                );
-                return Ok(());
+                return Err(crate::YdbError::Custom(format!(
+                    "discovery returned no endpoints after {empty_updates} updates"
+                )));
+            }
             }
         }
     }
