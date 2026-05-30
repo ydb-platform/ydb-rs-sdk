@@ -99,7 +99,10 @@ pub enum YdbError {
     TransportDial(Arc<tonic::transport::Error>),
 
     /// Pre-connect dial failure (DNS resolution, parallel dial timeout, etc.)
-    TransportDialFailed(String),
+    TransportDialFailed {
+        message: String,
+        kind: TransportDialFailureKind,
+    },
 
     /// Error on transport level of request/response
     Transport(String),
@@ -111,20 +114,43 @@ pub enum YdbError {
     YdbStatusError(YdbStatusError),
 }
 
+/// Whether a pre-connect dial failure may be retried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
+pub enum TransportDialFailureKind {
+    /// Timeout, connection refused, or other potentially transient reachability failure.
+    Transient,
+    /// DNS resolution, invalid endpoint configuration, or other stable failure.
+    Permanent,
+}
+
+impl TransportDialFailureKind {
+    fn need_retry(self) -> NeedRetry {
+        match self {
+            Self::Transient => NeedRetry::IdempotentOnly,
+            Self::Permanent => NeedRetry::False,
+        }
+    }
+}
+
 impl YdbError {
     pub(crate) fn custom<T: Into<String>>(message: T) -> Self {
         Self::Custom(message.into())
     }
 
     pub(crate) fn transport_dial_failed(message: impl Into<String>) -> Self {
-        Self::TransportDialFailed(message.into())
+        Self::TransportDialFailed {
+            message: message.into(),
+            kind: TransportDialFailureKind::Transient,
+        }
     }
-}
 
-fn is_permanent_dial_failure(message: &str) -> bool {
-    message.contains("failed to resolve")
-        || message.contains("no addresses resolved")
-        || message.contains("URI must have")
+    pub(crate) fn transport_dial_failed_permanent(message: impl Into<String>) -> Self {
+        Self::TransportDialFailed {
+            message: message.into(),
+            kind: TransportDialFailureKind::Permanent,
+        }
+    }
 }
 
 /// Describe operation status from server
@@ -262,13 +288,7 @@ impl YdbError {
             Self::InternalError(_) => NeedRetry::False,
             Self::NoRows => NeedRetry::False,
             Self::TransportDial(_) => NeedRetry::True,
-            Self::TransportDialFailed(message) => {
-                if is_permanent_dial_failure(message) {
-                    NeedRetry::False
-                } else {
-                    NeedRetry::IdempotentOnly
-                }
-            }
+            Self::TransportDialFailed { kind, .. } => kind.need_retry(),
             Self::Transport(_) => IdempotentOnly, // TODO: check when transport error created
             Self::TransportGRPCStatus(status) => {
                 use tonic::Code;

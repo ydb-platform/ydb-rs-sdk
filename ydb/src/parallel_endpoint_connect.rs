@@ -66,7 +66,9 @@ pub(crate) async fn connect_resolved(
 ) -> YdbResult<Channel> {
     if addrs.is_empty() {
         let host = uri.host().unwrap_or("<unknown>");
-        return Err(dial_error(format!("no addresses resolved for host {host}")));
+        return Err(permanent_dial_error(format!(
+            "no addresses resolved for host {host}"
+        )));
     }
 
     if addrs.len() == 1 {
@@ -373,11 +375,15 @@ async fn resolve_socket_addrs(host: &str, port: u16) -> YdbResult<Vec<SocketAddr
     tokio::net::lookup_host((host, port))
         .await
         .map(|iter| iter.collect())
-        .map_err(|e| dial_error(format!("failed to resolve {host}: {e}")))
+        .map_err(|e| permanent_dial_error(format!("failed to resolve {host}: {e}")))
 }
 
 fn dial_error(message: impl Into<String>) -> YdbError {
     YdbError::transport_dial_failed(message)
+}
+
+fn permanent_dial_error(message: impl Into<String>) -> YdbError {
+    YdbError::transport_dial_failed_permanent(message)
 }
 
 fn uri_with_port(uri: Uri, port: u16) -> YdbResult<Uri> {
@@ -535,8 +541,14 @@ mod tests {
             NeedRetry::IdempotentOnly
         ));
 
-        let resolve_err = dial_error("failed to resolve example.com: NXDOMAIN");
+        let resolve_err = permanent_dial_error("failed to resolve example.com: NXDOMAIN");
         assert!(matches!(resolve_err.need_retry(), NeedRetry::False));
+    }
+
+    #[test]
+    fn permanent_dial_error_does_not_depend_on_message_wording() {
+        let err = permanent_dial_error("NXDOMAIN");
+        assert!(matches!(err.need_retry(), NeedRetry::False));
     }
 
     #[test]
