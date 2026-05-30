@@ -121,6 +121,12 @@ impl YdbError {
     }
 }
 
+fn is_permanent_dial_failure(message: &str) -> bool {
+    message.contains("failed to resolve")
+        || message.contains("no addresses resolved")
+        || message.contains("URI must have")
+}
+
 /// Describe operation status from server
 ///
 /// Messages and codes doesn't have stable gurantee. But codes more stable.
@@ -256,7 +262,13 @@ impl YdbError {
             Self::InternalError(_) => NeedRetry::False,
             Self::NoRows => NeedRetry::False,
             Self::TransportDial(_) => NeedRetry::True,
-            Self::TransportDialFailed(_) => NeedRetry::True,
+            Self::TransportDialFailed(message) => {
+                if is_permanent_dial_failure(message) {
+                    NeedRetry::False
+                } else {
+                    NeedRetry::IdempotentOnly
+                }
+            }
             Self::Transport(_) => IdempotentOnly, // TODO: check when transport error created
             Self::TransportGRPCStatus(status) => {
                 use tonic::Code;

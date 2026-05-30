@@ -1,3 +1,4 @@
+use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::runtime_interceptors::{
     ChannelResponse, GrpcInterceptor, InterceptorError, InterceptorRequest, InterceptorResult,
     RequestMetadata,
@@ -5,7 +6,7 @@ use crate::grpc_wrapper::runtime_interceptors::{
 use crate::Discovery;
 use http::uri::PathAndQuery;
 use http::Uri;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -20,10 +21,14 @@ pub(crate) struct DiscoveryPessimizationInterceptor {
 }
 
 impl DiscoveryPessimizationInterceptor {
-    pub fn new(discovery: Arc<Box<dyn Discovery>>) -> Self {
+    pub fn new(
+        discovery: Arc<Box<dyn Discovery>>,
+        connection_manager: Arc<OnceLock<GrpcConnectionManager>>,
+    ) -> Self {
         let (channel_error_sender, channel_error_receiver) = mpsc::unbounded_channel();
         tokio::spawn(async move {
-            Self::node_pessimization_loop(discovery, channel_error_receiver).await;
+            Self::node_pessimization_loop(discovery, connection_manager, channel_error_receiver)
+                .await;
         });
         Self {
             sender: channel_error_sender,
@@ -32,10 +37,14 @@ impl DiscoveryPessimizationInterceptor {
 
     async fn node_pessimization_loop(
         discovery: Arc<Box<dyn Discovery>>,
+        connection_manager: Arc<OnceLock<GrpcConnectionManager>>,
         mut errors: UnboundedReceiver<ChannelErrorInfo>,
     ) {
         loop {
             if let Some(err) = errors.recv().await {
+                if let Some(manager) = connection_manager.get() {
+                    manager.evict_connection(&err.endpoint).await;
+                }
                 discovery.pessimization(&err.endpoint)
             } else {
                 return;

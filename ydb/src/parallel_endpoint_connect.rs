@@ -5,6 +5,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinSet;
+use tokio::time::Instant;
 use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tracing::{trace, warn};
 
@@ -152,8 +153,14 @@ pub(crate) fn normalize_uri_scheme(uri: Uri) -> YdbResult<Uri> {
 /// be read before [`normalize_uri_scheme`] maps those schemes to `http`/`https`
 /// (which would otherwise default to 80/443).
 pub(crate) fn normalize_uri_for_connect(uri: Uri) -> YdbResult<(Uri, u16)> {
+    let had_explicit_port = uri.port_u16().is_some();
     let port = uri_port(&uri);
     let uri = normalize_uri_scheme(uri)?;
+    let uri = if had_explicit_port {
+        uri
+    } else {
+        uri_with_port(uri, port)?
+    };
     Ok((uri, port))
 }
 
@@ -197,13 +204,30 @@ pub(crate) async fn parallel_connect(
     let total_addrs = addrs.len();
     let mut accumulated_errors: Vec<YdbError> = Vec::new();
     let mut any_timed_out = false;
+    let deadline = Instant::now() + timeouts.parallel_overall;
 
     for batch in addrs.chunks(MAX_PARALLEL_DIAL_ADDRESSES) {
-        match parallel_connect_batch(batch.to_vec(), &original_uri, tls_config, timeouts).await {
+        if Instant::now() >= deadline {
+            any_timed_out = true;
+            break;
+        }
+
+        match parallel_connect_batch(
+            batch.to_vec(),
+            &original_uri,
+            tls_config,
+            timeouts,
+            deadline,
+        )
+        .await
+        {
             Ok(channel) => return Ok(channel),
             Err(failure) => {
                 any_timed_out |= failure.timed_out;
                 accumulated_errors.extend(failure.errors);
+                if failure.timed_out {
+                    break;
+                }
             }
         }
     }
@@ -225,6 +249,7 @@ async fn parallel_connect_batch(
     original_uri: &Uri,
     tls_config: &Option<ClientTlsConfig>,
     timeouts: ConnectTimeouts,
+    deadline: Instant,
 ) -> Result<Channel, BatchDialFailure> {
     let scheme = original_uri.scheme().cloned().unwrap_or(Scheme::HTTP);
     let path_and_query = original_uri
@@ -247,7 +272,7 @@ async fn parallel_connect_batch(
         });
     }
 
-    let overall_timeout = tokio::time::sleep(timeouts.parallel_overall);
+    let overall_timeout = tokio::time::sleep_until(deadline);
     tokio::pin!(overall_timeout);
 
     let mut dial_errors: Vec<YdbError> = Vec::new();
@@ -264,6 +289,9 @@ async fn parallel_connect_batch(
                     Some(Ok(Err(err))) => dial_errors.push(err),
                     Some(Err(join_err)) => {
                         warn!(error = %join_err, "parallel dial task failed unexpectedly");
+                        dial_errors.push(dial_error(format!(
+                            "parallel dial task panicked: {join_err}"
+                        )));
                     }
                     None => unreachable!("join_next with empty JoinSet"),
                 }
@@ -350,6 +378,25 @@ async fn resolve_socket_addrs(host: &str, port: u16) -> YdbResult<Vec<SocketAddr
 
 fn dial_error(message: impl Into<String>) -> YdbError {
     YdbError::transport_dial_failed(message)
+}
+
+fn uri_with_port(uri: Uri, port: u16) -> YdbResult<Uri> {
+    if uri.port_u16().is_some() {
+        return Ok(uri);
+    }
+
+    let host = uri
+        .host()
+        .ok_or_else(|| YdbError::Custom("URI must have a host".to_string()))?;
+    let mut builder = Uri::builder()
+        .scheme(uri.scheme().cloned().unwrap_or(Scheme::HTTP))
+        .authority(format!("{host}:{port}"));
+
+    if let Some(path_and_query) = uri.path_and_query() {
+        builder = builder.path_and_query(path_and_query.as_str());
+    }
+
+    Ok(builder.build()?)
 }
 
 fn uri_port(uri: &Uri) -> u16 {
@@ -463,7 +510,19 @@ mod tests {
         let (normalized, port) = normalize_uri_for_connect(uri)?;
 
         assert_eq!(normalized.scheme(), Some(&Scheme::HTTP));
+        assert_eq!(normalized.port_u16(), Some(2135));
         assert_eq!(port, 2135);
+
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_uri_for_connect_preserves_explicit_port() -> YdbResult<()> {
+        let uri = Uri::from_static("grpc://example.com:9999");
+        let (normalized, port) = normalize_uri_for_connect(uri)?;
+
+        assert_eq!(normalized.port_u16(), Some(9999));
+        assert_eq!(port, 9999);
 
         Ok(())
     }
@@ -471,7 +530,13 @@ mod tests {
     #[test]
     fn dial_errors_are_retryable() {
         let timeout_err = dial_error("connect timeout: no reachable addresses");
-        assert!(matches!(timeout_err.need_retry(), NeedRetry::True));
+        assert!(matches!(
+            timeout_err.need_retry(),
+            NeedRetry::IdempotentOnly
+        ));
+
+        let resolve_err = dial_error("failed to resolve example.com: NXDOMAIN");
+        assert!(matches!(resolve_err.need_retry(), NeedRetry::False));
     }
 
     #[test]

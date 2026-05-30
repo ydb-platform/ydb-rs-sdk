@@ -10,9 +10,9 @@ use tracing::trace;
 /// Per-URI gRPC channel cache.
 ///
 /// Multi-record FQDN endpoints may be connected via parallel IP dial; the cached
-/// channel is pinned to the winning IP and is not evicted by TTL. Tonic reconnect
-/// on such channels targets the same IP rather than re-resolving DNS. Discovery
-/// endpoint pessimization is the primary recovery path when that IP becomes unreachable.
+/// channel is pinned to the winning IP and tonic reconnect targets the same IP
+/// rather than re-resolving DNS. Stale entries are evicted when endpoint
+/// pessimization reports transport failures for the URI.
 #[derive(Clone)]
 pub(crate) struct ConnectionPool {
     state: Arc<Mutex<ConnectionPoolState>>,
@@ -113,6 +113,17 @@ impl ConnectionPool {
         };
 
         Ok(channel)
+    }
+
+    pub(crate) async fn evict(&self, uri: &Uri) {
+        {
+            let mut lock = self.state.lock().unwrap();
+            if lock.connections.remove(uri).is_some() {
+                trace!(uri = %uri, "evicted cached connection");
+            }
+        }
+        let mut connecting = self.connecting.lock().await;
+        connecting.remove(uri);
     }
 
     async fn remove_connecting_if_same(

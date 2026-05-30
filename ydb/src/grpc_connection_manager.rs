@@ -55,6 +55,10 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
     pub(crate) fn database(&self) -> &String {
         &self.state.database
     }
+
+    pub(crate) async fn evict_connection(&self, uri: &Uri) {
+        self.state.connections_pool.evict(uri).await;
+    }
 }
 
 #[derive(Clone)]

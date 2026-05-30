@@ -15,7 +15,7 @@ use http::Uri;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 type ParamHandler = fn(&str, ClientBuilder) -> YdbResult<ClientBuilder>;
@@ -288,8 +288,11 @@ impl ClientBuilder {
 
         let discovery = Arc::new(discovery);
 
-        let interceptor =
-            interceptor.with_interceptor(DiscoveryPessimizationInterceptor::new(discovery.clone()));
+        let connection_manager_slot = Arc::new(OnceLock::new());
+        let interceptor = interceptor.with_interceptor(DiscoveryPessimizationInterceptor::new(
+            discovery.clone(),
+            Arc::clone(&connection_manager_slot),
+        ));
 
         let load_balancer = SharedLoadBalancer::new(discovery.as_ref().as_ref());
         let connection_manager = GrpcConnectionManager::new(
@@ -298,6 +301,7 @@ impl ClientBuilder {
             interceptor,
             self.cert_path,
         );
+        let _ = connection_manager_slot.set(connection_manager.clone());
 
         Client::new(db_cred, discovery, connection_manager, load_balancer)
     }
