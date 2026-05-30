@@ -615,7 +615,7 @@ mod tests {
     #[test]
     fn parallel_dial_error_single_failure_returns_original_error() {
         let original = permanent_dial_error("connection refused");
-        let err = parallel_dial_error(&[original.clone()], 17, false);
+        let err = parallel_dial_error(std::slice::from_ref(&original), 17, false);
         assert_eq!(format!("{err:?}"), format!("{original:?}"));
     }
 }
