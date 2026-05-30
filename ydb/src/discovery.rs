@@ -290,11 +290,11 @@ impl DiscoverySharedState {
             .await?;
         let new_endpoints = Self::list_endpoints_to_node_infos(res)?;
         let new_state = Arc::new(DiscoveryState::new(start, new_endpoints));
-        let current_empty = self.discovery_state.read().unwrap().is_empty();
-        if new_state.is_empty() && !current_empty {
+        let locked = self.discovery_state.write().unwrap();
+        if new_state.is_empty() && !locked.is_empty() {
             trace!("discovery returned no endpoints, keeping previous state");
         } else {
-            self.set_discovery_state(self.discovery_state.write().unwrap(), new_state);
+            self.set_discovery_state(locked, new_state);
         }
 
         // lock until exit

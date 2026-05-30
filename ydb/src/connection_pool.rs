@@ -105,9 +105,13 @@ impl ConnectionPool {
                 channel
             }
             Err(err) => {
-                // Keep the OnceCell in the connecting map so concurrent waiters coalesce
-                // on retries instead of spawning duplicate dials after removal.
+                // Keep the OnceCell for transient failures so concurrent waiters coalesce
+                // on retries. Permanent dial failures (DNS, invalid URI) drop the map entry
+                // to avoid unbounded growth for endpoints that will never connect.
                 cleanup.disarm();
+                if err.is_permanent_dial_failure() {
+                    self.remove_connecting_if_same(uri, &connect_once).await;
+                }
                 return Err(err);
             }
         };
@@ -186,14 +190,12 @@ impl Drop for ConnectingCleanup {
             return;
         }
 
-        let connecting = Arc::clone(&self.connecting);
-        let uri = self.uri.clone();
-        let connect_once = Arc::clone(&self.connect_once);
-
-        if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::spawn(async move {
-                remove_connecting_entry(connecting, uri, connect_once).await;
-            });
+        let mut map = self.connecting.blocking_lock();
+        if map
+            .get(&self.uri)
+            .is_some_and(|entry| Arc::ptr_eq(entry, &self.connect_once))
+        {
+            map.remove(&self.uri);
         }
     }
 }

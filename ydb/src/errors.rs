@@ -151,6 +151,16 @@ impl YdbError {
             kind: TransportDialFailureKind::Permanent,
         }
     }
+
+    pub(crate) fn is_permanent_dial_failure(&self) -> bool {
+        matches!(
+            self,
+            Self::TransportDialFailed {
+                kind: TransportDialFailureKind::Permanent,
+                ..
+            }
+        )
+    }
 }
 
 /// Describe operation status from server

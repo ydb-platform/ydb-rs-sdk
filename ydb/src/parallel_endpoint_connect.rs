@@ -345,6 +345,7 @@ fn parallel_dial_error(errors: &[YdbError], total_addrs: usize, timed_out: bool)
     };
 
     if failed == 1 && !timed_out {
+        // e.g. last batch of parallel_connect with a single remaining address
         return errors[0].clone();
     }
 
@@ -386,6 +387,14 @@ fn permanent_dial_error(message: impl Into<String>) -> YdbError {
     YdbError::transport_dial_failed_permanent(message)
 }
 
+fn host_port_authority(host: &str, port: u16) -> String {
+    if parse_host_as_ip(host).is_some_and(|ip| ip.is_ipv6()) {
+        format!("[{}]:{port}", strip_ipv6_brackets(host))
+    } else {
+        format!("{host}:{port}")
+    }
+}
+
 fn uri_with_port(uri: Uri, port: u16) -> YdbResult<Uri> {
     if uri.port_u16().is_some() {
         return Ok(uri);
@@ -396,7 +405,7 @@ fn uri_with_port(uri: Uri, port: u16) -> YdbResult<Uri> {
         .ok_or_else(|| YdbError::Custom("URI must have a host".to_string()))?;
     let mut builder = Uri::builder()
         .scheme(uri.scheme().cloned().unwrap_or(Scheme::HTTP))
-        .authority(format!("{host}:{port}"));
+        .authority(host_port_authority(host, port));
 
     if let Some(path_and_query) = uri.path_and_query() {
         builder = builder.path_and_query(path_and_query.as_str());
@@ -534,6 +543,24 @@ mod tests {
     }
 
     #[test]
+    fn uri_with_port_formats_ipv6_authority() -> YdbResult<()> {
+        let uri = Uri::from_static("http://[::1]/");
+        let with_port = uri_with_port(uri, 2135)?;
+
+        assert_eq!(with_port.host(), Some("[::1]"));
+        assert_eq!(with_port.port_u16(), Some(2135));
+
+        Ok(())
+    }
+
+    #[test]
+    fn host_port_authority_ipv6() {
+        assert_eq!(host_port_authority("::1", 2135), "[::1]:2135");
+        assert_eq!(host_port_authority("[::1]", 2135), "[::1]:2135");
+        assert_eq!(host_port_authority("example.com", 2135), "example.com:2135");
+    }
+
+    #[test]
     fn dial_errors_are_retryable() {
         let timeout_err = dial_error("connect timeout: no reachable addresses");
         assert!(matches!(
@@ -583,5 +610,12 @@ mod tests {
         let message = format!("{err:?}");
         assert!(message.contains("connect timeout: 1/3 addresses failed"));
         assert!(message.contains("connection refused"));
+    }
+
+    #[test]
+    fn parallel_dial_error_single_failure_returns_original_error() {
+        let original = permanent_dial_error("connection refused");
+        let err = parallel_dial_error(&[original.clone()], 17, false);
+        assert_eq!(format!("{err:?}"), format!("{original:?}"));
     }
 }
