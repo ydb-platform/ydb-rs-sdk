@@ -258,7 +258,7 @@ impl TopicWriter {
     }
 
     pub async fn stop(self) -> YdbResult<()> {
-        trace!("Stopping...");
+        trace!("stopping...");
 
         self.message_queue.close_for_new_messages().await;
         let flush_result = match timeout(self.flush_timeout, self.flush()).await {
@@ -281,7 +281,7 @@ impl TopicWriter {
             ))
         });
 
-        trace!("Reconnection loop stopped");
+        trace!("reconnection loop stopped");
 
         // First clean up all resources, then return result.
         flush_result?;

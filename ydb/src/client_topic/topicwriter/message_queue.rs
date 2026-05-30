@@ -193,19 +193,13 @@ impl MessageQueueInner {
 
     fn check_message_seq_no(&self, seq_no: i64) -> YdbResult<()> {
         match self.last_added_seq_no {
-            Some(last_added_seq_no) if seq_no <= last_added_seq_no => Err(YdbError::custom(
-                format!("message with seq_no={seq_no} is not newer than the last written message",),
-            )),
+            Some(last_added_seq_no) if seq_no <= last_added_seq_no => {
+                Err(YdbError::custom(format!(
+                    "message seq_no is not greater than the last written message: seq_no={seq_no}, last_added_seq_no={last_added_seq_no}",
+                )))
+            }
             _ => Ok(()),
         }
-    }
-
-    fn would_buffer_exceed_threshold_with_item(
-        buffer: &[MessageData],
-        _item: &MessageData, // Задел на будущее
-        threshold: usize,
-    ) -> bool {
-        buffer.len() + 1 > threshold
     }
 
     fn append_message_to_send_buffer(
@@ -213,38 +207,40 @@ impl MessageQueueInner {
         send_buffer: &mut Vec<MessageData>,
         threshold: usize,
     ) -> AppendMessageToSendBufferResult {
-        let Some(message) = self.messages.front() else {
+        let Some(_) = self.messages.front() else {
             return AppendMessageToSendBufferResult::CouldNotGetMessage;
         };
-        if MessageQueueInner::would_buffer_exceed_threshold_with_item(
-            send_buffer,
-            message,
-            threshold,
-        ) {
-            return AppendMessageToSendBufferResult::Full;
-        }
 
         let message = self.messages.pop_front().unwrap();
         send_buffer.push(message.clone());
         self.sent_messages.push_back(message);
 
-        AppendMessageToSendBufferResult::UnderThreshold
+        if send_buffer.len() < threshold {
+            AppendMessageToSendBufferResult::UnderThreshold
+        } else {
+            AppendMessageToSendBufferResult::Full
+        }
     }
 
     fn acknowledge_message(&mut self, seq_no: i64) -> YdbResult<()> {
         let Some(message) = self.sent_messages.pop_front() else {
             return Err(YdbError::custom(format!(
-                "ack unexpected message with seq_no={seq_no}: queue is empty",
+                "acknowledge_message: queue is empty, got unexpected message: seq_no={seq_no}",
             )));
         };
 
         if message.seq_no != seq_no {
             return Err(YdbError::custom(format!(
-                "ack unexpected message with seq_no={seq_no}: message seq_no mismatch",
+                "acknowledge_message: seq_no mismatch: expected_seq_no={} actual_seq_no={}",
+                message.seq_no, seq_no,
             )));
         }
 
-        self.message_acknowledged_tx.send(seq_no).unwrap();
+        self.message_acknowledged_tx.send(seq_no).map_err(|err| {
+            YdbError::custom(format!(
+                "acknowledge_message: message acknowledged channel: {err}"
+            ))
+        })?;
 
         if self.sent_messages.is_empty() && self.messages.is_empty() {
             self.last_added_seq_no = None;
@@ -322,9 +318,10 @@ mod tests {
         q.add_message(create_message(4, vec![])).await.unwrap();
 
         let err = q.add_message(create_message(4, vec![])).await.unwrap_err();
-
-        assert!(err.to_string().contains("seq_no=4"));
-        assert!(err.to_string().contains("not newer than the last written"));
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("message seq_no is not greater than the last written message"));
+        assert!(err_msg.contains("seq_no=4"));
+        assert!(err_msg.contains("last_added_seq_no=4"));
     }
 
     #[tokio::test]
@@ -333,9 +330,10 @@ mod tests {
         q.add_message(create_message(10, vec![])).await.unwrap();
 
         let err = q.add_message(create_message(7, vec![])).await.unwrap_err();
-
-        assert!(err.to_string().contains("seq_no=7"));
-        assert!(err.to_string().contains("not newer than the last written"));
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("message seq_no is not greater than the last written message"));
+        assert!(err_msg.contains("seq_no=7"));
+        assert!(err_msg.contains("last_added_seq_no=10"));
     }
 
     #[tokio::test]
@@ -355,7 +353,7 @@ mod tests {
         let q_collect = Arc::clone(&q);
         let collect_handle = tokio::spawn(async move {
             q_collect
-                .get_messages_to_send(10, Duration::from_millis(500))
+                .get_messages_to_send(10, Duration::from_millis(50))
                 .await
         });
         q.add_message(create_message(1, vec![10])).await.unwrap();
@@ -407,7 +405,7 @@ mod tests {
         q.add_message(create_message(1, vec![])).await.unwrap();
         q.add_message(create_message(2, vec![])).await.unwrap();
 
-        let msgs = q.get_messages_to_send(0, Duration::from_millis(500)).await;
+        let msgs = q.get_messages_to_send(0, Duration::from_millis(50)).await;
         assert!(msgs.is_empty());
 
         let err = q.acknowledge_message(1).await.unwrap_err();
@@ -425,7 +423,7 @@ mod tests {
         let q_collect = Arc::clone(&q);
         let collect_handle = tokio::spawn(async move {
             q_collect
-                .get_messages_to_send(10, Duration::from_millis(200))
+                .get_messages_to_send(10, Duration::from_millis(50))
                 .await
         });
         q.add_message(create_message(1, vec![])).await.unwrap();
@@ -441,7 +439,7 @@ mod tests {
         let q_collect = Arc::clone(&q);
         let collect_handle = tokio::spawn(async move {
             q_collect
-                .get_messages_to_send(2, Duration::from_millis(500))
+                .get_messages_to_send(2, Duration::from_millis(50))
                 .await
         });
         q.add_message(create_message(1, vec![])).await.unwrap();
@@ -460,7 +458,7 @@ mod tests {
         let q1 = Arc::clone(&q);
         let h1 =
             tokio::spawn(
-                async move { q1.get_messages_to_send(2, Duration::from_millis(500)).await },
+                async move { q1.get_messages_to_send(2, Duration::from_millis(50)).await },
             );
         q.add_message(create_message(11, vec![])).await.unwrap();
         q.add_message(create_message(12, vec![])).await.unwrap();
@@ -469,10 +467,10 @@ mod tests {
         assert_eq!(first.len(), 2);
 
         let q2 = Arc::clone(&q);
-        let h2 = tokio::spawn(async move {
-            q2.get_messages_to_send(10, Duration::from_millis(500))
-                .await
-        });
+        let h2 =
+            tokio::spawn(
+                async move { q2.get_messages_to_send(10, Duration::from_millis(50)).await },
+            );
         let second = h2.await.unwrap();
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].seq_no, 13);
@@ -501,9 +499,9 @@ mod tests {
         let q = MessageQueue::new();
 
         let err = q.acknowledge_message(8).await.unwrap_err();
-
-        assert!(err.to_string().contains("ack unexpected"));
-        assert!(err.to_string().contains("seq_no=8"));
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("acknowledge_message: queue is empty, got unexpected message"));
+        assert!(err_msg.contains("seq_no=8"));
     }
 
     #[tokio::test]
@@ -514,9 +512,10 @@ mod tests {
         assert_eq!(messages.len(), 1);
 
         let err = q.acknowledge_message(99).await.unwrap_err();
-
-        assert!(err.to_string().contains("ack unexpected"));
-        assert!(err.to_string().contains("seq_no=99"));
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("acknowledge_message: seq_no mismatch"));
+        assert!(err_msg.contains("actual_seq_no=99"));
+        assert!(err_msg.contains("expected_seq_no=1"));
     }
 
     #[tokio::test]
@@ -558,7 +557,7 @@ mod tests {
         let q_collect = Arc::clone(&q);
         let collect_handle = tokio::spawn(async move {
             q_collect
-                .get_messages_to_send(20, Duration::from_millis(500))
+                .get_messages_to_send(20, Duration::from_millis(50))
                 .await
         });
         for i in 1..=5 {

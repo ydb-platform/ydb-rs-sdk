@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use tokio::sync::oneshot;
 use tokio::sync::Mutex as TokioMutex;
@@ -7,7 +7,6 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::log::{error, trace};
-use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
 use crate::client_topic::topicwriter::message_queue::MessageQueue;
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
@@ -103,32 +102,16 @@ impl Reconnector {
         message: TopicWriterMessage,
         ack: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     ) -> YdbResult<()> {
-        let data_size = message.data.len() as i64;
-
         let seq_no = message
             .seq_no
             .ok_or_else(|| YdbError::custom("empty message seq_no is provided"))?;
+
+        self.message_queue.add_message(message.try_into()?).await?;
 
         let reception_type = ack.map_or(
             TopicWriterReceptionType::NoConfirmationExpected,
             TopicWriterReceptionType::AwaitingConfirmation,
         );
-
-        let duration = message.created_at.duration_since(UNIX_EPOCH)?;
-        self.message_queue
-            .add_message(MessageData {
-                seq_no,
-                created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
-                    seconds: duration.as_secs() as i64,
-                    nanos: duration.subsec_nanos() as i32,
-                }),
-                metadata_items: vec![],
-                data: message.data,
-                uncompressed_size: data_size,
-                partitioning: None,
-            })
-            .await?;
-
         {
             let mut writer_state = self.writer_state.lock().await;
             writer_state
@@ -295,18 +278,18 @@ impl ReconnectionLoop {
 
     async fn handle_error(&mut self, err: YdbError) -> ReconnectionLoopStatus {
         if !ReconnectionHelper::is_retry_allowed(&err) {
-            trace!("Reconnect is not allowed for error: {err}");
+            trace!("reconnect is not allowed for error: {err}");
             return ReconnectionLoopStatus::Exit(Some(err));
         }
 
-        trace!("Error, trying to reconnect: {err}");
+        trace!("error, trying to reconnect: {err}");
 
         let Some(wait_timeout) = self
             .helper
             .get_timeout_before_reconnect(self.attempt, self.reconnect_start_time.elapsed())
         else {
             return ReconnectionLoopStatus::Exit(Some(YdbError::custom(format!(
-                "Reconnect is not allowed after {} attempts for error: {err}",
+                "reconnect is not allowed after {} attempts for error: {err}",
                 self.attempt,
             ))));
         };
@@ -346,7 +329,7 @@ impl ReconnectionLoop {
                 ReconnectionLoopStatus::WaitForErrorOrCancellation(error_receiver)
             }
             Err(err) => {
-                trace!("Error creating stream writer: {err}");
+                trace!("error creating stream writer: {err}");
                 self.attempt += 1;
 
                 if let Some(tx) = self.init_tx.take() {
@@ -369,7 +352,7 @@ impl ReconnectionLoop {
                     self.reconnect_start_time = Instant::now();
                     ReconnectionLoopStatus::HandleError(err)
                 },
-                Err(chan_err) => ReconnectionLoopStatus::Exit(Some(YdbError::custom(format!("Channel error: {chan_err}"))))
+                Err(chan_err) => ReconnectionLoopStatus::Exit(Some(YdbError::custom(format!("channel error: {chan_err}"))))
             },
         }
     }
