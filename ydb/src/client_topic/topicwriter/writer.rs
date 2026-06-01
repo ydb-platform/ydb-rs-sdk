@@ -239,14 +239,14 @@ impl TopicWriter {
             {
                 Ok(Some(message)) => {
                     let data_size = message.data.len() as i64;
+                    let created_at = message.created_at.duration_since(UNIX_EPOCH)?;
                     messages.push(MessageData {
                         seq_no: message
                             .seq_no
                             .ok_or_else(|| YdbError::custom("empty message seq_no"))?,
                         created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
-                            seconds: message.created_at.duration_since(UNIX_EPOCH)?.as_secs()
-                                as i64,
-                            nanos: message.created_at.duration_since(UNIX_EPOCH)?.as_nanos() as i32,
+                            seconds: created_at.as_secs() as i64,
+                            nanos: created_at.subsec_nanos() as i32,
                         }),
                         metadata_items: vec![],
                         data: message.data,
