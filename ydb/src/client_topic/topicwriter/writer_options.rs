@@ -24,9 +24,9 @@ pub struct TopicWriterOptions {
     pub(crate) auto_seq_no: bool,
     #[builder(default = "true")]
     pub(crate) auto_created_at: bool,
-    #[builder(default = "10")]
+    #[builder(default = "1000")]
     pub(crate) write_request_messages_chunk_size: usize,
-    #[builder(default = "Duration::from_secs(1)")]
+    #[builder(default = "Duration::from_millis(1)")]
     pub(crate) write_request_send_messages_period: Duration,
     #[builder(setter(strip_option), default)]
     pub(crate) codec: Option<Codec>, // in case of no specified codec, codec is auto-selected
