@@ -5,6 +5,7 @@ use crate::grpc_wrapper::raw_scheme_client::list_directory_types::{
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
+use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use tracing::{instrument, trace};
 use ydb_grpc::ydb_proto::operations::OperationParams;
 use ydb_grpc::ydb_proto::scheme::v1::scheme_service_client::SchemeServiceClient;
@@ -12,6 +13,16 @@ use ydb_grpc::ydb_proto::scheme::{MakeDirectoryRequest, RemoveDirectoryRequest};
 
 pub(crate) struct RawSchemeClient {
     service: SchemeServiceClient<InterceptedChannel>,
+}
+
+impl WithGrpcMaxMessageSize for RawSchemeClient {
+    fn with_grpc_max_message_size(mut self, bytes: usize) -> Self {
+        self.service = self
+            .service
+            .max_decoding_message_size(bytes)
+            .max_encoding_message_size(bytes);
+        self
+    }
 }
 
 impl RawSchemeClient {

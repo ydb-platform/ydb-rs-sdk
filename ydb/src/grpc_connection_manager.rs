@@ -1,6 +1,7 @@
 use crate::connection_pool::ConnectionPool;
 use crate::grpc_wrapper::raw_services::GrpcServiceForDiscovery;
 use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
+use crate::grpc_wrapper::grpc_limits::{WithGrpcMaxMessageSize, DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES};
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::YdbResult;
 use http::Uri;
@@ -25,7 +26,7 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
     }
 
     pub(crate) async fn get_auth_service<
-        T: GrpcServiceForDiscovery,
+        T: GrpcServiceForDiscovery + WithGrpcMaxMessageSize,
         F: FnOnce(InterceptedChannel) -> T,
     >(
         &self,
@@ -39,7 +40,7 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
     }
 
     pub(crate) async fn get_auth_service_to_node<
-        T: GrpcServiceForDiscovery,
+        T: GrpcServiceForDiscovery + WithGrpcMaxMessageSize,
         F: FnOnce(InterceptedChannel) -> T,
     >(
         &self,
@@ -49,7 +50,7 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
         let channel = self.state.connections_pool.connection(uri).await?;
 
         let intercepted_channel = InterceptedChannel::new(channel, self.state.interceptor.clone());
-        Ok(new(intercepted_channel))
+        Ok(new(intercepted_channel).with_grpc_max_message_size(DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES))
     }
 
     pub(crate) fn database(&self) -> &String {

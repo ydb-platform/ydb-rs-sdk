@@ -18,9 +18,20 @@ use crate::grpc_wrapper::raw_topic_service::drop_topic::RawDropTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::stream_read;
 use crate::grpc_wrapper::raw_topic_service::update_offsets_in_transaction::RawUpdateOffsetsInTransactionRequest;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
+use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 
 pub(crate) struct RawTopicClient {
     service: TopicServiceClient<InterceptedChannel>,
+}
+
+impl WithGrpcMaxMessageSize for RawTopicClient {
+    fn with_grpc_max_message_size(mut self, bytes: usize) -> Self {
+        self.service = self
+            .service
+            .max_decoding_message_size(bytes)
+            .max_encoding_message_size(bytes);
+        self
+    }
 }
 
 impl RawTopicClient {

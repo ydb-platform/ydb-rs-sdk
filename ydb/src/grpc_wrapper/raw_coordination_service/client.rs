@@ -7,6 +7,7 @@ use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
+use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 
 use super::alter_node::RawAlterNodeRequest;
 use super::create_node::RawCreateNodeRequest;
@@ -15,6 +16,16 @@ use super::drop_node::RawDropNodeRequest;
 
 pub(crate) struct RawCoordinationClient {
     service: CoordinationServiceClient<InterceptedChannel>,
+}
+
+impl WithGrpcMaxMessageSize for RawCoordinationClient {
+    fn with_grpc_max_message_size(mut self, bytes: usize) -> Self {
+        self.service = self
+            .service
+            .max_decoding_message_size(bytes)
+            .max_encoding_message_size(bytes);
+        self
+    }
 }
 
 impl RawCoordinationClient {

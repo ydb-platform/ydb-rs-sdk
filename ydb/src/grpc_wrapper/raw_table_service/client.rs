@@ -23,6 +23,7 @@ use crate::grpc_wrapper::raw_table_service::explain_data_query::{
 };
 use crate::grpc_wrapper::raw_table_service::keepalive::{RawKeepAliveRequest, RawKeepAliveResult};
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
+use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use tracing::trace;
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
@@ -30,6 +31,13 @@ use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 pub(crate) struct RawTableClient {
     timeouts: TimeoutSettings,
     service: TableServiceClient<InterceptedChannel>,
+}
+
+impl WithGrpcMaxMessageSize for RawTableClient {
+    fn with_grpc_max_message_size(mut self, bytes: usize) -> Self {
+        self.service = self.service.with_grpc_max_message_size(bytes);
+        self
+    }
 }
 
 impl RawTableClient {
