@@ -253,6 +253,20 @@ impl TableClient {
         .await
     }
 
+    /// From table with given path `table_path` request rows by primary keys `keys`, which must be
+    /// [`crate::ValueList`].
+    /// If `columns` is `None`, all columns of requested rows will be returned. Otherwise, only
+    /// `columns` will be returned.
+    pub async fn retry_read_rows<C: IntoIterator<String>>(
+        &self,
+        table_path: String,
+        keys: Value,
+        columns: Option<C>,
+    ) -> YdbResult<crate::ResultSet> {
+        // TODO: Check keys inner type
+        unimplemented!()
+    }
+
     /// Execute explain data query with retry policy
     ///
     /// # Type Parameters
