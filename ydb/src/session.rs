@@ -5,9 +5,11 @@ use crate::grpc_wrapper::raw_table_service::read_rows::RawReadRowsRequest;
 use crate::query::Query;
 use crate::result::{ExplainResult, QueryResult, StreamResult};
 use crate::types::Value;
+use crate::YdbStatusError;
 use derivative::Derivative;
 use itertools::Itertools;
 use std::sync::atomic::{AtomicI64, Ordering};
+use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_table_service::client::{
@@ -140,17 +142,13 @@ impl Session {
 
         let res = self.handle_raw_result(raw_res)?;
 
-        // BUG: YdbStatusError internally uses generated StatusCode, not RawStatusCode.
-        // Those two do not match internally.
-        // For now YdbIssues are dropped
-        //
-        //if !matches!(res.status, RawStatusCode::Success) {
-        //    return Err(YdbError::YdbStatusError(YdbStatusError {
-        //        message: "".to_string(),
-        //        operation_status: res.status.into(),
-        //        issues: res.issues,
-        //    }));
-        //}
+        if !matches!(res.status, StatusCode::Success) {
+            return Err(YdbError::YdbStatusError(YdbStatusError {
+                message: "".to_string(),
+                operation_status: res.status.into(),
+                issues: res.issues,
+            }));
+        }
 
         res.result_set.try_into()
     }

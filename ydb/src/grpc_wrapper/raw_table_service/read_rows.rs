@@ -1,10 +1,12 @@
-use ydb_grpc::ydb_proto::table::{ReadRowsRequest, ReadRowsResponse};
+use ydb_grpc::ydb_proto::{
+    status_ids::StatusCode,
+    table::{ReadRowsRequest, ReadRowsResponse},
+};
 
 use crate::{
     grpc::proto_issues_to_ydb_issues,
     grpc_wrapper::{
         raw_errors::RawError,
-        raw_status::RawStatusCode,
         raw_table_service::value::{RawResultSet, RawTypedValue},
     },
     YdbIssue,
@@ -29,7 +31,7 @@ impl From<RawReadRowsRequest> for ReadRowsRequest {
 }
 
 pub(crate) struct RawReadRowsResponse {
-    pub status: RawStatusCode,
+    pub status: StatusCode,
     pub issues: Vec<YdbIssue>,
     pub result_set: RawResultSet,
 }
@@ -39,7 +41,7 @@ impl TryFrom<ReadRowsResponse> for RawReadRowsResponse {
 
     fn try_from(value: ReadRowsResponse) -> Result<Self, Self::Error> {
         Ok(Self {
-            status: value.status().into(),
+            status: value.status(),
             issues: proto_issues_to_ydb_issues(value.issues),
             result_set: value.result_set.unwrap_or_default().try_into()?,
         })
