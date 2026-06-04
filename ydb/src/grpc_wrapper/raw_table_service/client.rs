@@ -1,5 +1,5 @@
 use crate::client::TimeoutSettings;
-use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
+use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertRequest;
 use crate::grpc_wrapper::raw_table_service::commit_transaction::{
@@ -22,12 +22,12 @@ use crate::grpc_wrapper::raw_table_service::explain_data_query::{
     RawExplainDataQueryRequest, RawExplainDataQueryResult,
 };
 use crate::grpc_wrapper::raw_table_service::keepalive::{RawKeepAliveRequest, RawKeepAliveResult};
-use crate::grpc_wrapper::raw_table_service::read_rows::{RawReadRowsRequest, RawReadRowsResponse};
+use crate::grpc_wrapper::raw_table_service::read_rows::RawReadRowsRequest;
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
+use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use tracing::trace;
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
-use ydb_grpc::ydb_proto::table::ReadRowsRequest;
 
 pub(crate) struct RawTableClient {
     timeouts: TimeoutSettings,
@@ -102,11 +102,12 @@ impl RawTableClient {
         );
     }
 
-    pub async fn read_rows(&mut self, req: RawReadRowsRequest) -> RawResult<RawReadRowsResponse> {
-        let req = ReadRowsRequest::from(req);
-        let res = self.service.read_rows(req).await.map_err(RawError::from)?;
-
-        res.into_inner().try_into()
+    pub async fn read_rows(&mut self, req: RawReadRowsRequest) -> RawResult<RawResultSet> {
+        request_with_result!(
+            self.service.read_rows,
+            req => ydb_grpc::ydb_proto::table::ReadRowsRequest,
+            ydb_grpc::ydb_proto::ResultSet => RawResultSet
+        );
     }
 
     pub async fn keep_alive(&mut self, req: RawKeepAliveRequest) -> RawResult<RawKeepAliveResult> {
