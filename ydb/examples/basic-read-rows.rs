@@ -78,9 +78,9 @@ SELECT * FROM AS_TABLE($list)
         .retry_read_rows(format!("/local/{table_name}"), keys, None)
         .await?;
 
-    let rows = result_set.rows();
+    let mut rows = result_set.rows();
 
-    let row_to_val = |row: ydb::Row| {
+    let row_to_val = |mut row: ydb::Row| -> YdbResult<(i64, String)> {
         let id: Option<i64> = row.remove_field_by_name("id")?.try_into()?;
         let val: Option<String> = row.remove_field_by_name("val")?.try_into()?;
 
