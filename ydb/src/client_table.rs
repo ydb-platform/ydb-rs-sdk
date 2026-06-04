@@ -257,21 +257,17 @@ impl TableClient {
     /// [`Value::List`].
     /// If `columns` is `None`, all columns of requested rows will be returned. Otherwise, only
     /// `columns` will be returned.
-    pub async fn retry_read_rows<C: IntoIterator<Item = String>>(
+    pub async fn retry_read_rows(
         &self,
         table_path: String,
         keys: Value,
-        columns: Option<C>,
+        columns: Option<Vec<String>>,
     ) -> YdbResult<crate::ResultSet> {
         if !matches!(keys, Value::List(_)) {
             return Err(YdbError::Custom("expected List type for keys".to_string()));
         }
 
-        let columns: Vec<String> = if let Some(columns) = columns {
-            columns.into_iter().collect()
-        } else {
-            vec![]
-        };
+        let columns = columns.unwrap_or_default();
 
         self.retry(|| async {
             let mut session = self.create_session().await?;

@@ -17,7 +17,7 @@ async fn main() -> YdbResult<()> {
     let table_name = "test";
 
     let _ = table_client
-        .retry_execute_scheme_query(format!("DROP TABLE {test}"))
+        .retry_execute_scheme_query(format!("DROP TABLE {table_name}"))
         .await; // ignore drop error
 
     // create table
@@ -80,8 +80,23 @@ SELECT * FROM AS_TABLE($list)
 
     let rows = result_set.rows();
 
-    assert_eq!(rows.next().unwrap(), "test1");
-    assert_eq!(rows.next().unwrap(), "test3");
+    let row_to_val = |row: ydb::Row| {
+        let id: Option<i64> = row.remove_field_by_name("id")?.try_into()?;
+        let val: Option<String> = row.remove_field_by_name("val")?.try_into()?;
+
+        Ok((id.unwrap(), val.unwrap()))
+    };
+
+    assert_eq!(
+        row_to_val(rows.next().unwrap()).unwrap(),
+        (1i64, "test1".to_string())
+    );
+
+    assert_eq!(
+        row_to_val(rows.next().unwrap()).unwrap(),
+        (3i64, "test3".to_string())
+    );
+
     assert!(rows.next().is_none());
 
     println!("OK");
