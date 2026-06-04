@@ -420,7 +420,13 @@ mod test {
             MultiInterceptor::new().with_interceptor(AuthGrpcInterceptor::new(cred.clone())?);
 
         let connection_manager =
-            GrpcConnectionManager::new(load_balancer, cred.database, interceptor, None);
+            GrpcConnectionManager::new(
+                load_balancer,
+                cred.database,
+                interceptor,
+                None,
+                crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+            );
 
         let discovery_shared =
             DiscoverySharedState::new(connection_manager, test_client_builder().endpoint.as_str())?;
