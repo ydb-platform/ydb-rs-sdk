@@ -3,6 +3,7 @@ use tracing::trace;
 use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
 use ydb_grpc::ydb_proto::topic::{stream_read_message, stream_write_message};
 
+use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
@@ -18,7 +19,6 @@ use crate::grpc_wrapper::raw_topic_service::drop_topic::RawDropTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::stream_read;
 use crate::grpc_wrapper::raw_topic_service::update_offsets_in_transaction::RawUpdateOffsetsInTransactionRequest;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
-use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 
 pub(crate) struct RawTopicClient {
     service: TopicServiceClient<InterceptedChannel>,

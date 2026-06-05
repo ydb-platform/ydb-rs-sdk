@@ -1,4 +1,5 @@
 use crate::client::TimeoutSettings;
+use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertRequest;
@@ -23,7 +24,6 @@ use crate::grpc_wrapper::raw_table_service::explain_data_query::{
 };
 use crate::grpc_wrapper::raw_table_service::keepalive::{RawKeepAliveRequest, RawKeepAliveResult};
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
-use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use tracing::trace;
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;

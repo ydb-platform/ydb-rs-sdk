@@ -1,7 +1,7 @@
 use crate::grpc_wrapper::grpc::grpc_read_operation_result;
+use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
-use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::YdbResult;
 use itertools::Itertools;
 use ydb_grpc::ydb_proto::discovery::v1::discovery_service_client::DiscoveryServiceClient;

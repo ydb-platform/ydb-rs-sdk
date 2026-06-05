@@ -1,3 +1,4 @@
+use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_scheme_client::list_directory_types::{
     RawListDirectoryRequest, RawListDirectoryResult,
@@ -5,7 +6,6 @@ use crate::grpc_wrapper::raw_scheme_client::list_directory_types::{
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
-use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use tracing::{instrument, trace};
 use ydb_grpc::ydb_proto::operations::OperationParams;
 use ydb_grpc::ydb_proto::scheme::v1::scheme_service_client::SchemeServiceClient;
