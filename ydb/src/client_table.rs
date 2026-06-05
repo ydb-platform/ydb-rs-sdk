@@ -120,8 +120,8 @@ pub struct TableClient {
 }
 
 /// Tries to construct [`Value::List`] of [`Value::Struct`] from `values`.
-/// If `values` are empty (no example value), retruns None.
-/// If any value of `values` is not [`Value::Struct`], returns [`YdbError`].
+/// If `values` are empty (no example value), return None.
+/// If any of values is not [`Value::Struct`] or differs from others by structure, returns [`YdbError`]
 fn try_vec_to_list_of_structs(values: Vec<Value>) -> YdbResult<Option<Value>> {
     let Some(example_value) = values.first().cloned() else {
         return Ok(None);
@@ -642,5 +642,38 @@ impl Retry for NoRetrier {
             allow_retry: false,
             wait_timeout: Duration::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ydb_struct;
+
+    use super::*;
+
+    #[test]
+    fn try_vec_empty() {
+        assert!(matches!(try_vec_to_list_of_structs(vec![]), Ok(None)));
+    }
+
+    #[test]
+    fn try_vec_same_structure() {
+        let values = vec![ydb_struct!("id" => 1), ydb_struct!("id" => 2)];
+        assert!(matches!(try_vec_to_list_of_structs(values), Ok(Some(_))));
+    }
+
+    #[test]
+    fn try_vec_different_structure() {
+        let values = vec![ydb_struct!("id" => 1), ydb_struct!("key" => 2)];
+        assert!(try_vec_to_list_of_structs(values).is_err());
+    }
+
+    #[test]
+    fn try_vec_non_struct() {
+        let values = vec![ydb_struct!("id" => 1), 42i64.into()];
+        assert!(try_vec_to_list_of_structs(values).is_err());
+
+        let values = vec![1i64.into()];
+        assert!(try_vec_to_list_of_structs(values).is_err());
     }
 }
