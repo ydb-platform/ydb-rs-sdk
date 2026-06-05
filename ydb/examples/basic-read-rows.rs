@@ -31,15 +31,15 @@ async fn main() -> YdbResult<()> {
     let rows = vec![
         ydb_struct!(
             "id" => 1_i64,
-            "val" => "test",
+            "val" => Value::Text("test1".into()),
         ),
         ydb_struct!(
             "id" => 2_i64,
-            "val" => "test2",
+            "val" => Value::Text("test2".into()),
         ),
         ydb_struct!(
             "id" => 3_i64,
-            "val" => "test3"),
+            "val" => Value::Text("test3".into())),
     ];
 
     // example value will use only for type description
@@ -71,8 +71,11 @@ SELECT * FROM AS_TABLE($list)
         })
         .await?;
 
-    let example_key = Value::from(1_i64);
-    let keys = Value::list_from(example_key, vec![1i64.into(), 3_i64.into(), 42_i64.into()])?;
+    let keys = vec![
+        ydb_struct!("id" => 1i64),
+        ydb_struct!("id" => 3i64),
+        ydb_struct!("id" => 42i64),
+    ];
 
     let result_set = table_client
         .retry_read_rows(format!("/local/{table_name}"), keys, None)

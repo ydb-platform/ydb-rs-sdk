@@ -50,7 +50,7 @@ pub(crate) struct RawVariantValue {
 // internal to protobuf
 //
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Default)]
 pub(crate) struct RawResultSet {
     pub columns: Vec<RawColumn>,
     pub rows: Vec<Vec<RawValue>>,
