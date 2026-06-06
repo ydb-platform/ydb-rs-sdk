@@ -36,7 +36,7 @@ impl TryFrom<TopicWriterMessage> for MessageData {
         let created_at = value.created_at.duration_since(UNIX_EPOCH)?;
 
         Ok(MessageData {
-            seq_no: seq_no,
+            seq_no,
             created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
                 seconds: created_at.as_secs() as i64,
                 nanos: created_at.subsec_nanos() as i32,
