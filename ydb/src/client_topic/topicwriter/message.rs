@@ -33,13 +33,13 @@ impl TryFrom<TopicWriterMessage> for MessageData {
             .seq_no
             .ok_or_else(|| YdbError::custom("empty message seq_no is provided"))?;
 
-        let duration = value.created_at.duration_since(UNIX_EPOCH)?;
+        let created_at = value.created_at.duration_since(UNIX_EPOCH)?;
 
         Ok(MessageData {
             seq_no: seq_no,
             created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
-                seconds: duration.as_secs() as i64,
-                nanos: duration.subsec_nanos() as i32,
+                seconds: created_at.as_secs() as i64,
+                nanos: created_at.subsec_nanos() as i32,
             }),
             metadata_items: vec![],
             data: value.data,
