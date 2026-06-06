@@ -70,9 +70,8 @@ impl TopicWriterReceptionQueue {
             tokio::sync::oneshot::Receiver<()>,
         ) = tokio::sync::oneshot::channel();
         if self.message_receipt_signals_queue.is_empty() {
-            tx.send(()).map_err(|_| {
-                YdbError::custom(format!("init_flush_op: channel unexpectedly closed"))
-            })?;
+            tx.send(())
+                .map_err(|_| YdbError::custom("init_flush_op: channel unexpectedly closed"))?;
             return Ok(rx);
         }
         match self.message_receipt_signals_queue.back_mut() {
@@ -110,7 +109,7 @@ impl TopicWriterReceptionQueue {
         if let Some(sender) = self.flush_finished_sender.take() {
             sender
                 .send(())
-                .map_err(|_| YdbError::custom(format!("send_flush_finished: channel is closed")))?;
+                .map_err(|_| YdbError::custom("send_flush_finished: channel is closed"))?;
         }
         Ok(())
     }
