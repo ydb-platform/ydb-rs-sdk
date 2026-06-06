@@ -1,11 +1,10 @@
 use std::{collections::VecDeque, mem::swap, sync::Arc, time::Duration};
 
 use tokio::{
-    sync::{mpsc, Mutex as TokioMutex, Notify},
+    sync::{Mutex as TokioMutex, Notify, RwLock},
     time::{sleep_until, Instant},
 };
 use tokio_util::sync::CancellationToken;
-use tracing::log::trace;
 
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
@@ -16,27 +15,27 @@ pub(crate) struct MessageQueue {
     inner: Arc<TokioMutex<MessageQueueInner>>,
 
     new_message_added: Arc<Notify>,
-    message_acknowledged_rx: Arc<TokioMutex<mpsc::UnboundedReceiver<i64>>>,
+    last_acknowledged_seq_no: Arc<RwLock<Option<i64>>>,
+    message_acknowledged: Arc<Notify>,
 }
 
 impl MessageQueue {
     pub(crate) fn new() -> Self {
         let new_message_added = Arc::new(Notify::new());
-        let (message_acknowledged_tx, message_acknowledged_rx) = mpsc::unbounded_channel();
 
         Self {
-            inner: Arc::new(TokioMutex::new(MessageQueueInner::new(
-                new_message_added.clone(),
-                message_acknowledged_tx,
-            ))),
+            inner: Arc::new(TokioMutex::new(MessageQueueInner::new())),
             new_message_added,
-            message_acknowledged_rx: Arc::new(TokioMutex::new(message_acknowledged_rx)),
+            last_acknowledged_seq_no: Arc::new(RwLock::new(None)),
+            message_acknowledged: Arc::new(Notify::new()),
         }
     }
 
     pub(crate) async fn add_message(&self, message: MessageData) -> YdbResult<()> {
         let mut inner = self.inner.lock().await;
-        inner.add_message(message)
+        inner.add_message(message)?;
+        self.new_message_added.notify_one();
+        Ok(())
     }
 
     async fn append_message_to_send_buffer(
@@ -86,7 +85,10 @@ impl MessageQueue {
 
     pub(crate) async fn acknowledge_message(&self, seq_no: i64) -> YdbResult<()> {
         let mut inner = self.inner.lock().await;
-        inner.acknowledge_message(seq_no)
+        inner.acknowledge_message(seq_no)?;
+        *self.last_acknowledged_seq_no.write().await = Some(seq_no);
+        self.message_acknowledged.notify_one();
+        Ok(())
     }
 
     pub(crate) async fn reset_progress(&self) {
@@ -116,21 +118,16 @@ impl MessageQueue {
             return;
         };
 
-        let mut message_acknowledged_rx = self.message_acknowledged_rx.lock().await;
-
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => {
                     break;
                 }
-                Some(seq_no) = message_acknowledged_rx.recv() => {
-                    if seq_no == last_seq_no {
-                        break;
+                _ = self.message_acknowledged.notified() => {
+                    match *self.last_acknowledged_seq_no.read().await {
+                        Some(last_acknowledged_seq_no) if last_acknowledged_seq_no >= last_seq_no => break,
+                        _ => continue,
                     }
-                }
-                else => {
-                    trace!("message acknowledged channel is closed");
-                    break;
                 }
             }
         }
@@ -147,9 +144,6 @@ struct MessageQueueInner {
     last_added_seq_no: Option<i64>,
 
     is_open_for_new_messages: bool,
-
-    new_message_added: Arc<Notify>,
-    message_acknowledged_tx: mpsc::UnboundedSender<i64>,
 }
 
 #[derive(Debug)]
@@ -160,17 +154,12 @@ enum AppendMessageToSendBufferResult {
 }
 
 impl MessageQueueInner {
-    pub(crate) fn new(
-        new_message_added: Arc<Notify>,
-        message_acknowledged_tx: mpsc::UnboundedSender<i64>,
-    ) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             messages: VecDeque::new(),
             sent_messages: VecDeque::new(),
             last_added_seq_no: None,
             is_open_for_new_messages: true,
-            new_message_added,
-            message_acknowledged_tx,
         }
     }
 
@@ -185,8 +174,6 @@ impl MessageQueueInner {
         self.last_added_seq_no = Some(seq_no);
 
         self.messages.push_back(message);
-
-        self.new_message_added.notify_one();
 
         Ok(())
     }
@@ -236,12 +223,6 @@ impl MessageQueueInner {
             )));
         }
 
-        self.message_acknowledged_tx.send(seq_no).map_err(|err| {
-            YdbError::custom(format!(
-                "acknowledge_message: message acknowledged channel: {err}"
-            ))
-        })?;
-
         if self.sent_messages.is_empty() && self.messages.is_empty() {
             self.last_added_seq_no = None;
         }
@@ -276,22 +257,13 @@ mod tests {
         }
     }
 
-    fn create_queue() -> (MessageQueueInner, mpsc::UnboundedReceiver<i64>) {
-        let new_message_added = Arc::new(Notify::new());
-        let (message_acknowledged_tx, message_acknowledged_rx) = mpsc::unbounded_channel();
-        (
-            MessageQueueInner::new(new_message_added, message_acknowledged_tx),
-            message_acknowledged_rx,
-        )
-    }
-
     fn move_all_pending_to_sent(q: &mut MessageQueueInner) {
         q.sent_messages.append(&mut q.messages);
     }
 
     #[tokio::test]
     async fn new_creates_empty_queue() {
-        let (q, _rx) = create_queue();
+        let q = MessageQueueInner::new();
         assert!(q.last_added_seq_no.is_none());
         assert!(q.messages.is_empty());
         assert!(q.sent_messages.is_empty());
@@ -300,7 +272,7 @@ mod tests {
 
     #[tokio::test]
     async fn add_message_appends_and_updates_fields() {
-        let (mut q, _rx) = create_queue();
+        let mut q = MessageQueueInner::new();
         q.add_message(create_message(10, vec![1, 2, 3])).unwrap();
         q.add_message(create_message(11, vec![4, 5])).unwrap();
 
@@ -478,7 +450,7 @@ mod tests {
 
     #[tokio::test]
     async fn acknowledge_message_removes_front_when_seq_no_matches() {
-        let (mut q, _rx) = create_queue();
+        let mut q = MessageQueueInner::new();
         q.add_message(create_message(5, vec![])).unwrap();
         q.add_message(create_message(6, vec![])).unwrap();
         q.add_message(create_message(7, vec![])).unwrap();
@@ -520,7 +492,7 @@ mod tests {
 
     #[tokio::test]
     async fn reset_progress_restores_sent_messages_to_pending() {
-        let (mut q, _rx) = create_queue();
+        let mut q = MessageQueueInner::new();
 
         for i in 1..=2 {
             q.sent_messages.push_back(create_message(i, vec![]));
