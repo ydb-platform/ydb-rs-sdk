@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::sync::Arc;
@@ -503,6 +504,135 @@ async fn scheme_query() -> YdbResult<()> {
             let mut session = session; // force borrow for lifetime of t inside closure
             session
                 .execute_schema_query(format!("DROP TABLE {table_name}"))
+                .await?;
+
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn read_rows() -> YdbResult<()> {
+    const TABLE_NAME: &str = "read_rows";
+    const TABLE_PATH: &str = "/local/read_rows";
+
+    let client = create_client().await?;
+    let table_client = client.table_client();
+
+    table_client
+        .retry_with_session(RetryOptions::new(), |mut session| async move {
+            session
+                .execute_schema_query(format!(
+                    "CREATE TABLE {TABLE_NAME} (id Int64, first Utf8, second Utf8, PRIMARY KEY (id))"
+                ))
+                .await?;
+
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let values = [("A", "A"), ("A", "B"), ("B", "A"), ("B", "B")];
+    let ydb_values = values.map(|pair| (Value::Text(pair.0.into()), Value::Text(pair.1.into())));
+
+    let rows = values
+        .into_iter()
+        .enumerate()
+        .map(|t| {
+            let (id, (first, second)) = t;
+
+            ydb_struct!("id" => id as i64, "first" => first, "second" => second)
+        })
+        .collect_vec();
+
+    table_client
+        .retry_execute_bulk_upsert(TABLE_PATH.into(), rows)
+        .await?;
+
+    // Empty
+    let empty = table_client.retry_read_rows(TABLE_PATH, vec![], None).await;
+    assert_eq!(empty.unwrap().rows().count(), 0);
+
+    // Non-list keys
+    let non_structs = table_client
+        .retry_read_rows(TABLE_PATH, vec![Value::Int64(1i64)], None)
+        .await;
+    assert!(non_structs.is_err());
+
+    let vec_to_values = |ids: Vec<i64>| {
+        ids.into_iter()
+            .map(|id| ydb_struct!("id" => id))
+            .collect_vec()
+    };
+
+    // Basic all columns
+    let all_columns = table_client
+        .retry_read_rows(TABLE_PATH, vec_to_values((0i64..4i64).collect_vec()), None)
+        .await;
+
+    for (mut row, (first, second)) in all_columns.unwrap().rows().zip(ydb_values.iter()) {
+        assert_eq!(&row.remove_field_by_name("first").unwrap(), first);
+        assert_eq!(&row.remove_field_by_name("second").unwrap(), second);
+    }
+
+    // Basic reversed
+    let all_columns_rev = table_client
+        .retry_read_rows(
+            TABLE_PATH,
+            vec_to_values((0i64..4i64).rev().collect_vec()),
+            None,
+        )
+        .await;
+    for (mut row, (first, second)) in all_columns_rev.unwrap().rows().zip(ydb_values.iter().rev()) {
+        assert_eq!(&row.remove_field_by_name("first").unwrap(), first);
+        assert_eq!(&row.remove_field_by_name("second").unwrap(), second);
+    }
+
+    // Partial
+    let keys = vec![0i64, 2i64, 4i64, 6i64];
+    let partial = table_client
+        .retry_read_rows(
+            TABLE_PATH,
+            vec_to_values(keys.clone()),
+            Some(vec!["first".into()]),
+        )
+        .await;
+    let rows = partial
+        .unwrap()
+        .rows()
+        .map(|mut t| {
+            assert!(t.remove_field_by_name("second").is_err());
+            assert!(t.remove_field_by_name("third").is_err());
+            t.remove_field_by_name("first").unwrap()
+        })
+        .collect_vec();
+
+    for key in keys {
+        if let Some((first, _)) = ydb_values.get(key as usize) {
+            assert!(rows.contains(first));
+        }
+    }
+
+    // Unknown column
+    let unknown = table_client
+        .retry_read_rows(
+            TABLE_PATH,
+            vec_to_values(vec![1i64]),
+            Some(vec!["first".into(), "unknown".into()]),
+        )
+        .await;
+    assert!(unknown.is_err());
+
+    // Clear table
+    table_client
+        .retry_with_session(RetryOptions::new(), |mut session| async move {
+            session
+                .execute_schema_query(format!("DROP TABLE {TABLE_NAME}"))
                 .await?;
 
             Ok(())
