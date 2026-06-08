@@ -1,140 +1,9 @@
-use std::{collections::VecDeque, mem::swap, sync::Arc, time::Duration};
-
-use tokio::{
-    sync::{Mutex as TokioMutex, Notify, RwLock},
-    time::{sleep_until, Instant},
-};
-use tokio_util::sync::CancellationToken;
-
+use std::{collections::VecDeque, mem::swap};
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
 use crate::{YdbError, YdbResult};
 
-#[derive(Clone)]
-pub(crate) struct MessageQueue {
-    inner: Arc<TokioMutex<MessageQueueInner>>,
-
-    new_message_added: Arc<Notify>,
-    last_acknowledged_seq_no: Arc<RwLock<Option<i64>>>,
-    message_acknowledged: Arc<Notify>,
-}
-
-impl MessageQueue {
-    pub(crate) fn new() -> Self {
-        let new_message_added = Arc::new(Notify::new());
-
-        Self {
-            inner: Arc::new(TokioMutex::new(MessageQueueInner::new())),
-            new_message_added,
-            last_acknowledged_seq_no: Arc::new(RwLock::new(None)),
-            message_acknowledged: Arc::new(Notify::new()),
-        }
-    }
-
-    pub(crate) async fn add_message(&self, message: MessageData) -> YdbResult<()> {
-        let mut inner = self.inner.lock().await;
-        inner.add_message(message)?;
-        self.new_message_added.notify_one();
-        Ok(())
-    }
-
-    async fn append_message_to_send_buffer(
-        &self,
-        send_buffer: &mut Vec<MessageData>,
-        threshold: usize,
-    ) -> AppendMessageToSendBufferResult {
-        let mut inner = self.inner.lock().await;
-        inner.append_message_to_send_buffer(send_buffer, threshold)
-    }
-
-    pub(crate) async fn get_messages_to_send(
-        &self,
-        threshold: usize,
-        duration: Duration,
-    ) -> Vec<MessageData> {
-        let mut messages = Vec::new();
-        if threshold == 0 {
-            return messages;
-        }
-
-        let timeout = Instant::now() + duration;
-        loop {
-            // Append while we can
-            loop {
-                match self
-                    .append_message_to_send_buffer(&mut messages, threshold)
-                    .await
-                {
-                    AppendMessageToSendBufferResult::Full => return messages,
-                    // Looks like there are no messages
-                    AppendMessageToSendBufferResult::CouldNotGetMessage => break,
-                    AppendMessageToSendBufferResult::UnderThreshold => {}
-                }
-            }
-
-            // Wait for new messages or timeout
-            tokio::select! {
-                biased;
-                _ = self.new_message_added.notified() => {}
-                _ = sleep_until(timeout) => break,
-            }
-        }
-
-        messages
-    }
-
-    pub(crate) async fn acknowledge_message(&self, seq_no: i64) -> YdbResult<()> {
-        let mut inner = self.inner.lock().await;
-        inner.acknowledge_message(seq_no)?;
-        *self.last_acknowledged_seq_no.write().await = Some(seq_no);
-        self.message_acknowledged.notify_one();
-        Ok(())
-    }
-
-    pub(crate) async fn reset_progress(&self) {
-        let mut inner = self.inner.lock().await;
-        inner.reset_progress()
-    }
-
-    pub(crate) async fn close_for_new_messages(&self) {
-        let mut inner = self.inner.lock().await;
-        inner.close_for_new_messages()
-    }
-
-    // Waits for the last message to be acknowledged.
-    // Note that the "last message" is the last message in the queue at the start of the method call.
-    // If more messages are added during the wait, they will not be waited for here.
-    //
-    // Is used for the flush operation.
-    pub(crate) async fn wait_for_messages_to_be_acknowledged(
-        &self,
-        cancellation_token: &CancellationToken,
-    ) {
-        let last_seq_no = {
-            let inner = self.inner.lock().await;
-            inner.last_added_seq_no
-        };
-        let Some(last_seq_no) = last_seq_no else {
-            return;
-        };
-
-        loop {
-            tokio::select! {
-                _ = cancellation_token.cancelled() => {
-                    break;
-                }
-                _ = self.message_acknowledged.notified() => {
-                    match *self.last_acknowledged_seq_no.read().await {
-                        Some(last_acknowledged_seq_no) if last_acknowledged_seq_no >= last_seq_no => break,
-                        _ => continue,
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct MessageQueueInner {
+pub(crate) struct MessageQueueInner {
     // Messages awaiting to be sent
     messages: VecDeque<MessageData>,
     // Messages awaiting to be acknowledged
@@ -142,12 +11,10 @@ struct MessageQueueInner {
 
     // Sequence number of the last message that has been added to the queue
     last_added_seq_no: Option<i64>,
-
-    is_open_for_new_messages: bool,
 }
 
 #[derive(Debug)]
-enum AppendMessageToSendBufferResult {
+pub(crate) enum AppendMessageToSendBufferResult {
     Full,
     UnderThreshold,
     CouldNotGetMessage,
@@ -159,15 +26,10 @@ impl MessageQueueInner {
             messages: VecDeque::new(),
             sent_messages: VecDeque::new(),
             last_added_seq_no: None,
-            is_open_for_new_messages: true,
         }
     }
 
-    fn add_message(&mut self, message: MessageData) -> YdbResult<()> {
-        if !self.is_open_for_new_messages {
-            return Err(YdbError::custom("message queue is closed for new messages"));
-        }
-
+    pub(crate) fn add_message(&mut self, message: MessageData) -> YdbResult<()> {
         let seq_no = message.seq_no;
         self.check_message_seq_no(seq_no)?;
 
@@ -189,7 +51,7 @@ impl MessageQueueInner {
         }
     }
 
-    fn append_message_to_send_buffer(
+    pub(crate) fn append_message_to_send_buffer(
         &mut self,
         send_buffer: &mut Vec<MessageData>,
         threshold: usize,
@@ -209,7 +71,7 @@ impl MessageQueueInner {
         }
     }
 
-    fn acknowledge_message(&mut self, seq_no: i64) -> YdbResult<()> {
+    pub(crate) fn acknowledge_message(&mut self, seq_no: i64) -> YdbResult<()> {
         let Some(message) = self.sent_messages.pop_front() else {
             return Err(YdbError::custom(format!(
                 "acknowledge_message: queue is empty, got unexpected message: seq_no={seq_no}",
@@ -230,13 +92,9 @@ impl MessageQueueInner {
         Ok(())
     }
 
-    fn reset_progress(&mut self) {
+    pub(crate) fn reset_progress(&mut self) {
         self.sent_messages.append(&mut self.messages);
         swap(&mut self.messages, &mut self.sent_messages);
-    }
-
-    fn close_for_new_messages(&mut self) {
-        self.is_open_for_new_messages = false;
     }
 }
 
@@ -267,7 +125,6 @@ mod tests {
         assert!(q.last_added_seq_no.is_none());
         assert!(q.messages.is_empty());
         assert!(q.sent_messages.is_empty());
-        assert!(q.is_open_for_new_messages);
     }
 
     #[tokio::test]

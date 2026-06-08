@@ -8,17 +8,12 @@ use tokio_util::sync::CancellationToken;
 use tracing::log::{trace, warn};
 
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
-use ydb_grpc::ydb_proto::topic::stream_write_message::{InitRequest, WriteRequest};
+use ydb_grpc::ydb_proto::topic::stream_write_message::WriteRequest;
 use ydb_grpc::ydb_proto::topic::{stream_write_message, Codec};
 
-use crate::client_topic::topicwriter::connection::ConnectionInfo;
-use crate::client_topic::topicwriter::message_queue::MessageQueue;
 use crate::client_topic::topicwriter::message_write_status::WriteAck;
-use crate::client_topic::topicwriter::writer::WriterState;
-use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::client_topic::topicwriter::queue::Queue;
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
-use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
-use crate::grpc_wrapper::raw_topic_service::stream_write::init::RawInitResponse;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
 use crate::{TopicWriterOptions, YdbError, YdbResult};
 
@@ -39,42 +34,13 @@ struct WriterLoopParams {
 impl StreamWriter {
     pub async fn new(
         writer_options: TopicWriterOptions,
-        producer_id: String,
-        message_queue: MessageQueue,
-        connection_manager: GrpcConnectionManager,
-        writer_state: Arc<TokioMutex<WriterState>>,
+        mut stream: AsyncGrpcStreamWrapper<
+            stream_write_message::FromClient,
+            stream_write_message::FromServer,
+        >,
+        queue: Queue,
         error_tx: oneshot::Sender<YdbError>,
-    ) -> YdbResult<Self> {
-        let init_request_body = InitRequest {
-            path: writer_options.topic_path.clone(),
-            producer_id: producer_id.clone(),
-            write_session_meta: writer_options.session_metadata.clone().unwrap_or_default(),
-            get_last_seq_no: writer_options.auto_seq_no,
-            partitioning: Some(
-                writer_options
-                    .partitioning
-                    .to_grpc_init_partitioning(producer_id.clone()),
-            ),
-        };
-
-        let mut topic_service = connection_manager
-            .get_auth_service(RawTopicClient::new)
-            .await?;
-
-        let mut stream = topic_service
-            .stream_write(init_request_body.clone())
-            .await?;
-        let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
-        {
-            let mut writer_state = writer_state.lock().await;
-            writer_state.connection_info = ConnectionInfo {
-                partition_id: init_response.partition_id,
-                session_id: init_response.session_id,
-                last_seq_no_assigned: init_response.last_seq_no,
-                codecs_from_server: init_response.supported_codecs,
-            };
-        }
-
+    ) -> Self {
         let cancellation_token = CancellationToken::new();
 
         // Both loops share the same oneshot error channel.
@@ -83,7 +49,7 @@ impl StreamWriter {
         let writer_loop = tokio::spawn(StreamWriter::writer_loop(
             cancellation_token.clone(),
             shared_error_tx.clone(),
-            message_queue.clone(),
+            queue.clone(),
             WriterLoopParams {
                 write_request_messages_chunk_size: writer_options.write_request_messages_chunk_size,
                 write_request_send_messages_period: writer_options
@@ -95,28 +61,27 @@ impl StreamWriter {
         let receive_messages_loop = tokio::spawn(StreamWriter::receive_messages_loop(
             cancellation_token.clone(),
             shared_error_tx,
-            message_queue,
-            writer_state,
+            queue.clone(),
             stream,
         ));
 
-        Ok(Self {
+        Self {
             writer_loop,
             receive_messages_loop,
             cancellation_token,
-        })
+        }
     }
 
     async fn writer_loop(
         cancellation_token: CancellationToken,
         error_tx: Arc<TokioMutex<Option<oneshot::Sender<YdbError>>>>,
-        message_queue: MessageQueue,
+        queue: Queue,
         task_params: WriterLoopParams,
     ) {
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => { return; }
-                result = StreamWriter::writer_loop_iteration(&message_queue, &task_params) => {
+                result = StreamWriter::writer_loop_iteration(&queue, &task_params) => {
                     let Err(writer_iteration_error) = result else {
                         continue;
                     };
@@ -136,16 +101,14 @@ impl StreamWriter {
         }
     }
 
-    async fn writer_loop_iteration(
-        message_queue: &MessageQueue,
-        task_params: &WriterLoopParams,
-    ) -> YdbResult<()> {
-        let messages_to_send = message_queue
+    async fn writer_loop_iteration(queue: &Queue, task_params: &WriterLoopParams) -> YdbResult<()> {
+        let messages_to_send = queue
             .get_messages_to_send(
                 task_params.write_request_messages_chunk_size,
                 task_params.write_request_send_messages_period,
             )
             .await;
+
         if messages_to_send.is_empty() {
             return Ok(());
         }
@@ -166,8 +129,7 @@ impl StreamWriter {
     async fn receive_messages_loop(
         cancellation_token: CancellationToken,
         error_tx: Arc<TokioMutex<Option<oneshot::Sender<YdbError>>>>,
-        message_queue: MessageQueue,
-        writer_state: Arc<TokioMutex<WriterState>>,
+        queue: Queue,
         mut stream: AsyncGrpcStreamWrapper<
             stream_write_message::FromClient,
             stream_write_message::FromServer,
@@ -177,9 +139,8 @@ impl StreamWriter {
             tokio::select! {
                 _ = cancellation_token.cancelled() => { return; }
                 message_receive_it_res = StreamWriter::receive_messages_loop_iteration(
-                    &message_queue,
+                    &queue,
                     &mut stream,
-                    &writer_state,
                 ) => {
                     let Err(receive_message_it_error) = message_receive_it_res else {
                         continue;
@@ -200,12 +161,11 @@ impl StreamWriter {
     }
 
     async fn receive_messages_loop_iteration(
-        message_queue: &MessageQueue,
+        queue: &Queue,
         server_messages_receiver: &mut AsyncGrpcStreamWrapper<
             stream_write_message::FromClient,
             stream_write_message::FromServer,
         >,
-        writer_state: &Arc<TokioMutex<WriterState>>,
     ) -> YdbResult<()> {
         match server_messages_receiver.receive::<RawServerMessage>().await {
             Ok(message) => match message {
@@ -217,37 +177,7 @@ impl StreamWriter {
                 RawServerMessage::Write(write_response_body) => {
                     for raw_ack in write_response_body.acks {
                         let write_ack = WriteAck::from(raw_ack);
-                        let expected_seq_no = {
-                            let writer_state = writer_state.lock().await;
-                            writer_state
-                                .confirmation_reception_queue
-                                .peek_ticket_seq_no()
-                        };
-
-                        let Some(expected_seq_no) = expected_seq_no else {
-                            return Err(YdbError::custom(
-                                "expected reception ticket to be actually present",
-                            ));
-                        };
-                        if write_ack.seq_no != expected_seq_no {
-                            return Err(YdbError::custom(format!(
-                                "reception ticket and write ack seq_no mismatch. Seqno from ack: {}, expected: {}",
-                                write_ack.seq_no,
-                                expected_seq_no,
-                            )));
-                        }
-                        message_queue.acknowledge_message(write_ack.seq_no).await?;
-
-                        let ticket = {
-                            let mut writer_state = writer_state.lock().await;
-                            writer_state.confirmation_reception_queue.try_get_ticket()
-                        }?;
-                        let Some(ticket) = ticket else {
-                            return Err(YdbError::custom(
-                                "reception ticket is missing after message queue ack",
-                            ));
-                        };
-                        ticket.send_confirmation_if_needed(write_ack.status);
+                        queue.acknowledge_message(write_ack).await?;
                     }
                 }
                 RawServerMessage::UpdateToken(_update_token_response_body) => {}
