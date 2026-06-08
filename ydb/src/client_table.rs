@@ -300,13 +300,15 @@ impl TableClient {
     /// ```
     pub async fn retry_read_rows(
         &self,
-        table_path: String,
+        table_path: impl Into<String>,
         keys: Vec<Value>,
         columns: Option<Vec<String>>,
     ) -> YdbResult<crate::ResultSet> {
         let Some(keys) = try_vec_to_list_of_structs(keys)? else {
             return Ok(crate::ResultSet::default());
         };
+
+        let table_path: String = table_path.into();
 
         let columns = columns.unwrap_or_default();
 
