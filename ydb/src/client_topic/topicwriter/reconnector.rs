@@ -7,16 +7,18 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::log::{error, trace};
+use ydb_grpc::ydb_proto::topic::stream_write_message;
 
-use crate::client_topic::topicwriter::message_queue::MessageQueue;
+use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
+use crate::client_topic::topicwriter::queue::Queue;
 use crate::client_topic::topicwriter::stream_writer::StreamWriter;
-use crate::client_topic::topicwriter::writer::{TopicWriterStatus, WriterState};
-use crate::client_topic::topicwriter::writer_reception_queue::{
-    TopicWriterReceptionTicket, TopicWriterReceptionType,
-};
 use crate::errors::NeedRetry;
 use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
+use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
+use crate::grpc_wrapper::raw_topic_service::stream_write::init::RawInitResponse;
+use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
 use crate::retry::{Retry, RetryParams};
 use crate::{TopicWriterMessage, TopicWriterOptions, YdbError, YdbResult};
 
@@ -24,52 +26,71 @@ pub(crate) struct ReconnectorParams {
     pub(crate) writer_options: TopicWriterOptions,
     pub(crate) producer_id: String,
     pub(crate) connection_manager: GrpcConnectionManager,
-    pub(crate) writer_state: Arc<TokioMutex<WriterState>>,
     pub(crate) cancellation_token: CancellationToken,
-    pub(crate) message_queue: MessageQueue,
     pub(crate) retrier: Arc<dyn Retry>,
     pub(crate) init_tx: oneshot::Sender<YdbResult<()>>,
     pub(crate) fatal_error_tx: oneshot::Sender<YdbError>,
+    pub(crate) flush_timeout: Duration,
 }
 
+#[derive(Clone)]
 enum ReconnectorStatus {
-    Created,
     Working,
+    FinishedWithError(YdbError),
     Stopped,
+}
+
+impl ReconnectorStatus {
+    pub(crate) fn check_working(&self) -> YdbResult<()> {
+        match self {
+            ReconnectorStatus::Working => Ok(()),
+            ReconnectorStatus::FinishedWithError(err) => Err(err.clone()),
+            ReconnectorStatus::Stopped => Err(YdbError::custom("is stopped")),
+        }
+    }
 }
 
 struct ReconnectorState {
     status: ReconnectorStatus,
     loop_handle: Option<JoinHandle<()>>,
+    connection_info: ConnectionInfo,
+    queue: Queue,
 }
 
 pub(crate) struct Reconnector {
     state: Arc<TokioMutex<ReconnectorState>>,
-    writer_state: Arc<TokioMutex<WriterState>>,
-    pub(crate) message_queue: MessageQueue,
+    cancellation_token: CancellationToken,
+    auto_set_seq_no: bool,
+    flush_timeout: Duration,
 }
 
 impl Reconnector {
     pub(crate) async fn new(params: ReconnectorParams) -> Self {
+        let queue = Queue::new();
+        let state = Arc::new(TokioMutex::new(ReconnectorState {
+            status: ReconnectorStatus::Working,
+            loop_handle: None,
+            connection_info: ConnectionInfo::default(),
+            queue,
+        }));
+        let cancellation_token = params.cancellation_token;
+
         let r = Reconnector {
-            state: Arc::new(TokioMutex::new(ReconnectorState {
-                status: ReconnectorStatus::Created,
-                loop_handle: None,
-            })),
-            message_queue: params.message_queue.clone(),
-            writer_state: params.writer_state.clone(),
+            state: state.clone(),
+            cancellation_token: cancellation_token.clone(),
+            auto_set_seq_no: params.writer_options.auto_seq_no,
+            flush_timeout: params.flush_timeout,
         };
 
         let loop_join_handle = Reconnector::start_reconnection_loop(
             ReconnectionHelper {
+                state: r.state.clone(),
                 connection_manager: params.connection_manager,
                 retrier: params.retrier,
-                cancellation_token: params.cancellation_token,
-                writer_state: params.writer_state,
+                cancellation_token: cancellation_token,
                 writer_options: params.writer_options,
                 producer_id: params.producer_id,
             },
-            params.message_queue,
             params.fatal_error_tx,
             params.init_tx,
         )
@@ -78,7 +99,6 @@ impl Reconnector {
         {
             let mut state = r.state.lock().await;
             state.loop_handle = Some(loop_join_handle);
-            state.status = ReconnectorStatus::Working;
         }
 
         r
@@ -86,12 +106,11 @@ impl Reconnector {
 
     async fn start_reconnection_loop(
         helper: ReconnectionHelper,
-        message_queue: MessageQueue,
         fatal_error_tx: oneshot::Sender<YdbError>,
         init_tx: oneshot::Sender<YdbResult<()>>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
-            ReconnectionLoop::new(helper, message_queue, init_tx)
+            ReconnectionLoop::new(helper, init_tx)
                 .run(fatal_error_tx)
                 .await
         })
@@ -99,51 +118,89 @@ impl Reconnector {
 
     pub(crate) async fn add_message_for_processing(
         &self,
-        message: TopicWriterMessage,
-        ack: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
+        mut message: TopicWriterMessage,
+        wait_ack: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     ) -> YdbResult<()> {
-        let seq_no = message
-            .seq_no
-            .ok_or_else(|| YdbError::custom("empty message seq_no is provided"))?;
+        let mut state = self.state.lock().await;
+        state.status.check_working()?;
 
-        self.message_queue.add_message(message.try_into()?).await?;
+        if self.auto_set_seq_no {
+            if message.seq_no.is_some() {
+                return Err(YdbError::custom(
+                        "explicitly specifying message.seq_no is only allowed if auto_set_seq_no is disabled",
+                    ));
+            }
+            message.seq_no = Some(state.connection_info.last_seq_no_assigned + 1);
+        };
 
-        let reception_type = ack.map_or(
-            TopicWriterReceptionType::NoConfirmationExpected,
-            TopicWriterReceptionType::AwaitingConfirmation,
-        );
-        {
-            let mut writer_state = self.writer_state.lock().await;
-            writer_state
-                .confirmation_reception_queue
-                .add_ticket(TopicWriterReceptionTicket::new(seq_no, reception_type));
-        }
+        let Some(message_seq_no) = message.seq_no else {
+            return Err(YdbError::custom("empty message seq_no is provided"));
+        };
+        state.connection_info.last_seq_no_assigned = message_seq_no;
+
+        let message = message.try_into()?;
+        state.queue.add_message(message, wait_ack).await
+    }
+
+    pub(crate) async fn flush(&self) -> YdbResult<()> {
+        let queue = {
+            let state = self.state.lock().await;
+            state.status.check_working()?;
+            state.queue.clone()
+        };
+        queue.flush().await
+    }
+
+    pub(crate) async fn stop(&self) -> YdbResult<()> {
+        let queue = {
+            let state = self.state.lock().await;
+            state.queue.clone()
+        };
+        queue.close_for_new_messages().await;
+        let flush_result = match timeout(self.flush_timeout, queue.flush()).await {
+            Ok(result) => result,
+            Err(_) => Err(YdbError::custom(
+                "stop: flush() timed out while stopping topic writer",
+            )),
+        };
+
+        self.cancellation_token.cancel();
+
+        let reconnector_result = self.stop_inner().await;
+
+        flush_result?;
+        reconnector_result?;
 
         Ok(())
     }
 
-    pub(crate) async fn stop(self) -> YdbResult<()> {
-        let mut state = self.state.lock().await;
-        match &state.status {
-            ReconnectorStatus::Created => Ok(()),
-            ReconnectorStatus::Working => match state.loop_handle.take() {
-                Some(loop_handle) => {
+    async fn stop_inner(&self) -> YdbResult<()> {
+        let loop_handle = {
+            let mut state = self.state.lock().await;
+            match &state.status {
+                ReconnectorStatus::Working => {
                     state.status = ReconnectorStatus::Stopped;
-                    loop_handle.await.map_err(|err| {
-                        YdbError::custom(format!(
-                            "stop: error while waiting for reconnection_loop to finish: {err}"
-                        ))
-                    })
+                    state.loop_handle.take()
                 }
-                None => Ok(()),
-            },
-            ReconnectorStatus::Stopped => Ok(()),
+                ReconnectorStatus::FinishedWithError(err) => return Err(err.clone()),
+                ReconnectorStatus::Stopped => return Ok(()),
+            }
+        };
+
+        if let Some(loop_handle) = loop_handle {
+            loop_handle.await.map_err(|err| {
+                YdbError::custom(format!(
+                    "stop: error while waiting for reconnection_loop to finish: {err}"
+                ))
+            })?;
         }
+
+        Ok(())
     }
 }
 
 struct ReconnectionHelper {
-    writer_state: Arc<TokioMutex<WriterState>>,
+    state: Arc<TokioMutex<ReconnectorState>>,
     writer_options: TopicWriterOptions,
     connection_manager: GrpcConnectionManager,
     retrier: Arc<dyn Retry>,
@@ -159,20 +216,61 @@ enum WaitBeforeReconnectResult {
 impl ReconnectionHelper {
     async fn recreate_stream_writer(
         &self,
-        message_queue: MessageQueue,
         error_sender: oneshot::Sender<YdbError>,
     ) -> YdbResult<StreamWriter> {
-        message_queue.reset_progress().await;
+        let queue = {
+            let state = self.state.lock().await;
+            state.queue.clone()
+        };
 
-        StreamWriter::new(
-            self.writer_options.clone(),
-            self.producer_id.clone(),
-            message_queue,
-            self.connection_manager.clone(),
-            self.writer_state.clone(),
-            error_sender,
-        )
-        .await
+        queue.reset_progress().await;
+
+        let stream = self.connect().await?;
+
+        Ok(StreamWriter::new(self.writer_options.clone(), stream, queue, error_sender).await)
+    }
+
+    async fn connect(
+        &self,
+    ) -> YdbResult<
+        AsyncGrpcStreamWrapper<stream_write_message::FromClient, stream_write_message::FromServer>,
+    > {
+        let init_request_body = stream_write_message::InitRequest {
+            path: self.writer_options.topic_path.clone(),
+            producer_id: self.producer_id.clone(),
+            write_session_meta: self
+                .writer_options
+                .session_metadata
+                .clone()
+                .unwrap_or_default(),
+            get_last_seq_no: self.writer_options.auto_seq_no,
+            partitioning: Some(
+                self.writer_options
+                    .partitioning
+                    .to_grpc_init_partitioning(self.producer_id.clone()),
+            ),
+        };
+
+        let mut topic_service = self
+            .connection_manager
+            .get_auth_service(RawTopicClient::new)
+            .await?;
+
+        let mut stream = topic_service
+            .stream_write(init_request_body.clone())
+            .await?;
+        let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
+        {
+            let mut state = self.state.lock().await;
+            state.connection_info = ConnectionInfo {
+                partition_id: init_response.partition_id,
+                session_id: init_response.session_id,
+                last_seq_no_assigned: init_response.last_seq_no,
+                codecs_from_server: init_response.supported_codecs,
+            };
+        }
+
+        Ok(stream)
     }
 
     fn is_retry_allowed(err: &YdbError) -> bool {
@@ -205,16 +303,10 @@ impl ReconnectionHelper {
             Err(_) => WaitBeforeReconnectResult::Ok,
         }
     }
-
-    async fn set_writer_status(&self, new_status: TopicWriterStatus) {
-        let mut writer_state = self.writer_state.lock().await;
-        writer_state.status = new_status;
-    }
 }
 
 struct ReconnectionLoop {
     helper: ReconnectionHelper,
-    message_queue: MessageQueue,
 
     reconnect_start_time: Instant,
     attempt: usize,
@@ -222,6 +314,7 @@ struct ReconnectionLoop {
     stream_writer: Option<StreamWriter>,
 }
 
+#[derive(Debug)]
 enum ReconnectionLoopStatus {
     HandleError(YdbError),
     RecreateStreamWriter,
@@ -230,14 +323,9 @@ enum ReconnectionLoopStatus {
 }
 
 impl ReconnectionLoop {
-    fn new(
-        helper: ReconnectionHelper,
-        message_queue: MessageQueue,
-        init_tx: oneshot::Sender<YdbResult<()>>,
-    ) -> Self {
+    fn new(helper: ReconnectionHelper, init_tx: oneshot::Sender<YdbResult<()>>) -> Self {
         Self {
             helper,
-            message_queue,
             reconnect_start_time: Instant::now(),
             attempt: 0,
             init_tx: Some(init_tx),
@@ -266,13 +354,18 @@ impl ReconnectionLoop {
         }
 
         if let Some(final_error) = final_result {
-            if let Err(err) = fatal_error_tx.send(final_error.clone()) {
-                error!("can't send fatal error to TopicWriter: channel is closed: {err}");
+            {
+                let mut state = self.helper.state.lock().await;
+                state.status = ReconnectorStatus::FinishedWithError(final_error.clone());
+                state
+                    .queue
+                    .notify_reception_tickets(final_error.clone())
+                    .await;
             }
 
-            self.helper
-                .set_writer_status(TopicWriterStatus::FinishedWithError(final_error))
-                .await;
+            if let Err(err) = fatal_error_tx.send(final_error) {
+                error!("can't send fatal error to TopicWriter: channel is closed: {err}");
+            }
         }
     }
 
@@ -283,6 +376,7 @@ impl ReconnectionLoop {
         }
 
         trace!("error, trying to reconnect: {err}");
+        println!("error, trying to reconnect: {err}");
 
         let Some(wait_timeout) = self
             .helper
@@ -293,10 +387,6 @@ impl ReconnectionLoop {
                 self.attempt,
             ))));
         };
-
-        self.helper
-            .set_writer_status(TopicWriterStatus::Reconnecting)
-            .await;
 
         match self.helper.wait_before_reconnect(wait_timeout).await {
             WaitBeforeReconnectResult::Ok => ReconnectionLoopStatus::RecreateStreamWriter,
@@ -310,17 +400,10 @@ impl ReconnectionLoop {
         }
 
         let (error_sender, error_receiver) = oneshot::channel();
-        match self
-            .helper
-            .recreate_stream_writer(self.message_queue.clone(), error_sender)
-            .await
-        {
+        match self.helper.recreate_stream_writer(error_sender).await {
             Ok(sw) => {
                 self.stream_writer = Some(sw);
                 self.attempt = 0;
-                self.helper
-                    .set_writer_status(TopicWriterStatus::Working)
-                    .await;
 
                 if let Some(tx) = self.init_tx.take() {
                     let _ = tx.send(Ok(()));

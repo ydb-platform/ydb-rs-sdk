@@ -4,28 +4,18 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
-use tokio::sync::{oneshot, Mutex as TokioMutex, RwLock as TokioRwLock};
+use tokio::sync::{oneshot, RwLock as TokioRwLock};
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::log::trace;
 
-use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
-use crate::client_topic::topicwriter::message_queue::MessageQueue;
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
 use crate::client_topic::topicwriter::reconnector::{Reconnector, ReconnectorParams};
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
-use crate::client_topic::topicwriter::writer_reception_queue::TopicWriterReceptionQueue;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::retry::TimeoutRetrier;
 use crate::{YdbError, YdbResult};
-
-pub(crate) enum TopicWriterStatus {
-    Working,
-    Reconnecting,
-    FinishedWithError(YdbError),
-}
 
 /// TopicWriter is currently in development.
 /// It is mostly usable, but has some unimplemented features.
@@ -38,21 +28,12 @@ pub struct TopicWriter {
     pub(crate) auto_set_seq_no: bool,
     pub(crate) flush_timeout: Duration,
 
-    state: Arc<TokioMutex<WriterState>>,
-    message_queue: MessageQueue,
-
     cancellation_token: CancellationToken,
 
     fatal_error: Arc<TokioRwLock<Option<YdbError>>>,
     wait_for_fatal_error_handle: JoinHandle<()>,
 
     reconnector: Reconnector,
-}
-
-pub(crate) struct WriterState {
-    pub(crate) status: TopicWriterStatus,
-    pub(crate) confirmation_reception_queue: TopicWriterReceptionQueue,
-    pub(crate) connection_info: ConnectionInfo,
 }
 
 #[allow(dead_code)]
@@ -83,14 +64,7 @@ impl TopicWriter {
             .clone()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-        let message_queue = MessageQueue::new();
         let cancellation_token = CancellationToken::new();
-
-        let state = Arc::new(TokioMutex::new(WriterState {
-            status: TopicWriterStatus::Working,
-            confirmation_reception_queue: TopicWriterReceptionQueue::new(),
-            connection_info: ConnectionInfo::default(),
-        }));
 
         let retrier = writer_options.retrier.clone().unwrap_or_else(|| {
             Arc::new(TimeoutRetrier {
@@ -105,12 +79,11 @@ impl TopicWriter {
             writer_options: writer_options.clone(),
             producer_id: producer_id.clone(),
             connection_manager,
-            writer_state: state.clone(),
             cancellation_token: cancellation_token.clone(),
-            message_queue: message_queue.clone(),
             retrier,
             init_tx,
             fatal_error_tx,
+            flush_timeout: writer_options.flush_timeout,
         })
         .await;
 
@@ -128,7 +101,6 @@ impl TopicWriter {
         let wait_for_fatal_error_handle = tokio::spawn(TopicWriter::wait_for_fatal_error(
             cancellation_token.clone(),
             fatal_error_rx,
-            state.clone(),
             fatal_error.clone(),
         ));
 
@@ -140,8 +112,6 @@ impl TopicWriter {
             auto_set_seq_no: writer_options.auto_seq_no,
             flush_timeout: writer_options.flush_timeout,
             cancellation_token,
-            state,
-            message_queue,
             fatal_error,
             wait_for_fatal_error_handle,
             reconnector,
@@ -177,30 +147,11 @@ impl TopicWriter {
 
     async fn write_message(
         &mut self,
-        mut message: TopicWriterMessage,
+        message: TopicWriterMessage,
         wait_ack: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     ) -> YdbResult<()> {
-        self.check_working().await?;
-
         if let Some(err) = self.fatal_error.read().await.as_ref() {
             return Err(err.clone());
-        }
-
-        {
-            let mut state = self.state.lock().await;
-            if self.auto_set_seq_no {
-                if message.seq_no.is_some() {
-                    return Err(YdbError::custom(
-                        "explicitly specifying message.seq_no is only allowed if auto_set_seq_no is disabled",
-                    ));
-                }
-                message.seq_no = Some(state.connection_info.last_seq_no_assigned + 1);
-            };
-
-            let Some(message_seq_no) = message.seq_no else {
-                return Err(YdbError::custom("empty message seq_no is provided"));
-            };
-            state.connection_info.last_seq_no_assigned = message_seq_no;
         }
 
         self.reconnector
@@ -211,33 +162,12 @@ impl TopicWriter {
     }
 
     pub async fn flush(&self) -> YdbResult<()> {
-        self.check_working().await?;
-
-        let flush_op_completed = {
-            let mut state = self.state.lock().await;
-            state.confirmation_reception_queue.init_flush_op()?
-        };
-
-        self.message_queue
-            .wait_for_messages_to_be_acknowledged(&self.cancellation_token)
-            .await;
-
-        Ok(flush_op_completed.await?)
-    }
-
-    async fn check_working(&self) -> YdbResult<()> {
-        let state = self.state.lock().await;
-        match &state.status {
-            TopicWriterStatus::Working => Ok(()),
-            TopicWriterStatus::Reconnecting => Ok(()),
-            TopicWriterStatus::FinishedWithError(err) => Err(err.clone()),
-        }
+        self.reconnector.flush().await
     }
 
     async fn wait_for_fatal_error(
         cancellation_token: CancellationToken,
         fatal_error_rx: oneshot::Receiver<YdbError>,
-        state: Arc<TokioMutex<WriterState>>,
         fatal_error: Arc<TokioRwLock<Option<YdbError>>>,
     ) {
         tokio::select! {
@@ -249,10 +179,6 @@ impl TopicWriter {
                     let mut fatal_error = fatal_error.write().await;
                     *fatal_error = Some(err.clone());
                 }
-                {
-                    let mut state = state.lock().await;
-                    state.confirmation_reception_queue.send_error_to_tickets_and_clear(err);
-                }
             }
         }
     }
@@ -260,15 +186,6 @@ impl TopicWriter {
     pub async fn stop(self) -> YdbResult<()> {
         trace!("stopping...");
 
-        self.message_queue.close_for_new_messages().await;
-        let flush_result = match timeout(self.flush_timeout, self.flush()).await {
-            Ok(result) => result,
-            Err(_) => Err(YdbError::custom(
-                "stop: flush() timed out while stopping topic writer",
-            )),
-        };
-
-        self.cancellation_token.cancel();
         let reconnector_result = self.reconnector.stop().await.map_err(|err| {
             YdbError::custom(format!(
                 "stop: error while waiting for reconnector to finish: {err}"
@@ -284,7 +201,6 @@ impl TopicWriter {
         trace!("reconnection loop stopped");
 
         // First clean up all resources, then return result.
-        flush_result?;
         reconnector_result?;
         wait_for_fatal_error_result?;
 
