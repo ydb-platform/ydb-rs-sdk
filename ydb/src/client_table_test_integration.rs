@@ -528,7 +528,7 @@ async fn read_rows() -> YdbResult<()> {
         .retry_with_session(RetryOptions::new(), |mut session| async move {
             session
                 .execute_schema_query(format!(
-                    "CREATE TABLE {TABLE_NAME} (id Int64, first Utf8, second Utf8, PRIMARY KEY (id))"
+                    "CREATE TABLE {TABLE_NAME} (id Int64, first Int64, second Int64, PRIMARY KEY (id))"
                 ))
                 .await?;
 
@@ -537,8 +537,8 @@ async fn read_rows() -> YdbResult<()> {
         .await
         .unwrap();
 
-    let values = [("A", "A"), ("A", "B"), ("B", "A"), ("B", "B")];
-    let ydb_values = values.map(|pair| (Value::Text(pair.0.into()), Value::Text(pair.1.into())));
+    let values: [(i64, i64); 4] = [(0, 0), (0, 1), (1, 0), (1, 1)];
+    let ydb_values = values.map(|pair| (Value::Int64(pair.0), Value::Int64(pair.1)));
 
     let rows = values
         .into_iter()
