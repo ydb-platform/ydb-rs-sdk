@@ -528,7 +528,7 @@ async fn read_rows() -> YdbResult<()> {
         .retry_with_session(RetryOptions::new(), |mut session| async move {
             session
                 .execute_schema_query(format!(
-                    "CREATE TABLE {TABLE_NAME} (id Int64, first Int64, second Int64, PRIMARY KEY (id))"
+                    "CREATE TABLE {TABLE_NAME} (id Int64 NOT NULL, first Int64 NOT NULL, second Int64 NOT NULL, PRIMARY KEY (id))"
                 ))
                 .await?;
 
