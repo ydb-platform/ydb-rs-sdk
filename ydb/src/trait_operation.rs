@@ -20,7 +20,6 @@ use ydb_grpc::ydb_proto::topic::{
     AlterTopicResponse, CreateTopicResponse, DescribeConsumerResponse, DescribeTopicResponse,
     DropTopicResponse, UpdateOffsetsInTransactionResponse,
 };
-use ydb_grpc::ydb_proto::ResultSet;
 
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 
@@ -30,7 +29,7 @@ pub(crate) trait YdbGrpcStatus<T>: Debug {
     fn into_result(self) -> RawResult<T>;
 }
 
-impl YdbGrpcStatus<ResultSet> for ReadRowsResponse {
+impl YdbGrpcStatus<ReadRowsResponse> for ReadRowsResponse {
     fn status(&self) -> RawResult<StatusCode> {
         Ok(self.status())
     }
@@ -39,9 +38,8 @@ impl YdbGrpcStatus<ResultSet> for ReadRowsResponse {
         Ok(&self.issues)
     }
 
-    fn into_result(self) -> RawResult<ResultSet> {
-        self.result_set
-            .ok_or_else(|| RawError::Custom("no result data".into()))
+    fn into_result(self) -> RawResult<ReadRowsResponse> {
+        Ok(self)
     }
 }
 
@@ -75,6 +73,7 @@ macro_rules! operation_impl_for {
 
                 Ok(&operation.issues)
             }
+
             fn into_result(self) -> RawResult<T> {
                 let operation = self
                     .operation

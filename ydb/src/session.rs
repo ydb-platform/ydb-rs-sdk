@@ -138,9 +138,9 @@ impl Session {
         let mut table_client = self.get_table_client().await?;
         let raw_res = table_client.read_rows(req).await;
 
-        let raw_result_set = self.handle_raw_result(raw_res)?;
+        let raw_read_rows_response = self.handle_raw_result(raw_res)?;
 
-        raw_result_set.try_into()
+        raw_read_rows_response.result_set.try_into()
     }
 
     pub(crate) async fn execute_bulk_upsert(
