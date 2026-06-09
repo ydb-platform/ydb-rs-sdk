@@ -376,7 +376,6 @@ impl ReconnectionLoop {
         }
 
         trace!("error, trying to reconnect: {err}");
-        println!("error, trying to reconnect: {err}");
 
         let Some(wait_timeout) = self
             .helper
