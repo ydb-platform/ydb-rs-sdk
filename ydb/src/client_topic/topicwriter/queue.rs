@@ -247,7 +247,7 @@ impl QueueInner {
         Ok(receiver)
     }
 
-    fn reset_progress(&mut self) -> () {
+    fn reset_progress(&mut self) {
         self.message_queue.reset_progress();
     }
 
