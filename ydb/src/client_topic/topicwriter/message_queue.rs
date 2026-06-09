@@ -3,7 +3,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData
 
 use crate::{YdbError, YdbResult};
 
-pub(crate) struct MessageQueueInner {
+pub(crate) struct MessageQueue {
     // Messages awaiting to be sent
     messages: VecDeque<MessageData>,
     // Messages awaiting to be acknowledged
@@ -20,7 +20,7 @@ pub(crate) enum AppendMessageToSendBufferResult {
     CouldNotGetMessage,
 }
 
-impl MessageQueueInner {
+impl MessageQueue {
     pub(crate) fn new() -> Self {
         Self {
             messages: VecDeque::new(),
@@ -113,13 +113,13 @@ mod tests {
         }
     }
 
-    fn move_all_pending_to_sent(q: &mut MessageQueueInner) {
+    fn move_all_pending_to_sent(q: &mut MessageQueue) {
         q.sent_messages.append(&mut q.messages);
     }
 
     #[test]
     fn new_creates_empty_queue() {
-        let q = MessageQueueInner::new();
+        let q = MessageQueue::new();
         assert!(q.last_added_seq_no.is_none());
         assert!(q.messages.is_empty());
         assert!(q.sent_messages.is_empty());
@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn add_message_appends_and_updates_fields() {
-        let mut q = MessageQueueInner::new();
+        let mut q = MessageQueue::new();
         q.add_message(create_message(10, vec![1, 2, 3])).unwrap();
         q.add_message(create_message(11, vec![4, 5])).unwrap();
 
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn add_message_rejects_duplicate_seq_no() {
-        let mut q = MessageQueueInner::new();
+        let mut q = MessageQueue::new();
         q.add_message(create_message(4, vec![])).unwrap();
 
         let err = q.add_message(create_message(4, vec![])).unwrap_err();
@@ -153,7 +153,7 @@ mod tests {
 
     #[test]
     fn add_message_rejects_out_of_order_seq_no() {
-        let mut q = MessageQueueInner::new();
+        let mut q = MessageQueue::new();
         q.add_message(create_message(10, vec![])).unwrap();
 
         let err = q.add_message(create_message(7, vec![])).unwrap_err();
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn append_message_to_send_buffer_moves_message_to_sent() {
-        let mut q = MessageQueueInner::new();
+        let mut q = MessageQueue::new();
         q.add_message(create_message(1, vec![10])).unwrap();
 
         let mut buffer = Vec::new();
@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn append_message_to_send_buffer_returns_could_not_get_message_when_empty() {
-        let mut q = MessageQueueInner::new();
+        let mut q = MessageQueue::new();
         let mut buffer = Vec::new();
 
         let result = q.append_message_to_send_buffer(&mut buffer, 10);
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn append_message_to_send_buffer_returns_full_when_threshold_reached() {
-        let mut q = MessageQueueInner::new();
+        let mut q = MessageQueue::new();
         q.add_message(create_message(1, vec![])).unwrap();
         q.add_message(create_message(2, vec![])).unwrap();
 
@@ -219,7 +219,7 @@ mod tests {
 
     #[test]
     fn acknowledge_message_removes_front_when_seq_no_matches() {
-        let mut q = MessageQueueInner::new();
+        let mut q = MessageQueue::new();
         q.add_message(create_message(5, vec![])).unwrap();
         q.add_message(create_message(6, vec![])).unwrap();
         q.add_message(create_message(7, vec![])).unwrap();
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn acknowledge_message_clears_last_added_seq_no_when_all_queues_empty() {
-        let mut q = MessageQueueInner::new();
+        let mut q = MessageQueue::new();
         q.add_message(create_message(1, vec![])).unwrap();
         move_all_pending_to_sent(&mut q);
 
@@ -250,7 +250,7 @@ mod tests {
 
     #[test]
     fn acknowledge_message_returns_error_when_empty() {
-        let mut q = MessageQueueInner::new();
+        let mut q = MessageQueue::new();
 
         let err = q.acknowledge_message(8).unwrap_err();
         let err_msg = err.to_string();
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn acknowledge_message_errors_when_seq_no_mismatches() {
-        let mut q = MessageQueueInner::new();
+        let mut q = MessageQueue::new();
         q.add_message(create_message(1, vec![])).unwrap();
         move_all_pending_to_sent(&mut q);
 
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn reset_progress_restores_sent_messages_to_pending() {
-        let mut q = MessageQueueInner::new();
+        let mut q = MessageQueue::new();
 
         for i in 1..=2 {
             q.sent_messages.push_back(create_message(i, vec![]));
