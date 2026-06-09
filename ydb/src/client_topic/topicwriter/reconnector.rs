@@ -87,7 +87,7 @@ impl Reconnector {
                 state: r.state.clone(),
                 connection_manager: params.connection_manager,
                 retrier: params.retrier,
-                cancellation_token: cancellation_token,
+                cancellation_token,
                 writer_options: params.writer_options,
                 producer_id: params.producer_id,
             },
