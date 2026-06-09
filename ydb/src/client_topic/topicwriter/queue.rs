@@ -255,3 +255,280 @@ impl QueueInner {
         self.is_open_for_new_messages = false;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client_topic::topicwriter::message_write_status::{MessageWriteStatus, WriteAck};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    fn create_message(seq_no: i64, data: Vec<u8>) -> MessageData {
+        MessageData {
+            seq_no,
+            created_at: None,
+            data,
+            uncompressed_size: 0,
+            metadata_items: vec![],
+            partitioning: None,
+        }
+    }
+
+    fn write_ack(seq_no: i64) -> WriteAck {
+        WriteAck {
+            seq_no,
+            status: MessageWriteStatus::Unknown,
+        }
+    }
+
+    #[tokio::test]
+    async fn add_message_rejects_when_queue_closed_for_new_messages() {
+        let q = Queue::new();
+        q.add_message(create_message(1, vec![]), None)
+            .await
+            .unwrap();
+
+        q.close_for_new_messages().await;
+
+        let err = q
+            .add_message(create_message(1, vec![]), None)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("closed for new messages"));
+    }
+
+    #[tokio::test]
+    async fn get_messages_to_send_moves_batch_to_sent_and_can_ack() {
+        let q = Arc::new(Queue::new());
+
+        let q_collect = Arc::clone(&q);
+        let collect_handle = tokio::spawn(async move {
+            q_collect
+                .get_messages_to_send(10, Duration::from_millis(50))
+                .await
+        });
+        q.add_message(create_message(1, vec![10]), None)
+            .await
+            .unwrap();
+        q.add_message(create_message(2, vec![20]), None)
+            .await
+            .unwrap();
+
+        let batch = collect_handle.await.unwrap();
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch[0].seq_no, 1);
+        assert_eq!(batch[1].seq_no, 2);
+
+        q.acknowledge_message(write_ack(1)).await.unwrap();
+        q.acknowledge_message(write_ack(2)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_messages_to_send_empty_queue_times_out_empty() {
+        let q = Queue::new();
+        let msgs = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        assert!(msgs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn get_messages_to_send_drains_messages_added_before_call() {
+        let q = Queue::new();
+        q.add_message(create_message(1, vec![]), None)
+            .await
+            .unwrap();
+        q.add_message(create_message(2, vec![]), None)
+            .await
+            .unwrap();
+
+        let msgs = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].seq_no, 1);
+        assert_eq!(msgs[1].seq_no, 2);
+    }
+
+    #[tokio::test]
+    async fn get_messages_to_send_with_zero_duration_drains_messages() {
+        let q = Queue::new();
+        q.add_message(create_message(1, vec![]), None)
+            .await
+            .unwrap();
+
+        let msgs = q.get_messages_to_send(10, Duration::ZERO).await;
+
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].seq_no, 1);
+    }
+
+    #[tokio::test]
+    async fn get_messages_to_send_with_zero_threshold_doesnt_move_messages_to_sent() {
+        let q = Queue::new();
+        q.add_message(create_message(1, vec![]), None)
+            .await
+            .unwrap();
+        q.add_message(create_message(2, vec![]), None)
+            .await
+            .unwrap();
+
+        let msgs = q.get_messages_to_send(0, Duration::from_millis(50)).await;
+        assert!(msgs.is_empty());
+
+        let err = q.acknowledge_message(write_ack(1)).await.unwrap_err();
+        assert!(err.to_string().contains("queue is empty"));
+
+        let msgs = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].seq_no, 1);
+        assert_eq!(msgs[1].seq_no, 2);
+    }
+
+    #[tokio::test]
+    async fn get_messages_to_send_collects_messages_added_during_call() {
+        let q = Arc::new(Queue::new());
+        let q_collect = Arc::clone(&q);
+        let collect_handle = tokio::spawn(async move {
+            q_collect
+                .get_messages_to_send(10, Duration::from_millis(50))
+                .await
+        });
+        q.add_message(create_message(1, vec![]), None)
+            .await
+            .unwrap();
+
+        let msgs = collect_handle.await.unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].seq_no, 1);
+    }
+
+    #[tokio::test]
+    async fn get_messages_to_send_respects_threshold() {
+        let q = Arc::new(Queue::new());
+        let q_collect = Arc::clone(&q);
+        let collect_handle = tokio::spawn(async move {
+            q_collect
+                .get_messages_to_send(2, Duration::from_millis(50))
+                .await
+        });
+        q.add_message(create_message(1, vec![]), None)
+            .await
+            .unwrap();
+        q.add_message(create_message(2, vec![]), None)
+            .await
+            .unwrap();
+        q.add_message(create_message(3, vec![]), None)
+            .await
+            .unwrap();
+
+        let msgs = collect_handle.await.unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].seq_no, 1);
+        assert_eq!(msgs[1].seq_no, 2);
+    }
+
+    #[tokio::test]
+    async fn get_messages_to_send_second_call_drains_remaining() {
+        let q = Arc::new(Queue::new());
+        let q1 = Arc::clone(&q);
+        let h1 =
+            tokio::spawn(
+                async move { q1.get_messages_to_send(2, Duration::from_millis(50)).await },
+            );
+        q.add_message(create_message(11, vec![]), None)
+            .await
+            .unwrap();
+        q.add_message(create_message(12, vec![]), None)
+            .await
+            .unwrap();
+        q.add_message(create_message(13, vec![]), None)
+            .await
+            .unwrap();
+        let first = h1.await.unwrap();
+        assert_eq!(first.len(), 2);
+
+        let q2 = Arc::clone(&q);
+        let h2 =
+            tokio::spawn(
+                async move { q2.get_messages_to_send(10, Duration::from_millis(50)).await },
+            );
+        let second = h2.await.unwrap();
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].seq_no, 13);
+    }
+
+    #[tokio::test]
+    async fn acknowledge_message_returns_error_when_reception_ticket_not_present() {
+        let q = Queue::new();
+
+        let err = q.acknowledge_message(write_ack(8)).await.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("expected reception ticket to be actually present"));
+    }
+
+    #[tokio::test]
+    async fn acknowledge_message_errors_when_seq_no_mismatches() {
+        let q = Queue::new();
+        q.add_message(create_message(1, vec![]), None)
+            .await
+            .unwrap();
+        let messages = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        assert_eq!(messages.len(), 1);
+
+        let err = q.acknowledge_message(write_ack(99)).await.unwrap_err();
+        let err_msg = err.to_string();
+        assert!(err_msg.contains("reception ticket and write ack seq_no mismatch"));
+        assert!(err_msg.contains("expected_seq_no: 99"));
+        assert!(err_msg.contains("actual_seq_no: 1"));
+    }
+
+    #[tokio::test]
+    async fn reset_progress_restores_sent_messages_to_pending() {
+        let q = Queue::new();
+        q.add_message(create_message(1, vec![]), None)
+            .await
+            .unwrap();
+        q.add_message(create_message(2, vec![]), None)
+            .await
+            .unwrap();
+        let first_batch = q.get_messages_to_send(1, Duration::from_millis(20)).await;
+        assert_eq!(first_batch.len(), 1);
+
+        q.reset_progress().await;
+
+        let msgs = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].seq_no, 1);
+        assert_eq!(msgs[1].seq_no, 2);
+    }
+
+    #[tokio::test]
+    async fn wait_for_messages_to_be_acknowledged_completes_when_all_messages_are_acknowledged() {
+        let q = Arc::new(Queue::new());
+        for i in 1..=5 {
+            q.add_message(create_message(i, vec![]), None)
+                .await
+                .unwrap();
+        }
+
+        let q_wait = Arc::clone(&q);
+        let wait_handle = tokio::spawn(async move {
+            q_wait.wait_for_messages_to_be_acknowledged().await;
+        });
+
+        let messages = q.get_messages_to_send(20, Duration::from_millis(50)).await;
+        assert_eq!(messages.len(), 5);
+
+        for i in 1..=5 {
+            q.acknowledge_message(write_ack(i)).await.unwrap();
+        }
+
+        wait_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn wait_for_messages_to_be_acknowledged_completes_with_no_messages() {
+        let q = Queue::new();
+
+        q.wait_for_messages_to_be_acknowledged().await;
+    }
+}
