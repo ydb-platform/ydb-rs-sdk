@@ -130,13 +130,18 @@ impl Reconnector {
                         "explicitly specifying message.seq_no is only allowed if auto_set_seq_no is disabled",
                     ));
             }
-            message.seq_no = Some(state.connection_info.last_seq_no_assigned + 1);
+            let Some(last_seq_no_assigned) = state.connection_info.last_seq_no_assigned else {
+                return Err(YdbError::InternalError(
+                    "internal last_seq_no_assigned is unexpectedly not set".into(),
+                ));
+            };
+            message.seq_no = Some(last_seq_no_assigned + 1);
         };
 
         let Some(message_seq_no) = message.seq_no else {
             return Err(YdbError::custom("empty message seq_no is provided"));
         };
-        state.connection_info.last_seq_no_assigned = message_seq_no;
+        state.connection_info.last_seq_no_assigned = Some(message_seq_no);
 
         let message = message.try_into()?;
         state.queue.add_message(message, wait_ack).await
@@ -262,12 +267,9 @@ impl ReconnectionHelper {
         let init_response = RawInitResponse::try_from(stream.receive::<RawServerMessage>().await?)?;
         {
             let mut state = self.state.lock().await;
-            state.connection_info = ConnectionInfo {
-                partition_id: init_response.partition_id,
-                session_id: init_response.session_id,
-                last_seq_no_assigned: init_response.last_seq_no,
-                codecs_from_server: init_response.supported_codecs,
-            };
+            state
+                .connection_info
+                .update_from_init_response(init_response);
         }
 
         Ok(stream)
