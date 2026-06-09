@@ -26,6 +26,7 @@ impl TopicReaderBatch {
                 start_offset: partition_session.next_commit_offset_start,
                 end_offset: partition_session.next_commit_offset_start,
                 topic: partition_session.topic.clone(),
+                epoch: partition_session.epoch,
             },
 
             messages: raw_batch
@@ -50,6 +51,7 @@ impl TopicReaderBatch {
                             start_offset: start_commit_offset,
                             end_offset: message.offset + 1,
                             topic: partition_session.topic.clone(),
+                            epoch: partition_session.epoch,
                         },
 
                         bytes_to_release: 0,
@@ -84,6 +86,7 @@ impl TopicReaderBatch {
             start_offset: first.commit_marker.start_offset,
             end_offset: last.commit_marker.end_offset,
             topic: first.commit_marker.topic.clone(),
+            epoch: first.commit_marker.epoch,
         };
         TopicReaderBatch {
             messages,
@@ -144,6 +147,7 @@ mod tests {
             partition_session_id: 123,
             partition_id: 456,
             topic: "test-topic".to_string(),
+            epoch: 0,
             next_commit_offset_start: 100,
         };
 
@@ -186,6 +190,7 @@ mod tests {
             partition_session_id: 1,
             partition_id: 2,
             topic: "t".to_string(),
+            epoch: 0,
             next_commit_offset_start: 0,
         };
         let raw_batch = RawBatch {
@@ -222,6 +227,7 @@ mod tests {
             partition_session_id: 7,
             partition_id: 42,
             topic: "t-from-messages".to_string(),
+            epoch: 0,
             next_commit_offset_start: 100,
         };
         let raw_batch = RawBatch {

@@ -23,19 +23,90 @@ use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::transaction::{Transaction, TransactionInfo};
 use crate::{YdbError, YdbResult};
 use secrecy::ExposeSecret;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::select;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::sync::Notify;
+use tokio::sync::{oneshot, Notify};
 use tracing::{debug, error, info, warn};
 use ydb_grpc::ydb_proto::topic::stream_read_message::{FromClient, FromServer};
 
 const READER_BUFFER_SIZE: i64 = 1024 * 1024; // 1MB
 const UPDATE_TOKEN_INTERVAL: time::Duration = Duration::from_secs(3600);
+
+type PartitionSessionId = i64;
+
+#[derive(Default)]
+struct PendingCommits {
+    // NOTE: Reverse keeps all offsets covered by a server ack in the right side
+    // of split_off(&Reverse(committed_offset)): real end_offset <= committed_offset.
+    sessions: HashMap<PartitionSessionId, BTreeMap<std::cmp::Reverse<i64>, oneshot::Sender<()>>>,
+}
+
+impl PendingCommits {
+    fn push(
+        &mut self,
+        partition_session_id: PartitionSessionId,
+        committed_offset: i64,
+    ) -> oneshot::Receiver<()> {
+        let (sender, receiver) = oneshot::channel();
+
+        let session = self.sessions.entry(partition_session_id).or_default();
+
+        session.insert(std::cmp::Reverse(committed_offset), sender);
+
+        receiver
+    }
+
+    fn ack(&mut self, committed_offsets: impl IntoIterator<Item = (PartitionSessionId, i64)>) {
+        for (partition_session_id, committed_offset) in committed_offsets {
+            self.ack_partition(partition_session_id, committed_offset);
+        }
+    }
+
+    fn fail_all(&mut self) {
+        self.sessions.clear();
+    }
+
+    fn fail_session(&mut self, partition_session_id: PartitionSessionId) {
+        self.sessions.remove(&partition_session_id);
+    }
+
+    fn stop(&mut self, partition_session_id: PartitionSessionId, committed_offset: Option<i64>) {
+        if let Some(committed_offset) = committed_offset {
+            self.ack_partition(partition_session_id, committed_offset);
+        }
+        self.fail_session(partition_session_id);
+    }
+
+    fn ack_partition(&mut self, partition_session_id: PartitionSessionId, committed_offset: i64) {
+        let Some(session) = self.sessions.get_mut(&partition_session_id) else {
+            return;
+        };
+
+        let acked = session.split_off(&std::cmp::Reverse(committed_offset));
+        Self::finish_session(acked);
+
+        if session.is_empty() {
+            self.sessions.remove(&partition_session_id);
+        }
+    }
+
+    fn finish_session(session: BTreeMap<std::cmp::Reverse<i64>, oneshot::Sender<()>>) {
+        session.into_values().for_each(|sender| {
+            let _ = sender.send(());
+        });
+    }
+}
+
+#[derive(Default)]
+struct CommitState {
+    epoch: usize,
+    pending_commits: PendingCommits,
+}
 
 /// Shared state between the main `TopicReader` task and the background `receive_loop`.
 ///
@@ -47,6 +118,7 @@ const UPDATE_TOKEN_INTERVAL: time::Duration = Duration::from_secs(3600);
 ///   then `notify_one()`.
 pub(crate) struct ReaderShared {
     pub(crate) buffer: Mutex<VecDeque<TopicReaderMessage>>,
+    commit_state: Mutex<CommitState>,
     pub(crate) notify: Notify,
     pub(crate) error: Mutex<Option<YdbError>>,
     pub(crate) closed: AtomicBool,
@@ -56,6 +128,7 @@ impl ReaderShared {
     fn new() -> Self {
         Self {
             buffer: Mutex::new(VecDeque::new()),
+            commit_state: Mutex::new(CommitState::default()),
             notify: Notify::new(),
             error: Mutex::new(None),
             closed: AtomicBool::new(false),
@@ -168,8 +241,22 @@ impl TopicReader {
         Ok(())
     }
 
-    pub fn commit(&mut self, commit_marker: TopicReaderCommitMarker) -> YdbResult<()> {
-        send_on_stream(
+    pub fn commit(&mut self, commit_marker: TopicReaderCommitMarker) -> oneshot::Receiver<()> {
+        let mut commit_state = self
+            .shared
+            .commit_state
+            .lock()
+            .expect("topic reader commit state mutex poisoned");
+        if commit_state.epoch != commit_marker.epoch {
+            let (_sender, receiver) = oneshot::channel();
+            return receiver;
+        }
+
+        let receiver = commit_state
+            .pending_commits
+            .push(commit_marker.partition_session_id, commit_marker.end_offset);
+
+        let send_result = send_on_stream(
             &self.stream_sender,
             RawFromClientOneOf::CommitOffsetRequest(RawCommitOffsetRequest {
                 commit_offsets: vec![PartitionCommitOffset {
@@ -180,7 +267,14 @@ impl TopicReader {
                     }],
                 }],
             }),
-        )
+        );
+
+        if let Err(err) = send_result {
+            warn!("topic reader commit send failed: {}", err);
+            commit_state.pending_commits.fail_all();
+        }
+
+        receiver
     }
 
     pub(crate) async fn new(
@@ -214,6 +308,7 @@ impl TopicReader {
             stream,
             shared.clone(),
             stop_backgroung_work_token.clone(),
+            0,
         ));
 
         tokio::spawn(Self::update_token_loop(
@@ -324,6 +419,7 @@ async fn receive_loop(
     mut stream: AsyncGrpcStreamWrapper<FromClient, FromServer>,
     shared: Arc<ReaderShared>,
     stop: YdbCancellationToken,
+    epoch: usize,
 ) {
     let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
     let tokio_stop = stop.to_tokio_token();
@@ -345,6 +441,7 @@ async fn receive_loop(
                             &mut sessions,
                             &sender_for_responses,
                             &shared,
+                            epoch,
                         ) {
                             break Some(e);
                         }
@@ -362,11 +459,25 @@ fn handle_incoming(
     sessions: &mut HashMap<i64, PartitionSession>,
     sender: &UnboundedSender<FromClient>,
     shared: &ReaderShared,
+    epoch: usize,
 ) -> YdbResult<()> {
     match msg {
         RawFromServer::ReadResponse(resp) => handle_read_response(resp, sessions, shared)?,
         RawFromServer::InitResponse(resp) => {
             info!("init response for topic reader: {:?}", resp)
+        }
+        RawFromServer::CommitOffsetResponse(resp) => {
+            debug!("commit offset response for topic reader: {:?}", resp);
+            shared
+                .commit_state
+                .lock()
+                .expect("topic reader commit state mutex poisoned")
+                .pending_commits
+                .ack(
+                    resp.partitions_committed_offsets
+                        .into_iter()
+                        .map(|offset| (offset.partition_session_id, offset.committed_offset)),
+                );
         }
         RawFromServer::UpdateTokenResponse(_) => {}
         RawFromServer::StartPartitionSessionRequest(request) => {
@@ -376,6 +487,7 @@ fn handle_incoming(
                     partition_session_id: request.partition_session.partition_session_id,
                     partition_id: request.partition_session.partition_id,
                     topic: request.partition_session.path,
+                    epoch,
                     next_commit_offset_start: request.committed_offset,
                 },
             );
@@ -390,6 +502,12 @@ fn handle_incoming(
         }
         RawFromServer::StopPartitionSessionRequest(request) => {
             sessions.remove(&request.partition_session_id);
+            shared
+                .commit_state
+                .lock()
+                .expect("topic reader commit state mutex poisoned")
+                .pending_commits
+                .stop(request.partition_session_id, None);
             send_on_stream(
                 sender,
                 RawFromClientOneOf::StopPartitionSessionResponse(RawStopPartitionSessionResponse {
@@ -451,6 +569,13 @@ pub(crate) fn handle_read_response(
 }
 
 pub(crate) fn close_with_error(shared: &ReaderShared, err: Option<YdbError>) {
+    shared
+        .commit_state
+        .lock()
+        .expect("topic reader commit state mutex poisoned")
+        .pending_commits
+        .fail_all();
+
     if let Some(e) = err {
         let mut slot = shared
             .error
@@ -548,6 +673,7 @@ pub struct TopicReaderCommitMarker {
     pub(crate) start_offset: i64,
     pub(crate) end_offset: i64,
     pub(crate) topic: String,
+    pub(crate) epoch: usize,
 }
 
 #[cfg(test)]
@@ -560,6 +686,113 @@ mod tests {
     };
     use crate::grpc_wrapper::raw_topic_service::update_offsets_in_transaction::*;
     use std::time::Duration;
+    use tokio::sync::oneshot::error::TryRecvError;
+
+    fn assert_commit_ack(mut receiver: oneshot::Receiver<()>) {
+        assert_eq!(receiver.try_recv(), Ok(()));
+    }
+
+    fn assert_commit_pending(mut receiver: oneshot::Receiver<()>) -> oneshot::Receiver<()> {
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+        receiver
+    }
+
+    fn assert_commit_aborted(mut receiver: oneshot::Receiver<()>) {
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Closed));
+    }
+
+    #[test]
+    fn test_pending_commits_push_returns_pending_receiver() {
+        let mut commits = PendingCommits::default();
+
+        let receiver = commits.push(1, 10);
+
+        let _receiver = assert_commit_pending(receiver);
+    }
+
+    #[test]
+    fn test_pending_commits_ack_confirms_offsets_up_to_committed_offset() {
+        let mut commits = PendingCommits::default();
+        let offset_10 = commits.push(1, 10);
+        let offset_20 = commits.push(1, 20);
+        let offset_30 = commits.push(1, 30);
+
+        commits.ack([(1, 20)]);
+
+        assert_commit_ack(offset_10);
+        assert_commit_ack(offset_20);
+        let _offset_30 = assert_commit_pending(offset_30);
+    }
+
+    #[test]
+    fn test_pending_commits_ack_ignores_other_sessions() {
+        let mut commits = PendingCommits::default();
+        let session_1 = commits.push(1, 10);
+        let session_2 = commits.push(2, 10);
+
+        commits.ack([(1, 10)]);
+
+        assert_commit_ack(session_1);
+        let _session_2 = assert_commit_pending(session_2);
+    }
+
+    #[test]
+    fn test_pending_commits_push_replaces_waiter_for_same_offset() {
+        let mut commits = PendingCommits::default();
+        let replaced = commits.push(1, 10);
+        let current = commits.push(1, 10);
+
+        commits.ack([(1, 10)]);
+
+        assert_commit_aborted(replaced);
+        assert_commit_ack(current);
+    }
+
+    #[test]
+    fn test_pending_commits_fail_all_aborts_all_receivers() {
+        let mut commits = PendingCommits::default();
+        let session_1 = commits.push(1, 10);
+        let session_2 = commits.push(2, 20);
+
+        commits.fail_all();
+
+        assert_commit_aborted(session_1);
+        assert_commit_aborted(session_2);
+    }
+
+    #[test]
+    fn test_pending_commits_fail_session_aborts_only_requested_session() {
+        let mut commits = PendingCommits::default();
+        let session_1 = commits.push(1, 10);
+        let session_2 = commits.push(2, 10);
+
+        commits.fail_session(1);
+
+        assert_commit_aborted(session_1);
+        let _session_2 = assert_commit_pending(session_2);
+    }
+
+    #[test]
+    fn test_pending_commits_stop_acks_covered_offsets_and_aborts_rest() {
+        let mut commits = PendingCommits::default();
+        let covered = commits.push(1, 10);
+        let uncovered = commits.push(1, 20);
+
+        commits.stop(1, Some(10));
+
+        assert_commit_ack(covered);
+        assert_commit_aborted(uncovered);
+    }
+
+    #[test]
+    fn test_pending_commits_stop_without_committed_offset_aborts_session() {
+        let mut commits = PendingCommits::default();
+        let receiver = commits.push(1, 10);
+
+        commits.stop(1, None);
+
+        assert_commit_aborted(receiver);
+    }
 
     #[test]
     fn test_transaction_topic_reading_integration() {
@@ -569,6 +802,7 @@ mod tests {
             start_offset: 1000,
             end_offset: 1100,
             topic: "integration-test-topic".to_string(),
+            epoch: 0,
         };
 
         let raw_request = RawUpdateOffsetsInTransactionRequest {
@@ -630,6 +864,7 @@ mod tests {
             partition_session_id,
             partition_id,
             topic: topic.to_string(),
+            epoch: 0,
             next_commit_offset_start: start_offset,
         }
     }
