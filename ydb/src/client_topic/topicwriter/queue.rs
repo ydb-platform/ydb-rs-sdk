@@ -6,7 +6,7 @@ use tokio::time::{sleep_until, Instant};
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
 use crate::client_topic::topicwriter::message_queue::{
-    AppendMessageToSendBufferResult, MessageQueueInner,
+    AppendMessageToSendBufferResult, MessageQueue,
 };
 use crate::client_topic::topicwriter::message_write_status::{MessageWriteStatus, WriteAck};
 use crate::client_topic::topicwriter::writer_reception_queue::TopicWriterReceptionQueue;
@@ -160,7 +160,7 @@ impl Queue {
 }
 
 struct QueueInner {
-    message_queue: MessageQueueInner,
+    message_queue: MessageQueue,
     reception_queue: TopicWriterReceptionQueue,
     is_open_for_new_messages: bool,
     last_added_seq_no: Option<i64>,
@@ -169,7 +169,7 @@ struct QueueInner {
 impl QueueInner {
     fn new() -> Self {
         Self {
-            message_queue: MessageQueueInner::new(),
+            message_queue: MessageQueue::new(),
             reception_queue: TopicWriterReceptionQueue::new(),
             is_open_for_new_messages: true,
             last_added_seq_no: None,
