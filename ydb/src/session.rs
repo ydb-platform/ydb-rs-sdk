@@ -163,15 +163,15 @@ impl Session {
     pub(crate) async fn execute_bulk_upsert_arrow(
         &mut self,
         table_path: String,
-        arrow_schema: bytes::Bytes,
-        arrow_data: bytes::Bytes,
+        arrow_schema: Vec<u8>,
+        arrow_data: Vec<u8>,
     ) -> YdbResult<()> {
         use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertArrowRequest;
 
         let req = RawBulkUpsertArrowRequest {
             table: table_path,
-            arrow_schema: arrow_schema.to_vec(),
-            arrow_data: arrow_data.to_vec(),
+            arrow_schema,
+            arrow_data,
             operation_params: self.timeouts.operation_params(),
         };
         let res = self.get_table_client().await?.bulk_upsert_arrow(req).await;

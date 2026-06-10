@@ -405,18 +405,24 @@ impl TableClient {
             return Ok(());
         }
 
-        let (schema_bytes, data_bytes) =
-            crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(&batch)?;
-        let schema_bytes = bytes::Bytes::from(schema_bytes);
-        let data_bytes = bytes::Bytes::from(data_bytes);
+        let first_payload = std::sync::Mutex::new(Some(
+            crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(&batch)?,
+        ));
 
         self.retry(|| async {
+            let (schema_bytes, data_bytes) = if let Some((schema_bytes, data_bytes)) =
+                first_payload.lock().unwrap().take()
+            {
+                (schema_bytes, data_bytes)
+            } else {
+                crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(&batch)?
+            };
             let mut session = self.create_session().await?;
             session
                 .execute_bulk_upsert_arrow(
                     table_path.clone(),
-                    schema_bytes.clone(),
-                    data_bytes.clone(),
+                    schema_bytes,
+                    data_bytes,
                 )
                 .await
         })
