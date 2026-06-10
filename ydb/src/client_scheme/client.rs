@@ -4,6 +4,7 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_scheme_client::client::{
     RawMakeDirectoryRequest, RawRemoveDirectoryRequest,
 };
+use crate::grpc_wrapper::raw_scheme_client::describe_path_types::RawDescribePathRequest;
 use crate::grpc_wrapper::raw_scheme_client::list_directory_types::RawListDirectoryRequest;
 use crate::{grpc_wrapper, YdbResult};
 
@@ -32,6 +33,18 @@ impl SchemeClient {
         let mut service = self.connection().await?;
         service.make_directory(req).await?;
         Ok(())
+    }
+
+    pub async fn describe_path(&mut self, path: String) -> YdbResult<SchemeEntry> {
+        let req = RawDescribePathRequest {
+            operation_params: self.timeouts.operation_params(),
+            path,
+        };
+
+        let mut service = self.connection().await?;
+        let res = service.describe_path(req).await?;
+
+        Ok(res.entry)
     }
 
     pub async fn list_directory(&mut self, path: String) -> YdbResult<Vec<SchemeEntry>> {
