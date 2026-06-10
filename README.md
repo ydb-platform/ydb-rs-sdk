@@ -58,7 +58,7 @@ async fn main() -> YdbResult<()> {
 }
 ```
 
-For more examples, check out the [URL shortener application](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-example-urlshortener) or [many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples).
+For more examples, see [ydb/examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples).
 
 ## Tests
 

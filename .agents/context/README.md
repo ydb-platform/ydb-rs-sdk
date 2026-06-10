@@ -25,8 +25,8 @@ ydb-rs-sdk/
 ├── AGENTS.md                       lean agent router (read first)
 ├── CLAUDE.md                       tool entry point → AGENTS.md
 ├── ydb/                            public SDK crate
+│   └── examples/                   cargo example snippets (*.rs)
 ├── ydb-grpc/                       generated protobuf + tonic stubs
-├── ydb-example-urlshortener/
 └── ydb-slo-tests/
 ```
 
