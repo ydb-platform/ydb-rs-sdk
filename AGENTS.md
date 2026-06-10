@@ -13,7 +13,7 @@ Long-term context lives in [`memory-bank/`](memory-bank/). Details: architecture
    - architecture / module layout → [`systemPatterns.md`](memory-bank/systemPatterns.md)
    - toolchain / CI / local dev → [`techContext.md`](memory-bank/techContext.md)
    - API surface / users → [`productContext.md`](memory-bank/productContext.md)
-   - scope / goals → [`projectbrief.md`](memory-bank/projectbrief.md)
+   - scope / goals → [`projectBrief.md`](memory-bank/projectBrief.md)
 
 **After significant work** — update `activeContext.md` and `progress.md`. Update stable files only when architecture, tooling, or scope changed.
 
