@@ -74,8 +74,7 @@ cargo fmt --check
 cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
 
 # Unit tests (no YDB required)
-cargo test --workspace -- --skip-ignored
-```
+cargo test --workspace
 
 With a local YDB instance (`grpc://localhost:2136?database=/local`):
 
