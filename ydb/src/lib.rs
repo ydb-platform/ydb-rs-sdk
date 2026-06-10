@@ -40,9 +40,7 @@
 //! ```
 //!
 //! # More examples
-//! [Url shortener application](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples/urlshortener)
-//!
-//! [Many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
+//! [Examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
 //!
 extern crate core;
 

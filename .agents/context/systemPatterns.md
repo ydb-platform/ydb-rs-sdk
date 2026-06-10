@@ -5,9 +5,7 @@
 ```
 ydb-rs-sdk/
 ├── ydb/                            # Public SDK (main crate)
-│   └── examples/
-│       ├── *.rs                    # cargo example targets
-│       └── urlshortener/              # full app example
+│   └── examples/                   # cargo example targets (*.rs)
 ├── ydb-grpc/                       # Generated protobuf + tonic stubs
 ├── ydb-slo-tests/
 └── .agents/                        # Agent workspace (context/, rules/)
