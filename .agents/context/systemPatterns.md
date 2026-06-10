@@ -7,7 +7,7 @@ ydb-rs-sdk/
 ├── ydb/                            # Public SDK (main crate)
 │   └── examples/
 │       ├── *.rs                    # cargo example targets
-│       └── ydb-example-urlshortener/  # full app example
+│       └── urlshortener/              # full app example
 ├── ydb-grpc/                       # Generated protobuf + tonic stubs
 ├── ydb-slo-tests/
 └── .agents/                        # Agent workspace (context/, rules/)

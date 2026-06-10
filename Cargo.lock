@@ -2815,6 +2815,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "urlshortener"
+version = "0.0.0"
+dependencies = [
+ "async_once",
+ "hashers",
+ "lazy_static",
+ "serde",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "warp",
+ "ydb",
+]
+
+[[package]]
 name = "utf-8"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3407,21 +3422,6 @@ dependencies = [
  "url",
  "uuid",
  "ydb-grpc",
-]
-
-[[package]]
-name = "ydb-example-urlshortener"
-version = "0.0.0"
-dependencies = [
- "async_once",
- "hashers",
- "lazy_static",
- "serde",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "warp",
- "ydb",
 ]
 
 [[package]]

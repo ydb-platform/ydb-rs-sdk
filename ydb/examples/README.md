@@ -2,7 +2,7 @@
 
 ## Full application example
 
-[`ydb-example-urlshortener/`](ydb-example-urlshortener/) — a small URL shortener web app (Warp + YDB). Run from that directory:
+[`urlshortener/`](urlshortener/) — a small URL shortener web app (Warp + YDB). Run from that directory:
 
 ```bash
 cargo run

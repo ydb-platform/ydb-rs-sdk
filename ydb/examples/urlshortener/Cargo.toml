@@ -1,6 +1,6 @@
 [package]
 publish = false
-name = "ydb-example-urlshortener"
+name = "urlshortener"
 version = "0.0.0"
 edition = "2021"
 rust-version = "1.82"

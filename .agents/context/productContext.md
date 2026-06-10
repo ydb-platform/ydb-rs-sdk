@@ -22,7 +22,7 @@
 - **Connection string** as the primary entry point: `grpc://host:port?database=/path`.
 - **Automatic retries** on retriable errors for table operations (configurable).
 - **Type-safe row access** via `result` types and `try_into` conversions.
-- **Examples**: `ydb/examples/` for small snippets and `ydb/examples/ydb-example-urlshortener/` for a full app.
+- **Examples**: `ydb/examples/` for small snippets and `ydb/examples/urlshortener/` for a full app.
 
 ## API stability
 
