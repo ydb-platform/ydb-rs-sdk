@@ -543,6 +543,7 @@ impl StaticCredentials {
             self.database.clone(),
             MultiInterceptor::new(),
             self.cert_path.clone(),
+            crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
         );
 
         let mut auth_client = empty_connection_manager

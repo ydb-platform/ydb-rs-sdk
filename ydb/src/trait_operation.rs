@@ -7,7 +7,7 @@ use ydb_grpc::ydb_proto::discovery::{ListEndpointsResponse, WhoAmIResponse};
 use ydb_grpc::ydb_proto::issue::IssueMessage;
 use ydb_grpc::ydb_proto::operations::Operation as YdbOperation;
 use ydb_grpc::ydb_proto::scheme::{
-    ListDirectoryResponse, MakeDirectoryResponse, RemoveDirectoryResponse,
+    DescribePathResponse, ListDirectoryResponse, MakeDirectoryResponse, RemoveDirectoryResponse,
 };
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 use ydb_grpc::ydb_proto::table::{
@@ -102,6 +102,7 @@ operation_impl_for!(RollbackTransactionResponse);
 operation_impl_for!(WhoAmIResponse);
 operation_impl_for!(MakeDirectoryResponse);
 operation_impl_for!(ListDirectoryResponse);
+operation_impl_for!(DescribePathResponse);
 operation_impl_for!(RemoveDirectoryResponse);
 operation_impl_for!(AlterTopicResponse);
 operation_impl_for!(CreateTopicResponse);

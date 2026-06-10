@@ -1,4 +1,5 @@
 use crate::client::TimeoutSettings;
+use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertRequest;
@@ -31,6 +32,13 @@ use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 pub(crate) struct RawTableClient {
     timeouts: TimeoutSettings,
     service: TableServiceClient<InterceptedChannel>,
+}
+
+impl WithGrpcMaxMessageSize for RawTableClient {
+    fn with_grpc_max_message_size(mut self, bytes: usize) -> Self {
+        self.service = self.service.with_grpc_max_message_size(bytes);
+        self
+    }
 }
 
 impl RawTableClient {

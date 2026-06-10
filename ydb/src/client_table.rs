@@ -8,6 +8,7 @@ use crate::types::Value;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
 
+use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::table_service_types::{CopyTableItem, TableDescription};
 use crate::{Query, StreamResult};
@@ -23,6 +24,13 @@ const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
 
 pub(crate) type TableServiceClientType = TableServiceClient<InterceptedChannel>;
+
+impl WithGrpcMaxMessageSize for TableServiceClientType {
+    fn with_grpc_max_message_size(self, bytes: usize) -> Self {
+        self.max_decoding_message_size(bytes)
+            .max_encoding_message_size(bytes)
+    }
+}
 
 type TransactionArgType = Box<dyn Transaction>; // real type may be changed
 

@@ -1,5 +1,6 @@
 use ydb_grpc::ydb_proto::auth::v1::auth_service_client::AuthServiceClient;
 
+use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_auth_service::login::RawLoginRequest;
 use crate::grpc_wrapper::raw_auth_service::login::RawLoginResult;
 use crate::grpc_wrapper::raw_errors::RawResult;
@@ -11,6 +12,16 @@ use tracing::trace;
 #[derive(Clone)]
 pub(crate) struct RawAuthClient {
     service: AuthServiceClient<InterceptedChannel>,
+}
+
+impl WithGrpcMaxMessageSize for RawAuthClient {
+    fn with_grpc_max_message_size(mut self, bytes: usize) -> Self {
+        self.service = self
+            .service
+            .max_decoding_message_size(bytes)
+            .max_encoding_message_size(bytes);
+        self
+    }
 }
 
 impl RawAuthClient {

@@ -29,12 +29,11 @@ impl Client {
         credentials: DBCredentials,
         discovery: Arc<Box<dyn Discovery>>,
         connection_manager: GrpcConnectionManager,
+        load_balancer: SharedLoadBalancer,
     ) -> YdbResult<Self> {
-        let discovery_ref = discovery.as_ref().as_ref();
-
         Ok(Client {
             credentials,
-            load_balancer: SharedLoadBalancer::new(discovery_ref),
+            load_balancer,
             discovery,
             timeouts: TimeoutSettings::default(),
             connection_manager,
