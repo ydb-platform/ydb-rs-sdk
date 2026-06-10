@@ -53,7 +53,7 @@ Do not run `cargo update` or bump dependency versions unless the task requires i
 
 ### Arrow bulk upsert
 
-`ydb` depends on Apache Arrow 54 (`arrow-array`, `arrow-ipc`, `arrow-schema`, `default-features = false`) and re-exports `arrow_array` / `arrow_schema`. No optional feature flag yet (see maintainer note on #406).
+`ydb` depends on Apache Arrow 54 (`arrow-array`, `arrow-ipc`, `arrow-schema`, `default-features = false`). Arrow crates are **not** re-exported — downstream apps add `arrow-array` / `arrow-schema` to build `RecordBatch` values. No optional feature flag yet (maintainer note on #406).
 
 ```bash
 cargo run --example basic-arrow-bulk-upsert

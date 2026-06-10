@@ -389,7 +389,10 @@ impl TableClient {
         .await
     }
 
-    /// Execute bulk upsert of an Arrow `RecordBatch` with retry policy.
+    /// Execute bulk upsert of an Arrow [`RecordBatch`](arrow_array::RecordBatch) with retry policy.
+    ///
+    /// Callers need `arrow-array` (and typically `arrow-schema`) in their own `Cargo.toml` to
+    /// build batches. The SDK does not re-export Arrow crates.
     ///
     /// Dictionary-encoded arrays are not supported by the YDB server-side
     /// converter and will cause this call to fail.

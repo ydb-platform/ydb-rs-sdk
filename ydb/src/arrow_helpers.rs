@@ -2,7 +2,9 @@
 
 use crate::errors::{YdbError, YdbResult};
 use arrow_array::RecordBatch;
-use arrow_ipc::writer::{DictionaryTracker, EncodedData, IpcDataGenerator, IpcWriteOptions};
+use arrow_ipc::writer::{
+    write_message, DictionaryTracker, EncodedData, IpcDataGenerator, IpcWriteOptions,
+};
 use arrow_ipc::MetadataVersion;
 
 /// Serialize Arrow RecordBatch to IPC format for bulk upsert
@@ -29,20 +31,16 @@ pub(crate) fn serialize_record_batch_for_bulk_upsert(
     }
 
     Ok((
-        to_framed_ipc_message(&encoded_schema),
-        to_framed_ipc_message(&encoded_batch),
+        frame_ipc_message(encoded_schema, &options)?,
+        frame_ipc_message(encoded_batch, &options)?,
     ))
 }
 
-fn to_framed_ipc_message(encoded: &EncodedData) -> Vec<u8> {
-    let metadata_len = encoded.ipc_message.len() as u32;
-    let total = 8 + encoded.ipc_message.len() + encoded.arrow_data.len();
-    let mut buf = Vec::with_capacity(total);
-    buf.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
-    buf.extend_from_slice(&metadata_len.to_le_bytes());
-    buf.extend_from_slice(&encoded.ipc_message);
-    buf.extend_from_slice(&encoded.arrow_data);
-    buf
+fn frame_ipc_message(encoded: EncodedData, options: &IpcWriteOptions) -> YdbResult<Vec<u8>> {
+    let mut buf = Vec::new();
+    write_message(&mut buf, encoded, options)
+        .map_err(|e| YdbError::Custom(format!("Failed to frame IPC message: {e}")))?;
+    Ok(buf)
 }
 
 #[cfg(test)]

@@ -12,7 +12,7 @@
 |------|-------------|
 | Run YQL queries and transactions | `Client::table_client()`, `retry_transaction`, `Query` |
 | Bulk load rows | `TableClient::retry_execute_bulk_upsert` — row list (`Vec<Vec<Value>>`) |
-| Bulk load Arrow columnar data | `TableClient::retry_execute_bulk_upsert_arrow` — `arrow_array::RecordBatch`; re-exports `arrow_array`, `arrow_schema` |
+| Bulk load Arrow columnar data | `TableClient::retry_execute_bulk_upsert_arrow` — `arrow_array::RecordBatch` (callers depend on `arrow-array` directly) |
 | Browse database directory / schema | `Client::scheme_client()` |
 | Produce/consume topic messages | `Client::topic_client()` — reader/writer APIs |
 | Distributed locks / semaphores | `Client::coordination_client()` |
