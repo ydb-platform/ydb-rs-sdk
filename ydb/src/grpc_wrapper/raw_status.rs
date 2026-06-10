@@ -23,11 +23,8 @@ pub(crate) enum RawStatusCode {
     Unknown(i32),
 }
 
-impl From<i32> for RawStatusCode {
-    fn from(value: i32) -> Self {
-        let Ok(status) = ydb_grpc::ydb_proto::status_ids::StatusCode::try_from(value) else {
-            return Self::Unknown(value);
-        };
+impl From<ydb_grpc::ydb_proto::status_ids::StatusCode> for RawStatusCode {
+    fn from(status: ydb_grpc::ydb_proto::status_ids::StatusCode) -> Self {
         match status {
             ydb_grpc::ydb_proto::status_ids::StatusCode::Unspecified => Self::Unspecified,
             ydb_grpc::ydb_proto::status_ids::StatusCode::Success => Self::Success,
@@ -53,5 +50,15 @@ impl From<i32> for RawStatusCode {
             ydb_grpc::ydb_proto::status_ids::StatusCode::SessionBusy => Self::SessionBusy,
             ydb_grpc::ydb_proto::status_ids::StatusCode::ExternalError => Self::ExternalError,
         }
+    }
+}
+
+impl From<i32> for RawStatusCode {
+    fn from(value: i32) -> Self {
+        let Ok(status) = ydb_grpc::ydb_proto::status_ids::StatusCode::try_from(value) else {
+            return Self::Unknown(value);
+        };
+
+        status.into()
     }
 }

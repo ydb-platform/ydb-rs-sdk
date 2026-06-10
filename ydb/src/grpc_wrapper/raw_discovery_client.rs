@@ -1,4 +1,5 @@
 use crate::grpc_wrapper::grpc::grpc_read_operation_result;
+use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::YdbResult;
@@ -8,6 +9,16 @@ use ydb_grpc::ydb_proto::discovery::{ListEndpointsRequest, ListEndpointsResult};
 
 pub struct GrpcDiscoveryClient {
     service: DiscoveryServiceClient<InterceptedChannel>,
+}
+
+impl WithGrpcMaxMessageSize for GrpcDiscoveryClient {
+    fn with_grpc_max_message_size(mut self, bytes: usize) -> Self {
+        self.service = self
+            .service
+            .max_decoding_message_size(bytes)
+            .max_encoding_message_size(bytes);
+        self
+    }
 }
 
 impl GrpcDiscoveryClient {

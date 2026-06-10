@@ -1,3 +1,4 @@
+use itertools::Itertools;
 use std::collections::HashMap;
 use std::iter::FromIterator;
 use std::sync::Arc;
@@ -506,6 +507,135 @@ async fn scheme_query() -> YdbResult<()> {
             let mut session = session; // force borrow for lifetime of t inside closure
             session
                 .execute_schema_query(format!("DROP TABLE {table_name}"))
+                .await?;
+
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn read_rows() -> YdbResult<()> {
+    const TABLE_NAME: &str = "read_rows";
+    const TABLE_PATH: &str = "/local/read_rows";
+
+    let client = create_client().await?;
+    let table_client = client.table_client();
+
+    table_client
+        .retry_with_session(RetryOptions::new(), |mut session| async move {
+            session
+                .execute_schema_query(format!(
+                    "CREATE TABLE {TABLE_NAME} (id Int64 NOT NULL, first Int64 NOT NULL, second Int64 NOT NULL, PRIMARY KEY (id))"
+                ))
+                .await?;
+
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let values: [(i64, i64); 4] = [(0, 0), (0, 1), (1, 0), (1, 1)];
+    let ydb_values = values.map(|pair| (Value::Int64(pair.0), Value::Int64(pair.1)));
+
+    let rows = values
+        .into_iter()
+        .enumerate()
+        .map(|t| {
+            let (id, (first, second)) = t;
+
+            ydb_struct!("id" => id as i64, "first" => first, "second" => second)
+        })
+        .collect_vec();
+
+    table_client
+        .retry_execute_bulk_upsert(TABLE_PATH.into(), rows)
+        .await?;
+
+    // Empty
+    let empty = table_client.retry_read_rows(TABLE_PATH, vec![], None).await;
+    assert_eq!(empty.unwrap().rows().count(), 0);
+
+    // Non-list keys
+    let non_structs = table_client
+        .retry_read_rows(TABLE_PATH, vec![Value::Int64(1i64)], None)
+        .await;
+    assert!(non_structs.is_err());
+
+    let vec_to_values = |ids: Vec<i64>| {
+        ids.into_iter()
+            .map(|id| ydb_struct!("id" => id))
+            .collect_vec()
+    };
+
+    // Basic all columns
+    let all_columns = table_client
+        .retry_read_rows(TABLE_PATH, vec_to_values((0i64..4i64).collect_vec()), None)
+        .await;
+
+    for (mut row, (first, second)) in all_columns.unwrap().rows().zip(ydb_values.iter()) {
+        assert_eq!(&row.remove_field_by_name("first").unwrap(), first);
+        assert_eq!(&row.remove_field_by_name("second").unwrap(), second);
+    }
+
+    // Basic reversed
+    let all_columns_rev = table_client
+        .retry_read_rows(
+            TABLE_PATH,
+            vec_to_values((0i64..4i64).rev().collect_vec()),
+            None,
+        )
+        .await;
+    for (mut row, (first, second)) in all_columns_rev.unwrap().rows().zip(ydb_values.iter().rev()) {
+        assert_eq!(&row.remove_field_by_name("first").unwrap(), first);
+        assert_eq!(&row.remove_field_by_name("second").unwrap(), second);
+    }
+
+    // Partial
+    let keys = vec![0i64, 2i64, 4i64, 6i64];
+    let partial = table_client
+        .retry_read_rows(
+            TABLE_PATH,
+            vec_to_values(keys.clone()),
+            Some(vec!["first".into()]),
+        )
+        .await;
+    let rows = partial
+        .unwrap()
+        .rows()
+        .map(|mut t| {
+            assert!(t.remove_field_by_name("second").is_err());
+            assert!(t.remove_field_by_name("third").is_err());
+            t.remove_field_by_name("first").unwrap()
+        })
+        .collect_vec();
+
+    for key in keys {
+        if let Some((first, _)) = ydb_values.get(key as usize) {
+            assert!(rows.contains(first));
+        }
+    }
+
+    // Unknown column
+    let unknown = table_client
+        .retry_read_rows(
+            TABLE_PATH,
+            vec_to_values(vec![1i64]),
+            Some(vec!["first".into(), "unknown".into()]),
+        )
+        .await;
+    assert!(unknown.is_err());
+
+    // Clear table
+    table_client
+        .retry_with_session(RetryOptions::new(), |mut session| async move {
+            session
+                .execute_schema_query(format!("DROP TABLE {TABLE_NAME}"))
                 .await?;
 
             Ok(())
@@ -1231,6 +1361,129 @@ async fn describe_table() -> YdbResult<()> {
             Ok(())
         })
         .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn grpc_max_message_size_limit_exceeded() -> YdbResult<()> {
+    use crate::test_helpers::test_client_builder;
+
+    // 1 MiB limit — discovery and small queries still fit, but a ~2 MiB UPSERT must fail.
+    const LIMIT_BYTES: usize = 1024 * 1024;
+    const PAYLOAD_BYTES: usize = 2 * 1024 * 1024;
+    const TABLE: &str = "grpc_limit_test";
+
+    // Step 1: schema with a permissive client.
+    let setup_client = test_client_builder().client()?;
+    setup_client.wait().await?;
+    let setup_table_client = setup_client.table_client();
+    let _ = setup_table_client
+        .create_session()
+        .await?
+        .execute_schema_query(format!("DROP TABLE {TABLE}"))
+        .await;
+    setup_table_client
+        .create_session()
+        .await?
+        .execute_schema_query(format!(
+            "CREATE TABLE {TABLE} (id Int64, val Bytes, PRIMARY KEY (id))"
+        ))
+        .await?;
+
+    // Step 2: pre-seed an oversized row using the permissive client so the decode test
+    // has something to read back.
+    let payload = vec![0xABu8; PAYLOAD_BYTES];
+    setup_table_client
+        .retry_transaction(|mut tr| {
+            let payload = payload.clone();
+            async move {
+                tr.query(
+                    Query::new(format!(
+                        "DECLARE $id AS Int64; DECLARE $val AS Bytes;
+                         UPSERT INTO {TABLE} (id, val) VALUES ($id, $val)"
+                    ))
+                    .with_params(ydb_params!(
+                        "$id" => Value::Int64(1),
+                        "$val" => Value::Bytes(Bytes::from(payload))
+                    )),
+                )
+                .await?;
+                tr.commit().await?;
+                Ok(())
+            }
+        })
+        .await?;
+
+    // Step 3: small-limit client. Discovery passes because endpoint list fits in 1 MiB.
+    let limited_client = test_client_builder()
+        .with_grpc_max_message_size(LIMIT_BYTES)
+        .client()?;
+    limited_client.wait().await?;
+    let limited = limited_client.table_client();
+
+    // Step 3a: ENCODE path — UPSERT with a 2 MiB blob. tonic 0.14 emits the encode-limit
+    // failure as a body-stream error which is observed by the client as an HTTP/2 stream
+    // reset (Reason::INTERNAL_ERROR initiated by us), not as a proper Status::OutOfRange.
+    // So the error surfaces as YdbError::TransportGRPCStatus with Code::Unknown.
+    let mut tx = limited.create_interactive_transaction();
+    let encode_err = tx
+        .query(
+            Query::new(format!(
+                "DECLARE $id AS Int64; DECLARE $val AS Bytes;
+                 UPSERT INTO {TABLE} (id, val) VALUES ($id, $val)"
+            ))
+            .with_params(ydb_params!(
+                "$id" => Value::Int64(2),
+                "$val" => Value::Bytes(Bytes::from(vec![0xCDu8; PAYLOAD_BYTES]))
+            )),
+        )
+        .await
+        .expect_err("upsert exceeding grpc encoding limit must fail");
+    trace!("encode-limit error: {:?}", encode_err);
+    match &encode_err {
+        YdbError::TransportGRPCStatus(status) => {
+            // tonic 0.14: encode-limit becomes a transport-level RST_STREAM(INTERNAL_ERROR).
+            assert_eq!(
+                status.code(),
+                Code::Unknown,
+                "expected Unknown (transport reset from local encode limit), got {status:?}"
+            );
+            assert!(
+                status.message().contains("INTERNAL_ERROR"),
+                "expected message mentioning the stream reset, got: {}",
+                status.message()
+            );
+        }
+        other => panic!("expected TransportGRPCStatus, got {other:?}"),
+    }
+
+    // Step 3b: DECODE path — SELECT the pre-seeded 2 MiB blob. tonic surfaces the decode
+    // limit as a clean Status::OutOfRange.
+    let mut tx = limited.create_autocommit_transaction(Mode::OnlineReadonly);
+    let decode_err = tx
+        .query(Query::new(format!("SELECT val FROM {TABLE} WHERE id = 1")))
+        .await
+        .expect_err("select exceeding grpc decoding limit must fail");
+    trace!("decode-limit error: {:?}", decode_err);
+    match &decode_err {
+        YdbError::TransportGRPCStatus(status) => {
+            assert_eq!(
+                status.code(),
+                Code::OutOfRange,
+                "expected OutOfRange (tonic decode-size limit), got {status:?}"
+            );
+        }
+        other => panic!("expected TransportGRPCStatus(OutOfRange), got {other:?}"),
+    }
+
+    let _ = setup_table_client
+        .create_session()
+        .await?
+        .execute_schema_query(format!("DROP TABLE {TABLE}"))
+        .await;
 
     Ok(())
 }

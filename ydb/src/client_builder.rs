@@ -8,6 +8,7 @@ use crate::discovery::{Discovery, StaticDiscovery, TimerDiscovery};
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
+use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 use crate::{Client, Credentials};
@@ -235,6 +236,7 @@ pub struct ClientBuilder {
     discovery: Option<Box<dyn Discovery>>,
     discovery_enabled: bool,
     pub cert_path: Option<String>,
+    grpc_max_message_size: usize,
 }
 
 impl ClientBuilder {
@@ -271,6 +273,7 @@ impl ClientBuilder {
             db_cred.database.clone(),
             interceptor.clone(),
             self.cert_path.clone(),
+            self.grpc_max_message_size,
         );
 
         let discovery: Box<dyn Discovery> = match self.discovery {
@@ -293,13 +296,14 @@ impl ClientBuilder {
 
         let load_balancer = SharedLoadBalancer::new(discovery.as_ref().as_ref());
         let connection_manager = GrpcConnectionManager::new(
-            load_balancer,
+            load_balancer.clone(),
             db_cred.database.clone(),
             interceptor,
             self.cert_path,
+            self.grpc_max_message_size,
         );
 
-        Client::new(db_cred, discovery, connection_manager)
+        Client::new(db_cred, discovery, connection_manager, load_balancer)
     }
 
     pub fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
@@ -334,6 +338,15 @@ impl ClientBuilder {
         self
     }
 
+    /// Set the maximum encoded/decoded gRPC message size in bytes.
+    ///
+    /// Applies to every gRPC service client used by this `Client`
+    /// (both encoding and decoding directions).
+    pub fn with_grpc_max_message_size(mut self, bytes: usize) -> Self {
+        self.grpc_max_message_size = bytes;
+        self
+    }
+
     fn new() -> Self {
         Self {
             credentials: credencials_ref(AccessTokenCredentials::from("")),
@@ -343,6 +356,7 @@ impl ClientBuilder {
             discovery: None,
             discovery_enabled: true,
             cert_path: None,
+            grpc_max_message_size: DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
         }
     }
 

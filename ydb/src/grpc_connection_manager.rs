@@ -1,4 +1,5 @@
 use crate::connection_pool::ConnectionPool;
+use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_services::GrpcServiceForDiscovery;
 use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
@@ -18,14 +19,21 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
         database: String,
         interceptor: MultiInterceptor,
         cert_path: Option<String>,
+        grpc_max_message_size: usize,
     ) -> Self {
         GrpcConnectionManagerGeneric {
-            state: State::new(balancer, database, interceptor, cert_path),
+            state: State::new(
+                balancer,
+                database,
+                interceptor,
+                cert_path,
+                grpc_max_message_size,
+            ),
         }
     }
 
     pub(crate) async fn get_auth_service<
-        T: GrpcServiceForDiscovery,
+        T: GrpcServiceForDiscovery + WithGrpcMaxMessageSize,
         F: FnOnce(InterceptedChannel) -> T,
     >(
         &self,
@@ -39,7 +47,7 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
     }
 
     pub(crate) async fn get_auth_service_to_node<
-        T: GrpcServiceForDiscovery,
+        T: GrpcServiceForDiscovery + WithGrpcMaxMessageSize,
         F: FnOnce(InterceptedChannel) -> T,
     >(
         &self,
@@ -49,7 +57,7 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
         let channel = self.state.connections_pool.connection(uri).await?;
 
         let intercepted_channel = InterceptedChannel::new(channel, self.state.interceptor.clone());
-        Ok(new(intercepted_channel))
+        Ok(new(intercepted_channel).with_grpc_max_message_size(self.state.grpc_max_message_size))
     }
 
     pub(crate) fn database(&self) -> &String {
@@ -63,6 +71,7 @@ struct State<TBalancer: LoadBalancer> {
     connections_pool: ConnectionPool,
     interceptor: MultiInterceptor,
     database: String,
+    grpc_max_message_size: usize,
 }
 
 impl<TBalancer: LoadBalancer> State<TBalancer> {
@@ -71,6 +80,7 @@ impl<TBalancer: LoadBalancer> State<TBalancer> {
         database: String,
         interceptor: MultiInterceptor,
         cert_path: Option<String>,
+        grpc_max_message_size: usize,
     ) -> Self {
         let mut cp = ConnectionPool::new();
         if let Some(cert_path) = cert_path {
@@ -82,6 +92,7 @@ impl<TBalancer: LoadBalancer> State<TBalancer> {
             connections_pool: cp,
             interceptor,
             database,
+            grpc_max_message_size,
         }
     }
 }

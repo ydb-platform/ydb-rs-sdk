@@ -8,6 +8,7 @@ use crate::types::Value;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
 
+use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::table_service_types::{CopyTableItem, TableDescription};
 use crate::{Query, StreamResult};
@@ -23,6 +24,13 @@ const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
 
 pub(crate) type TableServiceClientType = TableServiceClient<InterceptedChannel>;
+
+impl WithGrpcMaxMessageSize for TableServiceClientType {
+    fn with_grpc_max_message_size(self, bytes: usize) -> Self {
+        self.max_decoding_message_size(bytes)
+            .max_encoding_message_size(bytes)
+    }
+}
 
 type TransactionArgType = Box<dyn Transaction>; // real type may be changed
 
@@ -117,6 +125,23 @@ pub struct TableClient {
     transaction_options: TransactionOptions,
     idempotent_operation: bool,
     timeouts: TimeoutSettings,
+}
+
+/// Tries to construct [`Value::List`] of [`Value::Struct`] from `values`.
+/// If `values` are empty (no example value), return None.
+/// If any of values is not [`Value::Struct`] or differs from others by structure, returns [`YdbError`]
+fn try_vec_to_list_of_structs(values: Vec<Value>) -> YdbResult<Option<Value>> {
+    let Some(example_value) = values.first().cloned() else {
+        return Ok(None);
+    };
+
+    if !matches!(example_value, Value::Struct(_)) {
+        return Err(YdbError::Custom(
+            "expected ValueStruct type for items".to_string(),
+        ));
+    }
+
+    Ok(Some(Value::list_from(example_value, values)?))
 }
 
 impl TableClient {
@@ -253,6 +278,57 @@ impl TableClient {
         .await
     }
 
+    /// From table with given path `table_path` request rows by primary keys `keys`, which must be
+    /// vector of [`Value::Struct`]. If any key does not meet requirement, error will be returned.
+    ///
+    /// If `columns` is `None`, all columns of requested rows will be returned. Otherwise, only
+    /// `columns` will be returned.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ydb::{TableClient, YdbResult, ydb_struct};
+    /// # async fn example(table_client: TableClient) -> YdbResult<()> {
+    /// let keys = vec![
+    ///     ydb_struct!("id" => 1_i64),
+    ///     ydb_struct!("id" => 2_i64),
+    /// ];
+    ///
+    /// let columns = Some(vec!["date".to_string(), "count".to_string()]);
+    ///
+    /// let result_set = table_client
+    ///     .retry_read_rows("/local/my_table".to_string(), keys, columns)
+    ///     .await?;
+    ///
+    /// for row in result_set.rows() {
+    ///     // Your code here.
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn retry_read_rows(
+        &self,
+        table_path: impl Into<String>,
+        keys: Vec<Value>,
+        columns: Option<Vec<String>>,
+    ) -> YdbResult<crate::ResultSet> {
+        let Some(keys) = try_vec_to_list_of_structs(keys)? else {
+            return Ok(crate::ResultSet::default());
+        };
+
+        let table_path: String = table_path.into();
+
+        let columns = columns.unwrap_or_default();
+
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            session
+                .read_rows(table_path.clone(), keys.clone(), columns.clone())
+                .await
+        })
+        .await
+    }
+
     /// Execute explain data query with retry policy
     ///
     /// # Type Parameters
@@ -300,18 +376,9 @@ impl TableClient {
         table_path: String,
         rows: Vec<Value>,
     ) -> YdbResult<()> {
-        if rows.is_empty() {
+        let Some(value) = try_vec_to_list_of_structs(rows)? else {
             return Ok(());
-        }
-
-        let examle_value = rows[0].clone();
-        if !matches!(&examle_value, Value::Struct(_)) {
-            return Err(YdbError::Custom(
-                "expected ValueStruct type for items".to_string(),
-            ));
-        }
-
-        let value = Value::list_from(examle_value, rows)?;
+        };
 
         self.retry(|| async {
             let mut session = self.create_session().await?;
@@ -614,5 +681,38 @@ impl Retry for NoRetrier {
             allow_retry: false,
             wait_timeout: Duration::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::ydb_struct;
+
+    use super::*;
+
+    #[test]
+    fn try_vec_empty() {
+        assert!(matches!(try_vec_to_list_of_structs(vec![]), Ok(None)));
+    }
+
+    #[test]
+    fn try_vec_same_structure() {
+        let values = vec![ydb_struct!("id" => 1), ydb_struct!("id" => 2)];
+        assert!(matches!(try_vec_to_list_of_structs(values), Ok(Some(_))));
+    }
+
+    #[test]
+    fn try_vec_different_structure() {
+        let values = vec![ydb_struct!("id" => 1), ydb_struct!("key" => 2)];
+        assert!(try_vec_to_list_of_structs(values).is_err());
+    }
+
+    #[test]
+    fn try_vec_non_struct() {
+        let values = vec![ydb_struct!("id" => 1), 42i64.into()];
+        assert!(try_vec_to_list_of_structs(values).is_err());
+
+        let values = vec![1i64.into()];
+        assert!(try_vec_to_list_of_structs(values).is_err());
     }
 }

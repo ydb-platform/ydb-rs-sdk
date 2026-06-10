@@ -3,6 +3,7 @@ use std::time::UNIX_EPOCH;
 
 use tracing_test::traced_test;
 
+use crate::client_scheme::list_types::SchemeEntryType;
 use crate::errors::YdbResult;
 use crate::test_integration_helper::create_client;
 
@@ -18,6 +19,11 @@ async fn create_list_remove_directory() -> YdbResult<()> {
     let directory_path = format!("{}/{}", database_path, directory_name.clone());
 
     scheme_client.make_directory(directory_path.clone()).await?;
+
+    let entry = scheme_client.describe_path(directory_path.clone()).await?;
+    assert_eq!(entry.name, directory_name);
+    assert!(matches!(entry.r#type, SchemeEntryType::Directory));
+
     let directories = scheme_client.list_directory(database_path.clone()).await?;
     assert!(directories.iter().any(|d| d.name == directory_name));
 
