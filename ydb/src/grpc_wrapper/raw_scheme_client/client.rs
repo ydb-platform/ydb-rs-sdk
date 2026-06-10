@@ -1,5 +1,8 @@
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_errors::RawResult;
+use crate::grpc_wrapper::raw_scheme_client::describe_path_types::{
+    RawDescribePathRequest, RawDescribePathResult,
+};
 use crate::grpc_wrapper::raw_scheme_client::list_directory_types::{
     RawListDirectoryRequest, RawListDirectoryResult,
 };
@@ -57,6 +60,18 @@ impl RawSchemeClient {
         request_without_result!(
             self.service.remove_directory,
             req => ydb_grpc::ydb_proto::scheme::RemoveDirectoryRequest
+        );
+    }
+
+    #[instrument(skip(self), err, ret)]
+    pub async fn describe_path(
+        &mut self,
+        req: RawDescribePathRequest,
+    ) -> RawResult<RawDescribePathResult> {
+        request_with_result!(
+            self.service.describe_path,
+            req => ydb_grpc::ydb_proto::scheme::DescribePathRequest,
+            ydb_grpc::ydb_proto::scheme::DescribePathResult => RawDescribePathResult
         );
     }
 }
