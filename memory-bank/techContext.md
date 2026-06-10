@@ -46,7 +46,7 @@ cargo test --workspace -- --include-ignored
 | `.github/workflows/linter.yaml` | push/PR to `master` | `cargo fmt --check`, `cargo clippy` |
 | `.github/workflows/rust-tests.yml` | push/PR + nightly cron | `cargo test --include-ignored` against `local-ydb:nightly` |
 | `.github/workflows/publish-crate.yml` | manual dispatch | version bump + crates.io publish |
-| `.github/workflows/slo.yml` | — | SLO tests |
+| `.github/workflows/slo.yml` | push/PR to `master` + manual dispatch | SLO tests |
 
 ## Workspace dependency policy
 
