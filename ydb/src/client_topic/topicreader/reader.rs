@@ -5,6 +5,7 @@ use crate::client_topic::topicreader::partition_state::PartitionSession;
 use crate::client_topic::topicreader::reader_options::{
     TopicReaderOptions, TopicReaderOptionsBuilder,
 };
+use crate::errors::NeedRetry;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
@@ -24,20 +25,25 @@ use crate::transaction::{Transaction, TransactionInfo};
 use crate::{YdbError, YdbResult};
 use secrecy::ExposeSecret;
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::select;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{oneshot, Notify};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace};
 use ydb_grpc::ydb_proto::topic::stream_read_message::{FromClient, FromServer};
 
+const READER_SHARED_STATE_POISONED: &str = "topic reader shared state mutex poisoned";
 const READER_BUFFER_SIZE: i64 = 1024 * 1024; // 1MB
 const UPDATE_TOKEN_INTERVAL: time::Duration = Duration::from_secs(3600);
 
+const RETRY_BACKOFF_SLOT: Duration = Duration::from_millis(100);
+const RETRY_BACKOFF_CEILING: u32 = 6;
+const RECONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
+
 type PartitionSessionId = i64;
+type GrpcStream = AsyncGrpcStreamWrapper<FromClient, FromServer>;
 
 #[derive(Default)]
 struct PendingCommits {
@@ -103,52 +109,168 @@ impl PendingCommits {
 }
 
 #[derive(Default)]
-struct CommitState {
-    epoch: usize,
+struct SharedState {
+    buffer: VecDeque<TopicReaderMessage>,
     pending_commits: PendingCommits,
 }
 
-/// Shared state between the main `TopicReader` task and the background `receive_loop`.
-///
-/// Ordering contract for `notify`:
-/// - `notify_one()` is called strictly AFTER writing to `buffer` or setting `closed`.
-/// - `notify_one` is permit-safe: stores a permit when no waiter is registered,
-///   consumed by the next `notified().await`.
-/// - On shutdown: `error` is written first, then `closed=true` (Release),
-///   then `notify_one()`.
 pub(crate) struct ReaderShared {
-    pub(crate) buffer: Mutex<VecDeque<TopicReaderMessage>>,
-    commit_state: Mutex<CommitState>,
-    pub(crate) notify: Notify,
-    pub(crate) error: Mutex<Option<YdbError>>,
-    pub(crate) closed: AtomicBool,
+    state: Mutex<YdbResult<SharedState>>,
+    notify: Notify,
 }
 
 impl ReaderShared {
     fn new() -> Self {
         Self {
-            buffer: Mutex::new(VecDeque::new()),
-            commit_state: Mutex::new(CommitState::default()),
+            state: Mutex::new(Ok(SharedState::default())),
             notify: Notify::new(),
-            error: Mutex::new(None),
-            closed: AtomicBool::new(false),
         }
+    }
+
+    fn fail(&self, err: YdbError) {
+        let mut state = self.lock_state();
+
+        if let Ok(state) = &mut *state {
+            state.pending_commits.fail_all();
+        }
+        *state = Err(err);
+
+        self.notify.notify_one();
+    }
+
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, YdbResult<SharedState>> {
+        self.state.lock().expect(READER_SHARED_STATE_POISONED)
     }
 }
 
-pub struct TopicReader {
-    stream_sender: UnboundedSender<FromClient>,
-    shared: Arc<ReaderShared>,
-    stop_backgroung_work_token: YdbCancellationToken,
-
-    topic_service: RawTopicClient,
-    consumer: String,
-
-    batch_size: usize,
+struct TopicReaderContext {
+    manager: GrpcConnectionManager,
+    options: TopicReaderOptions,
+    token_cache: TokenCache,
 }
 
+pub struct TopicReader {
+    context: TopicReaderContext,
+    epoch: usize,
+
+    reader: StreamReader,
+}
+
+type TopicCommitHandler = tokio::sync::oneshot::Receiver<()>;
+
 impl TopicReader {
+    pub(crate) async fn new(
+        options: TopicReaderOptions,
+        manager: GrpcConnectionManager,
+        token_cache: TokenCache,
+    ) -> YdbResult<Self> {
+        let context = TopicReaderContext {
+            manager,
+            options,
+            token_cache,
+        };
+        let epoch = 0;
+        let reader = StreamReader::new(&context, epoch).await?;
+
+        Ok(Self {
+            context,
+            epoch,
+            reader,
+        })
+    }
+
     pub async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
+        loop {
+            match self.reader.read_batch().await {
+                Ok(batch) => return Ok(batch),
+                Err(err) => self.try_reconnect_on_err(err).await?,
+            }
+        }
+    }
+
+    pub async fn pop_batch_in_tx(
+        &mut self,
+        tx: &mut Box<dyn Transaction>,
+    ) -> YdbResult<TopicReaderBatch> {
+        let tx_info = tx.transaction_info().await?;
+        let batch = self.read_batch().await?;
+        self.reader
+            .update_offsets_in_transaction(&batch, &tx_info)
+            .await?;
+        Ok(batch)
+    }
+
+    pub fn commit(&mut self, commit_marker: TopicReaderCommitMarker) -> TopicCommitHandler {
+        self.reader
+            .commit(commit_marker)
+            .unwrap_or_else(|_| StreamReader::cancelled_commit_handle())
+    }
+
+    async fn try_reconnect_on_err(&mut self, err: YdbError) -> YdbResult<()> {
+        trace!(
+            consumer = self.context.options.consumer,
+            err = %err,
+        );
+
+        ensure_retriable(err)?;
+
+        self.reader.cancel();
+        self.epoch += 1;
+
+        let mut attempts: usize = 0;
+        let start = std::time::Instant::now();
+
+        let reader = loop {
+            attempts += 1;
+
+            match tokio::time::timeout(
+                RECONNECT_ATTEMPT_TIMEOUT,
+                StreamReader::new(&self.context, self.epoch),
+            )
+            .await
+            {
+                Ok(Ok(reader)) => break reader,
+                Ok(Err(err)) => ensure_retriable(err)?,
+                Err(_) => {}
+            };
+
+            tokio::time::sleep(topic_reader_retry_backoff(attempts)).await;
+        };
+
+        trace!(
+            consumer = self.context.options.consumer,
+            elapsed = ?start.elapsed(),
+            attempts = attempts,
+            "topic reader succesfully reconnected"
+        );
+
+        self.reader = reader;
+
+        Ok(())
+    }
+}
+
+/// Converts `err` in Ok(()) if `err` is retriable. Otherwise returns Err(err)
+fn ensure_retriable(err: YdbError) -> YdbResult<()> {
+    match err.need_retry() {
+        NeedRetry::True | NeedRetry::IdempotentOnly => Ok(()),
+        NeedRetry::False => Err(err),
+    }
+}
+
+struct StreamReader {
+    stream_sender: UnboundedSender<FromClient>,
+    topic_service: RawTopicClient,
+    shared: Arc<ReaderShared>,
+
+    consumer: String,
+    stop_background_work_token: YdbCancellationToken,
+    batch_size: usize,
+    epoch: usize,
+}
+
+impl StreamReader {
+    async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
         self.read_batch_private().await
     }
 
@@ -160,22 +282,10 @@ impl TopicReader {
             tokio::pin!(notified);
             notified.as_mut().enable();
 
-            let prefix = {
-                let mut buf = self
-                    .shared
-                    .buffer
-                    .lock()
-                    .expect("topic reader buffer mutex poisoned");
-                if buf.is_empty() {
-                    None
-                } else {
-                    Some(cut_prefix(&mut buf, self.batch_size))
-                }
+            let prefix = match &mut *self.shared.lock_state() {
+                Ok(state) => cut_prefix(&mut state.buffer, self.batch_size),
+                Err(err) => return Err(err.clone()),
             };
-
-            if self.shared.closed.load(Ordering::Acquire) {
-                return Err(shared_error_or_closed(&self.shared));
-            }
 
             if let Some((messages, bytes_to_release)) = prefix {
                 if bytes_to_release > 0 {
@@ -186,23 +296,6 @@ impl TopicReader {
 
             notified.await;
         }
-    }
-
-    /// Read a batch of messages within a transaction context.
-    /// The TopicReaderBatch from the result will be committed within the `tx` transaction.
-    /// This is an EXAMPLE of the interface. IT IS NOT PRODUCTION READY.
-    /// The reader will fail consistently on ANY error, including TLI.
-    ///
-    /// You can use this method to test the interface and try writing your own code to see how it works.
-    /// DO NOT USE IN PRODUCTION
-    pub async fn pop_batch_in_tx(
-        &mut self,
-        tx: &mut Box<dyn Transaction>,
-    ) -> YdbResult<TopicReaderBatch> {
-        let tx_info = tx.transaction_info().await?;
-        let batch = self.read_batch().await?;
-        self.update_offsets_in_transaction(&batch, &tx_info).await?;
-        Ok(batch)
     }
 
     async fn update_offsets_in_transaction(
@@ -241,94 +334,83 @@ impl TopicReader {
         Ok(())
     }
 
-    pub fn commit(&mut self, commit_marker: TopicReaderCommitMarker) -> oneshot::Receiver<()> {
-        let mut commit_state = self
-            .shared
-            .commit_state
-            .lock()
-            .expect("topic reader commit state mutex poisoned");
-        if commit_state.epoch != commit_marker.epoch {
-            let (_sender, receiver) = oneshot::channel();
-            return receiver;
-        }
-
-        let receiver = commit_state
-            .pending_commits
-            .push(commit_marker.partition_session_id, commit_marker.end_offset);
-
-        let send_result = send_on_stream(
-            &self.stream_sender,
-            RawFromClientOneOf::CommitOffsetRequest(RawCommitOffsetRequest {
-                commit_offsets: vec![PartitionCommitOffset {
-                    partition_session_id: commit_marker.partition_session_id,
-                    offsets: vec![RawOffsetsRange {
-                        start: commit_marker.start_offset,
-                        end: commit_marker.end_offset,
-                    }],
-                }],
-            }),
-        );
-
-        if let Err(err) = send_result {
-            warn!("topic reader commit send failed: {}", err);
-            commit_state.pending_commits.fail_all();
-        }
-
-        receiver
+    fn cancelled_commit_handle() -> TopicCommitHandler {
+        let (_sender, reciever) = oneshot::channel();
+        reciever
     }
 
-    pub(crate) async fn new(
-        options: TopicReaderOptions,
-        connection_manager: GrpcConnectionManager,
-        token_cache: TokenCache,
-    ) -> YdbResult<Self> {
-        let mut topic_service = connection_manager
-            .get_auth_service(RawTopicClient::new)
-            .await?;
+    fn commit(&mut self, commit_marker: TopicReaderCommitMarker) -> YdbResult<TopicCommitHandler> {
+        if self.epoch != commit_marker.epoch {
+            return Ok(Self::cancelled_commit_handle());
+        }
 
-        let init_request = RawInitRequest {
-            topics_read_settings: options.topic.into_topics_read_settings(),
-            consumer: options.consumer.clone(),
-            reader_name: "".to_string(),
+        let receiver = {
+            let mut state_guard = self.shared.lock_state();
+
+            let state = match &mut *state_guard {
+                Ok(state) => state,
+                Err(err) => {
+                    return Err(err.clone());
+                }
+            };
+
+            state
+                .pending_commits
+                .push(commit_marker.partition_session_id, commit_marker.end_offset)
         };
 
-        let mut stream = topic_service.stream_read(init_request).await?;
+        let commit_message = RawFromClientOneOf::CommitOffsetRequest(RawCommitOffsetRequest {
+            commit_offsets: vec![PartitionCommitOffset {
+                partition_session_id: commit_marker.partition_session_id,
+                offsets: vec![RawOffsetsRange {
+                    start: commit_marker.start_offset,
+                    end: commit_marker.end_offset,
+                }],
+            }],
+        });
 
-        stream
-            .send(RawFromClientOneOf::ReadRequest(RawReadRequest {
-                bytes_size: READER_BUFFER_SIZE,
-            }))
-            .await?;
+        if let Err(err) = send_on_stream(&self.stream_sender, commit_message) {
+            self.shared.fail(err.clone());
 
-        let stream_sender = stream.clone_sender();
-        let shared = Arc::new(ReaderShared::new());
-        let stop_backgroung_work_token = YdbCancellationToken::new();
+            Err(err)
+        } else {
+            Ok(receiver)
+        }
+    }
 
+    pub(crate) async fn new(context: &TopicReaderContext, epoch: usize) -> YdbResult<Self> {
+        let (stream, topic_service) =
+            Self::grpc_connect(&context.manager, &context.options).await?;
+
+        let stream_reader = StreamReader {
+            stream_sender: stream.clone_sender(),
+            shared: Arc::new(ReaderShared::new()),
+            stop_background_work_token: YdbCancellationToken::new(),
+            epoch,
+            consumer: context.options.consumer.clone(),
+            batch_size: context.options.batch_size,
+            topic_service,
+        };
+
+        stream_reader.start_background_jobs(stream, context.token_cache.clone());
+
+        Ok(stream_reader)
+    }
+
+    fn start_background_jobs(&self, stream: GrpcStream, token_cache: TokenCache) {
         tokio::spawn(receive_loop(
             stream,
-            shared.clone(),
-            stop_backgroung_work_token.clone(),
-            0,
+            self.shared.clone(),
+            self.stop_background_work_token.clone(),
+            self.epoch,
         ));
 
         tokio::spawn(Self::update_token_loop(
-            stop_backgroung_work_token.clone(),
-            stream_sender.clone(),
+            self.stop_background_work_token.clone(),
+            self.stream_sender.clone(),
+            self.shared.clone(),
             token_cache,
         ));
-
-        let transaction_topic_service = connection_manager
-            .get_auth_service(RawTopicClient::new)
-            .await?;
-
-        Ok(Self {
-            stream_sender,
-            shared,
-            stop_backgroung_work_token,
-            topic_service: transaction_topic_service,
-            consumer: options.consumer,
-            batch_size: options.batch_size,
-        })
     }
 
     fn send_read_request(&self, size: i64) -> YdbResult<()> {
@@ -341,6 +423,7 @@ impl TopicReader {
     async fn update_token_loop(
         cancellation_token: YdbCancellationToken,
         send: UnboundedSender<FromClient>,
+        shared: Arc<ReaderShared>,
         auth_token: TokenCache,
     ) {
         let mut interval = tokio::time::interval(UPDATE_TOKEN_INTERVAL);
@@ -355,13 +438,19 @@ impl TopicReader {
                     break;
                 }
                 _ = interval.tick() => {
-                    Self::send_update_token(&send, &auth_token).await;
+                    if let Err(err) = Self::send_update_token(&send, &auth_token).await {
+                        shared.fail(err);
+                        break;
+                    }
                 }
             }
         }
     }
 
-    async fn send_update_token(send: &UnboundedSender<FromClient>, auth_token: &TokenCache) {
+    async fn send_update_token(
+        send: &UnboundedSender<FromClient>,
+        auth_token: &TokenCache,
+    ) -> YdbResult<()> {
         let token = auth_token.token();
         debug!("sending update token request from topic reader");
 
@@ -370,36 +459,61 @@ impl TopicReader {
         })
         .into();
 
-        if let Err(err) = send.send(update_request) {
-            warn!(
-                "error while sending update token request from topic reader: {}",
-                err
-            );
-        }
+        send.send(update_request).map_err(|err| {
+            YdbError::Transport(format!("topic reader update token send failed: {err}"))
+        })
+    }
+
+    async fn grpc_connect(
+        manager: &GrpcConnectionManager,
+        options: &TopicReaderOptions,
+    ) -> YdbResult<(GrpcStream, RawTopicClient)> {
+        let mut topic_service = manager.get_auth_service(RawTopicClient::new).await?;
+
+        let init_request = RawInitRequest {
+            topics_read_settings: options.topic.clone().into_topics_read_settings(),
+            consumer: options.consumer.clone(),
+            reader_name: "".to_string(),
+        };
+
+        let stream = topic_service.stream_read(init_request).await?;
+
+        stream
+            .send(RawFromClientOneOf::ReadRequest(RawReadRequest {
+                bytes_size: READER_BUFFER_SIZE,
+            }))
+            .await?;
+
+        let topic_client = manager.get_auth_service(RawTopicClient::new).await?;
+
+        Ok((stream, topic_client))
+    }
+
+    fn cancel(&self) {
+        self.stop_background_work_token.cancel();
     }
 }
 
-impl Drop for TopicReader {
+impl Drop for StreamReader {
     fn drop(&mut self) {
-        self.stop_backgroung_work_token.cancel();
+        self.stop_background_work_token.cancel();
     }
 }
 
-/// Takes up to `cap` messages from the front of `buffer`, all sharing the same
+/// If `buffer` is empty, returns [`None`].
+///
+/// Otherwise, takes up to `cap` messages from the front of `buffer`, all sharing the same
 /// `partition_session_id`. Returns the messages and the total `bytes_to_release`
 /// for the flow-control ReadRequest.
 pub(crate) fn cut_prefix(
     buffer: &mut VecDeque<TopicReaderMessage>,
     cap: usize,
-) -> (Vec<TopicReaderMessage>, i64) {
-    let session_id = buffer
-        .front()
-        .expect("cut_prefix called on empty buffer")
-        .commit_marker
-        .partition_session_id;
+) -> Option<(Vec<TopicReaderMessage>, i64)> {
+    let session_id = buffer.front()?.commit_marker.partition_session_id;
 
     let mut out = Vec::new();
     let mut bytes: i64 = 0;
+
     while out.len() < cap {
         match buffer.front() {
             Some(m) if m.commit_marker.partition_session_id == session_id => {
@@ -410,7 +524,8 @@ pub(crate) fn cut_prefix(
             _ => break,
         }
     }
-    (out, bytes)
+
+    Some((out, bytes))
 }
 
 /// Background task: reads from the grpc stream, dispatches incoming messages,
@@ -451,7 +566,16 @@ async fn receive_loop(
         }
     };
 
-    close_with_error(&shared, err);
+    if let Some(err) = err {
+        if !tokio_stop.is_cancelled() {
+            close_with_error(&shared, Some(err));
+        }
+    }
+}
+
+fn topic_reader_retry_backoff(attempt: usize) -> Duration {
+    let multiplier = 1u32 << (attempt as u32).min(RETRY_BACKOFF_CEILING);
+    RETRY_BACKOFF_SLOT * multiplier
 }
 
 fn handle_incoming(
@@ -462,22 +586,20 @@ fn handle_incoming(
     epoch: usize,
 ) -> YdbResult<()> {
     match msg {
-        RawFromServer::ReadResponse(resp) => handle_read_response(resp, sessions, shared)?,
+        RawFromServer::ReadResponse(resp) => handle_read_response(resp, sessions, shared, epoch)?,
         RawFromServer::InitResponse(resp) => {
             info!("init response for topic reader: {:?}", resp)
         }
         RawFromServer::CommitOffsetResponse(resp) => {
             debug!("commit offset response for topic reader: {:?}", resp);
-            shared
-                .commit_state
-                .lock()
-                .expect("topic reader commit state mutex poisoned")
-                .pending_commits
-                .ack(
+            let mut state = shared.lock_state();
+            if let Ok(state) = &mut *state {
+                state.pending_commits.ack(
                     resp.partitions_committed_offsets
                         .into_iter()
                         .map(|offset| (offset.partition_session_id, offset.committed_offset)),
                 );
+            }
         }
         RawFromServer::UpdateTokenResponse(_) => {}
         RawFromServer::StartPartitionSessionRequest(request) => {
@@ -487,7 +609,6 @@ fn handle_incoming(
                     partition_session_id: request.partition_session.partition_session_id,
                     partition_id: request.partition_session.partition_id,
                     topic: request.partition_session.path,
-                    epoch,
                     next_commit_offset_start: request.committed_offset,
                 },
             );
@@ -502,12 +623,14 @@ fn handle_incoming(
         }
         RawFromServer::StopPartitionSessionRequest(request) => {
             sessions.remove(&request.partition_session_id);
-            shared
-                .commit_state
-                .lock()
-                .expect("topic reader commit state mutex poisoned")
-                .pending_commits
-                .stop(request.partition_session_id, None);
+            {
+                let mut state = shared.lock_state();
+                if let Ok(state) = &mut *state {
+                    state
+                        .pending_commits
+                        .stop(request.partition_session_id, None);
+                }
+            }
             send_on_stream(
                 sender,
                 RawFromClientOneOf::StopPartitionSessionResponse(RawStopPartitionSessionResponse {
@@ -530,6 +653,7 @@ pub(crate) fn handle_read_response(
     resp: RawReadResponse,
     sessions: &mut HashMap<i64, PartitionSession>,
     shared: &ReaderShared,
+    epoch: usize,
 ) -> YdbResult<()> {
     for partition_data in resp.partition_data {
         let partition_session_id = partition_data.partition_session_id;
@@ -548,18 +672,18 @@ pub(crate) fn handle_read_response(
                 continue;
             }
             let batch_bytes = raw_batch.get_read_session_size();
-            let batch = TopicReaderBatch::new(raw_batch, session);
+            let batch = TopicReaderBatch::new(raw_batch, session, epoch);
             let mut messages = batch.messages;
             if let Some(last) = messages.last_mut() {
                 last.bytes_to_release = batch_bytes;
             }
 
             {
-                let mut buf = shared
-                    .buffer
-                    .lock()
-                    .expect("topic reader buffer mutex poisoned");
-                buf.extend(messages);
+                let mut state = shared.lock_state();
+                match &mut *state {
+                    Ok(state) => state.buffer.extend(messages),
+                    Err(err) => return Err(err.clone()),
+                }
             }
             // push-then-notify: no lost wakeups
             shared.notify.notify_one();
@@ -569,33 +693,7 @@ pub(crate) fn handle_read_response(
 }
 
 pub(crate) fn close_with_error(shared: &ReaderShared, err: Option<YdbError>) {
-    shared
-        .commit_state
-        .lock()
-        .expect("topic reader commit state mutex poisoned")
-        .pending_commits
-        .fail_all();
-
-    if let Some(e) = err {
-        let mut slot = shared
-            .error
-            .lock()
-            .expect("topic reader error mutex poisoned");
-        if slot.is_none() {
-            *slot = Some(e);
-        }
-    }
-    shared.closed.store(true, Ordering::Release);
-    shared.notify.notify_one();
-}
-
-fn shared_error_or_closed(shared: &ReaderShared) -> YdbError {
-    shared
-        .error
-        .lock()
-        .expect("topic reader error mutex poisoned")
-        .clone()
-        .unwrap_or_else(|| YdbError::custom("topic read stream closed"))
+    shared.fail(err.unwrap_or_else(|| YdbError::custom("topic read stream closed")));
 }
 
 fn send_on_stream(
@@ -605,7 +703,7 @@ fn send_on_stream(
     let from_client: FromClient = message.into();
     sender
         .send(from_client)
-        .map_err(|err| YdbError::custom(format!("topic reader send failed: {err}")))
+        .map_err(|err| YdbError::Transport(format!("topic reader send failed: {err}")))
 }
 
 #[derive(Clone)]
@@ -702,7 +800,14 @@ mod tests {
     }
 
     #[test]
-    fn test_pending_commits_push_returns_pending_receiver() {
+    fn topic_reader_retry_backoff_uses_middle_go_like_policy() {
+        assert_eq!(topic_reader_retry_backoff(1), Duration::from_millis(200));
+        assert_eq!(topic_reader_retry_backoff(6), Duration::from_millis(6400));
+        assert_eq!(topic_reader_retry_backoff(7), Duration::from_millis(6400));
+    }
+
+    #[test]
+    fn pending_commits_push_returns_pending_receiver() {
         let mut commits = PendingCommits::default();
 
         let receiver = commits.push(1, 10);
@@ -711,7 +816,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pending_commits_ack_confirms_offsets_up_to_committed_offset() {
+    fn pending_commits_ack_confirms_offsets_up_to_committed_offset() {
         let mut commits = PendingCommits::default();
         let offset_10 = commits.push(1, 10);
         let offset_20 = commits.push(1, 20);
@@ -725,7 +830,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pending_commits_ack_ignores_other_sessions() {
+    fn pending_commits_ack_ignores_other_sessions() {
         let mut commits = PendingCommits::default();
         let session_1 = commits.push(1, 10);
         let session_2 = commits.push(2, 10);
@@ -737,7 +842,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pending_commits_push_replaces_waiter_for_same_offset() {
+    fn pending_commits_push_replaces_waiter_for_same_offset() {
         let mut commits = PendingCommits::default();
         let replaced = commits.push(1, 10);
         let current = commits.push(1, 10);
@@ -749,7 +854,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pending_commits_fail_all_aborts_all_receivers() {
+    fn pending_commits_fail_all_aborts_all_receivers() {
         let mut commits = PendingCommits::default();
         let session_1 = commits.push(1, 10);
         let session_2 = commits.push(2, 20);
@@ -761,7 +866,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pending_commits_fail_session_aborts_only_requested_session() {
+    fn pending_commits_fail_session_aborts_only_requested_session() {
         let mut commits = PendingCommits::default();
         let session_1 = commits.push(1, 10);
         let session_2 = commits.push(2, 10);
@@ -773,7 +878,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pending_commits_stop_acks_covered_offsets_and_aborts_rest() {
+    fn pending_commits_stop_acks_covered_offsets_and_aborts_rest() {
         let mut commits = PendingCommits::default();
         let covered = commits.push(1, 10);
         let uncovered = commits.push(1, 20);
@@ -785,7 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pending_commits_stop_without_committed_offset_aborts_session() {
+    fn pending_commits_stop_without_committed_offset_aborts_session() {
         let mut commits = PendingCommits::default();
         let receiver = commits.push(1, 10);
 
@@ -795,7 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn test_transaction_topic_reading_integration() {
+    fn transaction_topic_reading_integration() {
         let commit_marker = TopicReaderCommitMarker {
             partition_session_id: 456,
             partition_id: 789,
@@ -864,7 +969,6 @@ mod tests {
             partition_session_id,
             partition_id,
             topic: topic.to_string(),
-            epoch: 0,
             next_commit_offset_start: start_offset,
         }
     }
@@ -895,7 +999,7 @@ mod tests {
         bytes_to_release: i64,
     ) -> TopicReaderMessage {
         let raw = make_raw_batch(offset, 1);
-        let batch = TopicReaderBatch::new(raw, session);
+        let batch = TopicReaderBatch::new(raw, session, 0);
         let mut m = batch.messages.into_iter().next().unwrap();
         m.bytes_to_release = bytes_to_release;
         m
@@ -904,7 +1008,7 @@ mod tests {
     // ---- cut_prefix ----
 
     #[test]
-    fn test_cut_prefix_hard_limit_within_one_session() {
+    fn cut_prefix_hard_limit_within_one_session() {
         let mut session = make_session(1, 11, "t", 0);
         let mut buf: VecDeque<TopicReaderMessage> = VecDeque::new();
         for offset in 0..1500i64 {
@@ -912,13 +1016,13 @@ mod tests {
             buf.push_back(message_for_session(&mut session, offset, bytes));
         }
 
-        let (first, first_bytes) = cut_prefix(&mut buf, 1000);
+        let (first, first_bytes) = cut_prefix(&mut buf, 1000).unwrap();
         assert_eq!(first.len(), 1000);
         assert_eq!(first.first().unwrap().offset, 0);
         assert_eq!(first.last().unwrap().offset, 999);
         assert_eq!(first_bytes, 0);
 
-        let (second, second_bytes) = cut_prefix(&mut buf, 1000);
+        let (second, second_bytes) = cut_prefix(&mut buf, 1000).unwrap();
         assert_eq!(second.len(), 500);
         assert_eq!(second.first().unwrap().offset, 1000);
         assert_eq!(second.last().unwrap().offset, 1499);
@@ -928,7 +1032,14 @@ mod tests {
     }
 
     #[test]
-    fn test_cut_prefix_stops_at_session_boundary() {
+    fn cut_prefix_returns_none_for_empty_buffer() {
+        let mut buf = VecDeque::new();
+
+        assert!(cut_prefix(&mut buf, 1000).is_none());
+    }
+
+    #[test]
+    fn cut_prefix_stops_at_session_boundary() {
         let mut a1 = make_session(1, 11, "t", 0);
         let mut b = make_session(2, 22, "t", 0);
         let mut a2 = make_session(3, 33, "t", 0);
@@ -944,19 +1055,19 @@ mod tests {
             buf.push_back(message_for_session(&mut a2, offset, 0));
         }
 
-        let (first, _) = cut_prefix(&mut buf, 1000);
+        let (first, _) = cut_prefix(&mut buf, 1000).unwrap();
         assert_eq!(first.len(), 200);
         assert!(first
             .iter()
             .all(|m| m.commit_marker.partition_session_id == 1));
 
-        let (second, _) = cut_prefix(&mut buf, 1000);
+        let (second, _) = cut_prefix(&mut buf, 1000).unwrap();
         assert_eq!(second.len(), 200);
         assert!(second
             .iter()
             .all(|m| m.commit_marker.partition_session_id == 2));
 
-        let (third, _) = cut_prefix(&mut buf, 1000);
+        let (third, _) = cut_prefix(&mut buf, 1000).unwrap();
         assert_eq!(third.len(), 100);
         assert!(third
             .iter()
@@ -966,7 +1077,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cut_prefix_aggregates_bytes() {
+    fn cut_prefix_aggregates_bytes() {
         let mut session = make_session(1, 11, "t", 0);
         let mut buf: VecDeque<TopicReaderMessage> = VecDeque::new();
         for offset in 0..5 {
@@ -974,14 +1085,14 @@ mod tests {
             buf.push_back(message_for_session(&mut session, offset, bytes));
         }
 
-        let (msgs, bytes) = cut_prefix(&mut buf, 10);
+        let (msgs, bytes) = cut_prefix(&mut buf, 10).unwrap();
         assert_eq!(msgs.len(), 5);
         assert_eq!(bytes, 1234);
         assert!(buf.is_empty());
     }
 
     #[test]
-    fn test_cut_prefix_hard_limit_leaves_bytes_tag_on_remainder() {
+    fn cut_prefix_hard_limit_leaves_bytes_tag_on_remainder() {
         let mut session = make_session(1, 11, "t", 0);
         let mut buf: VecDeque<TopicReaderMessage> = VecDeque::new();
         for offset in 0..5 {
@@ -989,11 +1100,11 @@ mod tests {
             buf.push_back(message_for_session(&mut session, offset, bytes));
         }
 
-        let (first, bytes_first) = cut_prefix(&mut buf, 3);
+        let (first, bytes_first) = cut_prefix(&mut buf, 3).unwrap();
         assert_eq!(first.len(), 3);
         assert_eq!(bytes_first, 0);
 
-        let (second, bytes_second) = cut_prefix(&mut buf, 10);
+        let (second, bytes_second) = cut_prefix(&mut buf, 10).unwrap();
         assert_eq!(second.len(), 2);
         assert_eq!(bytes_second, 1234);
     }
@@ -1032,7 +1143,7 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_read_response_preserves_fifo_across_partition_data() {
+    fn handle_read_response_preserves_fifo_across_partition_data() {
         let shared = ReaderShared::new();
         let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
         sessions.insert(1, make_session(1, 11, "t-a", 0));
@@ -1044,9 +1155,10 @@ mod tests {
         let pd_a2 = make_raw_partition_data(3, vec![make_raw_batch(0, 2)]);
 
         let resp = make_raw_read_response(9999, vec![pd_a1, pd_b, pd_a2]);
-        handle_read_response(resp, &mut sessions, &shared).unwrap();
+        handle_read_response(resp, &mut sessions, &shared, 0).unwrap();
 
-        let buf = shared.buffer.lock().unwrap();
+        let state = shared.lock_state();
+        let buf = &state.as_ref().unwrap().buffer;
         assert_eq!(buf.len(), 9);
 
         let session_sequence: Vec<i64> = buf
@@ -1064,7 +1176,7 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_read_response_skips_empty_batches() {
+    fn handle_read_response_skips_empty_batches() {
         let shared = ReaderShared::new();
         let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
         sessions.insert(1, make_session(1, 11, "t", 0));
@@ -1079,9 +1191,10 @@ mod tests {
         let pd = make_raw_partition_data(1, vec![empty_batch, make_raw_batch(0, 2)]);
         let resp = make_raw_read_response(500, vec![pd]);
 
-        handle_read_response(resp, &mut sessions, &shared).unwrap();
+        handle_read_response(resp, &mut sessions, &shared, 0).unwrap();
 
-        let buf = shared.buffer.lock().unwrap();
+        let state = shared.lock_state();
+        let buf = &state.as_ref().unwrap().buffer;
         assert_eq!(buf.len(), 2);
         assert_eq!(buf[0].offset, 0);
         assert_eq!(buf[1].offset, 1);
@@ -1089,7 +1202,7 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_read_response_advances_next_commit_offset_start() {
+    fn handle_read_response_advances_next_commit_offset_start() {
         let shared = ReaderShared::new();
         let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
         sessions.insert(1, make_session(1, 11, "t", 100));
@@ -1097,13 +1210,13 @@ mod tests {
         let pd = make_raw_partition_data(1, vec![make_raw_batch(100, 3)]);
         let resp = make_raw_read_response(10, vec![pd]);
 
-        handle_read_response(resp, &mut sessions, &shared).unwrap();
+        handle_read_response(resp, &mut sessions, &shared, 0).unwrap();
 
         assert_eq!(sessions.get(&1).unwrap().next_commit_offset_start, 103);
     }
 
     #[test]
-    fn test_handle_read_response_drops_data_for_unknown_session() {
+    fn handle_read_response_drops_data_for_unknown_session() {
         let shared = ReaderShared::new();
         let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
         sessions.insert(1, make_session(1, 11, "t", 0));
@@ -1112,9 +1225,10 @@ mod tests {
         let pd_known = make_raw_partition_data(1, vec![make_raw_batch(0, 2)]);
         let resp = make_raw_read_response(123, vec![pd_unknown, pd_known]);
 
-        handle_read_response(resp, &mut sessions, &shared).unwrap();
+        handle_read_response(resp, &mut sessions, &shared, 0).unwrap();
 
-        let buf = shared.buffer.lock().unwrap();
+        let state = shared.lock_state();
+        let buf = &state.as_ref().unwrap().buffer;
         assert_eq!(buf.len(), 2);
         assert!(buf
             .iter()
@@ -1122,7 +1236,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_read_response_notifies_after_push() {
+    async fn handle_read_response_notifies_after_push() {
         let shared = Arc::new(ReaderShared::new());
         let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
         sessions.insert(1, make_session(1, 11, "t", 0));
@@ -1133,7 +1247,7 @@ mod tests {
 
         let pd = make_raw_partition_data(1, vec![make_raw_batch(0, 2)]);
         let resp = make_raw_read_response(100, vec![pd]);
-        handle_read_response(resp, &mut sessions, shared.as_ref()).unwrap();
+        handle_read_response(resp, &mut sessions, shared.as_ref(), 0).unwrap();
 
         tokio::time::timeout(Duration::from_millis(100), notified)
             .await
@@ -1175,18 +1289,10 @@ mod tests {
                 tokio::pin!(notified);
                 notified.as_mut().enable();
 
-                let prefix = {
-                    let mut buf = self.shared.buffer.lock().unwrap();
-                    if buf.is_empty() {
-                        None
-                    } else {
-                        Some(cut_prefix(&mut buf, self.batch_size))
-                    }
+                let prefix = match &mut *self.shared.lock_state() {
+                    Ok(state) => cut_prefix(&mut state.buffer, self.batch_size),
+                    Err(err) => return Err(err.clone()),
                 };
-
-                if self.shared.closed.load(Ordering::Acquire) {
-                    return Err(shared_error_or_closed(&self.shared));
-                }
 
                 if let Some((messages, bytes_to_release)) = prefix {
                     if bytes_to_release > 0 {
@@ -1206,11 +1312,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_read_batch_private_returns_data_already_in_buffer() {
+    async fn read_batch_private_returns_data_already_in_buffer() {
         let (reader, mut rx, shared) = TestReader::new(1000);
         let mut session = make_session(1, 11, "t", 0);
         {
-            let mut buf = shared.buffer.lock().unwrap();
+            let mut state = shared.lock_state();
+            let buf = &mut state.as_mut().unwrap().buffer;
             for offset in 0..300i64 {
                 let bytes = if offset == 299 { 7777 } else { 0 };
                 buf.push_back(message_for_session(&mut session, offset, bytes));
@@ -1231,7 +1338,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_read_batch_private_awaits_notify_then_reads() {
+    async fn read_batch_private_awaits_notify_then_reads() {
         let (reader, _rx, shared) = TestReader::new(1000);
 
         let handle =
@@ -1243,7 +1350,8 @@ mod tests {
 
         {
             let mut session = make_session(1, 11, "t", 0);
-            let mut buf = shared.buffer.lock().unwrap();
+            let mut state = shared.lock_state();
+            let buf = &mut state.as_mut().unwrap().buffer;
             buf.push_back(message_for_session(&mut session, 0, 0));
             buf.push_back(message_for_session(&mut session, 1, 0));
         }
@@ -1258,13 +1366,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_read_batch_private_returns_error_when_closed_with_notify() {
+    async fn read_batch_private_returns_error_when_closed_with_notify() {
         let (reader, _rx, shared) = TestReader::new(1000);
         {
-            let mut slot = shared.error.lock().unwrap();
-            *slot = Some(YdbError::custom("boom"));
+            let mut state = shared.lock_state();
+            *state = Err(YdbError::custom("boom"));
         }
-        shared.closed.store(true, Ordering::Release);
         shared.notify.notify_one();
 
         let res = reader.read_batch_private().await;
@@ -1275,9 +1382,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_read_batch_private_returns_error_when_closed_without_notify() {
+    async fn read_batch_private_returns_error_when_closed_without_notify() {
         let (reader, _rx, shared) = TestReader::new(1000);
-        shared.closed.store(true, Ordering::Release);
+        {
+            let mut state = shared.lock_state();
+            *state = Err(YdbError::custom("topic read stream closed"));
+        }
 
         let res = tokio::time::timeout(Duration::from_millis(200), reader.read_batch_private())
             .await
@@ -1286,16 +1396,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_read_batch_private_returns_error_when_closed_even_with_data() {
+    async fn read_batch_private_returns_error_when_closed_even_with_data() {
         let (reader, _rx, shared) = TestReader::new(1000);
         let mut session = make_session(1, 11, "t", 0);
         {
-            let mut buf = shared.buffer.lock().unwrap();
+            let mut state = shared.lock_state();
+            let buf = &mut state.as_mut().unwrap().buffer;
             for offset in 0..10i64 {
                 buf.push_back(message_for_session(&mut session, offset, 0));
             }
         }
-        shared.closed.store(true, Ordering::Release);
+        {
+            let mut state = shared.lock_state();
+            *state = Err(YdbError::custom("topic read stream closed"));
+        }
 
         let res = reader.read_batch_private().await;
         assert!(
@@ -1307,7 +1421,7 @@ mod tests {
     // ---- options ----
 
     #[test]
-    fn test_topic_reader_options_default_batch_size_is_1000() {
+    fn topic_reader_options_default_batch_size_is_1000() {
         let opts =
             crate::client_topic::topicreader::reader_options::TopicReaderOptionsBuilder::default()
                 .consumer("c".to_string())
@@ -1318,7 +1432,7 @@ mod tests {
     }
 
     #[test]
-    fn test_topic_reader_options_custom_batch_size() {
+    fn topic_reader_options_custom_batch_size() {
         let opts =
             crate::client_topic::topicreader::reader_options::TopicReaderOptionsBuilder::default()
                 .consumer("c".to_string())

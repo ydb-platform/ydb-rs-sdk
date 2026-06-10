@@ -16,6 +16,7 @@ impl TopicReaderBatch {
     pub(crate) fn new(
         raw_batch: RawBatch,
         partition_session: &mut PartitionSession,
+        epoch: usize,
     ) -> TopicReaderBatch {
         let written_at: SystemTime = raw_batch.written_at.into();
 
@@ -26,7 +27,7 @@ impl TopicReaderBatch {
                 start_offset: partition_session.next_commit_offset_start,
                 end_offset: partition_session.next_commit_offset_start,
                 topic: partition_session.topic.clone(),
-                epoch: partition_session.epoch,
+                epoch,
             },
 
             messages: raw_batch
@@ -51,7 +52,7 @@ impl TopicReaderBatch {
                             start_offset: start_commit_offset,
                             end_offset: message.offset + 1,
                             topic: partition_session.topic.clone(),
-                            epoch: partition_session.epoch,
+                            epoch,
                         },
 
                         bytes_to_release: 0,
@@ -142,12 +143,11 @@ mod tests {
     use std::time::SystemTime;
 
     #[test]
-    fn test_topic_reader_batch_new() {
+    fn topic_reader_batch_new() {
         let mut partition_session = PartitionSession {
             partition_session_id: 123,
             partition_id: 456,
             topic: "test-topic".to_string(),
-            epoch: 0,
             next_commit_offset_start: 100,
         };
 
@@ -166,7 +166,7 @@ mod tests {
             }],
         };
 
-        let batch = TopicReaderBatch::new(raw_batch, &mut partition_session);
+        let batch = TopicReaderBatch::new(raw_batch, &mut partition_session, 0);
 
         let commit_marker = batch.get_commit_marker();
         assert_eq!(commit_marker.topic, "test-topic");
@@ -185,12 +185,11 @@ mod tests {
     }
 
     #[test]
-    fn test_bytes_to_release_default_zero() {
+    fn bytes_to_release_default_zero() {
         let mut partition_session = PartitionSession {
             partition_session_id: 1,
             partition_id: 2,
             topic: "t".to_string(),
-            epoch: 0,
             next_commit_offset_start: 0,
         };
         let raw_batch = RawBatch {
@@ -217,17 +216,16 @@ mod tests {
                 },
             ],
         };
-        let batch = TopicReaderBatch::new(raw_batch, &mut partition_session);
+        let batch = TopicReaderBatch::new(raw_batch, &mut partition_session, 0);
         assert!(batch.messages.iter().all(|m| m.bytes_to_release == 0));
     }
 
     #[test]
-    fn test_from_messages_commit_marker_spans_first_to_last() {
+    fn from_messages_commit_marker_spans_first_to_last() {
         let mut partition_session = PartitionSession {
             partition_session_id: 7,
             partition_id: 42,
             topic: "t-from-messages".to_string(),
-            epoch: 0,
             next_commit_offset_start: 100,
         };
         let raw_batch = RawBatch {
@@ -246,7 +244,7 @@ mod tests {
                 })
                 .collect(),
         };
-        let messages = TopicReaderBatch::new(raw_batch, &mut partition_session).messages;
+        let messages = TopicReaderBatch::new(raw_batch, &mut partition_session, 0).messages;
 
         let rebuilt = TopicReaderBatch::from_messages(messages);
         let m = rebuilt.get_commit_marker();
