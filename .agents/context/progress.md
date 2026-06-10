@@ -4,7 +4,7 @@
 
 ## What works (baseline)
 
-- **Table API**: queries, transactions with automatic retry, session pool, bulk upsert.
+- **Table API**: queries, transactions with automatic retry, session pool, row-based bulk upsert (`retry_execute_bulk_upsert`), Arrow bulk upsert (`retry_execute_bulk_upsert_arrow`, #406).
 - **Scheme API**: directory listing, path operations (evolving — see open PRs).
 - **Topics**: reader/writer with partitioning and offset management.
 - **Coordination**: distributed semaphores (integration-tested).
@@ -34,3 +34,5 @@
 ## Changelog for agents
 
 When making user-visible API or behavior changes, note them here briefly until a formal changelog process is adopted (unlike `ydb-go-sdk`, this repo does not yet require `CHANGELOG.md` entries).
+
+- **#406** — Arrow `RecordBatch` bulk upsert; closes [#251](https://github.com/ydb-platform/ydb-rs-sdk/issues/251).

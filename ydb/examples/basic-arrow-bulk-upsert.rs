@@ -1,6 +1,5 @@
-use arrow::array::{Int64Array, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
+use arrow_array::{Int64Array, RecordBatch, StringArray};
+use arrow_schema::{DataType, Field, Schema};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -21,7 +20,7 @@ async fn main() -> YdbResult<()> {
     let table_name = "arrow_test";
 
     let _ = table_client
-        .retry_execute_scheme_query(format!("DROP TABLE {table_name}"))
+        .retry_execute_scheme_query(format!("DROP TABLE IF EXISTS {table_name}"))
         .await;
 
     table_client
@@ -72,14 +71,10 @@ async fn main() -> YdbResult<()> {
 
     println!("\nReading back data:");
     for mut row in read.into_only_result()?.rows() {
-        let id_opt: Option<i64> = row
-            .remove_field_by_name("id")?
-            .try_into()
-            .ok()
-            .ok_or_else(|| YdbError::Custom("Failed to read id".to_string()))?;
-        let id = id_opt.ok_or_else(|| YdbError::Custom("id is null".to_string()))?;
+        let id: Option<i64> = row.remove_field_by_name("id")?.try_into()?;
+        let id = id.ok_or_else(|| YdbError::Custom("id is null".to_string()))?;
 
-        let val: Option<String> = row.remove_field_by_name("val")?.try_into().ok().flatten();
+        let val: Option<String> = row.remove_field_by_name("val")?.try_into()?;
         println!("  id: {}, val: {:?}", id, val);
     }
 

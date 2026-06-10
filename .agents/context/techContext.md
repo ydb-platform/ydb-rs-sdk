@@ -51,6 +51,14 @@ Do not run `cargo update` or bump dependency versions unless the task requires i
 
 - `force-exhaustive-all` on `ydb` crate — removes `#[non_exhaustive]` for compile-time enum coverage in downstream crates.
 
+### Arrow bulk upsert
+
+`ydb` depends on Apache Arrow 54 (`arrow-array`, `arrow-ipc`, `arrow-schema`, `default-features = false`) and re-exports `arrow_array` / `arrow_schema`. No optional feature flag yet (see maintainer note on #406).
+
+```bash
+cargo run --example basic-arrow-bulk-upsert
+```
+
 ## Publishing
 
 - Manual workflow selects crate (`ydb` / `ydb-grpc` / `ydb-grpc-helpers`) and version part (`patch` / `minor`).

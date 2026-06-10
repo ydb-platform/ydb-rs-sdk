@@ -6,9 +6,8 @@ use std::time;
 use std::time::UNIX_EPOCH;
 use tokio::sync::Mutex as AsyncMutex;
 
-use arrow::array::{Int64Array, StringArray};
-use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
+use arrow_array::{Int64Array, RecordBatch, StringArray};
+use arrow_schema::{DataType, Field, Schema};
 use rand::distributions::{Alphanumeric, DistString};
 use tonic::{Code, Status};
 use tracing::trace;
@@ -1159,7 +1158,7 @@ async fn bulk_upsert_arrow() -> YdbResult<()> {
 
     table_client
         .retry_execute_scheme_query(format!(
-            "CREATE TABLE {table_name} (id Int64, val Utf8, PRIMARY KEY (id))"
+            "CREATE TABLE {table_name} (id Int64 NOT NULL, val Utf8, PRIMARY KEY (id))"
         ))
         .await?;
 
@@ -1204,7 +1203,7 @@ async fn bulk_upsert_arrow() -> YdbResult<()> {
             let id: Option<i64> = id_val.try_into()?;
             let id = id.ok_or_else(|| YdbError::Custom("id is null".to_string()))?;
 
-            let val: Option<String> = row.remove_field_by_name("val")?.try_into().ok().flatten();
+            let val: Option<String> = row.remove_field_by_name("val")?.try_into()?;
             Ok((id, val))
         })
         .collect::<YdbResult<Vec<_>>>()?;
@@ -1233,7 +1232,7 @@ async fn bulk_upsert_arrow_empty_batch() -> YdbResult<()> {
 
     table_client
         .retry_execute_scheme_query(format!(
-            "CREATE TABLE {table_name} (id Int64, PRIMARY KEY (id))"
+            "CREATE TABLE {table_name} (id Int64 NOT NULL, PRIMARY KEY (id))"
         ))
         .await?;
 

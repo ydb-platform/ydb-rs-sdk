@@ -396,7 +396,7 @@ impl TableClient {
     pub async fn retry_execute_bulk_upsert_arrow(
         &self,
         table_path: String,
-        batch: arrow::record_batch::RecordBatch,
+        batch: arrow_array::RecordBatch,
     ) -> YdbResult<()> {
         if batch.num_rows() == 0 {
             return Ok(());
@@ -404,6 +404,8 @@ impl TableClient {
 
         let (schema_bytes, data_bytes) =
             crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(&batch)?;
+        let schema_bytes = bytes::Bytes::from(schema_bytes);
+        let data_bytes = bytes::Bytes::from(data_bytes);
 
         self.retry(|| async {
             let mut session = self.create_session().await?;

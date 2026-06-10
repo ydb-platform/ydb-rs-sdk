@@ -72,7 +72,8 @@ mod sugar;
 
 pub(crate) mod arrow_helpers;
 
-pub use arrow;
+pub use arrow_array;
+pub use arrow_schema;
 
 #[cfg(test)]
 pub(crate) mod auth_test;

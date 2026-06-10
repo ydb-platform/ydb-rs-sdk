@@ -1,7 +1,7 @@
 //! Arrow IPC serialization
 
 use crate::errors::{YdbError, YdbResult};
-use arrow::record_batch::RecordBatch;
+use arrow_array::RecordBatch;
 use arrow_ipc::writer::{DictionaryTracker, EncodedData, IpcDataGenerator, IpcWriteOptions};
 use arrow_ipc::MetadataVersion;
 
@@ -48,8 +48,8 @@ fn to_framed_ipc_message(encoded: &EncodedData) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Int64Array, StringArray};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow_array::{Int64Array, StringArray};
+    use arrow_schema::{DataType, Field, Schema};
     use std::sync::Arc;
 
     #[test]

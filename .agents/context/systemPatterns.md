@@ -35,7 +35,8 @@ Client
 | `connection_pool.rs` | Channel lifecycle, endpoint selection |
 | `load_balancer/` | `RandomBalancer`, `StaticBalancer`, `NearestDcBalancer` |
 | `session_pool.rs` | YDB session acquisition for table API |
-| `client_table.rs` | High-level table client, `retry_transaction` |
+| `client_table.rs` | High-level table client, `retry_transaction`, bulk upsert (rows + Arrow) |
+| `arrow_helpers.rs` | Arrow IPC serialization for bulk upsert (`MetadataVersion::V5`); rejects dictionary-encoded arrays |
 | `grpc_wrapper/` | Thin wrappers around tonic services; auth interceptors |
 | `errors.rs` | `YdbError`, status code mapping, retry classification |
 | `types.rs` | YDB value types, conversions |
@@ -45,6 +46,15 @@ Client
 ### Retry wrapper
 
 Table operations use a retry helper (see `trait_operation.rs`, `client_table.rs`). Retriable gRPC statuses trigger re-execution; idempotent operations are safe to retry.
+
+### Bulk upsert
+
+Two paths on `TableClient`:
+
+1. **Rows** — `retry_execute_bulk_upsert(table_path, rows)` via `grpc_wrapper/raw_table_service/bulk_upsert.rs`.
+2. **Arrow** — `retry_execute_bulk_upsert_arrow(table_path, RecordBatch)` serializes schema/data to IPC bytes in `arrow_helpers.rs`, then `Session::execute_bulk_upsert_arrow`. Empty batches (`num_rows() == 0`) are a no-op. Dictionary-encoded Arrow columns are rejected client-side. Serialized payloads are held in `bytes::Bytes` across retries (cheap clone).
+
+Example: `ydb/examples/basic-arrow-bulk-upsert.rs`.
 
 ### `grpc_wrapper` naming
 
