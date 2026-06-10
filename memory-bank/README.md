@@ -1,43 +1,39 @@
 # Memory Bank — ydb-rs-sdk
 
-Structured, version-controlled context for AI coding agents working on this repository.
+Structured, version-controlled context for AI coding agents.
 
-Based on the [Memory Bank](https://docs.cline.bot/best-practices/memory-bank) pattern and the [AGENTS.md](https://agents.md/) open standard. See [`AGENTS.md`](../AGENTS.md) for the mandatory read/update workflow.
+`AGENTS.md` stays minimal (operational rules only). This directory holds detailed context — read **selectively**, not all at once.
 
 ## Core files
 
-Read all of these at the start of every session:
-
-| File | Stability | Purpose |
-|------|-----------|---------|
+| File | Stability | Read when |
+|------|-----------|-----------|
+| [`activeContext.md`](activeContext.md) | **Volatile** | **Every session** — current focus, decisions, next steps |
+| [`progress.md`](progress.md) | **Volatile** | Resuming work, closing a PR, status checks |
+| [`systemPatterns.md`](systemPatterns.md) | Evolving | Architecture, new modules, API layering |
+| [`techContext.md`](techContext.md) | Evolving | CI, MSRV, local YDB, build commands |
+| [`productContext.md`](productContext.md) | Stable | Public API, users, feature parity |
 | [`projectbrief.md`](projectbrief.md) | Stable | Scope, goals, constraints |
-| [`productContext.md`](productContext.md) | Stable | Users, problems solved, API surface |
-| [`systemPatterns.md`](systemPatterns.md) | Evolving | Architecture, modules, design patterns |
-| [`techContext.md`](techContext.md) | Evolving | Toolchain, CI, local dev setup |
-| [`activeContext.md`](activeContext.md) | **Volatile** | Current task, decisions, next steps |
-| [`progress.md`](progress.md) | **Volatile** | Status log, milestones, known issues |
 
-## File hierarchy
+## Reading strategy
 
 ```
-projectbrief.md ──┬── productContext.md ──┐
-                  ├── systemPatterns.md  ──┼── activeContext.md ── progress.md
-                  └── techContext.md ──────┘
+Every session:  activeContext.md
+If needed:      one stable file matching the task
+Full review:    all files (on "update memory bank" or major onboarding)
 ```
 
-`activeContext.md` and `progress.md` change most often. Update them after every meaningful session.
+Avoid loading all six core files at session start — it wastes context tokens without improving outcomes ([research](https://arxiv.org/abs/2602.11988)).
 
 ## Update triggers
 
-Update the memory bank when:
+1. Feature/fix ready for PR → `activeContext.md` + `progress.md`
+2. Architecture or CI changed → `systemPatterns.md` or `techContext.md`
+3. Scope changed → `projectbrief.md` or `productContext.md`
+4. User says **"update memory bank"** → review every core file
 
-1. A feature, fix, or refactor is merged or ready for PR.
-2. Architecture or public API conventions change.
-3. CI commands, MSRV, or dev setup change.
-4. The user requests **"update memory bank"** (full review of all core files).
+## What not to store
 
-## What not to store here
-
-- Secrets, tokens, or personal credentials.
-- Large generated artifacts or full API dumps (link to `docs.rs` instead).
-- Chat transcripts.
+- Secrets, tokens, credentials
+- Large generated artifacts (link to `docs.rs` instead)
+- Chat transcripts
