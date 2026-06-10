@@ -40,7 +40,7 @@
 //! ```
 //!
 //! # More examples
-//! [Url shorneter application](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-example-urlshortener)
+//! [Url shorneter application](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples/ydb-example-urlshortener)
 //!
 //! [Many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
 //!
