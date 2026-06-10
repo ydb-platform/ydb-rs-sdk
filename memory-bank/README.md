@@ -29,7 +29,7 @@ Avoid loading all six core files at session start — it wastes context tokens w
 
 1. Feature/fix ready for PR → `activeContext.md` + `progress.md`
 2. Architecture or CI changed → `systemPatterns.md` or `techContext.md`
-3. Scope changed → `projectbrief.md` or `productContext.md`
+3. Scope changed → `projectBrief.md` or `productContext.md`
 4. User says **"update memory bank"** → review every core file
 
 ## What not to store
