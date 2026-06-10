@@ -296,14 +296,14 @@ impl ClientBuilder {
 
         let load_balancer = SharedLoadBalancer::new(discovery.as_ref().as_ref());
         let connection_manager = GrpcConnectionManager::new(
-            load_balancer,
+            load_balancer.clone(),
             db_cred.database.clone(),
             interceptor,
             self.cert_path,
             self.grpc_max_message_size,
         );
 
-        Client::new(db_cred, discovery, connection_manager)
+        Client::new(db_cred, discovery, connection_manager, load_balancer)
     }
 
     pub fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
