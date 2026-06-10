@@ -27,8 +27,8 @@
 
 | Date | Milestone |
 |------|-----------|
-| 2026-06 | Memory bank for AI agents ([#428](https://github.com/ydb-platform/ydb-rs-sdk/issues/428)) |
-| 2026-06 | Slim `AGENTS.md` — selective memory-bank reads, no duplication with stable files |
+| 2026-06 | Agent workspace under `.agents/` ([#428](https://github.com/ydb-platform/ydb-rs-sdk/issues/428)) |
+| 2026-06 | Slim `AGENTS.md` router — selective `.agents/context/` reads, rules in `.agents/rules/` |
 | ongoing | Default gRPC message limits ([#417](https://github.com/ydb-platform/ydb-rs-sdk/pull/417)) merged |
 
 ## Changelog for agents

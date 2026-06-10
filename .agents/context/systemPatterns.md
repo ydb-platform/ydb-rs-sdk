@@ -8,7 +8,7 @@ ydb-rs-sdk/
 ├── ydb-grpc/             # Generated protobuf + tonic stubs
 ├── ydb-example-urlshortener/
 ├── ydb-slo-tests/
-└── memory-bank/          # Agent context (this directory)
+└── .agents/              # Agent workspace (context/, rules/)
 ```
 
 ## Layered architecture (`ydb` crate)

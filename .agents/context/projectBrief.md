@@ -27,4 +27,4 @@
 
 - Public API changes are intentional, documented, and semver-aware.
 - New code follows existing module boundaries and retry/pool patterns.
-- Memory bank reflects the current state after each significant change.
+- `.agents/context/` reflects the current state after each significant change.

@@ -29,15 +29,15 @@ cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnin
 
 ### Integration tests with local YDB
 
-```bash
-docker run -d --name ydb -h localhost \
-  -p 2135:2135 -p 2136:2136 -p 8765:8765 \
-  -e YDB_USE_IN_MEMORY_PDISKS=true \
-  ydbplatform/local-ydb:nightly
+**Recommended** — repo `docker-compose.yaml` (`ydbplatform/local-ydb:latest`):
 
+```bash
+docker compose up -d
 export YDB_CONNECTION_STRING='grpc://localhost:2136?database=/local'
 cargo test --workspace -- --include-ignored
 ```
+
+CI uses `ydbplatform/local-ydb:nightly` (see `rust-tests.yml`); image tag may differ from local compose.
 
 ## CI workflows
 
