@@ -13,7 +13,7 @@ Structured, version-controlled context for AI coding agents.
 | [`systemPatterns.md`](systemPatterns.md) | Evolving | Architecture, new modules, API layering |
 | [`techContext.md`](techContext.md) | Evolving | CI, MSRV, local YDB, build commands |
 | [`productContext.md`](productContext.md) | Stable | Public API, users, feature parity |
-| [`projectbrief.md`](projectbrief.md) | Stable | Scope, goals, constraints |
+| [`projectBrief.md`](projectBrief.md) | Stable | Scope, goals, constraints |
 
 ## Reading strategy
 
