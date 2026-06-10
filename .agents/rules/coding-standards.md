@@ -18,20 +18,14 @@ Read when touching public API, module layout, dependencies, or error handling.
 ## Public API (`ydb` crate)
 
 - `ydb-grpc` types are internal — do not leak them in the public API without a stable wrapper.
-- New APIs follow the layered pattern: `grpc_wrapper/raw_*` → `client_*` → `lib.rs` re-exports (see `systemPatterns.md`).
+- New APIs follow the layered pattern in [`.agents/context/systemPatterns.md`](../context/systemPatterns.md).
 - Public API changes must be semver-aware and intentional.
 - Many enums are `#[non_exhaustive]`; respect this unless using `force-exhaustive-all` for downstream checks.
 
 ## Architecture anti-patterns
 
+See `systemPatterns.md` for layout. In short:
+
 - Bypassing the connection pool for production RPC paths.
 - Adding dependencies without workspace-level version alignment.
 - Exposing raw tonic/prost types as stable public types.
-
-## Adding a new API (checklist)
-
-1. Confirm protobuf support exists in `ydb-grpc` (regenerate protos if needed — separate maintenance task).
-2. Add methods in `grpc_wrapper/raw_*`.
-3. Expose through a `client_*` module with retries and `YdbError` mapping.
-4. Re-export stable types from `lib.rs`.
-5. Add unit tests; add `#[ignore]` integration test if server interaction is required.

@@ -14,16 +14,9 @@
 ## Local development
 
 ```bash
-# Build workspace
 cargo build --workspace
-
-# Unit tests only (no YDB)
-cargo test --workspace
-
-# Format
+cargo test --workspace          # unit only; integration tests are #[ignore]
 cargo fmt
-
-# Lint (matches CI)
 cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
 ```
 
@@ -43,10 +36,10 @@ CI uses `ydbplatform/local-ydb:nightly` (see `rust-tests.yml`); image tag may di
 
 | Workflow | Trigger | What it runs |
 |----------|---------|--------------|
-| `.github/workflows/linter.yaml` | push/PR to `master` | `cargo fmt --check`, `cargo clippy` |
-| `.github/workflows/rust-tests.yml` | push/PR + nightly cron | `cargo test --include-ignored` against `local-ydb:nightly` |
-| `.github/workflows/publish-crate.yml` | manual dispatch | version bump + crates.io publish |
-| `.github/workflows/slo.yml` | push/PR to `master` + manual dispatch | SLO tests |
+| `linter.yaml` | push/PR to `master` | `cargo fmt --check`, `cargo clippy` |
+| `rust-tests.yml` | push/PR + nightly cron | `cargo test --include-ignored` against `local-ydb:nightly` |
+| `publish-crate.yml` | manual dispatch | version bump + crates.io publish |
+| `slo.yml` | push/PR to `master` + manual dispatch | SLO tests (**disabled in CI** — `if: false` in workflow; see [#227](https://github.com/ydb-platform/ydb-rs-sdk/issues/227)) |
 
 ## Workspace dependency policy
 
@@ -60,5 +53,5 @@ Do not run `cargo update` or bump dependency versions unless the task requires i
 
 ## Publishing
 
-- Manual workflow selects crate (`ydb` / `ydb-grpc`) and version part (`patch` / `minor`).
+- Manual workflow selects crate (`ydb` / `ydb-grpc` / `ydb-grpc-helpers`) and version part (`patch` / `minor`).
 - Script: `.github/scripts/version-up.sh`.
