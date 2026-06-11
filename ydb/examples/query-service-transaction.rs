@@ -5,11 +5,22 @@
 //! no `let mut t = t;`, no manual `query.clone()` per attempt, no explicit
 //! `t.commit()`.
 
-use ydb::{ClientBuilder, QueryTransaction, YdbOrCustomerError, YdbResultWithCustomerErr};
+use ydb::{
+    ClientBuilder, QueryExecutor, QueryTransaction, YdbOrCustomerError, YdbResult,
+    YdbResultWithCustomerErr,
+};
 
 enum Withdraw {
     Done { remaining: i64 },
     Insufficient,
+}
+
+/// Generic over the executor via the `QueryExecutor` trait: works with both a
+/// `QueryClient` and a `QueryTransaction`. This is how an external library /
+/// ORM adapter stays decoupled from the concrete type.
+async fn fetch_total(e: &mut impl QueryExecutor) -> YdbResult<i64> {
+    let mut row = e.query_row("SELECT SUM(id) AS s FROM test").await?;
+    row.remove_field_by_name("s")?.try_into()
 }
 
 #[tokio::main]
@@ -41,8 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .param("$val", format!("val {id}"))
                     .await?;
             }
-            let mut row = tx.query_row("SELECT SUM(id) AS s FROM test").await?;
-            let sum: i64 = row.remove_field_by_name("s")?.try_into()?;
+            let sum = fetch_total(tx).await?; // generic over QueryExecutor
             Ok(sum) // Ok => commit; Err => rollback + retry
         })
         .await?;
