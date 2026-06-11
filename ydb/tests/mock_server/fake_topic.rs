@@ -469,16 +469,16 @@ async fn expect_stream_read_opened_on_stream(
 ) -> u64 {
     loop {
         match server.next_event().await {
-            TopicClientEvent::StreamReadOpened { stream_id } => return stream_id,
-            TopicClientEvent::StreamReadClosed { stream_id }
+            TopicClientEvent::Opened { stream_id } => return stream_id,
+            TopicClientEvent::Closed { stream_id }
                 if allowed_closed_streams.contains(&stream_id) => {}
-            TopicClientEvent::StreamReadMessage { stream_id, .. }
+            TopicClientEvent::Message { stream_id, .. }
                 if allowed_closed_streams.contains(&stream_id) => {}
-            TopicClientEvent::StreamReadError {
+            TopicClientEvent::Error {
                 stream_id,
                 status: _,
             } if allowed_closed_streams.contains(&stream_id) => {}
-            event => panic!("expected StreamReadOpened, got {event:?}"),
+            event => panic!("expected TopicClientEvent::Opened, got {event:?}"),
         }
     }
 }
@@ -538,18 +538,16 @@ async fn expect_client_message_on_stream(
 ) -> ClientMessage {
     loop {
         match server.next_event().await {
-            TopicClientEvent::StreamReadMessage { stream_id, message }
-                if stream_id == target_stream_id =>
-            {
+            TopicClientEvent::Message { stream_id, message } if stream_id == target_stream_id => {
                 return message
                     .client_message
-                    .expect("StreamRead client message must be present");
+                    .expect("TopicClientEvent::Message client message must be present");
             }
-            TopicClientEvent::StreamReadClosed { stream_id }
+            TopicClientEvent::Closed { stream_id }
                 if allowed_closed_streams.contains(&stream_id) => {}
-            TopicClientEvent::StreamReadMessage { stream_id, .. }
+            TopicClientEvent::Message { stream_id, .. }
                 if allowed_closed_streams.contains(&stream_id) => {}
-            TopicClientEvent::StreamReadError {
+            TopicClientEvent::Error {
                 stream_id,
                 status: _,
             } if allowed_closed_streams.contains(&stream_id) => {}
@@ -563,7 +561,7 @@ async fn expect_client_message_on_stream(
 async fn assert_no_stream_read_opened(server: &mut MockServer, quiet_period: Duration) {
     loop {
         match tokio::time::timeout(quiet_period, server.next_event()).await {
-            Ok(TopicClientEvent::StreamReadOpened { stream_id }) => {
+            Ok(TopicClientEvent::Opened { stream_id }) => {
                 panic!("unexpected reconnect opened stream {stream_id}")
             }
             Ok(_) => {}

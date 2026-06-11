@@ -184,15 +184,15 @@ impl MockServer {
 
     pub async fn expect_stream_read_opened(&mut self) -> u64 {
         match self.next_event().await {
-            TopicClientEvent::StreamReadOpened { stream_id } => stream_id,
-            event => panic!("expected StreamReadOpened, got {event:?}"),
+            TopicClientEvent::Opened { stream_id } => stream_id,
+            event => panic!("expected TopicClientEvent::Opened, got {event:?}"),
         }
     }
 
     pub async fn expect_stream_read_message(&mut self) -> (u64, stream_read_message::FromClient) {
         match self.next_event().await {
-            TopicClientEvent::StreamReadMessage { stream_id, message } => (stream_id, message),
-            event => panic!("expected StreamReadMessage, got {event:?}"),
+            TopicClientEvent::Message { stream_id, message } => (stream_id, message),
+            event => panic!("expected TopicClientEvent::Message, got {event:?}"),
         }
     }
 
@@ -280,7 +280,7 @@ impl TopicService for MockTopicService {
             *active_stream = Some(commands_tx);
         }
 
-        self.emit(TopicClientEvent::StreamReadOpened { stream_id });
+        self.emit(TopicClientEvent::Opened { stream_id });
         self.spawn_client_reader(stream_id, request.into_inner());
 
         let responses =
@@ -366,16 +366,14 @@ impl MockTopicService {
             loop {
                 match request.message().await {
                     Ok(Some(message)) => {
-                        let _ = events_tx
-                            .send(TopicClientEvent::StreamReadMessage { stream_id, message });
+                        let _ = events_tx.send(TopicClientEvent::Message { stream_id, message });
                     }
                     Ok(None) => {
-                        let _ = events_tx.send(TopicClientEvent::StreamReadClosed { stream_id });
+                        let _ = events_tx.send(TopicClientEvent::Closed { stream_id });
                         break;
                     }
                     Err(status) => {
-                        let _ =
-                            events_tx.send(TopicClientEvent::StreamReadError { stream_id, status });
+                        let _ = events_tx.send(TopicClientEvent::Error { stream_id, status });
                         break;
                     }
                 }
