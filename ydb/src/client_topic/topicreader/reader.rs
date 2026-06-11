@@ -207,12 +207,7 @@ impl TopicReader {
     }
 
     async fn try_reconnect_on_err(&mut self, err: YdbError) -> YdbResult<()> {
-        error!(
-            consumer = self.context.options.consumer,
-            err = %err,
-        );
-
-        ensure_retriable(err)?;
+        self.ensure_retriable(err)?;
 
         self.reader.cancel().await;
         self.epoch += 1;
@@ -230,8 +225,15 @@ impl TopicReader {
             .await
             {
                 Ok(Ok(reader)) => break reader,
-                Ok(Err(err)) => ensure_retriable(err)?,
-                Err(_) => {}
+                Ok(Err(err)) => self.ensure_retriable(err)?,
+                Err(_) => {
+                    debug!(
+                        consumer = self.context.options.consumer,
+                        epoch = self.epoch,
+                        attempt = attempts,
+                        "topic reader reconnect attempt timed out"
+                    );
+                }
             };
 
             tokio::time::sleep(topic_reader_retry_backoff(attempts)).await;
@@ -239,22 +241,39 @@ impl TopicReader {
 
         info!(
             consumer = self.context.options.consumer,
+            epoch = self.epoch,
             elapsed = ?start.elapsed(),
             attempts = attempts,
-            "topic reader succesfully reconnected"
+            "topic reader reconnected"
         );
 
         self.reader = reader;
 
         Ok(())
     }
-}
 
-/// Converts `err` in Ok(()) if `err` is retriable. Otherwise returns Err(err)
-fn ensure_retriable(err: YdbError) -> YdbResult<()> {
-    match err.need_retry() {
-        NeedRetry::True | NeedRetry::IdempotentOnly => Ok(()),
-        NeedRetry::False => Err(err),
+    /// Converts a retriable error into `Ok(())` and returns non-retriable errors unchanged.
+    fn ensure_retriable(&self, err: YdbError) -> YdbResult<()> {
+        match err.need_retry() {
+            NeedRetry::True | NeedRetry::IdempotentOnly => {
+                info!(
+                    consumer = self.context.options.consumer,
+                    epoch = self.epoch,
+                    err = %err,
+                    "topic reader error is retriable, reconnecting"
+                );
+                Ok(())
+            }
+            NeedRetry::False => {
+                error!(
+                    consumer = self.context.options.consumer,
+                    epoch = self.epoch,
+                    err = %err,
+                    "topic reader error is non-retriable"
+                );
+                Err(err)
+            }
+        }
     }
 }
 
@@ -397,7 +416,11 @@ impl StreamReader {
 
         stream_reader.start_background_jobs(stream, context.token_cache.clone());
 
-        info!("topic stream reader created");
+        debug!(
+            consumer = stream_reader.consumer,
+            epoch = stream_reader.epoch,
+            "topic stream reader created"
+        );
 
         Ok(stream_reader)
     }
@@ -473,7 +496,10 @@ impl StreamReader {
         manager: &GrpcConnectionManager,
         options: &TopicReaderOptions,
     ) -> YdbResult<(GrpcStream, RawTopicClient)> {
-        info!("Start grpc connection");
+        debug!(
+            consumer = options.consumer,
+            "starting topic reader grpc connection"
+        );
 
         let mut topic_service = manager.get_auth_service(RawTopicClient::new).await?;
 
@@ -596,9 +622,7 @@ fn handle_incoming(
 ) -> YdbResult<()> {
     match msg {
         RawFromServer::ReadResponse(resp) => handle_read_response(resp, sessions, shared, epoch)?,
-        RawFromServer::InitResponse(resp) => {
-            info!("init response for topic reader: {:?}", resp)
-        }
+        RawFromServer::InitResponse(_) => debug!("topic reader initialized"),
         RawFromServer::CommitOffsetResponse(resp) => {
             debug!("commit offset response for topic reader: {:?}", resp);
             let mut state = shared.lock_state();
