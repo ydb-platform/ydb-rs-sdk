@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use ydb::{ydb_params, ClientBuilder, FromYdbRow, QueryExecutor, Row, YdbResult};
+use ydb::{ydb_params, ClientBuilder, FromYdbRow, Row, YdbResult};
 
 #[derive(Debug)]
 struct CounterRow {
@@ -79,19 +79,19 @@ async fn main() -> YdbResult<()> {
         .idempotent(true)
         .await?;
 
-    // 7. Reuse in a hot loop: text AND big parameter values are borrowed —
-    //    nothing is deep-copied per iteration until the gRPC request itself
-    //    is encoded. Works the same for dynamic SQL built once outside.
+    // 7. Hot loop with dynamic SQL. The builder is consumed by `.await`, so
+    //    an owned value passed by value is moved in, not copied. Pass
+    //    `value.clone()` only if you need to keep the value after the call.
     let table = "test";
     let dynamic_sql = format!(
         "DECLARE $id AS Int64; DECLARE $payload AS Utf8; \
          UPSERT INTO {table} (id, val) VALUES ($id, $payload)"
     );
-    let big_payload = "x".repeat(1024 * 1024); // e.g. a large blob / bulk data
     for id in 0..100_i64 {
-        qc.exec(&dynamic_sql)
-            .param("$id", id) // small Copy value: owned, nothing to win
-            .param("$payload", &big_payload) // borrowed: no 1 MB clone per call
+        let payload = format!("payload for row {id}");
+        qc.exec(dynamic_sql.clone())
+            .param("$id", id)
+            .param("$payload", payload) // moved in, no extra copy
             .await?;
     }
 

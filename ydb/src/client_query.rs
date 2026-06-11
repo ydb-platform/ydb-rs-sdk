@@ -21,26 +21,27 @@
 //! - All five builders are one generic [`CallBuilder`]`<'a, K>` where `K`
 //!   marks the result shape; the option methods are written once, the
 //!   `IntoFuture` impls differ per `K`. Public names are type aliases.
-//! - The query text is borrowed (`Cow<'a, str>`) until the gRPC request is
-//!   encoded: reusing text across retry attempts / hot-loop iterations
-//!   copies nothing.
-//! - Parameter values can be borrowed too: `&String` / `&Value` are encoded
-//!   into the request directly, so big values (bulk lists for `AS_TABLE`,
-//!   blobs) are not deep-cloned at the call site.
-//! - [`IntoParamValue`] has a blanket impl for every `Into<Value>` type:
-//!   when `Value` gains a new conversion, it automatically becomes a valid
-//!   parameter — there is no second list to keep in sync. (Consequence:
-//!   `&str` always goes through the owned path, because `From<&str> for
-//!   Value` already exists; borrowed big strings are passed as `&String`.)
-//! - [`QueryExecutor`] is a small sealed trait implemented by [`QueryClient`]
-//!   (one-shot calls, retried internally) and [`QueryTransaction`].
+//!   (`'a` is only the executor borrow — see [`QueryStream`].)
+//! - No conversion traits and no data lifetimes: methods take
+//!   `impl Into<String>` for text and `impl Into<Value>` for params, owned.
+//!   The builder is consumed by `.await`, so an owned `Value` passed by
+//!   value is *moved*, not copied — borrowing bought nothing here, because
+//!   the gRPC request needs an owned `String` / protobuf value at the end
+//!   anyway. `Into<Value>` also means a new `Value` conversion is a valid
+//!   parameter automatically — no list to maintain. The one case where
+//!   borrowing would have saved a copy (a big `Value` you must keep, reused
+//!   in a hot loop) is an explicit `.clone()` at the call site.
+//! - The query surface (`exec` / `query` / `query_result_set` / `query_row`)
+//!   is **inherent** methods on both [`QueryClient`] (one-shot calls, retried
+//!   internally) and [`QueryTransaction`] — they autocomplete in an IDE with
+//!   no `use` import. A `QueryExecutor` trait can be added later for generic
+//!   code (ORM adapters) without changing call sites.
 //! - Strict `query_row` (exactly one row), `.optional()` for 0-or-1,
 //!   `.typed::<T>()` for struct mapping (derive macro later).
 //! - [`QueryStream`] borrows the executor: it cannot leak out of a retry
 //!   attempt, and a second concurrent query on one transaction does not
 //!   compile.
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::future::{Future, IntoFuture};
 use std::marker::PhantomData;
@@ -54,121 +55,6 @@ use crate::result::{ResultSet, Row};
 use crate::types::Value;
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-type Params<'a> = Vec<(Cow<'a, str>, ParamValue<'a>)>;
-
-mod sealed {
-    use crate::types::Value;
-
-    /// Seals the conversion traits: the set of accepted forms is fixed by
-    /// the SDK so it can evolve internals without breaking external code.
-    pub trait Sealed {}
-
-    impl<T: Into<Value>> Sealed for T {}
-    impl Sealed for &String {}
-    impl Sealed for &Value {}
-}
-
-// ---------------------------------------------------------------------------
-// Query text
-// ---------------------------------------------------------------------------
-
-/// Conversion into query text. Borrowed forms (`&str`, `&String`) stay
-/// borrowed until the gRPC request is encoded — nothing is copied per call.
-/// Sealed.
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` cannot be used as YQL query text",
-    label = "expected YQL text here",
-    note = "pass a `&str` / `String` with the YQL query"
-)]
-pub trait IntoQueryText<'a>: sealed::Sealed {
-    #[doc(hidden)]
-    fn into_query_text(self) -> Cow<'a, str>;
-}
-
-impl<'a> IntoQueryText<'a> for &'a str {
-    fn into_query_text(self) -> Cow<'a, str> {
-        Cow::Borrowed(self)
-    }
-}
-
-impl<'a> IntoQueryText<'a> for &'a String {
-    fn into_query_text(self) -> Cow<'a, str> {
-        Cow::Borrowed(self.as_str())
-    }
-}
-
-impl<'a> IntoQueryText<'a> for String {
-    fn into_query_text(self) -> Cow<'a, str> {
-        Cow::Owned(self)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Parameter values
-// ---------------------------------------------------------------------------
-
-/// A parameter value for one call. Borrowed forms stay borrowed until the
-/// gRPC request is encoded. Opaque on purpose: the internal representation
-/// may change without breaking the API.
-pub struct ParamValue<'a>(ParamValueInner<'a>);
-
-enum ParamValueInner<'a> {
-    Owned(Value),
-    Borrowed(&'a Value),
-    Utf8(&'a str),
-}
-
-impl ParamValue<'_> {
-    /// Prototype plumbing: the real implementation encodes the value into
-    /// the protobuf request here (borrowed variants without a deep copy).
-    fn describe(&self) -> String {
-        match &self.0 {
-            ParamValueInner::Owned(value) => format!("owned {value:?}"),
-            ParamValueInner::Borrowed(value) => format!("borrowed {value:?}"),
-            ParamValueInner::Utf8(text) => format!("borrowed utf8, len={}", text.len()),
-        }
-    }
-}
-
-/// Conversion into a parameter value (the tokio-postgres `ToSql` / sqlx
-/// `Encode` analogue). Sealed.
-///
-/// The blanket impl covers every `Into<Value>` type — new `Value`
-/// conversions become valid parameters automatically. `&String` / `&Value`
-/// are encoded into the request without an intermediate deep copy — use
-/// them for big values (bulk lists for `AS_TABLE`, blobs).
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` cannot be used as a YQL parameter value",
-    label = "expected a parameter value here",
-    note = "pass any type convertible to `ydb::Value` (i64, bool, String, &str, ...), \
-            or `&String` / `&Value` to borrow big values"
-)]
-pub trait IntoParamValue<'a>: sealed::Sealed {
-    #[doc(hidden)]
-    fn into_param_value(self) -> ParamValue<'a>;
-}
-
-impl<'a, T: Into<Value>> IntoParamValue<'a> for T {
-    fn into_param_value(self) -> ParamValue<'a> {
-        ParamValue(ParamValueInner::Owned(self.into()))
-    }
-}
-
-// NOTE: do not add `From<&String>` / `From<&Value>` for `Value` — the
-// borrowed impls below rely on those NOT existing (coherence with the
-// blanket impl above).
-impl<'a> IntoParamValue<'a> for &'a String {
-    fn into_param_value(self) -> ParamValue<'a> {
-        ParamValue(ParamValueInner::Utf8(self.as_str()))
-    }
-}
-
-impl<'a> IntoParamValue<'a> for &'a Value {
-    fn into_param_value(self) -> ParamValue<'a> {
-        ParamValue(ParamValueInner::Borrowed(self))
-    }
-}
 
 /// Row-to-struct mapping (the sqlx `FromRow` analogue). The real
 /// implementation would ship `#[derive(FromYdbRow)]`.
@@ -187,10 +73,10 @@ impl FromYdbRow for Row {
 // ---------------------------------------------------------------------------
 
 mod private {
-    use std::borrow::Cow;
+    use std::collections::HashMap;
     use std::time::Duration;
 
-    use super::{ParamValue, ResultSet, YdbError, YdbResult};
+    use super::{ResultSet, Value, YdbError, YdbResult};
 
     /// In the real implementation this wraps session acquisition and the
     /// `ExecuteQuery` gRPC streaming machinery. For `QueryClient` it also
@@ -206,7 +92,7 @@ mod private {
         pub async fn run(
             &mut self,
             text: &str,
-            params: &[(Cow<'_, str>, ParamValue<'_>)],
+            params: &HashMap<String, Value>,
             opts: &CallOptions,
         ) -> YdbResult<Vec<ResultSet>> {
             if self.finished {
@@ -214,23 +100,17 @@ mod private {
                     "transaction already finished (committed or rolled back)".to_string(),
                 ));
             }
-            let params_desc = params
-                .iter()
-                .map(|(name, value)| format!("{name}: {}", value.describe()))
-                .collect::<Vec<_>>()
-                .join(", ");
             Err(YdbError::Custom(format!(
                 "prototype ({}): execution is not implemented; would run {:?} \
-                 with params [{params_desc}], timeout={:?}, idempotent={:?}, collect_stats={}",
-                self.kind, text, opts.timeout, opts.idempotent, opts.collect_stats,
+                 with {} param(s), timeout={:?}, idempotent={:?}, collect_stats={}",
+                self.kind,
+                text,
+                params.len(),
+                opts.timeout,
+                opts.idempotent,
+                opts.collect_stats,
             )))
         }
-    }
-
-    /// Sealing trait: gives the provided methods of `QueryExecutor` access
-    /// to the execution core. Not nameable outside the crate.
-    pub trait HasCore {
-        fn core_mut(&mut self) -> &mut ExecCore;
     }
 
     /// Per-call options, filled by builder methods before `.await`.
@@ -245,7 +125,7 @@ mod private {
     }
 }
 
-use private::{CallOptions, ExecCore, HasCore};
+use private::{CallOptions, ExecCore};
 
 // ---------------------------------------------------------------------------
 // The builder
@@ -274,18 +154,18 @@ pub type QueryStreamBuilder<'a> = CallBuilder<'a, Streamed>;
 /// impls — and so the type produced by `.await` — differ per `K`.
 pub struct CallBuilder<'a, K> {
     core: &'a mut ExecCore,
-    text: Cow<'a, str>,
-    params: Params<'a>,
+    text: String,
+    params: HashMap<String, Value>,
     opts: CallOptions,
     _kind: PhantomData<fn() -> K>,
 }
 
 impl<'a, K> CallBuilder<'a, K> {
-    fn new(core: &'a mut ExecCore, text: Cow<'a, str>) -> Self {
+    fn new(core: &'a mut ExecCore, text: String) -> Self {
         Self {
             core,
             text,
-            params: Params::new(),
+            params: HashMap::new(),
             opts: CallOptions::default(),
             _kind: PhantomData,
         }
@@ -301,19 +181,16 @@ impl<'a, K> CallBuilder<'a, K> {
         }
     }
 
-    /// Bind a parameter for this call. `&String` / `&Value` are encoded
-    /// into the request without an intermediate deep copy.
-    pub fn param(mut self, name: impl Into<Cow<'a, str>>, value: impl IntoParamValue<'a>) -> Self {
-        self.params.push((name.into(), value.into_param_value()));
+    /// Bind a parameter for this call. An owned `Value` (or anything
+    /// `Into<Value>`) is moved in — pass `value.clone()` if you must keep it.
+    pub fn param(mut self, name: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.params.insert(name.into(), value.into());
         self
     }
 
     /// Bind many parameters at once (works with the `ydb_params!` macro).
     pub fn params(mut self, params: HashMap<String, Value>) -> Self {
-        for (name, value) in params {
-            self.params
-                .push((Cow::Owned(name), ParamValue(ParamValueInner::Owned(value))));
-        }
+        self.params.extend(params);
         self
     }
 
@@ -442,8 +319,8 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
 /// [`ResultSet`]s by `result_set_index` internally.
 pub struct QueryStream<'a> {
     core: &'a mut ExecCore,
-    text: Cow<'a, str>,
-    params: Params<'a>,
+    text: String,
+    params: HashMap<String, Value>,
     opts: CallOptions,
 }
 
@@ -475,50 +352,56 @@ pub struct QueryStats {
 }
 
 // ---------------------------------------------------------------------------
-// Executor trait
+// Query surface (inherent methods on QueryClient and QueryTransaction)
 // ---------------------------------------------------------------------------
 
-/// Common query surface for [`QueryClient`] (one-shot calls with internal
+/// The shared query surface of [`QueryClient`] (one-shot calls with internal
 /// retries) and [`QueryTransaction`] (inside
 /// [`QueryClient::retry_transaction`]).
 ///
-/// Sealed: implemented only by SDK types.
+/// These are **inherent** methods on both types, not trait methods: they
+/// autocomplete in an IDE with no extra `use` import and no trait-resolution
+/// quirks. A macro generates the identical set on each type — Rust has no
+/// inheritance of inherent methods, and the obvious alternative (a shared
+/// trait) is exactly what makes completion require importing the trait.
+/// A `QueryExecutor` trait can be added later, additively, for code that
+/// must be generic over client/transaction (e.g. ORM adapters): inherent
+/// methods keep winning method resolution, so existing call sites are
+/// unaffected.
 ///
 /// Methods are sync and return awaitable builders, so parameters and
 /// per-call options chain before `.await`:
 ///
 /// ```ignore
-/// let row = executor
+/// let row = tx
 ///     .query_row("DECLARE $id AS Int64; SELECT val FROM t WHERE id = $id")
 ///     .param("$id", 42_i64)
 ///     .await?;
 /// ```
-///
-/// Note: async-fn-in-trait would make this trait not dyn-compatible anyway,
-/// so generic bounds (`impl QueryExecutor`) are the intended way to be
-/// generic over client/transaction (e.g. in ORM adapters).
-pub trait QueryExecutor: HasCore {
-    /// DML/DDL without result rows.
-    fn exec<'a>(&'a mut self, text: impl IntoQueryText<'a>) -> ExecBuilder<'a> {
-        CallBuilder::new(self.core_mut(), text.into_query_text())
-    }
+macro_rules! impl_query_methods {
+    () => {
+        /// DML/DDL without result rows.
+        pub fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_> {
+            CallBuilder::new(&mut self.core, text.into())
+        }
 
-    /// Streaming result; the primary path for big data / multi result sets.
-    fn query<'a>(&'a mut self, text: impl IntoQueryText<'a>) -> QueryStreamBuilder<'a> {
-        CallBuilder::new(self.core_mut(), text.into_query_text())
-    }
+        /// Streaming result; the primary path for big data / multi result sets.
+        pub fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_> {
+            CallBuilder::new(&mut self.core, text.into())
+        }
 
-    /// Materialize exactly one result set (error on 0 or >1).
-    fn query_result_set<'a>(&'a mut self, text: impl IntoQueryText<'a>) -> ResultSetBuilder<'a> {
-        CallBuilder::new(self.core_mut(), text.into_query_text())
-    }
+        /// Materialize exactly one result set (error on 0 or >1).
+        pub fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_> {
+            CallBuilder::new(&mut self.core, text.into())
+        }
 
-    /// Materialize exactly one row of exactly one result set
-    /// (0 rows -> [`YdbError::NoRows`], >1 -> error). See `.optional()` and
-    /// `.typed()` on the returned builder.
-    fn query_row<'a>(&'a mut self, text: impl IntoQueryText<'a>) -> QueryRowBuilder<'a, Row> {
-        CallBuilder::new(self.core_mut(), text.into_query_text())
-    }
+        /// Materialize exactly one row of exactly one result set
+        /// (0 rows -> [`YdbError::NoRows`], >1 -> error). See `.optional()`
+        /// and `.typed()` on the returned builder.
+        pub fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row> {
+            CallBuilder::new(&mut self.core, text.into())
+        }
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -570,6 +453,8 @@ pub struct QueryClient {
 }
 
 impl QueryClient {
+    impl_query_methods!();
+
     pub(crate) fn new() -> Self {
         Self {
             core: ExecCore {
@@ -683,14 +568,6 @@ impl QueryClient {
     }
 }
 
-impl HasCore for QueryClient {
-    fn core_mut(&mut self) -> &mut ExecCore {
-        &mut self.core
-    }
-}
-
-impl QueryExecutor for QueryClient {}
-
 // ---------------------------------------------------------------------------
 // Transaction
 // ---------------------------------------------------------------------------
@@ -712,6 +589,8 @@ pub struct QueryTransaction {
 }
 
 impl QueryTransaction {
+    impl_query_methods!();
+
     fn new(options: QueryTransactionOptions) -> Self {
         Self {
             core: ExecCore {
@@ -756,11 +635,3 @@ impl QueryTransaction {
         }
     }
 }
-
-impl HasCore for QueryTransaction {
-    fn core_mut(&mut self) -> &mut ExecCore {
-        &mut self.core
-    }
-}
-
-impl QueryExecutor for QueryTransaction {}
