@@ -6,6 +6,7 @@ use std::time;
 use std::time::SystemTime;
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
+#[derive(Debug)]
 pub struct TopicReaderBatch {
     pub messages: Vec<TopicReaderMessage>,
 
@@ -97,6 +98,7 @@ impl TopicReaderBatch {
 }
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
+#[derive(Debug)]
 pub struct TopicReaderMessage {
     pub seq_no: i64,
     pub created_at: Option<time::SystemTime>,
