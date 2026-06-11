@@ -254,7 +254,7 @@ impl YdbError {
                 use tonic::Code;
                 match status.code() {
                     Code::Aborted | Code::ResourceExhausted => NeedRetry::True,
-                    Code::Internal | Code::Cancelled | Code::Unavailable => {
+                    Code::Internal | Code::Cancelled | Code::Unavailable | Code::Unknown => {
                         NeedRetry::IdempotentOnly
                     }
                     _ => NeedRetry::False,
