@@ -7,7 +7,7 @@ edition = "2021"
 license = "Apache-2.0"
 description = "Crate contains SLO-tests for YDB"
 repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-slo-tests"
-rust-version = "1.82"
+rust-version = "1.85"
 
 [dependencies]
 base64 = { version = "0.22.1" }

@@ -5,6 +5,10 @@
 //! goal is to fix the public API shape and the borrow-checker guarantees;
 //! the gRPC layer (`grpc_wrapper/raw_query_service`) comes later.
 //!
+//! BEFORE changing this module read `.agents/context/query-service-design.md`
+//! — it records the design invariants (and *why*) so the implementation does
+//! not silently regress them.
+//!
 //! Requires Rust 1.85+ (`AsyncFnMut`) — pending the MSRV bump decision.
 //!
 //! Key decisions encoded here:
