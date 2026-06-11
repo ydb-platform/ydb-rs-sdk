@@ -31,7 +31,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::select;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{oneshot, Notify};
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info};
 use ydb_grpc::ydb_proto::topic::stream_read_message::{FromClient, FromServer};
 
 const READER_SHARED_STATE_POISONED: &str = "topic reader shared state mutex poisoned";
@@ -207,14 +207,14 @@ impl TopicReader {
     }
 
     async fn try_reconnect_on_err(&mut self, err: YdbError) -> YdbResult<()> {
-        trace!(
+        error!(
             consumer = self.context.options.consumer,
             err = %err,
         );
 
         ensure_retriable(err)?;
 
-        self.reader.cancel();
+        self.reader.cancel().await;
         self.epoch += 1;
 
         let mut attempts: usize = 0;
@@ -237,7 +237,7 @@ impl TopicReader {
             tokio::time::sleep(topic_reader_retry_backoff(attempts)).await;
         };
 
-        trace!(
+        info!(
             consumer = self.context.options.consumer,
             elapsed = ?start.elapsed(),
             attempts = attempts,
@@ -267,6 +267,8 @@ struct StreamReader {
     stop_background_work_token: YdbCancellationToken,
     batch_size: usize,
     epoch: usize,
+
+    background: tokio::task::JoinSet<()>,
 }
 
 impl StreamReader {
@@ -382,11 +384,12 @@ impl StreamReader {
         let (stream, topic_service) =
             Self::grpc_connect(&context.manager, &context.options).await?;
 
-        let stream_reader = StreamReader {
+        let mut stream_reader = StreamReader {
             stream_sender: stream.clone_sender(),
             shared: Arc::new(ReaderShared::new()),
             stop_background_work_token: YdbCancellationToken::new(),
             epoch,
+            background: Default::default(),
             consumer: context.options.consumer.clone(),
             batch_size: context.options.batch_size,
             topic_service,
@@ -394,18 +397,20 @@ impl StreamReader {
 
         stream_reader.start_background_jobs(stream, context.token_cache.clone());
 
+        info!("topic stream reader created");
+
         Ok(stream_reader)
     }
 
-    fn start_background_jobs(&self, stream: GrpcStream, token_cache: TokenCache) {
-        tokio::spawn(receive_loop(
+    fn start_background_jobs(&mut self, stream: GrpcStream, token_cache: TokenCache) {
+        self.background.spawn(receive_loop(
             stream,
             self.shared.clone(),
             self.stop_background_work_token.clone(),
             self.epoch,
         ));
 
-        tokio::spawn(Self::update_token_loop(
+        self.background.spawn(Self::update_token_loop(
             self.stop_background_work_token.clone(),
             self.stream_sender.clone(),
             self.shared.clone(),
@@ -468,6 +473,8 @@ impl StreamReader {
         manager: &GrpcConnectionManager,
         options: &TopicReaderOptions,
     ) -> YdbResult<(GrpcStream, RawTopicClient)> {
+        info!("Start grpc connection");
+
         let mut topic_service = manager.get_auth_service(RawTopicClient::new).await?;
 
         let init_request = RawInitRequest {
@@ -489,14 +496,16 @@ impl StreamReader {
         Ok((stream, topic_client))
     }
 
-    fn cancel(&self) {
+    async fn cancel(&mut self) {
         self.stop_background_work_token.cancel();
+        self.background.shutdown().await;
     }
 }
 
 impl Drop for StreamReader {
     fn drop(&mut self) {
         self.stop_background_work_token.cancel();
+        self.background.abort_all();
     }
 }
 
