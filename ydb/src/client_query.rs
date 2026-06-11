@@ -32,10 +32,13 @@
 //!   borrowing would have saved a copy (a big `Value` you must keep, reused
 //!   in a hot loop) is an explicit `.clone()` at the call site.
 //! - The query surface (`exec` / `query` / `query_result_set` / `query_row`)
-//!   is **inherent** methods on both [`QueryClient`] (one-shot calls, retried
-//!   internally) and [`QueryTransaction`] — they autocomplete in an IDE with
-//!   no `use` import. A `QueryExecutor` trait can be added later for generic
-//!   code (ORM adapters) without changing call sites.
+//!   exists twice with identical signatures: as **inherent** methods on both
+//!   [`QueryClient`] (one-shot calls, retried internally) and
+//!   [`QueryTransaction`] — for IDE completion with no `use` import — and as
+//!   the sealed [`QueryExecutor`] trait, for external code generic over
+//!   client/transaction (ORM adapters). Inherent methods forward to the
+//!   trait and win method resolution, so importing the trait never changes a
+//!   direct call.
 //! - Strict `query_row` (exactly one row), `.optional()` for 0-or-1,
 //!   `.typed::<T>()` for struct mapping (derive macro later).
 //! - [`QueryStream`] borrows the executor: it cannot leak out of a retry
@@ -123,9 +126,16 @@ mod private {
         pub idempotent: Option<bool>,
         pub collect_stats: bool,
     }
+
+    /// Seals [`super::QueryExecutor`] and gives its default methods access to
+    /// the execution core. Not nameable outside the crate, so the trait
+    /// cannot be implemented for foreign types.
+    pub trait HasCore {
+        fn core_mut(&mut self) -> &mut ExecCore;
+    }
 }
 
-use private::{CallOptions, ExecCore};
+use private::{CallOptions, ExecCore, HasCore};
 
 // ---------------------------------------------------------------------------
 // The builder
@@ -352,54 +362,83 @@ pub struct QueryStats {
 }
 
 // ---------------------------------------------------------------------------
-// Query surface (inherent methods on QueryClient and QueryTransaction)
+// Query surface
 // ---------------------------------------------------------------------------
 
 /// The shared query surface of [`QueryClient`] (one-shot calls with internal
 /// retries) and [`QueryTransaction`] (inside
 /// [`QueryClient::retry_transaction`]).
 ///
-/// These are **inherent** methods on both types, not trait methods: they
-/// autocomplete in an IDE with no extra `use` import and no trait-resolution
-/// quirks. A macro generates the identical set on each type — Rust has no
-/// inheritance of inherent methods, and the obvious alternative (a shared
-/// trait) is exactly what makes completion require importing the trait.
-/// A `QueryExecutor` trait can be added later, additively, for code that
-/// must be generic over client/transaction (e.g. ORM adapters): inherent
-/// methods keep winning method resolution, so existing call sites are
-/// unaffected.
-///
-/// Methods are sync and return awaitable builders, so parameters and
-/// per-call options chain before `.await`:
+/// Sealed: implemented only by SDK types. Use it as a bound
+/// (`&mut impl QueryExecutor`) to write code generic over the client and a
+/// transaction — e.g. an ORM adapter or a shared helper:
 ///
 /// ```ignore
-/// let row = tx
-///     .query_row("DECLARE $id AS Int64; SELECT val FROM t WHERE id = $id")
-///     .param("$id", 42_i64)
-///     .await?;
+/// async fn fetch_sum(e: &mut impl QueryExecutor) -> YdbResult<i64> {
+///     let mut row = e.query_row("SELECT SUM(id) AS s FROM test").await?;
+///     row.remove_field_by_name("s")?.try_into()
+/// }
 /// ```
+///
+/// For direct calls (`tx.exec(...)`) the **inherent** methods of the same
+/// name are used instead — they autocomplete in an IDE with no `use
+/// ydb::QueryExecutor` import. The inherent methods and these trait methods
+/// have identical signatures and behaviour; inherent methods win method
+/// resolution, so importing the trait never changes a direct call.
+///
+/// async-fn-in-trait would make this trait not dyn-compatible regardless, so
+/// generic bounds (not `dyn QueryExecutor`) are the intended use.
+pub trait QueryExecutor: HasCore {
+    /// DML/DDL without result rows.
+    fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_> {
+        CallBuilder::new(self.core_mut(), text.into())
+    }
+
+    /// Streaming result; the primary path for big data / multi result sets.
+    fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_> {
+        CallBuilder::new(self.core_mut(), text.into())
+    }
+
+    /// Materialize exactly one result set (error on 0 or >1).
+    fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_> {
+        CallBuilder::new(self.core_mut(), text.into())
+    }
+
+    /// Materialize exactly one row of exactly one result set
+    /// (0 rows -> [`YdbError::NoRows`], >1 -> error). See `.optional()` and
+    /// `.typed()` on the returned builder.
+    fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row> {
+        CallBuilder::new(self.core_mut(), text.into())
+    }
+}
+
+/// Generates the **inherent** copies of the [`QueryExecutor`] methods on a
+/// concrete type. They forward to the trait, so behaviour has one source —
+/// but being inherent they autocomplete in an IDE without importing the
+/// trait, and win method resolution for direct calls. Rust has no
+/// inheritance of inherent methods, hence the macro over two types.
 macro_rules! impl_query_methods {
     () => {
         /// DML/DDL without result rows.
         pub fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_> {
-            CallBuilder::new(&mut self.core, text.into())
+            QueryExecutor::exec(self, text)
         }
 
         /// Streaming result; the primary path for big data / multi result sets.
         pub fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_> {
-            CallBuilder::new(&mut self.core, text.into())
+            QueryExecutor::query(self, text)
         }
 
         /// Materialize exactly one result set (error on 0 or >1).
         pub fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_> {
-            CallBuilder::new(&mut self.core, text.into())
+            QueryExecutor::query_result_set(self, text)
         }
 
         /// Materialize exactly one row of exactly one result set
         /// (0 rows -> [`YdbError::NoRows`], >1 -> error). See `.optional()`
         /// and `.typed()` on the returned builder.
         pub fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row> {
-            CallBuilder::new(&mut self.core, text.into())
+            QueryExecutor::query_row(self, text)
         }
     };
 }
@@ -568,6 +607,14 @@ impl QueryClient {
     }
 }
 
+impl HasCore for QueryClient {
+    fn core_mut(&mut self) -> &mut ExecCore {
+        &mut self.core
+    }
+}
+
+impl QueryExecutor for QueryClient {}
+
 // ---------------------------------------------------------------------------
 // Transaction
 // ---------------------------------------------------------------------------
@@ -635,3 +682,11 @@ impl QueryTransaction {
         }
     }
 }
+
+impl HasCore for QueryTransaction {
+    fn core_mut(&mut self) -> &mut ExecCore {
+        &mut self.core
+    }
+}
+
+impl QueryExecutor for QueryTransaction {}
