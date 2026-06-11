@@ -5,7 +5,7 @@
 //! no `let mut t = t;`, no manual `query.clone()` per attempt, no explicit
 //! `t.commit()`.
 
-use ydb::{ClientBuilder, YdbOrCustomerError, YdbResultWithCustomerErr};
+use ydb::{ClientBuilder, QueryTransaction, YdbOrCustomerError, YdbResultWithCustomerErr};
 
 enum Withdraw {
     Done { remaining: i64 },
@@ -29,7 +29,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut attempts = 0_u32;
 
     let total: i64 = qc
-        .retry_transaction(async |tx| {
+        // Annotate `tx: &mut QueryTransaction` so the IDE completes methods
+        // on `tx`: rust-analyzer does not yet reliably infer `async ||`
+        // closure parameter types from the `AsyncFnMut` bound (the compiler
+        // infers it fine without this).
+        .retry_transaction(async |tx: &mut QueryTransaction| {
             attempts += 1; // mutable capture: AsyncFnMut allows it
             for id in 0..10_i64 {
                 tx.exec(upsert)
@@ -48,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A business outcome, not a failure: finish the transaction explicitly
     // and return a value. No commit, no retry, no Err.
     let outcome = qc
-        .retry_transaction(async |tx| {
+        .retry_transaction(async |tx: &mut QueryTransaction| {
             let mut row = tx
                 .query_row("DECLARE $id AS Int64; SELECT balance FROM accounts WHERE id = $id")
                 .param("$id", 1_i64)
@@ -74,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- 3. Customer errors are never retried -------------------------------
     let res: YdbResultWithCustomerErr<()> = qc
-        .retry_transaction(async |tx| {
+        .retry_transaction(async |tx: &mut QueryTransaction| {
             tx.exec("DELETE FROM test").await?;
             Err(YdbOrCustomerError::from_err(std::io::Error::other(
                 "business rule violated",

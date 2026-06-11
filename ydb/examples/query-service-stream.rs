@@ -2,7 +2,7 @@
 //! `ExecuteQueryResponsePart` is hidden, the public unit of iteration is a
 //! logical `ResultSet`.
 
-use ydb::ClientBuilder;
+use ydb::{ClientBuilder, QueryTransaction};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -13,9 +13,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let qc = client.query_client();
 
     let sets = qc
-        .retry_transaction(async |tx| {
+        // Annotate the parameter type (`tx: &mut QueryTransaction`) so the
+        // IDE can complete methods on `tx`: rust-analyzer does not yet
+        // reliably infer `async ||` closure parameter types from the
+        // `AsyncFnMut` bound. The compiler infers it fine without this.
+        .retry_transaction(async |tx: &mut QueryTransaction| {
             let mut stream = tx.query("SELECT 42 AS a; SELECT 1 AS b, 2 AS c;").await?;
-            tx.
 
             // While `stream` is alive, `tx` stays mutably borrowed — a second
             // concurrent query in the same transaction does not compile:
