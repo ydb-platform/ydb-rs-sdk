@@ -389,6 +389,46 @@ impl TableClient {
         .await
     }
 
+    /// Execute bulk upsert of an Arrow [`RecordBatch`](arrow_array::RecordBatch) with retry policy.
+    ///
+    /// Callers need `arrow-array` (and typically `arrow-schema`) in their own `Cargo.toml` to
+    /// build batches. The SDK does not re-export Arrow crates.
+    ///
+    /// Dictionary-encoded arrays are not supported by the YDB server-side
+    /// converter and will cause this call to fail.
+    pub async fn retry_execute_bulk_upsert_arrow(
+        &self,
+        table_path: String,
+        batch: arrow_array::RecordBatch,
+    ) -> YdbResult<()> {
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+
+        let first_payload = std::sync::Mutex::new(Some(
+            crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(&batch)?,
+        ));
+
+        self.retry(|| async {
+            let (schema_bytes, data_bytes) = if let Some((schema_bytes, data_bytes)) =
+                first_payload.lock().unwrap().take()
+            {
+                (schema_bytes, data_bytes)
+            } else {
+                crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(&batch)?
+            };
+            let mut session = self.create_session().await?;
+            session
+                .execute_bulk_upsert_arrow(
+                    table_path.clone(),
+                    schema_bytes,
+                    data_bytes,
+                )
+                .await
+        })
+        .await
+    }
+
     /// Retry callback in transaction
     ///
     /// retries callback as retry policy.
