@@ -2,7 +2,7 @@
 //! `ExecuteQueryResponsePart` is hidden, the public unit of iteration is a
 //! logical `ResultSet`.
 
-use ydb::{ClientBuilder, QueryExecutor};
+use ydb::ClientBuilder;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -15,6 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sets = qc
         .retry_transaction(async |tx| {
             let mut stream = tx.query("SELECT 42 AS a; SELECT 1 AS b, 2 AS c;").await?;
+            tx.
 
             // While `stream` is alive, `tx` stays mutably borrowed — a second
             // concurrent query in the same transaction does not compile:

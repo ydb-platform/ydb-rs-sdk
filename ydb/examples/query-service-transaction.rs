@@ -5,7 +5,7 @@
 //! no `let mut t = t;`, no manual `query.clone()` per attempt, no explicit
 //! `t.commit()`.
 
-use ydb::{ClientBuilder, QueryExecutor, YdbOrCustomerError, YdbResultWithCustomerErr};
+use ydb::{ClientBuilder, YdbOrCustomerError, YdbResultWithCustomerErr};
 
 enum Withdraw {
     Done { remaining: i64 },
