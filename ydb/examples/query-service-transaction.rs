@@ -1,9 +1,4 @@
-//! Query Service API PROTOTYPE (issue #207): `retry_transaction` in the new
-//! style — `AsyncFnMut(&mut QueryTransaction)`.
-//!
-//! Compare with the table API (`basic-select-upsert.rs`): no `async move`,
-//! no `let mut t = t;`, no manual `query.clone()` per attempt, no explicit
-//! `t.commit()`.
+//! `retry_transaction` with `AsyncFnMut(&mut QueryTransaction)` on implicit sessions.
 
 use ydb::{
     ClientBuilder, QueryExecutor, QueryTransaction, YdbOrCustomerError, YdbResult,

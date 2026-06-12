@@ -1,6 +1,4 @@
-//! Query Service API PROTOTYPE (issue #207): multi-result-set streaming.
-//! `ExecuteQueryResponsePart` is hidden, the public unit of iteration is a
-//! logical `ResultSet`.
+//! Multi-result-set streaming inside `retry_transaction` (lazy tx on implicit session).
 
 use ydb::{ClientBuilder, QueryTransaction};
 
@@ -35,10 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 set_count += 1;
             }
-            stream.close().await?; // consumes the stream, releases the borrow
-
-            // `tx` is usable again after the stream is closed:
-            tx.exec("DELETE FROM test").await?;
+            stream.close().await?;
 
             Ok(set_count)
         })
