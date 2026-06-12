@@ -14,7 +14,9 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self, String> {
-        let connection_string = env::var("YDB_CONNECTION_STRING").ok().filter(|s| !s.is_empty());
+        let connection_string = env::var("YDB_CONNECTION_STRING")
+            .ok()
+            .filter(|s| !s.is_empty());
 
         let (connection_string, database) = match connection_string {
             Some(cs) => {
@@ -29,8 +31,9 @@ impl Config {
             None => {
                 let endpoint = env::var("YDB_ENDPOINT")
                     .map_err(|_| "YDB_CONNECTION_STRING or YDB_ENDPOINT is required".to_string())?;
-                let database = env::var("YDB_DATABASE")
-                    .map_err(|_| "YDB_DATABASE is required when YDB_CONNECTION_STRING is not set".to_string())?;
+                let database = env::var("YDB_DATABASE").map_err(|_| {
+                    "YDB_DATABASE is required when YDB_CONNECTION_STRING is not set".to_string()
+                })?;
                 (format!("{endpoint}{database}"), database)
             }
         };

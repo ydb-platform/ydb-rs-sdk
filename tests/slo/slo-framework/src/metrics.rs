@@ -271,10 +271,7 @@ impl Span {
             .latency
             .lock()
             .unwrap()
-            .record(
-                self.started.elapsed().as_micros() as u64,
-                attrs_key.clone(),
-            );
+            .record(self.started.elapsed().as_micros() as u64, attrs_key.clone());
 
         if let Some(counter) = &self.metrics.inner.operations_total {
             counter.add(1, &attrs);

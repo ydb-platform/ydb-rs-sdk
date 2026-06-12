@@ -63,18 +63,24 @@ impl Database for Storage {
             partition_size = self.partition_size,
         );
 
-        tokio::time::timeout(self.write_timeout, self.table_client.retry_execute_scheme_query(query))
-            .await
-            .map_err(|_| "create table timeout".to_string())?
-            .map_err(|err| err.to_string())
+        tokio::time::timeout(
+            self.write_timeout,
+            self.table_client.retry_execute_scheme_query(query),
+        )
+        .await
+        .map_err(|_| "create table timeout".to_string())?
+        .map_err(|err| err.to_string())
     }
 
     async fn drop_table(&self) -> Result<(), String> {
         let query = format!("DROP TABLE `{table}`", table = self.table_path);
-        tokio::time::timeout(self.write_timeout, self.table_client.retry_execute_scheme_query(query))
-            .await
-            .map_err(|_| "drop table timeout".to_string())?
-            .map_err(|err| err.to_string())
+        tokio::time::timeout(
+            self.write_timeout,
+            self.table_client.retry_execute_scheme_query(query),
+        )
+        .await
+        .map_err(|_| "drop table timeout".to_string())?
+        .map_err(|err| err.to_string())
     }
 
     async fn read(&self, id: RowID) -> Result<(TestRow, u64), String> {

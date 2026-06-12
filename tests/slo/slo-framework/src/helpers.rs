@@ -11,8 +11,12 @@ pub fn new_rate_limiter(rps: u32) -> Ratelimiter {
         .expect("valid ratelimiter")
 }
 
-pub async fn run_workers<F, Fut>(ctx: &CancellationToken, workers: usize, limiter: Ratelimiter, f: F)
-where
+pub async fn run_workers<F, Fut>(
+    ctx: &CancellationToken,
+    workers: usize,
+    limiter: Ratelimiter,
+    f: F,
+) where
     F: Fn() -> Fut + Clone + Send + 'static,
     Fut: std::future::Future<Output = ()> + Send,
 {
