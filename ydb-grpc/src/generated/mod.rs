@@ -33,6 +33,12 @@ pub mod ydb {
     pub mod operations {
         include!("ydb.operations.rs");
     }
+    pub mod query {
+        include!("ydb.query.rs");
+        pub mod v1 {
+            include!("ydb.query.v1.rs");
+        }
+    }
     pub mod scheme {
         include!("ydb.scheme.rs");
         pub mod v1 {
