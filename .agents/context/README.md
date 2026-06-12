@@ -27,7 +27,7 @@ ydb-rs-sdk/
 ├── ydb/                            public SDK crate
 │   └── examples/                   cargo example snippets (*.rs)
 ├── ydb-grpc/                       generated protobuf + tonic stubs
-└── ydb-slo-tests/
+└── tests/slo/                      SLO workloads (ydb-slo-action)
 ```
 
 ## Core files

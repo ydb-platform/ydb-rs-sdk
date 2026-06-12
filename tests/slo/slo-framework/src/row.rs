@@ -1,5 +1,3 @@
-use std::time::SystemTime;
-
 pub type RowID = u64;
 
 #[derive(Debug, Clone)]
@@ -7,7 +5,7 @@ pub struct TestRow {
     pub id: RowID,
     pub payload_str: String,
     pub payload_double: f64,
-    pub payload_timestamp: SystemTime,
+    pub payload_timestamp: std::time::SystemTime,
 }
 
 impl TestRow {
@@ -15,7 +13,7 @@ impl TestRow {
         id: RowID,
         payload_str: String,
         payload_double: f64,
-        payload_timestamp: SystemTime,
+        payload_timestamp: std::time::SystemTime,
     ) -> Self {
         Self {
             id,
