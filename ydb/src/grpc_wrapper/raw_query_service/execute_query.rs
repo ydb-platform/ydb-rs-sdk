@@ -72,9 +72,9 @@ pub(crate) fn merge_part(
 
     let part_set = RawResultSet::try_from(proto_set)?;
     let entry = sets.entry(index).or_insert_with(|| RawResultSet {
-        columns: part_set.columns.clone(),
+        columns: Vec::new(),
         rows: Vec::new(),
-        truncated: part_set.truncated,
+        truncated: false,
     });
     entry.truncated |= part_set.truncated;
     if entry.columns.is_empty() {

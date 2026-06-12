@@ -33,10 +33,11 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum QuerySessionMode {
     /// Empty `session_id` in `ExecuteQueryRequest`: the server creates a session,
-    /// runs the query, and closes the session (default for the initial release).
+    /// runs the query, and closes the session. This is the default mode.
     #[default]
     Implicit,
-    /// Explicit session from a pool (not implemented yet).
+    /// Reserved for an explicit session pool. Not implemented yet; selecting this
+    /// mode returns a runtime error until pool support lands.
     Pool,
 }
 
@@ -153,6 +154,11 @@ impl<'a, K> CallBuilder<'a, K> {
         self
     }
 
+    /// Per-call operation timeout.
+    ///
+    /// For one-shot calls (`exec`, `query_row`, …) this limits the full RPC.
+    /// For [`QueryStream`](Self) the timeout applies only while opening the gRPC
+    /// stream; iterating result sets is not bounded by this value.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.opts.timeout = Some(timeout);
         self
@@ -180,6 +186,8 @@ impl<'a, K> CallBuilder<'a, K> {
     }
 
     /// Shorthand for [`Self::session_mode`] ([`QuerySessionMode::Pool`]).
+    ///
+    /// Pool mode is not implemented yet and currently returns a runtime error.
     pub fn pooled_session(self) -> Self {
         self.session_mode(QuerySessionMode::Pool)
     }
@@ -444,6 +452,11 @@ impl QueryClient {
         }
     }
 
+    /// Upper bound on exponential backoff delay between retry attempts.
+    ///
+    /// This is not a total retry budget: each attempt may still run for up to
+    /// [`TimeoutSettings::operation_timeout`], and the overall retry loop can
+    /// take longer than this value.
     pub fn clone_with_retry_timeout(&self, timeout: Duration) -> Self {
         let ExecCore::Client(ctx) = &self.core else {
             unreachable!("query client stores client exec context");

@@ -11,6 +11,12 @@ pub(crate) struct AttachedQuerySession {
     attach_task: JoinHandle<()>,
 }
 
+impl Drop for AttachedQuerySession {
+    fn drop(&mut self) {
+        self.attach_task.abort();
+    }
+}
+
 impl AttachedQuerySession {
     pub async fn open(client: &mut RawQueryClient) -> RawResult<Self> {
         let session_id = client.create_session().await?;

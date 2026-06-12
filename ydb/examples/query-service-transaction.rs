@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .client()?;
     client.wait().await?;
 
-    let qc = client.query_client().clone_with_idempotent_operations(true);
+    let mut qc = client.query_client().clone_with_idempotent_operations(true);
 
     // --- 1. Borrowing the environment across attempts ----------------------
     // The query text lives outside the callback and is reused on every
@@ -54,6 +54,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("total = {total} after {attempts} attempt(s)");
 
     // --- 2. Rollback without an error ---------------------------------------
+    // Requires `accounts` table; create minimal schema for the example.
+    qc.exec("CREATE TABLE IF NOT EXISTS accounts (id Int64, balance Int64, PRIMARY KEY(id))")
+        .await?;
+    qc.exec("UPSERT INTO accounts (id, balance) VALUES (1, 500)")
+        .await?;
+
     // A business outcome, not a failure: finish the transaction explicitly
     // and return a value. No commit, no retry, no Err.
     let outcome = qc
