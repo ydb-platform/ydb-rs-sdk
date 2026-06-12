@@ -2,7 +2,7 @@
 [Documentation](https://docs.rs/ydb)
 
 Rust SDK for YDB.
-Supported rust: 1.82 and newer.
+Supported rust: 1.85 and newer.
 
 
 Integration tests, with dependency from real YDB database mark as ignored.
