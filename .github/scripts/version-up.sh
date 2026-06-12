@@ -17,7 +17,25 @@ function git_set_tags(){
 
   local GIT_TAG
   for GIT_TAG in "${GIT_TAGS[@]}";  do
-    git tag "$GIT_TAG"
+    git tag -f "$GIT_TAG"
+  done
+}
+
+function git push_tags() {
+  local GIT_TAG remote_sha local_sha
+  for GIT_TAG in "${GIT_TAGS[@]}"; do
+    remote_sha="$(git ls-remote --tags origin "refs/tags/$GIT_TAG" | cut -f1)"
+    local_sha="$(git rev-parse "$GIT_TAG")"
+    if [ -n "$remote_sha" ]; then
+      if [ "$remote_sha" = "$local_sha" ]; then
+        echo "Tag $GIT_TAG already exists on remote at the same commit, skipping push"
+      else
+        echo "Tag $GIT_TAG exists on remote at a different commit, force-updating"
+        git push origin "refs/tags/$GIT_TAG":refs/tags/"$GIT_TAG" --force
+      fi
+    else
+      git push origin "$GIT_TAG"
+    fi
   done
 }
 
@@ -123,7 +141,7 @@ git diff
 git_set_tags
 
 # push tags before publish - for fix repository state if failed in middle of publish crates
-git push --tags
+git push_tags
 
 for CRATE in "${CRATES[@]}"; do
   publish_crate "$CRATE"
