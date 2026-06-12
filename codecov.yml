@@ -2,4 +2,4 @@
 ignore:
   - ydb-grpc/src/generated
   - ydb/examples
-  - ydb-slo-tests
+  - tests/slo
