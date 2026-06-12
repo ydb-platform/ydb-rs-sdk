@@ -2,7 +2,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/ydb-platform/ydb/blob/main/LICENSE)
 [![Latest Version](https://img.shields.io/crates/v/ydb.svg)](https://crates.io/crates/ydb)
 [![Released API docs](https://docs.rs/ydb/badge.svg)](https://docs.rs/ydb)
-[![linter](https://github.com/ydb-platform/ydb-rs-sdk/workflows/linter/badge.svg)](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/linter.yml)
+[![Linter](https://github.com/ydb-platform/ydb-rs-sdk/workflows/Linter/badge.svg)](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/linter.yml)
 [![YDB tests](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-tests.yml/badge.svg?branch=master&event=schedule)](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-tests.yml)
 [![codecov](https://codecov.io/gh/ydb-platform/ydb-rs-sdk/badge.svg?precision=2)](https://app.codecov.io/gh/ydb-platform/ydb-rs-sdk)
 [![View examples](https://img.shields.io/badge/learn-examples-brightgreen.svg)](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
