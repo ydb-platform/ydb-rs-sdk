@@ -72,12 +72,22 @@ echo "Building SLO image..."
 echo "  TAG:        $tag"
 echo "  SRC_PATH:   $src_path"
 
+pkg_name=""
+case "$src_path" in
+  native/table)
+    pkg_name="slo-native-table"
+    ;;
+  *)
+    die "Unknown --src-path: $src_path"
+    ;;
+esac
+
 (
   set +e
   cd "$context_dir"
   docker build -t "$tag" \
     --platform linux/amd64 \
-    --build-arg "SRC_PATH=$src_path" \
+    --build-arg "PKG_NAME=$pkg_name" \
     -f "$dockerfile" .
   exit_code=$?
   echo "Docker build exit code: $exit_code"
@@ -87,7 +97,8 @@ echo "  SRC_PATH:   $src_path"
     fi
 
     echo "Baseline build failed, using fallback image: $fallback_image"
-    docker tag "$fallback_image" "$tag"
+    docker tag "$fallback_image" "$tag" || die "Fallback docker tag failed"
+    exit_code=0
   fi
-  set -e
+  exit $exit_code
 )

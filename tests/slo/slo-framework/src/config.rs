@@ -20,8 +20,10 @@ impl Config {
 
         let (connection_string, database) = match connection_string {
             Some(cs) => {
-                let database = database_from_connection_string(&cs)
-                    .or_else(|| env::var("YDB_DATABASE").ok())
+                let database = env::var("YDB_DATABASE")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| database_from_connection_string(&cs))
                     .ok_or_else(|| {
                         "YDB_DATABASE is required when database path is missing in YDB_CONNECTION_STRING"
                             .to_string()
@@ -72,9 +74,21 @@ impl Config {
 }
 
 fn database_from_connection_string(connection_string: &str) -> Option<String> {
+    if let Some(query) = connection_string.split('?').nth(1) {
+        for part in query.split('&') {
+            if let Some(db) = part.strip_prefix("database=") {
+                if !db.is_empty() {
+                    return Some(db.to_string());
+                }
+            }
+        }
+    }
+
     let without_query = connection_string.split('?').next()?;
     let scheme_end = without_query.find("://")? + 3;
-    let path = without_query.get(scheme_end..)?;
+    let after_scheme = without_query.get(scheme_end..)?;
+    let slash = after_scheme.find('/')?;
+    let path = &after_scheme[slash..];
     if path.is_empty() || path == "/" {
         return None;
     }

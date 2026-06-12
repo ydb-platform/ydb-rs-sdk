@@ -32,7 +32,10 @@ on:
 
 jobs:
   ydb-slo-action:
-    if: contains(github.event.pull_request.labels.*.name, 'SLO')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.labels.*.name, 'SLO')
 
     name: Run YDB SLO Tests
     runs-on: "large-runner"
@@ -142,7 +145,5 @@ jobs:
           workload_duration: ${{ inputs.slo_workload_duration_seconds || '600' }}
           workload_current_ref: ${{ github.head_ref || github.ref_name }}
           workload_current_image: ydb-app-current
-          workload_current_command: ${{ matrix.sdk.command }}
           workload_baseline_ref: ${{ steps.baseline.outputs.ref }}
           workload_baseline_image: ydb-app-baseline
-          workload_baseline_command: ${{ matrix.sdk.command }}

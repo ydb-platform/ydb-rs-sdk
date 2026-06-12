@@ -42,44 +42,39 @@ struct MetricsInner {
 
 struct LatencyHistogram {
     by_attrs: HashMap<String, Histogram<u64>>,
+    cached_percentiles: HashMap<String, [f64; 3]>,
 }
 
 impl LatencyHistogram {
     fn new() -> Self {
         Self {
             by_attrs: HashMap::new(),
+            cached_percentiles: HashMap::new(),
         }
     }
 
     fn record(&mut self, latency_micros: u64, attrs_key: String) {
-        self.by_attrs
-            .entry(attrs_key)
-            .or_insert_with(|| {
-                Histogram::new_with_bounds(
-                    HDR_MIN_MICROSECONDS,
-                    HDR_MAX_MICROSECONDS,
-                    HDR_SIGNIFICANT_DIGITS,
-                )
-                .expect("valid hdr bounds")
-            })
-            .record(latency_micros)
-            .ok();
+        let hist = self.by_attrs.entry(attrs_key.clone()).or_insert_with(|| {
+            Histogram::new_with_bounds(
+                HDR_MIN_MICROSECONDS,
+                HDR_MAX_MICROSECONDS,
+                HDR_SIGNIFICANT_DIGITS,
+            )
+            .expect("valid hdr bounds")
+        });
+        hist.record(latency_micros).ok();
+        self.cached_percentiles.insert(
+            attrs_key,
+            [
+                hist.value_at_quantile(0.5) as f64 / 1_000_000.0,
+                hist.value_at_quantile(0.95) as f64 / 1_000_000.0,
+                hist.value_at_quantile(0.99) as f64 / 1_000_000.0,
+            ],
+        );
     }
 
-    fn percentiles(&self) -> HashMap<String, [f64; 3]> {
-        self.by_attrs
-            .iter()
-            .map(|(key, hist)| {
-                (
-                    key.clone(),
-                    [
-                        hist.value_at_quantile(0.5) as f64 / 1_000_000.0,
-                        hist.value_at_quantile(0.95) as f64 / 1_000_000.0,
-                        hist.value_at_quantile(0.99) as f64 / 1_000_000.0,
-                    ],
-                )
-            })
-            .collect()
+    fn percentiles(&self) -> &HashMap<String, [f64; 3]> {
+        &self.cached_percentiles
     }
 }
 
@@ -143,7 +138,7 @@ impl Metrics {
             .with_unit("s")
             .with_callback(move |observer| {
                 for (attrs_key, vals) in latency_p50.lock().unwrap().percentiles() {
-                    observer.observe(vals[0], &attrs_from_key(&attrs_key));
+                    observer.observe(vals[0], &attrs_from_key(attrs_key));
                 }
             })
             .build();
@@ -155,7 +150,7 @@ impl Metrics {
             .with_unit("s")
             .with_callback(move |observer| {
                 for (attrs_key, vals) in latency_p95.lock().unwrap().percentiles() {
-                    observer.observe(vals[1], &attrs_from_key(&attrs_key));
+                    observer.observe(vals[1], &attrs_from_key(attrs_key));
                 }
             })
             .build();
@@ -167,7 +162,7 @@ impl Metrics {
             .with_unit("s")
             .with_callback(move |observer| {
                 for (attrs_key, vals) in latency_p99.lock().unwrap().percentiles() {
-                    observer.observe(vals[2], &attrs_from_key(&attrs_key));
+                    observer.observe(vals[2], &attrs_from_key(attrs_key));
                 }
             })
             .build();

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::signal::unix::{signal, SignalKind};
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
@@ -99,10 +99,21 @@ where
 
         logger.set_phase(Phase::Run);
         let run_duration = fw.config.run_duration();
-        let run_cancel = cancel.clone();
-        timeout(run_duration, workload.run(&run_cancel))
-            .await
-            .map_err(|_| "run timed out".to_string())??;
+        let run_cancel = cancel.child_token();
+        let mut run_fut = Box::pin(workload.run(&run_cancel));
+
+        tokio::select! {
+            res = &mut run_fut => res?,
+            _ = sleep(run_duration) => {
+                run_cancel.cancel();
+                let _ = run_fut.await;
+            }
+            _ = cancel.cancelled() => {
+                run_cancel.cancel();
+                let _ = run_fut.await;
+            }
+        }
+
         logger.printf("run ok");
         Ok(())
     }

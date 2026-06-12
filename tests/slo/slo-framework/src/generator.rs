@@ -26,8 +26,9 @@ impl Generator {
     pub fn generate(&self) -> TestRow {
         let id = {
             let mut id_guard = self.current_id.lock().unwrap();
+            let id = *id_guard;
             *id_guard += 1;
-            *id_guard
+            id
         };
 
         let mut rng = self.rng.lock().unwrap();
