@@ -1,12 +1,12 @@
 use super::{
-    commit_offset_response, create_mock_topic_reader, init_response, read_response,
-    start_partition_session_request, stop_partition_session_request, MockServer, TopicClientEvent,
+    commit_offset_response, init_response, read_response, start_partition_session_request,
+    stop_partition_session_request, MockServer, TopicClientEvent,
 };
 use std::collections::BTreeMap;
 use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tracing::debug;
-use ydb::{TopicReader, YdbResult};
+use ydb::{ClientBuilder, TopicReader, YdbResult};
 use ydb_grpc::ydb_proto::topic::stream_read_message;
 use ydb_grpc::ydb_proto::topic::stream_read_message::from_client::ClientMessage;
 
@@ -48,7 +48,7 @@ enum FakeTopicCommand {
 }
 
 struct FakeTopicActor {
-    server: MockServer,
+    server: Option<MockServer>,
     state: TopicState,
     current_stream_id: Option<u64>,
     current_partition_session_id: Option<i64>,
@@ -81,7 +81,7 @@ impl FakeTopic {
 
         let (commands, commands_rx) = mpsc::unbounded_channel();
         let actor = FakeTopicActor {
-            server,
+            server: Some(server),
             state: TopicState::default(),
             current_stream_id: None,
             current_partition_session_id: None,
@@ -197,6 +197,31 @@ impl Drop for FakeTopic {
     }
 }
 
+async fn create_mock_topic_reader(
+    database: impl AsRef<str>,
+    topic_path: impl Into<String>,
+    consumer: impl Into<String>,
+) -> YdbResult<(TopicReader, MockServer)> {
+    let database = database.as_ref();
+    let topic_path = topic_path.into();
+    let consumer = consumer.into();
+
+    let server = MockServer::start().await;
+
+    let client = ClientBuilder::new_from_connection_string(format!(
+        "{}?database={database}&use_discovery=false",
+        server.endpoint()
+    ))?
+    .client()?;
+
+    let reader = client
+        .topic_client()
+        .create_reader(consumer, topic_path)
+        .await?;
+
+    Ok((reader, server))
+}
+
 impl FakeTopicActor {
     async fn run(mut self, mut commands: mpsc::UnboundedReceiver<FakeTopicCommand>) -> MockServer {
         while let Some(command) = commands.recv().await {
@@ -229,7 +254,7 @@ impl FakeTopicActor {
                     let _ = done.send(());
                 }
                 FakeTopicCommand::AssertNoReconnect { quiet_period, done } => {
-                    assert_no_stream_read_opened(&mut self.server, quiet_period).await;
+                    assert_no_stream_read_opened(self.server(), quiet_period).await;
                     let _ = done.send(());
                 }
                 FakeTopicCommand::RestartServer { done } => {
@@ -240,6 +265,14 @@ impl FakeTopicActor {
         }
 
         self.server
+            .take()
+            .expect("fake topic server must be present")
+    }
+
+    fn server(&mut self) -> &mut MockServer {
+        self.server
+            .as_mut()
+            .expect("fake topic server must be present")
     }
 
     async fn deliver(&mut self, offset: i64, payload: Vec<u8>) {
@@ -251,7 +284,7 @@ impl FakeTopicActor {
             .expect("reader must have an active partition session");
 
         debug!(offset, "fake topic delivering message");
-        self.server
+        self.server()
             .send(read_response(partition_session_id, offset, payload));
     }
 
@@ -279,7 +312,7 @@ impl FakeTopicActor {
             "fake topic redelivering uncommitted messages"
         );
         for (offset, payload) in uncommitted {
-            self.server
+            self.server()
                 .send(read_response(partition_session_id, offset, payload));
         }
     }
@@ -294,9 +327,8 @@ impl FakeTopicActor {
             .expect("reader must have an active partition session");
 
         loop {
-            match expect_client_message_on_stream(&mut self.server, stream_id, &self.closed_streams)
-                .await
-            {
+            let closed_streams = self.closed_streams.clone();
+            match expect_client_message_on_stream(self.server(), stream_id, &closed_streams).await {
                 ClientMessage::ReadRequest(read) => {
                     debug!(
                         bytes_size = read.bytes_size,
@@ -323,7 +355,7 @@ impl FakeTopicActor {
 
         self.state.committed_offset = self.state.committed_offset.max(end);
         debug!(committed_offset = end, "fake topic acknowledging commit");
-        self.server
+        self.server()
             .send(commit_offset_response(partition_session_id, end));
     }
 
@@ -341,16 +373,17 @@ impl FakeTopicActor {
             partition_session_id,
             "fake topic stopping partition without committed offset"
         );
-        self.server.send(stop_partition_session_request(
+        self.server().send(stop_partition_session_request(
             partition_session_id,
             false,
             0,
         ));
 
+        let closed_streams = self.closed_streams.clone();
         let response = expect_stop_partition_session_response_on_stream(
-            &mut self.server,
+            self.server(),
             stream_id,
-            &self.closed_streams,
+            &closed_streams,
         )
         .await;
         assert_eq!(response.partition_session_id, partition_session_id);
@@ -364,7 +397,7 @@ impl FakeTopicActor {
             .expect("reader must have an active stream");
 
         debug!(stream_id, ?status, "fake topic failing active stream");
-        self.server.fail_stream(status);
+        self.server().fail_stream(status);
         self.closed_streams.push(stream_id);
         self.current_partition_session_id = None;
     }
@@ -376,7 +409,11 @@ impl FakeTopicActor {
         }
 
         debug!("fake topic restarting mock server");
-        self.server.restart().await;
+        let server = self
+            .server
+            .take()
+            .expect("fake topic server must be present");
+        self.server = Some(server.restart().await);
         self.current_stream_id = None;
         self.current_partition_session_id = None;
         self.closed_streams.clear();
@@ -396,14 +433,18 @@ impl FakeTopicActor {
             committed_offset = self.state.committed_offset,
             "fake topic accepting reader stream"
         );
+        let closed_streams = self.closed_streams.clone();
+        let committed_offset = self.state.committed_offset;
+        let topic_path = self.topic_path.clone();
+        let consumer = self.consumer.clone();
         let stream_id = expect_reader_started_on_stream(
-            &mut self.server,
-            &self.closed_streams,
+            self.server(),
+            &closed_streams,
             "read-session",
             partition_session_id,
-            self.state.committed_offset,
-            &self.topic_path,
-            &self.consumer,
+            committed_offset,
+            &topic_path,
+            &consumer,
         )
         .await;
 
