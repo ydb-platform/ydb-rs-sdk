@@ -53,7 +53,7 @@ where
 {
     match timeout(timeout_duration, operation).await {
         Ok(result) => result,
-        Err(_) => Err(YdbError::Custom(format!(
+        Err(_) => Err(YdbError::Transport(format!(
             "operation timed out after {timeout_duration:?}"
         ))),
     }
@@ -325,10 +325,17 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
     let tx_id = tx.tx_id.take().expect("checked Some");
     let session_id = tx_session_id(tx)?.to_string();
     let mut client = query_client_from_tx(tx).await?;
-    let result = client.commit_transaction(&session_id, &tx_id).await;
+    let timeout_duration = tx.timeouts.operation_timeout;
+    let result = with_operation_timeout(timeout_duration, async {
+        client
+            .commit_transaction(&session_id, &tx_id)
+            .await
+            .map_err(Into::into)
+    })
+    .await;
     release_tx_session(tx).await;
     tx.finished = true;
-    result.map_err(Into::into)
+    result
 }
 
 pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> YdbResult<()> {
@@ -339,7 +346,14 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
         let tx_id = tx.tx_id.take().expect("checked Some");
         if let Ok(session_id) = tx_session_id(tx) {
             if let Ok(mut client) = query_client_from_tx(tx).await {
-                let _ = client.rollback_transaction(session_id, &tx_id).await;
+                let timeout_duration = tx.timeouts.operation_timeout;
+                let _ = with_operation_timeout(timeout_duration, async {
+                    client
+                        .rollback_transaction(session_id, &tx_id)
+                        .await
+                        .map_err(Into::into)
+                })
+                .await;
             }
         }
     } else {

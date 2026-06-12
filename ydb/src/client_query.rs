@@ -7,9 +7,11 @@ mod exec;
 use std::collections::HashMap;
 use std::future::{Future, IntoFuture};
 use std::marker::PhantomData;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::time::Duration;
 
+use futures_util::FutureExt;
 use tokio::time::sleep;
 
 use crate::client::TimeoutSettings;
@@ -424,7 +426,7 @@ impl QueryClient {
 
     pub fn clone_with_idempotent_operations(&self, idempotent: bool) -> Self {
         let ExecCore::Client(ctx) = &self.core else {
-            return self.clone();
+            unreachable!("query client stores client exec context");
         };
         Self {
             core: ExecCore::Client(ClientExecContext {
@@ -444,7 +446,7 @@ impl QueryClient {
 
     pub fn clone_with_retry_timeout(&self, timeout: Duration) -> Self {
         let ExecCore::Client(ctx) = &self.core else {
-            return self.clone();
+            unreachable!("query client stores client exec context");
         };
         Self {
             core: ExecCore::Client(ClientExecContext {
@@ -457,7 +459,7 @@ impl QueryClient {
 
     pub fn clone_with_no_retry(&self) -> Self {
         let ExecCore::Client(ctx) = &self.core else {
-            return self.clone();
+            unreachable!("query client stores client exec context");
         };
         Self {
             core: ExecCore::Client(ClientExecContext {
@@ -470,7 +472,7 @@ impl QueryClient {
 
     pub fn clone_with_session_mode(&self, session_mode: QuerySessionMode) -> Self {
         let ExecCore::Client(ctx) = &self.core else {
-            return self.clone();
+            unreachable!("query client stores client exec context");
         };
         Self {
             core: ExecCore::Client(ClientExecContext {
@@ -504,8 +506,10 @@ impl QueryClient {
                 self.tx_options.clone(),
             );
 
-            let err = match callback(&mut tx).await {
-                Ok(value) => {
+            let callback_result = AssertUnwindSafe(callback(&mut tx)).catch_unwind().await;
+
+            let err = match callback_result {
+                Ok(Ok(value)) => {
                     if tx.state == TxState::RolledBack {
                         return Ok(value);
                     }
@@ -514,9 +518,15 @@ impl QueryClient {
                         Err(e) => YdbOrCustomerError::YDB(e),
                     }
                 }
-                Err(err) => {
+                Ok(Err(err)) => {
                     tx.rollback_quiet().await;
                     err
+                }
+                Err(_panic) => {
+                    tx.rollback_quiet().await;
+                    YdbOrCustomerError::YDB(YdbError::Custom(
+                        "query transaction callback panicked".to_string(),
+                    ))
                 }
             };
 

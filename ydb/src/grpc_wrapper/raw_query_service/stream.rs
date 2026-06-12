@@ -51,9 +51,9 @@ impl ExecuteQueryStream {
         let mut rows = Vec::new();
         let mut truncated = false;
         let mut tx_id = None;
-        let target_index = self.next_index;
 
         loop {
+            let target_index = self.next_index;
             let part = if let Some(part) = self.pending_part.take() {
                 part
             } else {
@@ -91,29 +91,34 @@ impl ExecuteQueryStream {
                 continue;
             }
 
-            if part.result_set_index > target_index && (!rows.is_empty() || !columns.is_empty()) {
-                self.pending_part = Some(part);
-                self.next_index += 1;
-                return Ok(Some((
-                    RawResultSet {
-                        columns,
-                        rows,
-                        truncated,
-                    },
-                    tx_id,
-                )));
+            if part.result_set_index > target_index {
+                if rows.is_empty() && columns.is_empty() {
+                    self.next_index = part.result_set_index;
+                } else {
+                    self.pending_part = Some(part);
+                    self.next_index += 1;
+                    return Ok(Some((
+                        RawResultSet {
+                            columns,
+                            rows,
+                            truncated,
+                        },
+                        tx_id,
+                    )));
+                }
             }
 
-            append_rows_from_part(&mut columns, &mut rows, &mut truncated, &part)?;
+            append_rows_from_part(&mut columns, &mut rows, &mut truncated, part)?;
 
             let stream = self.grpc.as_mut().expect("grpc stream");
+            let collecting_index = self.next_index;
             match stream.message().await? {
                 Some(next) => {
                     check_part(&next)?;
                     if let Some(id) = self.absorb_part_metadata(&next) {
                         tx_id = Some(id);
                     }
-                    if next.result_set_index > target_index {
+                    if next.result_set_index > collecting_index {
                         self.pending_part = Some(next);
                         self.next_index += 1;
                         return Ok(Some((
@@ -125,7 +130,10 @@ impl ExecuteQueryStream {
                             tx_id,
                         )));
                     }
-                    append_rows_from_part(&mut columns, &mut rows, &mut truncated, &next)?;
+                    if next.result_set_index < collecting_index {
+                        continue;
+                    }
+                    append_rows_from_part(&mut columns, &mut rows, &mut truncated, next)?;
                 }
                 None => {
                     self.finished = true;

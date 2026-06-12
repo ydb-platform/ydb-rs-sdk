@@ -9,8 +9,9 @@ use crate::grpc_wrapper::raw_table_service::value::{
 use crate::types::Value;
 use ydb_grpc::ydb_proto::query::{
     execute_query_request, ExecMode, ExecuteQueryRequest, ExecuteQueryResponsePart, QueryContent,
-    StatsMode, Syntax,
+    SchemaInclusionMode, StatsMode, Syntax,
 };
+use ydb_grpc::ydb_proto::result_set::Format;
 
 #[derive(Clone, Debug)]
 pub(crate) struct RawExecuteQueryRequest {
@@ -53,8 +54,8 @@ impl RawExecuteQueryRequest {
             response_part_limit_bytes: 0,
             pool_id: String::new(),
             stats_period_ms: 0,
-            schema_inclusion_mode: 0,
-            result_set_format: 0,
+            schema_inclusion_mode: SchemaInclusionMode::Unspecified as i32,
+            result_set_format: Format::Unspecified as i32,
             arrow_format_settings: None,
         })
     }
@@ -110,12 +111,12 @@ pub(crate) fn append_rows_from_part(
     columns: &mut Vec<RawColumn>,
     rows: &mut Vec<Vec<RawValue>>,
     truncated: &mut bool,
-    part: &ExecuteQueryResponsePart,
+    part: ExecuteQueryResponsePart,
 ) -> RawResult<()> {
-    let Some(proto_set) = &part.result_set else {
+    let Some(proto_set) = part.result_set else {
         return Ok(());
     };
-    let part_set = RawResultSet::try_from(proto_set.clone())?;
+    let part_set = RawResultSet::try_from(proto_set)?;
     *truncated |= part_set.truncated;
     if columns.is_empty() {
         *columns = part_set.columns;
