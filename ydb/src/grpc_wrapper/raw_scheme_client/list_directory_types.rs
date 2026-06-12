@@ -90,6 +90,7 @@ fn from_grpc_code_to_scheme_entry_type(value: i32) -> SchemeEntryType {
         grpcT::ExternalDataSource => SchemeEntryType::ExternalDataSource,
         grpcT::ExternalTable => SchemeEntryType::ExternalTable,
         grpcT::View => SchemeEntryType::View,
+        _ => SchemeEntryType::Unknown(value),
     }
 }
 

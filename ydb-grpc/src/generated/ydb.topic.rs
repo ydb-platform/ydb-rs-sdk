@@ -191,7 +191,7 @@ pub mod stream_write_message {
             /// Starts at 1
             #[prost(int64, tag = "1")]
             pub seq_no: i64,
-            /// Creation timestamp
+            /// Creation timestamp.
             #[prost(message, optional, tag = "2")]
             pub created_at: ::core::option::Option<
                 super::super::super::super::google::protobuf::Timestamp,
@@ -500,6 +500,9 @@ pub mod stream_read_message {
         /// Indicates that the SDK supports auto partitioning.
         #[prost(bool, tag = "5")]
         pub auto_partitioning_support: bool,
+        /// Max in flight bytes per partition
+        #[prost(uint64, tag = "6")]
+        pub partition_max_in_flight_bytes: u64,
     }
     /// Nested message and enum types in `InitRequest`.
     pub mod init_request {
@@ -713,6 +716,9 @@ pub mod stream_read_message {
         pub write_time_high_watermark: ::core::option::Option<
             super::super::super::google::protobuf::Timestamp,
         >,
+        /// Messages with offsets up to and including (read_offset - 1) was read.
+        #[prost(int64, tag = "5")]
+        pub read_offset: i64,
     }
     /// Command from server to create and start a partition session.
     /// Client must respond with StartPartitionSessionResponse when ready to receive data from this partition.
@@ -1136,6 +1142,11 @@ pub struct Consumer {
     /// Filled only when requested statistics in Describe\*Request.
     #[prost(message, optional, tag = "7")]
     pub consumer_stats: ::core::option::Option<consumer::ConsumerStats>,
+    /// Message for this consumer will not expire due to retention for at least `availability_period` if they aren't commited.
+    #[prost(message, optional, tag = "8")]
+    pub availability_period: ::core::option::Option<
+        super::super::google::protobuf::Duration,
+    >,
 }
 /// Nested message and enum types in `Consumer`.
 pub mod consumer {
@@ -1194,6 +1205,23 @@ pub struct AlterConsumer {
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
+    /// Change message lifetime if consumer is important.
+    #[prost(oneof = "alter_consumer::AvailabilityPeriodAction", tags = "7, 8")]
+    pub availability_period_action: ::core::option::Option<
+        alter_consumer::AvailabilityPeriodAction,
+    >,
+}
+/// Nested message and enum types in `AlterConsumer`.
+pub mod alter_consumer {
+    /// Change message lifetime if consumer is important.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum AvailabilityPeriodAction {
+        #[prost(message, tag = "7")]
+        SetAvailabilityPeriod(super::super::super::google::protobuf::Duration),
+        #[prost(message, tag = "8")]
+        ResetAvailabilityPeriod(super::super::super::google::protobuf::Empty),
+    }
 }
 /// Partitioning settings for topic.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1352,6 +1380,12 @@ pub struct CreateTopicRequest {
     /// Metering mode for the topic in a serverless database.
     #[prost(enumeration = "MeteringMode", tag = "12")]
     pub metering_mode: i32,
+    /// Metrics level. If the level is unset, use database setting.
+    #[prost(uint32, optional, tag = "13")]
+    pub metrics_level: ::core::option::Option<u32>,
+    /// Enable content-based deduplication for the topic.
+    #[prost(bool, tag = "14")]
+    pub content_based_deduplication: bool,
 }
 /// Create topic response sent from server to client.
 /// If topic is already exists then response status will be "ALREADY_EXISTS".
@@ -1468,6 +1502,12 @@ pub struct DescribeTopicResult {
     /// Statistics of topic.
     #[prost(message, optional, tag = "13")]
     pub topic_stats: ::core::option::Option<describe_topic_result::TopicStats>,
+    /// Metrics level.
+    #[prost(uint32, optional, tag = "16")]
+    pub metrics_level: ::core::option::Option<u32>,
+    /// Is content-based deduplication enabled for the topic.
+    #[prost(bool, tag = "17")]
+    pub content_based_deduplication: bool,
 }
 /// Nested message and enum types in `DescribeTopicResult`.
 pub mod describe_topic_result {
@@ -1748,6 +1788,24 @@ pub struct AlterTopicRequest {
     /// Set metering mode for topic in serverless database.
     #[prost(enumeration = "MeteringMode", tag = "14")]
     pub set_metering_mode: i32,
+    /// Enable content-based deduplication for the topic.
+    #[prost(bool, optional, tag = "17")]
+    pub set_content_based_deduplication: ::core::option::Option<bool>,
+    /// Set or reset metrics level.
+    #[prost(oneof = "alter_topic_request::MetricsLevel", tags = "15, 16")]
+    pub metrics_level: ::core::option::Option<alter_topic_request::MetricsLevel>,
+}
+/// Nested message and enum types in `AlterTopicRequest`.
+pub mod alter_topic_request {
+    /// Set or reset metrics level.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum MetricsLevel {
+        #[prost(uint32, tag = "15")]
+        SetMetricsLevel(u32),
+        #[prost(message, tag = "16")]
+        ResetMetricsLevel(super::super::super::google::protobuf::Empty),
+    }
 }
 /// Update topic response sent from server to client.
 #[derive(serde::Serialize, serde::Deserialize)]

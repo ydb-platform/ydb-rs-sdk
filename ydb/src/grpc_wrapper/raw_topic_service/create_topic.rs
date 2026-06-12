@@ -70,6 +70,8 @@ impl From<RawCreateTopicRequest> for CreateTopicRequest {
             attributes: value.attributes,
             consumers: value.consumers.into_iter().map(Consumer::from).collect(),
             metering_mode: MeteringMode::from(value.metering_mode) as i32,
+            metrics_level: None,
+            content_based_deduplication: false,
         }
     }
 }

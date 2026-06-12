@@ -6,10 +6,10 @@ pub mod coordination_service_client {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value
+        clippy::let_unit_value,
     )]
-    use tonic::codegen::http::Uri;
     use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
     #[derive(Debug, Clone)]
     pub struct CoordinationServiceClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -53,8 +53,9 @@ pub mod coordination_service_client {
                     <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
                 >,
             >,
-            <T as tonic::codegen::Service<http::Request<tonic::body::Body>>>::Error:
-                Into<StdError> + std::marker::Send + std::marker::Sync,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::Body>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
         {
             CoordinationServiceClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -95,103 +96,150 @@ pub mod coordination_service_client {
         /// below) and semaphores are local to that coordination node.
         pub async fn session(
             &mut self,
-            request: impl tonic::IntoStreamingRequest<Message = super::super::SessionRequest>,
+            request: impl tonic::IntoStreamingRequest<
+                Message = super::super::SessionRequest,
+            >,
         ) -> std::result::Result<
             tonic::Response<tonic::codec::Streaming<super::super::SessionResponse>>,
             tonic::Status,
         > {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/Ydb.Coordination.V1.CoordinationService/Session",
             );
             let mut req = request.into_streaming_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "Ydb.Coordination.V1.CoordinationService",
-                "Session",
-            ));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("Ydb.Coordination.V1.CoordinationService", "Session"),
+                );
             self.inner.streaming(req, path, codec).await
         }
         /// Creates a new coordination node
         pub async fn create_node(
             &mut self,
             request: impl tonic::IntoRequest<super::super::CreateNodeRequest>,
-        ) -> std::result::Result<tonic::Response<super::super::CreateNodeResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::super::CreateNodeResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/Ydb.Coordination.V1.CoordinationService/CreateNode",
             );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "Ydb.Coordination.V1.CoordinationService",
-                "CreateNode",
-            ));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "Ydb.Coordination.V1.CoordinationService",
+                        "CreateNode",
+                    ),
+                );
             self.inner.unary(req, path, codec).await
         }
         /// Modifies settings of a coordination node
         pub async fn alter_node(
             &mut self,
             request: impl tonic::IntoRequest<super::super::AlterNodeRequest>,
-        ) -> std::result::Result<tonic::Response<super::super::AlterNodeResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::super::AlterNodeResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/Ydb.Coordination.V1.CoordinationService/AlterNode",
             );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "Ydb.Coordination.V1.CoordinationService",
-                "AlterNode",
-            ));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "Ydb.Coordination.V1.CoordinationService",
+                        "AlterNode",
+                    ),
+                );
             self.inner.unary(req, path, codec).await
         }
         /// Drops a coordination node
         pub async fn drop_node(
             &mut self,
             request: impl tonic::IntoRequest<super::super::DropNodeRequest>,
-        ) -> std::result::Result<tonic::Response<super::super::DropNodeResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::super::DropNodeResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/Ydb.Coordination.V1.CoordinationService/DropNode",
             );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "Ydb.Coordination.V1.CoordinationService",
-                "DropNode",
-            ));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "Ydb.Coordination.V1.CoordinationService",
+                        "DropNode",
+                    ),
+                );
             self.inner.unary(req, path, codec).await
         }
         /// Describes a coordination node
         pub async fn describe_node(
             &mut self,
             request: impl tonic::IntoRequest<super::super::DescribeNodeRequest>,
-        ) -> std::result::Result<tonic::Response<super::super::DescribeNodeResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::super::DescribeNodeResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/Ydb.Coordination.V1.CoordinationService/DescribeNode",
             );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "Ydb.Coordination.V1.CoordinationService",
-                "DescribeNode",
-            ));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "Ydb.Coordination.V1.CoordinationService",
+                        "DescribeNode",
+                    ),
+                );
             self.inner.unary(req, path, codec).await
         }
     }

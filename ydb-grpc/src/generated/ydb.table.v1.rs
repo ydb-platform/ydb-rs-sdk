@@ -90,7 +90,7 @@ pub mod table_service_client {
         /// Create new session. Implicit session creation is forbidden,
         /// so user must create new session before execute any query,
         /// otherwise BAD_SESSION status will be returned.
-        /// Simultaneous execution of requests are forbiden.
+        /// Simultaneous execution of requests are forbidden.
         /// Sessions are volatile, can be invalidated by server, for example in case
         /// of fatal errors. All requests with this session will fail with BAD_SESSION status.
         /// So, client must be able to handle BAD_SESSION status.
@@ -671,6 +671,92 @@ pub mod table_service_client {
                     ),
                 );
             self.inner.server_streaming(req, path, codec).await
+        }
+        /// Returns information about a given external data source.
+        pub async fn describe_external_data_source(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                super::super::DescribeExternalDataSourceRequest,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::super::DescribeExternalDataSourceResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/Ydb.Table.V1.TableService/DescribeExternalDataSource",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "Ydb.Table.V1.TableService",
+                        "DescribeExternalDataSource",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Returns information about a given external table.
+        pub async fn describe_external_table(
+            &mut self,
+            request: impl tonic::IntoRequest<super::super::DescribeExternalTableRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::DescribeExternalTableResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/Ydb.Table.V1.TableService/DescribeExternalTable",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("Ydb.Table.V1.TableService", "DescribeExternalTable"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Returns information about a given system view table.
+        pub async fn describe_system_view(
+            &mut self,
+            request: impl tonic::IntoRequest<super::super::DescribeSystemViewRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::DescribeSystemViewResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/Ydb.Table.V1.TableService/DescribeSystemView",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("Ydb.Table.V1.TableService", "DescribeSystemView"),
+                );
+            self.inner.unary(req, path, codec).await
         }
     }
 }

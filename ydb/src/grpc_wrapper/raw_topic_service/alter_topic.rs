@@ -96,6 +96,8 @@ impl From<RawAlterTopicRequest> for AlterTopicRequest {
                 .map(AlterConsumer::from)
                 .collect(),
             set_metering_mode: MeteringMode::from(value.set_metering_mode).into(),
+            metrics_level: None,
+            set_content_based_deduplication: None,
         }
     }
 }
