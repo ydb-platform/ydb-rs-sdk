@@ -381,3 +381,699 @@ pub mod topic_service_client {
         }
     }
 }
+/// Generated server implementations.
+pub mod topic_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with TopicServiceServer.
+    #[async_trait]
+    pub trait TopicService: std::marker::Send + std::marker::Sync + 'static {
+        /// Server streaming response type for the StreamWrite method.
+        type StreamWriteStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<
+                    super::super::stream_write_message::FromServer,
+                    tonic::Status,
+                >,
+            >
+            + std::marker::Send
+            + 'static;
+        /// Create Write Session
+        /// Pipeline example:
+        /// client                  server
+        /// InitRequest(Topic, MessageGroupID, ...)
+        /// ---------------->
+        /// InitResponse(Partition, MaxSeqNo, ...)
+        /// \<----------------
+        /// WriteRequest(data1, seqNo1)
+        /// ---------------->
+        /// WriteRequest(data2, seqNo2)
+        /// ---------------->
+        /// WriteResponse(seqNo1, offset1, ...)
+        /// \<----------------
+        /// WriteRequest(data3, seqNo3)
+        /// ---------------->
+        /// WriteResponse(seqNo2, offset2, ...)
+        /// \<----------------
+        /// \[something went wrong\] (status != SUCCESS, issues not empty)
+        /// \<----------------
+        async fn stream_write(
+            &self,
+            request: tonic::Request<
+                tonic::Streaming<super::super::stream_write_message::FromClient>,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<Self::StreamWriteStream>,
+            tonic::Status,
+        >;
+        /// Server streaming response type for the StreamRead method.
+        type StreamReadStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<
+                    super::super::stream_read_message::FromServer,
+                    tonic::Status,
+                >,
+            >
+            + std::marker::Send
+            + 'static;
+        /// Create Read Session
+        /// Pipeline:
+        /// client                  server
+        /// InitRequest(Topics, ClientId, ...)
+        /// ---------------->
+        /// InitResponse(SessionId)
+        /// \<----------------
+        /// ReadRequest
+        /// ---------------->
+        /// ReadRequest
+        /// ---------------->
+        /// StartPartitionSessionRequest(Topic1, Partition1, PartitionSessionID1, ...)
+        /// \<----------------
+        /// StartPartitionSessionRequest(Topic2, Partition2, PartitionSessionID2, ...)
+        /// \<----------------
+        /// StartPartitionSessionResponse(PartitionSessionID1, ...)
+        /// client must respond with this message to actually start recieving data messages from this partition
+        /// ---------------->
+        /// StopPartitionSessionRequest(PartitionSessionID1, ...)
+        /// \<----------------
+        /// StopPartitionSessionResponse(PartitionSessionID1, ...)
+        /// only after this response server will give this parittion to other session.
+        /// ---------------->
+        /// StartPartitionSessionResponse(PartitionSession2, ...)
+        /// ---------------->
+        /// ReadResponse(data, ...)
+        /// \<----------------
+        /// CommitRequest(PartitionCommit1, ...)
+        /// ---------------->
+        /// CommitResponse(PartitionCommitAck1, ...)
+        /// \<----------------
+        /// \[something went wrong\] (status != SUCCESS, issues not empty)
+        /// \<----------------
+        async fn stream_read(
+            &self,
+            request: tonic::Request<
+                tonic::Streaming<super::super::stream_read_message::FromClient>,
+            >,
+        ) -> std::result::Result<tonic::Response<Self::StreamReadStream>, tonic::Status>;
+        /// Single commit offset request.
+        async fn commit_offset(
+            &self,
+            request: tonic::Request<super::super::CommitOffsetRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::CommitOffsetResponse>,
+            tonic::Status,
+        >;
+        /// Add information about offset ranges to the transaction.
+        async fn update_offsets_in_transaction(
+            &self,
+            request: tonic::Request<super::super::UpdateOffsetsInTransactionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::UpdateOffsetsInTransactionResponse>,
+            tonic::Status,
+        >;
+        /// Create topic command.
+        async fn create_topic(
+            &self,
+            request: tonic::Request<super::super::CreateTopicRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::CreateTopicResponse>,
+            tonic::Status,
+        >;
+        /// Describe topic command.
+        async fn describe_topic(
+            &self,
+            request: tonic::Request<super::super::DescribeTopicRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::DescribeTopicResponse>,
+            tonic::Status,
+        >;
+        /// Describe topic's consumer command.
+        async fn describe_consumer(
+            &self,
+            request: tonic::Request<super::super::DescribeConsumerRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::DescribeConsumerResponse>,
+            tonic::Status,
+        >;
+        /// Alter topic command.
+        async fn alter_topic(
+            &self,
+            request: tonic::Request<super::super::AlterTopicRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::AlterTopicResponse>,
+            tonic::Status,
+        >;
+        /// Drop topic command.
+        async fn drop_topic(
+            &self,
+            request: tonic::Request<super::super::DropTopicRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::DropTopicResponse>,
+            tonic::Status,
+        >;
+    }
+    #[derive(Debug)]
+    pub struct TopicServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> TopicServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for TopicServiceServer<T>
+    where
+        T: TopicService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/Ydb.Topic.V1.TopicService/StreamWrite" => {
+                    #[allow(non_camel_case_types)]
+                    struct StreamWriteSvc<T: TopicService>(pub Arc<T>);
+                    impl<
+                        T: TopicService,
+                    > tonic::server::StreamingService<
+                        super::super::stream_write_message::FromClient,
+                    > for StreamWriteSvc<T> {
+                        type Response = super::super::stream_write_message::FromServer;
+                        type ResponseStream = T::StreamWriteStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                tonic::Streaming<
+                                    super::super::stream_write_message::FromClient,
+                                >,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TopicService>::stream_write(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = StreamWriteSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Topic.V1.TopicService/StreamRead" => {
+                    #[allow(non_camel_case_types)]
+                    struct StreamReadSvc<T: TopicService>(pub Arc<T>);
+                    impl<
+                        T: TopicService,
+                    > tonic::server::StreamingService<
+                        super::super::stream_read_message::FromClient,
+                    > for StreamReadSvc<T> {
+                        type Response = super::super::stream_read_message::FromServer;
+                        type ResponseStream = T::StreamReadStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                tonic::Streaming<
+                                    super::super::stream_read_message::FromClient,
+                                >,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TopicService>::stream_read(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = StreamReadSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Topic.V1.TopicService/CommitOffset" => {
+                    #[allow(non_camel_case_types)]
+                    struct CommitOffsetSvc<T: TopicService>(pub Arc<T>);
+                    impl<
+                        T: TopicService,
+                    > tonic::server::UnaryService<super::super::CommitOffsetRequest>
+                    for CommitOffsetSvc<T> {
+                        type Response = super::super::CommitOffsetResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::CommitOffsetRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TopicService>::commit_offset(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CommitOffsetSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Topic.V1.TopicService/UpdateOffsetsInTransaction" => {
+                    #[allow(non_camel_case_types)]
+                    struct UpdateOffsetsInTransactionSvc<T: TopicService>(pub Arc<T>);
+                    impl<
+                        T: TopicService,
+                    > tonic::server::UnaryService<
+                        super::super::UpdateOffsetsInTransactionRequest,
+                    > for UpdateOffsetsInTransactionSvc<T> {
+                        type Response = super::super::UpdateOffsetsInTransactionResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::super::UpdateOffsetsInTransactionRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TopicService>::update_offsets_in_transaction(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = UpdateOffsetsInTransactionSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Topic.V1.TopicService/CreateTopic" => {
+                    #[allow(non_camel_case_types)]
+                    struct CreateTopicSvc<T: TopicService>(pub Arc<T>);
+                    impl<
+                        T: TopicService,
+                    > tonic::server::UnaryService<super::super::CreateTopicRequest>
+                    for CreateTopicSvc<T> {
+                        type Response = super::super::CreateTopicResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::CreateTopicRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TopicService>::create_topic(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CreateTopicSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Topic.V1.TopicService/DescribeTopic" => {
+                    #[allow(non_camel_case_types)]
+                    struct DescribeTopicSvc<T: TopicService>(pub Arc<T>);
+                    impl<
+                        T: TopicService,
+                    > tonic::server::UnaryService<super::super::DescribeTopicRequest>
+                    for DescribeTopicSvc<T> {
+                        type Response = super::super::DescribeTopicResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::DescribeTopicRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TopicService>::describe_topic(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DescribeTopicSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Topic.V1.TopicService/DescribeConsumer" => {
+                    #[allow(non_camel_case_types)]
+                    struct DescribeConsumerSvc<T: TopicService>(pub Arc<T>);
+                    impl<
+                        T: TopicService,
+                    > tonic::server::UnaryService<super::super::DescribeConsumerRequest>
+                    for DescribeConsumerSvc<T> {
+                        type Response = super::super::DescribeConsumerResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::super::DescribeConsumerRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TopicService>::describe_consumer(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DescribeConsumerSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Topic.V1.TopicService/AlterTopic" => {
+                    #[allow(non_camel_case_types)]
+                    struct AlterTopicSvc<T: TopicService>(pub Arc<T>);
+                    impl<
+                        T: TopicService,
+                    > tonic::server::UnaryService<super::super::AlterTopicRequest>
+                    for AlterTopicSvc<T> {
+                        type Response = super::super::AlterTopicResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::AlterTopicRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TopicService>::alter_topic(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = AlterTopicSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Topic.V1.TopicService/DropTopic" => {
+                    #[allow(non_camel_case_types)]
+                    struct DropTopicSvc<T: TopicService>(pub Arc<T>);
+                    impl<
+                        T: TopicService,
+                    > tonic::server::UnaryService<super::super::DropTopicRequest>
+                    for DropTopicSvc<T> {
+                        type Response = super::super::DropTopicResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::DropTopicRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TopicService>::drop_topic(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DropTopicSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for TopicServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "Ydb.Topic.V1.TopicService";
+    impl<T> tonic::server::NamedService for TopicServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}

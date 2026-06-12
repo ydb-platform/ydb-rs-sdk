@@ -1,6 +1,5 @@
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 
-use futures_util::StreamExt;
 use tokio::sync::mpsc;
 
 pub(crate) struct AsyncGrpcStreamWrapper<RequestT, ResponseT> {
@@ -20,21 +19,21 @@ impl<RequestT, ResponseT> AsyncGrpcStreamWrapper<RequestT, ResponseT> {
     }
 
     #[allow(dead_code)]
-    pub(crate) async fn send<Message>(&mut self, message: Message) -> RawResult<()>
+    pub(crate) async fn send<Message>(&self, message: Message) -> RawResult<()>
     where
         Message: Into<RequestT>,
     {
         self.send_nowait(message)
     }
 
-    pub(crate) fn send_nowait<Message>(&mut self, message: Message) -> RawResult<()>
+    pub(crate) fn send_nowait<Message>(&self, message: Message) -> RawResult<()>
     where
         Message: Into<RequestT>,
     {
         Ok(self.from_client_grpc.send(message.into())?)
     }
 
-    pub(crate) fn clone_sender(&mut self) -> mpsc::UnboundedSender<RequestT> {
+    pub(crate) fn clone_sender(&self) -> mpsc::UnboundedSender<RequestT> {
         self.from_client_grpc.clone()
     }
 
@@ -42,12 +41,18 @@ impl<RequestT, ResponseT> AsyncGrpcStreamWrapper<RequestT, ResponseT> {
     where
         Message: TryFrom<ResponseT, Error = RawError>,
     {
-        let maybe_ydb_response = self
+        let message = self
             .from_server_grpc
-            .next()
+            .message()
             .await
-            .ok_or(RawError::Custom("Stream seems to be empty".to_string()))?;
-        let message = Message::try_from(maybe_ydb_response?)?;
-        Ok(message)
+            .map_err(RawError::from)?;
+
+        message
+            .ok_or_else(|| {
+                RawError::from(tonic::Status::unavailable(
+                    "Grpc stream was closed by sender",
+                ))
+            })?
+            .try_into()
     }
 }

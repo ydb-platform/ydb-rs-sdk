@@ -8,6 +8,7 @@ pub(crate) type RawResult<T> = std::result::Result<T, RawError>;
 pub(crate) enum RawError {
     Custom(String),
     ProtobufDecodeError(String),
+    Transport(String),
     YdbStatus(crate::YdbStatusError),
     TonicStatus(Box<tonic::Status>),
 }
@@ -23,9 +24,7 @@ impl RawError {
 
 impl<T> From<tokio::sync::mpsc::error::SendError<T>> for RawError {
     fn from(value: tokio::sync::mpsc::error::SendError<T>) -> Self {
-        Self::Custom(format!(
-            "Internal error while sending message via mpsc channel: {value}"
-        ))
+        Self::Transport(format!("sender channel to server was closed: {value}"))
     }
 }
 

@@ -254,7 +254,7 @@ impl YdbError {
                 use tonic::Code;
                 match status.code() {
                     Code::Aborted | Code::ResourceExhausted => NeedRetry::True,
-                    Code::Internal | Code::Cancelled | Code::Unavailable => {
+                    Code::Internal | Code::Cancelled | Code::Unavailable | Code::Unknown => {
                         NeedRetry::IdempotentOnly
                     }
                     _ => NeedRetry::False,
@@ -347,6 +347,7 @@ impl From<RawError> for YdbError {
             RawError::ProtobufDecodeError(message) => {
                 YdbError::Custom(format!("decode protobuf error: {message}"))
             }
+            RawError::Transport(message) => YdbError::Transport(message),
             RawError::TonicStatus(s) => YdbError::TransportGRPCStatus(Arc::new(*s)),
             RawError::YdbStatus(status_error) => YdbError::YdbStatusError(status_error),
         }

@@ -674,3 +674,1365 @@ pub mod table_service_client {
         }
     }
 }
+/// Generated server implementations.
+pub mod table_service_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with TableServiceServer.
+    #[async_trait]
+    pub trait TableService: std::marker::Send + std::marker::Sync + 'static {
+        /// Create new session. Implicit session creation is forbidden,
+        /// so user must create new session before execute any query,
+        /// otherwise BAD_SESSION status will be returned.
+        /// Simultaneous execution of requests are forbiden.
+        /// Sessions are volatile, can be invalidated by server, for example in case
+        /// of fatal errors. All requests with this session will fail with BAD_SESSION status.
+        /// So, client must be able to handle BAD_SESSION status.
+        async fn create_session(
+            &self,
+            request: tonic::Request<super::super::CreateSessionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::CreateSessionResponse>,
+            tonic::Status,
+        >;
+        /// Ends a session, releasing server resources associated with it.
+        async fn delete_session(
+            &self,
+            request: tonic::Request<super::super::DeleteSessionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::DeleteSessionResponse>,
+            tonic::Status,
+        >;
+        /// Idle sessions can be kept alive by calling KeepAlive periodically.
+        async fn keep_alive(
+            &self,
+            request: tonic::Request<super::super::KeepAliveRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::KeepAliveResponse>,
+            tonic::Status,
+        >;
+        /// Creates new table.
+        async fn create_table(
+            &self,
+            request: tonic::Request<super::super::CreateTableRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::CreateTableResponse>,
+            tonic::Status,
+        >;
+        /// Drop table.
+        async fn drop_table(
+            &self,
+            request: tonic::Request<super::super::DropTableRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::DropTableResponse>,
+            tonic::Status,
+        >;
+        /// Modifies schema of given table.
+        async fn alter_table(
+            &self,
+            request: tonic::Request<super::super::AlterTableRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::AlterTableResponse>,
+            tonic::Status,
+        >;
+        /// Creates copy of given table.
+        async fn copy_table(
+            &self,
+            request: tonic::Request<super::super::CopyTableRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::CopyTableResponse>,
+            tonic::Status,
+        >;
+        /// Creates consistent copy of given tables.
+        async fn copy_tables(
+            &self,
+            request: tonic::Request<super::super::CopyTablesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::CopyTablesResponse>,
+            tonic::Status,
+        >;
+        /// Creates consistent move of given tables.
+        async fn rename_tables(
+            &self,
+            request: tonic::Request<super::super::RenameTablesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::RenameTablesResponse>,
+            tonic::Status,
+        >;
+        /// Returns information about given table (metadata).
+        async fn describe_table(
+            &self,
+            request: tonic::Request<super::super::DescribeTableRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::DescribeTableResponse>,
+            tonic::Status,
+        >;
+        /// Explains data query.
+        /// SessionId of previously created session must be provided.
+        async fn explain_data_query(
+            &self,
+            request: tonic::Request<super::super::ExplainDataQueryRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::ExplainDataQueryResponse>,
+            tonic::Status,
+        >;
+        /// Prepares data query, returns query id.
+        /// SessionId of previously created session must be provided.
+        async fn prepare_data_query(
+            &self,
+            request: tonic::Request<super::super::PrepareDataQueryRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::PrepareDataQueryResponse>,
+            tonic::Status,
+        >;
+        /// Executes data query.
+        /// SessionId of previously created session must be provided.
+        async fn execute_data_query(
+            &self,
+            request: tonic::Request<super::super::ExecuteDataQueryRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::ExecuteDataQueryResponse>,
+            tonic::Status,
+        >;
+        /// Executes scheme query.
+        /// SessionId of previously created session must be provided.
+        async fn execute_scheme_query(
+            &self,
+            request: tonic::Request<super::super::ExecuteSchemeQueryRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::ExecuteSchemeQueryResponse>,
+            tonic::Status,
+        >;
+        /// Begins new transaction.
+        async fn begin_transaction(
+            &self,
+            request: tonic::Request<super::super::BeginTransactionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::BeginTransactionResponse>,
+            tonic::Status,
+        >;
+        /// Commits specified active transaction.
+        async fn commit_transaction(
+            &self,
+            request: tonic::Request<super::super::CommitTransactionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::CommitTransactionResponse>,
+            tonic::Status,
+        >;
+        /// Performs a rollback of the specified active transaction.
+        async fn rollback_transaction(
+            &self,
+            request: tonic::Request<super::super::RollbackTransactionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::RollbackTransactionResponse>,
+            tonic::Status,
+        >;
+        /// Describe supported table options.
+        async fn describe_table_options(
+            &self,
+            request: tonic::Request<super::super::DescribeTableOptionsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::DescribeTableOptionsResponse>,
+            tonic::Status,
+        >;
+        /// Server streaming response type for the StreamReadTable method.
+        type StreamReadTableStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<
+                    super::super::ReadTableResponse,
+                    tonic::Status,
+                >,
+            >
+            + std::marker::Send
+            + 'static;
+        /// Streaming read table
+        async fn stream_read_table(
+            &self,
+            request: tonic::Request<super::super::ReadTableRequest>,
+        ) -> std::result::Result<
+            tonic::Response<Self::StreamReadTableStream>,
+            tonic::Status,
+        >;
+        /// Reads specified keys non-transactionally from a single table
+        async fn read_rows(
+            &self,
+            request: tonic::Request<super::super::ReadRowsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::ReadRowsResponse>,
+            tonic::Status,
+        >;
+        /// Upserts a batch of rows non-transactionally.
+        /// Returns success only when all rows were successfully upserted. In case of an error some rows might
+        /// be upserted and some might not.
+        async fn bulk_upsert(
+            &self,
+            request: tonic::Request<super::super::BulkUpsertRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::super::BulkUpsertResponse>,
+            tonic::Status,
+        >;
+        /// Server streaming response type for the StreamExecuteScanQuery method.
+        type StreamExecuteScanQueryStream: tonic::codegen::tokio_stream::Stream<
+                Item = std::result::Result<
+                    super::super::ExecuteScanQueryPartialResponse,
+                    tonic::Status,
+                >,
+            >
+            + std::marker::Send
+            + 'static;
+        /// Executes scan query with streaming result.
+        async fn stream_execute_scan_query(
+            &self,
+            request: tonic::Request<super::super::ExecuteScanQueryRequest>,
+        ) -> std::result::Result<
+            tonic::Response<Self::StreamExecuteScanQueryStream>,
+            tonic::Status,
+        >;
+    }
+    #[derive(Debug)]
+    pub struct TableServiceServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> TableServiceServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for TableServiceServer<T>
+    where
+        T: TableService,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/Ydb.Table.V1.TableService/CreateSession" => {
+                    #[allow(non_camel_case_types)]
+                    struct CreateSessionSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::CreateSessionRequest>
+                    for CreateSessionSvc<T> {
+                        type Response = super::super::CreateSessionResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::CreateSessionRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::create_session(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CreateSessionSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/DeleteSession" => {
+                    #[allow(non_camel_case_types)]
+                    struct DeleteSessionSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::DeleteSessionRequest>
+                    for DeleteSessionSvc<T> {
+                        type Response = super::super::DeleteSessionResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::DeleteSessionRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::delete_session(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DeleteSessionSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/KeepAlive" => {
+                    #[allow(non_camel_case_types)]
+                    struct KeepAliveSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::KeepAliveRequest>
+                    for KeepAliveSvc<T> {
+                        type Response = super::super::KeepAliveResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::KeepAliveRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::keep_alive(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = KeepAliveSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/CreateTable" => {
+                    #[allow(non_camel_case_types)]
+                    struct CreateTableSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::CreateTableRequest>
+                    for CreateTableSvc<T> {
+                        type Response = super::super::CreateTableResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::CreateTableRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::create_table(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CreateTableSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/DropTable" => {
+                    #[allow(non_camel_case_types)]
+                    struct DropTableSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::DropTableRequest>
+                    for DropTableSvc<T> {
+                        type Response = super::super::DropTableResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::DropTableRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::drop_table(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DropTableSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/AlterTable" => {
+                    #[allow(non_camel_case_types)]
+                    struct AlterTableSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::AlterTableRequest>
+                    for AlterTableSvc<T> {
+                        type Response = super::super::AlterTableResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::AlterTableRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::alter_table(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = AlterTableSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/CopyTable" => {
+                    #[allow(non_camel_case_types)]
+                    struct CopyTableSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::CopyTableRequest>
+                    for CopyTableSvc<T> {
+                        type Response = super::super::CopyTableResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::CopyTableRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::copy_table(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CopyTableSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/CopyTables" => {
+                    #[allow(non_camel_case_types)]
+                    struct CopyTablesSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::CopyTablesRequest>
+                    for CopyTablesSvc<T> {
+                        type Response = super::super::CopyTablesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::CopyTablesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::copy_tables(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CopyTablesSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/RenameTables" => {
+                    #[allow(non_camel_case_types)]
+                    struct RenameTablesSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::RenameTablesRequest>
+                    for RenameTablesSvc<T> {
+                        type Response = super::super::RenameTablesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::RenameTablesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::rename_tables(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = RenameTablesSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/DescribeTable" => {
+                    #[allow(non_camel_case_types)]
+                    struct DescribeTableSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::DescribeTableRequest>
+                    for DescribeTableSvc<T> {
+                        type Response = super::super::DescribeTableResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::DescribeTableRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::describe_table(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DescribeTableSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/ExplainDataQuery" => {
+                    #[allow(non_camel_case_types)]
+                    struct ExplainDataQuerySvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::ExplainDataQueryRequest>
+                    for ExplainDataQuerySvc<T> {
+                        type Response = super::super::ExplainDataQueryResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::super::ExplainDataQueryRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::explain_data_query(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ExplainDataQuerySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/PrepareDataQuery" => {
+                    #[allow(non_camel_case_types)]
+                    struct PrepareDataQuerySvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::PrepareDataQueryRequest>
+                    for PrepareDataQuerySvc<T> {
+                        type Response = super::super::PrepareDataQueryResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::super::PrepareDataQueryRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::prepare_data_query(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = PrepareDataQuerySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/ExecuteDataQuery" => {
+                    #[allow(non_camel_case_types)]
+                    struct ExecuteDataQuerySvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::ExecuteDataQueryRequest>
+                    for ExecuteDataQuerySvc<T> {
+                        type Response = super::super::ExecuteDataQueryResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::super::ExecuteDataQueryRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::execute_data_query(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ExecuteDataQuerySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/ExecuteSchemeQuery" => {
+                    #[allow(non_camel_case_types)]
+                    struct ExecuteSchemeQuerySvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<
+                        super::super::ExecuteSchemeQueryRequest,
+                    > for ExecuteSchemeQuerySvc<T> {
+                        type Response = super::super::ExecuteSchemeQueryResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::super::ExecuteSchemeQueryRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::execute_scheme_query(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ExecuteSchemeQuerySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/BeginTransaction" => {
+                    #[allow(non_camel_case_types)]
+                    struct BeginTransactionSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::BeginTransactionRequest>
+                    for BeginTransactionSvc<T> {
+                        type Response = super::super::BeginTransactionResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::super::BeginTransactionRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::begin_transaction(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = BeginTransactionSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/CommitTransaction" => {
+                    #[allow(non_camel_case_types)]
+                    struct CommitTransactionSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::CommitTransactionRequest>
+                    for CommitTransactionSvc<T> {
+                        type Response = super::super::CommitTransactionResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::super::CommitTransactionRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::commit_transaction(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CommitTransactionSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/RollbackTransaction" => {
+                    #[allow(non_camel_case_types)]
+                    struct RollbackTransactionSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<
+                        super::super::RollbackTransactionRequest,
+                    > for RollbackTransactionSvc<T> {
+                        type Response = super::super::RollbackTransactionResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::super::RollbackTransactionRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::rollback_transaction(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = RollbackTransactionSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/DescribeTableOptions" => {
+                    #[allow(non_camel_case_types)]
+                    struct DescribeTableOptionsSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<
+                        super::super::DescribeTableOptionsRequest,
+                    > for DescribeTableOptionsSvc<T> {
+                        type Response = super::super::DescribeTableOptionsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::super::DescribeTableOptionsRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::describe_table_options(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = DescribeTableOptionsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/StreamReadTable" => {
+                    #[allow(non_camel_case_types)]
+                    struct StreamReadTableSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::ServerStreamingService<
+                        super::super::ReadTableRequest,
+                    > for StreamReadTableSvc<T> {
+                        type Response = super::super::ReadTableResponse;
+                        type ResponseStream = T::StreamReadTableStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::ReadTableRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::stream_read_table(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = StreamReadTableSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.server_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/ReadRows" => {
+                    #[allow(non_camel_case_types)]
+                    struct ReadRowsSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::ReadRowsRequest>
+                    for ReadRowsSvc<T> {
+                        type Response = super::super::ReadRowsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::ReadRowsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::read_rows(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ReadRowsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/BulkUpsert" => {
+                    #[allow(non_camel_case_types)]
+                    struct BulkUpsertSvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::UnaryService<super::super::BulkUpsertRequest>
+                    for BulkUpsertSvc<T> {
+                        type Response = super::super::BulkUpsertResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::super::BulkUpsertRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::bulk_upsert(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = BulkUpsertSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/Ydb.Table.V1.TableService/StreamExecuteScanQuery" => {
+                    #[allow(non_camel_case_types)]
+                    struct StreamExecuteScanQuerySvc<T: TableService>(pub Arc<T>);
+                    impl<
+                        T: TableService,
+                    > tonic::server::ServerStreamingService<
+                        super::super::ExecuteScanQueryRequest,
+                    > for StreamExecuteScanQuerySvc<T> {
+                        type Response = super::super::ExecuteScanQueryPartialResponse;
+                        type ResponseStream = T::StreamExecuteScanQueryStream;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::super::ExecuteScanQueryRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as TableService>::stream_execute_scan_query(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = StreamExecuteScanQuerySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.server_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for TableServiceServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "Ydb.Table.V1.TableService";
+    impl<T> tonic::server::NamedService for TableServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
