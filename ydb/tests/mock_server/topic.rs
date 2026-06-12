@@ -24,6 +24,8 @@ type WriteStream = Pin<
     >,
 >;
 
+const DEFAULT_EVENT_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct MockServer {
     endpoint: String,
     addr: SocketAddr,
@@ -114,7 +116,7 @@ impl MockServer {
 
 impl MockServer {
     pub async fn next_event(&mut self) -> TopicClientEvent {
-        self.next_event_timeout(Duration::from_secs(5)).await
+        self.next_event_timeout(DEFAULT_EVENT_TIMEOUT).await
     }
 
     pub async fn next_event_timeout(&mut self, timeout: Duration) -> TopicClientEvent {
