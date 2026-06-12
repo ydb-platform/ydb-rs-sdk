@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::time::Duration;
 
-use tokio::time::sleep;
+use http::Uri;
+use tokio::time::{sleep, timeout};
 
 use crate::client::TimeoutSettings;
 use crate::errors::{NeedRetry, YdbError, YdbOrCustomerError, YdbResult};
@@ -13,6 +15,7 @@ use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::grpc_wrapper::raw_query_service::transaction_control::{
     begin_tx_control, implicit_tx_control, tx_id_control, RawQueryTxMode,
 };
+use crate::grpc_wrapper::raw_services::Service;
 use crate::result::ResultSet;
 use crate::types::Value;
 use crate::{QuerySessionMode, QueryTransactionOptions, QueryTxMode};
@@ -22,7 +25,6 @@ use super::private::CallOptions;
 #[derive(Clone)]
 pub(crate) struct ClientExecContext {
     pub connection_manager: GrpcConnectionManager,
-    #[allow(dead_code)]
     pub timeouts: TimeoutSettings,
     pub session_mode: QuerySessionMode,
     pub idempotent_operation: bool,
@@ -32,19 +34,47 @@ pub(crate) struct ClientExecContext {
 
 pub(crate) struct TransactionExecContext {
     pub connection_manager: GrpcConnectionManager,
-    #[allow(dead_code)]
     pub timeouts: TimeoutSettings,
     pub session_mode: QuerySessionMode,
     pub tx_mode: QueryTxMode,
     pub attached_session: Option<AttachedQuerySession>,
+    pub query_node: Option<Uri>,
     pub tx_id: Option<String>,
     pub finished: bool,
+}
+
+fn operation_timeout(opts: &CallOptions, defaults: &TimeoutSettings) -> Duration {
+    opts.timeout.unwrap_or(defaults.operation_timeout)
+}
+
+async fn with_operation_timeout<T, F>(timeout_duration: Duration, operation: F) -> YdbResult<T>
+where
+    F: Future<Output = YdbResult<T>>,
+{
+    match timeout(timeout_duration, operation).await {
+        Ok(result) => result,
+        Err(_) => Err(YdbError::Custom(format!(
+            "operation timed out after {timeout_duration:?}"
+        ))),
+    }
 }
 
 async fn query_client(ctx: &ClientExecContext) -> YdbResult<RawQueryClient> {
     ctx.connection_manager
         .get_auth_service(RawQueryClient::new)
         .await
+}
+
+async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQueryClient> {
+    if let Some(uri) = &tx.query_node {
+        tx.connection_manager
+            .get_auth_service_to_node(RawQueryClient::new, uri)
+            .await
+    } else {
+        tx.connection_manager
+            .get_auth_service(RawQueryClient::new)
+            .await
+    }
 }
 
 fn session_id_for_mode(mode: QuerySessionMode) -> YdbResult<String> {
@@ -128,7 +158,11 @@ async fn client_run_once_raw(
         tx_control: implicit_tx_control(),
         collect_stats: opts.collect_stats,
     };
-    client.execute_query_collect(req).await.map_err(Into::into)
+    let timeout_duration = operation_timeout(opts, &ctx.timeouts);
+    with_operation_timeout(timeout_duration, async {
+        client.execute_query_collect(req).await.map_err(Into::into)
+    })
+    .await
 }
 
 async fn client_run_once(
@@ -141,6 +175,29 @@ async fn client_run_once(
     raw_sets_to_result_sets(raw.result_sets)
 }
 
+async fn client_begin_stream_once(
+    ctx: &ClientExecContext,
+    text: &str,
+    params: &HashMap<String, Value>,
+    opts: &CallOptions,
+) -> YdbResult<ExecuteQueryStream> {
+    let session_id = session_id_for_mode(opts.session_mode.unwrap_or(ctx.session_mode))?;
+    let mut client = query_client(ctx).await?;
+    let req = RawExecuteQueryRequest {
+        session_id,
+        yql_text: text.to_string(),
+        parameters: params.clone(),
+        tx_control: implicit_tx_control(),
+        collect_stats: opts.collect_stats,
+    };
+    let timeout_duration = operation_timeout(opts, &ctx.timeouts);
+    let stream = with_operation_timeout(timeout_duration, async {
+        client.execute_query(req).await.map_err(Into::into)
+    })
+    .await?;
+    Ok(ExecuteQueryStream::new(stream))
+}
+
 pub(crate) async fn client_begin_stream(
     ctx: &ClientExecContext,
     text: String,
@@ -151,8 +208,8 @@ pub(crate) async fn client_begin_stream(
     let mut attempt = 0usize;
     loop {
         attempt += 1;
-        match client_run_once_raw(ctx, &text, &params, &opts).await {
-            Ok(raw) => return Ok(ExecuteQueryStream::from_buffered(raw.result_sets)),
+        match client_begin_stream_once(ctx, &text, &params, &opts).await {
+            Ok(stream) => return Ok(stream),
             Err(err) => {
                 let retry = match err.need_retry() {
                     NeedRetry::True => true,
@@ -168,12 +225,6 @@ pub(crate) async fn client_begin_stream(
     }
 }
 
-async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQueryClient> {
-    tx.connection_manager
-        .get_auth_service(RawQueryClient::new)
-        .await
-}
-
 /// Interactive transactions need a stable attached session; implicit one-shot queries do not.
 async fn ensure_tx_session(tx: &mut TransactionExecContext) -> YdbResult<()> {
     if tx.attached_session.is_some() {
@@ -181,8 +232,13 @@ async fn ensure_tx_session(tx: &mut TransactionExecContext) -> YdbResult<()> {
     }
     match tx.session_mode {
         QuerySessionMode::Implicit => {
-            let mut client = query_client_from_tx(tx).await?;
+            let uri = tx.connection_manager.endpoint(Service::Query)?;
+            let mut client = tx
+                .connection_manager
+                .get_auth_service_to_node(RawQueryClient::new, &uri)
+                .await?;
             tx.attached_session = Some(AttachedQuerySession::open(&mut client).await?);
+            tx.query_node = Some(uri);
             Ok(())
         }
         QuerySessionMode::Pool => Err(YdbError::Custom(
@@ -205,6 +261,7 @@ async fn release_tx_session(tx: &mut TransactionExecContext) {
     if let Ok(mut client) = query_client_from_tx(tx).await {
         session.close(&mut client).await;
     }
+    tx.query_node = None;
 }
 
 pub(crate) async fn transaction_run(
@@ -223,7 +280,11 @@ pub(crate) async fn transaction_run(
         tx_control: tx_control_for_transaction(tx)?,
         collect_stats: opts.collect_stats,
     };
-    let raw = client.execute_query_collect(req).await?;
+    let timeout_duration = operation_timeout(opts, &tx.timeouts);
+    let raw = with_operation_timeout(timeout_duration, async {
+        client.execute_query_collect(req).await.map_err(Into::into)
+    })
+    .await?;
     if let Some(id) = raw.tx_id {
         tx.tx_id = Some(id);
     }
@@ -246,12 +307,16 @@ pub(crate) async fn transaction_begin_stream(
         tx_control: tx_control_for_transaction(tx)?,
         collect_stats: opts.collect_stats,
     };
-    let stream = client.execute_query(req).await?;
+    let timeout_duration = operation_timeout(&opts, &tx.timeouts);
+    let stream = with_operation_timeout(timeout_duration, async {
+        client.execute_query(req).await.map_err(Into::into)
+    })
+    .await?;
     Ok(ExecuteQueryStream::new(stream))
 }
 
 pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbResult<()> {
-    if tx.tx_id.is_none() {
+    if tx.tx_id.as_ref().is_none_or(String::is_empty) {
         tx.finished = true;
         release_tx_session(tx).await;
         return Ok(());
@@ -270,7 +335,7 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
     if tx.finished {
         return Ok(());
     }
-    if tx.tx_id.is_some() && tx.attached_session.is_some() {
+    if tx.tx_id.as_ref().is_some_and(|id| !id.is_empty()) && tx.attached_session.is_some() {
         let tx_id = tx.tx_id.take().expect("checked Some");
         if let Ok(session_id) = tx_session_id(tx) {
             if let Ok(mut client) = query_client_from_tx(tx).await {
@@ -297,6 +362,7 @@ pub(crate) fn transaction_exec_context(
         session_mode,
         tx_mode: options.mode(),
         attached_session: None,
+        query_node: None,
         tx_id: None,
         finished: false,
     }
@@ -304,7 +370,7 @@ pub(crate) fn transaction_exec_context(
 
 pub(crate) fn apply_stream_tx_id(tx: &mut TransactionExecContext, tx_id: Option<String>) {
     if tx.tx_id.is_none() {
-        tx.tx_id = tx_id;
+        tx.tx_id = tx_id.filter(|id| !id.is_empty());
     }
 }
 

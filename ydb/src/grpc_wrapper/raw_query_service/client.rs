@@ -34,7 +34,7 @@ impl WithGrpcMaxMessageSize for RawQueryClient {
 
 impl GrpcServiceForDiscovery for RawQueryClient {
     fn get_grpc_discovery_service() -> Service {
-        Service::Table
+        Service::Query
     }
 }
 

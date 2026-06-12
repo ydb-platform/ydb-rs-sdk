@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_query_service::status::check_status;
@@ -93,7 +94,16 @@ pub(crate) fn check_part(part: &ExecuteQueryResponsePart) -> RawResult<()> {
 }
 
 pub(crate) fn tx_id_from_part(part: &ExecuteQueryResponsePart) -> Option<String> {
-    part.tx_meta.as_ref().map(|m| m.id.clone())
+    part.tx_meta
+        .as_ref()
+        .map(|m| m.id.clone())
+        .filter(|id| !id.is_empty())
+}
+
+pub(crate) fn stats_from_part(part: &ExecuteQueryResponsePart) -> Option<Duration> {
+    part.exec_stats
+        .as_ref()
+        .map(|stats| Duration::from_micros(stats.total_duration_us))
 }
 
 pub(crate) fn append_rows_from_part(

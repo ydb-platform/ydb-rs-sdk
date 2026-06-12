@@ -57,17 +57,6 @@ mod private {
         Transaction(TransactionExecContext),
     }
 
-    impl Clone for ExecCore {
-        fn clone(&self) -> Self {
-            match self {
-                ExecCore::Client(ctx) => ExecCore::Client(ctx.clone()),
-                ExecCore::Transaction(_) => {
-                    panic!("query transaction exec context must not be cloned")
-                }
-            }
-        }
-    }
-
     impl ExecCore {
         pub(crate) async fn run(
             &mut self,
@@ -307,12 +296,18 @@ impl QueryStream<'_> {
         Ok(Some(ResultSet::try_from(raw)?))
     }
 
-    pub fn stats(&self) -> Option<&QueryStats> {
-        None
+    pub fn stats(&self) -> Option<QueryStats> {
+        self.stream
+            .stats()
+            .map(|total_duration| QueryStats { total_duration })
     }
 
     pub async fn close(self) -> YdbResult<()> {
-        self.stream.close().await.map_err(Into::into)
+        let meta = self.stream.close().await.map_err(YdbError::from)?;
+        if let ExecCore::Transaction(ctx) = self.core {
+            apply_stream_tx_id(ctx, meta.tx_id);
+        }
+        Ok(())
     }
 }
 
@@ -366,6 +361,7 @@ pub enum QueryTxMode {
     SerializableReadWrite,
     SnapshotReadOnly,
     StaleReadOnly,
+    /// Online read-only mode with stale-replica reads disabled (`allow_inconsistent_reads: false`).
     OnlineReadOnly,
 }
 
@@ -389,10 +385,21 @@ impl QueryTransactionOptions {
     }
 }
 
-#[derive(Clone)]
 pub struct QueryClient {
     core: ExecCore,
     tx_options: QueryTransactionOptions,
+}
+
+impl Clone for QueryClient {
+    fn clone(&self) -> Self {
+        let ExecCore::Client(ctx) = &self.core else {
+            unreachable!("query client stores client exec context");
+        };
+        Self {
+            core: ExecCore::Client(ctx.clone()),
+            tx_options: self.tx_options.clone(),
+        }
+    }
 }
 
 impl QueryClient {
@@ -416,14 +423,15 @@ impl QueryClient {
     }
 
     pub fn clone_with_idempotent_operations(&self, idempotent: bool) -> Self {
-        let Self { core, tx_options } = self.clone();
-        let ExecCore::Client(mut ctx) = core else {
+        let ExecCore::Client(ctx) = &self.core else {
             return self.clone();
         };
-        ctx.idempotent_operation = idempotent;
         Self {
-            core: ExecCore::Client(ctx),
-            tx_options,
+            core: ExecCore::Client(ClientExecContext {
+                idempotent_operation: idempotent,
+                ..ctx.clone()
+            }),
+            tx_options: self.tx_options.clone(),
         }
     }
 
@@ -435,38 +443,41 @@ impl QueryClient {
     }
 
     pub fn clone_with_retry_timeout(&self, timeout: Duration) -> Self {
-        let Self { core, tx_options } = self.clone();
-        let ExecCore::Client(mut ctx) = core else {
+        let ExecCore::Client(ctx) = &self.core else {
             return self.clone();
         };
-        ctx.retry_timeout = timeout;
         Self {
-            core: ExecCore::Client(ctx),
-            tx_options,
+            core: ExecCore::Client(ClientExecContext {
+                retry_timeout: timeout,
+                ..ctx.clone()
+            }),
+            tx_options: self.tx_options.clone(),
         }
     }
 
     pub fn clone_with_no_retry(&self) -> Self {
-        let Self { core, tx_options } = self.clone();
-        let ExecCore::Client(mut ctx) = core else {
+        let ExecCore::Client(ctx) = &self.core else {
             return self.clone();
         };
-        ctx.max_attempts = 1;
         Self {
-            core: ExecCore::Client(ctx),
-            tx_options,
+            core: ExecCore::Client(ClientExecContext {
+                max_attempts: 1,
+                ..ctx.clone()
+            }),
+            tx_options: self.tx_options.clone(),
         }
     }
 
     pub fn clone_with_session_mode(&self, session_mode: QuerySessionMode) -> Self {
-        let Self { core, tx_options } = self.clone();
-        let ExecCore::Client(mut ctx) = core else {
+        let ExecCore::Client(ctx) = &self.core else {
             return self.clone();
         };
-        ctx.session_mode = session_mode;
         Self {
-            core: ExecCore::Client(ctx),
-            tx_options,
+            core: ExecCore::Client(ClientExecContext {
+                session_mode,
+                ..ctx.clone()
+            }),
+            tx_options: self.tx_options.clone(),
         }
     }
 

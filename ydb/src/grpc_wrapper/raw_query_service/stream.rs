@@ -1,45 +1,48 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_query_service::execute_query::{
-    append_rows_from_part, check_part, merge_part, sets_to_vec, tx_id_from_part,
+    append_rows_from_part, check_part, merge_part, sets_to_vec, stats_from_part, tx_id_from_part,
 };
 use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
 use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
 
+pub(crate) struct StreamCloseMeta {
+    pub tx_id: Option<String>,
+}
+
 pub(crate) struct ExecuteQueryStream {
     grpc: Option<tonic::Streaming<ExecuteQueryResponsePart>>,
-    buffered: Vec<RawResultSet>,
     next_index: i64,
     pending_part: Option<ExecuteQueryResponsePart>,
     finished: bool,
+    stats: Option<Duration>,
 }
 
 impl ExecuteQueryStream {
     pub fn new(stream: tonic::Streaming<ExecuteQueryResponsePart>) -> Self {
         Self {
             grpc: Some(stream),
-            buffered: Vec::new(),
             next_index: 0,
             pending_part: None,
             finished: false,
+            stats: None,
         }
     }
 
-    pub fn from_buffered(sets: Vec<RawResultSet>) -> Self {
-        Self {
-            grpc: None,
-            buffered: sets,
-            next_index: 0,
-            pending_part: None,
-            finished: false,
+    pub fn stats(&self) -> Option<Duration> {
+        self.stats
+    }
+
+    fn absorb_part_metadata(&mut self, part: &ExecuteQueryResponsePart) -> Option<String> {
+        if let Some(duration) = stats_from_part(part) {
+            self.stats = Some(duration);
         }
+        tx_id_from_part(part)
     }
 
     pub async fn next_result_set(&mut self) -> RawResult<Option<(RawResultSet, Option<String>)>> {
-        if !self.buffered.is_empty() {
-            return Ok(Some((self.buffered.remove(0), None)));
-        }
         if self.grpc.is_none() || self.finished {
             return Ok(None);
         }
@@ -80,7 +83,7 @@ impl ExecuteQueryStream {
             };
 
             check_part(&part)?;
-            if let Some(id) = tx_id_from_part(&part) {
+            if let Some(id) = self.absorb_part_metadata(&part) {
                 tx_id = Some(id);
             }
 
@@ -107,7 +110,7 @@ impl ExecuteQueryStream {
             match stream.message().await? {
                 Some(next) => {
                     check_part(&next)?;
-                    if let Some(id) = tx_id_from_part(&next) {
+                    if let Some(id) = self.absorb_part_metadata(&next) {
                         tx_id = Some(id);
                     }
                     if next.result_set_index > target_index {
@@ -146,9 +149,8 @@ impl ExecuteQueryStream {
     #[allow(dead_code)]
     pub async fn drain_all(&mut self) -> RawResult<(Vec<RawResultSet>, Option<String>)> {
         if self.grpc.is_none() {
-            let sets = std::mem::take(&mut self.buffered);
             self.finished = true;
-            return Ok((sets, None));
+            return Ok((Vec::new(), None));
         }
 
         let mut sets: HashMap<i64, RawResultSet> = HashMap::new();
@@ -156,29 +158,49 @@ impl ExecuteQueryStream {
 
         if let Some(part) = self.pending_part.take() {
             check_part(&part)?;
-            if let Some(id) = tx_id_from_part(&part) {
+            if let Some(id) = self.absorb_part_metadata(&part) {
                 tx_id = Some(id);
             }
             merge_part(&mut sets, part)?;
         }
 
         if let Some(stream) = self.grpc.as_mut() {
+            let mut stats = self.stats;
             while let Some(part) = stream.message().await? {
                 check_part(&part)?;
+                if let Some(duration) = stats_from_part(&part) {
+                    stats = Some(duration);
+                }
                 if let Some(id) = tx_id_from_part(&part) {
                     tx_id = Some(id);
                 }
                 merge_part(&mut sets, part)?;
             }
+            self.stats = stats;
         }
         self.finished = true;
         Ok((sets_to_vec(sets), tx_id))
     }
 
-    pub async fn close(mut self) -> RawResult<()> {
-        if let Some(mut stream) = self.grpc.take() {
-            while stream.message().await?.is_some() {}
+    pub async fn close(mut self) -> RawResult<StreamCloseMeta> {
+        let mut tx_id = None;
+
+        if let Some(part) = self.pending_part.take() {
+            check_part(&part)?;
+            if let Some(id) = self.absorb_part_metadata(&part) {
+                tx_id = Some(id);
+            }
         }
-        Ok(())
+
+        if let Some(mut stream) = self.grpc.take() {
+            while let Some(part) = stream.message().await? {
+                check_part(&part)?;
+                if let Some(id) = self.absorb_part_metadata(&part) {
+                    tx_id = Some(id);
+                }
+            }
+        }
+
+        Ok(StreamCloseMeta { tx_id })
     }
 }
