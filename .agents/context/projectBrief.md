@@ -9,7 +9,7 @@
 - Provide an idiomatic, async Rust client for YDB table, scheme, topic, coordination, and discovery APIs.
 - Handle production concerns: connection pooling, load balancing, retries, credentials, TLS.
 - Stay compatible with YDB server protobuf/gRPC contracts via the `ydb-grpc` crate.
-- Maintain semver for published crates; MSRV **1.85**.
+- Maintain semver for published crates; MSRV **1.82**.
 
 ## Non-goals
 

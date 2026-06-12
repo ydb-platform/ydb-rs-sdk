@@ -15,7 +15,7 @@
 ## CI status
 
 - Lint: `cargo fmt --check` + `cargo clippy` on Rust 1.91.0.
-- Tests: full workspace tests with `--include-ignored` against `ydbplatform/local-ydb:nightly` on Rust 1.85 and 1.91.0.
+- Tests: full workspace tests with `--include-ignored` against `ydbplatform/local-ydb:nightly` on Rust 1.82 and 1.91.0.
 
 ## Known issues / gaps
 
