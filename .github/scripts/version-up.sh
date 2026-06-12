@@ -21,7 +21,7 @@ function git_set_tags(){
   done
 }
 
-function git push_tags() {
+function git_push_tags() {
   local GIT_TAG remote_sha local_sha
   for GIT_TAG in "${GIT_TAGS[@]}"; do
     remote_sha="$(git ls-remote --tags origin "refs/tags/$GIT_TAG" | cut -f1)"
@@ -141,7 +141,7 @@ git diff
 git_set_tags
 
 # push tags before publish - for fix repository state if failed in middle of publish crates
-git push_tags
+git_push_tags
 
 for CRATE in "${CRATES[@]}"; do
   publish_crate "$CRATE"
