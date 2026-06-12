@@ -90,6 +90,10 @@ fn from_grpc_code_to_scheme_entry_type(value: i32) -> SchemeEntryType {
         grpcT::ExternalDataSource => SchemeEntryType::ExternalDataSource,
         grpcT::ExternalTable => SchemeEntryType::ExternalTable,
         grpcT::View => SchemeEntryType::View,
+        // New scheme entry types (ResourcePool, Transfer, SysView) map to Unknown until
+        // SchemeEntryType gains dedicated variants. Catch-all stays for forward compatibility
+        // with older ydb-grpc releases where all variants are listed above.
+        #[allow(unreachable_patterns)]
         _ => SchemeEntryType::Unknown(value),
     }
 }
