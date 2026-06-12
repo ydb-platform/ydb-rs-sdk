@@ -39,7 +39,8 @@ CI uses `ydbplatform/local-ydb:nightly` (see `rust-tests.yml`); image tag may di
 | `linter.yaml` | push/PR to `master` | `cargo fmt --check`, `cargo clippy` |
 | `rust-tests.yml` | push/PR + nightly cron | `cargo test --include-ignored` against `local-ydb:nightly` |
 | `publish-crate.yml` | manual dispatch | version bump + crates.io publish |
-| `slo.yml` | push/PR to `master` + manual dispatch | SLO tests (**disabled in CI** — `if: false` in workflow; see [#227](https://github.com/ydb-platform/ydb-rs-sdk/issues/227)) |
+| `slo.yml` | PR label `SLO` + manual dispatch | SLO tests via `ydb-slo-action` v2 (Docker workload, chaos, baseline comparison); see `tests/slo/README.md` |
+| `slo-report.yml` | after `SLO` workflow | Publishes SLO report to PR comment |
 
 ## Workspace dependency policy
 

@@ -7,7 +7,7 @@ ydb-rs-sdk/
 ├── ydb/                            # Public SDK (main crate)
 │   └── examples/                   # cargo example targets (*.rs)
 ├── ydb-grpc/                       # Generated protobuf + tonic stubs
-├── ydb-slo-tests/
+├── tests/slo/                      # SLO workloads (ydb-slo-action)
 └── .agents/                        # Agent workspace (context/, rules/)
 ```
 
