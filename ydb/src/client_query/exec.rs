@@ -128,9 +128,7 @@ pub(crate) async fn client_run(
         match client_run_once(ctx, text, params, opts).await {
             Ok(sets) => return Ok(sets),
             Err(err) => {
-                if !check_retry_error(idempotent, &YdbOrCustomerError::YDB(err.clone()))
-                    || attempt >= ctx.max_attempts
-                {
+                if !should_retry_ydb_error(idempotent, &err) || attempt >= ctx.max_attempts {
                     return Err(err);
                 }
                 sleep(backoff(ctx.retry_timeout, attempt)).await;
@@ -210,9 +208,7 @@ pub(crate) async fn client_begin_stream(
         match client_begin_stream_once(ctx, &text, &params, &opts).await {
             Ok(stream) => return Ok(stream),
             Err(err) => {
-                if !check_retry_error(idempotent, &YdbOrCustomerError::YDB(err.clone()))
-                    || attempt >= ctx.max_attempts
-                {
+                if !should_retry_ydb_error(idempotent, &err) || attempt >= ctx.max_attempts {
                     return Err(err);
                 }
                 sleep(backoff(ctx.retry_timeout, attempt)).await;
@@ -406,12 +402,8 @@ pub(crate) fn check_retry_transaction_error(err: &YdbOrCustomerError) -> bool {
     }
 }
 
-pub(crate) fn check_retry_error(idempotent: bool, err: &YdbOrCustomerError) -> bool {
-    let ydb_err = match err {
-        YdbOrCustomerError::Customer(_) => return false,
-        YdbOrCustomerError::YDB(err) => err,
-    };
-    match ydb_err.need_retry() {
+pub(crate) fn should_retry_ydb_error(idempotent: bool, err: &YdbError) -> bool {
+    match err.need_retry() {
         NeedRetry::True => true,
         NeedRetry::IdempotentOnly => idempotent,
         NeedRetry::False => false,
@@ -436,8 +428,14 @@ mod unit_tests {
     fn retry_helpers_and_backoff() {
         let transport = YdbOrCustomerError::YDB(YdbError::Transport("timeout".into()));
         assert!(check_retry_transaction_error(&transport));
-        assert!(check_retry_error(true, &transport));
-        assert!(!check_retry_error(false, &transport));
+        assert!(should_retry_ydb_error(
+            true,
+            &YdbError::Transport("timeout".into())
+        ));
+        assert!(!should_retry_ydb_error(
+            false,
+            &YdbError::Transport("timeout".into())
+        ));
         assert!(!check_retry_transaction_error(
             &YdbOrCustomerError::from_mess("customer")
         ));

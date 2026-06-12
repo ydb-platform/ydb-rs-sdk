@@ -47,6 +47,12 @@ impl ExecuteQueryStream {
         None
     }
 
+    fn ingest_part(&mut self, part: &ExecuteQueryResponsePart) -> RawResult<Option<String>> {
+        let tx_id = self.absorb_part_metadata(part);
+        check_part(part)?;
+        Ok(tx_id)
+    }
+
     /// Read the first response part so transaction `tx_id` is captured before iteration.
     pub async fn prime_first_part(&mut self) -> RawResult<()> {
         if self.pending_part.is_some() || self.grpc.is_none() || self.finished {
@@ -57,8 +63,7 @@ impl ExecuteQueryStream {
         };
         match stream.message().await? {
             Some(part) => {
-                check_part(&part)?;
-                self.absorb_part_metadata(&part);
+                self.ingest_part(&part)?;
                 self.pending_part = Some(part);
             }
             None => self.finished = true,
@@ -106,9 +111,9 @@ impl ExecuteQueryStream {
                 }
             };
 
-            check_part(&part)?;
-            if let Some(id) = self.absorb_part_metadata(&part) {
-                tx_id = Some(id);
+            let tx_id_from_part = self.ingest_part(&part)?;
+            if tx_id_from_part.is_some() {
+                tx_id = tx_id_from_part;
             }
 
             if part.result_set_index < target_index {
@@ -138,9 +143,9 @@ impl ExecuteQueryStream {
             let collecting_index = self.next_index;
             match stream.message().await? {
                 Some(next) => {
-                    check_part(&next)?;
-                    if let Some(id) = self.absorb_part_metadata(&next) {
-                        tx_id = Some(id);
+                    let tx_id_from_part = self.ingest_part(&next)?;
+                    if tx_id_from_part.is_some() {
+                        tx_id = tx_id_from_part;
                     }
                     if next.result_set_index > collecting_index {
                         self.pending_part = Some(next);

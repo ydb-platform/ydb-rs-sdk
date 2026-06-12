@@ -13,15 +13,18 @@ pub(crate) struct AttachedQuerySession {
     session_id: String,
     attach_task: JoinHandle<()>,
     attach_alive: Arc<AtomicBool>,
+    explicitly_closed: bool,
 }
 
 impl Drop for AttachedQuerySession {
     fn drop(&mut self) {
         self.attach_task.abort();
-        tracing::warn!(
-            session_id = %self.session_id,
-            "query session dropped without explicit close; server-side session may leak until idle timeout"
-        );
+        if !self.explicitly_closed {
+            tracing::warn!(
+                session_id = %self.session_id,
+                "query session dropped without explicit close; server-side session may leak until idle timeout"
+            );
+        }
     }
 }
 
@@ -50,6 +53,7 @@ impl AttachedQuerySession {
             session_id,
             attach_task,
             attach_alive,
+            explicitly_closed: false,
         })
     }
 
@@ -67,7 +71,8 @@ impl AttachedQuerySession {
         }
     }
 
-    pub async fn close(self, client: &mut RawQueryClient) {
+    pub async fn close(mut self, client: &mut RawQueryClient) {
+        self.explicitly_closed = true;
         self.attach_task.abort();
         let _ = client.delete_session(&self.session_id).await;
     }

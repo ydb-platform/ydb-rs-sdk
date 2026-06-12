@@ -83,11 +83,24 @@ pub(crate) fn merge_part(
         truncated: false,
     });
     entry.truncated |= part_set.truncated;
+    if !entry.columns.is_empty() && !columns_compatible(&entry.columns, &part_set.columns) {
+        return Err(crate::grpc_wrapper::raw_errors::RawError::custom(format!(
+            "result set {index}: column metadata mismatch between stream parts"
+        )));
+    }
     if entry.columns.is_empty() {
         entry.columns = part_set.columns;
     }
     entry.rows.extend(part_set.rows);
     Ok(())
+}
+
+fn columns_compatible(existing: &[RawColumn], new_cols: &[RawColumn]) -> bool {
+    existing.len() == new_cols.len()
+        && existing
+            .iter()
+            .zip(new_cols.iter())
+            .all(|(left, right)| left.name == right.name)
 }
 
 pub(crate) fn sets_to_vec(mut sets: HashMap<i64, RawResultSet>) -> Vec<RawResultSet> {

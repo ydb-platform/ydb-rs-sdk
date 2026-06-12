@@ -57,12 +57,12 @@ impl FromYdbRow for Row {
 mod private {
     use super::*;
 
-    pub(crate) enum ExecCore {
-        Client(ClientExecContext),
-        Transaction(TransactionExecContext),
+    pub(crate) enum ExecCoreRef<'a> {
+        Client(&'a mut ClientExecContext),
+        Transaction(&'a mut TransactionExecContext),
     }
 
-    impl ExecCore {
+    impl ExecCoreRef<'_> {
         pub(crate) async fn run(
             &mut self,
             text: &str,
@@ -70,8 +70,8 @@ mod private {
             opts: &CallOptions,
         ) -> YdbResult<Vec<ResultSet>> {
             match self {
-                ExecCore::Client(ctx) => client_run(ctx, text, params, opts).await,
-                ExecCore::Transaction(ctx) => transaction_run(ctx, text, params, opts).await,
+                ExecCoreRef::Client(ctx) => client_run(ctx, text, params, opts).await,
+                ExecCoreRef::Transaction(ctx) => transaction_run(ctx, text, params, opts).await,
             }
         }
 
@@ -82,8 +82,8 @@ mod private {
             opts: CallOptions,
         ) -> YdbResult<ExecuteQueryStream> {
             match self {
-                ExecCore::Client(ctx) => client_begin_stream(ctx, text, params, opts).await,
-                ExecCore::Transaction(ctx) => {
+                ExecCoreRef::Client(ctx) => client_begin_stream(ctx, text, params, opts).await,
+                ExecCoreRef::Transaction(ctx) => {
                     transaction_begin_stream(ctx, text, params, opts).await
                 }
             }
@@ -99,11 +99,11 @@ mod private {
     }
 
     pub(crate) trait HasCore {
-        fn core_mut(&mut self) -> &mut ExecCore;
+        fn core_mut(&mut self) -> ExecCoreRef<'_>;
     }
 }
 
-use private::{CallOptions, ExecCore, HasCore};
+use private::{CallOptions, ExecCoreRef, HasCore};
 
 pub enum ExecCall {}
 pub struct OneRow<T>(PhantomData<T>);
@@ -118,7 +118,7 @@ pub type ResultSetBuilder<'a> = CallBuilder<'a, OneResultSet>;
 pub type QueryStreamBuilder<'a> = CallBuilder<'a, Streamed>;
 
 pub struct CallBuilder<'a, K> {
-    core: &'a mut ExecCore,
+    core: ExecCoreRef<'a>,
     text: String,
     params: HashMap<String, Value>,
     opts: CallOptions,
@@ -126,7 +126,7 @@ pub struct CallBuilder<'a, K> {
 }
 
 impl<'a, K> CallBuilder<'a, K> {
-    fn new(core: &'a mut ExecCore, text: String) -> Self {
+    fn new(core: ExecCoreRef<'a>, text: String) -> Self {
         Self {
             core,
             text,
@@ -207,9 +207,11 @@ impl<'a, T> CallBuilder<'a, OneRow<T>> {
 
 fn exactly_one_set(mut sets: Vec<ResultSet>) -> YdbResult<ResultSet> {
     match sets.len() {
-        0 => Err(YdbError::Custom("no result set".to_string())),
+        0 => Err(YdbError::Custom("expected 1 result set, got 0".to_string())),
         1 => Ok(sets.pop().expect("len checked")),
-        _ => Err(YdbError::Custom("more than one result set".to_string())),
+        count => Err(YdbError::Custom(format!(
+            "expected 1 result set, got {count}"
+        ))),
     }
 }
 
@@ -218,7 +220,7 @@ fn take_single_row(sets: Vec<ResultSet>) -> YdbResult<Option<Row>> {
     let row = rows.next();
     if rows.next().is_some() {
         return Err(YdbError::Custom(
-            "result set has more than one row".to_string(),
+            "expected at most 1 row in result set, got more".to_string(),
         ));
     }
     Ok(row)
@@ -228,7 +230,7 @@ impl<'a> IntoFuture for CallBuilder<'a, ExecCall> {
     type Output = YdbResult<()>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
-    fn into_future(self) -> Self::IntoFuture {
+    fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
             self.core.run(&self.text, &self.params, &self.opts).await?;
             Ok(())
@@ -240,7 +242,7 @@ impl<'a, T: FromYdbRow + 'a> IntoFuture for CallBuilder<'a, OneRow<T>> {
     type Output = YdbResult<T>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
-    fn into_future(self) -> Self::IntoFuture {
+    fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
             let sets = self.core.run(&self.text, &self.params, &self.opts).await?;
             let row = take_single_row(sets)?.ok_or(YdbError::NoRows)?;
@@ -253,7 +255,7 @@ impl<'a, T: FromYdbRow + 'a> IntoFuture for CallBuilder<'a, OptionalRow<T>> {
     type Output = YdbResult<Option<T>>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
-    fn into_future(self) -> Self::IntoFuture {
+    fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
             let sets = self.core.run(&self.text, &self.params, &self.opts).await?;
             take_single_row(sets)?.map(T::from_row).transpose()
@@ -265,7 +267,7 @@ impl<'a> IntoFuture for CallBuilder<'a, OneResultSet> {
     type Output = YdbResult<ResultSet>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
-    fn into_future(self) -> Self::IntoFuture {
+    fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
             let sets = self.core.run(&self.text, &self.params, &self.opts).await?;
             exactly_one_set(sets)
@@ -277,7 +279,7 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
     type Output = YdbResult<QueryStream<'a>>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
-    fn into_future(self) -> Self::IntoFuture {
+    fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
             let stream = self
                 .core
@@ -292,14 +294,14 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
 }
 
 pub struct QueryStream<'a> {
-    core: &'a mut ExecCore,
+    core: ExecCoreRef<'a>,
     stream: ManuallyDrop<ExecuteQueryStream>,
 }
 
 impl Drop for QueryStream<'_> {
     fn drop(&mut self) {
         if let Some(tx_id) = self.stream.take_captured_tx_id() {
-            if let ExecCore::Transaction(ctx) = self.core {
+            if let ExecCoreRef::Transaction(ctx) = &mut self.core {
                 apply_stream_tx_id(ctx, Some(tx_id));
             }
         }
@@ -314,7 +316,7 @@ impl QueryStream<'_> {
             Some(v) => v,
             None => return Ok(None),
         };
-        if let ExecCore::Transaction(ctx) = self.core {
+        if let ExecCoreRef::Transaction(ctx) = &mut self.core {
             apply_stream_tx_id(ctx, tx_id);
         }
         Ok(Some(ResultSet::try_from(raw)?))
@@ -328,7 +330,7 @@ impl QueryStream<'_> {
 
     pub async fn close(mut self) -> YdbResult<()> {
         let meta = self.stream.close().await.map_err(YdbError::from)?;
-        if let ExecCore::Transaction(ctx) = self.core {
+        if let ExecCoreRef::Transaction(ctx) = &mut self.core {
             apply_stream_tx_id(ctx, meta.tx_id);
         }
         std::mem::forget(self);
@@ -411,17 +413,14 @@ impl QueryTransactionOptions {
 }
 
 pub struct QueryClient {
-    core: ExecCore,
+    ctx: ClientExecContext,
     tx_options: QueryTransactionOptions,
 }
 
 impl Clone for QueryClient {
     fn clone(&self) -> Self {
-        let ExecCore::Client(ctx) = &self.core else {
-            unreachable!("query client stores client exec context");
-        };
         Self {
-            core: ExecCore::Client(ctx.clone()),
+            ctx: self.ctx.clone(),
             tx_options: self.tx_options.clone(),
         }
     }
@@ -435,27 +434,24 @@ impl QueryClient {
         timeouts: TimeoutSettings,
     ) -> Self {
         Self {
-            core: ExecCore::Client(ClientExecContext {
+            ctx: ClientExecContext {
                 connection_manager,
                 timeouts,
                 session_mode: QuerySessionMode::Implicit,
                 idempotent_operation: false,
                 retry_timeout: Duration::from_secs(5),
                 max_attempts: 3,
-            }),
+            },
             tx_options: QueryTransactionOptions::default(),
         }
     }
 
     pub fn clone_with_idempotent_operations(&self, idempotent: bool) -> Self {
-        let ExecCore::Client(ctx) = &self.core else {
-            unreachable!("query client stores client exec context");
-        };
         Self {
-            core: ExecCore::Client(ClientExecContext {
+            ctx: ClientExecContext {
                 idempotent_operation: idempotent,
-                ..ctx.clone()
-            }),
+                ..self.ctx.clone()
+            },
             tx_options: self.tx_options.clone(),
         }
     }
@@ -472,40 +468,31 @@ impl QueryClient {
     /// This caps the per-attempt sleep before the next retry, not a total retry
     /// budget (unlike [`crate::TableClient::clone_with_retry_timeout`]).
     pub fn clone_with_retry_timeout(&self, timeout: Duration) -> Self {
-        let ExecCore::Client(ctx) = &self.core else {
-            unreachable!("query client stores client exec context");
-        };
         Self {
-            core: ExecCore::Client(ClientExecContext {
+            ctx: ClientExecContext {
                 retry_timeout: timeout,
-                ..ctx.clone()
-            }),
+                ..self.ctx.clone()
+            },
             tx_options: self.tx_options.clone(),
         }
     }
 
     pub fn clone_with_no_retry(&self) -> Self {
-        let ExecCore::Client(ctx) = &self.core else {
-            unreachable!("query client stores client exec context");
-        };
         Self {
-            core: ExecCore::Client(ClientExecContext {
+            ctx: ClientExecContext {
                 max_attempts: 1,
-                ..ctx.clone()
-            }),
+                ..self.ctx.clone()
+            },
             tx_options: self.tx_options.clone(),
         }
     }
 
     pub fn clone_with_session_mode(&self, session_mode: QuerySessionMode) -> Self {
-        let ExecCore::Client(ctx) = &self.core else {
-            unreachable!("query client stores client exec context");
-        };
         Self {
-            core: ExecCore::Client(ClientExecContext {
+            ctx: ClientExecContext {
                 session_mode,
-                ..ctx.clone()
-            }),
+                ..self.ctx.clone()
+            },
             tx_options: self.tx_options.clone(),
         }
     }
@@ -514,21 +501,16 @@ impl QueryClient {
         &self,
         mut callback: impl AsyncFnMut(&mut QueryTransaction) -> YdbResultWithCustomerErr<T>,
     ) -> YdbResultWithCustomerErr<T> {
-        let ExecCore::Client(client_ctx) = &self.core else {
-            return Err(YdbOrCustomerError::YDB(YdbError::Custom(
-                "invalid query client state".to_string(),
-            )));
-        };
-        let max_attempts = client_ctx.max_attempts;
-        let retry_timeout = client_ctx.retry_timeout;
+        let max_attempts = self.ctx.max_attempts;
+        let retry_timeout = self.ctx.retry_timeout;
         let mut attempt = 0;
 
         loop {
             attempt += 1;
             let mut tx = QueryTransaction::new(
-                client_ctx.connection_manager.clone(),
-                client_ctx.timeouts,
-                client_ctx.session_mode,
+                self.ctx.connection_manager.clone(),
+                self.ctx.timeouts,
+                self.ctx.session_mode,
                 self.tx_options.clone(),
             );
 
@@ -567,8 +549,8 @@ impl QueryClient {
 }
 
 impl HasCore for QueryClient {
-    fn core_mut(&mut self) -> &mut ExecCore {
-        &mut self.core
+    fn core_mut(&mut self) -> ExecCoreRef<'_> {
+        ExecCoreRef::Client(&mut self.ctx)
     }
 }
 
@@ -582,7 +564,7 @@ enum TxState {
 }
 
 pub struct QueryTransaction {
-    core: ExecCore,
+    ctx: TransactionExecContext,
     state: TxState,
 }
 
@@ -596,56 +578,41 @@ impl QueryTransaction {
         options: QueryTransactionOptions,
     ) -> Self {
         Self {
-            core: ExecCore::Transaction(transaction_exec_context(
-                connection_manager,
-                timeouts,
-                session_mode,
-                options,
-            )),
+            ctx: transaction_exec_context(connection_manager, timeouts, session_mode, options),
             state: TxState::Active,
         }
     }
 
     pub fn mode(&self) -> QueryTxMode {
-        match &self.core {
-            ExecCore::Transaction(ctx) => ctx.tx_mode,
-            ExecCore::Client(_) => QueryTxMode::default(),
-        }
+        self.ctx.tx_mode
     }
 
     pub async fn rollback(&mut self) -> YdbResult<()> {
         if self.state != TxState::Active {
             return Err(YdbError::Custom("transaction already finished".to_string()));
         }
-        transaction_rollback(self.tx_ctx_mut()).await?;
+        transaction_rollback(&mut self.ctx).await?;
         self.state = TxState::RolledBack;
         Ok(())
     }
 
     async fn commit(&mut self) -> YdbResult<()> {
-        transaction_commit(self.tx_ctx_mut()).await?;
+        transaction_commit(&mut self.ctx).await?;
         self.state = TxState::Committed;
         Ok(())
     }
 
     async fn rollback_quiet(&mut self) {
         if self.state == TxState::Active {
-            let _ = transaction_rollback(self.tx_ctx_mut()).await;
+            let _ = transaction_rollback(&mut self.ctx).await;
             self.state = TxState::RolledBack;
-        }
-    }
-
-    fn tx_ctx_mut(&mut self) -> &mut TransactionExecContext {
-        match &mut self.core {
-            ExecCore::Transaction(ctx) => ctx,
-            ExecCore::Client(_) => panic!("transaction state expected"),
         }
     }
 }
 
 impl HasCore for QueryTransaction {
-    fn core_mut(&mut self) -> &mut ExecCore {
-        &mut self.core
+    fn core_mut(&mut self) -> ExecCoreRef<'_> {
+        ExecCoreRef::Transaction(&mut self.ctx)
     }
 }
 
