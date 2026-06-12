@@ -8,6 +8,7 @@ use crate::errors::{NeedRetry, YdbError, YdbOrCustomerError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryRequest;
+use crate::grpc_wrapper::raw_query_service::session::AttachedQuerySession;
 use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::grpc_wrapper::raw_query_service::transaction_control::{
     begin_tx_control, implicit_tx_control, tx_id_control, RawQueryTxMode,
@@ -29,14 +30,13 @@ pub(crate) struct ClientExecContext {
     pub max_attempts: usize,
 }
 
-#[derive(Clone)]
 pub(crate) struct TransactionExecContext {
     pub connection_manager: GrpcConnectionManager,
     #[allow(dead_code)]
     pub timeouts: TimeoutSettings,
     pub session_mode: QuerySessionMode,
     pub tx_mode: QueryTxMode,
-    pub session_id: String,
+    pub attached_session: Option<AttachedQuerySession>,
     pub tx_id: Option<String>,
     pub finished: bool,
 }
@@ -168,13 +168,55 @@ pub(crate) async fn client_begin_stream(
     }
 }
 
+async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQueryClient> {
+    tx.connection_manager
+        .get_auth_service(RawQueryClient::new)
+        .await
+}
+
+/// Interactive transactions need a stable attached session; implicit one-shot queries do not.
+async fn ensure_tx_session(tx: &mut TransactionExecContext) -> YdbResult<()> {
+    if tx.attached_session.is_some() {
+        return Ok(());
+    }
+    match tx.session_mode {
+        QuerySessionMode::Implicit => {
+            let mut client = query_client_from_tx(tx).await?;
+            tx.attached_session = Some(AttachedQuerySession::open(&mut client).await?);
+            Ok(())
+        }
+        QuerySessionMode::Pool => Err(YdbError::Custom(
+            "query session pool is not implemented yet".to_string(),
+        )),
+    }
+}
+
+fn tx_session_id(tx: &TransactionExecContext) -> YdbResult<&str> {
+    tx.attached_session
+        .as_ref()
+        .map(|s| s.session_id())
+        .ok_or_else(|| {
+            YdbError::Custom("query transaction session is not initialized".to_string())
+        })
+}
+
+async fn release_tx_session(tx: &mut TransactionExecContext) {
+    let Some(session) = tx.attached_session.take() else {
+        return;
+    };
+    if let Ok(mut client) = query_client_from_tx(tx).await {
+        session.close(&mut client).await;
+    }
+}
+
 pub(crate) async fn transaction_run(
     tx: &mut TransactionExecContext,
     text: &str,
     params: &HashMap<String, Value>,
     opts: &CallOptions,
 ) -> YdbResult<Vec<ResultSet>> {
-    let session_id = session_id_for_mode(opts.session_mode.unwrap_or(tx.session_mode))?;
+    ensure_tx_session(tx).await?;
+    let session_id = tx_session_id(tx)?.to_string();
     let mut client = query_client_from_tx(tx).await?;
     let req = RawExecuteQueryRequest {
         session_id,
@@ -196,7 +238,8 @@ pub(crate) async fn transaction_begin_stream(
     params: HashMap<String, Value>,
     opts: CallOptions,
 ) -> YdbResult<ExecuteQueryStream> {
-    let session_id = session_id_for_mode(opts.session_mode.unwrap_or(tx.session_mode))?;
+    ensure_tx_session(tx).await?;
+    let session_id = tx_session_id(tx)?.to_string();
     let mut client = query_client_from_tx(tx).await?;
     let req = RawExecuteQueryRequest {
         session_id,
@@ -210,33 +253,40 @@ pub(crate) async fn transaction_begin_stream(
 }
 
 pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbResult<()> {
-    let Some(tx_id) = tx.tx_id.take() else {
+    if tx.tx_id.is_none() {
         tx.finished = true;
+        release_tx_session(tx).await;
         return Ok(());
-    };
+    }
+    ensure_tx_session(tx).await?;
+    let tx_id = tx.tx_id.take().expect("checked Some");
+    let session_id = tx_session_id(tx)?.to_string();
     let mut client = query_client_from_tx(tx).await?;
-    client.commit_transaction(&tx.session_id, &tx_id).await?;
+    let result = client.commit_transaction(&session_id, &tx_id).await;
+    release_tx_session(tx).await;
     tx.finished = true;
-    Ok(())
+    result.map_err(Into::into)
 }
 
 pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> YdbResult<()> {
     if tx.finished {
         return Ok(());
     }
-    if let Some(tx_id) = tx.tx_id.take() {
-        let mut client = query_client_from_tx(tx).await?;
-        let _ = client.rollback_transaction(&tx.session_id, &tx_id).await;
+    if tx.tx_id.is_some() && tx.attached_session.is_some() {
+        let tx_id = tx.tx_id.take().expect("checked Some");
+        if let Ok(session_id) = tx_session_id(tx) {
+            if let Ok(mut client) = query_client_from_tx(tx).await {
+                let _ = client.rollback_transaction(session_id, &tx_id).await;
+            }
+        }
+    } else {
+        tx.tx_id = None;
     }
+    release_tx_session(tx).await;
     tx.finished = true;
     Ok(())
 }
 
-async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQueryClient> {
-    tx.connection_manager
-        .get_auth_service(RawQueryClient::new)
-        .await
-}
 
 pub(crate) fn transaction_exec_context(
     connection_manager: GrpcConnectionManager,
@@ -249,7 +299,7 @@ pub(crate) fn transaction_exec_context(
         timeouts,
         session_mode,
         tx_mode: options.mode(),
-        session_id: String::new(),
+        attached_session: None,
         tx_id: None,
         finished: false,
     }

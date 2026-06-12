@@ -1,7 +1,18 @@
 use crate::client_query::{QuerySessionMode, QueryTransactionOptions, QueryTxMode};
 use crate::errors::YdbResult;
 use crate::test_integration_helper::create_client;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing_test::traced_test;
+
+fn unique_table_name(prefix: &str) -> String {
+    format!(
+        "{prefix}_{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before UNIX epoch")
+            .as_nanos()
+    )
+}
 
 #[tokio::test]
 #[traced_test]
@@ -22,11 +33,16 @@ async fn query_client_select_one() -> YdbResult<()> {
 async fn query_client_exec_ddl() -> YdbResult<()> {
     let client = create_client().await?;
     let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let table_name = unique_table_name("query_client_test_exec_ddl");
 
-    let _ = qc.exec("DROP TABLE IF EXISTS query_client_test").await;
-    qc.exec("CREATE TABLE query_client_test (id Int64, val Utf8, PRIMARY KEY(id))")
-        .await?;
-    qc.exec("DROP TABLE query_client_test").await?;
+    let _ = qc
+        .exec(format!("DROP TABLE IF EXISTS {table_name}"))
+        .await;
+    qc.exec(format!(
+        "CREATE TABLE {table_name} (id Int64, val Utf8, PRIMARY KEY(id))"
+    ))
+    .await?;
+    qc.exec(format!("DROP TABLE {table_name}")).await?;
     Ok(())
 }
 
@@ -59,17 +75,24 @@ async fn query_client_multi_result_set() -> YdbResult<()> {
 async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
     let client = create_client().await?;
     let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let table_name = unique_table_name("query_client_test_upsert");
 
-    let _ = qc.exec("DROP TABLE IF EXISTS query_client_test").await;
-    qc.exec("CREATE TABLE query_client_test (id Int64, val Utf8, PRIMARY KEY(id))")
-        .await?;
+    let _ = qc
+        .exec(format!("DROP TABLE IF EXISTS {table_name}"))
+        .await;
+    qc.exec(format!(
+        "CREATE TABLE {table_name} (id Int64, val Utf8, PRIMARY KEY(id))"
+    ))
+    .await?;
 
-    let upsert = "DECLARE $id AS Int64; DECLARE $val AS Utf8; \
-                  UPSERT INTO query_client_test (id, val) VALUES ($id, $val)";
+    let upsert = format!(
+        "DECLARE $id AS Int64; DECLARE $val AS Utf8; \
+         UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
+    );
 
     qc.retry_transaction(async |tx| {
         for id in 0..3_i64 {
-            tx.exec(upsert)
+            tx.exec(&upsert)
                 .param("$id", id)
                 .param("$val", format!("v{id}"))
                 .await?;
@@ -79,12 +102,12 @@ async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
     .await?;
 
     let mut row = qc
-        .query_row("SELECT COUNT(*) AS cnt FROM query_client_test")
+        .query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))
         .await?;
-    let cnt: i64 = row.remove_field_by_name("cnt")?.try_into()?;
+    let cnt: u64 = row.remove_field_by_name("cnt")?.try_into()?;
     assert_eq!(cnt, 3);
 
-    qc.exec("DROP TABLE query_client_test").await?;
+    qc.exec(format!("DROP TABLE {table_name}")).await?;
     Ok(())
 }
 
