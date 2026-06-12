@@ -24,7 +24,7 @@ use crate::result::{ResultSet, Row};
 use crate::types::Value;
 
 use exec::{
-    apply_stream_tx_id, backoff, check_retry_error, client_begin_stream, client_run,
+    apply_stream_tx_id, backoff, check_retry_transaction_error, client_begin_stream, client_run,
     transaction_begin_stream, transaction_commit, transaction_exec_context, transaction_rollback,
     transaction_run, ClientExecContext, TransactionExecContext,
 };
@@ -303,6 +303,8 @@ impl Drop for QueryStream<'_> {
                 apply_stream_tx_id(ctx, Some(tx_id));
             }
         }
+        self.stream.cancel();
+        unsafe { ManuallyDrop::drop(&mut self.stream) };
     }
 }
 
@@ -325,16 +327,12 @@ impl QueryStream<'_> {
     }
 
     pub async fn close(mut self) -> YdbResult<()> {
-        match self.stream.close().await {
-            Ok(meta) => {
-                if let ExecCore::Transaction(ctx) = self.core {
-                    apply_stream_tx_id(ctx, meta.tx_id);
-                }
-                std::mem::forget(self);
-                Ok(())
-            }
-            Err(e) => Err(YdbError::from(e)),
+        let meta = self.stream.close().await.map_err(YdbError::from)?;
+        if let ExecCore::Transaction(ctx) = self.core {
+            apply_stream_tx_id(ctx, meta.tx_id);
         }
+        std::mem::forget(self);
+        Ok(())
     }
 }
 
@@ -521,7 +519,6 @@ impl QueryClient {
                 "invalid query client state".to_string(),
             )));
         };
-        let idempotent = client_ctx.idempotent_operation;
         let max_attempts = client_ctx.max_attempts;
         let retry_timeout = client_ctx.retry_timeout;
         let mut attempt = 0;
@@ -561,7 +558,7 @@ impl QueryClient {
                 }
             };
 
-            if !check_retry_error(idempotent, &err) || attempt >= max_attempts {
+            if !check_retry_transaction_error(&err) || attempt >= max_attempts {
                 return Err(err);
             }
             sleep(backoff(retry_timeout, attempt)).await;
@@ -661,5 +658,41 @@ fn panic_message(payload: Box<dyn Any + Send>) -> String {
             Ok(msg) => (*msg).to_string(),
             Err(_) => "unknown panic payload".to_string(),
         },
+    }
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+    use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
+    use crate::grpc_wrapper::raw_table_service::value::{RawColumn, RawResultSet, RawValue};
+    use crate::result::ResultSet;
+
+    fn int64_set(values: Vec<i64>) -> ResultSet {
+        RawResultSet {
+            columns: vec![RawColumn {
+                name: "id".to_string(),
+                column_type: RawType::Int64,
+            }],
+            rows: values
+                .into_iter()
+                .map(|v| vec![RawValue::Int64(v)])
+                .collect(),
+            truncated: false,
+        }
+        .try_into()
+        .expect("valid result set")
+    }
+
+    #[test]
+    fn exactly_one_set_and_take_single_row() {
+        assert!(exactly_one_set(vec![]).is_err());
+        assert!(exactly_one_set(vec![int64_set(vec![1])]).is_ok());
+        assert!(exactly_one_set(vec![int64_set(vec![1]), int64_set(vec![2])]).is_err());
+
+        assert!(take_single_row(vec![int64_set(vec![])])
+            .expect("empty rows")
+            .is_none());
+        assert!(take_single_row(vec![int64_set(vec![1, 2])]).is_err());
     }
 }

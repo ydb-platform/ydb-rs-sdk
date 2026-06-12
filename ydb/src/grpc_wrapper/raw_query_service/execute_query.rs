@@ -28,6 +28,12 @@ pub(crate) struct RawExecuteQueryResult {
     pub tx_id: Option<String>,
 }
 
+#[derive(Debug)]
+pub(crate) struct RawExecuteQueryCollectError {
+    pub err: crate::grpc_wrapper::raw_errors::RawError,
+    pub tx_id: Option<String>,
+}
+
 impl RawExecuteQueryRequest {
     pub fn into_proto(self) -> RawResult<ExecuteQueryRequest> {
         let mut parameters = HashMap::with_capacity(self.parameters.len());

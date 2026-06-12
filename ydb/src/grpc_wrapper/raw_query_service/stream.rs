@@ -1,9 +1,8 @@
-use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_query_service::execute_query::{
-    append_rows_from_part, check_part, merge_part, sets_to_vec, stats_from_part, tx_id_from_part,
+    append_rows_from_part, check_part, stats_from_part, tx_id_from_part,
 };
 use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
 use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
@@ -179,42 +178,6 @@ impl ExecuteQueryStream {
         }
     }
 
-    #[allow(dead_code)]
-    pub async fn drain_all(&mut self) -> RawResult<(Vec<RawResultSet>, Option<String>)> {
-        if self.grpc.is_none() {
-            self.finished = true;
-            return Ok((Vec::new(), None));
-        }
-
-        let mut sets: HashMap<i64, RawResultSet> = HashMap::new();
-        let mut tx_id = None;
-
-        if let Some(part) = self.pending_part.take() {
-            check_part(&part)?;
-            if let Some(id) = self.absorb_part_metadata(&part) {
-                tx_id = Some(id);
-            }
-            merge_part(&mut sets, part)?;
-        }
-
-        if let Some(stream) = self.grpc.as_mut() {
-            let mut stats = self.stats;
-            while let Some(part) = stream.message().await? {
-                check_part(&part)?;
-                if let Some(duration) = stats_from_part(&part) {
-                    stats = Some(duration);
-                }
-                if let Some(id) = tx_id_from_part(&part) {
-                    tx_id = Some(id);
-                }
-                merge_part(&mut sets, part)?;
-            }
-            self.stats = stats;
-        }
-        self.finished = true;
-        Ok((sets_to_vec(sets), tx_id))
-    }
-
     pub fn take_captured_tx_id(&mut self) -> Option<String> {
         if let Some(id) = self.captured_tx_id.take() {
             return Some(id);
@@ -222,20 +185,23 @@ impl ExecuteQueryStream {
         self.pending_part.as_ref().and_then(tx_id_from_part)
     }
 
-    pub async fn close(&mut self) -> RawResult<StreamCloseMeta> {
-        let mut tx_id = None;
-
+    /// Drop the gRPC stream without draining unread parts (sends RST_STREAM).
+    pub fn cancel(&mut self) {
         if let Some(part) = self.pending_part.take() {
-            check_part(&part)?;
-            if let Some(id) = self.absorb_part_metadata(&part) {
-                tx_id = Some(id);
-            }
+            self.absorb_part_metadata(&part);
         }
-
-        // Drop the gRPC stream without draining — cancels server-side send for unread parts.
         drop(self.grpc.take());
         self.finished = true;
+    }
 
-        Ok(StreamCloseMeta { tx_id })
+    pub async fn close(&mut self) -> RawResult<StreamCloseMeta> {
+        if let Some(part) = self.pending_part.take() {
+            self.absorb_part_metadata(&part);
+        }
+        drop(self.grpc.take());
+        self.finished = true;
+        Ok(StreamCloseMeta {
+            tx_id: self.captured_tx_id.take(),
+        })
     }
 }

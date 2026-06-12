@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_query_service::execute_query::{
-    check_part, merge_part, sets_to_vec, tx_id_from_part, RawExecuteQueryRequest,
-    RawExecuteQueryResult,
+    check_part, merge_part, sets_to_vec, tx_id_from_part, RawExecuteQueryCollectError,
+    RawExecuteQueryRequest, RawExecuteQueryResult,
 };
 use crate::grpc_wrapper::raw_query_service::status::check_status;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
@@ -54,18 +54,35 @@ impl RawQueryClient {
     pub async fn execute_query_collect(
         &mut self,
         req: RawExecuteQueryRequest,
-    ) -> RawResult<RawExecuteQueryResult> {
-        let mut stream = self.execute_query(req).await?;
+    ) -> Result<RawExecuteQueryResult, RawExecuteQueryCollectError> {
+        let mut stream = self
+            .execute_query(req)
+            .await
+            .map_err(|err| RawExecuteQueryCollectError { err, tx_id: None })?;
         let mut sets: HashMap<i64, crate::grpc_wrapper::raw_table_service::value::RawResultSet> =
             HashMap::new();
         let mut tx_id = None;
 
-        while let Some(part) = stream.message().await? {
-            check_part(&part)?;
+        loop {
+            let part = match stream.message().await {
+                Ok(Some(part)) => part,
+                Ok(None) => break,
+                Err(err) => {
+                    return Err(RawExecuteQueryCollectError {
+                        err: err.into(),
+                        tx_id,
+                    })
+                }
+            };
             if let Some(id) = tx_id_from_part(&part) {
                 tx_id = Some(id);
             }
-            merge_part(&mut sets, part)?;
+            if let Err(err) = check_part(&part) {
+                return Err(RawExecuteQueryCollectError { err, tx_id });
+            }
+            if let Err(err) = merge_part(&mut sets, part) {
+                return Err(RawExecuteQueryCollectError { err, tx_id });
+            }
         }
 
         Ok(RawExecuteQueryResult {

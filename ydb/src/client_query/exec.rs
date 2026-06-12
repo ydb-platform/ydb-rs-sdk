@@ -128,13 +128,9 @@ pub(crate) async fn client_run(
         match client_run_once(ctx, text, params, opts).await {
             Ok(sets) => return Ok(sets),
             Err(err) => {
-                let need = err.need_retry();
-                let retry = match need {
-                    NeedRetry::True => true,
-                    NeedRetry::IdempotentOnly => idempotent,
-                    NeedRetry::False => false,
-                };
-                if !retry || attempt >= ctx.max_attempts {
+                if !check_retry_error(idempotent, &YdbOrCustomerError::YDB(err.clone()))
+                    || attempt >= ctx.max_attempts
+                {
                     return Err(err);
                 }
                 sleep(backoff(ctx.retry_timeout, attempt)).await;
@@ -160,7 +156,10 @@ async fn client_run_once_raw(
     };
     let timeout_duration = operation_timeout(opts, &ctx.timeouts);
     with_operation_timeout(timeout_duration, async {
-        client.execute_query_collect(req).await.map_err(Into::into)
+        client
+            .execute_query_collect(req)
+            .await
+            .map_err(|e| YdbError::from(e.err))
     })
     .await
 }
@@ -211,12 +210,9 @@ pub(crate) async fn client_begin_stream(
         match client_begin_stream_once(ctx, &text, &params, &opts).await {
             Ok(stream) => return Ok(stream),
             Err(err) => {
-                let retry = match err.need_retry() {
-                    NeedRetry::True => true,
-                    NeedRetry::IdempotentOnly => idempotent,
-                    NeedRetry::False => false,
-                };
-                if !retry || attempt >= ctx.max_attempts {
+                if !check_retry_error(idempotent, &YdbOrCustomerError::YDB(err.clone()))
+                    || attempt >= ctx.max_attempts
+                {
                     return Err(err);
                 }
                 sleep(backoff(ctx.retry_timeout, attempt)).await;
@@ -283,7 +279,15 @@ pub(crate) async fn transaction_run(
     };
     let timeout_duration = operation_timeout(opts, &tx.timeouts);
     let raw = with_operation_timeout(timeout_duration, async {
-        client.execute_query_collect(req).await.map_err(Into::into)
+        match client.execute_query_collect(req).await {
+            Ok(raw) => Ok(raw),
+            Err(e) => {
+                if let Some(id) = e.tx_id.filter(|id| !id.is_empty()) {
+                    tx.tx_id = Some(id);
+                }
+                Err(YdbError::from(e.err))
+            }
+        }
     })
     .await?;
     if let Some(id) = raw.tx_id {
@@ -395,6 +399,13 @@ pub(crate) fn apply_stream_tx_id(tx: &mut TransactionExecContext, tx_id: Option<
     }
 }
 
+pub(crate) fn check_retry_transaction_error(err: &YdbOrCustomerError) -> bool {
+    match err {
+        YdbOrCustomerError::Customer(_) => false,
+        YdbOrCustomerError::YDB(err) => !matches!(err.need_retry(), NeedRetry::False),
+    }
+}
+
 pub(crate) fn check_retry_error(idempotent: bool, err: &YdbOrCustomerError) -> bool {
     let ydb_err = match err {
         YdbOrCustomerError::Customer(_) => return false,
@@ -414,4 +425,25 @@ pub(crate) fn backoff(max_backoff: Duration, attempt: usize) -> Duration {
     let capped = exp.min(max_backoff);
     let half = capped / 2;
     half + rand::thread_rng().gen_range(Duration::ZERO..=half)
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+    use crate::errors::{YdbError, YdbOrCustomerError};
+
+    #[test]
+    fn retry_helpers_and_backoff() {
+        let transport = YdbOrCustomerError::YDB(YdbError::Transport("timeout".into()));
+        assert!(check_retry_transaction_error(&transport));
+        assert!(check_retry_error(true, &transport));
+        assert!(!check_retry_error(false, &transport));
+        assert!(!check_retry_transaction_error(
+            &YdbOrCustomerError::from_mess("customer")
+        ));
+
+        let delay = backoff(Duration::from_millis(100), 5);
+        assert!(delay > Duration::ZERO);
+        assert!(delay <= Duration::from_millis(100));
+    }
 }
