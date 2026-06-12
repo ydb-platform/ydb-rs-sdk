@@ -7,6 +7,7 @@ mod exec;
 use std::collections::HashMap;
 use std::future::{Future, IntoFuture};
 use std::marker::PhantomData;
+use std::mem::ManuallyDrop;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::time::Duration;
@@ -283,7 +284,7 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
                 .await?;
             Ok(QueryStream {
                 core: self.core,
-                stream,
+                stream: ManuallyDrop::new(stream),
             })
         })
     }
@@ -291,7 +292,17 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
 
 pub struct QueryStream<'a> {
     core: &'a mut ExecCore,
-    stream: ExecuteQueryStream,
+    stream: ManuallyDrop<ExecuteQueryStream>,
+}
+
+impl Drop for QueryStream<'_> {
+    fn drop(&mut self) {
+        if let Some(tx_id) = self.stream.take_pending_tx_id() {
+            if let ExecCore::Transaction(ctx) = self.core {
+                apply_stream_tx_id(ctx, Some(tx_id));
+            }
+        }
+    }
 }
 
 impl QueryStream<'_> {
@@ -312,11 +323,13 @@ impl QueryStream<'_> {
             .map(|total_duration| QueryStats { total_duration })
     }
 
-    pub async fn close(self) -> YdbResult<()> {
-        let meta = self.stream.close().await.map_err(YdbError::from)?;
+    pub async fn close(mut self) -> YdbResult<()> {
+        let stream = unsafe { ManuallyDrop::take(&mut self.stream) };
+        let meta = stream.close().await.map_err(YdbError::from)?;
         if let ExecCore::Transaction(ctx) = self.core {
             apply_stream_tx_id(ctx, meta.tx_id);
         }
+        std::mem::forget(self);
         Ok(())
     }
 }
@@ -454,9 +467,8 @@ impl QueryClient {
 
     /// Upper bound on exponential backoff delay between retry attempts.
     ///
-    /// This is not a total retry budget: each attempt may still run for up to
-    /// [`TimeoutSettings::operation_timeout`], and the overall retry loop can
-    /// take longer than this value.
+    /// This caps the per-attempt sleep before the next retry, not a total retry
+    /// budget (unlike [`crate::TableClient::clone_with_retry_timeout`]).
     pub fn clone_with_retry_timeout(&self, timeout: Duration) -> Self {
         let ExecCore::Client(ctx) = &self.core else {
             unreachable!("query client stores client exec context");

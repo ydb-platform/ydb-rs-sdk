@@ -227,7 +227,8 @@ pub(crate) async fn client_begin_stream(
 
 /// Interactive transactions need a stable attached session; implicit one-shot queries do not.
 async fn ensure_tx_session(tx: &mut TransactionExecContext) -> YdbResult<()> {
-    if tx.attached_session.is_some() {
+    if let Some(session) = &tx.attached_session {
+        session.ensure_alive().map_err(YdbError::from)?;
         return Ok(());
     }
     match tx.session_mode {
@@ -400,6 +401,11 @@ pub(crate) fn check_retry_error(idempotent: bool, err: &YdbOrCustomerError) -> b
     }
 }
 
-pub(crate) fn backoff(retry_timeout: Duration, attempt: usize) -> Duration {
-    (Duration::from_millis(10) * 2u32.pow(attempt.min(10) as u32)).min(retry_timeout)
+pub(crate) fn backoff(max_backoff: Duration, attempt: usize) -> Duration {
+    use rand::Rng;
+
+    let exp = Duration::from_millis(10) * 2u32.pow(attempt.min(10) as u32);
+    let capped = exp.min(max_backoff);
+    let half = capped / 2;
+    half + rand::thread_rng().gen_range(Duration::ZERO..=half)
 }

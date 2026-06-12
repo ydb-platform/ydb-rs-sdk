@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use crate::client::TimeoutSettings;
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_query_service::execute_query::{
@@ -18,8 +17,6 @@ use ydb_grpc::ydb_proto::query::{
 
 pub(crate) struct RawQueryClient {
     service: QueryServiceClient<InterceptedChannel>,
-    #[allow(dead_code)]
-    timeouts: TimeoutSettings,
 }
 
 impl WithGrpcMaxMessageSize for RawQueryClient {
@@ -42,14 +39,7 @@ impl RawQueryClient {
     pub fn new(service: InterceptedChannel) -> Self {
         Self {
             service: QueryServiceClient::new(service),
-            timeouts: TimeoutSettings::default(),
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn with_timeout(mut self, timeouts: TimeoutSettings) -> Self {
-        self.timeouts = timeouts;
-        self
     }
 
     pub async fn execute_query(

@@ -190,6 +190,12 @@ impl ExecuteQueryStream {
         Ok((sets_to_vec(sets), tx_id))
     }
 
+    pub fn take_pending_tx_id(&mut self) -> Option<String> {
+        self.pending_part
+            .as_ref()
+            .and_then(|part| tx_id_from_part(part))
+    }
+
     pub async fn close(mut self) -> RawResult<StreamCloseMeta> {
         let mut tx_id = None;
 
@@ -200,14 +206,8 @@ impl ExecuteQueryStream {
             }
         }
 
-        if let Some(mut stream) = self.grpc.take() {
-            while let Some(part) = stream.message().await? {
-                check_part(&part)?;
-                if let Some(id) = self.absorb_part_metadata(&part) {
-                    tx_id = Some(id);
-                }
-            }
-        }
+        // Drop the gRPC stream without draining — cancels server-side send for unread parts.
+        drop(self.grpc.take());
 
         Ok(StreamCloseMeta { tx_id })
     }

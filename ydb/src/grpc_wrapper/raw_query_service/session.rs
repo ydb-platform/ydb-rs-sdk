@@ -1,3 +1,6 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use tokio::task::JoinHandle;
 
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
@@ -9,6 +12,7 @@ use ydb_grpc::ydb_proto::query::SessionState;
 pub(crate) struct AttachedQuerySession {
     session_id: String,
     attach_task: JoinHandle<()>,
+    attach_alive: Arc<AtomicBool>,
 }
 
 impl Drop for AttachedQuerySession {
@@ -27,22 +31,36 @@ impl AttachedQuerySession {
             .ok_or_else(|| RawError::custom("attach session stream closed"))?;
         check_attach_state(&first)?;
 
+        let attach_alive = Arc::new(AtomicBool::new(true));
+        let alive_flag = attach_alive.clone();
         let attach_task = tokio::spawn(async move {
             while let Ok(Some(state)) = attach_stream.message().await {
                 if check_attach_state(&state).is_err() {
                     break;
                 }
             }
+            alive_flag.store(false, Ordering::Release);
         });
 
         Ok(Self {
             session_id,
             attach_task,
+            attach_alive,
         })
     }
 
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    pub fn ensure_alive(&self) -> RawResult<()> {
+        if self.attach_alive.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err(RawError::custom(
+                "query attach session stream closed; create a new transaction",
+            ))
+        }
     }
 
     pub async fn close(self, client: &mut RawQueryClient) {
