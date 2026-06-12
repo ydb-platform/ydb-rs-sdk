@@ -12,7 +12,8 @@ use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use ydb_grpc::ydb_proto::query::v1::query_service_client::QueryServiceClient;
 use ydb_grpc::ydb_proto::query::{
-    CommitTransactionRequest, ExecuteQueryResponsePart, RollbackTransactionRequest,
+    AttachSessionRequest, CommitTransactionRequest, CreateSessionRequest,
+    DeleteSessionRequest, ExecuteQueryResponsePart, RollbackTransactionRequest, SessionState,
 };
 
 pub(crate) struct RawQueryClient {
@@ -81,6 +82,40 @@ impl RawQueryClient {
             result_sets: sets_to_vec(sets),
             tx_id,
         })
+    }
+
+    pub async fn create_session(&mut self) -> RawResult<String> {
+        let response = self
+            .service
+            .create_session(CreateSessionRequest {})
+            .await?;
+        let inner = response.into_inner();
+        check_status(inner.status, &inner.issues)?;
+        Ok(inner.session_id)
+    }
+
+    pub async fn delete_session(&mut self, session_id: &str) -> RawResult<()> {
+        let response = self
+            .service
+            .delete_session(DeleteSessionRequest {
+                session_id: session_id.to_string(),
+            })
+            .await?;
+        let inner = response.into_inner();
+        check_status(inner.status, &inner.issues)
+    }
+
+    pub async fn attach_session(
+        &mut self,
+        session_id: &str,
+    ) -> RawResult<tonic::Streaming<SessionState>> {
+        let response = self
+            .service
+            .attach_session(AttachSessionRequest {
+                session_id: session_id.to_string(),
+            })
+            .await?;
+        Ok(response.into_inner())
     }
 
     pub async fn commit_transaction(&mut self, session_id: &str, tx_id: &str) -> RawResult<()> {

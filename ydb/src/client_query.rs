@@ -52,10 +52,20 @@ impl FromYdbRow for Row {
 mod private {
     use super::*;
 
-    #[derive(Clone)]
     pub(crate) enum ExecCore {
         Client(ClientExecContext),
         Transaction(TransactionExecContext),
+    }
+
+    impl Clone for ExecCore {
+        fn clone(&self) -> Self {
+            match self {
+                ExecCore::Client(ctx) => ExecCore::Client(ctx.clone()),
+                ExecCore::Transaction(_) => {
+                    panic!("query transaction exec context must not be cloned")
+                }
+            }
+        }
     }
 
     impl ExecCore {
