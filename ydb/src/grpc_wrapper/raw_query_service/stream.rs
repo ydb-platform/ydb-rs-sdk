@@ -191,9 +191,7 @@ impl ExecuteQueryStream {
     }
 
     pub fn take_pending_tx_id(&mut self) -> Option<String> {
-        self.pending_part
-            .as_ref()
-            .and_then(tx_id_from_part)
+        self.pending_part.as_ref().and_then(tx_id_from_part)
     }
 
     pub async fn close(mut self) -> RawResult<StreamCloseMeta> {
