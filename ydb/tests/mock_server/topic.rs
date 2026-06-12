@@ -7,10 +7,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
+use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
-use ydb::{ClientBuilder, TopicReader, YdbResult};
 use ydb_grpc::ydb_proto::topic::v1::topic_service_server::{TopicService, TopicServiceServer};
 use ydb_grpc::ydb_proto::topic::{self, stream_read_message, stream_write_message};
 
@@ -29,33 +29,8 @@ pub struct MockServer {
     addr: SocketAddr,
     events_rx: mpsc::UnboundedReceiver<TopicClientEvent>,
     active_stream: Arc<Mutex<Option<mpsc::UnboundedSender<TopicServerCommand>>>>,
-    shutdown: Option<oneshot::Sender<()>>,
+    shutdown: CancellationToken,
     task: Option<tokio::task::JoinHandle<()>>,
-}
-
-pub async fn create_mock_topic_reader(
-    database: impl AsRef<str>,
-    topic_path: impl Into<String>,
-    consumer: impl Into<String>,
-) -> YdbResult<(TopicReader, MockServer)> {
-    let database = database.as_ref();
-    let topic_path = topic_path.into();
-    let consumer = consumer.into();
-
-    let server = MockServer::start().await;
-
-    let client = ClientBuilder::new_from_connection_string(format!(
-        "{}?database={database}&use_discovery=false",
-        server.endpoint()
-    ))?
-    .client()?;
-
-    let reader = client
-        .topic_client()
-        .create_reader(consumer, topic_path)
-        .await?;
-
-    Ok((reader, server))
 }
 
 impl MockServer {
@@ -78,7 +53,7 @@ impl MockServer {
 
     async fn start_with_listener(listener: TcpListener, addr: SocketAddr) -> Self {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let shutdown = CancellationToken::new();
         let active_stream = Arc::new(Mutex::new(None));
 
         let service = MockTopicService {
@@ -91,11 +66,12 @@ impl MockServer {
             Some((listener.accept().await.map(|(stream, _)| stream), listener))
         });
 
+        let shutdown_signal = shutdown.clone();
         let task = tokio::spawn(async move {
             let result = Server::builder()
                 .add_service(TopicServiceServer::new(service))
                 .serve_with_incoming_shutdown(incoming, async {
-                    let _ = shutdown_rx.await;
+                    shutdown_signal.cancelled().await;
                 })
                 .await;
 
@@ -109,7 +85,7 @@ impl MockServer {
             addr,
             events_rx,
             active_stream,
-            shutdown: Some(shutdown_tx),
+            shutdown,
             task: Some(task),
         }
     }
@@ -118,52 +94,22 @@ impl MockServer {
         &self.endpoint
     }
 
-    pub async fn shutdown(mut self) {
-        self.shutdown_inner();
-        if let Some(task) = self.task.take() {
-            let _ = task.await;
-        }
-    }
+    pub async fn restart(mut self) -> Self {
+        let addr = self.addr;
 
-    pub async fn restart(&mut self) {
         self.shutdown_inner();
         if let Some(task) = self.task.take() {
             task.abort();
             let _ = task.await;
         }
 
-        *self = Self::start_on_addr(self.addr).await;
+        Self::start_on_addr(addr).await
     }
 
     fn shutdown_inner(&mut self) {
         self.try_close_stream();
-        if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(());
-        }
+        self.shutdown.cancel();
     }
-}
-
-macro_rules! expect_client_message_methods {
-    (
-        $(
-            fn $method:ident() -> $ty:ty = $variant:ident;
-        )+
-    ) => {
-        $(
-            pub async fn $method(&mut self) -> $ty {
-                let (_, message) = self.expect_stream_read_message().await;
-                match message.client_message {
-                    Some(stream_read_message::from_client::ClientMessage::$variant(value)) => {
-                        value
-                    }
-                    other => panic!(
-                        "expected {}, got {other:?}",
-                        stringify!($variant),
-                    ),
-                }
-            }
-        )+
-    };
 }
 
 impl MockServer {
@@ -182,34 +128,8 @@ impl MockServer {
         .expect("timed out waiting for mock topic event")
     }
 
-    pub async fn expect_stream_read_opened(&mut self) -> u64 {
-        match self.next_event().await {
-            TopicClientEvent::Opened { stream_id } => stream_id,
-            event => panic!("expected TopicClientEvent::Opened, got {event:?}"),
-        }
-    }
-
-    pub async fn expect_stream_read_message(&mut self) -> (u64, stream_read_message::FromClient) {
-        match self.next_event().await {
-            TopicClientEvent::Message { stream_id, message } => (stream_id, message),
-            event => panic!("expected TopicClientEvent::Message, got {event:?}"),
-        }
-    }
-
-    expect_client_message_methods! {
-        fn expect_init_request() -> stream_read_message::InitRequest = InitRequest;
-        fn expect_read_request() -> stream_read_message::ReadRequest = ReadRequest;
-        fn expect_start_partition_session_response() -> stream_read_message::StartPartitionSessionResponse = StartPartitionSessionResponse;
-        fn expect_stop_partition_session_response() -> stream_read_message::StopPartitionSessionResponse = StopPartitionSessionResponse;
-        fn expect_commit_offset_request() -> stream_read_message::CommitOffsetRequest = CommitOffsetRequest;
-    }
-
     pub fn send(&self, message: stream_read_message::FromServer) {
         self.command(TopicServerCommand::SendReadStreamMessage(message));
-    }
-
-    pub fn close_stream(&self) {
-        self.command(TopicServerCommand::CloseReadStream);
     }
 
     pub fn try_close_stream(&self) {
@@ -389,23 +309,76 @@ fn endpoint(addr: SocketAddr) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ydb::YdbResult;
+    use crate::mock_server::init_response;
+    use tokio::sync::mpsc;
+    use tokio_stream::wrappers::UnboundedReceiverStream;
+    use ydb_grpc::ydb_proto::topic::stream_read_message;
+    use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
 
     const TOPIC_PATH: &str = "/local/mock-topic";
     const CONSUMER: &str = "mock-consumer";
-    const DATABASE: &str = "/local";
 
     #[tokio::test]
-    async fn server_receives_topic_reader_init_request() -> YdbResult<()> {
-        let (_reader, mut server) =
-            create_mock_topic_reader(DATABASE, TOPIC_PATH, CONSUMER).await?;
+    async fn sends_messages_between_client_and_server() -> Result<(), Box<dyn std::error::Error>> {
+        let mut server = MockServer::start().await;
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://{}", server.addr))?
+            .connect_lazy();
+        let mut client = TopicServiceClient::new(channel);
 
-        let stream_id = server.expect_stream_read_opened().await;
+        let (client_tx, client_rx) = mpsc::unbounded_channel();
+        let mut responses = client
+            .stream_read(UnboundedReceiverStream::new(client_rx))
+            .await?
+            .into_inner();
+
+        let stream_id = match server.next_event().await {
+            TopicClientEvent::Opened { stream_id } => stream_id,
+            event => panic!("expected TopicClientEvent::Opened, got {event:?}"),
+        };
         assert_eq!(stream_id, 1);
 
-        let init = server.expect_init_request().await;
+        client_tx.send(stream_read_message::FromClient {
+            client_message: Some(
+                stream_read_message::from_client::ClientMessage::InitRequest(
+                    stream_read_message::InitRequest {
+                        topics_read_settings: vec![
+                            stream_read_message::init_request::TopicReadSettings {
+                                path: TOPIC_PATH.to_string(),
+                                partition_ids: Vec::new(),
+                                max_lag: None,
+                                read_from: None,
+                            },
+                        ],
+                        consumer: CONSUMER.to_string(),
+                        reader_name: String::new(),
+                        direct_read: false,
+                        auto_partitioning_support: false,
+                    },
+                ),
+            ),
+        })?;
+
+        let init = match server.next_event().await {
+            TopicClientEvent::Message { message, .. } => match message.client_message {
+                Some(stream_read_message::from_client::ClientMessage::InitRequest(value)) => value,
+                other => panic!("expected InitRequest, got {other:?}"),
+            },
+            event => panic!("expected TopicClientEvent::Message, got {event:?}"),
+        };
         assert_eq!(init.consumer, CONSUMER);
         assert_eq!(init.topics_read_settings[0].path, TOPIC_PATH);
+
+        server.send(init_response("read-session"));
+        let response = responses
+            .message()
+            .await?
+            .expect("client response stream must contain init response");
+        match response.server_message {
+            Some(stream_read_message::from_server::ServerMessage::InitResponse(init)) => {
+                assert_eq!(init.session_id, "read-session");
+            }
+            other => panic!("expected InitResponse, got {other:?}"),
+        }
 
         Ok(())
     }
