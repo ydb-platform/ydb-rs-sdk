@@ -390,9 +390,20 @@ pub(crate) fn transaction_exec_context(
 }
 
 pub(crate) fn apply_stream_tx_id(tx: &mut TransactionExecContext, tx_id: Option<String>) {
-    if tx.tx_id.is_none() {
-        tx.tx_id = tx_id.filter(|id| !id.is_empty());
+    let Some(id) = tx_id.filter(|id| !id.is_empty()) else {
+        return;
+    };
+    if let Some(existing) = &tx.tx_id {
+        if *existing != id {
+            tracing::warn!(
+                existing = existing.as_str(),
+                incoming = id.as_str(),
+                "query transaction tx_id changed in stream; keeping first value"
+            );
+        }
+        return;
     }
+    tx.tx_id = Some(id);
 }
 
 pub(crate) fn check_retry_transaction_error(err: &YdbOrCustomerError) -> bool {

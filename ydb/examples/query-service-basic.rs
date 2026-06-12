@@ -77,6 +77,9 @@ async fn main() -> YdbResult<()> {
     // 7. Hot loop with dynamic SQL. The builder is consumed by `.await`, so
     //    an owned value passed by value is moved in, not copied. Pass
     //    `value.clone()` only if you need to keep the value after the call.
+    //
+    //    Table/identifier names cannot be YQL parameters — validate any user-
+    //    controlled identifier before interpolating into SQL (literal is safe).
     let table = "test";
     let dynamic_sql = format!(
         "DECLARE $id AS Int64; DECLARE $payload AS Utf8; \

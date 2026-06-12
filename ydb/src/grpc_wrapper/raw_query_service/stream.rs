@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use tracing::warn;
+
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_query_service::execute_query::{
     append_rows_from_part, check_part, stats_from_part, tx_id_from_part,
@@ -117,6 +119,11 @@ impl ExecuteQueryStream {
             }
 
             if part.result_set_index < target_index {
+                warn!(
+                    got = part.result_set_index,
+                    expected = target_index,
+                    "dropping stream part with stale result_set_index"
+                );
                 continue;
             }
 
@@ -160,6 +167,11 @@ impl ExecuteQueryStream {
                         )));
                     }
                     if next.result_set_index < collecting_index {
+                        warn!(
+                            got = next.result_set_index,
+                            expected = collecting_index,
+                            "dropping stream part with stale result_set_index"
+                        );
                         continue;
                     }
                     append_rows_from_part(&mut columns, &mut rows, &mut truncated, next)?;
