@@ -1,0 +1,16 @@
+[package]
+publish = false
+name = "slo-native-table"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+
+[[bin]]
+name = "slo-native-table"
+path = "src/main.rs"
+
+[dependencies]
+async-trait = "0.1"
+slo-framework = { path = "../../slo-framework" }
+tokio = { version = "=1.38.1", features = ["full"] }
+ydb = { path = "../../../../ydb" }
