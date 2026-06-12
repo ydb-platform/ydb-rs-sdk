@@ -33,7 +33,7 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum QuerySessionMode {
     /// Empty `session_id` in `ExecuteQueryRequest`: the server creates a session,
-    /// runs the query, and closes the session (first release default).
+    /// runs the query, and closes the session (default for the initial release).
     #[default]
     Implicit,
     /// Explicit session from a pool (not implemented yet).
