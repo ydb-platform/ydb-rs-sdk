@@ -38,6 +38,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'SLO')
 
     name: Run YDB SLO Tests
+    runs-on: "ubuntu-24.04"
     # runs-on: "large-runner"
 
     strategy:
