@@ -4,6 +4,7 @@
 
 mod exec;
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::future::{Future, IntoFuture};
 use std::marker::PhantomData;
@@ -297,7 +298,7 @@ pub struct QueryStream<'a> {
 
 impl Drop for QueryStream<'_> {
     fn drop(&mut self) {
-        if let Some(tx_id) = self.stream.take_pending_tx_id() {
+        if let Some(tx_id) = self.stream.take_captured_tx_id() {
             if let ExecCore::Transaction(ctx) = self.core {
                 apply_stream_tx_id(ctx, Some(tx_id));
             }
@@ -324,13 +325,16 @@ impl QueryStream<'_> {
     }
 
     pub async fn close(mut self) -> YdbResult<()> {
-        let stream = unsafe { ManuallyDrop::take(&mut self.stream) };
-        let meta = stream.close().await.map_err(YdbError::from)?;
-        if let ExecCore::Transaction(ctx) = self.core {
-            apply_stream_tx_id(ctx, meta.tx_id);
+        match self.stream.close().await {
+            Ok(meta) => {
+                if let ExecCore::Transaction(ctx) = self.core {
+                    apply_stream_tx_id(ctx, meta.tx_id);
+                }
+                std::mem::forget(self);
+                Ok(())
+            }
+            Err(e) => Err(YdbError::from(e)),
         }
-        std::mem::forget(self);
-        Ok(())
     }
 }
 
@@ -538,20 +542,22 @@ impl QueryClient {
                     if tx.state == TxState::RolledBack {
                         return Ok(value);
                     }
-                    match tx.commit().await {
-                        Ok(()) => return Ok(value),
-                        Err(e) => YdbOrCustomerError::YDB(e),
-                    }
+                    return match tx.commit().await {
+                        Ok(()) => Ok(value),
+                        // Commit outcome is ambiguous on transport errors; never retry.
+                        Err(e) => Err(YdbOrCustomerError::YDB(e)),
+                    };
                 }
                 Ok(Err(err)) => {
                     tx.rollback_quiet().await;
                     err
                 }
-                Err(_panic) => {
+                Err(panic_payload) => {
                     tx.rollback_quiet().await;
-                    YdbOrCustomerError::YDB(YdbError::Custom(
-                        "query transaction callback panicked".to_string(),
-                    ))
+                    YdbOrCustomerError::YDB(YdbError::Custom(format!(
+                        "query transaction callback panicked: {}",
+                        panic_message(panic_payload)
+                    )))
                 }
             };
 
@@ -647,3 +653,13 @@ impl HasCore for QueryTransaction {
 }
 
 impl QueryExecutor for QueryTransaction {}
+
+fn panic_message(payload: Box<dyn Any + Send>) -> String {
+    match payload.downcast::<String>() {
+        Ok(msg) => *msg,
+        Err(payload) => match payload.downcast::<&'static str>() {
+            Ok(msg) => (*msg).to_string(),
+            Err(_) => "unknown panic payload".to_string(),
+        },
+    }
+}

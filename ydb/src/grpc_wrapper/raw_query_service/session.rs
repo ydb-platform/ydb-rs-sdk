@@ -18,6 +18,10 @@ pub(crate) struct AttachedQuerySession {
 impl Drop for AttachedQuerySession {
     fn drop(&mut self) {
         self.attach_task.abort();
+        tracing::warn!(
+            session_id = %self.session_id,
+            "query session dropped without explicit close; server-side session may leak until idle timeout"
+        );
     }
 }
 

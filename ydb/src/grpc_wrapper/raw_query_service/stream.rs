@@ -16,6 +16,7 @@ pub(crate) struct ExecuteQueryStream {
     grpc: Option<tonic::Streaming<ExecuteQueryResponsePart>>,
     next_index: i64,
     pending_part: Option<ExecuteQueryResponsePart>,
+    captured_tx_id: Option<String>,
     finished: bool,
     stats: Option<Duration>,
 }
@@ -26,6 +27,7 @@ impl ExecuteQueryStream {
             grpc: Some(stream),
             next_index: 0,
             pending_part: None,
+            captured_tx_id: None,
             finished: false,
             stats: None,
         }
@@ -39,7 +41,30 @@ impl ExecuteQueryStream {
         if let Some(duration) = stats_from_part(part) {
             self.stats = Some(duration);
         }
-        tx_id_from_part(part)
+        if let Some(id) = tx_id_from_part(part) {
+            self.captured_tx_id = Some(id.clone());
+            return Some(id);
+        }
+        None
+    }
+
+    /// Read the first response part so transaction `tx_id` is captured before iteration.
+    pub async fn prime_first_part(&mut self) -> RawResult<()> {
+        if self.pending_part.is_some() || self.grpc.is_none() || self.finished {
+            return Ok(());
+        }
+        let Some(stream) = self.grpc.as_mut() else {
+            return Ok(());
+        };
+        match stream.message().await? {
+            Some(part) => {
+                check_part(&part)?;
+                self.absorb_part_metadata(&part);
+                self.pending_part = Some(part);
+            }
+            None => self.finished = true,
+        }
+        Ok(())
     }
 
     pub async fn next_result_set(&mut self) -> RawResult<Option<(RawResultSet, Option<String>)>> {
@@ -190,11 +215,14 @@ impl ExecuteQueryStream {
         Ok((sets_to_vec(sets), tx_id))
     }
 
-    pub fn take_pending_tx_id(&mut self) -> Option<String> {
+    pub fn take_captured_tx_id(&mut self) -> Option<String> {
+        if let Some(id) = self.captured_tx_id.take() {
+            return Some(id);
+        }
         self.pending_part.as_ref().and_then(tx_id_from_part)
     }
 
-    pub async fn close(mut self) -> RawResult<StreamCloseMeta> {
+    pub async fn close(&mut self) -> RawResult<StreamCloseMeta> {
         let mut tx_id = None;
 
         if let Some(part) = self.pending_part.take() {
@@ -206,6 +234,7 @@ impl ExecuteQueryStream {
 
         // Drop the gRPC stream without draining — cancels server-side send for unread parts.
         drop(self.grpc.take());
+        self.finished = true;
 
         Ok(StreamCloseMeta { tx_id })
     }

@@ -313,7 +313,12 @@ pub(crate) async fn transaction_begin_stream(
         client.execute_query(req).await.map_err(Into::into)
     })
     .await?;
-    Ok(ExecuteQueryStream::new(stream))
+    let mut stream = ExecuteQueryStream::new(stream);
+    stream.prime_first_part().await?;
+    if let Some(id) = stream.take_captured_tx_id() {
+        apply_stream_tx_id(tx, Some(id));
+    }
+    Ok(stream)
 }
 
 pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbResult<()> {
@@ -336,6 +341,7 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
     .await;
     release_tx_session(tx).await;
     tx.finished = true;
+    // Do not retry commit: a transport timeout may mean the commit succeeded server-side.
     result
 }
 
