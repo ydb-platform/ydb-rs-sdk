@@ -50,10 +50,9 @@ impl Client {
         TableClient::new(self.connection_manager.clone(), self.timeouts)
     }
 
-    /// Create instance of client for query service (PROTOTYPE: interface for
-    /// design review of issue #207, execution is not implemented yet)
+    /// Create instance of client for query service.
     pub fn query_client(&self) -> QueryClient {
-        QueryClient::new()
+        QueryClient::new(self.connection_manager.clone(), self.timeouts)
     }
 
     /// Create instance of client for directory service

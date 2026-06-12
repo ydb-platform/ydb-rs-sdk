@@ -1,9 +1,4 @@
-//! Query Service API PROTOTYPE (issue #207): one-shot queries on
-//! `QueryClient` — awaitable builders, params at the call site,
-//! strict/optional/typed rows, reusable `Stmt` in a hot loop.
-//!
-//! Compiles to validate the API shape; running it fails at the first query —
-//! execution is not implemented in the prototype.
+//! Query Service examples — implicit sessions (default), awaitable builders.
 
 use std::time::Duration;
 

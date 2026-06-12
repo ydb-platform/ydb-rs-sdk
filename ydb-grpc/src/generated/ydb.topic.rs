@@ -1136,6 +1136,11 @@ pub struct Consumer {
     /// Filled only when requested statistics in Describe\*Request.
     #[prost(message, optional, tag = "7")]
     pub consumer_stats: ::core::option::Option<consumer::ConsumerStats>,
+    /// Message for this consumer will not expire due to retention for at least `availability_period` if they aren't commited.
+    #[prost(message, optional, tag = "8")]
+    pub availability_period: ::core::option::Option<
+        super::super::google::protobuf::Duration,
+    >,
 }
 /// Nested message and enum types in `Consumer`.
 pub mod consumer {
@@ -1194,6 +1199,23 @@ pub struct AlterConsumer {
         ::prost::alloc::string::String,
         ::prost::alloc::string::String,
     >,
+    /// Change message lifetime if consumer is important.
+    #[prost(oneof = "alter_consumer::AvailabilityPeriodAction", tags = "7, 8")]
+    pub availability_period_action: ::core::option::Option<
+        alter_consumer::AvailabilityPeriodAction,
+    >,
+}
+/// Nested message and enum types in `AlterConsumer`.
+pub mod alter_consumer {
+    /// Change message lifetime if consumer is important.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum AvailabilityPeriodAction {
+        #[prost(message, tag = "7")]
+        SetAvailabilityPeriod(super::super::super::google::protobuf::Duration),
+        #[prost(message, tag = "8")]
+        ResetAvailabilityPeriod(super::super::super::google::protobuf::Empty),
+    }
 }
 /// Partitioning settings for topic.
 #[derive(serde::Serialize, serde::Deserialize)]
