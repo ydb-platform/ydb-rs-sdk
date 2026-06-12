@@ -44,6 +44,7 @@ jobs:
       uses: dtolnay/rust-toolchain@v1
       with:
         toolchain: ${{ env[matrix.rust_version] }}
+        components: llvm-tools-preview
 
     - name: Checkout
       uses: actions/checkout@v4
@@ -61,7 +62,19 @@ jobs:
     - name: Rust cache
       uses: Swatinem/rust-cache@v2
 
-    - name: Run tests
+    - name: Install cargo-llvm-cov
+      uses: taiki-e/install-action@cargo-llvm-cov
+
+    - name: Run tests with coverage
       env:
         YDB_CONNECTION_STRING: grpc://localhost:2136?database=/local
-      run: cargo test --verbose --workspace -- --include-ignored
+      run: cargo llvm-cov --workspace --exclude ydb-slo-tests --lcov --output-path lcov.info -- --include-ignored
+
+    - name: Upload coverage report to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./lcov.info
+        flags: tests,ubuntu,rust-${{ steps.rust_version_step.outputs.version }}
+        name: tests
+      env:
+        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

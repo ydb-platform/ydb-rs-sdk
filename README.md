@@ -2,6 +2,7 @@
 [![Latest Version](https://img.shields.io/crates/v/ydb.svg)](https://crates.io/crates/ydb)
 [![Released API docs](https://docs.rs/ydb/badge.svg)](https://docs.rs/ydb)
 [![YDB tests](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-tests.yml/badge.svg?branch=master&event=schedule)](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-tests.yml)
+[![codecov](https://codecov.io/gh/ydb-platform/ydb-rs-sdk/badge.svg?precision=2)](https://app.codecov.io/gh/ydb-platform/ydb-rs-sdk)
 
 Rust SDK for YDB.
 
