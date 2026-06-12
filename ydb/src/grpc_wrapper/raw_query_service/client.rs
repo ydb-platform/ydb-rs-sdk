@@ -12,8 +12,8 @@ use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use ydb_grpc::ydb_proto::query::v1::query_service_client::QueryServiceClient;
 use ydb_grpc::ydb_proto::query::{
-    AttachSessionRequest, CommitTransactionRequest, CreateSessionRequest,
-    DeleteSessionRequest, ExecuteQueryResponsePart, RollbackTransactionRequest, SessionState,
+    AttachSessionRequest, CommitTransactionRequest, CreateSessionRequest, DeleteSessionRequest,
+    ExecuteQueryResponsePart, RollbackTransactionRequest, SessionState,
 };
 
 pub(crate) struct RawQueryClient {
@@ -85,10 +85,7 @@ impl RawQueryClient {
     }
 
     pub async fn create_session(&mut self) -> RawResult<String> {
-        let response = self
-            .service
-            .create_session(CreateSessionRequest {})
-            .await?;
+        let response = self.service.create_session(CreateSessionRequest {}).await?;
         let inner = response.into_inner();
         check_status(inner.status, &inner.issues)?;
         Ok(inner.session_id)

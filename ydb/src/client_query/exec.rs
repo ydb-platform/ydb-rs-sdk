@@ -195,9 +195,7 @@ fn tx_session_id(tx: &TransactionExecContext) -> YdbResult<&str> {
     tx.attached_session
         .as_ref()
         .map(|s| s.session_id())
-        .ok_or_else(|| {
-            YdbError::Custom("query transaction session is not initialized".to_string())
-        })
+        .ok_or_else(|| YdbError::Custom("query transaction session is not initialized".to_string()))
 }
 
 async fn release_tx_session(tx: &mut TransactionExecContext) {
@@ -286,7 +284,6 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
     tx.finished = true;
     Ok(())
 }
-
 
 pub(crate) fn transaction_exec_context(
     connection_manager: GrpcConnectionManager,

@@ -35,4 +35,8 @@ Agent: "Method M failed, so I implemented alternative N instead."
 - **`progress.md`** — update in the PR that delivers completed work.
 - Stable files (`systemPatterns.md`, …) — only when architecture, tooling, or scope actually changed.
 
+## Before handoff
+
+Run the lint gate from [`AGENTS.md`](../../AGENTS.md#done-when) (`cargo fmt`, `cargo fmt --check`, `cargo clippy …`) and fix all failures before declaring the task done.
+
 Add rules to `AGENTS.md` only after repeated agent mistakes — incremental, not upfront.

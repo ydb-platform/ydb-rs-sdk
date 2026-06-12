@@ -21,14 +21,8 @@ impl AttachedQuerySession {
             .ok_or_else(|| RawError::custom("attach session stream closed"))?;
         check_attach_state(&first)?;
 
-        let attach_task = tokio::spawn(async move {
-            loop {
-                match attach_stream.message().await {
-                    Ok(Some(_)) => {}
-                    _ => break,
-                }
-            }
-        });
+        let attach_task =
+            tokio::spawn(async move { while let Ok(Some(_)) = attach_stream.message().await {} });
 
         Ok(Self {
             session_id,

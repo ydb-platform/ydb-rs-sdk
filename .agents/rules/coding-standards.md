@@ -6,7 +6,18 @@ Read when touching public API, module layout, dependencies, or error handling.
 
 - Comments, doc comments, error messages, and logs: **English**.
 - Match naming and formatting in the touched module; do not reformat unrelated code.
-- Run `cargo fmt` on changed files before handoff.
+
+## Lint before handoff (required)
+
+After editing Rust code, **always** run from repo root before marking work complete:
+
+```bash
+cargo fmt
+cargo fmt --check
+cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
+```
+
+Fix all reported issues in touched files. CI runs the same checks in [`.github/workflows/linter.yaml`](../../.github/workflows/linter.yaml).
 
 ## Dependencies and versions
 

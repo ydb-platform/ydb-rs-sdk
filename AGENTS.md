@@ -41,9 +41,10 @@ On **"update memory bank"** — review all core files in [`.agents/context/READM
 
 ## Done when
 
-From repo root:
+**Before finishing any task** — run these from repo root on all changed code and fix failures (do not hand off with lint errors):
 
 ```bash
+cargo fmt                    # format; then verify:
 cargo fmt --check
 cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
 cargo test --workspace

@@ -35,9 +35,7 @@ async fn query_client_exec_ddl() -> YdbResult<()> {
     let mut qc = client.query_client().clone_with_idempotent_operations(true);
     let table_name = unique_table_name("query_client_test_exec_ddl");
 
-    let _ = qc
-        .exec(format!("DROP TABLE IF EXISTS {table_name}"))
-        .await;
+    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
     qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Utf8, PRIMARY KEY(id))"
     ))
@@ -77,9 +75,7 @@ async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
     let mut qc = client.query_client().clone_with_idempotent_operations(true);
     let table_name = unique_table_name("query_client_test_upsert");
 
-    let _ = qc
-        .exec(format!("DROP TABLE IF EXISTS {table_name}"))
-        .await;
+    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
     qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Utf8, PRIMARY KEY(id))"
     ))
