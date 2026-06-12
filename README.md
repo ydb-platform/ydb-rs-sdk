@@ -7,7 +7,7 @@
 Rust SDK for YDB.
 
 ### Prerequisites
-Rust 1.82.0 or newer
+Rust 1.85.0 or newer
 
 ### Installation
 Add the YDB dependency to your project using `cargo add ydb` or add this your Cargo.toml:
