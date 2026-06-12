@@ -134,6 +134,7 @@ impl From<RawInitRequest> for stream_read_message::InitRequest {
             reader_name: value.reader_name,
             direct_read: false,
             auto_partitioning_support: false,
+            partition_max_in_flight_bytes: 0,
         }
     }
 }
