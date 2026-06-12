@@ -3,7 +3,7 @@ mod mock_server;
 use crate::mock_server::FakeTopic;
 
 use std::time::Duration;
-use tokio::sync::oneshot::error::TryRecvError;
+use tokio::{sync::oneshot::error::TryRecvError, time::timeout};
 use tracing_test::traced_test;
 use ydb::{TopicReader, TopicReaderBatch, TopicReaderCommitMarker, YdbError, YdbResult};
 
@@ -102,13 +102,19 @@ async fn idempotent_retry() -> YdbResult<()> {
 #[tokio::test]
 #[traced_test]
 async fn reconnects_after_server_restart() -> YdbResult<()> {
-    let (mut reader, mut topic) = reader_and_topic().await?;
+    let job = async {
+        let (mut reader, mut topic) = reader_and_topic().await?;
 
-    read_one(&mut reader, &mut topic, 0, b"before").await?;
+        read_one(&mut reader, &mut topic, 0, b"before").await?;
 
-    topic.restart_server().await;
-    read_one(&mut reader, &mut topic, 1, b"after").await?;
-    Ok(())
+        topic.restart_server().await;
+        read_one(&mut reader, &mut topic, 1, b"after").await?;
+        Ok(())
+    };
+
+    timeout(Duration::from_secs(60), job)
+        .await
+        .expect("too long reconnecting")
 }
 
 #[tokio::test]
