@@ -158,7 +158,8 @@ pub(crate) fn append_rows_from_part(
     *truncated |= part_set.truncated;
     if !columns.is_empty()
         && !part_set.columns.is_empty()
-        && !columns_compatible(columns, &part_set.columns) {
+        && !columns_compatible(columns, &part_set.columns)
+    {
         return Err(crate::grpc_wrapper::raw_errors::RawError::custom(
             "column metadata mismatch between stream parts".to_string(),
         ));
