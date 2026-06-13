@@ -35,6 +35,22 @@ pub(crate) struct RawExecuteQueryCollectError {
 }
 
 impl RawExecuteQueryRequest {
+    pub(crate) fn new(
+        session_id: impl Into<String>,
+        yql_text: impl Into<String>,
+        parameters: HashMap<String, Value>,
+        tx_control: Option<ydb_grpc::ydb_proto::query::TransactionControl>,
+        collect_stats: bool,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            yql_text: yql_text.into(),
+            parameters,
+            tx_control,
+            collect_stats,
+        }
+    }
+
     pub fn into_proto(self) -> RawResult<ExecuteQueryRequest> {
         let mut parameters = HashMap::with_capacity(self.parameters.len());
         for (name, val) in self.parameters {

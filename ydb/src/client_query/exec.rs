@@ -20,10 +20,16 @@ use crate::result::ResultSet;
 use crate::types::Value;
 use crate::{QuerySessionMode, QueryTransactionOptions, QueryTxMode};
 
-use super::private::CallOptions;
-
 const DEFAULT_RETRY_BUDGET: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CallOptions {
+    pub timeout: Option<Duration>,
+    pub idempotent: Option<bool>,
+    pub collect_stats: bool,
+    pub session_mode: Option<QuerySessionMode>,
+}
 
 #[derive(Clone)]
 pub(crate) struct ClientExecContext {
@@ -118,24 +124,26 @@ fn raw_sets_to_result_sets(
     sets.into_iter().map(ResultSet::try_from).collect()
 }
 
-pub(crate) async fn client_run(
-    ctx: &ClientExecContext,
-    text: &str,
-    params: &HashMap<String, Value>,
-    opts: &CallOptions,
-) -> YdbResult<Vec<ResultSet>> {
-    let idempotent = opts.idempotent.unwrap_or(ctx.idempotent_operation);
+async fn retry_with_budget<T, F, Fut>(
+    idempotent: bool,
+    retry_budget: Duration,
+    mut attempt_fn: F,
+) -> YdbResult<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = YdbResult<T>>,
+{
     let start = Instant::now();
     let mut attempt = 0usize;
     loop {
         attempt += 1;
-        match client_run_once(ctx, text, params, opts).await {
-            Ok(sets) => return Ok(sets),
+        match attempt_fn().await {
+            Ok(value) => return Ok(value),
             Err(err) => {
                 if !should_retry_ydb_error(idempotent, &err) {
                     return Err(err);
                 }
-                match retry_wait(attempt, start.elapsed(), ctx.retry_budget) {
+                match retry_wait(attempt, start.elapsed(), retry_budget) {
                     Some(wait) if wait > Duration::ZERO => sleep(wait).await,
                     Some(_) => {}
                     None => return Err(err),
@@ -145,21 +153,44 @@ pub(crate) async fn client_run(
     }
 }
 
+pub(crate) async fn client_run(
+    ctx: &ClientExecContext,
+    text: &str,
+    params: &HashMap<String, Value>,
+    opts: &CallOptions,
+) -> YdbResult<Vec<ResultSet>> {
+    let idempotent = opts.idempotent.unwrap_or(ctx.idempotent_operation);
+    retry_with_budget(idempotent, ctx.retry_budget, || {
+        client_run_once(ctx, text, params, opts)
+    })
+    .await
+}
+
+async fn client_implicit_request(
+    ctx: &ClientExecContext,
+    text: &str,
+    params: &HashMap<String, Value>,
+    opts: &CallOptions,
+) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
+    let session_id = session_id_for_mode(opts.session_mode.unwrap_or(ctx.session_mode))?;
+    let client = query_client(ctx).await?;
+    let req = RawExecuteQueryRequest::new(
+        session_id,
+        text,
+        params.clone(),
+        implicit_tx_control(),
+        opts.collect_stats,
+    );
+    Ok((client, req))
+}
+
 async fn client_run_once_raw(
     ctx: &ClientExecContext,
     text: &str,
     params: &HashMap<String, Value>,
     opts: &CallOptions,
 ) -> YdbResult<crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryResult> {
-    let session_id = session_id_for_mode(opts.session_mode.unwrap_or(ctx.session_mode))?;
-    let mut client = query_client(ctx).await?;
-    let req = RawExecuteQueryRequest {
-        session_id,
-        yql_text: text.to_string(),
-        parameters: params.clone(),
-        tx_control: implicit_tx_control(),
-        collect_stats: opts.collect_stats,
-    };
+    let (mut client, req) = client_implicit_request(ctx, text, params, opts).await?;
     let timeout_duration = operation_timeout(opts, &ctx.timeouts);
     with_operation_timeout(timeout_duration, async {
         client
@@ -186,15 +217,7 @@ async fn client_begin_stream_once(
     params: &HashMap<String, Value>,
     opts: &CallOptions,
 ) -> YdbResult<ExecuteQueryStream> {
-    let session_id = session_id_for_mode(opts.session_mode.unwrap_or(ctx.session_mode))?;
-    let mut client = query_client(ctx).await?;
-    let req = RawExecuteQueryRequest {
-        session_id,
-        yql_text: text.to_string(),
-        parameters: params.clone(),
-        tx_control: implicit_tx_control(),
-        collect_stats: opts.collect_stats,
-    };
+    let (mut client, req) = client_implicit_request(ctx, text, params, opts).await?;
     let timeout_duration = operation_timeout(opts, &ctx.timeouts);
     let stream = with_operation_timeout(timeout_duration, async {
         client.execute_query(req).await.map_err(Into::into)
@@ -210,24 +233,10 @@ pub(crate) async fn client_begin_stream(
     opts: CallOptions,
 ) -> YdbResult<ExecuteQueryStream> {
     let idempotent = opts.idempotent.unwrap_or(ctx.idempotent_operation);
-    let start = Instant::now();
-    let mut attempt = 0usize;
-    loop {
-        attempt += 1;
-        match client_begin_stream_once(ctx, &text, &params, &opts).await {
-            Ok(stream) => return Ok(stream),
-            Err(err) => {
-                if !should_retry_ydb_error(idempotent, &err) {
-                    return Err(err);
-                }
-                match retry_wait(attempt, start.elapsed(), ctx.retry_budget) {
-                    Some(wait) if wait > Duration::ZERO => sleep(wait).await,
-                    Some(_) => {}
-                    None => return Err(err),
-                }
-            }
-        }
-    }
+    retry_with_budget(idempotent, ctx.retry_budget, || {
+        client_begin_stream_once(ctx, &text, &params, &opts)
+    })
+    .await
 }
 
 /// Interactive transactions need a stable attached session; implicit one-shot queries do not.
@@ -270,6 +279,24 @@ async fn release_tx_session(tx: &mut TransactionExecContext) {
     tx.query_node = None;
 }
 
+async fn transaction_execute_request(
+    tx: &TransactionExecContext,
+    yql_text: String,
+    parameters: HashMap<String, Value>,
+    opts: &CallOptions,
+) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
+    let session_id = tx_session_id(tx)?.to_string();
+    let client = query_client_from_tx(tx).await?;
+    let req = RawExecuteQueryRequest::new(
+        session_id,
+        yql_text,
+        parameters,
+        tx_control_for_transaction(tx)?,
+        opts.collect_stats,
+    );
+    Ok((client, req))
+}
+
 pub(crate) async fn transaction_run(
     tx: &mut TransactionExecContext,
     text: &str,
@@ -277,15 +304,8 @@ pub(crate) async fn transaction_run(
     opts: &CallOptions,
 ) -> YdbResult<Vec<ResultSet>> {
     ensure_tx_session(tx).await?;
-    let session_id = tx_session_id(tx)?.to_string();
-    let mut client = query_client_from_tx(tx).await?;
-    let req = RawExecuteQueryRequest {
-        session_id,
-        yql_text: text.to_string(),
-        parameters: params.clone(),
-        tx_control: tx_control_for_transaction(tx)?,
-        collect_stats: opts.collect_stats,
-    };
+    let (mut client, req) =
+        transaction_execute_request(tx, text.to_string(), params.clone(), opts).await?;
     let timeout_duration = operation_timeout(opts, &tx.timeouts);
     let raw = with_operation_timeout(timeout_duration, async {
         match client.execute_query_collect(req).await {
@@ -312,15 +332,7 @@ pub(crate) async fn transaction_begin_stream(
     opts: CallOptions,
 ) -> YdbResult<ExecuteQueryStream> {
     ensure_tx_session(tx).await?;
-    let session_id = tx_session_id(tx)?.to_string();
-    let mut client = query_client_from_tx(tx).await?;
-    let req = RawExecuteQueryRequest {
-        session_id,
-        yql_text: text,
-        parameters: params,
-        tx_control: tx_control_for_transaction(tx)?,
-        collect_stats: opts.collect_stats,
-    };
+    let (mut client, req) = transaction_execute_request(tx, text, params, &opts).await?;
     let timeout_duration = operation_timeout(&opts, &tx.timeouts);
     let stream = with_operation_timeout(timeout_duration, async {
         client.execute_query(req).await.map_err(Into::into)

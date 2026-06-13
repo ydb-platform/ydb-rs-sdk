@@ -2,17 +2,16 @@
 //!
 //! Requires Rust 1.85+ (`AsyncFnMut` in [`QueryClient::retry_transaction`]).
 
+mod builders;
 mod exec;
+mod internal;
+mod stream_facade;
 
 #[cfg(test)]
 mod integration_test;
 
 use std::any::Any;
-use std::collections::HashMap;
-use std::future::{Future, IntoFuture};
-use std::marker::PhantomData;
 use std::panic::AssertUnwindSafe;
-use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use futures_util::FutureExt;
@@ -21,17 +20,14 @@ use tokio::time::sleep;
 use crate::client::TimeoutSettings;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr};
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
-use crate::result::{ResultSet, Row};
-use crate::types::Value;
+use crate::result::Row;
 
+use builders::impl_query_methods;
 use exec::{
-    apply_stream_tx_id, check_retry_transaction_error, client_begin_stream, client_run, retry_wait,
-    transaction_begin_stream, transaction_commit, transaction_exec_context, transaction_rollback,
-    transaction_run, ClientExecContext, TransactionExecContext, DEFAULT_QUERY_RETRY_BUDGET,
+    check_retry_transaction_error, retry_wait, transaction_commit, transaction_exec_context,
+    transaction_rollback, ClientExecContext, TransactionExecContext, DEFAULT_QUERY_RETRY_BUDGET,
 };
-
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+use internal::{ExecCoreRef, HasCore};
 
 /// How [`QueryClient`] acquires a YDB session for each call.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -54,339 +50,6 @@ impl FromYdbRow for Row {
     fn from_row(row: Row) -> YdbResult<Self> {
         Ok(row)
     }
-}
-
-mod private {
-    use super::*;
-
-    pub(crate) enum ExecCoreRef<'a> {
-        Client(&'a mut ClientExecContext),
-        Transaction(&'a mut TransactionExecContext),
-    }
-
-    impl ExecCoreRef<'_> {
-        pub(crate) async fn run(
-            &mut self,
-            text: &str,
-            params: &HashMap<String, Value>,
-            opts: &CallOptions,
-        ) -> YdbResult<Vec<ResultSet>> {
-            match self {
-                ExecCoreRef::Client(ctx) => client_run(ctx, text, params, opts).await,
-                ExecCoreRef::Transaction(ctx) => transaction_run(ctx, text, params, opts).await,
-            }
-        }
-
-        pub(crate) async fn begin_stream(
-            &mut self,
-            text: String,
-            params: HashMap<String, Value>,
-            opts: CallOptions,
-        ) -> YdbResult<ExecuteQueryStream> {
-            match self {
-                ExecCoreRef::Client(ctx) => client_begin_stream(ctx, text, params, opts).await,
-                ExecCoreRef::Transaction(ctx) => {
-                    transaction_begin_stream(ctx, text, params, opts).await
-                }
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, Default)]
-    pub(crate) struct CallOptions {
-        pub timeout: Option<Duration>,
-        pub idempotent: Option<bool>,
-        pub collect_stats: bool,
-        pub session_mode: Option<QuerySessionMode>,
-    }
-
-    pub(crate) trait HasCore {
-        fn core_mut(&mut self) -> ExecCoreRef<'_>;
-    }
-}
-
-use private::{CallOptions, ExecCoreRef, HasCore};
-
-pub enum ExecCall {}
-pub struct OneRow<T>(PhantomData<T>);
-pub struct OptionalRow<T>(PhantomData<T>);
-pub enum OneResultSet {}
-pub enum Streamed {}
-
-pub type ExecBuilder<'a> = CallBuilder<'a, ExecCall>;
-pub type QueryRowBuilder<'a, T = Row> = CallBuilder<'a, OneRow<T>>;
-pub type OptionalRowBuilder<'a, T = Row> = CallBuilder<'a, OptionalRow<T>>;
-pub type ResultSetBuilder<'a> = CallBuilder<'a, OneResultSet>;
-pub type QueryStreamBuilder<'a> = CallBuilder<'a, Streamed>;
-
-pub struct CallBuilder<'a, K> {
-    core: ExecCoreRef<'a>,
-    text: String,
-    params: HashMap<String, Value>,
-    opts: CallOptions,
-    _kind: PhantomData<fn() -> K>,
-}
-
-impl<'a, K> CallBuilder<'a, K> {
-    fn new(core: ExecCoreRef<'a>, text: String) -> Self {
-        Self {
-            core,
-            text,
-            params: HashMap::new(),
-            opts: CallOptions::default(),
-            _kind: PhantomData,
-        }
-    }
-
-    fn into_kind<K2>(self) -> CallBuilder<'a, K2> {
-        CallBuilder {
-            core: self.core,
-            text: self.text,
-            params: self.params,
-            opts: self.opts,
-            _kind: PhantomData,
-        }
-    }
-
-    pub fn param(mut self, name: impl Into<String>, value: impl Into<Value>) -> Self {
-        self.params.insert(name.into(), value.into());
-        self
-    }
-
-    pub fn params(mut self, params: HashMap<String, Value>) -> Self {
-        self.params.extend(params);
-        self
-    }
-
-    /// Per-call operation timeout.
-    ///
-    /// For one-shot calls (`exec`, `query_row`, …) this limits the full RPC.
-    /// For [`QueryStream`](Self) the timeout applies only while opening the gRPC
-    /// stream; iterating result sets is not bounded by this value.
-    pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.opts.timeout = Some(timeout);
-        self
-    }
-
-    pub fn idempotent(mut self, idempotent: bool) -> Self {
-        self.opts.idempotent = Some(idempotent);
-        self
-    }
-
-    pub fn collect_stats(mut self) -> Self {
-        self.opts.collect_stats = true;
-        self
-    }
-
-    /// Override session acquisition for this call (default: implicit session).
-    pub fn session_mode(mut self, mode: QuerySessionMode) -> Self {
-        self.opts.session_mode = Some(mode);
-        self
-    }
-
-    /// Shorthand for [`Self::session_mode`] ([`QuerySessionMode::Implicit`]).
-    pub fn implicit_session(self) -> Self {
-        self.session_mode(QuerySessionMode::Implicit)
-    }
-
-    /// Shorthand for [`Self::session_mode`] ([`QuerySessionMode::Pool`]).
-    ///
-    /// Pool mode is not implemented yet and currently returns a runtime error.
-    pub fn pooled_session(self) -> Self {
-        self.session_mode(QuerySessionMode::Pool)
-    }
-}
-
-impl<'a, T> CallBuilder<'a, OneRow<T>> {
-    pub fn typed<U: FromYdbRow>(self) -> CallBuilder<'a, OneRow<U>> {
-        self.into_kind()
-    }
-
-    pub fn optional(self) -> CallBuilder<'a, OptionalRow<T>> {
-        self.into_kind()
-    }
-}
-
-fn exactly_one_set(mut sets: Vec<ResultSet>) -> YdbResult<ResultSet> {
-    match sets.len() {
-        0 => Err(YdbError::Custom("expected 1 result set, got 0".to_string())),
-        1 => Ok(sets.pop().expect("len checked")),
-        count => Err(YdbError::Custom(format!(
-            "expected 1 result set, got {count}"
-        ))),
-    }
-}
-
-fn take_single_row(sets: Vec<ResultSet>) -> YdbResult<Option<Row>> {
-    let mut rows = exactly_one_set(sets)?.into_iter();
-    let row = rows.next();
-    if rows.next().is_some() {
-        return Err(YdbError::Custom(
-            "expected at most 1 row in result set, got more".to_string(),
-        ));
-    }
-    Ok(row)
-}
-
-impl<'a> IntoFuture for CallBuilder<'a, ExecCall> {
-    type Output = YdbResult<()>;
-    type IntoFuture = BoxFuture<'a, Self::Output>;
-
-    fn into_future(mut self) -> Self::IntoFuture {
-        Box::pin(async move {
-            self.core.run(&self.text, &self.params, &self.opts).await?;
-            Ok(())
-        })
-    }
-}
-
-impl<'a, T: FromYdbRow + 'a> IntoFuture for CallBuilder<'a, OneRow<T>> {
-    type Output = YdbResult<T>;
-    type IntoFuture = BoxFuture<'a, Self::Output>;
-
-    fn into_future(mut self) -> Self::IntoFuture {
-        Box::pin(async move {
-            let sets = self.core.run(&self.text, &self.params, &self.opts).await?;
-            let row = take_single_row(sets)?.ok_or(YdbError::NoRows)?;
-            T::from_row(row)
-        })
-    }
-}
-
-impl<'a, T: FromYdbRow + 'a> IntoFuture for CallBuilder<'a, OptionalRow<T>> {
-    type Output = YdbResult<Option<T>>;
-    type IntoFuture = BoxFuture<'a, Self::Output>;
-
-    fn into_future(mut self) -> Self::IntoFuture {
-        Box::pin(async move {
-            let sets = self.core.run(&self.text, &self.params, &self.opts).await?;
-            take_single_row(sets)?.map(T::from_row).transpose()
-        })
-    }
-}
-
-impl<'a> IntoFuture for CallBuilder<'a, OneResultSet> {
-    type Output = YdbResult<ResultSet>;
-    type IntoFuture = BoxFuture<'a, Self::Output>;
-
-    fn into_future(mut self) -> Self::IntoFuture {
-        Box::pin(async move {
-            let sets = self.core.run(&self.text, &self.params, &self.opts).await?;
-            exactly_one_set(sets)
-        })
-    }
-}
-
-impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
-    type Output = YdbResult<QueryStream<'a>>;
-    type IntoFuture = BoxFuture<'a, Self::Output>;
-
-    fn into_future(mut self) -> Self::IntoFuture {
-        Box::pin(async move {
-            let stream = self
-                .core
-                .begin_stream(self.text, self.params, self.opts)
-                .await?;
-            Ok(QueryStream {
-                core: self.core,
-                stream,
-            })
-        })
-    }
-}
-
-pub struct QueryStream<'a> {
-    core: ExecCoreRef<'a>,
-    stream: ExecuteQueryStream,
-}
-
-impl Drop for QueryStream<'_> {
-    fn drop(&mut self) {
-        if let Some(tx_id) = self.stream.take_captured_tx_id() {
-            if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-                apply_stream_tx_id(ctx, Some(tx_id));
-            }
-        }
-        self.stream.cancel();
-    }
-}
-
-impl QueryStream<'_> {
-    pub async fn next_result_set(&mut self) -> YdbResult<Option<ResultSet>> {
-        let (raw, tx_id) = match self.stream.next_result_set().await? {
-            Some(v) => v,
-            None => return Ok(None),
-        };
-        if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-            apply_stream_tx_id(ctx, tx_id);
-        }
-        Ok(Some(ResultSet::try_from(raw)?))
-    }
-
-    pub fn stats(&self) -> Option<QueryStats> {
-        self.stream
-            .stats()
-            .map(|total_duration| QueryStats { total_duration })
-    }
-
-    pub async fn close(mut self) -> YdbResult<()> {
-        let meta_result = self.stream.close().await.map_err(YdbError::from);
-        if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-            match &meta_result {
-                Ok(meta) => apply_stream_tx_id(ctx, meta.tx_id.clone()),
-                Err(_) => {
-                    if let Some(tx_id) = self.stream.take_captured_tx_id() {
-                        apply_stream_tx_id(ctx, Some(tx_id));
-                    }
-                }
-            }
-        }
-        meta_result.map(|_| ())
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct QueryStats {
-    pub total_duration: Duration,
-}
-
-#[allow(private_bounds)]
-pub trait QueryExecutor: HasCore {
-    fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_> {
-        CallBuilder::new(self.core_mut(), text.into())
-    }
-
-    fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_> {
-        CallBuilder::new(self.core_mut(), text.into())
-    }
-
-    fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_> {
-        CallBuilder::new(self.core_mut(), text.into())
-    }
-
-    fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row> {
-        CallBuilder::new(self.core_mut(), text.into())
-    }
-}
-
-macro_rules! impl_query_methods {
-    () => {
-        pub fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_> {
-            QueryExecutor::exec(self, text)
-        }
-
-        pub fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_> {
-            QueryExecutor::query(self, text)
-        }
-
-        pub fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_> {
-            QueryExecutor::query_result_set(self, text)
-        }
-
-        pub fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row> {
-            QueryExecutor::query_row(self, text)
-        }
-    };
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -626,6 +289,12 @@ impl HasCore for QueryTransaction {
 
 impl QueryExecutor for QueryTransaction {}
 
+pub use builders::{
+    CallBuilder, ExecBuilder, ExecCall, OneResultSet, OneRow, OptionalRow, OptionalRowBuilder,
+    QueryExecutor, QueryRowBuilder, QueryStreamBuilder, ResultSetBuilder, Streamed,
+};
+pub use stream_facade::{QueryStats, QueryStream};
+
 fn panic_message(payload: Box<dyn Any + Send>) -> String {
     match payload.downcast::<String>() {
         Ok(msg) => *msg,
@@ -642,6 +311,8 @@ mod unit_tests {
     use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
     use crate::grpc_wrapper::raw_table_service::value::{RawColumn, RawResultSet, RawValue};
     use crate::result::ResultSet;
+
+    use builders::{exactly_one_set, take_single_row};
 
     fn int64_set(values: Vec<i64>) -> ResultSet {
         RawResultSet {
