@@ -311,3 +311,22 @@ fn attrs_from_key(key: &str) -> Vec<KeyValue> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn otlp_metric_exporter_has_http_client() {
+        let exporter = opentelemetry_otlp::MetricExporter::builder()
+            .with_http()
+            .with_endpoint("http://localhost:4318/v1/metrics")
+            .with_temporality(Temporality::Cumulative)
+            .build();
+        assert!(
+            exporter.is_ok(),
+            "OTLP metrics exporter must build with reqwest HTTP client features: {}",
+            exporter.err().map(|e| e.to_string()).unwrap_or_default()
+        );
+    }
+}
