@@ -42,18 +42,11 @@ impl QueryStream<'_> {
     }
 
     pub async fn close(mut self) -> YdbResult<()> {
-        let meta_result = self.stream.close().await.map_err(YdbError::from);
+        let meta = self.stream.close().await.map_err(YdbError::from)?;
         if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-            match &meta_result {
-                Ok(meta) => apply_stream_tx_id(ctx, meta.tx_id.clone()),
-                Err(_) => {
-                    if let Some(tx_id) = self.stream.take_captured_tx_id() {
-                        apply_stream_tx_id(ctx, Some(tx_id));
-                    }
-                }
-            }
+            apply_stream_tx_id(ctx, meta.tx_id.clone());
         }
-        meta_result.map(|_| ())
+        Ok(())
     }
 }
 

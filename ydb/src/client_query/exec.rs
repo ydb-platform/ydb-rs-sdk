@@ -3,7 +3,6 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use http::Uri;
-use num::pow;
 use rand::Rng;
 use tokio::time::{sleep, timeout};
 
@@ -459,9 +458,9 @@ pub(crate) fn retry_wait(
         return None;
     }
     let wait = if attempt > 0 {
-        let exp = pow(2u64, attempt - 1);
+        let exp_shift = (attempt - 1).min(63) as u32;
         let base_ms = INITIAL_RETRY_BACKOFF_MILLISECONDS
-            .saturating_mul(exp)
+            .saturating_mul(1u64 << exp_shift)
             .min(MAX_RETRY_BACKOFF_MILLISECONDS);
         let base = Duration::from_millis(base_ms);
         let half = base / 2;

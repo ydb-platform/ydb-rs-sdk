@@ -99,6 +99,8 @@ impl Database for Storage {
 
         let attempts_for_op = attempts.clone();
         let mut qc = self.idempotent_client();
+        // Counts logical read invocations (one per timeout-wrapped call), not SDK-internal
+        // retries inside query_row — the one-shot API has no attempt callback (unlike table retry_transaction).
         let row = tokio::time::timeout(self.read_timeout, async move {
             attempts_for_op.fetch_add(1, Ordering::Relaxed);
             qc.query_row(select_sql).param("$id", id).await
