@@ -90,7 +90,7 @@ impl Database for Storage {
             r#"
             DECLARE $id AS Uint64;
 
-            SELECT id, payload_str, payload_double, payload_timestamp, payload_hash
+            SELECT id, payload_str, payload_double, payload_timestamp
             FROM `{table}`
             WHERE id = $id AND hash = Digest::NumericHash($id);
             "#,

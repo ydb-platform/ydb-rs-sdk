@@ -99,7 +99,10 @@ pub(crate) fn merge_part(
         truncated: false,
     });
     entry.truncated |= part_set.truncated;
-    if !entry.columns.is_empty() && !columns_compatible(&entry.columns, &part_set.columns) {
+    if !entry.columns.is_empty()
+        && !part_set.columns.is_empty()
+        && !columns_compatible(&entry.columns, &part_set.columns)
+    {
         return Err(crate::grpc_wrapper::raw_errors::RawError::custom(format!(
             "result set {index}: column metadata mismatch between stream parts"
         )));

@@ -129,6 +129,13 @@ impl ExecuteQueryStream {
 
             if part.result_set_index > target_index {
                 if rows.is_empty() && columns.is_empty() {
+                    if part.result_set_index > self.next_index + 1 {
+                        warn!(
+                            from = self.next_index,
+                            to = part.result_set_index,
+                            "skipping result set indices in stream"
+                        );
+                    }
                     self.next_index = part.result_set_index;
                 } else {
                     self.pending_part = Some(part);

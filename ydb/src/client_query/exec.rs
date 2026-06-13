@@ -3,6 +3,8 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use http::Uri;
+use num::pow;
+use rand::Rng;
 use tokio::time::{sleep, timeout};
 
 use crate::client::TimeoutSettings;
@@ -22,6 +24,7 @@ use crate::{QuerySessionMode, QueryTransactionOptions, QueryTxMode};
 
 const DEFAULT_RETRY_BUDGET: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
+const MAX_RETRY_BACKOFF_MILLISECONDS: u64 = 1_000;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CallOptions {
@@ -456,7 +459,17 @@ pub(crate) fn retry_wait(
         return None;
     }
     let wait = if attempt > 0 {
-        Duration::from_millis(INITIAL_RETRY_BACKOFF_MILLISECONDS.pow(attempt as u32))
+        let exp = pow(2u64, attempt - 1);
+        let base_ms = INITIAL_RETRY_BACKOFF_MILLISECONDS
+            .saturating_mul(exp)
+            .min(MAX_RETRY_BACKOFF_MILLISECONDS);
+        let base = Duration::from_millis(base_ms);
+        let half = base / 2;
+        if half.is_zero() {
+            base
+        } else {
+            half + Duration::from_millis(rand::thread_rng().gen_range(0..=half.as_millis() as u64))
+        }
     } else {
         Duration::ZERO
     };
@@ -491,8 +504,10 @@ mod unit_tests {
         ));
 
         let budget = Duration::from_millis(100);
-        let wait = retry_wait(1, Duration::ZERO, budget).expect("wait");
-        assert!(wait > Duration::ZERO);
+        let wait1 = retry_wait(1, Duration::ZERO, budget).expect("wait");
+        assert!(wait1 > Duration::ZERO);
+        let wait2 = retry_wait(2, Duration::ZERO, budget).expect("wait");
+        assert!(wait2 >= wait1);
         assert!(retry_wait(10, budget, budget).is_none());
     }
 }
