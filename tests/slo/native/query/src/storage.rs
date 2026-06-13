@@ -107,7 +107,10 @@ impl Database for Storage {
         .map_err(|_| "read timeout".to_string())?
         .map_err(|err| err.to_string())?;
 
-        Ok((row_to_test_row(row)?, attempts.load(Ordering::Relaxed) as u64))
+        Ok((
+            row_to_test_row(row)?,
+            attempts.load(Ordering::Relaxed) as u64,
+        ))
     }
 
     async fn write(&self, row: TestRow) -> Result<u64, String> {
