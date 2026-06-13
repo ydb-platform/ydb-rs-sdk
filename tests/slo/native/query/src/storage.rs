@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use slo_framework::kv::{Database, KvWorkload, Params};
-use slo_framework::{Framework, RowID, TestRow, Workload};
+use slo_framework::{Framework, RowID, TestRow, Workload, test_row_from_row};
 use ydb::ClientBuilder;
 use ydb::QueryClient;
 
@@ -108,7 +108,7 @@ impl Database for Storage {
         .map_err(|err| err.to_string())?;
 
         Ok((
-            row_to_test_row(row)?,
+            test_row_from_row(row)?,
             attempts.load(Ordering::Relaxed) as u64,
         ))
     }
@@ -160,36 +160,6 @@ impl Database for Storage {
     async fn close(&self) -> Result<(), String> {
         Ok(())
     }
-}
-
-fn row_to_test_row(mut row: ydb::Row) -> Result<TestRow, String> {
-    let id: u64 = row
-        .remove_field_by_name("id")
-        .map_err(|err: ydb::YdbError| err.to_string())?
-        .try_into()
-        .map_err(|err: ydb::YdbError| err.to_string())?;
-    let payload_str: String = row
-        .remove_field_by_name("payload_str")
-        .map_err(|err: ydb::YdbError| err.to_string())?
-        .try_into()
-        .map_err(|err: ydb::YdbError| err.to_string())?;
-    let payload_double: f64 = row
-        .remove_field_by_name("payload_double")
-        .map_err(|err: ydb::YdbError| err.to_string())?
-        .try_into()
-        .map_err(|err: ydb::YdbError| err.to_string())?;
-    let payload_timestamp: std::time::SystemTime = row
-        .remove_field_by_name("payload_timestamp")
-        .map_err(|err: ydb::YdbError| err.to_string())?
-        .try_into()
-        .map_err(|err: ydb::YdbError| err.to_string())?;
-
-    Ok(TestRow::new(
-        id,
-        payload_str,
-        payload_double,
-        payload_timestamp,
-    ))
 }
 
 pub async fn new_workload(fw: Framework) -> Result<Box<dyn Workload>, String> {
