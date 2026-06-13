@@ -6,7 +6,9 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
 pub fn new_rate_limiter(rps: u32) -> Ratelimiter {
-    Ratelimiter::builder(rps as u64, Duration::from_secs(1))
+    let rps = rps.max(1) as u64;
+    Ratelimiter::builder(rps, Duration::from_secs(1))
+        .max_tokens(rps)
         .build()
         .expect("valid ratelimiter")
 }
@@ -39,5 +41,16 @@ pub async fn run_workers<F, Fut>(
 
     for handle in handles {
         let _ = handle.await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_limiter_supports_default_slo_rps() {
+        new_rate_limiter(1000);
+        new_rate_limiter(100);
     }
 }
