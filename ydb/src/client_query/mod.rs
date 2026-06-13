@@ -4,14 +4,16 @@
 
 mod exec;
 
+#[cfg(test)]
+mod integration_test;
+
 use std::any::Any;
 use std::collections::HashMap;
 use std::future::{Future, IntoFuture};
 use std::marker::PhantomData;
-use std::mem::ManuallyDrop;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::FutureExt;
 use tokio::time::sleep;
@@ -24,9 +26,9 @@ use crate::result::{ResultSet, Row};
 use crate::types::Value;
 
 use exec::{
-    apply_stream_tx_id, backoff, check_retry_transaction_error, client_begin_stream, client_run,
+    apply_stream_tx_id, check_retry_transaction_error, client_begin_stream, client_run, retry_wait,
     transaction_begin_stream, transaction_commit, transaction_exec_context, transaction_rollback,
-    transaction_run, ClientExecContext, TransactionExecContext,
+    transaction_run, ClientExecContext, TransactionExecContext, DEFAULT_QUERY_RETRY_BUDGET,
 };
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -287,7 +289,7 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
                 .await?;
             Ok(QueryStream {
                 core: self.core,
-                stream: ManuallyDrop::new(stream),
+                stream,
             })
         })
     }
@@ -295,7 +297,7 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
 
 pub struct QueryStream<'a> {
     core: ExecCoreRef<'a>,
-    stream: ManuallyDrop<ExecuteQueryStream>,
+    stream: ExecuteQueryStream,
 }
 
 impl Drop for QueryStream<'_> {
@@ -306,7 +308,6 @@ impl Drop for QueryStream<'_> {
             }
         }
         self.stream.cancel();
-        unsafe { ManuallyDrop::drop(&mut self.stream) };
     }
 }
 
@@ -340,7 +341,6 @@ impl QueryStream<'_> {
                 }
             }
         }
-        std::mem::forget(self);
         meta_result.map(|_| ())
     }
 }
@@ -446,8 +446,7 @@ impl QueryClient {
                 timeouts,
                 session_mode: QuerySessionMode::Implicit,
                 idempotent_operation: false,
-                retry_timeout: Duration::from_secs(5),
-                max_attempts: 3,
+                retry_budget: DEFAULT_QUERY_RETRY_BUDGET,
             },
             tx_options: QueryTransactionOptions::default(),
         }
@@ -470,14 +469,12 @@ impl QueryClient {
         }
     }
 
-    /// Upper bound on exponential backoff delay between retry attempts.
-    ///
-    /// This caps the per-attempt sleep before the next retry, not a total retry
-    /// budget (unlike [`crate::TableClient::clone_with_retry_timeout`]).
+    /// Total wall-clock budget for automatic retries on idempotent operations
+    /// (aligned with [`crate::TableClient::clone_with_retry_timeout`]).
     pub fn clone_with_retry_timeout(&self, timeout: Duration) -> Self {
         Self {
             ctx: ClientExecContext {
-                retry_timeout: timeout,
+                retry_budget: timeout,
                 ..self.ctx.clone()
             },
             tx_options: self.tx_options.clone(),
@@ -487,7 +484,7 @@ impl QueryClient {
     pub fn clone_with_no_retry(&self) -> Self {
         Self {
             ctx: ClientExecContext {
-                max_attempts: 1,
+                retry_budget: Duration::ZERO,
                 ..self.ctx.clone()
             },
             tx_options: self.tx_options.clone(),
@@ -508,8 +505,8 @@ impl QueryClient {
         &self,
         mut callback: impl AsyncFnMut(&mut QueryTransaction) -> YdbResultWithCustomerErr<T>,
     ) -> YdbResultWithCustomerErr<T> {
-        let max_attempts = self.ctx.max_attempts;
-        let retry_timeout = self.ctx.retry_timeout;
+        let retry_budget = self.ctx.retry_budget;
+        let start = Instant::now();
         let mut attempt = 0;
 
         loop {
@@ -547,10 +544,14 @@ impl QueryClient {
                 }
             };
 
-            if !check_retry_transaction_error(&err) || attempt >= max_attempts {
+            if !check_retry_transaction_error(&err) {
                 return Err(err);
             }
-            sleep(backoff(retry_timeout, attempt)).await;
+            match retry_wait(attempt, start.elapsed(), retry_budget) {
+                Some(wait) if wait > Duration::ZERO => sleep(wait).await,
+                Some(_) => {}
+                None => return Err(err),
+            }
         }
     }
 }

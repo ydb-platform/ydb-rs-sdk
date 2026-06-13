@@ -51,8 +51,6 @@ pub(crate) mod client_coordination;
 #[cfg(test)]
 mod client_directory_test_integration;
 pub(crate) mod client_query;
-#[cfg(test)]
-mod client_query_test_integration;
 pub(crate) mod client_scheme;
 pub(crate) mod client_table;
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use http::Uri;
 use tokio::time::{sleep, timeout};
@@ -22,14 +22,17 @@ use crate::{QuerySessionMode, QueryTransactionOptions, QueryTxMode};
 
 use super::private::CallOptions;
 
+const DEFAULT_RETRY_BUDGET: Duration = Duration::from_secs(5);
+const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
+
 #[derive(Clone)]
 pub(crate) struct ClientExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub timeouts: TimeoutSettings,
     pub session_mode: QuerySessionMode,
     pub idempotent_operation: bool,
-    pub retry_timeout: Duration,
-    pub max_attempts: usize,
+    /// Total wall-clock budget for automatic retries (same idea as [`crate::TableClient::clone_with_retry_timeout`]).
+    pub retry_budget: Duration,
 }
 
 pub(crate) struct TransactionExecContext {
@@ -122,16 +125,21 @@ pub(crate) async fn client_run(
     opts: &CallOptions,
 ) -> YdbResult<Vec<ResultSet>> {
     let idempotent = opts.idempotent.unwrap_or(ctx.idempotent_operation);
+    let start = Instant::now();
     let mut attempt = 0usize;
     loop {
         attempt += 1;
         match client_run_once(ctx, text, params, opts).await {
             Ok(sets) => return Ok(sets),
             Err(err) => {
-                if !should_retry_ydb_error(idempotent, &err) || attempt >= ctx.max_attempts {
+                if !should_retry_ydb_error(idempotent, &err) {
                     return Err(err);
                 }
-                sleep(backoff(ctx.retry_timeout, attempt)).await;
+                match retry_wait(attempt, start.elapsed(), ctx.retry_budget) {
+                    Some(wait) if wait > Duration::ZERO => sleep(wait).await,
+                    Some(_) => {}
+                    None => return Err(err),
+                }
             }
         }
     }
@@ -202,16 +210,21 @@ pub(crate) async fn client_begin_stream(
     opts: CallOptions,
 ) -> YdbResult<ExecuteQueryStream> {
     let idempotent = opts.idempotent.unwrap_or(ctx.idempotent_operation);
+    let start = Instant::now();
     let mut attempt = 0usize;
     loop {
         attempt += 1;
         match client_begin_stream_once(ctx, &text, &params, &opts).await {
             Ok(stream) => return Ok(stream),
             Err(err) => {
-                if !should_retry_ydb_error(idempotent, &err) || attempt >= ctx.max_attempts {
+                if !should_retry_ydb_error(idempotent, &err) {
                     return Err(err);
                 }
-                sleep(backoff(ctx.retry_timeout, attempt)).await;
+                match retry_wait(attempt, start.elapsed(), ctx.retry_budget) {
+                    Some(wait) if wait > Duration::ZERO => sleep(wait).await,
+                    Some(_) => {}
+                    None => return Err(err),
+                }
             }
         }
     }
@@ -421,14 +434,28 @@ pub(crate) fn should_retry_ydb_error(idempotent: bool, err: &YdbError) -> bool {
     }
 }
 
-pub(crate) fn backoff(max_backoff: Duration, attempt: usize) -> Duration {
-    use rand::Rng;
-
-    let exp = Duration::from_millis(10) * 2u32.pow(attempt.min(10) as u32);
-    let capped = exp.min(max_backoff);
-    let half = capped / 2;
-    half + rand::thread_rng().gen_range(Duration::ZERO..=half)
+/// Sleep duration before the next retry attempt, or `None` when the retry budget is exhausted.
+pub(crate) fn retry_wait(
+    attempt: usize,
+    time_from_start: Duration,
+    retry_budget: Duration,
+) -> Option<Duration> {
+    if time_from_start >= retry_budget {
+        return None;
+    }
+    let wait = if attempt > 0 {
+        Duration::from_millis(INITIAL_RETRY_BACKOFF_MILLISECONDS.pow(attempt as u32))
+    } else {
+        Duration::ZERO
+    };
+    if time_from_start + wait < retry_budget {
+        Some(wait)
+    } else {
+        None
+    }
 }
+
+pub(crate) const DEFAULT_QUERY_RETRY_BUDGET: Duration = DEFAULT_RETRY_BUDGET;
 
 #[cfg(test)]
 mod unit_tests {
@@ -436,7 +463,7 @@ mod unit_tests {
     use crate::errors::{YdbError, YdbOrCustomerError};
 
     #[test]
-    fn retry_helpers_and_backoff() {
+    fn retry_helpers_and_wait() {
         let transport = YdbOrCustomerError::YDB(YdbError::Transport("timeout".into()));
         assert!(check_retry_transaction_error(&transport));
         assert!(should_retry_ydb_error(
@@ -451,8 +478,9 @@ mod unit_tests {
             &YdbOrCustomerError::from_mess("customer")
         ));
 
-        let delay = backoff(Duration::from_millis(100), 5);
-        assert!(delay > Duration::ZERO);
-        assert!(delay <= Duration::from_millis(100));
+        let budget = Duration::from_millis(100);
+        let wait = retry_wait(1, Duration::ZERO, budget).expect("wait");
+        assert!(wait > Duration::ZERO);
+        assert!(retry_wait(10, budget, budget).is_none());
     }
 }

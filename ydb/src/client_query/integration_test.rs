@@ -1,4 +1,4 @@
-use crate::client_query::{QuerySessionMode, QueryTransactionOptions, QueryTxMode};
+use super::{QuerySessionMode, QueryTransactionOptions, QueryTxMode};
 use crate::errors::YdbResult;
 use crate::test_integration_helper::create_client;
 use std::time::{SystemTime, UNIX_EPOCH};
