@@ -64,6 +64,5 @@ where
     T: TryFrom<Value, Error = YdbError>,
     Option<T>: TryFrom<Value, Error = YdbError>,
 {
-    optional_ydb_field(row, name)?
-        .ok_or_else(|| format!("{name} is null"))
+    optional_ydb_field(row, name)?.ok_or_else(|| format!("{name} is null"))
 }
