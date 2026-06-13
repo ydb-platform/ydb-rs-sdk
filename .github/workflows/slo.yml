@@ -132,6 +132,12 @@ jobs:
             --tag "ydb-app-current" \
             --src-path "${{ matrix.sdk.path }}"
 
+          # slo-framework is shared by all workloads; keep it in sync with current
+          # so baseline images pick up framework fixes (e.g. OTLP client features).
+          rm -rf "$GITHUB_WORKSPACE/baseline/tests/slo/slo-framework"
+          cp -r "$GITHUB_WORKSPACE/current/tests/slo/slo-framework" \
+            "$GITHUB_WORKSPACE/baseline/tests/slo/slo-framework"
+
           bash "$SCRIPT" \
             --context "$GITHUB_WORKSPACE/baseline" \
             --tag "ydb-app-baseline" \
