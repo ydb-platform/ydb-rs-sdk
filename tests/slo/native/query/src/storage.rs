@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use slo_framework::kv::{Database, KvWorkload, Params};
-use slo_framework::{Framework, RowID, TestRow, Workload, test_row_from_row};
+use slo_framework::{test_row_from_row, Framework, RowID, TestRow, Workload};
 use ydb::ClientBuilder;
 use ydb::QueryClient;
 
