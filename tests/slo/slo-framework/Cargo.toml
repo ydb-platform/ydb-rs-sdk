@@ -11,11 +11,7 @@ base64 = "0.22.1"
 clap = { version = "=4.2.7", features = ["derive"] }
 hdrhistogram = "7.5.4"
 opentelemetry = "0.27"
-opentelemetry-otlp = {
-    version = "0.27",
-    default-features = false,
-    features = ["http-proto", "metrics", "reqwest-client", "reqwest-rustls"],
-}
+opentelemetry-otlp = { version = "0.27", default-features = false, features = ["http-proto", "metrics", "reqwest-client", "reqwest-rustls"] }
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-semantic-conventions = "0.27"
 rand = "0.8.5"
