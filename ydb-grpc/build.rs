@@ -10,6 +10,7 @@ const COMPILE_FILES: &[&str] = &[
     "ydb_auth_v1.proto",
     "ydb_coordination_v1.proto",
     "ydb_discovery_v1.proto",
+    "ydb_operation_v1.proto",
     "ydb_query_v1.proto",
     "ydb_scheme_v1.proto",
     "ydb_table_v1.proto",

@@ -30,6 +30,11 @@ pub mod ydb {
     pub mod issue {
         include!("ydb.issue.rs");
     }
+    pub mod operation {
+        pub mod v1 {
+            include!("ydb.operation.v1.rs");
+        }
+    }
     pub mod operations {
         include!("ydb.operations.rs");
     }
