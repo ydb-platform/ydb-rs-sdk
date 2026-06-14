@@ -213,24 +213,13 @@ pub(crate) enum QuerySessionPoolKind {
     Implicit,
 }
 
+#[derive(Clone)]
 struct ExplicitIdleItem {
     session: AttachedQuerySession,
     node_uri: Uri,
     created: Instant,
     last_used: Instant,
     use_count: u64,
-}
-
-impl Clone for ExplicitIdleItem {
-    fn clone(&self) -> Self {
-        Self {
-            session: self.session.clone(),
-            node_uri: self.node_uri.clone(),
-            created: self.created,
-            last_used: self.last_used,
-            use_count: self.use_count,
-        }
-    }
 }
 
 struct ImplicitIdleItem {

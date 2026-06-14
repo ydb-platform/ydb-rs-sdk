@@ -323,7 +323,7 @@ async fn client_begin_stream_once(
     let mode = effective_session_mode(ctx.session_mode, opts);
     let timeout_duration = operation_timeout(opts, &ctx.timeouts);
 
-    let stream = match mode {
+    match mode {
         QuerySessionMode::Pool => {
             let pool = ctx.session_pool.as_ref().ok_or_else(|| {
                 YdbError::Custom(
@@ -338,8 +338,7 @@ async fn client_begin_stream_once(
                 client.execute_query(req).await.map_err(Into::into)
             })
             .await?;
-            lease.end_use();
-            stream
+            Ok(ExecuteQueryStream::new(stream).with_session_guard(lease))
         }
         QuerySessionMode::Implicit if ctx.implicit_session_pool.is_some() => {
             let pool = ctx.implicit_session_pool.as_ref().expect("checked");
@@ -350,19 +349,17 @@ async fn client_begin_stream_once(
                 client.execute_query(req).await.map_err(Into::into)
             })
             .await?;
-            lease.end_use();
-            stream
+            Ok(ExecuteQueryStream::new(stream).with_session_guard(lease))
         }
         QuerySessionMode::Implicit => {
             let (mut client, req) = client_implicit_request(ctx, text, params, opts).await?;
-            with_operation_timeout(timeout_duration, async {
+            let stream = with_operation_timeout(timeout_duration, async {
                 client.execute_query(req).await.map_err(Into::into)
             })
-            .await?
+            .await?;
+            Ok(ExecuteQueryStream::new(stream))
         }
-    };
-
-    Ok(ExecuteQueryStream::new(stream))
+    }
 }
 
 pub(crate) async fn client_begin_stream(
@@ -401,12 +398,6 @@ async fn ensure_tx_session(tx: &mut TransactionExecContext) -> YdbResult<()> {
             let lease = pool.acquire_explicit().await?;
             tx.query_node = Some(lease.node_uri().clone());
             tx.pooled_lease = Some(lease);
-            Ok(())
-        }
-        QuerySessionMode::Implicit if tx.implicit_session_pool.is_some() => {
-            let pool = tx.implicit_session_pool.as_ref().expect("checked");
-            let lease = pool.acquire_implicit().await?;
-            tx.implicit_lease = Some(lease);
             Ok(())
         }
         QuerySessionMode::Implicit => {
@@ -539,14 +530,7 @@ pub(crate) async fn transaction_begin_stream(
     let stream = with_operation_timeout(timeout_duration, async {
         client.execute_query(req).await.map_err(Into::into)
     })
-    .await;
-    if let Some(lease) = &mut tx.pooled_lease {
-        lease.end_use();
-    }
-    if let Some(lease) = &mut tx.implicit_lease {
-        lease.end_use();
-    }
-    let stream = stream?;
+    .await?;
     let mut stream = ExecuteQueryStream::new(stream);
     stream.prime_first_part().await?;
     if let Some(id) = stream.take_captured_tx_id() {
@@ -584,7 +568,9 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
         return Ok(());
     }
     if tx.tx_id.as_ref().is_some_and(|id| !id.is_empty())
-        && (tx.pooled_lease.is_some() || tx.attached_session.is_some())
+        && (tx.pooled_lease.is_some()
+            || tx.implicit_lease.is_some()
+            || tx.attached_session.is_some())
     {
         let tx_id = tx.tx_id.take().expect("checked Some");
         if let Ok(session_id) = tx_session_id(tx) {

@@ -34,7 +34,9 @@ struct AttachedQuerySessionInner {
 
 impl Drop for AttachedQuerySession {
     fn drop(&mut self) {
-        if !self.inner.explicitly_closed.load(Ordering::Acquire) {
+        if !self.inner.explicitly_closed.load(Ordering::Acquire)
+            && Arc::strong_count(&self.inner) == 1
+        {
             warn!(
                 session_id = %self.inner.session_id,
                 "query session dropped without explicit close; server-side session may leak until idle timeout"
@@ -176,9 +178,13 @@ impl AttachedQuerySession {
     }
 
     async fn wait_not_in_use(&self) {
-        while self.inner.in_use.load(Ordering::Acquire) > 0 {
-            sleep(Duration::from_millis(1)).await;
-        }
+        let drain_timeout = self.inner.delete_timeout;
+        let _ = timeout(drain_timeout, async {
+            while self.inner.in_use.load(Ordering::Acquire) > 0 {
+                sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await;
     }
 
     pub async fn close(self, client: &mut RawQueryClient) {
