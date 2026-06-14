@@ -52,7 +52,11 @@ impl Client {
 
     /// Create instance of client for query service.
     pub fn query_client(&self) -> QueryClient {
-        QueryClient::new(self.connection_manager.clone(), self.timeouts)
+        QueryClient::new(
+            self.connection_manager.clone(),
+            self.timeouts,
+            self.discovery.clone(),
+        )
     }
 
     /// Create instance of client for directory service

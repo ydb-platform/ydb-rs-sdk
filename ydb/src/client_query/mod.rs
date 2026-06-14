@@ -5,6 +5,7 @@
 mod builders;
 mod exec;
 mod internal;
+mod session_pool;
 mod stream_facade;
 
 #[cfg(test)]
@@ -12,12 +13,14 @@ mod integration_test;
 
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::FutureExt;
 use tokio::time::sleep;
 
 use crate::client::TimeoutSettings;
+use crate::discovery::Discovery;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::result::Row;
@@ -28,6 +31,7 @@ use exec::{
     transaction_rollback, ClientExecContext, TransactionExecContext, DEFAULT_QUERY_RETRY_BUDGET,
 };
 use internal::{ExecCoreRef, HasCore};
+use session_pool::QuerySessionPool;
 
 /// How [`QueryClient`] acquires a YDB session for each call.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -36,8 +40,7 @@ pub enum QuerySessionMode {
     /// runs the query, and closes the session. This is the default mode.
     #[default]
     Implicit,
-    /// Reserved for an explicit session pool. Not implemented yet; selecting this
-    /// mode returns a runtime error until pool support lands.
+    /// Use an explicit session pool ([`QueryClient::with_session_pool`]).
     Pool,
 }
 
@@ -102,16 +105,59 @@ impl QueryClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
+        discovery: Arc<Box<dyn Discovery>>,
     ) -> Self {
         Self {
             ctx: ClientExecContext {
                 connection_manager,
                 timeouts,
+                discovery,
                 session_mode: QuerySessionMode::Implicit,
                 idempotent_operation: false,
                 retry_budget: DEFAULT_QUERY_RETRY_BUDGET,
+                session_pool: None,
+                implicit_session_pool: None,
             },
             tx_options: QueryTransactionOptions::default(),
+        }
+    }
+
+    /// Configure an explicit session pool (CreateSession + AttachSession) and switch to
+    /// [`QuerySessionMode::Pool`]. Sessions are not exposed to the caller; the pool owns
+    /// their lifecycle.
+    pub async fn with_session_pool(self, settings: QuerySessionPoolSettings) -> YdbResult<Self> {
+        let pool = QuerySessionPool::new_explicit(
+            self.ctx.connection_manager.clone(),
+            self.ctx.timeouts,
+            self.ctx.discovery.clone(),
+            settings,
+        )
+        .await?;
+        Ok(Self {
+            ctx: ClientExecContext {
+                session_pool: Some(pool),
+                session_mode: QuerySessionMode::Pool,
+                ..self.ctx
+            },
+            tx_options: self.tx_options,
+        })
+    }
+
+    /// Configure an implicit session pool (empty `session_id`, no AttachSession) while keeping
+    /// [`QuerySessionMode::Implicit`]. Limits concurrency and enables warm-up like the explicit pool.
+    pub fn with_implicit_session_pool(self, settings: QuerySessionPoolSettings) -> Self {
+        let pool = QuerySessionPool::new_implicit(
+            self.ctx.connection_manager.clone(),
+            self.ctx.timeouts,
+            self.ctx.discovery.clone(),
+            settings,
+        );
+        Self {
+            ctx: ClientExecContext {
+                implicit_session_pool: Some(pool),
+                ..self.ctx
+            },
+            tx_options: self.tx_options,
         }
     }
 
@@ -177,7 +223,10 @@ impl QueryClient {
             let mut tx = QueryTransaction::new(
                 self.ctx.connection_manager.clone(),
                 self.ctx.timeouts,
+                self.ctx.discovery.clone(),
                 self.ctx.session_mode,
+                self.ctx.session_pool.clone(),
+                self.ctx.implicit_session_pool.clone(),
                 self.tx_options.clone(),
             );
 
@@ -245,11 +294,22 @@ impl QueryTransaction {
     fn new(
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
+        discovery: Arc<Box<dyn Discovery>>,
         session_mode: QuerySessionMode,
+        session_pool: Option<QuerySessionPool>,
+        implicit_session_pool: Option<QuerySessionPool>,
         options: QueryTransactionOptions,
     ) -> Self {
         Self {
-            ctx: transaction_exec_context(connection_manager, timeouts, session_mode, options),
+            ctx: transaction_exec_context(
+                connection_manager,
+                timeouts,
+                discovery,
+                session_mode,
+                session_pool,
+                implicit_session_pool,
+                options,
+            ),
             state: TxState::Active,
         }
     }
@@ -293,6 +353,7 @@ pub use builders::{
     CallBuilder, ExecBuilder, ExecCall, OneResultSet, OneRow, OptionalRow, OptionalRowBuilder,
     QueryExecutor, QueryRowBuilder, QueryStreamBuilder, ResultSetBuilder, Streamed,
 };
+pub use session_pool::QuerySessionPoolSettings;
 pub use stream_facade::{QueryStats, QueryStream};
 
 fn panic_message(payload: Box<dyn Any + Send>) -> String {

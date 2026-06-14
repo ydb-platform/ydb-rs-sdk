@@ -154,9 +154,9 @@ pub use client_builder::ClientBuilder;
 // full enum pub types
 pub use client_query::{
     CallBuilder, ExecBuilder, ExecCall, FromYdbRow, OneResultSet, OneRow, OptionalRow,
-    OptionalRowBuilder, QueryClient, QueryExecutor, QueryRowBuilder, QuerySessionMode, QueryStats,
-    QueryStream, QueryStreamBuilder, QueryTransaction, QueryTransactionOptions, QueryTxMode,
-    ResultSetBuilder, Streamed,
+    OptionalRowBuilder, QueryClient, QueryExecutor, QueryRowBuilder, QuerySessionMode,
+    QuerySessionPoolSettings, QueryStats, QueryStream, QueryStreamBuilder, QueryTransaction,
+    QueryTransactionOptions, QueryTxMode, ResultSetBuilder, Streamed,
 };
 
 // full enum pub types

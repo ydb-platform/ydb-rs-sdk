@@ -15,6 +15,11 @@ use ydb_grpc::ydb_proto::query::{
     ExecuteQueryResponsePart, RollbackTransactionRequest, SessionState,
 };
 
+pub(crate) struct CreateSessionResult {
+    pub session_id: String,
+    pub node_id: u64,
+}
+
 pub(crate) struct RawQueryClient {
     service: QueryServiceClient<InterceptedChannel>,
 }
@@ -91,11 +96,14 @@ impl RawQueryClient {
         })
     }
 
-    pub async fn create_session(&mut self) -> RawResult<String> {
+    pub async fn create_session(&mut self) -> RawResult<CreateSessionResult> {
         let response = self.service.create_session(CreateSessionRequest {}).await?;
         let inner = response.into_inner();
         check_status(inner.status, &inner.issues)?;
-        Ok(inner.session_id)
+        Ok(CreateSessionResult {
+            session_id: inner.session_id,
+            node_id: inner.node_id.max(0) as u64,
+        })
     }
 
     pub async fn delete_session(&mut self, session_id: &str) -> RawResult<()> {

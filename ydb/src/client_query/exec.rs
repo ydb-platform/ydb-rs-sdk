@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use http::Uri;
@@ -7,6 +8,7 @@ use rand::Rng;
 use tokio::time::{sleep, timeout};
 
 use crate::client::TimeoutSettings;
+use crate::discovery::Discovery;
 use crate::errors::{NeedRetry, YdbError, YdbOrCustomerError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
@@ -20,6 +22,8 @@ use crate::grpc_wrapper::raw_services::Service;
 use crate::result::ResultSet;
 use crate::types::Value;
 use crate::{QuerySessionMode, QueryTransactionOptions, QueryTxMode};
+
+use super::session_pool::{ImplicitSessionLease, QuerySessionLease, QuerySessionPool};
 
 const DEFAULT_RETRY_BUDGET: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
@@ -37,18 +41,26 @@ pub(crate) struct CallOptions {
 pub(crate) struct ClientExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub timeouts: TimeoutSettings,
+    pub discovery: Arc<Box<dyn Discovery>>,
     pub session_mode: QuerySessionMode,
     pub idempotent_operation: bool,
     /// Total wall-clock budget for automatic retries (same idea as [`crate::TableClient::clone_with_retry_timeout`]).
     pub retry_budget: Duration,
+    pub session_pool: Option<QuerySessionPool>,
+    pub implicit_session_pool: Option<QuerySessionPool>,
 }
 
 pub(crate) struct TransactionExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub timeouts: TimeoutSettings,
+    pub discovery: Arc<Box<dyn Discovery>>,
     pub session_mode: QuerySessionMode,
     pub tx_mode: QueryTxMode,
+    pub session_pool: Option<QuerySessionPool>,
+    pub implicit_session_pool: Option<QuerySessionPool>,
     pub attached_session: Option<AttachedQuerySession>,
+    pub pooled_lease: Option<QuerySessionLease>,
+    pub implicit_lease: Option<ImplicitSessionLease>,
     pub query_node: Option<Uri>,
     pub tx_id: Option<String>,
     pub finished: bool,
@@ -92,9 +104,13 @@ fn session_id_for_mode(mode: QuerySessionMode) -> YdbResult<String> {
     match mode {
         QuerySessionMode::Implicit => Ok(String::new()),
         QuerySessionMode::Pool => Err(YdbError::Custom(
-            "query session pool is not implemented yet".to_string(),
+            "query session pool is not configured; call QueryClient::with_session_pool".to_string(),
         )),
     }
+}
+
+fn effective_session_mode(ctx_mode: QuerySessionMode, opts: &CallOptions) -> QuerySessionMode {
+    opts.session_mode.unwrap_or(ctx_mode)
 }
 
 fn tx_mode_to_raw(mode: QueryTxMode) -> RawQueryTxMode {
@@ -174,10 +190,54 @@ async fn client_implicit_request(
     params: &HashMap<String, Value>,
     opts: &CallOptions,
 ) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
-    let session_id = session_id_for_mode(opts.session_mode.unwrap_or(ctx.session_mode))?;
+    let mode = effective_session_mode(ctx.session_mode, opts);
+    let session_id = session_id_for_mode(mode)?;
     let client = query_client(ctx).await?;
     let req = RawExecuteQueryRequest::new(
         session_id,
+        text,
+        params.clone(),
+        implicit_tx_control(),
+        opts.collect_stats,
+    );
+    Ok((client, req))
+}
+
+async fn client_pooled_explicit_request(
+    ctx: &ClientExecContext,
+    lease: &mut QuerySessionLease,
+    text: &str,
+    params: &HashMap<String, Value>,
+    opts: &CallOptions,
+) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
+    lease.ensure_alive()?;
+    lease.begin_use();
+    let node_uri = lease.node_uri().clone();
+    let client = ctx
+        .connection_manager
+        .get_auth_service_to_node(RawQueryClient::new, &node_uri)
+        .await?;
+    let req = RawExecuteQueryRequest::new(
+        lease.session_id(),
+        text,
+        params.clone(),
+        implicit_tx_control(),
+        opts.collect_stats,
+    );
+    Ok((client, req))
+}
+
+async fn client_pooled_implicit_request(
+    ctx: &ClientExecContext,
+    lease: &mut ImplicitSessionLease,
+    text: &str,
+    params: &HashMap<String, Value>,
+    opts: &CallOptions,
+) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
+    lease.begin_use();
+    let client = query_client(ctx).await?;
+    let req = RawExecuteQueryRequest::new(
+        lease.session_id(),
         text,
         params.clone(),
         implicit_tx_control(),
@@ -192,15 +252,56 @@ async fn client_run_once_raw(
     params: &HashMap<String, Value>,
     opts: &CallOptions,
 ) -> YdbResult<crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryResult> {
-    let (mut client, req) = client_implicit_request(ctx, text, params, opts).await?;
+    let mode = effective_session_mode(ctx.session_mode, opts);
     let timeout_duration = operation_timeout(opts, &ctx.timeouts);
-    with_operation_timeout(timeout_duration, async {
-        client
-            .execute_query_collect(req)
+
+    match mode {
+        QuerySessionMode::Pool => {
+            let pool = ctx.session_pool.as_ref().ok_or_else(|| {
+                YdbError::Custom(
+                    "query session pool is not configured; call QueryClient::with_session_pool"
+                        .to_string(),
+                )
+            })?;
+            let mut lease = pool.acquire_explicit().await?;
+            let (mut client, req) =
+                client_pooled_explicit_request(ctx, &mut lease, text, params, opts).await?;
+            let raw = with_operation_timeout(timeout_duration, async {
+                client
+                    .execute_query_collect(req)
+                    .await
+                    .map_err(|e| YdbError::from(e.err))
+            })
+            .await;
+            lease.end_use();
+            raw
+        }
+        QuerySessionMode::Implicit if ctx.implicit_session_pool.is_some() => {
+            let pool = ctx.implicit_session_pool.as_ref().expect("checked");
+            let mut lease = pool.acquire_implicit().await?;
+            let (mut client, req) =
+                client_pooled_implicit_request(ctx, &mut lease, text, params, opts).await?;
+            let raw = with_operation_timeout(timeout_duration, async {
+                client
+                    .execute_query_collect(req)
+                    .await
+                    .map_err(|e| YdbError::from(e.err))
+            })
+            .await;
+            lease.end_use();
+            raw
+        }
+        QuerySessionMode::Implicit => {
+            let (mut client, req) = client_implicit_request(ctx, text, params, opts).await?;
+            with_operation_timeout(timeout_duration, async {
+                client
+                    .execute_query_collect(req)
+                    .await
+                    .map_err(|e| YdbError::from(e.err))
+            })
             .await
-            .map_err(|e| YdbError::from(e.err))
-    })
-    .await
+        }
+    }
 }
 
 async fn client_run_once(
@@ -219,12 +320,48 @@ async fn client_begin_stream_once(
     params: &HashMap<String, Value>,
     opts: &CallOptions,
 ) -> YdbResult<ExecuteQueryStream> {
-    let (mut client, req) = client_implicit_request(ctx, text, params, opts).await?;
+    let mode = effective_session_mode(ctx.session_mode, opts);
     let timeout_duration = operation_timeout(opts, &ctx.timeouts);
-    let stream = with_operation_timeout(timeout_duration, async {
-        client.execute_query(req).await.map_err(Into::into)
-    })
-    .await?;
+
+    let stream = match mode {
+        QuerySessionMode::Pool => {
+            let pool = ctx.session_pool.as_ref().ok_or_else(|| {
+                YdbError::Custom(
+                    "query session pool is not configured; call QueryClient::with_session_pool"
+                        .to_string(),
+                )
+            })?;
+            let mut lease = pool.acquire_explicit().await?;
+            let (mut client, req) =
+                client_pooled_explicit_request(ctx, &mut lease, text, params, opts).await?;
+            let stream = with_operation_timeout(timeout_duration, async {
+                client.execute_query(req).await.map_err(Into::into)
+            })
+            .await?;
+            lease.end_use();
+            stream
+        }
+        QuerySessionMode::Implicit if ctx.implicit_session_pool.is_some() => {
+            let pool = ctx.implicit_session_pool.as_ref().expect("checked");
+            let mut lease = pool.acquire_implicit().await?;
+            let (mut client, req) =
+                client_pooled_implicit_request(ctx, &mut lease, text, params, opts).await?;
+            let stream = with_operation_timeout(timeout_duration, async {
+                client.execute_query(req).await.map_err(Into::into)
+            })
+            .await?;
+            lease.end_use();
+            stream
+        }
+        QuerySessionMode::Implicit => {
+            let (mut client, req) = client_implicit_request(ctx, text, params, opts).await?;
+            with_operation_timeout(timeout_duration, async {
+                client.execute_query(req).await.map_err(Into::into)
+            })
+            .await?
+        }
+    };
+
     Ok(ExecuteQueryStream::new(stream))
 }
 
@@ -243,28 +380,67 @@ pub(crate) async fn client_begin_stream(
 
 /// Interactive transactions need a stable attached session; implicit one-shot queries do not.
 async fn ensure_tx_session(tx: &mut TransactionExecContext) -> YdbResult<()> {
+    if tx.pooled_lease.is_some() || tx.implicit_lease.is_some() {
+        if let Some(lease) = &tx.pooled_lease {
+            lease.ensure_alive()?;
+        }
+        return Ok(());
+    }
     if let Some(session) = &tx.attached_session {
         session.ensure_alive().map_err(YdbError::from)?;
         return Ok(());
     }
     match tx.session_mode {
+        QuerySessionMode::Pool => {
+            let pool = tx.session_pool.as_ref().ok_or_else(|| {
+                YdbError::Custom(
+                    "query session pool is not configured; call QueryClient::with_session_pool"
+                        .to_string(),
+                )
+            })?;
+            let lease = pool.acquire_explicit().await?;
+            tx.query_node = Some(lease.node_uri().clone());
+            tx.pooled_lease = Some(lease);
+            Ok(())
+        }
+        QuerySessionMode::Implicit if tx.implicit_session_pool.is_some() => {
+            let pool = tx.implicit_session_pool.as_ref().expect("checked");
+            let lease = pool.acquire_implicit().await?;
+            tx.implicit_lease = Some(lease);
+            Ok(())
+        }
         QuerySessionMode::Implicit => {
             let uri = tx.connection_manager.endpoint(Service::Query)?;
             let mut client = tx
                 .connection_manager
                 .get_auth_service_to_node(RawQueryClient::new, &uri)
                 .await?;
-            tx.attached_session = Some(AttachedQuerySession::open(&mut client).await?);
+            let discovery = tx.discovery.clone();
+            let on_node_shutdown = Arc::new(move |uri: Uri| discovery.pessimization(&uri));
+            tx.attached_session = Some(
+                AttachedQuerySession::create_and_open(
+                    &mut client,
+                    uri.clone(),
+                    on_node_shutdown,
+                    DEFAULT_SESSION_DELETE_TIMEOUT,
+                )
+                .await?,
+            );
             tx.query_node = Some(uri);
             Ok(())
         }
-        QuerySessionMode::Pool => Err(YdbError::Custom(
-            "query session pool is not implemented yet".to_string(),
-        )),
     }
 }
 
+const DEFAULT_SESSION_DELETE_TIMEOUT: Duration = Duration::from_millis(500);
+
 fn tx_session_id(tx: &TransactionExecContext) -> YdbResult<&str> {
+    if let Some(lease) = &tx.pooled_lease {
+        return Ok(lease.session_id());
+    }
+    if let Some(lease) = &tx.implicit_lease {
+        return Ok(lease.session_id());
+    }
     tx.attached_session
         .as_ref()
         .map(|s| s.session_id())
@@ -272,11 +448,16 @@ fn tx_session_id(tx: &TransactionExecContext) -> YdbResult<&str> {
 }
 
 async fn release_tx_session(tx: &mut TransactionExecContext) {
-    let Some(session) = tx.attached_session.take() else {
-        return;
-    };
-    if let Ok(mut client) = query_client_from_tx(tx).await {
-        session.close(&mut client).await;
+    if let Some(lease) = tx.pooled_lease.take() {
+        lease.return_to_pool().await;
+    }
+    if let Some(lease) = tx.implicit_lease.take() {
+        lease.return_to_pool().await;
+    }
+    if let Some(session) = tx.attached_session.take() {
+        if let Ok(mut client) = query_client_from_tx(tx).await {
+            session.close(&mut client).await;
+        }
     }
     tx.query_node = None;
 }
@@ -306,6 +487,12 @@ pub(crate) async fn transaction_run(
     opts: &CallOptions,
 ) -> YdbResult<Vec<ResultSet>> {
     ensure_tx_session(tx).await?;
+    if let Some(lease) = &mut tx.pooled_lease {
+        lease.begin_use();
+    }
+    if let Some(lease) = &mut tx.implicit_lease {
+        lease.begin_use();
+    }
     let (mut client, req) =
         transaction_execute_request(tx, text.to_string(), params.clone(), opts).await?;
     let timeout_duration = operation_timeout(opts, &tx.timeouts);
@@ -320,7 +507,14 @@ pub(crate) async fn transaction_run(
             }
         }
     })
-    .await?;
+    .await;
+    if let Some(lease) = &mut tx.pooled_lease {
+        lease.end_use();
+    }
+    if let Some(lease) = &mut tx.implicit_lease {
+        lease.end_use();
+    }
+    let raw = raw?;
     if let Some(id) = raw.tx_id {
         tx.tx_id = Some(id);
     }
@@ -334,12 +528,25 @@ pub(crate) async fn transaction_begin_stream(
     opts: CallOptions,
 ) -> YdbResult<ExecuteQueryStream> {
     ensure_tx_session(tx).await?;
+    if let Some(lease) = &mut tx.pooled_lease {
+        lease.begin_use();
+    }
+    if let Some(lease) = &mut tx.implicit_lease {
+        lease.begin_use();
+    }
     let (mut client, req) = transaction_execute_request(tx, text, params, &opts).await?;
     let timeout_duration = operation_timeout(&opts, &tx.timeouts);
     let stream = with_operation_timeout(timeout_duration, async {
         client.execute_query(req).await.map_err(Into::into)
     })
-    .await?;
+    .await;
+    if let Some(lease) = &mut tx.pooled_lease {
+        lease.end_use();
+    }
+    if let Some(lease) = &mut tx.implicit_lease {
+        lease.end_use();
+    }
+    let stream = stream?;
     let mut stream = ExecuteQueryStream::new(stream);
     stream.prime_first_part().await?;
     if let Some(id) = stream.take_captured_tx_id() {
@@ -376,7 +583,9 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
     if tx.finished {
         return Ok(());
     }
-    if tx.tx_id.as_ref().is_some_and(|id| !id.is_empty()) && tx.attached_session.is_some() {
+    if tx.tx_id.as_ref().is_some_and(|id| !id.is_empty())
+        && (tx.pooled_lease.is_some() || tx.attached_session.is_some())
+    {
         let tx_id = tx.tx_id.take().expect("checked Some");
         if let Ok(session_id) = tx_session_id(tx) {
             if let Ok(mut client) = query_client_from_tx(tx).await {
@@ -401,15 +610,23 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
 pub(crate) fn transaction_exec_context(
     connection_manager: GrpcConnectionManager,
     timeouts: TimeoutSettings,
+    discovery: Arc<Box<dyn Discovery>>,
     session_mode: QuerySessionMode,
+    session_pool: Option<QuerySessionPool>,
+    implicit_session_pool: Option<QuerySessionPool>,
     options: QueryTransactionOptions,
 ) -> TransactionExecContext {
     TransactionExecContext {
         connection_manager,
         timeouts,
+        discovery,
         session_mode,
+        session_pool,
+        implicit_session_pool,
         tx_mode: options.mode(),
         attached_session: None,
+        pooled_lease: None,
+        implicit_lease: None,
         query_node: None,
         tx_id: None,
         finished: false,
