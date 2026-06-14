@@ -9,6 +9,7 @@ on:
     branches:
       - master
       - release-*
+      - query-service-example
   workflow_dispatch:
     inputs:
       github_issue:
