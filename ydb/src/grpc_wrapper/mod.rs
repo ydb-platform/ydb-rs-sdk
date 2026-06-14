@@ -28,5 +28,7 @@ pub(crate) mod raw_topic_service;
 #[allow(dead_code)]
 pub(crate) mod raw_coordination_service;
 
+pub(crate) mod raw_query_service;
+
 pub(crate) mod raw_ydb_operation;
 pub(crate) mod runtime_interceptors;
