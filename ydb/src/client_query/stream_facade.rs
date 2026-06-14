@@ -20,6 +20,14 @@ impl Drop for QueryStream<'_> {
             }
         }
         self.stream.cancel();
+        if let ExecCoreRef::Transaction(ctx) = &mut self.core {
+            if let Some(lease) = &mut ctx.pooled_lease {
+                lease.end_use();
+            }
+            if let Some(lease) = &mut ctx.implicit_lease {
+                lease.end_use();
+            }
+        }
     }
 }
 
