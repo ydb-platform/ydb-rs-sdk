@@ -118,7 +118,10 @@ impl QueryStream {
     }
 
     pub async fn close(mut self) -> YdbResult<()> {
-        self.stream.close().await.map_err(crate::errors::YdbError::from)?;
+        self.stream
+            .close()
+            .await
+            .map_err(crate::errors::YdbError::from)?;
         Ok(())
     }
 }
