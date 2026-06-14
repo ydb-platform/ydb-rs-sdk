@@ -1,5 +1,4 @@
 use crate::grpc_wrapper::grpc::proto_issues_to_ydb_issues;
-use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::YdbIssue;
 use ydb_grpc::ydb_proto::operations::Operation;
 
@@ -12,17 +11,15 @@ pub(crate) struct RawOperation {
     pub consumed_units: Option<f64>,
 }
 
-impl TryFrom<Operation> for RawOperation {
-    type Error = RawError;
-
-    fn try_from(op: Operation) -> RawResult<Self> {
-        Ok(Self {
+impl From<Operation> for RawOperation {
+    fn from(op: Operation) -> Self {
+        Self {
             id: op.id,
             ready: op.ready,
             status: op.status,
             issues: proto_issues_to_ydb_issues(op.issues),
             consumed_units: op.cost_info.map(|c| c.consumed_units),
-        })
+        }
     }
 }
 

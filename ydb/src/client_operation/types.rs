@@ -1,4 +1,5 @@
 use crate::YdbIssue;
+use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 /// Long-running operation snapshot returned by Operation Service.
 #[derive(Debug, Clone)]
@@ -11,6 +12,16 @@ pub struct OperationInfo {
     pub issues: Vec<YdbIssue>,
     /// Consumed units from `cost_info`, when reported by the server.
     pub consumed_units: Option<f64>,
+}
+
+impl OperationInfo {
+    pub fn status_code(&self) -> Option<StatusCode> {
+        StatusCode::try_from(self.status).ok()
+    }
+
+    pub fn is_success(&self) -> bool {
+        self.status_code() == Some(StatusCode::Success)
+    }
 }
 
 /// Filter and pagination parameters for [`OperationClient::list_operations`].

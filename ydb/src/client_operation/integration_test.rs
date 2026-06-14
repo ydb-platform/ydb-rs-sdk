@@ -16,11 +16,10 @@ async fn list_operations_execute_query_kind() -> YdbResult<()> {
     let client = create_client().await?;
     let op_client = client.operation_client();
 
-    let result = op_client
+    op_client
         .list_operations(ListOperationsRequest::new(OperationKind::EXECUTE_QUERY))
         .await?;
 
-    assert!(result.next_page_token.is_empty() || !result.next_page_token.is_empty());
     Ok(())
 }
 
@@ -33,7 +32,7 @@ async fn get_operation_unknown_id_returns_non_success() -> YdbResult<()> {
 
     let op = op_client.get_operation("nonexistent-operation-id").await?;
     assert!(op.id.is_empty());
-    assert_ne!(op.status, StatusCode::Success as i32);
+    assert!(!op.is_success());
 
     Ok(())
 }

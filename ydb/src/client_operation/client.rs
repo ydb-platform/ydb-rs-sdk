@@ -2,11 +2,13 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use rand::Rng;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
+use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::client::TimeoutSettings;
 use crate::errors::{NeedRetry, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::grpc_wrapper::raw_errors::RawError;
 use crate::grpc_wrapper::raw_operation_service::client::RawOperationClient;
 use crate::grpc_wrapper::raw_operation_service::types::{
     RawListOperationsRequest, RawListOperationsResult, RawOperation,
@@ -21,16 +23,18 @@ const MAX_RETRY_BACKOFF_MILLISECONDS: u64 = 1_000;
 #[derive(Clone)]
 pub struct OperationClient {
     connection_manager: GrpcConnectionManager,
+    operation_timeout: Duration,
     retry_budget: Duration,
 }
 
 impl OperationClient {
     pub(crate) fn new(
-        _timeouts: TimeoutSettings,
+        timeouts: TimeoutSettings,
         connection_manager: GrpcConnectionManager,
     ) -> Self {
         Self {
             connection_manager,
+            operation_timeout: timeouts.operation_timeout,
             retry_budget: DEFAULT_RETRY_BUDGET,
         }
     }
@@ -54,7 +58,10 @@ impl OperationClient {
         let id = id.into();
         self.retry(|| async {
             let mut client = self.raw_client().await?;
-            let op = client.get_operation(&id).await.map_err(YdbError::from)?;
+            let op = self
+                .with_rpc_timeout(|| client.get_operation(&id))
+                .await
+                .map_err(YdbError::from)?;
             Ok(raw_to_operation_info(op))
         })
         .await
@@ -71,8 +78,8 @@ impl OperationClient {
         };
         self.retry(|| async {
             let mut client = self.raw_client().await?;
-            let result = client
-                .list_operations(raw_req.clone())
+            let result = self
+                .with_rpc_timeout(|| client.list_operations(raw_req.clone()))
                 .await
                 .map_err(YdbError::from)?;
             Ok(raw_to_list_result(result))
@@ -80,12 +87,23 @@ impl OperationClient {
         .await
     }
 
+    /// Forgets a completed operation on the server.
+    ///
+    /// If the operation was already forgotten (e.g. a retry after a successful first attempt
+    /// that lost the response), `NOT_FOUND` is treated as success.
     pub async fn forget_operation(&self, id: impl Into<String>) -> YdbResult<()> {
         let id = id.into();
         self.retry(|| async {
             let mut client = self.raw_client().await?;
-            client.forget_operation(&id).await.map_err(YdbError::from)?;
-            Ok(())
+            match self.with_rpc_timeout(|| client.forget_operation(&id)).await {
+                Ok(()) => Ok(()),
+                Err(RawError::YdbStatus(status))
+                    if status.operation_status == StatusCode::NotFound as i32 =>
+                {
+                    Ok(())
+                }
+                Err(err) => Err(YdbError::from(err)),
+            }
         })
         .await
     }
@@ -94,7 +112,9 @@ impl OperationClient {
         let id = id.into();
         self.retry(|| async {
             let mut client = self.raw_client().await?;
-            client.cancel_operation(&id).await.map_err(YdbError::from)?;
+            self.with_rpc_timeout(|| client.cancel_operation(&id))
+                .await
+                .map_err(YdbError::from)?;
             Ok(())
         })
         .await
@@ -104,6 +124,20 @@ impl OperationClient {
         self.connection_manager
             .get_auth_service(RawOperationClient::new)
             .await
+    }
+
+    async fn with_rpc_timeout<T, F, Fut>(&self, operation: F) -> Result<T, RawError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<T, RawError>>,
+    {
+        match timeout(self.operation_timeout, operation()).await {
+            Ok(result) => result,
+            Err(_) => Err(RawError::custom(format!(
+                "operation service rpc timed out after {:?}",
+                self.operation_timeout
+            ))),
+        }
     }
 
     async fn retry<T, F, Fut>(&self, mut attempt_fn: F) -> YdbResult<T>

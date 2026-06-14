@@ -47,7 +47,7 @@ impl RawOperationClient {
         let operation = inner
             .operation
             .ok_or_else(|| RawError::custom("get operation response has no operation field"))?;
-        RawOperation::try_from(operation)
+        Ok(RawOperation::from(operation))
     }
 
     pub async fn list_operations(
@@ -67,8 +67,8 @@ impl RawOperationClient {
         let operations = inner
             .operations
             .into_iter()
-            .map(RawOperation::try_from)
-            .collect::<RawResult<Vec<_>>>()?;
+            .map(RawOperation::from)
+            .collect();
         Ok(RawListOperationsResult {
             operations,
             next_page_token: inner.next_page_token,
