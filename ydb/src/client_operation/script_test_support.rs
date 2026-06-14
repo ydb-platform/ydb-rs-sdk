@@ -64,7 +64,9 @@ pub(crate) async fn start_execute_script_operation(
 
     let operation = response.into_inner();
     if operation.id.is_empty() {
-        return Err(RawError::custom("execute script returned empty operation id"));
+        return Err(RawError::custom(
+            "execute script returned empty operation id",
+        ));
     }
 
     Ok(operation.id)
