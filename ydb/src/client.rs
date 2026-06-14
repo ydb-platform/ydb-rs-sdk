@@ -1,5 +1,6 @@
 use crate::client_common::DBCredentials;
 use crate::client_coordination::client::CoordinationClient;
+use crate::client_operation::OperationClient;
 use crate::client_scheme::client::SchemeClient;
 use crate::client_table::TableClient;
 use crate::discovery::Discovery;
@@ -68,6 +69,11 @@ impl Client {
         CoordinationClient::new(self.timeouts, self.connection_manager.clone())
     }
 
+    /// Create instance of client for operation service (list/get/forget long-running operations).
+    pub fn operation_client(&self) -> OperationClient {
+        OperationClient::new(self.timeouts, self.connection_manager.clone())
+    }
+
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {
         self.timeouts = timeouts;
         self
@@ -86,6 +92,13 @@ impl Client {
         trace!("wait balancer");
         self.load_balancer.wait().await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+impl Client {
+    pub(crate) fn connection_manager_for_test(&self) -> GrpcConnectionManager {
+        self.connection_manager.clone()
     }
 }
 
