@@ -2405,6 +2405,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "slo-native-query"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "slo-framework",
+ "tokio",
+ "ydb",
+]
+
+[[package]]
 name = "slo-native-table"
 version = "0.1.0"
 dependencies = [
