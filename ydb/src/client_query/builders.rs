@@ -6,9 +6,8 @@ use std::time::Duration;
 
 use crate::types::Value;
 
-use super::exec::CallOptions;
-use super::internal::{ExecCoreRef, HasCore};
-use super::stream_facade::QueryStream;
+use super::exec::{client_begin_stream, CallOptions, ClientExecContext};
+use super::QueryStream;
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -17,7 +16,7 @@ pub enum Streamed {}
 pub type QueryStreamBuilder<'a> = CallBuilder<'a, Streamed>;
 
 pub struct CallBuilder<'a, K> {
-    core: ExecCoreRef<'a>,
+    ctx: &'a mut ClientExecContext,
     text: String,
     params: HashMap<String, Value>,
     opts: CallOptions,
@@ -25,9 +24,9 @@ pub struct CallBuilder<'a, K> {
 }
 
 impl<'a, K> CallBuilder<'a, K> {
-    pub(crate) fn new(core: ExecCoreRef<'a>, text: String) -> Self {
+    pub(crate) fn new(ctx: &'a mut ClientExecContext, text: String) -> Self {
         Self {
-            core,
+            ctx,
             text,
             params: HashMap::new(),
             opts: CallOptions::default(),
@@ -45,10 +44,7 @@ impl<'a, K> CallBuilder<'a, K> {
         self
     }
 
-    /// Per-call operation timeout.
-    ///
-    /// For [`QueryStream`](Self) the timeout applies only while opening the gRPC
-    /// stream; iterating result sets is not bounded by this value.
+    /// Per-call operation timeout (opening the gRPC stream only).
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.opts.timeout = Some(timeout);
         self
@@ -66,36 +62,17 @@ impl<'a, K> CallBuilder<'a, K> {
 }
 
 impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
-    type Output = crate::errors::YdbResult<QueryStream<'a>>;
+    type Output = crate::errors::YdbResult<QueryStream>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
-    fn into_future(mut self) -> Self::IntoFuture {
+    fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let stream = self
-                .core
-                .begin_stream(self.text, self.params, self.opts)
-                .await?;
-            Ok(QueryStream {
-                core: self.core,
-                stream,
-            })
+            let stream = client_begin_stream(self.ctx, self.text, self.params, self.opts).await?;
+            Ok(QueryStream { stream })
         })
     }
 }
 
-#[allow(private_bounds)]
-pub trait QueryExecutor: HasCore {
-    fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_> {
-        CallBuilder::new(self.core_mut(), text.into())
-    }
+pub trait QueryExecutor {
+    fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_>;
 }
-
-macro_rules! impl_query_methods {
-    () => {
-        pub fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_> {
-            QueryExecutor::query(self, text)
-        }
-    };
-}
-
-pub(crate) use impl_query_methods;

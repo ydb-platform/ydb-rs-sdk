@@ -10,6 +10,7 @@ use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
 use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
 
 pub(crate) struct StreamCloseMeta {
+    #[allow(dead_code)]
     pub tx_id: Option<String>,
 }
 
@@ -78,7 +79,8 @@ impl ExecuteQueryStream {
         Ok(tx_id)
     }
 
-    /// Read the first response part so transaction `tx_id` is captured before iteration.
+    /// Read the first response part (used when transaction support is added).
+    #[allow(dead_code)]
     pub async fn prime_first_part(&mut self) -> RawResult<()> {
         if self.pending_part.is_some() || self.grpc.is_none() || self.finished {
             return Ok(());
@@ -225,6 +227,7 @@ impl ExecuteQueryStream {
         }
     }
 
+    #[allow(dead_code)]
     pub fn take_captured_tx_id(&mut self) -> Option<String> {
         if let Some(id) = self.captured_tx_id.take() {
             return Some(id);

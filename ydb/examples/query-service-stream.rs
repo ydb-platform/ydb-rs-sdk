@@ -1,44 +1,39 @@
-//! Multi-result-set streaming inside `retry_transaction` (lazy tx on implicit session).
+//! Multi-result-set streaming via [`QueryExecutor::query`] (implicit sessions).
 
-use ydb::{ClientBuilder, QueryTransaction};
+use ydb::{ClientBuilder, FromYdbRow, Row, YdbResult};
+
+#[derive(Debug)]
+struct ValueRow {
+    a: i64,
+}
+
+impl FromYdbRow for ValueRow {
+    fn from_row(mut row: Row) -> YdbResult<Self> {
+        Ok(Self {
+            a: row.remove_field_by_name("a")?.try_into()?,
+        })
+    }
+}
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> YdbResult<()> {
     let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
         .client()?;
     client.wait().await?;
 
-    let qc = client.query_client();
+    let mut qc = client.query_client();
+    let mut stream = qc.query("SELECT 42 AS a; SELECT 1 AS b, 2 AS c;").await?;
 
-    let sets = qc
-        // Annotate the parameter type (`tx: &mut QueryTransaction`) so the
-        // IDE can complete methods on `tx`: rust-analyzer does not yet
-        // reliably infer `async ||` closure parameter types from the
-        // `AsyncFnMut` bound. The compiler infers it fine without this.
-        .retry_transaction(async |tx: &mut QueryTransaction| {
-            let mut stream = tx.query("SELECT 42 AS a; SELECT 1 AS b, 2 AS c;").await?;
+    let mut set_count = 0;
+    while let Some(result_set) = stream.next_result_set().await? {
+        for row in result_set {
+            let typed = ValueRow::from_row(row)?;
+            println!("a = {}", typed.a);
+        }
+        set_count += 1;
+    }
+    stream.close().await?;
 
-            // While `stream` is alive, `tx` stays mutably borrowed — a second
-            // concurrent query in the same transaction does not compile:
-            //
-            //     tx.exec("SELECT 1").await?;
-            //     // error[E0499]: cannot borrow `*tx` as mutable more than once
-            //
-            // The single-stream-per-transaction invariant comes for free.
-
-            let mut set_count = 0;
-            while let Some(result_set) = stream.next_result_set().await? {
-                for mut row in result_set {
-                    let _ = row.remove_field_by_name("a");
-                }
-                set_count += 1;
-            }
-            stream.close().await?;
-
-            Ok(set_count)
-        })
-        .await?;
-
-    println!("result sets: {sets}");
+    println!("result sets: {set_count}");
     Ok(())
 }

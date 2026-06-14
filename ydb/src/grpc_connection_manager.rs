@@ -1,6 +1,6 @@
 use crate::connection_pool::ConnectionPool;
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
-use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
+use crate::grpc_wrapper::raw_services::GrpcServiceForDiscovery;
 use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::YdbResult;
@@ -58,10 +58,6 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
 
         let intercepted_channel = InterceptedChannel::new(channel, self.state.interceptor.clone());
         Ok(new(intercepted_channel).with_grpc_max_message_size(self.state.grpc_max_message_size))
-    }
-
-    pub(crate) fn endpoint(&self, service: Service) -> YdbResult<Uri> {
-        self.state.balancer.endpoint(service)
     }
 
     pub(crate) fn database(&self) -> &String {
