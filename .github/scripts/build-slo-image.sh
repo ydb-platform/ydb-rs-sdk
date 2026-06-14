@@ -77,9 +77,6 @@ case "$src_path" in
   native/table)
     pkg_name="slo-native-table"
     ;;
-  native/query)
-    pkg_name="slo-native-query"
-    ;;
   *)
     die "Unknown --src-path: $src_path"
     ;;
