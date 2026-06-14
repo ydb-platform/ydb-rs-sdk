@@ -50,6 +50,7 @@ pub(crate) mod client_common;
 pub(crate) mod client_coordination;
 #[cfg(test)]
 mod client_directory_test_integration;
+pub(crate) mod client_query;
 pub(crate) mod client_scheme;
 pub(crate) mod client_table;
 #[cfg(test)]
@@ -149,6 +150,14 @@ pub use client::{Client, TimeoutSettings};
 
 // full enum pub types
 pub use client_builder::ClientBuilder;
+
+// full enum pub types
+pub use client_query::{
+    CallBuilder, ExecBuilder, ExecCall, FromYdbRow, OneResultSet, OneRow, OptionalRow,
+    OptionalRowBuilder, QueryClient, QueryExecutor, QueryRowBuilder, QuerySessionMode, QueryStats,
+    QueryStream, QueryStreamBuilder, QueryTransaction, QueryTransactionOptions, QueryTxMode,
+    ResultSetBuilder, Streamed,
+};
 
 // full enum pub types
 pub use client_table::{RetryOptions, TableClient, TransactionOptions};
