@@ -125,7 +125,7 @@ async fn query_client_pooled_session_not_configured() {
 #[ignore] // need YDB access
 async fn query_client_pooled_session_select() -> YdbResult<()> {
     let client = create_client().await?;
-    let qc = client
+    let mut qc = client
         .query_client()
         .clone_with_idempotent_operations(true)
         .with_session_pool(

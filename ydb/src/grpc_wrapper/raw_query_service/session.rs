@@ -23,7 +23,6 @@ pub(crate) struct AttachedQuerySession {
 struct AttachedQuerySessionInner {
     session_id: String,
     node_uri: Uri,
-    node_id: u64,
     in_use: AtomicUsize,
     alive: AtomicBool,
     attach_task: Mutex<Option<JoinHandle<()>>>,
@@ -56,7 +55,6 @@ impl AttachedQuerySession {
         Self::open(
             client,
             node_uri,
-            created.node_id,
             created.session_id,
             on_node_shutdown,
             delete_timeout,
@@ -67,7 +65,6 @@ impl AttachedQuerySession {
     pub async fn open(
         client: &mut RawQueryClient,
         node_uri: Uri,
-        node_id: u64,
         session_id: String,
         on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync>,
         delete_timeout: Duration,
@@ -85,7 +82,6 @@ impl AttachedQuerySession {
         let inner = Arc::new(AttachedQuerySessionInner {
             session_id,
             node_uri,
-            node_id,
             in_use: AtomicUsize::new(0),
             alive: AtomicBool::new(true),
             attach_task: Mutex::new(None),
@@ -107,14 +103,6 @@ impl AttachedQuerySession {
 
     pub fn session_id(&self) -> &str {
         &self.inner.session_id
-    }
-
-    pub fn node_uri(&self) -> &Uri {
-        &self.inner.node_uri
-    }
-
-    pub fn node_id(&self) -> u64 {
-        self.inner.node_id
     }
 
     pub fn begin_use(&self) {
@@ -259,14 +247,6 @@ impl ImplicitQuerySession {
 
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Acquire)
-    }
-
-    pub fn ensure_alive(&self) -> RawResult<()> {
-        if self.is_alive() {
-            Ok(())
-        } else {
-            Err(RawError::custom("implicit query session is closed"))
-        }
     }
 
     pub fn close(&self) {

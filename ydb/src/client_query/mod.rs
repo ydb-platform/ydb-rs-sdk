@@ -226,7 +226,6 @@ impl QueryClient {
                 self.ctx.discovery.clone(),
                 self.ctx.session_mode,
                 self.ctx.session_pool.clone(),
-                self.ctx.implicit_session_pool.clone(),
                 self.tx_options.clone(),
             );
 
@@ -297,7 +296,6 @@ impl QueryTransaction {
         discovery: Arc<Box<dyn Discovery>>,
         session_mode: QuerySessionMode,
         session_pool: Option<QuerySessionPool>,
-        implicit_session_pool: Option<QuerySessionPool>,
         options: QueryTransactionOptions,
     ) -> Self {
         Self {
@@ -307,7 +305,6 @@ impl QueryTransaction {
                 discovery,
                 session_mode,
                 session_pool,
-                implicit_session_pool,
                 options,
             ),
             state: TxState::Active,

@@ -17,7 +17,6 @@ use ydb_grpc::ydb_proto::query::{
 
 pub(crate) struct CreateSessionResult {
     pub session_id: String,
-    pub node_id: u64,
 }
 
 pub(crate) struct RawQueryClient {
@@ -102,7 +101,6 @@ impl RawQueryClient {
         check_status(inner.status, &inner.issues)?;
         Ok(CreateSessionResult {
             session_id: inner.session_id,
-            node_id: inner.node_id.max(0) as u64,
         })
     }
 

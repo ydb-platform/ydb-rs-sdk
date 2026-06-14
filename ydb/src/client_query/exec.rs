@@ -57,7 +57,6 @@ pub(crate) struct TransactionExecContext {
     pub session_mode: QuerySessionMode,
     pub tx_mode: QueryTxMode,
     pub session_pool: Option<QuerySessionPool>,
-    pub implicit_session_pool: Option<QuerySessionPool>,
     pub attached_session: Option<AttachedQuerySession>,
     pub pooled_lease: Option<QuerySessionLease>,
     pub implicit_lease: Option<ImplicitSessionLease>,
@@ -599,7 +598,6 @@ pub(crate) fn transaction_exec_context(
     discovery: Arc<Box<dyn Discovery>>,
     session_mode: QuerySessionMode,
     session_pool: Option<QuerySessionPool>,
-    implicit_session_pool: Option<QuerySessionPool>,
     options: QueryTransactionOptions,
 ) -> TransactionExecContext {
     TransactionExecContext {
@@ -608,7 +606,6 @@ pub(crate) fn transaction_exec_context(
         discovery,
         session_mode,
         session_pool,
-        implicit_session_pool,
         tx_mode: options.mode(),
         attached_session: None,
         pooled_lease: None,

@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use http::Uri;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::client::TimeoutSettings;
 use crate::discovery::Discovery;
@@ -213,7 +213,6 @@ pub(crate) enum QuerySessionPoolKind {
     Implicit,
 }
 
-#[derive(Clone)]
 struct ExplicitIdleItem {
     session: AttachedQuerySession,
     node_uri: Uri,
@@ -233,8 +232,6 @@ struct QuerySessionPoolInner {
     kind: QuerySessionPoolKind,
     settings: QuerySessionPoolSettings,
     connection_manager: GrpcConnectionManager,
-    timeouts: TimeoutSettings,
-    _discovery: Arc<Box<dyn Discovery>>,
     semaphore: Arc<Semaphore>,
     explicit_idle: Mutex<Vec<ExplicitIdleItem>>,
     implicit_idle: Mutex<Vec<ImplicitIdleItem>>,
@@ -244,7 +241,7 @@ struct QuerySessionPoolInner {
 impl QuerySessionPool {
     pub async fn new_explicit(
         connection_manager: GrpcConnectionManager,
-        timeouts: TimeoutSettings,
+        _timeouts: TimeoutSettings,
         discovery: Arc<Box<dyn Discovery>>,
         settings: QuerySessionPoolSettings,
     ) -> YdbResult<Self> {
@@ -258,8 +255,6 @@ impl QuerySessionPool {
             kind: QuerySessionPoolKind::Explicit,
             settings,
             connection_manager,
-            timeouts,
-            _discovery: discovery,
             semaphore: Arc::new(Semaphore::new(limit)),
             explicit_idle: Mutex::new(Vec::new()),
             implicit_idle: Mutex::new(Vec::new()),
@@ -275,7 +270,7 @@ impl QuerySessionPool {
 
     pub fn new_implicit(
         connection_manager: GrpcConnectionManager,
-        timeouts: TimeoutSettings,
+        _timeouts: TimeoutSettings,
         discovery: Arc<Box<dyn Discovery>>,
         settings: QuerySessionPoolSettings,
     ) -> Self {
@@ -289,8 +284,6 @@ impl QuerySessionPool {
             kind: QuerySessionPoolKind::Implicit,
             settings,
             connection_manager,
-            timeouts,
-            _discovery: discovery,
             semaphore: Arc::new(Semaphore::new(limit)),
             explicit_idle: Mutex::new(Vec::new()),
             implicit_idle: Mutex::new(Vec::new()),
@@ -313,10 +306,6 @@ impl QuerySessionPool {
         Self { inner }
     }
 
-    pub fn kind(&self) -> QuerySessionPoolKind {
-        self.inner.kind
-    }
-
     pub async fn acquire_explicit(&self) -> YdbResult<QuerySessionLease> {
         if self.inner.kind != QuerySessionPoolKind::Explicit {
             return Err(YdbError::Custom(
@@ -333,7 +322,7 @@ impl QuerySessionPool {
             .map_err(|_| YdbError::Transport("query session pool closed".to_string()))?;
 
         for _ in 0..2 {
-            if let Some(item) = self.inner.pop_explicit_idle().await {
+            if let Some(item) = self.inner.pop_explicit_idle() {
                 if self.inner.should_close_explicit(&item) {
                     self.inner.close_explicit_item(item).await;
                     continue;
@@ -383,7 +372,7 @@ impl QuerySessionPool {
             .map_err(|_| YdbError::Transport("query session pool closed".to_string()))?;
 
         for _ in 0..2 {
-            if let Some(item) = self.inner.pop_implicit_idle().await {
+            if let Some(item) = self.inner.pop_implicit_idle() {
                 if self.inner.should_close_implicit(&item) {
                     item.session.close();
                     continue;
@@ -471,12 +460,12 @@ impl QuerySessionPoolInner {
         })
     }
 
-    async fn pop_explicit_idle(&self) -> Option<ExplicitIdleItem> {
+    fn pop_explicit_idle(&self) -> Option<ExplicitIdleItem> {
         let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
         idle.pop()
     }
 
-    async fn pop_implicit_idle(&self) -> Option<ImplicitIdleItem> {
+    fn pop_implicit_idle(&self) -> Option<ImplicitIdleItem> {
         let mut idle = self.implicit_idle.lock().expect("implicit idle lock");
         idle.pop()
     }
@@ -522,12 +511,21 @@ impl QuerySessionPoolInner {
     }
 
     async fn close_explicit_item(&self, item: ExplicitIdleItem) {
-        if let Ok(mut client) = self
+        match self
             .connection_manager
             .get_auth_service_to_node(RawQueryClient::new, &item.node_uri)
             .await
         {
-            item.session.close(&mut client).await;
+            Ok(mut client) => {
+                item.session.close(&mut client).await;
+            }
+            Err(err) => {
+                warn!(
+                    session_id = item.session.session_id(),
+                    error = %err,
+                    "failed to connect for DeleteSession; server-side session may leak until idle timeout"
+                );
+            }
         }
     }
 
@@ -540,6 +538,7 @@ impl QuerySessionPoolInner {
         item.last_used = Instant::now();
 
         if self.should_close_explicit(&item) {
+            drop(permit);
             self.close_explicit_item(item).await;
         } else {
             let overflow = {
@@ -551,12 +550,11 @@ impl QuerySessionPoolInner {
                     Some(item)
                 }
             };
+            drop(permit);
             if let Some(item) = overflow {
                 self.close_explicit_item(item).await;
             }
         }
-
-        drop(permit);
     }
 
     async fn release_implicit_item(
@@ -569,6 +567,7 @@ impl QuerySessionPoolInner {
 
         if self.should_close_implicit(&item) {
             item.session.close();
+            drop(permit);
         } else {
             let mut idle = self.implicit_idle.lock().expect("implicit idle lock");
             if idle.len() < self.settings.limit {
@@ -576,9 +575,8 @@ impl QuerySessionPoolInner {
             } else {
                 item.session.close();
             }
+            drop(permit);
         }
-
-        drop(permit);
     }
 }
 
