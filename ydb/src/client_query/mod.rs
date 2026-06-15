@@ -168,13 +168,13 @@ impl QueryClient {
     /// Start a long-running script operation. Poll completion via
     /// [`crate::OperationClient::get_operation`], then read rows with
     /// [`Self::fetch_script_results`].
-    pub fn execute_script(&mut self, text: impl Into<String>) -> script::ExecuteScriptBuilder<'_> {
+    pub fn execute_script(&self, text: impl Into<String>) -> script::ExecuteScriptBuilder<'_> {
         script::ExecuteScriptBuilder::new(&self.ctx, text.into())
     }
 
     /// Fetch a page of script results for a completed operation.
     pub fn fetch_script_results(
-        &mut self,
+        &self,
         operation_id: impl Into<String>,
     ) -> script::FetchScriptResultsBuilder<'_> {
         script::FetchScriptResultsBuilder::new(&self.ctx, operation_id.into())

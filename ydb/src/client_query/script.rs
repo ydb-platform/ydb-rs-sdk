@@ -10,7 +10,9 @@ use crate::grpc_wrapper::raw_query_service::fetch_script_results::RawFetchScript
 use crate::result::ResultSet;
 use crate::types::Value;
 
-use super::exec::{run_idempotent, CallOptions, ClientExecContext};
+use super::exec::{
+    call_operation_timeout, run_with_retry, with_operation_timeout, CallOptions, ClientExecContext,
+};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -178,18 +180,26 @@ async fn client_execute_script_once(
         operation_params: ctx.timeouts.execute_script_operation_params(),
         collect_stats: opts.collect_stats,
     };
-    let timeout_duration = opts.timeout.unwrap_or(ctx.timeouts.operation_timeout);
-    let (id, consumed_units) = tokio::time::timeout(timeout_duration, async {
-        let mut client = ctx
-            .connection_manager
-            .get_auth_service(RawQueryClient::new)
-            .await?;
+    let timeout_duration = call_operation_timeout(opts, &ctx.timeouts);
+    let mut client = ctx
+        .connection_manager
+        .get_auth_service(RawQueryClient::new)
+        .await?;
+    let (id, consumed_units) = match with_operation_timeout(timeout_duration, async {
         client.execute_script(req).await.map_err(YdbError::from)
     })
     .await
-    .map_err(|_| {
-        YdbError::Transport(format!("operation timed out after {timeout_duration:?}"))
-    })??;
+    {
+        Ok(value) => value,
+        Err(err) => {
+            tracing::warn!(
+                ?timeout_duration,
+                "execute_script timed out waiting for RPC response; \
+                 a server-side operation may still be running until cancel_after"
+            );
+            return Err(err);
+        }
+    };
 
     Ok(ExecuteScriptOperation { id, consumed_units })
 }
@@ -203,7 +213,7 @@ async fn client_fetch_script_results(
     opts: CallOptions,
 ) -> YdbResult<FetchScriptResult> {
     // FetchScriptResults is always safe to retry (aligned with Go SDK).
-    run_idempotent(ctx, true, || {
+    run_with_retry(ctx, true, || {
         client_fetch_script_results_once(
             ctx,
             &operation_id,
@@ -230,21 +240,18 @@ async fn client_fetch_script_results_once(
         fetch_token: fetch_token.to_string(),
         rows_limit,
     };
-    let timeout_duration = opts.timeout.unwrap_or(ctx.timeouts.operation_timeout);
-    let (index, raw_set, next_token) = tokio::time::timeout(timeout_duration, async {
-        let mut client = ctx
-            .connection_manager
-            .get_auth_service(RawQueryClient::new)
-            .await?;
+    let timeout_duration = call_operation_timeout(opts, &ctx.timeouts);
+    let mut client = ctx
+        .connection_manager
+        .get_auth_service(RawQueryClient::new)
+        .await?;
+    let (index, raw_set, next_token) = with_operation_timeout(timeout_duration, async {
         client
             .fetch_script_results(req)
             .await
             .map_err(YdbError::from)
     })
-    .await
-    .map_err(|_| {
-        YdbError::Transport(format!("operation timed out after {timeout_duration:?}"))
-    })??;
+    .await?;
 
     Ok(FetchScriptResult {
         result_set_index: index,
