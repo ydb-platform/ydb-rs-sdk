@@ -180,7 +180,7 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
             .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
             .await?;
         let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
-        assert_eq!(val.unwrap_or(0), 42);
+        assert_eq!(val, 42);
 
         Ok(())
     })
