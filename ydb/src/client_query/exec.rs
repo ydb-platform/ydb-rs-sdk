@@ -75,6 +75,18 @@ async fn query_client(ctx: &ClientExecContext) -> YdbResult<RawQueryClient> {
         .await
 }
 
+pub(crate) async fn run_idempotent<T, F, Fut>(
+    ctx: &ClientExecContext,
+    idempotent: bool,
+    attempt_fn: F,
+) -> YdbResult<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = YdbResult<T>>,
+{
+    retry_with_budget(idempotent, ctx.retry_budget, attempt_fn).await
+}
+
 async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQueryClient> {
     if let Some(uri) = &tx.query_node {
         tx.connection_manager

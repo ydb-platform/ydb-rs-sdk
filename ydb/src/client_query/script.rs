@@ -1,0 +1,269 @@
+use std::collections::HashMap;
+use std::future::{Future, IntoFuture};
+use std::pin::Pin;
+use std::time::Duration;
+
+use crate::errors::{YdbError, YdbResult};
+use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
+use crate::grpc_wrapper::raw_query_service::execute_script::RawExecuteScriptRequest;
+use crate::grpc_wrapper::raw_query_service::fetch_script_results::RawFetchScriptResultsRequest;
+use crate::result::ResultSet;
+use crate::types::Value;
+
+use super::exec::{run_idempotent, CallOptions, ClientExecContext};
+
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// Long-running script operation started by [`QueryClient::execute_script`].
+#[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
+pub struct ExecuteScriptOperation {
+    pub id: String,
+    pub consumed_units: Option<f64>,
+}
+
+/// One page of script results from [`QueryClient::fetch_script_results`].
+#[derive(Debug)]
+#[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
+pub struct FetchScriptResult {
+    pub result_set_index: i64,
+    pub result_set: ResultSet,
+    pub next_fetch_token: String,
+}
+
+pub struct ExecuteScriptBuilder<'a> {
+    ctx: &'a ClientExecContext,
+    text: String,
+    params: HashMap<String, Value>,
+    opts: CallOptions,
+    results_ttl: Option<Duration>,
+}
+
+impl<'a> ExecuteScriptBuilder<'a> {
+    pub(crate) fn new(ctx: &'a ClientExecContext, text: String) -> Self {
+        Self {
+            ctx,
+            text,
+            params: HashMap::new(),
+            opts: CallOptions::default(),
+            results_ttl: None,
+        }
+    }
+
+    /// TTL for script results on the server after execution completes.
+    pub fn results_ttl(mut self, ttl: Duration) -> Self {
+        self.results_ttl = Some(ttl);
+        self
+    }
+
+    pub fn param(mut self, name: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.params.insert(name.into(), value.into());
+        self
+    }
+
+    pub fn params(mut self, params: HashMap<String, Value>) -> Self {
+        self.params.extend(params);
+        self
+    }
+
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.opts.timeout = Some(timeout);
+        self
+    }
+
+    pub fn idempotent(mut self, idempotent: bool) -> Self {
+        self.opts.idempotent = Some(idempotent);
+        self
+    }
+
+    pub fn collect_stats(mut self) -> Self {
+        self.opts.collect_stats = true;
+        self
+    }
+}
+
+impl<'a> IntoFuture for ExecuteScriptBuilder<'a> {
+    type Output = YdbResult<ExecuteScriptOperation>;
+    type IntoFuture = BoxFuture<'a, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            let results_ttl = self.results_ttl.ok_or_else(|| {
+                YdbError::Custom("execute_script requires `.results_ttl(...)`".into())
+            })?;
+            client_execute_script(self.ctx, self.text, self.params, self.opts, results_ttl).await
+        })
+    }
+}
+
+pub struct FetchScriptResultsBuilder<'a> {
+    ctx: &'a ClientExecContext,
+    operation_id: String,
+    result_set_index: i64,
+    fetch_token: String,
+    rows_limit: i64,
+    opts: CallOptions,
+}
+
+impl<'a> FetchScriptResultsBuilder<'a> {
+    pub(crate) fn new(ctx: &'a ClientExecContext, operation_id: String) -> Self {
+        Self {
+            ctx,
+            operation_id,
+            result_set_index: 0,
+            fetch_token: String::new(),
+            rows_limit: 0,
+            opts: CallOptions::default(),
+        }
+    }
+
+    pub fn result_set_index(mut self, index: i64) -> Self {
+        self.result_set_index = index;
+        self
+    }
+
+    pub fn fetch_token(mut self, token: impl Into<String>) -> Self {
+        self.fetch_token = token.into();
+        self
+    }
+
+    pub fn rows_limit(mut self, limit: i64) -> Self {
+        self.rows_limit = limit;
+        self
+    }
+
+    pub fn timeout(mut self, timeout: Duration) -> Self {
+        self.opts.timeout = Some(timeout);
+        self
+    }
+}
+
+impl<'a> IntoFuture for FetchScriptResultsBuilder<'a> {
+    type Output = YdbResult<FetchScriptResult>;
+    type IntoFuture = BoxFuture<'a, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            client_fetch_script_results(
+                self.ctx,
+                self.operation_id,
+                self.result_set_index,
+                self.fetch_token,
+                self.rows_limit,
+                self.opts,
+            )
+            .await
+        })
+    }
+}
+
+async fn client_execute_script(
+    ctx: &ClientExecContext,
+    text: String,
+    params: HashMap<String, Value>,
+    opts: CallOptions,
+    results_ttl: Duration,
+) -> YdbResult<ExecuteScriptOperation> {
+    let idempotent = opts.idempotent.unwrap_or(ctx.idempotent_operation);
+    run_idempotent(ctx, idempotent, || {
+        client_execute_script_once(ctx, &text, &params, &opts, results_ttl)
+    })
+    .await
+}
+
+async fn client_execute_script_once(
+    ctx: &ClientExecContext,
+    text: &str,
+    params: &HashMap<String, Value>,
+    opts: &CallOptions,
+    results_ttl: Duration,
+) -> YdbResult<ExecuteScriptOperation> {
+    let req = RawExecuteScriptRequest {
+        yql_text: text.to_string(),
+        parameters: params.clone(),
+        results_ttl,
+        operation_params: ctx.timeouts.operation_params(),
+        collect_stats: opts.collect_stats,
+    };
+    let timeout_duration = opts.timeout.unwrap_or(ctx.timeouts.operation_timeout);
+    let operation = tokio::time::timeout(timeout_duration, async {
+        let mut client = ctx
+            .connection_manager
+            .get_auth_service(RawQueryClient::new)
+            .await?;
+        client.execute_script(req).await.map_err(YdbError::from)
+    })
+    .await
+    .map_err(|_| {
+        YdbError::Transport(format!("operation timed out after {timeout_duration:?}"))
+    })??;
+
+    if operation.id.is_empty() {
+        return Err(YdbError::Custom(
+            "execute script returned empty operation id".into(),
+        ));
+    }
+    Ok(ExecuteScriptOperation {
+        id: operation.id,
+        consumed_units: operation.cost_info.map(|info| info.consumed_units),
+    })
+}
+
+async fn client_fetch_script_results(
+    ctx: &ClientExecContext,
+    operation_id: String,
+    result_set_index: i64,
+    fetch_token: String,
+    rows_limit: i64,
+    opts: CallOptions,
+) -> YdbResult<FetchScriptResult> {
+    // FetchScriptResults is always safe to retry (aligned with Go SDK).
+    run_idempotent(ctx, true, || {
+        client_fetch_script_results_once(
+            ctx,
+            &operation_id,
+            result_set_index,
+            &fetch_token,
+            rows_limit,
+            &opts,
+        )
+    })
+    .await
+}
+
+async fn client_fetch_script_results_once(
+    ctx: &ClientExecContext,
+    operation_id: &str,
+    result_set_index: i64,
+    fetch_token: &str,
+    rows_limit: i64,
+    opts: &CallOptions,
+) -> YdbResult<FetchScriptResult> {
+    let req = RawFetchScriptResultsRequest {
+        operation_id: operation_id.to_string(),
+        result_set_index,
+        fetch_token: fetch_token.to_string(),
+        rows_limit,
+    };
+    let timeout_duration = opts.timeout.unwrap_or(ctx.timeouts.operation_timeout);
+    let (index, raw_set, next_token) = tokio::time::timeout(timeout_duration, async {
+        let mut client = ctx
+            .connection_manager
+            .get_auth_service(RawQueryClient::new)
+            .await?;
+        client
+            .fetch_script_results(req)
+            .await
+            .map_err(YdbError::from)
+    })
+    .await
+    .map_err(|_| {
+        YdbError::Transport(format!("operation timed out after {timeout_duration:?}"))
+    })??;
+
+    Ok(FetchScriptResult {
+        result_set_index: index,
+        result_set: raw_set.try_into()?,
+        next_fetch_token: next_token,
+    })
+}

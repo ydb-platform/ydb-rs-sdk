@@ -20,6 +20,18 @@ impl RawOperationParams {
             labels: Default::default(),
         }
     }
+
+    pub(crate) fn new_async(
+        operation_timeout: std::time::Duration,
+        cancel_after: std::time::Duration,
+    ) -> Self {
+        Self {
+            operation_mode: OperationMode::_Async,
+            operation_timeout: Some(operation_timeout.into()),
+            cancel_after: Some(cancel_after.into()),
+            labels: Default::default(),
+        }
+    }
 }
 
 impl From<RawOperationParams> for ydb_grpc::ydb_proto::operations::OperationParams {
