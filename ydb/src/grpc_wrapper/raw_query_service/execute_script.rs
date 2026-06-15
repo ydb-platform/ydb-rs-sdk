@@ -2,11 +2,15 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::grpc_wrapper::raw_common_types::Duration as RawDuration;
-use crate::grpc_wrapper::raw_errors::RawResult;
+use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
+use crate::grpc_wrapper::raw_query_service::status::check_status;
 use crate::grpc_wrapper::raw_table_service::value::RawTypedValue;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::types::Value;
-use ydb_grpc::ydb_proto::query::{ExecMode, ExecuteScriptRequest, QueryContent, StatsMode, Syntax};
+use prost::Message;
+use ydb_grpc::ydb_proto::query::{
+    ExecMode, ExecuteScriptMetadata, ExecuteScriptRequest, QueryContent, StatsMode, Syntax,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) struct RawExecuteScriptRequest {
@@ -42,4 +46,29 @@ impl RawExecuteScriptRequest {
             pool_id: String::new(),
         })
     }
+}
+
+pub(crate) fn parse_execute_script_operation(
+    operation: ydb_grpc::ydb_proto::operations::Operation,
+) -> RawResult<(String, Option<f64>)> {
+    check_status(operation.status, &operation.issues)?;
+    if !operation.id.is_empty() {
+        return Ok((
+            operation.id,
+            operation.cost_info.map(|info| info.consumed_units),
+        ));
+    }
+    if let Some(any) = operation.metadata {
+        if let Ok(meta) = ExecuteScriptMetadata::decode(&*any.value) {
+            if !meta.execution_id.is_empty() {
+                return Ok((
+                    meta.execution_id,
+                    operation.cost_info.map(|info| info.consumed_units),
+                ));
+            }
+        }
+    }
+    Err(RawError::custom(
+        "execute script returned empty operation id",
+    ))
 }

@@ -19,19 +19,13 @@ pub(crate) async fn start_execute_script_operation(
         yql_text: "$items = ListFromRange(1, 50000000); SELECT ListSum($items);".to_string(),
         parameters: Default::default(),
         results_ttl: Duration::from_secs(3600),
-        operation_params: RawOperationParams::new_async(
+        operation_params: RawOperationParams::for_execute_script(
             Duration::from_secs(3600),
             Duration::from_secs(3600),
         ),
         collect_stats: false,
     };
 
-    let operation = client.execute_script(req).await?;
-    if operation.id.is_empty() {
-        return Err(RawError::custom(
-            "execute script returned empty operation id",
-        ));
-    }
-
-    Ok(operation.id)
+    let (operation_id, _) = client.execute_script(req).await?;
+    Ok(operation_id)
 }

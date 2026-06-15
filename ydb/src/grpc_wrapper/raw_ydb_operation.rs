@@ -21,8 +21,8 @@ impl RawOperationParams {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_async(
+    /// ExecuteScript must run asynchronously (YDB rejects SYNC mode).
+    pub(crate) fn for_execute_script(
         operation_timeout: std::time::Duration,
         cancel_after: std::time::Duration,
     ) -> Self {

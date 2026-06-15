@@ -1,7 +1,9 @@
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryRequest;
-use crate::grpc_wrapper::raw_query_service::execute_script::RawExecuteScriptRequest;
+use crate::grpc_wrapper::raw_query_service::execute_script::{
+    parse_execute_script_operation, RawExecuteScriptRequest,
+};
 use crate::grpc_wrapper::raw_query_service::fetch_script_results::{
     parse_response, RawFetchScriptResultsRequest,
 };
@@ -53,10 +55,10 @@ impl RawQueryClient {
     pub async fn execute_script(
         &mut self,
         req: RawExecuteScriptRequest,
-    ) -> RawResult<ydb_grpc::ydb_proto::operations::Operation> {
+    ) -> RawResult<(String, Option<f64>)> {
         let proto = req.into_proto()?;
         let response = self.service.execute_script(proto).await?;
-        Ok(response.into_inner())
+        parse_execute_script_operation(response.into_inner())
     }
 
     pub async fn fetch_script_results(

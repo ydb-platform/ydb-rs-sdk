@@ -54,9 +54,9 @@ async fn main() -> YdbResult<()> {
         next_token = page.next_fetch_token.clone();
 
         for mut row in page.result_set {
-            let id: u64 = row.remove_field_by_name("id")?.try_into()?;
-            let msg: String = row.remove_field_by_name("msg")?.try_into()?;
-            println!("id={id}, msg={msg:?}");
+            let id: Option<u64> = row.remove_field_by_name("id")?.try_into()?;
+            let msg: Option<String> = row.remove_field_by_name("msg")?.try_into()?;
+            println!("id={}, msg={msg:?}", id.unwrap_or(0));
         }
 
         if next_token.is_empty() {

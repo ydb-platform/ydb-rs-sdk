@@ -182,11 +182,11 @@ async fn client_execute_script_once(
         yql_text: text.to_string(),
         parameters: params.clone(),
         results_ttl,
-        operation_params: ctx.timeouts.operation_params(),
+        operation_params: ctx.timeouts.execute_script_operation_params(),
         collect_stats: opts.collect_stats,
     };
     let timeout_duration = opts.timeout.unwrap_or(ctx.timeouts.operation_timeout);
-    let operation = tokio::time::timeout(timeout_duration, async {
+    let (id, consumed_units) = tokio::time::timeout(timeout_duration, async {
         let mut client = ctx
             .connection_manager
             .get_auth_service(RawQueryClient::new)
@@ -198,15 +198,7 @@ async fn client_execute_script_once(
         YdbError::Transport(format!("operation timed out after {timeout_duration:?}"))
     })??;
 
-    if operation.id.is_empty() {
-        return Err(YdbError::Custom(
-            "execute script returned empty operation id".into(),
-        ));
-    }
-    Ok(ExecuteScriptOperation {
-        id: operation.id,
-        consumed_units: operation.cost_info.map(|info| info.consumed_units),
-    })
+    Ok(ExecuteScriptOperation { id, consumed_units })
 }
 
 async fn client_fetch_script_results(

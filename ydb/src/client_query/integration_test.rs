@@ -187,14 +187,14 @@ async fn query_execute_script() -> YdbResult<()> {
     let mut row = qc
         .query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))
         .await?;
-    let rows_from_db: u64 = row.remove_field_by_name("cnt")?.try_into()?;
-    assert_eq!(rows_from_db, UPSERT_ROWS_COUNT as u64);
+    let rows_from_db: Option<u64> = row.remove_field_by_name("cnt")?.try_into()?;
+    assert_eq!(rows_from_db.unwrap_or(0), UPSERT_ROWS_COUNT as u64);
 
     let mut row = qc
         .query_row(format!("SELECT SUM(val) AS s FROM {table_name}"))
         .await?;
-    let checksum_from_db: i64 = row.remove_field_by_name("s")?.try_into()?;
-    assert_eq!(checksum_from_db as u64, EXPECTED_CHECKSUM);
+    let checksum_from_db: Option<i64> = row.remove_field_by_name("s")?.try_into()?;
+    assert_eq!(checksum_from_db.unwrap_or(0) as u64, EXPECTED_CHECKSUM);
 
     let op = qc
         .execute_script(format!("SELECT val FROM {table_name};"))
@@ -225,8 +225,8 @@ async fn query_execute_script() -> YdbResult<()> {
 
         for mut row in page.result_set {
             rows_count += 1;
-            let val: i64 = row.remove_field_by_name("val")?.try_into()?;
-            checksum += val as u64;
+            let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+            checksum += val.unwrap_or(0) as u64;
         }
 
         if next_token.is_empty() {
