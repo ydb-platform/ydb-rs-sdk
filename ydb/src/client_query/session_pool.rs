@@ -174,15 +174,6 @@ impl ImplicitSessionLease {
             self.use_guard = false;
         }
     }
-
-    pub async fn return_to_pool(mut self) {
-        self.end_use();
-        self.returned = true;
-        let permit = self.permit.take();
-        if let Some(item) = self.item.take() {
-            self.pool.release_implicit_item(item, permit).await;
-        }
-    }
 }
 
 impl Drop for ImplicitSessionLease {
