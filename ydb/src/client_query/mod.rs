@@ -279,6 +279,11 @@ impl QueryTransaction {
             self.state = TxState::RolledBack;
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn tx_id_for_test(&self) -> Option<&str> {
+        self.ctx.tx_id.as_deref()
+    }
 }
 
 impl HasCore for QueryTransaction {

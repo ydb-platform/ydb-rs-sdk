@@ -142,3 +142,75 @@ async fn query_client_snapshot_read_only_tx() -> YdbResult<()> {
     assert_eq!(value, 42);
     Ok(())
 }
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
+    let client = create_client().await?;
+    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let table_name = unique_table_name("query_lazy_tx");
+
+    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
+    qc.exec(format!(
+        "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
+    ))
+    .await?;
+
+    qc.retry_transaction(async |tx| {
+        assert!(
+            tx.tx_id_for_test().is_none(),
+            "lazy transaction must not have tx_id before the first query"
+        );
+
+        tx.exec(format!(
+            "DECLARE $id AS Int64; DECLARE $val AS Int64; \
+             UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
+        ))
+        .param("$id", 1_i64)
+        .param("$val", 42_i64)
+        .await?;
+
+        let tx_id = tx
+            .tx_id_for_test()
+            .filter(|id| !id.is_empty())
+            .expect("lazy transaction must receive tx_id from the first ExecuteQuery");
+        assert!(!tx_id.is_empty());
+
+        let mut row = tx
+            .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
+            .await?;
+        let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+        assert_eq!(val.unwrap_or(0), 42);
+
+        Ok(())
+    })
+    .await?;
+
+    let mut row = qc
+        .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
+        .await?;
+    let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+    assert_eq!(val.unwrap_or(0), 42);
+
+    qc.exec(format!("DROP TABLE {table_name}")).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_lazy_tx_commit_without_queries() -> YdbResult<()> {
+    let client = create_client().await?;
+    let qc = client.query_client().clone_with_idempotent_operations(true);
+
+    let value = qc
+        .retry_transaction(async |tx| {
+            assert!(tx.tx_id_for_test().is_none());
+            Ok(7_i32)
+        })
+        .await?;
+
+    assert_eq!(value, 7);
+    Ok(())
+}
