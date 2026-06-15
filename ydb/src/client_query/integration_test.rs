@@ -3,7 +3,7 @@ use crate::errors::YdbResult;
 use crate::test_integration_helper::create_client;
 use crate::types::Value;
 use crate::ydb_struct;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 use tracing_test::traced_test;
 
@@ -201,7 +201,12 @@ async fn query_execute_script() -> YdbResult<()> {
         .results_ttl(Duration::from_secs(3600))
         .await?;
 
+    let poll_deadline = Instant::now() + Duration::from_secs(120);
     loop {
+        assert!(
+            Instant::now() < poll_deadline,
+            "script operation did not become ready within 120s"
+        );
         let status = op_client.get_operation(&op.id).await?;
         if status.ready {
             break;

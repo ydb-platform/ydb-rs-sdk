@@ -59,13 +59,19 @@ pub(crate) fn parse_execute_script_operation(
         ));
     }
     if let Some(any) = operation.metadata {
-        if let Ok(meta) = ExecuteScriptMetadata::decode(&*any.value) {
-            if !meta.execution_id.is_empty() {
+        match ExecuteScriptMetadata::decode(&*any.value) {
+            Ok(meta) if !meta.execution_id.is_empty() => {
                 return Ok((
                     meta.execution_id,
                     operation.cost_info.map(|info| info.consumed_units),
                 ));
             }
+            Err(e) => {
+                return Err(RawError::custom(format!(
+                    "execute script returned empty operation id and metadata decode failed: {e}"
+                )));
+            }
+            _ => {}
         }
     }
     Err(RawError::custom(

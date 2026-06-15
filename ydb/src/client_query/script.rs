@@ -71,11 +71,6 @@ impl<'a> ExecuteScriptBuilder<'a> {
         self
     }
 
-    pub fn idempotent(mut self, idempotent: bool) -> Self {
-        self.opts.idempotent = Some(idempotent);
-        self
-    }
-
     pub fn collect_stats(mut self) -> Self {
         self.opts.collect_stats = true;
         self
@@ -164,11 +159,9 @@ async fn client_execute_script(
     opts: CallOptions,
     results_ttl: Duration,
 ) -> YdbResult<ExecuteScriptOperation> {
-    let idempotent = opts.idempotent.unwrap_or(ctx.idempotent_operation);
-    run_idempotent(ctx, idempotent, || {
-        client_execute_script_once(ctx, &text, &params, &opts, results_ttl)
-    })
-    .await
+    // Unlike FetchScriptResults, ExecuteScript is not retried: a server-side start
+    // followed by a client transport error would spawn duplicate long-running ops.
+    client_execute_script_once(ctx, &text, &params, &opts, results_ttl).await
 }
 
 async fn client_execute_script_once(

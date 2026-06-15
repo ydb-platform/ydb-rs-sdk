@@ -1,10 +1,10 @@
 //! Query Service script execution — start a long-running operation, poll until
 //! ready, then paginate results with `FetchScriptResults`.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::time::sleep;
-use ydb::{ClientBuilder, YdbResult};
+use ydb::{ClientBuilder, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -34,7 +34,13 @@ async fn main() -> YdbResult<()> {
 
     println!("script operation id={}", op.id);
 
+    let poll_deadline = Instant::now() + Duration::from_secs(120);
     loop {
+        if Instant::now() >= poll_deadline {
+            return Err(YdbError::Custom(
+                "script operation polling timed out after 120s".into(),
+            ));
+        }
         let status = op_client.get_operation(&op.id).await?;
         if status.ready {
             println!("operation ready, status={}", status.status);
@@ -51,7 +57,7 @@ async fn main() -> YdbResult<()> {
             .rows_limit(1000)
             .fetch_token(&next_token)
             .await?;
-        next_token = page.next_fetch_token.clone();
+        next_token = page.next_fetch_token;
 
         for mut row in page.result_set {
             let id: Option<u64> = row.remove_field_by_name("id")?.try_into()?;
