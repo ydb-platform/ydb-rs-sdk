@@ -175,7 +175,6 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
             .tx_id_for_test()
             .filter(|id| !id.is_empty())
             .expect("lazy transaction must receive tx_id from the first ExecuteQuery");
-        assert!(!tx_id.is_empty());
 
         let mut row = tx
             .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
