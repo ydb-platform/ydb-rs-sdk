@@ -17,6 +17,26 @@ const DEFAULT_POOL_LIMIT: usize = 50;
 const DEFAULT_SESSION_CREATE_TIMEOUT: Duration = Duration::from_millis(500);
 pub(crate) const DEFAULT_SESSION_DELETE_TIMEOUT: Duration = Duration::from_millis(500);
 
+fn normalize_pool_settings(mut settings: QuerySessionPoolSettings) -> QuerySessionPoolSettings {
+    settings.limit = settings.limit.max(1);
+    settings.warm_up = settings.warm_up.min(settings.limit);
+    settings
+}
+
+fn spawn_pool_release<F>(future: F)
+where
+    F: std::future::Future<Output = ()> + Send + 'static,
+{
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn(future);
+        }
+        Err(_) => {
+            warn!("no active tokio runtime; skipping async session pool release during shutdown");
+        }
+    }
+}
+
 /// Settings for the Query Service session pool (explicit or implicit items).
 #[derive(Clone, Debug)]
 pub struct QuerySessionPoolSettings {
@@ -59,7 +79,7 @@ impl QuerySessionPoolSettings {
     }
 
     pub fn with_warm_up(mut self, warm_up: usize) -> Self {
-        self.warm_up = warm_up;
+        self.warm_up = warm_up.min(self.limit.max(1));
         self
     }
 
@@ -140,7 +160,7 @@ impl Drop for QuerySessionLease {
         let item = self.item.take();
         let permit = self.permit.take();
         if let Some(item) = item {
-            tokio::spawn(async move {
+            spawn_pool_release(async move {
                 pool.release_explicit_item(item, permit).await;
             });
         }
@@ -152,7 +172,6 @@ pub(crate) struct ImplicitSessionLease {
     item: Option<ImplicitIdleItem>,
     pool: Arc<QuerySessionPoolInner>,
     permit: Option<OwnedSemaphorePermit>,
-    returned: bool,
     use_guard: bool,
 }
 
@@ -178,15 +197,12 @@ impl ImplicitSessionLease {
 
 impl Drop for ImplicitSessionLease {
     fn drop(&mut self) {
-        if self.returned {
-            return;
-        }
         self.end_use();
         let pool = self.pool.clone();
         let item = self.item.take();
         let permit = self.permit.take();
         if let Some(item) = item {
-            tokio::spawn(async move {
+            spawn_pool_release(async move {
                 pool.release_implicit_item(item, permit).await;
             });
         }
@@ -236,8 +252,9 @@ impl QuerySessionPool {
         discovery: Arc<Box<dyn Discovery>>,
         settings: QuerySessionPoolSettings,
     ) -> YdbResult<Self> {
-        let limit = settings.limit.max(1);
-        let warm_up = settings.warm_up.min(limit);
+        let settings = normalize_pool_settings(settings);
+        let warm_up = settings.warm_up;
+        let limit = settings.limit;
         let discovery_for_shutdown = discovery.clone();
         let on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync> =
             Arc::new(move |uri: Uri| discovery_for_shutdown.pessimization(&uri));
@@ -265,8 +282,9 @@ impl QuerySessionPool {
         discovery: Arc<Box<dyn Discovery>>,
         settings: QuerySessionPoolSettings,
     ) -> Self {
-        let limit = settings.limit.max(1);
-        let warm_up = settings.warm_up.min(limit);
+        let settings = normalize_pool_settings(settings);
+        let warm_up = settings.warm_up;
+        let limit = settings.limit;
         let discovery_for_shutdown = discovery.clone();
         let on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync> =
             Arc::new(move |uri: Uri| discovery_for_shutdown.pessimization(&uri));
@@ -312,25 +330,22 @@ impl QuerySessionPool {
             .await
             .map_err(|_| YdbError::Transport("query session pool closed".to_string()))?;
 
-        for _ in 0..2 {
-            if let Some(item) = self.inner.pop_explicit_idle() {
-                if self.inner.should_close_explicit(&item) {
-                    self.inner.close_explicit_item(item).await;
-                    continue;
-                }
-                trace!(
-                    session_id = item.session.session_id(),
-                    "got query session from pool"
-                );
-                return Ok(QuerySessionLease {
-                    item: Some(item),
-                    pool: self.inner.clone(),
-                    permit: Some(permit),
-                    returned: false,
-                    use_guard: false,
-                });
+        while let Some(item) = self.inner.pop_explicit_idle() {
+            if self.inner.should_close_explicit(&item) {
+                self.inner.close_explicit_item(item).await;
+                continue;
             }
-            break;
+            trace!(
+                session_id = item.session.session_id(),
+                "got query session from pool"
+            );
+            return Ok(QuerySessionLease {
+                item: Some(item),
+                pool: self.inner.clone(),
+                permit: Some(permit),
+                returned: false,
+                use_guard: false,
+            });
         }
 
         let item = self.inner.create_explicit_session().await?;
@@ -362,21 +377,17 @@ impl QuerySessionPool {
             .await
             .map_err(|_| YdbError::Transport("query session pool closed".to_string()))?;
 
-        for _ in 0..2 {
-            if let Some(item) = self.inner.pop_implicit_idle() {
-                if self.inner.should_close_implicit(&item) {
-                    item.session.close();
-                    continue;
-                }
-                return Ok(ImplicitSessionLease {
-                    item: Some(item),
-                    pool: self.inner.clone(),
-                    permit: Some(permit),
-                    returned: false,
-                    use_guard: false,
-                });
+        while let Some(item) = self.inner.pop_implicit_idle() {
+            if self.inner.should_close_implicit(&item) {
+                item.session.close();
+                continue;
             }
-            break;
+            return Ok(ImplicitSessionLease {
+                item: Some(item),
+                pool: self.inner.clone(),
+                permit: Some(permit),
+                use_guard: false,
+            });
         }
 
         Ok(ImplicitSessionLease {
@@ -388,7 +399,6 @@ impl QuerySessionPool {
             }),
             pool: self.inner.clone(),
             permit: Some(permit),
-            returned: false,
             use_guard: false,
         })
     }

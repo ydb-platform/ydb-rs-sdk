@@ -78,6 +78,9 @@ pub(crate) async fn materialize_query(
     let meta = stream.close().await.map_err(YdbError::from)?;
     if let ExecCoreRef::Transaction(ctx) = core {
         apply_stream_tx_id(ctx, meta.tx_id);
+        if let Some(lease) = &mut ctx.pooled_lease {
+            lease.end_use();
+        }
     }
     Ok(sets)
 }

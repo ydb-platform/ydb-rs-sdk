@@ -289,10 +289,8 @@ pub(crate) async fn client_begin_stream(
 
 /// Interactive transactions need a stable attached session; implicit one-shot queries do not.
 async fn ensure_tx_session(tx: &mut TransactionExecContext) -> YdbResult<()> {
-    if tx.pooled_lease.is_some() {
-        if let Some(lease) = &tx.pooled_lease {
-            lease.ensure_alive()?;
-        }
+    if let Some(lease) = &tx.pooled_lease {
+        lease.ensure_alive()?;
         return Ok(());
     }
     if let Some(session) = &tx.attached_session {
