@@ -22,10 +22,6 @@ pub(crate) fn begin_tx_control(mode: RawQueryTxMode) -> TransactionControl {
     }
 }
 
-pub(crate) fn tx_settings_for_mode(mode: RawQueryTxMode) -> TransactionSettings {
-    tx_settings(mode)
-}
-
 pub(crate) fn tx_id_control(tx_id: &str) -> TransactionControl {
     TransactionControl {
         commit_tx: false,
