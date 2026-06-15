@@ -21,6 +21,7 @@ impl RawOperationParams {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn new_async(
         operation_timeout: std::time::Duration,
         cancel_after: std::time::Duration,
