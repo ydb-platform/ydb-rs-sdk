@@ -6,6 +6,7 @@ members = [
     #    "ydb-grpc-helpers",
     "tests/slo/slo-framework",
     "tests/slo/native/table",
+    "tests/slo/native/query",
 ]
 
 [workspace.package]
