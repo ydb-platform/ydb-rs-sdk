@@ -72,11 +72,6 @@ impl<'a> ExecuteScriptBuilder<'a> {
         self.opts.timeout = Some(timeout);
         self
     }
-
-    pub fn collect_stats(mut self) -> Self {
-        self.opts.collect_stats = true;
-        self
-    }
 }
 
 impl<'a> IntoFuture for ExecuteScriptBuilder<'a> {
@@ -178,7 +173,7 @@ async fn client_execute_script_once(
         parameters: params.clone(),
         results_ttl,
         operation_params: ctx.timeouts.execute_script_operation_params(),
-        collect_stats: opts.collect_stats,
+        collect_stats: false,
     };
     let timeout_duration = call_operation_timeout(opts, &ctx.timeouts);
     let mut client = ctx
@@ -192,11 +187,13 @@ async fn client_execute_script_once(
     {
         Ok(value) => value,
         Err(err) => {
-            tracing::warn!(
-                ?timeout_duration,
-                "execute_script timed out waiting for RPC response; \
-                 a server-side operation may still be running until cancel_after"
-            );
+            if matches!(&err, YdbError::Transport(msg) if msg.contains("timed out")) {
+                tracing::warn!(
+                    ?timeout_duration,
+                    "execute_script timed out waiting for RPC response; \
+                     a server-side operation may still be running until cancel_after"
+                );
+            }
             return Err(err);
         }
     };
