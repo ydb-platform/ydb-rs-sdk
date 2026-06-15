@@ -11,7 +11,7 @@ use crate::QuerySessionMode;
 
 use super::exec::CallOptions;
 use super::internal::{ExecCoreRef, HasCore};
-use super::stream_facade::QueryStream;
+use super::stream_facade::{materialize_query, QueryStream};
 use super::FromYdbRow;
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -126,8 +126,8 @@ pub(crate) fn exactly_one_set(mut sets: Vec<ResultSet>) -> YdbResult<ResultSet> 
     }
 }
 
-pub(crate) fn take_single_row(sets: Vec<ResultSet>) -> YdbResult<Option<Row>> {
-    let mut rows = exactly_one_set(sets)?.into_iter();
+pub(crate) fn take_single_row(result_set: ResultSet) -> YdbResult<Option<Row>> {
+    let mut rows = result_set.into_iter();
     let row = rows.next();
     if rows.next().is_some() {
         return Err(YdbError::Custom(
@@ -143,7 +143,7 @@ impl<'a> IntoFuture for CallBuilder<'a, ExecCall> {
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
-            self.core.run(&self.text, &self.params, &self.opts).await?;
+            materialize_query(&mut self.core, self.text, self.params, self.opts).await?;
             Ok(())
         })
     }
@@ -155,8 +155,10 @@ impl<'a, T: FromYdbRow + 'a> IntoFuture for CallBuilder<'a, OneRow<T>> {
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
-            let sets = self.core.run(&self.text, &self.params, &self.opts).await?;
-            let row = take_single_row(sets)?.ok_or(YdbError::NoRows)?;
+            let set = exactly_one_set(
+                materialize_query(&mut self.core, self.text, self.params, self.opts).await?,
+            )?;
+            let row = take_single_row(set)?.ok_or(YdbError::NoRows)?;
             T::from_row(row)
         })
     }
@@ -168,8 +170,10 @@ impl<'a, T: FromYdbRow + 'a> IntoFuture for CallBuilder<'a, OptionalRow<T>> {
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
-            let sets = self.core.run(&self.text, &self.params, &self.opts).await?;
-            take_single_row(sets)?.map(T::from_row).transpose()
+            let set = exactly_one_set(
+                materialize_query(&mut self.core, self.text, self.params, self.opts).await?,
+            )?;
+            take_single_row(set)?.map(T::from_row).transpose()
         })
     }
 }
@@ -180,8 +184,9 @@ impl<'a> IntoFuture for CallBuilder<'a, OneResultSet> {
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
-            let sets = self.core.run(&self.text, &self.params, &self.opts).await?;
-            exactly_one_set(sets)
+            exactly_one_set(
+                materialize_query(&mut self.core, self.text, self.params, self.opts).await?,
+            )
         })
     }
 }
@@ -204,6 +209,15 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
     }
 }
 
+/// Query execution entry points for [`QueryClient`](crate::QueryClient) and
+/// [`QueryTransaction`](crate::QueryTransaction).
+///
+/// One-shot helpers are layered on [`Self::query`]:
+///
+/// - [`Self::query`] — streaming response (lazy via [`QueryStream`])
+/// - [`Self::query_result_set`] — `query` + drain + exactly one result set
+/// - [`Self::query_row`] — `query_result_set` + at most one row
+/// - [`Self::exec`] — `query` + drain and discard (success = no error)
 #[allow(private_bounds)]
 pub trait QueryExecutor: HasCore {
     fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_> {
