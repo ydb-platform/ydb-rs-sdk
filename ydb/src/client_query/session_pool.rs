@@ -596,8 +596,12 @@ mod unit_tests {
         };
         let created = Instant::now();
         let last_used = Instant::now();
-        assert!(!session_should_close(&settings, 2, created, last_used, true));
+        assert!(!session_should_close(
+            &settings, 2, created, last_used, true,
+        ));
         assert!(session_should_close(&settings, 3, created, last_used, true));
-        assert!(session_should_close(&settings, 0, created, last_used, false));
+        assert!(session_should_close(
+            &settings, 0, created, last_used, false,
+        ));
     }
 }
