@@ -171,7 +171,7 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
         .param("$val", 42_i64)
         .await?;
 
-        let tx_id = tx
+        let _tx_id = tx
             .tx_id_for_test()
             .filter(|id| !id.is_empty())
             .expect("lazy transaction must receive tx_id from the first ExecuteQuery");
