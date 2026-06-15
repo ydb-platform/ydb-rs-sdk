@@ -19,7 +19,6 @@ use crate::grpc_wrapper::raw_query_service::transaction_control::{
     begin_tx_control, implicit_tx_control, tx_id_control, RawQueryTxMode,
 };
 use crate::grpc_wrapper::raw_services::Service;
-use crate::result::ResultSet;
 use crate::types::Value;
 use crate::{QuerySessionMode, QueryTransactionOptions, QueryTxMode};
 
@@ -135,12 +134,6 @@ fn tx_control_for_transaction(
     }))
 }
 
-fn raw_sets_to_result_sets(
-    sets: Vec<crate::grpc_wrapper::raw_table_service::value::RawResultSet>,
-) -> YdbResult<Vec<ResultSet>> {
-    sets.into_iter().map(ResultSet::try_from).collect()
-}
-
 async fn retry_with_budget<T, F, Fut>(
     idempotent: bool,
     retry_budget: Duration,
@@ -168,19 +161,6 @@ where
             }
         }
     }
-}
-
-pub(crate) async fn client_run(
-    ctx: &ClientExecContext,
-    text: &str,
-    params: &HashMap<String, Value>,
-    opts: &CallOptions,
-) -> YdbResult<Vec<ResultSet>> {
-    let idempotent = opts.idempotent.unwrap_or(ctx.idempotent_operation);
-    retry_with_budget(idempotent, ctx.retry_budget, || {
-        client_run_once(ctx, text, params, opts)
-    })
-    .await
 }
 
 async fn client_implicit_request(
@@ -243,74 +223,6 @@ async fn client_pooled_implicit_request(
         opts.collect_stats,
     );
     Ok((client, req))
-}
-
-async fn client_run_once_raw(
-    ctx: &ClientExecContext,
-    text: &str,
-    params: &HashMap<String, Value>,
-    opts: &CallOptions,
-) -> YdbResult<crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryResult> {
-    let mode = effective_session_mode(ctx.session_mode, opts);
-    let timeout_duration = operation_timeout(opts, &ctx.timeouts);
-
-    match mode {
-        QuerySessionMode::Pool => {
-            let pool = ctx.session_pool.as_ref().ok_or_else(|| {
-                YdbError::Custom(
-                    "query session pool is not configured; call QueryClient::with_session_pool"
-                        .to_string(),
-                )
-            })?;
-            let mut lease = pool.acquire_explicit().await?;
-            let (mut client, req) =
-                client_pooled_explicit_request(ctx, &mut lease, text, params, opts).await?;
-            let raw = with_operation_timeout(timeout_duration, async {
-                client
-                    .execute_query_collect(req)
-                    .await
-                    .map_err(|e| YdbError::from(e.err))
-            })
-            .await;
-            lease.end_use();
-            raw
-        }
-        QuerySessionMode::Implicit if ctx.implicit_session_pool.is_some() => {
-            let pool = ctx.implicit_session_pool.as_ref().expect("checked");
-            let mut lease = pool.acquire_implicit().await?;
-            let (mut client, req) =
-                client_pooled_implicit_request(ctx, &mut lease, text, params, opts).await?;
-            let raw = with_operation_timeout(timeout_duration, async {
-                client
-                    .execute_query_collect(req)
-                    .await
-                    .map_err(|e| YdbError::from(e.err))
-            })
-            .await;
-            lease.end_use();
-            raw
-        }
-        QuerySessionMode::Implicit => {
-            let (mut client, req) = client_implicit_request(ctx, text, params, opts).await?;
-            with_operation_timeout(timeout_duration, async {
-                client
-                    .execute_query_collect(req)
-                    .await
-                    .map_err(|e| YdbError::from(e.err))
-            })
-            .await
-        }
-    }
-}
-
-async fn client_run_once(
-    ctx: &ClientExecContext,
-    text: &str,
-    params: &HashMap<String, Value>,
-    opts: &CallOptions,
-) -> YdbResult<Vec<ResultSet>> {
-    let raw = client_run_once_raw(ctx, text, params, opts).await?;
-    raw_sets_to_result_sets(raw.result_sets)
 }
 
 async fn client_begin_stream_once(
@@ -468,47 +380,6 @@ async fn transaction_execute_request(
         opts.collect_stats,
     );
     Ok((client, req))
-}
-
-pub(crate) async fn transaction_run(
-    tx: &mut TransactionExecContext,
-    text: &str,
-    params: &HashMap<String, Value>,
-    opts: &CallOptions,
-) -> YdbResult<Vec<ResultSet>> {
-    ensure_tx_session(tx).await?;
-    if let Some(lease) = &mut tx.pooled_lease {
-        lease.begin_use();
-    }
-    if let Some(lease) = &mut tx.implicit_lease {
-        lease.begin_use();
-    }
-    let (mut client, req) =
-        transaction_execute_request(tx, text.to_string(), params.clone(), opts).await?;
-    let timeout_duration = operation_timeout(opts, &tx.timeouts);
-    let raw = with_operation_timeout(timeout_duration, async {
-        match client.execute_query_collect(req).await {
-            Ok(raw) => Ok(raw),
-            Err(e) => {
-                if let Some(id) = e.tx_id.filter(|id| !id.is_empty()) {
-                    tx.tx_id = Some(id);
-                }
-                Err(YdbError::from(e.err))
-            }
-        }
-    })
-    .await;
-    if let Some(lease) = &mut tx.pooled_lease {
-        lease.end_use();
-    }
-    if let Some(lease) = &mut tx.implicit_lease {
-        lease.end_use();
-    }
-    let raw = raw?;
-    if let Some(id) = raw.tx_id {
-        tx.tx_id = Some(id);
-    }
-    raw_sets_to_result_sets(raw.result_sets)
 }
 
 pub(crate) async fn transaction_begin_stream(

@@ -22,18 +22,6 @@ pub(crate) struct RawExecuteQueryRequest {
     pub collect_stats: bool,
 }
 
-#[derive(Debug)]
-pub(crate) struct RawExecuteQueryResult {
-    pub result_sets: Vec<RawResultSet>,
-    pub tx_id: Option<String>,
-}
-
-#[derive(Debug)]
-pub(crate) struct RawExecuteQueryCollectError {
-    pub err: crate::grpc_wrapper::raw_errors::RawError,
-    pub tx_id: Option<String>,
-}
-
 impl RawExecuteQueryRequest {
     pub(crate) fn new(
         session_id: impl Into<String>,
@@ -83,51 +71,6 @@ impl RawExecuteQueryRequest {
     }
 }
 
-pub(crate) fn merge_part(
-    sets: &mut HashMap<i64, RawResultSet>,
-    part: ExecuteQueryResponsePart,
-) -> RawResult<()> {
-    let index = part.result_set_index;
-    let Some(proto_set) = part.result_set else {
-        return Ok(());
-    };
-
-    let part_set = RawResultSet::try_from(proto_set)?;
-    let entry = sets.entry(index).or_insert_with(|| RawResultSet {
-        columns: Vec::new(),
-        rows: Vec::new(),
-        truncated: false,
-    });
-    entry.truncated |= part_set.truncated;
-    if !entry.columns.is_empty()
-        && !part_set.columns.is_empty()
-        && !columns_compatible(&entry.columns, &part_set.columns)
-    {
-        return Err(crate::grpc_wrapper::raw_errors::RawError::custom(format!(
-            "result set {index}: column metadata mismatch between stream parts"
-        )));
-    }
-    if entry.columns.is_empty() {
-        entry.columns = part_set.columns;
-    }
-    entry.rows.extend(part_set.rows);
-    Ok(())
-}
-
-fn columns_compatible(existing: &[RawColumn], new_cols: &[RawColumn]) -> bool {
-    existing.len() == new_cols.len()
-        && existing
-            .iter()
-            .zip(new_cols.iter())
-            .all(|(left, right)| left.name == right.name && left.column_type == right.column_type)
-}
-
-pub(crate) fn sets_to_vec(mut sets: HashMap<i64, RawResultSet>) -> Vec<RawResultSet> {
-    let mut keys: Vec<_> = sets.keys().copied().collect();
-    keys.sort_unstable();
-    keys.into_iter().filter_map(|k| sets.remove(&k)).collect()
-}
-
 pub(crate) fn check_part(part: &ExecuteQueryResponsePart) -> RawResult<()> {
     check_status(part.status, &part.issues)
 }
@@ -169,4 +112,12 @@ pub(crate) fn append_rows_from_part(
     }
     rows.extend(part_set.rows);
     Ok(())
+}
+
+fn columns_compatible(existing: &[RawColumn], new_cols: &[RawColumn]) -> bool {
+    existing.len() == new_cols.len()
+        && existing
+            .iter()
+            .zip(new_cols.iter())
+            .all(|(left, right)| left.name == right.name && left.column_type == right.column_type)
 }
