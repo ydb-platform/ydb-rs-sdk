@@ -5,8 +5,8 @@
 mod builders;
 mod exec;
 mod internal;
-mod session_pool;
 mod script;
+mod session_pool;
 mod stream_facade;
 
 #[cfg(test)]
