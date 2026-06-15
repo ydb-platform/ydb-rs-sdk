@@ -124,6 +124,10 @@ impl TimeoutSettings {
     pub(crate) fn operation_params(&self) -> RawOperationParams {
         RawOperationParams::new_with_timeouts(self.operation_timeout, self.operation_timeout)
     }
+
+    pub(crate) fn execute_script_operation_params(&self) -> RawOperationParams {
+        RawOperationParams::for_execute_script(self.operation_timeout, self.operation_timeout)
+    }
 }
 
 impl Default for TimeoutSettings {

@@ -1,6 +1,12 @@
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryRequest;
+use crate::grpc_wrapper::raw_query_service::execute_script::{
+    parse_execute_script_operation, RawExecuteScriptRequest,
+};
+use crate::grpc_wrapper::raw_query_service::fetch_script_results::{
+    parse_response, RawFetchScriptResultsRequest,
+};
 use crate::grpc_wrapper::raw_query_service::status::check_status;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
@@ -48,6 +54,28 @@ impl RawQueryClient {
         let proto = req.into_proto()?;
         let response = self.service.execute_query(proto).await?;
         Ok(response.into_inner())
+    }
+
+    pub async fn execute_script(
+        &mut self,
+        req: RawExecuteScriptRequest,
+    ) -> RawResult<(String, Option<f64>)> {
+        let proto = req.into_proto()?;
+        let response = self.service.execute_script(proto).await?;
+        parse_execute_script_operation(response.into_inner())
+    }
+
+    pub async fn fetch_script_results(
+        &mut self,
+        req: RawFetchScriptResultsRequest,
+    ) -> RawResult<(
+        i64,
+        crate::grpc_wrapper::raw_table_service::value::RawResultSet,
+        String,
+    )> {
+        let proto = req.into_proto();
+        let response = self.service.fetch_script_results(proto).await?;
+        parse_response(response.into_inner())
     }
 
     pub async fn create_session(&mut self) -> RawResult<CreateSessionResult> {

@@ -1,7 +1,10 @@
 use super::{QuerySessionMode, QuerySessionPoolSettings, QueryTransactionOptions, QueryTxMode};
 use crate::errors::YdbResult;
 use crate::test_integration_helper::create_client;
-use std::time::{SystemTime, UNIX_EPOCH};
+use crate::types::Value;
+use crate::ydb_struct;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use tokio::time::sleep;
 use tracing_test::traced_test;
 
 fn unique_table_name(prefix: &str) -> String {
@@ -161,5 +164,106 @@ async fn query_client_snapshot_read_only_tx() -> YdbResult<()> {
         .await?;
 
     assert_eq!(value, 42);
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_execute_script() -> YdbResult<()> {
+    let client = create_client().await?;
+    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let op_client = client.operation_client();
+    let table_name = unique_table_name("query_execute_script");
+
+    const UPSERT_ROWS_COUNT: i32 = 100_000;
+    const BATCH_SIZE: i32 = 10_000;
+    const EXPECTED_CHECKSUM: u64 = 4_999_950_000;
+
+    assert_eq!(UPSERT_ROWS_COUNT % BATCH_SIZE, 0);
+
+    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
+    qc.exec(format!(
+        "CREATE TABLE {table_name} (val Int64, PRIMARY KEY (val))"
+    ))
+    .await?;
+
+    let upsert_query = format!(
+        "DECLARE $values AS List<Struct<val: Int32>>; \
+         UPSERT INTO {table_name} SELECT val FROM AS_TABLE($values);"
+    );
+
+    let mut upserted = 0_u32;
+    for batch in 0..(UPSERT_ROWS_COUNT / BATCH_SIZE) {
+        let from = batch * BATCH_SIZE;
+        let to = from + BATCH_SIZE;
+        let example = ydb_struct!("val" => 0_i32);
+        let values: Vec<Value> = (from..to).map(|j| ydb_struct!("val" => j)).collect();
+        let list = Value::list_from(example, values)?;
+        qc.exec(&upsert_query).param("$values", list).await?;
+        upserted += (to - from) as u32;
+    }
+    assert_eq!(upserted, UPSERT_ROWS_COUNT as u32);
+
+    let mut row = qc
+        .query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))
+        .await?;
+    let rows_from_db: Option<u64> = row.remove_field_by_name("cnt")?.try_into()?;
+    assert_eq!(rows_from_db.unwrap_or(0), UPSERT_ROWS_COUNT as u64);
+
+    let mut row = qc
+        .query_row(format!("SELECT SUM(val) AS s FROM {table_name}"))
+        .await?;
+    let checksum_from_db: Option<i64> = row.remove_field_by_name("s")?.try_into()?;
+    assert_eq!(checksum_from_db.unwrap_or(0) as u64, EXPECTED_CHECKSUM);
+
+    let op = qc
+        .execute_script(format!("SELECT val FROM {table_name};"))
+        .results_ttl(Duration::from_secs(3600))
+        .await?;
+
+    let poll_deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        assert!(
+            Instant::now() < poll_deadline,
+            "script operation did not become ready within 120s"
+        );
+        let status = op_client.get_operation(&op.id).await?;
+        if status.ready {
+            break;
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
+
+    let mut next_token = String::new();
+    let mut rows_count = 0_usize;
+    let mut checksum = 0_u64;
+
+    loop {
+        let page = qc
+            .fetch_script_results(&op.id)
+            .result_set_index(0)
+            .rows_limit(1000)
+            .fetch_token(&next_token)
+            .await?;
+        next_token = page.next_fetch_token;
+        assert_eq!(page.result_set_index, 0);
+
+        for mut row in page.result_set {
+            rows_count += 1;
+            let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+            checksum += val.unwrap_or(0) as u64;
+        }
+
+        if next_token.is_empty() {
+            break;
+        }
+    }
+
+    assert_eq!(rows_count, UPSERT_ROWS_COUNT as usize);
+    assert_eq!(checksum, EXPECTED_CHECKSUM);
+
+    op_client.forget_operation(&op.id).await?;
+    qc.exec(format!("DROP TABLE {table_name}")).await?;
     Ok(())
 }

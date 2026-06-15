@@ -6,6 +6,7 @@ mod builders;
 mod exec;
 mod internal;
 mod session_pool;
+mod script;
 mod stream_facade;
 
 #[cfg(test)]
@@ -210,6 +211,21 @@ impl QueryClient {
         }
     }
 
+    /// Start a long-running script operation. Poll completion via
+    /// [`crate::OperationClient::get_operation`], then read rows with
+    /// [`Self::fetch_script_results`].
+    pub fn execute_script(&self, text: impl Into<String>) -> script::ExecuteScriptBuilder<'_> {
+        script::ExecuteScriptBuilder::new(&self.ctx, text.into())
+    }
+
+    /// Fetch a page of script results for a completed operation.
+    pub fn fetch_script_results(
+        &self,
+        operation_id: impl Into<String>,
+    ) -> script::FetchScriptResultsBuilder<'_> {
+        script::FetchScriptResultsBuilder::new(&self.ctx, operation_id.into())
+    }
+
     pub async fn retry_transaction<T>(
         &self,
         mut callback: impl AsyncFnMut(&mut QueryTransaction) -> YdbResultWithCustomerErr<T>,
@@ -351,6 +367,8 @@ pub use builders::{
     QueryExecutor, QueryRowBuilder, QueryStreamBuilder, ResultSetBuilder, Streamed,
 };
 pub use session_pool::QuerySessionPoolSettings;
+pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
+pub use script::{ExecuteScriptOperation, FetchScriptResult};
 pub use stream_facade::{QueryStats, QueryStream};
 
 fn panic_message(payload: Box<dyn Any + Send>) -> String {
