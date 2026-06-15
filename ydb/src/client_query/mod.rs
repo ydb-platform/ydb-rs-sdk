@@ -336,9 +336,9 @@ mod unit_tests {
         assert!(exactly_one_set(vec![int64_set(vec![1])]).is_ok());
         assert!(exactly_one_set(vec![int64_set(vec![1]), int64_set(vec![2])]).is_err());
 
-        assert!(take_single_row(vec![int64_set(vec![])])
+        assert!(take_single_row(int64_set(vec![]))
             .expect("empty rows")
             .is_none());
-        assert!(take_single_row(vec![int64_set(vec![1, 2])]).is_err());
+        assert!(take_single_row(int64_set(vec![1, 2])).is_err());
     }
 }
