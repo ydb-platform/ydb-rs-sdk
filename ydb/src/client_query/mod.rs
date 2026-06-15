@@ -366,9 +366,9 @@ pub use builders::{
     CallBuilder, ExecBuilder, ExecCall, OneResultSet, OneRow, OptionalRow, OptionalRowBuilder,
     QueryExecutor, QueryRowBuilder, QueryStreamBuilder, ResultSetBuilder, Streamed,
 };
-pub use session_pool::QuerySessionPoolSettings;
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};
+pub use session_pool::QuerySessionPoolSettings;
 pub use stream_facade::{QueryStats, QueryStream};
 
 fn panic_message(payload: Box<dyn Any + Send>) -> String {
