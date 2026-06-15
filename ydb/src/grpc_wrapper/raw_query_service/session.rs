@@ -166,6 +166,8 @@ impl AttachedQuerySession {
     }
 
     async fn wait_not_in_use(&self) {
+        // Bounded wait for in-flight RPCs; `close()` may then spend up to another
+        // `delete_timeout` on DeleteSession (worst case ≈ 2× delete_timeout).
         let drain_timeout = self.inner.delete_timeout;
         let _ = timeout(drain_timeout, async {
             while self.inner.in_use.load(Ordering::Acquire) > 0 {

@@ -15,7 +15,7 @@ use crate::grpc_wrapper::raw_services::Service;
 
 const DEFAULT_POOL_LIMIT: usize = 50;
 const DEFAULT_SESSION_CREATE_TIMEOUT: Duration = Duration::from_millis(500);
-const DEFAULT_SESSION_DELETE_TIMEOUT: Duration = Duration::from_millis(500);
+pub(crate) const DEFAULT_SESSION_DELETE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Settings for the Query Service session pool (explicit or implicit items).
 #[derive(Clone, Debug)]
@@ -471,43 +471,23 @@ impl QuerySessionPoolInner {
     }
 
     fn should_close_explicit(&self, item: &ExplicitIdleItem) -> bool {
-        if !item.session.is_alive() {
-            return true;
-        }
-        if self.settings.item_usage_limit > 0 && item.use_count >= self.settings.item_usage_limit {
-            return true;
-        }
-        if self.settings.item_usage_ttl > Duration::ZERO
-            && item.created.elapsed() >= self.settings.item_usage_ttl
-        {
-            return true;
-        }
-        if self.settings.idle_ttl > Duration::ZERO
-            && item.last_used.elapsed() >= self.settings.idle_ttl
-        {
-            return true;
-        }
-        false
+        session_should_close(
+            &self.settings,
+            item.use_count,
+            item.created,
+            item.last_used,
+            item.session.is_alive(),
+        )
     }
 
     fn should_close_implicit(&self, item: &ImplicitIdleItem) -> bool {
-        if !item.session.is_alive() {
-            return true;
-        }
-        if self.settings.item_usage_limit > 0 && item.use_count >= self.settings.item_usage_limit {
-            return true;
-        }
-        if self.settings.item_usage_ttl > Duration::ZERO
-            && item.created.elapsed() >= self.settings.item_usage_ttl
-        {
-            return true;
-        }
-        if self.settings.idle_ttl > Duration::ZERO
-            && item.last_used.elapsed() >= self.settings.idle_ttl
-        {
-            return true;
-        }
-        false
+        session_should_close(
+            &self.settings,
+            item.use_count,
+            item.created,
+            item.last_used,
+            item.session.is_alive(),
+        )
     }
 
     async fn close_explicit_item(&self, item: ExplicitIdleItem) {
@@ -580,14 +560,44 @@ impl QuerySessionPoolInner {
     }
 }
 
+fn session_should_close(
+    settings: &QuerySessionPoolSettings,
+    use_count: u64,
+    created: Instant,
+    last_used: Instant,
+    is_alive: bool,
+) -> bool {
+    if !is_alive {
+        return true;
+    }
+    if settings.item_usage_limit > 0 && use_count >= settings.item_usage_limit {
+        return true;
+    }
+    if settings.item_usage_ttl > Duration::ZERO && created.elapsed() >= settings.item_usage_ttl {
+        return true;
+    }
+    if settings.idle_ttl > Duration::ZERO && last_used.elapsed() >= settings.idle_ttl {
+        return true;
+    }
+    false
+}
+
 #[cfg(test)]
 mod unit_tests {
     use super::*;
 
     #[test]
-    fn explicit_idle_lifo_storage() {
-        let mut idle: Vec<ExplicitIdleItem> = Vec::new();
-        // LIFO: pop from end
-        assert!(idle.pop().is_none());
+    fn session_should_close_respects_usage_limit_and_ttl() {
+        let settings = QuerySessionPoolSettings {
+            item_usage_limit: 3,
+            item_usage_ttl: Duration::from_secs(60),
+            idle_ttl: Duration::from_secs(30),
+            ..QuerySessionPoolSettings::default()
+        };
+        let created = Instant::now();
+        let last_used = Instant::now();
+        assert!(!session_should_close(&settings, 2, created, last_used, true));
+        assert!(session_should_close(&settings, 3, created, last_used, true));
+        assert!(session_should_close(&settings, 0, created, last_used, false));
     }
 }

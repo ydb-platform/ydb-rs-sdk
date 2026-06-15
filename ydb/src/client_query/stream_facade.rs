@@ -26,9 +26,6 @@ impl Drop for QueryStream<'_> {
             if let Some(lease) = &mut ctx.pooled_lease {
                 lease.end_use();
             }
-            if let Some(lease) = &mut ctx.implicit_lease {
-                lease.end_use();
-            }
         }
     }
 }

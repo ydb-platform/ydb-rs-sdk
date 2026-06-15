@@ -23,14 +23,15 @@ impl SessionStreamGuard {
 }
 
 pub(crate) struct ExecuteQueryStream {
-    // First-declared fields are dropped last; session_guard must outlive the gRPC stream.
-    session_guard: SessionStreamGuard,
     grpc: Option<tonic::Streaming<ExecuteQueryResponsePart>>,
     next_index: i64,
     pending_part: Option<ExecuteQueryResponsePart>,
     captured_tx_id: Option<String>,
     finished: bool,
     stats: Option<Duration>,
+    // Dropped last (after `grpc`) so the pooled lease outlives the stream.
+    // `Drop` also calls `cancel()` before field destructors run.
+    session_guard: SessionStreamGuard,
 }
 
 impl Drop for ExecuteQueryStream {
@@ -42,13 +43,13 @@ impl Drop for ExecuteQueryStream {
 impl ExecuteQueryStream {
     pub fn new(stream: tonic::Streaming<ExecuteQueryResponsePart>) -> Self {
         Self {
-            session_guard: SessionStreamGuard(None),
             grpc: Some(stream),
             next_index: 0,
             pending_part: None,
             captured_tx_id: None,
             finished: false,
             stats: None,
+            session_guard: SessionStreamGuard(None),
         }
     }
 

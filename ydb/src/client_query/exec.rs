@@ -22,7 +22,9 @@ use crate::grpc_wrapper::raw_services::Service;
 use crate::types::Value;
 use crate::{QuerySessionMode, QueryTransactionOptions, QueryTxMode};
 
-use super::session_pool::{ImplicitSessionLease, QuerySessionLease, QuerySessionPool};
+use super::session_pool::{
+    ImplicitSessionLease, QuerySessionLease, QuerySessionPool, DEFAULT_SESSION_DELETE_TIMEOUT,
+};
 
 const DEFAULT_RETRY_BUDGET: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
@@ -58,7 +60,6 @@ pub(crate) struct TransactionExecContext {
     pub session_pool: Option<QuerySessionPool>,
     pub attached_session: Option<AttachedQuerySession>,
     pub pooled_lease: Option<QuerySessionLease>,
-    pub implicit_lease: Option<ImplicitSessionLease>,
     pub query_node: Option<Uri>,
     pub tx_id: Option<String>,
     pub finished: bool,
@@ -288,7 +289,7 @@ pub(crate) async fn client_begin_stream(
 
 /// Interactive transactions need a stable attached session; implicit one-shot queries do not.
 async fn ensure_tx_session(tx: &mut TransactionExecContext) -> YdbResult<()> {
-    if tx.pooled_lease.is_some() || tx.implicit_lease.is_some() {
+    if tx.pooled_lease.is_some() {
         if let Some(lease) = &tx.pooled_lease {
             lease.ensure_alive()?;
         }
@@ -334,13 +335,8 @@ async fn ensure_tx_session(tx: &mut TransactionExecContext) -> YdbResult<()> {
     }
 }
 
-const DEFAULT_SESSION_DELETE_TIMEOUT: Duration = Duration::from_millis(500);
-
 fn tx_session_id(tx: &TransactionExecContext) -> YdbResult<&str> {
     if let Some(lease) = &tx.pooled_lease {
-        return Ok(lease.session_id());
-    }
-    if let Some(lease) = &tx.implicit_lease {
         return Ok(lease.session_id());
     }
     tx.attached_session
@@ -351,9 +347,6 @@ fn tx_session_id(tx: &TransactionExecContext) -> YdbResult<&str> {
 
 async fn release_tx_session(tx: &mut TransactionExecContext) {
     if let Some(lease) = tx.pooled_lease.take() {
-        lease.return_to_pool().await;
-    }
-    if let Some(lease) = tx.implicit_lease.take() {
         lease.return_to_pool().await;
     }
     if let Some(session) = tx.attached_session.take() {
@@ -390,9 +383,6 @@ pub(crate) async fn transaction_begin_stream(
 ) -> YdbResult<ExecuteQueryStream> {
     ensure_tx_session(tx).await?;
     if let Some(lease) = &mut tx.pooled_lease {
-        lease.begin_use();
-    }
-    if let Some(lease) = &mut tx.implicit_lease {
         lease.begin_use();
     }
     let (mut client, req) = transaction_execute_request(tx, text, params, &opts).await?;
@@ -438,9 +428,7 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
         return Ok(());
     }
     if tx.tx_id.as_ref().is_some_and(|id| !id.is_empty())
-        && (tx.pooled_lease.is_some()
-            || tx.implicit_lease.is_some()
-            || tx.attached_session.is_some())
+        && (tx.pooled_lease.is_some() || tx.attached_session.is_some())
     {
         let tx_id = tx.tx_id.take().expect("checked Some");
         if let Ok(session_id) = tx_session_id(tx) {
@@ -480,7 +468,6 @@ pub(crate) fn transaction_exec_context(
         tx_mode: options.mode(),
         attached_session: None,
         pooled_lease: None,
-        implicit_lease: None,
         query_node: None,
         tx_id: None,
         finished: false,
