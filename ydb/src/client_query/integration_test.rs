@@ -185,20 +185,16 @@ async fn query_execute_script() -> YdbResult<()> {
     assert_eq!(upserted, UPSERT_ROWS_COUNT as u32);
 
     let mut row = qc
-        .query_row(format!(
-            "SELECT CAST(COUNT(*) AS Uint64) AS cnt FROM {table_name};"
-        ))
+        .query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))
         .await?;
     let rows_from_db: u64 = row.remove_field_by_name("cnt")?.try_into()?;
     assert_eq!(rows_from_db, UPSERT_ROWS_COUNT as u64);
 
     let mut row = qc
-        .query_row(format!(
-            "SELECT CAST(SUM(val) AS Uint64) AS s FROM {table_name};"
-        ))
+        .query_row(format!("SELECT SUM(val) AS s FROM {table_name}"))
         .await?;
-    let checksum_from_db: u64 = row.remove_field_by_name("s")?.try_into()?;
-    assert_eq!(checksum_from_db, EXPECTED_CHECKSUM);
+    let checksum_from_db: i64 = row.remove_field_by_name("s")?.try_into()?;
+    assert_eq!(checksum_from_db as u64, EXPECTED_CHECKSUM);
 
     let op = qc
         .execute_script(format!("SELECT val FROM {table_name};"))
