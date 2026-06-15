@@ -57,7 +57,14 @@ fn operation_timeout(opts: &CallOptions, defaults: &TimeoutSettings) -> Duration
     opts.timeout.unwrap_or(defaults.operation_timeout)
 }
 
-async fn with_operation_timeout<T, F>(timeout_duration: Duration, operation: F) -> YdbResult<T>
+pub(crate) fn call_operation_timeout(opts: &CallOptions, defaults: &TimeoutSettings) -> Duration {
+    operation_timeout(opts, defaults)
+}
+
+pub(crate) async fn with_operation_timeout<T, F>(
+    timeout_duration: Duration,
+    operation: F,
+) -> YdbResult<T>
 where
     F: Future<Output = YdbResult<T>>,
 {
@@ -73,6 +80,18 @@ async fn query_client(ctx: &ClientExecContext) -> YdbResult<RawQueryClient> {
     ctx.connection_manager
         .get_auth_service(RawQueryClient::new)
         .await
+}
+
+pub(crate) async fn run_with_retry<T, F, Fut>(
+    ctx: &ClientExecContext,
+    idempotent: bool,
+    attempt_fn: F,
+) -> YdbResult<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = YdbResult<T>>,
+{
+    retry_with_budget(idempotent, ctx.retry_budget, attempt_fn).await
 }
 
 async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQueryClient> {
