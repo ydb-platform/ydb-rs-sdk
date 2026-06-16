@@ -450,22 +450,42 @@ impl QuerySessionPoolInner {
         let delete_timeout = self.settings.session_delete_timeout;
         let on_node_shutdown = self.on_node_shutdown.clone();
 
-        let session = tokio::time::timeout(create_timeout, async {
-            AttachedQuerySession::create_and_open(
+        let created = tokio::time::timeout(create_timeout, client.create_session())
+            .await
+            .map_err(|_| {
+                YdbError::Transport(format!(
+                    "create query session timed out after {create_timeout:?}"
+                ))
+            })?
+            .map_err(YdbError::from)?;
+        let session_id = created.session_id;
+
+        let session = match tokio::time::timeout(
+            create_timeout,
+            AttachedQuerySession::open(
                 &mut client,
                 node_uri.clone(),
+                session_id.clone(),
                 on_node_shutdown,
                 delete_timeout,
-            )
-            .await
-        })
+            ),
+        )
         .await
-        .map_err(|_| {
-            YdbError::Transport(format!(
-                "create query session timed out after {create_timeout:?}"
-            ))
-        })?
-        .map_err(YdbError::from)?;
+        {
+            Ok(Ok(session)) => session,
+            Ok(Err(err)) => {
+                let _ = tokio::time::timeout(delete_timeout, client.delete_session(&session_id))
+                    .await;
+                return Err(YdbError::from(err));
+            }
+            Err(_) => {
+                let _ = tokio::time::timeout(delete_timeout, client.delete_session(&session_id))
+                    .await;
+                return Err(YdbError::Transport(format!(
+                    "attach query session timed out after {create_timeout:?}"
+                )));
+            }
+        };
 
         let now = Instant::now();
         Ok(ExplicitIdleItem {
@@ -520,8 +540,9 @@ impl QuerySessionPoolInner {
                 warn!(
                     session_id = item.session.session_id(),
                     error = %err,
-                    "failed to connect for DeleteSession; server-side session may leak until idle timeout"
+                    "failed to connect for DeleteSession; aborting attach listener"
                 );
+                item.session.abort_without_delete().await;
             }
         }
     }
@@ -569,13 +590,19 @@ impl QuerySessionPoolInner {
             item.session.close();
             drop(permit);
         } else {
-            let mut idle = self.implicit_idle.lock().expect("implicit idle lock");
-            if idle.len() < self.settings.limit {
-                idle.push(item);
-            } else {
+            let overflow = {
+                let mut idle = self.implicit_idle.lock().expect("implicit idle lock");
+                if idle.len() < self.settings.limit {
+                    idle.push(item);
+                    None
+                } else {
+                    Some(item)
+                }
+            };
+            drop(permit);
+            if let Some(item) = overflow {
                 item.session.close();
             }
-            drop(permit);
         }
     }
 }

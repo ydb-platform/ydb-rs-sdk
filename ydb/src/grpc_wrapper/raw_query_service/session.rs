@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use http::Uri;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, timeout};
+use tokio::time::timeout;
 use tracing::warn;
 
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
@@ -29,6 +29,7 @@ struct AttachedQuerySessionInner {
     explicitly_closed: AtomicBool,
     on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync>,
     delete_timeout: Duration,
+    not_in_use: Notify,
 }
 
 impl Drop for AttachedQuerySession {
@@ -52,14 +53,22 @@ impl AttachedQuerySession {
         delete_timeout: Duration,
     ) -> RawResult<Self> {
         let created = client.create_session().await?;
-        Self::open(
+        let session_id = created.session_id;
+        match Self::open(
             client,
             node_uri,
-            created.session_id,
+            session_id.clone(),
             on_node_shutdown,
             delete_timeout,
         )
         .await
+        {
+            Ok(session) => Ok(session),
+            Err(err) => {
+                let _ = timeout(delete_timeout, client.delete_session(&session_id)).await;
+                Err(err)
+            }
+        }
     }
 
     pub async fn open(
@@ -88,6 +97,7 @@ impl AttachedQuerySession {
             explicitly_closed: AtomicBool::new(false),
             on_node_shutdown,
             delete_timeout,
+            not_in_use: Notify::new(),
         });
 
         let session_for_task = AttachedQuerySession {
@@ -110,7 +120,9 @@ impl AttachedQuerySession {
     }
 
     pub fn end_use(&self) {
-        self.inner.in_use.fetch_sub(1, Ordering::SeqCst);
+        if self.inner.in_use.fetch_sub(1, Ordering::SeqCst) == 1 {
+            self.inner.not_in_use.notify_waiters();
+        }
     }
 
     pub fn is_alive(&self) -> bool {
@@ -171,10 +183,19 @@ impl AttachedQuerySession {
         let drain_timeout = self.inner.delete_timeout;
         let _ = timeout(drain_timeout, async {
             while self.inner.in_use.load(Ordering::Acquire) > 0 {
-                sleep(Duration::from_millis(1)).await;
+                self.inner.not_in_use.notified().await;
             }
         })
         .await;
+    }
+
+    /// Abort the attach listener without `DeleteSession` (used when we cannot reach the node).
+    pub async fn abort_without_delete(self) {
+        self.inner.explicitly_closed.store(true, Ordering::Release);
+        self.mark_not_alive();
+        if let Some(task) = self.inner.attach_task.lock().await.take() {
+            task.abort();
+        }
     }
 
     pub async fn close(self, client: &mut RawQueryClient) {
