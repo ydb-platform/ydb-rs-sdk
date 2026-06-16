@@ -220,7 +220,7 @@ async fn query_lazy_tx_commit_without_queries() -> YdbResult<()> {
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
-async fn query_eager_begin_via_explicit_begin() -> YdbResult<()> {
+async fn query_explicit_begin_via_begin() -> YdbResult<()> {
     let client = create_client().await?;
     let qc = client.query_client().clone_with_idempotent_operations(true);
 
@@ -248,18 +248,18 @@ async fn query_eager_begin_via_explicit_begin() -> YdbResult<()> {
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
-async fn query_eager_begin_via_client_option() -> YdbResult<()> {
+async fn query_explicit_begin_via_client_option() -> YdbResult<()> {
     let client = create_client().await?;
     let qc = client
         .query_client()
         .clone_with_idempotent_operations(true)
-        .clone_with_transaction_options(QueryTransactionOptions::new().with_eager_begin());
+        .clone_with_transaction_options(QueryTransactionOptions::new().with_begin());
 
     qc.retry_transaction(async |tx| {
         tx.exec("SELECT 1 AS v").await?;
         assert!(
             tx.tx_id_for_test().is_some_and(|id| !id.is_empty()),
-            "with_eager_begin must obtain tx_id on the first operation via BeginTransaction RPC"
+            "with_begin must obtain tx_id on the first operation via BeginTransaction RPC"
         );
         Ok(())
     })

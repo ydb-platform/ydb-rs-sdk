@@ -50,7 +50,7 @@ pub(crate) struct TransactionExecContext {
     pub session_mode: QuerySessionMode,
     pub tx_mode: QueryTxMode,
     /// When set, the first operation calls `BeginTransaction` RPC instead of lazy `BeginTx` in `ExecuteQuery`.
-    pub eager_begin: bool,
+    pub begin: bool,
     pub attached_session: Option<AttachedQuerySession>,
     pub query_node: Option<Uri>,
     pub tx_id: Option<String>,
@@ -134,8 +134,8 @@ fn tx_mode_to_raw(mode: QueryTxMode) -> RawQueryTxMode {
 /// `BeginTx` with `commit_tx: false` — no upfront `BeginTransaction` RPC. The server
 /// returns `tx_id` in the response stream; later queries use `TxId`.
 ///
-/// **Eager start:** when [`TransactionExecContext::eager_begin`] is set or
-/// [`transaction_ensure_eager_begin`] was called, `tx_id` is already known and this
+/// **Explicit begin:** when [`TransactionExecContext::begin`] is set or
+/// [`transaction_ensure_begin`] was called, `tx_id` is already known and this
 /// function always emits `TxId`.
 fn tx_control_for_transaction(
     tx: &TransactionExecContext,
@@ -286,8 +286,8 @@ async fn transaction_execute_request(
     Ok((client, req))
 }
 
-/// Open the transaction via `BeginTransaction` RPC (eager / explicit begin).
-pub(crate) async fn transaction_ensure_eager_begin(tx: &mut TransactionExecContext) -> YdbResult<()> {
+/// Open the transaction via `BeginTransaction` RPC (explicit begin).
+pub(crate) async fn transaction_ensure_begin(tx: &mut TransactionExecContext) -> YdbResult<()> {
     if tx.finished {
         return Err(YdbError::Custom(
             "transaction already finished (committed or rolled back)".to_string(),
@@ -325,8 +325,8 @@ pub(crate) async fn transaction_begin_stream(
     opts: CallOptions,
 ) -> YdbResult<ExecuteQueryStream> {
     ensure_tx_session(tx).await?;
-    if tx.eager_begin {
-        transaction_ensure_eager_begin(tx).await?;
+    if tx.begin {
+        transaction_ensure_begin(tx).await?;
     }
     let (mut client, req) = transaction_execute_request(tx, text, params, &opts).await?;
     let timeout_duration = operation_timeout(&opts, &tx.timeouts);
@@ -406,7 +406,7 @@ pub(crate) fn transaction_exec_context(
         timeouts,
         session_mode,
         tx_mode: options.mode(),
-        eager_begin: options.eager_begin(),
+        begin: options.begin(),
         attached_session: None,
         query_node: None,
         tx_id: None,
