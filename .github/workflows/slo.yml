@@ -9,8 +9,6 @@ on:
     branches:
       - master
       - release-*
-      - query-service-example
-      - slo/query-kv-over-query-client
   workflow_dispatch:
     inputs:
       github_issue:

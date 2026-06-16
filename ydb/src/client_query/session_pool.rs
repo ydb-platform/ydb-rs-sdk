@@ -97,7 +97,7 @@ impl QuerySessionPoolSettings {
     }
 
     pub fn with_warm_up(mut self, warm_up: usize) -> Self {
-        self.warm_up = warm_up.min(self.limit.max(1));
+        self.warm_up = warm_up;
         self
     }
 
@@ -245,6 +245,7 @@ struct ImplicitIdleItem {
 struct QuerySessionPoolInner {
     kind: QuerySessionPoolKind,
     settings: QuerySessionPoolSettings,
+    acquire_timeout: Duration,
     connection_manager: GrpcConnectionManager,
     semaphore: Arc<Semaphore>,
     explicit_idle: Mutex<Vec<ExplicitIdleItem>>,
@@ -256,7 +257,7 @@ struct QuerySessionPoolInner {
 impl QuerySessionPool {
     pub async fn new_explicit(
         connection_manager: GrpcConnectionManager,
-        _timeouts: TimeoutSettings,
+        timeouts: TimeoutSettings,
         discovery: Arc<Box<dyn Discovery>>,
         settings: QuerySessionPoolSettings,
     ) -> YdbResult<Self> {
@@ -270,6 +271,7 @@ impl QuerySessionPool {
         let inner = Arc::new(QuerySessionPoolInner {
             kind: QuerySessionPoolKind::Explicit,
             settings,
+            acquire_timeout: timeouts.operation_timeout,
             connection_manager,
             semaphore: Arc::new(Semaphore::new(limit)),
             explicit_idle: Mutex::new(Vec::new()),
@@ -287,7 +289,7 @@ impl QuerySessionPool {
 
     pub fn new_implicit(
         connection_manager: GrpcConnectionManager,
-        _timeouts: TimeoutSettings,
+        timeouts: TimeoutSettings,
         discovery: Arc<Box<dyn Discovery>>,
         settings: QuerySessionPoolSettings,
     ) -> Self {
@@ -301,6 +303,7 @@ impl QuerySessionPool {
         let inner = Arc::new(QuerySessionPoolInner {
             kind: QuerySessionPoolKind::Implicit,
             settings,
+            acquire_timeout: timeouts.operation_timeout,
             connection_manager,
             semaphore: Arc::new(Semaphore::new(limit)),
             explicit_idle: Mutex::new(Vec::new()),
@@ -336,13 +339,7 @@ impl QuerySessionPool {
             ));
         }
 
-        let permit = self
-            .inner
-            .semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| YdbError::Transport("query session pool closed".to_string()))?;
+        let permit = self.inner.acquire_permit().await?;
 
         let mut stale_items = Vec::new();
         while let Some(item) = self.inner.pop_explicit_idle() {
@@ -396,13 +393,7 @@ impl QuerySessionPool {
             ));
         }
 
-        let permit = self
-            .inner
-            .semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| YdbError::Transport("query session pool closed".to_string()))?;
+        let permit = self.inner.acquire_permit().await?;
 
         while let Some(item) = self.inner.pop_implicit_idle() {
             if self.inner.should_close_implicit(&item) {
@@ -430,6 +421,23 @@ impl QuerySessionPool {
 }
 
 impl QuerySessionPoolInner {
+    async fn acquire_permit(&self) -> YdbResult<OwnedSemaphorePermit> {
+        let acquire = self.semaphore.clone().acquire_owned();
+        let permit = if self.acquire_timeout.is_zero() {
+            acquire.await
+        } else {
+            tokio::time::timeout(self.acquire_timeout, acquire)
+                .await
+                .map_err(|_| {
+                    YdbError::Transport(format!(
+                        "acquire session from pool timed out after {:?}",
+                        self.acquire_timeout
+                    ))
+                })?
+        };
+        permit.map_err(|_| YdbError::Transport("query session pool closed".to_string()))
+    }
+
     fn stats(&self) -> QuerySessionPoolStats {
         let idle = match self.kind {
             QuerySessionPoolKind::Explicit => {
@@ -439,11 +447,15 @@ impl QuerySessionPoolInner {
                 self.implicit_idle.lock().expect("implicit idle lock").len()
             }
         };
-        let in_use = self
+        let permits_held = self
             .settings
             .limit
             .saturating_sub(self.semaphore.available_permits());
         let create_in_progress = self.create_in_progress.load(Ordering::Acquire);
+        // Permits held during post-acquire CreateSession are not live sessions yet (go-sdk
+        // tracks Size separately from CreateInProgress). Warm-up creates do not hold permits.
+        let creates_with_permit = create_in_progress.min(permits_held);
+        let in_use = permits_held.saturating_sub(creates_with_permit);
         QuerySessionPoolStats {
             limit: self.settings.limit,
             warm_up: self.settings.warm_up,
