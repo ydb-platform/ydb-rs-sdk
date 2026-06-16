@@ -26,7 +26,8 @@ use crate::result::Row;
 use builders::impl_query_methods;
 use exec::{
     check_retry_transaction_error, retry_wait, transaction_commit, transaction_exec_context,
-    transaction_rollback, ClientExecContext, TransactionExecContext, DEFAULT_QUERY_RETRY_BUDGET,
+    transaction_ensure_eager_begin, transaction_rollback, ClientExecContext, TransactionExecContext,
+    DEFAULT_QUERY_RETRY_BUDGET,
 };
 use internal::{ExecCoreRef, HasCore};
 
@@ -66,6 +67,8 @@ pub enum QueryTxMode {
 #[derive(Clone, Debug, Default)]
 pub struct QueryTransactionOptions {
     mode: QueryTxMode,
+    /// Call `BeginTransaction` RPC before the first `ExecuteQuery` instead of lazy `BeginTx`.
+    eager_begin: bool,
 }
 
 impl QueryTransactionOptions {
@@ -78,8 +81,22 @@ impl QueryTransactionOptions {
         self
     }
 
+    /// Eager transaction start: the first operation in [`QueryTransaction`] calls
+    /// `BeginTransaction` RPC and obtains `tx_id` before any `ExecuteQuery`.
+    ///
+    /// Default (lazy): the first `ExecuteQuery` carries `BeginTx` in `tx_control` without a
+    /// separate RPC — see [`QueryTransaction::begin`] for an explicit begin inside the callback.
+    pub fn with_eager_begin(mut self) -> Self {
+        self.eager_begin = true;
+        self
+    }
+
     pub(crate) fn mode(&self) -> QueryTxMode {
         self.mode
+    }
+
+    pub(crate) fn eager_begin(&self) -> bool {
+        self.eager_begin
     }
 }
 
@@ -204,6 +221,10 @@ impl QueryClient {
                     if tx.state == TxState::RolledBack {
                         return Ok(value);
                     }
+                    if tx.ctx.finished {
+                        tx.state = TxState::Committed;
+                        return Ok(value);
+                    }
                     return match tx.commit().await {
                         Ok(()) => Ok(value),
                         // Commit outcome is ambiguous on transport errors; never retry.
@@ -274,8 +295,20 @@ impl QueryTransaction {
         self.ctx.tx_mode
     }
 
-    pub async fn rollback(&mut self) -> YdbResult<()> {
+    /// Explicitly open the transaction via `BeginTransaction` RPC.
+    ///
+    /// By default (lazy tx) the transaction materializes on the first query. Call this when you
+    /// need `tx_id` before any YQL, or configure [`QueryTransactionOptions::with_eager_begin`]
+    /// on the client so the first operation does this automatically.
+    pub async fn begin(&mut self) -> YdbResult<()> {
         if self.state != TxState::Active {
+            return Err(YdbError::Custom("transaction already finished".to_string()));
+        }
+        transaction_ensure_eager_begin(&mut self.ctx).await
+    }
+
+    pub async fn rollback(&mut self) -> YdbResult<()> {
+        if self.state != TxState::Active || self.ctx.finished {
             return Err(YdbError::Custom("transaction already finished".to_string()));
         }
         transaction_rollback(&mut self.ctx).await?;
@@ -284,13 +317,17 @@ impl QueryTransaction {
     }
 
     async fn commit(&mut self) -> YdbResult<()> {
+        if self.ctx.finished {
+            self.state = TxState::Committed;
+            return Ok(());
+        }
         transaction_commit(&mut self.ctx).await?;
         self.state = TxState::Committed;
         Ok(())
     }
 
     async fn rollback_quiet(&mut self) {
-        if self.state == TxState::Active {
+        if self.state == TxState::Active && !self.ctx.finished {
             let _ = transaction_rollback(&mut self.ctx).await;
             self.state = TxState::RolledBack;
         }

@@ -6,12 +6,13 @@ use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::result::ResultSet;
 use crate::types::Value;
 
-use super::exec::{apply_stream_tx_id, CallOptions};
+use super::exec::{apply_stream_tx_id, transaction_finish_committed_via_query, CallOptions};
 use super::internal::ExecCoreRef;
 
 pub struct QueryStream<'a> {
     pub(crate) core: ExecCoreRef<'a>,
     pub(crate) stream: ExecuteQueryStream,
+    pub(crate) with_commit: bool,
 }
 
 impl Drop for QueryStream<'_> {
@@ -47,6 +48,9 @@ impl QueryStream<'_> {
         let meta = self.stream.close().await.map_err(YdbError::from)?;
         if let ExecCoreRef::Transaction(ctx) = &mut self.core {
             apply_stream_tx_id(ctx, meta.tx_id.clone());
+            if self.with_commit {
+                transaction_finish_committed_via_query(ctx).await;
+            }
         }
         Ok(())
     }
@@ -62,6 +66,7 @@ pub(crate) async fn materialize_query(
     params: HashMap<String, Value>,
     opts: CallOptions,
 ) -> YdbResult<Vec<ResultSet>> {
+    let with_commit = opts.with_commit;
     let mut stream = core.begin_stream(text, params, opts).await?;
     let mut sets = Vec::new();
     while let Some((raw, tx_id)) = stream.next_result_set().await.map_err(YdbError::from)? {
@@ -73,6 +78,9 @@ pub(crate) async fn materialize_query(
     let meta = stream.close().await.map_err(YdbError::from)?;
     if let ExecCoreRef::Transaction(ctx) = core {
         apply_stream_tx_id(ctx, meta.tx_id);
+        if with_commit {
+            transaction_finish_committed_via_query(ctx).await;
+        }
     }
     Ok(sets)
 }

@@ -15,18 +15,22 @@ pub(crate) fn implicit_tx_control() -> Option<TransactionControl> {
     None
 }
 
-pub(crate) fn begin_tx_control(mode: RawQueryTxMode) -> TransactionControl {
+pub(crate) fn begin_tx_control(mode: RawQueryTxMode, commit_tx: bool) -> TransactionControl {
     TransactionControl {
-        commit_tx: false,
+        commit_tx,
         tx_selector: Some(transaction_control::TxSelector::BeginTx(tx_settings(mode))),
     }
 }
 
-pub(crate) fn tx_id_control(tx_id: &str) -> TransactionControl {
+pub(crate) fn tx_id_control(tx_id: &str, commit_tx: bool) -> TransactionControl {
     TransactionControl {
-        commit_tx: false,
+        commit_tx,
         tx_selector: Some(transaction_control::TxSelector::TxId(tx_id.to_string())),
     }
+}
+
+pub(crate) fn tx_settings_for_mode(mode: RawQueryTxMode) -> TransactionSettings {
+    tx_settings(mode)
 }
 
 fn tx_settings(mode: RawQueryTxMode) -> TransactionSettings {

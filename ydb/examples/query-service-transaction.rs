@@ -1,8 +1,8 @@
 //! `retry_transaction` with `AsyncFnMut(&mut QueryTransaction)` on implicit sessions.
 
 use ydb::{
-    ClientBuilder, QueryExecutor, QueryTransaction, YdbOrCustomerError, YdbResult,
-    YdbResultWithCustomerErr,
+    ClientBuilder, QueryExecutor, QueryTransaction, QueryTransactionOptions, YdbOrCustomerError,
+    YdbResult, YdbResultWithCustomerErr,
 };
 
 enum Withdraw {
@@ -98,7 +98,63 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
     println!("customer error passed through: {}", res.is_err());
 
-    // --- 4. What does NOT compile (by design) -------------------------------
+    // --- 5. Lazy tx vs explicit begin ---------------------------------------
+    // Default: tx_id appears only after the first ExecuteQuery (BeginTx in tx_control).
+    qc.retry_transaction(async |tx: &mut QueryTransaction| {
+        assert!(tx.tx_id_for_test().is_none());
+        tx.exec("SELECT 1").await?;
+        assert!(tx.tx_id_for_test().is_some());
+        Ok(())
+    })
+    .await?;
+
+    // Explicit BeginTransaction RPC before any YQL:
+    qc.retry_transaction(async |tx: &mut QueryTransaction| {
+        tx.begin().await?;
+        assert!(tx.tx_id_for_test().is_some());
+        tx.exec("SELECT 1").await?;
+        Ok(())
+    })
+    .await?;
+
+    // Or configure eager begin on the client for every retry_transaction:
+    let eager_qc = qc.clone_with_transaction_options(QueryTransactionOptions::new().with_eager_begin());
+    eager_qc
+        .retry_transaction(async |tx: &mut QueryTransaction| {
+            tx.exec("SELECT 1").await?; // BeginTransaction RPC runs first
+            assert!(tx.tx_id_for_test().is_some());
+            Ok(())
+        })
+        .await?;
+
+    // --- 6. Commit with the last query (with_commit) ------------------------
+    let table = "query_example_with_commit";
+    qc.exec(format!(
+        "CREATE TABLE IF NOT EXISTS {table} (id Int64, val Int64, PRIMARY KEY(id))"
+    ))
+    .await?;
+
+    qc.retry_transaction(async |tx: &mut QueryTransaction| {
+        tx.exec(format!(
+            "DECLARE $id AS Int64; DECLARE $val AS Int64; \
+             UPSERT INTO {table} (id, val) VALUES ($id, $val)"
+        ))
+        .param("$id", 1_i64)
+        .param("$val", 100_i64)
+        .with_commit() // server commits when the stream is fully read
+        .await?;
+        // Transaction is already committed; further queries in this callback would fail.
+        Ok(())
+    })
+    .await?; // retry_transaction commit is a no-op
+
+    let mut row = qc
+        .query_row(format!("SELECT val FROM {table} WHERE id = 1"))
+        .await?;
+    let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+    println!("with_commit persisted val = {:?}", val);
+
+    // --- 7. What does NOT compile (by design) -------------------------------
     //
     // a) Smuggling a stream (or the tx itself) out of the attempt — the
     //    stream borrows the transaction and cannot outlive the callback:

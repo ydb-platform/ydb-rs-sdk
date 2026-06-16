@@ -11,9 +11,13 @@ use crate::grpc_wrapper::raw_query_service::status::check_status;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use ydb_grpc::ydb_proto::query::v1::query_service_client::QueryServiceClient;
+use crate::grpc_wrapper::raw_errors::RawError;
+use crate::grpc_wrapper::raw_query_service::transaction_control::{
+    tx_settings_for_mode, RawQueryTxMode,
+};
 use ydb_grpc::ydb_proto::query::{
-    AttachSessionRequest, CommitTransactionRequest, CreateSessionRequest, DeleteSessionRequest,
-    ExecuteQueryResponsePart, RollbackTransactionRequest, SessionState,
+    AttachSessionRequest, BeginTransactionRequest, CommitTransactionRequest, CreateSessionRequest,
+    DeleteSessionRequest, ExecuteQueryResponsePart, RollbackTransactionRequest, SessionState,
 };
 
 pub(crate) struct RawQueryClient {
@@ -103,6 +107,27 @@ impl RawQueryClient {
             })
             .await?;
         Ok(response.into_inner())
+    }
+
+    pub async fn begin_transaction(
+        &mut self,
+        session_id: &str,
+        mode: RawQueryTxMode,
+    ) -> RawResult<String> {
+        let response = self
+            .service
+            .begin_transaction(BeginTransactionRequest {
+                session_id: session_id.to_string(),
+                tx_settings: Some(tx_settings_for_mode(mode)),
+            })
+            .await?;
+        let inner = response.into_inner();
+        check_status(inner.status, &inner.issues)?;
+        inner
+            .tx_meta
+            .map(|meta| meta.id)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| RawError::custom("BeginTransaction response missing tx_meta.id"))
     }
 
     pub async fn commit_transaction(&mut self, session_id: &str, tx_id: &str) -> RawResult<()> {

@@ -30,6 +30,8 @@ pub(crate) struct CallOptions {
     pub idempotent: Option<bool>,
     pub collect_stats: bool,
     pub session_mode: Option<QuerySessionMode>,
+    /// Commit the interactive transaction as part of this `ExecuteQuery` (Query Service `commit_tx`).
+    pub with_commit: bool,
 }
 
 #[derive(Clone)]
@@ -47,6 +49,8 @@ pub(crate) struct TransactionExecContext {
     pub timeouts: TimeoutSettings,
     pub session_mode: QuerySessionMode,
     pub tx_mode: QueryTxMode,
+    /// When set, the first operation calls `BeginTransaction` RPC instead of lazy `BeginTx` in `ExecuteQuery`.
+    pub eager_begin: bool,
     pub attached_session: Option<AttachedQuerySession>,
     pub query_node: Option<Uri>,
     pub tx_id: Option<String>,
@@ -126,20 +130,26 @@ fn tx_mode_to_raw(mode: QueryTxMode) -> RawQueryTxMode {
 
 /// Build `tx_control` for an interactive transaction.
 ///
-/// Until `tx_id` is known, the first `ExecuteQuery` uses lazy start: `BeginTx` with
-/// `commit_tx: false` (no upfront `BeginTransaction` RPC). The server returns `tx_id`
-/// in the response stream; later queries use `TxId`.
+/// **Lazy start (default):** while `tx_id` is unknown, the first `ExecuteQuery` sends
+/// `BeginTx` with `commit_tx: false` — no upfront `BeginTransaction` RPC. The server
+/// returns `tx_id` in the response stream; later queries use `TxId`.
+///
+/// **Eager start:** when [`TransactionExecContext::eager_begin`] is set or
+/// [`transaction_ensure_eager_begin`] was called, `tx_id` is already known and this
+/// function always emits `TxId`.
 fn tx_control_for_transaction(
     tx: &TransactionExecContext,
+    opts: &CallOptions,
 ) -> YdbResult<Option<ydb_grpc::ydb_proto::query::TransactionControl>> {
     if tx.finished {
         return Err(YdbError::Custom(
             "transaction already finished (committed or rolled back)".to_string(),
         ));
     }
+    let commit_tx = opts.with_commit;
     Ok(Some(match &tx.tx_id {
-        Some(id) => tx_id_control(id),
-        None => begin_tx_control(tx_mode_to_raw(tx.tx_mode)),
+        Some(id) => tx_id_control(id, commit_tx),
+        None => begin_tx_control(tx_mode_to_raw(tx.tx_mode), commit_tx),
     }))
 }
 
@@ -270,10 +280,42 @@ async fn transaction_execute_request(
         session_id,
         yql_text,
         parameters,
-        tx_control_for_transaction(tx)?,
+        tx_control_for_transaction(tx, opts)?,
         opts.collect_stats,
     );
     Ok((client, req))
+}
+
+/// Open the transaction via `BeginTransaction` RPC (eager / explicit begin).
+pub(crate) async fn transaction_ensure_eager_begin(tx: &mut TransactionExecContext) -> YdbResult<()> {
+    if tx.finished {
+        return Err(YdbError::Custom(
+            "transaction already finished (committed or rolled back)".to_string(),
+        ));
+    }
+    if tx.tx_id.as_ref().is_some_and(|id| !id.is_empty()) {
+        return Ok(());
+    }
+    ensure_tx_session(tx).await?;
+    let session_id = tx_session_id(tx)?.to_string();
+    let mut client = query_client_from_tx(tx).await?;
+    let timeout_duration = tx.timeouts.operation_timeout;
+    let tx_id = with_operation_timeout(timeout_duration, async {
+        client
+            .begin_transaction(&session_id, tx_mode_to_raw(tx.tx_mode))
+            .await
+            .map_err(Into::into)
+    })
+    .await?;
+    apply_stream_tx_id(tx, Some(tx_id));
+    Ok(())
+}
+
+/// Mark the transaction committed by the server as part of the last `ExecuteQuery` (`commit_tx: true`).
+pub(crate) async fn transaction_finish_committed_via_query(tx: &mut TransactionExecContext) {
+    tx.finished = true;
+    tx.tx_id = None;
+    release_tx_session(tx).await;
 }
 
 pub(crate) async fn transaction_begin_stream(
@@ -283,6 +325,9 @@ pub(crate) async fn transaction_begin_stream(
     opts: CallOptions,
 ) -> YdbResult<ExecuteQueryStream> {
     ensure_tx_session(tx).await?;
+    if tx.eager_begin {
+        transaction_ensure_eager_begin(tx).await?;
+    }
     let (mut client, req) = transaction_execute_request(tx, text, params, &opts).await?;
     let timeout_duration = operation_timeout(&opts, &tx.timeouts);
     let stream = with_operation_timeout(timeout_duration, async {
@@ -298,6 +343,9 @@ pub(crate) async fn transaction_begin_stream(
 }
 
 pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbResult<()> {
+    if tx.finished {
+        return Ok(());
+    }
     if tx.tx_id.as_ref().is_none_or(String::is_empty) {
         tx.finished = true;
         release_tx_session(tx).await;
@@ -358,6 +406,7 @@ pub(crate) fn transaction_exec_context(
         timeouts,
         session_mode,
         tx_mode: options.mode(),
+        eager_begin: options.eager_begin(),
         attached_session: None,
         query_node: None,
         tx_id: None,

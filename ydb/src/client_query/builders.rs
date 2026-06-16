@@ -87,6 +87,16 @@ impl<'a, K> CallBuilder<'a, K> {
         self
     }
 
+    /// Commit the interactive transaction as part of this query (`commit_tx: true` in Query Service).
+    ///
+    /// Only meaningful on [`QueryTransaction`]: the server commits when the full response stream
+    /// is consumed. A later query in the same transaction fails; [`QueryClient::retry_transaction`]
+    /// treats the implicit commit as success (explicit `commit` is a no-op).
+    pub fn with_commit(mut self) -> Self {
+        self.opts.with_commit = true;
+        self
+    }
+
     /// Override session acquisition for this call (default: implicit session).
     pub fn session_mode(mut self, mode: QuerySessionMode) -> Self {
         self.opts.session_mode = Some(mode);
@@ -197,6 +207,7 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
+            let with_commit = self.opts.with_commit;
             let stream = self
                 .core
                 .begin_stream(self.text, self.params, self.opts)
@@ -204,6 +215,7 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
             Ok(QueryStream {
                 core: self.core,
                 stream,
+                with_commit,
             })
         })
     }
