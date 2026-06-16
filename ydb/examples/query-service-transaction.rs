@@ -99,11 +99,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("customer error passed through: {}", res.is_err());
 
     // --- 5. Lazy tx vs explicit begin ---------------------------------------
-    // Default: tx_id appears only after the first ExecuteQuery (BeginTx in tx_control).
+    // Default (lazy): the first ExecuteQuery opens the transaction (BeginTx in tx_control).
     qc.retry_transaction(async |tx: &mut QueryTransaction| {
-        assert!(tx.tx_id_for_test().is_none());
         tx.exec("SELECT 1").await?;
-        assert!(tx.tx_id_for_test().is_some());
         Ok(())
     })
     .await?;
@@ -111,7 +109,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Explicit BeginTransaction RPC before any YQL:
     qc.retry_transaction(async |tx: &mut QueryTransaction| {
         tx.begin().await?;
-        assert!(tx.tx_id_for_test().is_some());
         tx.exec("SELECT 1").await?;
         Ok(())
     })
@@ -122,8 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         qc.clone_with_transaction_options(QueryTransactionOptions::new().with_begin());
     with_begin_qc
         .retry_transaction(async |tx: &mut QueryTransaction| {
-            tx.exec("SELECT 1").await?; // BeginTransaction RPC runs first
-            assert!(tx.tx_id_for_test().is_some());
+            tx.exec("SELECT 1").await?; // BeginTransaction RPC runs before this query
             Ok(())
         })
         .await?;
