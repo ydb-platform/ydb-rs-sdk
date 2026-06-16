@@ -172,7 +172,6 @@ pub(crate) struct ImplicitSessionLease {
     item: Option<ImplicitIdleItem>,
     pool: Arc<QuerySessionPoolInner>,
     permit: Option<OwnedSemaphorePermit>,
-    use_guard: bool,
 }
 
 impl ImplicitSessionLease {
@@ -180,19 +179,9 @@ impl ImplicitSessionLease {
         self.item.as_ref().expect("lease item").session.session_id()
     }
 
-    pub fn begin_use(&mut self) {
-        if !self.use_guard {
-            self.item.as_ref().expect("lease item").session.begin_use();
-            self.use_guard = true;
-        }
-    }
+    pub fn begin_use(&mut self) {}
 
-    pub fn end_use(&mut self) {
-        if self.use_guard {
-            self.item.as_ref().expect("lease item").session.end_use();
-            self.use_guard = false;
-        }
-    }
+    pub fn end_use(&mut self) {}
 }
 
 impl Drop for ImplicitSessionLease {
@@ -330,10 +319,17 @@ impl QuerySessionPool {
             .await
             .map_err(|_| YdbError::Transport("query session pool closed".to_string()))?;
 
+        let mut stale_items = Vec::new();
         while let Some(item) = self.inner.pop_explicit_idle() {
             if self.inner.should_close_explicit(&item) {
-                self.inner.close_explicit_item(item).await;
+                stale_items.push(item);
                 continue;
+            }
+            for stale in stale_items {
+                let inner = self.inner.clone();
+                spawn_pool_release(async move {
+                    inner.close_explicit_item(stale).await;
+                });
             }
             trace!(
                 session_id = item.session.session_id(),
@@ -345,6 +341,12 @@ impl QuerySessionPool {
                 permit: Some(permit),
                 returned: false,
                 use_guard: false,
+            });
+        }
+        for stale in stale_items {
+            let inner = self.inner.clone();
+            spawn_pool_release(async move {
+                inner.close_explicit_item(stale).await;
             });
         }
 
@@ -386,7 +388,6 @@ impl QuerySessionPool {
                 item: Some(item),
                 pool: self.inner.clone(),
                 permit: Some(permit),
-                use_guard: false,
             });
         }
 
@@ -399,7 +400,6 @@ impl QuerySessionPool {
             }),
             pool: self.inner.clone(),
             permit: Some(permit),
-            use_guard: false,
         })
     }
 }
@@ -407,7 +407,13 @@ impl QuerySessionPool {
 impl QuerySessionPoolInner {
     async fn warm_up_explicit(&self, count: usize) -> YdbResult<()> {
         for _ in 0..count {
-            let item = self.create_explicit_session().await?;
+            let item = match self.create_explicit_session().await {
+                Ok(item) => item,
+                Err(err) => {
+                    self.drain_and_close_explicit_idle().await;
+                    return Err(err);
+                }
+            };
             let overflow = {
                 let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
                 if idle.len() < self.settings.limit {
@@ -422,6 +428,16 @@ impl QuerySessionPoolInner {
             }
         }
         Ok(())
+    }
+
+    async fn drain_and_close_explicit_idle(&self) {
+        let items: Vec<ExplicitIdleItem> = {
+            let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
+            std::mem::take(&mut *idle)
+        };
+        for item in items {
+            self.close_explicit_item(item).await;
+        }
     }
 
     async fn create_explicit_session(&self) -> YdbResult<ExplicitIdleItem> {
@@ -519,6 +535,7 @@ impl QuerySessionPoolInner {
         item.last_used = Instant::now();
 
         if self.should_close_explicit(&item) {
+            // Drop permit first so other acquirers are not blocked during DeleteSession.
             drop(permit);
             self.close_explicit_item(item).await;
         } else {
@@ -531,6 +548,8 @@ impl QuerySessionPoolInner {
                     Some(item)
                 }
             };
+            // Push to idle before dropping permit: a waiter may acquire the same session
+            // as soon as the semaphore slot is freed.
             drop(permit);
             if let Some(item) = overflow {
                 self.close_explicit_item(item).await;

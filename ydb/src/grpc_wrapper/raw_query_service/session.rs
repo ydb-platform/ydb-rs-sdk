@@ -196,6 +196,7 @@ enum ShutdownHint {
     NodeShutdown,
 }
 
+/// Returns `RawResult` so future hint variants can fail validation without changing call sites.
 fn shutdown_hint(state: &SessionState) -> RawResult<Option<ShutdownHint>> {
     match &state.session_hint {
         Some(SessionHint::SessionShutdown(_)) => Ok(Some(ShutdownHint::SessionShutdown)),
@@ -217,7 +218,6 @@ fn check_attach_state(state: &SessionState) -> RawResult<()> {
 
 /// Implicit pool item: no CreateSession/AttachSession; ExecuteQuery uses an empty session id.
 pub(crate) struct ImplicitQuerySession {
-    in_use: AtomicUsize,
     alive: AtomicBool,
 }
 
@@ -230,21 +230,12 @@ impl Default for ImplicitQuerySession {
 impl ImplicitQuerySession {
     pub fn new() -> Self {
         Self {
-            in_use: AtomicUsize::new(0),
             alive: AtomicBool::new(true),
         }
     }
 
     pub fn session_id(&self) -> &str {
         ""
-    }
-
-    pub fn begin_use(&self) {
-        self.in_use.fetch_add(1, Ordering::SeqCst);
-    }
-
-    pub fn end_use(&self) {
-        self.in_use.fetch_sub(1, Ordering::SeqCst);
     }
 
     pub fn is_alive(&self) -> bool {
