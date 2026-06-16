@@ -33,6 +33,9 @@ pub(crate) struct CallOptions {
     /// Override Query Service `commit_tx`. `None` uses context default: `true` on
     /// [`QueryClient`] one-shots, `false` on [`QueryTransaction`].
     pub commit_tx: Option<bool>,
+    /// Skip `BeginTx` entirely (`tx_control: None`), like Go SDK `query.NoTx()`.
+    /// Scheme (DDL) statements are detected automatically; set this for explicit opt-out.
+    pub no_tx: bool,
 }
 
 #[derive(Clone)]
@@ -190,11 +193,16 @@ where
 
 /// Build `tx_control` for one-shot [`QueryClient`] calls.
 ///
-/// Every `ExecuteQuery` carries explicit `BeginTx` with auto-commit by default
-/// ([#130](https://github.com/ydb-platform/ydb-rs-sdk/issues/130)).
+/// Data statements use `BeginTx` with auto-commit by default
+/// ([#130](https://github.com/ydb-platform/ydb-rs-sdk/issues/130)). Scheme (DDL) statements
+/// and explicit [`CallOptions::no_tx`] omit `tx_control` — YDB rejects scheme ops inside a tx.
 fn tx_control_for_client(
+    text: &str,
     opts: &CallOptions,
 ) -> Option<ydb_grpc::ydb_proto::query::TransactionControl> {
+    if opts.no_tx || super::scheme_query::is_scheme_query(text) {
+        return None;
+    }
     Some(begin_tx_control(
         RawQueryTxMode::SerializableReadWrite,
         opts.commit_tx.unwrap_or(true),
@@ -213,7 +221,7 @@ async fn client_implicit_request(
         session_id,
         text,
         params.clone(),
-        tx_control_for_client(opts),
+        tx_control_for_client(text, opts),
         opts.collect_stats,
     );
     Ok((client, req))

@@ -5,6 +5,7 @@
 mod builders;
 mod exec;
 mod internal;
+mod scheme_query;
 mod script;
 mod stream_facade;
 

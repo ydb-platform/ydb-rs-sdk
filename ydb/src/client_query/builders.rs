@@ -89,12 +89,19 @@ impl<'a, K> CallBuilder<'a, K> {
 
     /// Override auto-commit (`commit_tx` in Query Service `TxControl`).
     ///
-    /// Defaults: [`QueryClient`] one-shots commit automatically (`true`); interactive
-    /// [`QueryTransaction`] queries do not (`false`). Pass `with_commit(false)` on a client
-    /// call or `with_commit(true)` on the last query in a transaction to override — see
-    /// [#130](https://github.com/ydb-platform/ydb-rs-sdk/issues/130).
+    /// Defaults: [`QueryClient`] data statements commit automatically (`true`); interactive
+    /// [`QueryTransaction`] queries do not (`false`). Scheme (DDL) statements on the client
+    /// omit `tx_control` automatically (same as Go SDK `query.NoTx()`).
     pub fn with_commit(mut self, commit: bool) -> Self {
         self.opts.commit_tx = Some(commit);
+        self
+    }
+
+    /// Do not attach a transaction to this call (`tx_control: None`).
+    ///
+    /// Scheme statements are detected automatically; use this for explicit opt-out.
+    pub fn without_tx(mut self) -> Self {
+        self.opts.no_tx = true;
         self
     }
 
