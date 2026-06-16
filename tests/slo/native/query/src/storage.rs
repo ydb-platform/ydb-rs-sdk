@@ -30,9 +30,7 @@ impl Storage {
         let pool_limit = params.pool_size() as usize;
         let query_client = client
             .query_client()
-            .with_session_pool(
-                QuerySessionPoolSettings::new().with_limit(pool_limit),
-            )
+            .with_session_pool(QuerySessionPoolSettings::new().with_limit(pool_limit))
             .await
             .map_err(|err| err.to_string())?
             .clone_with_idempotent_operations(true);
