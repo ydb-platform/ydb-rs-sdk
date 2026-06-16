@@ -11,6 +11,10 @@ use super::exec::{
 };
 use super::internal::ExecCoreRef;
 
+/// Streaming query result. When obtained with [`CallBuilder::with_commit(true)`] inside a
+/// transaction, you must drain all result sets and call [`Self::close`]; dropping early
+/// cancels the gRPC stream and does not commit.
+#[must_use = "QueryStream must be fully consumed; call close() when using with_commit(true)"]
 pub struct QueryStream<'a> {
     pub(crate) core: ExecCoreRef<'a>,
     pub(crate) stream: ExecuteQueryStream,
@@ -24,14 +28,8 @@ impl Drop for QueryStream<'_> {
                 apply_stream_tx_id(ctx, Some(tx_id));
             }
         }
-        if self.commit_tx {
-            if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-                // Server committed via `commit_tx`; sync client state so cleanup does not
-                // issue a spurious CommitTransaction. Session release runs in retry_transaction.
-                ctx.finished = true;
-                ctx.tx_id = None;
-            }
-        }
+        // Do not mark the transaction finished here: with_commit(true) requires
+        // draining the stream and calling close() so the server can commit.
         self.stream.cancel();
     }
 }

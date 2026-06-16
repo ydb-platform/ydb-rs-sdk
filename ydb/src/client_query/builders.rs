@@ -93,6 +93,10 @@ impl<'a, K> CallBuilder<'a, K> {
     /// One-shot defaults depend on [`Self::with_tx_mode`]: implicit mode relies on the server;
     /// explicit modes default to `commit_tx: true`. Interactive transactions default to
     /// `commit_tx: false` unless [`Self::with_commit(true)`] is set on the last query.
+    ///
+    /// When using [`Self::query`] with `with_commit(true)` inside a transaction, you must
+    /// fully drain the stream and call [`QueryStream::close`] — dropping the stream early
+    /// cancels the gRPC call and does not commit.
     pub fn with_commit(mut self, commit: bool) -> Self {
         self.opts.commit_tx = Some(commit);
         self
@@ -103,6 +107,9 @@ impl<'a, K> CallBuilder<'a, K> {
     /// Default on [`QueryClient`] is [`QueryTxMode::Implicit`] (no `tx_control`; the server
     /// infers isolation from the SQL). Interactive transactions use the mode from
     /// [`QueryTransactionOptions`] unless overridden here.
+    ///
+    /// [`QueryTxMode::Implicit`] inside [`QueryTransaction`] returns a runtime error — DDL and
+    /// other non-transactional statements must run on [`QueryClient`], not inside a transaction.
     pub fn with_tx_mode(mut self, mode: QueryTxMode) -> Self {
         self.opts.tx_mode = Some(mode);
         self

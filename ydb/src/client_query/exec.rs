@@ -139,6 +139,13 @@ fn client_tx_mode(opts: &CallOptions) -> QueryTxMode {
 
 fn interactive_tx_mode(tx: &TransactionExecContext, opts: &CallOptions) -> YdbResult<QueryTxMode> {
     let mode = opts.tx_mode.unwrap_or(tx.tx_mode);
+    if mode == QueryTxMode::Implicit {
+        return Err(YdbError::Custom(
+            "QueryTxMode::Implicit is not available inside QueryTransaction; \
+             DDL and other non-transactional statements must run on QueryClient, not inside tx"
+                .to_string(),
+        ));
+    }
     if !mode.supported_in_interactive() {
         return Err(YdbError::Custom(format!(
             "transaction mode {mode:?} is not supported in interactive transactions \
