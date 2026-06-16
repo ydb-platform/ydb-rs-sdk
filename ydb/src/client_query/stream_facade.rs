@@ -55,7 +55,7 @@ impl QueryStream<'_> {
     pub async fn close(mut self) -> YdbResult<()> {
         let meta = self.stream.close().await.map_err(YdbError::from)?;
         if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-            apply_stream_tx_id(ctx, meta.tx_id.clone());
+            apply_stream_tx_id(ctx, meta.tx_id);
             if self.commit_tx {
                 transaction_finish_committed_via_query(ctx).await;
             }

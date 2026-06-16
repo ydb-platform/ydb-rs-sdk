@@ -124,7 +124,9 @@ fn session_id_for_mode(mode: QuerySessionMode) -> YdbResult<String> {
 
 fn tx_mode_to_raw(mode: QueryTxMode) -> RawQueryTxMode {
     match mode {
-        QueryTxMode::Implicit => RawQueryTxMode::SerializableReadWrite, // unreachable when used
+        QueryTxMode::Implicit => {
+            unreachable!("Implicit is filtered before tx_mode_to_raw")
+        }
         QueryTxMode::SerializableReadWrite => RawQueryTxMode::SerializableReadWrite,
         QueryTxMode::SnapshotReadOnly => RawQueryTxMode::SnapshotReadOnly,
         QueryTxMode::SnapshotReadWrite => RawQueryTxMode::SnapshotReadWrite,
@@ -133,12 +135,7 @@ fn tx_mode_to_raw(mode: QueryTxMode) -> RawQueryTxMode {
     }
 }
 
-fn client_tx_mode(opts: &CallOptions) -> QueryTxMode {
-    opts.tx_mode.unwrap_or(QueryTxMode::Implicit)
-}
-
-fn interactive_tx_mode(tx: &TransactionExecContext, opts: &CallOptions) -> YdbResult<QueryTxMode> {
-    let mode = opts.tx_mode.unwrap_or(tx.tx_mode);
+fn ensure_interactive_tx_mode(mode: QueryTxMode) -> YdbResult<()> {
     if mode == QueryTxMode::Implicit {
         return Err(YdbError::Custom(
             "QueryTxMode::Implicit is not available inside QueryTransaction; \
@@ -152,18 +149,37 @@ fn interactive_tx_mode(tx: &TransactionExecContext, opts: &CallOptions) -> YdbRe
              (use SerializableReadWrite, SnapshotReadOnly, or SnapshotReadWrite)"
         )));
     }
-    Ok(mode)
+    Ok(())
 }
 
-fn default_commit_tx_client(mode: QueryTxMode) -> bool {
-    match mode {
-        QueryTxMode::Implicit => true,
-        // Read-only one-shot modes must commit (open tx not supported).
-        QueryTxMode::SnapshotReadOnly
-        | QueryTxMode::StaleReadOnly
-        | QueryTxMode::OnlineReadOnly => true,
-        QueryTxMode::SerializableReadWrite | QueryTxMode::SnapshotReadWrite => true,
+fn reject_per_call_tx_mode_override(
+    tx: &TransactionExecContext,
+    opts: &CallOptions,
+) -> YdbResult<()> {
+    if let Some(override_mode) = opts.tx_mode {
+        if override_mode != tx.tx_mode {
+            return Err(YdbError::Custom(format!(
+                "per-call tx_mode {:?} does not match transaction mode {:?}",
+                override_mode, tx.tx_mode
+            )));
+        }
     }
+    Ok(())
+}
+
+fn client_tx_mode(opts: &CallOptions) -> QueryTxMode {
+    opts.tx_mode.unwrap_or(QueryTxMode::Implicit)
+}
+
+fn interactive_tx_mode(tx: &TransactionExecContext, opts: &CallOptions) -> YdbResult<QueryTxMode> {
+    reject_per_call_tx_mode_override(tx, opts)?;
+    ensure_interactive_tx_mode(opts.tx_mode.unwrap_or(tx.tx_mode))?;
+    Ok(tx.tx_mode)
+}
+
+fn default_commit_tx_client(_mode: QueryTxMode) -> bool {
+    // All one-shot modes auto-commit today; revisit if a future mode should not.
+    true
 }
 
 /// Build `tx_control` for an interactive transaction.
@@ -184,11 +200,17 @@ fn tx_control_for_transaction(
             "transaction already finished (committed or rolled back)".to_string(),
         ));
     }
-    let mode = interactive_tx_mode(tx, opts)?;
     let commit_tx = opts.commit_tx.unwrap_or(false);
     Ok(Some(match &tx.tx_id {
-        Some(id) => tx_id_control(id, commit_tx),
-        None => begin_tx_control(tx_mode_to_raw(mode), commit_tx),
+        Some(id) => {
+            interactive_tx_mode(tx, opts)?;
+            tx_id_control(id, commit_tx)
+        }
+        None => {
+            reject_per_call_tx_mode_override(tx, opts)?;
+            ensure_interactive_tx_mode(tx.tx_mode)?;
+            begin_tx_control(tx_mode_to_raw(tx.tx_mode), commit_tx)
+        }
     }))
 }
 
@@ -352,7 +374,10 @@ async fn transaction_execute_request(
 }
 
 /// Open the transaction via `BeginTransaction` RPC (explicit begin).
-pub(crate) async fn transaction_ensure_begin(tx: &mut TransactionExecContext) -> YdbResult<()> {
+pub(crate) async fn transaction_ensure_begin(
+    tx: &mut TransactionExecContext,
+    session_ready: bool,
+) -> YdbResult<()> {
     if tx.finished {
         return Err(YdbError::Custom(
             "transaction already finished (committed or rolled back)".to_string(),
@@ -361,7 +386,10 @@ pub(crate) async fn transaction_ensure_begin(tx: &mut TransactionExecContext) ->
     if tx.tx_id.as_ref().is_some_and(|id| !id.is_empty()) {
         return Ok(());
     }
-    ensure_tx_session(tx).await?;
+    ensure_interactive_tx_mode(tx.tx_mode)?;
+    if !session_ready {
+        ensure_tx_session(tx).await?;
+    }
     let session_id = tx_session_id(tx)?.to_string();
     let mut client = query_client_from_tx(tx).await?;
     let timeout_duration = tx.timeouts.operation_timeout;
@@ -396,7 +424,7 @@ pub(crate) async fn transaction_begin_stream(
     }
     ensure_tx_session(tx).await?;
     if tx.begin {
-        transaction_ensure_begin(tx).await?;
+        transaction_ensure_begin(tx, true).await?;
     }
     let (mut client, req) = transaction_execute_request(tx, text, params, &opts).await?;
     let timeout_duration = operation_timeout(&opts, &tx.timeouts);

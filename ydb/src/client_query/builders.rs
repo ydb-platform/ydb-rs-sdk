@@ -116,6 +116,9 @@ impl<'a, K> CallBuilder<'a, K> {
     }
 
     /// Shorthand for [`Self::with_tx_mode`](QueryTxMode::Implicit) (ImplicitTx / NoTx).
+    ///
+    /// [`QueryTxMode::Implicit`] inside [`QueryTransaction`] returns a runtime error — DDL and
+    /// other non-transactional statements must run on [`QueryClient`], not inside a transaction.
     pub fn implicit_tx(self) -> Self {
         self.with_tx_mode(QueryTxMode::Implicit)
     }
