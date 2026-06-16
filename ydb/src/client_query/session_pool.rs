@@ -474,13 +474,13 @@ impl QuerySessionPoolInner {
         {
             Ok(Ok(session)) => session,
             Ok(Err(err)) => {
-                let _ = tokio::time::timeout(delete_timeout, client.delete_session(&session_id))
-                    .await;
+                let _ =
+                    tokio::time::timeout(delete_timeout, client.delete_session(&session_id)).await;
                 return Err(YdbError::from(err));
             }
             Err(_) => {
-                let _ = tokio::time::timeout(delete_timeout, client.delete_session(&session_id))
-                    .await;
+                let _ =
+                    tokio::time::timeout(delete_timeout, client.delete_session(&session_id)).await;
                 return Err(YdbError::Transport(format!(
                     "attach query session timed out after {create_timeout:?}"
                 )));
