@@ -162,6 +162,19 @@ impl QueryClient {
         }
     }
 
+    /// Pool stats for the explicit session pool ([`Self::with_session_pool`]), if configured.
+    pub fn session_pool_stats(&self) -> Option<QuerySessionPoolStats> {
+        self.ctx.session_pool.as_ref().map(|pool| pool.stats())
+    }
+
+    /// Pool stats for the implicit session pool ([`Self::with_implicit_session_pool`]), if configured.
+    pub fn implicit_session_pool_stats(&self) -> Option<QuerySessionPoolStats> {
+        self.ctx
+            .implicit_session_pool
+            .as_ref()
+            .map(|pool| pool.stats())
+    }
+
     pub fn clone_with_idempotent_operations(&self, idempotent: bool) -> Self {
         Self {
             ctx: ClientExecContext {
@@ -368,7 +381,7 @@ pub use builders::{
 };
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};
-pub use session_pool::QuerySessionPoolSettings;
+pub use session_pool::{QuerySessionPoolSettings, QuerySessionPoolStats};
 pub use stream_facade::{QueryStats, QueryStream};
 
 fn panic_message(payload: Box<dyn Any + Send>) -> String {

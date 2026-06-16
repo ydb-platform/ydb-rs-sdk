@@ -16,6 +16,10 @@ use ydb_grpc::ydb_proto::query::{
     ExecuteQueryResponsePart, RollbackTransactionRequest, SessionState,
 };
 
+/// gRPC metadata: enable server-side session balancing on CreateSession.
+pub(crate) const HEADER_CLIENT_CAPABILITIES: &str = "x-ydb-client-capabilities";
+pub(crate) const CLIENT_CAPABILITY_SESSION_BALANCER: &str = "session-balancer";
+
 pub(crate) struct CreateSessionResult {
     pub session_id: String,
 }
@@ -79,7 +83,12 @@ impl RawQueryClient {
     }
 
     pub async fn create_session(&mut self) -> RawResult<CreateSessionResult> {
-        let response = self.service.create_session(CreateSessionRequest {}).await?;
+        let mut request = tonic::Request::new(CreateSessionRequest {});
+        request.metadata_mut().append(
+            HEADER_CLIENT_CAPABILITIES,
+            tonic::metadata::MetadataValue::from_static(CLIENT_CAPABILITY_SESSION_BALANCER),
+        );
+        let response = self.service.create_session(request).await?;
         let inner = response.into_inner();
         check_status(inner.status, &inner.issues)?;
         Ok(CreateSessionResult {

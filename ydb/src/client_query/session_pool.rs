@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -66,6 +67,23 @@ impl Default for QuerySessionPoolSettings {
             session_delete_timeout: DEFAULT_SESSION_DELETE_TIMEOUT,
         }
     }
+}
+
+/// Snapshot of query session pool counters (aligned with go-sdk `pool.Stats`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QuerySessionPoolStats {
+    /// Configured maximum concurrent in-flight sessions (`limit`).
+    pub limit: usize,
+    /// Configured warm-up target (`warm_up`).
+    pub warm_up: usize,
+    /// Total live sessions: idle + in_use.
+    pub size: usize,
+    /// Sessions waiting in the idle stack.
+    pub idle: usize,
+    /// Sessions currently leased to callers (holding a semaphore permit).
+    pub in_use: usize,
+    /// CreateSession RPCs in progress.
+    pub create_in_progress: usize,
 }
 
 impl QuerySessionPoolSettings {
@@ -232,6 +250,7 @@ struct QuerySessionPoolInner {
     explicit_idle: Mutex<Vec<ExplicitIdleItem>>,
     implicit_idle: Mutex<Vec<ImplicitIdleItem>>,
     on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync>,
+    create_in_progress: AtomicUsize,
 }
 
 impl QuerySessionPool {
@@ -256,6 +275,7 @@ impl QuerySessionPool {
             explicit_idle: Mutex::new(Vec::new()),
             implicit_idle: Mutex::new(Vec::new()),
             on_node_shutdown,
+            create_in_progress: AtomicUsize::new(0),
         });
 
         if warm_up > 0 {
@@ -286,6 +306,7 @@ impl QuerySessionPool {
             explicit_idle: Mutex::new(Vec::new()),
             implicit_idle: Mutex::new(Vec::new()),
             on_node_shutdown,
+            create_in_progress: AtomicUsize::new(0),
         });
 
         if warm_up > 0 {
@@ -302,6 +323,10 @@ impl QuerySessionPool {
         }
 
         Self { inner }
+    }
+
+    pub fn stats(&self) -> QuerySessionPoolStats {
+        self.inner.stats()
     }
 
     pub async fn acquire_explicit(&self) -> YdbResult<QuerySessionLease> {
@@ -405,6 +430,30 @@ impl QuerySessionPool {
 }
 
 impl QuerySessionPoolInner {
+    fn stats(&self) -> QuerySessionPoolStats {
+        let idle = match self.kind {
+            QuerySessionPoolKind::Explicit => {
+                self.explicit_idle.lock().expect("explicit idle lock").len()
+            }
+            QuerySessionPoolKind::Implicit => {
+                self.implicit_idle.lock().expect("implicit idle lock").len()
+            }
+        };
+        let in_use = self
+            .settings
+            .limit
+            .saturating_sub(self.semaphore.available_permits());
+        let create_in_progress = self.create_in_progress.load(Ordering::Acquire);
+        QuerySessionPoolStats {
+            limit: self.settings.limit,
+            warm_up: self.settings.warm_up,
+            size: idle + in_use,
+            idle,
+            in_use,
+            create_in_progress,
+        }
+    }
+
     async fn warm_up_explicit(&self, count: usize) -> YdbResult<()> {
         for _ in 0..count {
             let item = match self.create_explicit_session().await {
@@ -441,6 +490,13 @@ impl QuerySessionPoolInner {
     }
 
     async fn create_explicit_session(&self) -> YdbResult<ExplicitIdleItem> {
+        self.create_in_progress.fetch_add(1, Ordering::SeqCst);
+        let result = self.create_explicit_session_inner().await;
+        self.create_in_progress.fetch_sub(1, Ordering::SeqCst);
+        result
+    }
+
+    async fn create_explicit_session_inner(&self) -> YdbResult<ExplicitIdleItem> {
         let node_uri = self.connection_manager.endpoint(Service::Query)?;
         let mut client = self
             .connection_manager
