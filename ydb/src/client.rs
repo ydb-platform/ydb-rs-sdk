@@ -1,5 +1,6 @@
 use crate::client_common::DBCredentials;
 use crate::client_coordination::client::CoordinationClient;
+use crate::client_operation::OperationClient;
 use crate::client_query::QueryClient;
 use crate::client_scheme::client::SchemeClient;
 use crate::client_table::TableClient;
@@ -74,6 +75,11 @@ impl Client {
         CoordinationClient::new(self.timeouts, self.connection_manager.clone())
     }
 
+    /// Create instance of client for operation service (list/get/forget long-running operations).
+    pub fn operation_client(&self) -> OperationClient {
+        OperationClient::new(self.timeouts, self.connection_manager.clone())
+    }
+
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {
         self.timeouts = timeouts;
         self
@@ -95,6 +101,13 @@ impl Client {
     }
 }
 
+#[cfg(test)]
+impl Client {
+    pub(crate) fn connection_manager_for_test(&self) -> GrpcConnectionManager {
+        self.connection_manager.clone()
+    }
+}
+
 const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
@@ -106,6 +119,10 @@ pub struct TimeoutSettings {
 impl TimeoutSettings {
     pub(crate) fn operation_params(&self) -> RawOperationParams {
         RawOperationParams::new_with_timeouts(self.operation_timeout, self.operation_timeout)
+    }
+
+    pub(crate) fn execute_script_operation_params(&self) -> RawOperationParams {
+        RawOperationParams::for_execute_script(self.operation_timeout, self.operation_timeout)
     }
 }
 
