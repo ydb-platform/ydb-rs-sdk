@@ -20,7 +20,9 @@ fn statement_start(text: &str) -> &str {
 /// Matches Go SDK usage of [`query.NoTx()`] for `CREATE TABLE` / `DROP TABLE` / `ALTER TABLE`.
 pub(crate) fn is_scheme_query(text: &str) -> bool {
     let stmt = statement_start(text);
-    let mut words = stmt.split(|c: char| c.is_whitespace()).filter(|w| !w.is_empty());
+    let mut words = stmt
+        .split(|c: char| c.is_whitespace())
+        .filter(|w| !w.is_empty());
     let Some(first) = words.next() else {
         return false;
     };
@@ -42,7 +44,9 @@ mod tests {
 
     #[test]
     fn scheme_statements() {
-        assert!(is_scheme_query("CREATE TABLE t (id Int64, PRIMARY KEY(id))"));
+        assert!(is_scheme_query(
+            "CREATE TABLE t (id Int64, PRIMARY KEY(id))"
+        ));
         assert!(is_scheme_query("  drop table if exists t"));
         assert!(is_scheme_query("ALTER TABLE t ADD COLUMN x Int64"));
         assert!(is_scheme_query(
