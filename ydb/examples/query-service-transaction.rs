@@ -150,6 +150,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut row = qc
         .query_row(format!("SELECT val FROM {table} WHERE id = 1"))
+        .with_commit()
         .await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     println!("with_commit persisted val = {:?}", val);

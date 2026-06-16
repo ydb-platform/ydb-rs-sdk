@@ -184,8 +184,10 @@ where
 
 /// Build `tx_control` for one-shot [`QueryClient`] calls.
 ///
-/// Every `ExecuteQuery` carries explicit `BeginTx`; [`CallOptions::with_commit`] sets
-/// `commit_tx` (auto-commit, [#130](https://github.com/ydb-platform/ydb-rs-sdk/issues/130)).
+/// Every `ExecuteQuery` carries explicit `BeginTx`. [`CallOptions::with_commit`] must be
+/// `true` on client calls — otherwise the server-side transaction is never committed
+/// ([#130](https://github.com/ydb-platform/ydb-rs-sdk/issues/130)). Client builders default
+/// to `with_commit = true`.
 fn tx_control_for_client(opts: &CallOptions) -> Option<ydb_grpc::ydb_proto::query::TransactionControl> {
     Some(begin_tx_control(
         RawQueryTxMode::SerializableReadWrite,

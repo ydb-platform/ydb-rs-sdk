@@ -24,7 +24,10 @@ async fn query_client_select_one() -> YdbResult<()> {
     let client = create_client().await?;
     let mut qc = client.query_client().clone_with_idempotent_operations(true);
 
-    let mut row = qc.query_row("SELECT 1 + 1 AS sum").await?;
+    let mut row = qc
+        .query_row("SELECT 1 + 1 AS sum")
+        .with_commit()
+        .await?;
     let sum: i64 = row.remove_field_by_name("sum")?.try_into()?;
     assert_eq!(sum, 2);
     Ok(())
@@ -82,6 +85,7 @@ async fn query_client_with_commit_autocommit() -> YdbResult<()> {
 
     let mut row = qc
         .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
+        .with_commit()
         .await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     assert_eq!(val, Some(77));
@@ -151,6 +155,7 @@ async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
 
     let mut row = qc
         .query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))
+        .with_commit()
         .await?;
     let cnt: u64 = row.remove_field_by_name("cnt")?.try_into()?;
     assert_eq!(cnt, 3);
@@ -170,7 +175,11 @@ async fn query_client_pooled_session_not_implemented() {
         .query_client()
         .clone_with_session_mode(QuerySessionMode::Pool);
 
-    let err = qc.query_row("SELECT 1").await.unwrap_err();
+    let err = qc
+        .query_row("SELECT 1")
+        .with_commit()
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("session pool is not implemented"));
 }
 
@@ -246,6 +255,7 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
 
     let mut row = qc
         .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
+        .with_commit()
         .await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     assert_eq!(val, Some(42));
@@ -368,6 +378,7 @@ async fn query_with_commit_on_last_query() -> YdbResult<()> {
 
     let mut row = qc
         .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
+        .with_commit()
         .await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     assert_eq!(val, Some(99));
@@ -422,12 +433,14 @@ async fn query_execute_script() -> YdbResult<()> {
 
     let mut row = qc
         .query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))
+        .with_commit()
         .await?;
     let rows_from_db: Option<u64> = row.remove_field_by_name("cnt")?.try_into()?;
     assert_eq!(rows_from_db.unwrap_or(0), UPSERT_ROWS_COUNT as u64);
 
     let mut row = qc
         .query_row(format!("SELECT SUM(val) AS s FROM {table_name}"))
+        .with_commit()
         .await?;
     let checksum_from_db: Option<i64> = row.remove_field_by_name("s")?.try_into()?;
     assert_eq!(checksum_from_db.unwrap_or(0) as u64, EXPECTED_CHECKSUM);

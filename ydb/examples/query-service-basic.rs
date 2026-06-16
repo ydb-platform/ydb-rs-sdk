@@ -26,9 +26,9 @@ async fn main() -> YdbResult<()> {
 
     let mut qc = client.query_client();
 
-    // 1. DDL / DML without result rows. Writes need `.with_commit()` so the
-    //    server commits (`commit_tx: true`); reads can omit it. One-shot client
-    //    calls retry internally — no closure needed for a single statement.
+    // 1. Every QueryClient call needs `.with_commit()` (`commit_tx: true`). Each one-shot
+    //    request opens a server-side tx; without commit the tx leaks. One-shot calls retry
+    //    internally — no closure needed for a single statement.
     qc.exec("CREATE TABLE test (id Int64, val Utf8, PRIMARY KEY(id))")
         .with_commit()
         .await?;
@@ -53,7 +53,10 @@ async fn main() -> YdbResult<()> {
     .await?;
 
     // 3. Exactly one row: 0 rows -> Err(NoRows), >1 -> error.
-    let mut row = qc.query_row("SELECT COUNT(*) AS cnt FROM test").await?;
+    let mut row = qc
+        .query_row("SELECT COUNT(*) AS cnt FROM test")
+        .with_commit()
+        .await?;
     let cnt: i64 = row.remove_field_by_name("cnt")?.try_into()?;
     println!("cnt = {cnt}");
 
@@ -61,6 +64,7 @@ async fn main() -> YdbResult<()> {
     let found: Option<Row> = qc
         .query_row("DECLARE $id AS Int64; SELECT val FROM test WHERE id = $id")
         .param("$id", 42_i64)
+        .with_commit()
         .optional()
         .await?;
     println!("found: {}", found.is_some());
@@ -68,12 +72,14 @@ async fn main() -> YdbResult<()> {
     // 5. Typed row — the sqlx `query_as` analogue.
     let counter = qc
         .query_row("SELECT COUNT(*) AS cnt FROM test")
+        .with_commit()
         .typed::<CounterRow>()
         .await?;
     println!("typed cnt = {}", counter.cnt);
 
     // 6. Per-call overrides, without touching client-level settings.
     qc.query_row("SELECT 1 AS one")
+        .with_commit()
         .timeout(Duration::from_secs(5))
         .idempotent(true)
         .await?;

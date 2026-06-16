@@ -38,11 +38,18 @@ pub struct CallBuilder<'a, K> {
 
 impl<'a, K> CallBuilder<'a, K> {
     pub(crate) fn new(core: ExecCoreRef<'a>, text: String) -> Self {
+        // One-shot QueryClient calls always open a server-side tx (`BeginTx`); default
+        // `commit_tx: true` avoids leaking uncommitted transactions when `.with_commit()`
+        // is omitted. Interactive [`QueryTransaction`] builders keep `commit_tx: false`.
+        let with_commit = matches!(core, ExecCoreRef::Client(_));
         Self {
             core,
             text,
             params: HashMap::new(),
-            opts: CallOptions::default(),
+            opts: CallOptions {
+                with_commit,
+                ..CallOptions::default()
+            },
             _kind: PhantomData,
         }
     }
@@ -89,12 +96,14 @@ impl<'a, K> CallBuilder<'a, K> {
 
     /// Auto-commit this query (`commit_tx: true` in Query Service `TxControl`).
     ///
-    /// On [`QueryClient`] one-shot calls, every request sends `BeginTx`; without this flag
-    /// `commit_tx` stays `false` (writes are not persisted). With `.with_commit()` the server
-    /// commits when the full response stream is consumed — see
-    /// [#130](https://github.com/ydb-platform/ydb-rs-sdk/issues/130).
+    /// **Required on [`QueryClient`]**: every one-shot call opens a server-side transaction
+    /// (`BeginTx`); without `commit_tx: true` the transaction stays open and server resources
+    /// leak. Client builders default to `with_commit = true`; keep the flag explicit at call
+    /// sites — see [#130](https://github.com/ydb-platform/ydb-rs-sdk/issues/130).
     ///
-    /// On [`QueryTransaction`], a later query in the same transaction fails after commit;
+    /// **Do not use inside [`QueryTransaction`]**, except on the last query when replacing an
+    /// explicit `commit()` hop. Mid-transaction queries must leave `commit_tx: false`.
+    /// After commit-in-query, a later query in the same transaction fails;
     /// [`QueryClient::retry_transaction`] treats the implicit commit as success (explicit
     /// `commit` is a no-op).
     pub fn with_commit(mut self) -> Self {

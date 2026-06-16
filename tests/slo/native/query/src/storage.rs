@@ -107,7 +107,10 @@ impl Database for Storage {
         // retries inside query_row — the one-shot API has no attempt callback (unlike table retry_transaction).
         let row = tokio::time::timeout(self.read_timeout, async move {
             attempts_for_op.fetch_add(1, Ordering::Relaxed);
-            qc.query_row(select_sql).param("$id", id).await
+            qc.query_row(select_sql)
+                .param("$id", id)
+                .with_commit()
+                .await
         })
         .await
         .map_err(|_| "read timeout".to_string())?
