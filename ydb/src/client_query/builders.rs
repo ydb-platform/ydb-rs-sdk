@@ -8,6 +8,7 @@ use crate::errors::{YdbError, YdbResult};
 use crate::result::{ResultSet, Row};
 use crate::types::Value;
 use crate::QuerySessionMode;
+use crate::QueryTxMode;
 
 use super::exec::{resolve_commit_tx, CallOptions};
 use super::internal::{ExecCoreRef, HasCore};
@@ -89,20 +90,27 @@ impl<'a, K> CallBuilder<'a, K> {
 
     /// Override auto-commit (`commit_tx` in Query Service `TxControl`).
     ///
-    /// Defaults: [`QueryClient`] data statements commit automatically (`true`); interactive
-    /// [`QueryTransaction`] queries do not (`false`). Scheme (DDL) statements on the client
-    /// omit `tx_control` automatically (same as Go SDK `query.NoTx()`).
+    /// One-shot defaults depend on [`Self::with_tx_mode`]: implicit mode relies on the server;
+    /// explicit modes default to `commit_tx: true`. Interactive transactions default to
+    /// `commit_tx: false` unless [`Self::with_commit(true)`] is set on the last query.
     pub fn with_commit(mut self, commit: bool) -> Self {
         self.opts.commit_tx = Some(commit);
         self
     }
 
-    /// Do not attach a transaction to this call (`tx_control: None`).
+    /// Set transaction isolation for this call.
     ///
-    /// Scheme statements are detected automatically; use this for explicit opt-out.
-    pub fn without_tx(mut self) -> Self {
-        self.opts.no_tx = true;
+    /// Default on [`QueryClient`] is [`QueryTxMode::Implicit`] (no `tx_control`; the server
+    /// infers isolation from the SQL). Interactive transactions use the mode from
+    /// [`QueryTransactionOptions`] unless overridden here.
+    pub fn with_tx_mode(mut self, mode: QueryTxMode) -> Self {
+        self.opts.tx_mode = Some(mode);
         self
+    }
+
+    /// Shorthand for [`Self::with_tx_mode`](QueryTxMode::Implicit) (ImplicitTx / NoTx).
+    pub fn implicit_tx(self) -> Self {
+        self.with_tx_mode(QueryTxMode::Implicit)
     }
 
     /// Override session acquisition for this call (default: implicit session).

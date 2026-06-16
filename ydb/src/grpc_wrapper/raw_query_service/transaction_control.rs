@@ -1,12 +1,14 @@
 use ydb_grpc::ydb_proto::query::{
     transaction_control, transaction_settings, OnlineModeSettings, SerializableModeSettings,
-    SnapshotModeSettings, StaleModeSettings, TransactionControl, TransactionSettings,
+    SnapshotModeSettings, SnapshotRwModeSettings, StaleModeSettings, TransactionControl,
+    TransactionSettings,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RawQueryTxMode {
     SerializableReadWrite,
     SnapshotReadOnly,
+    SnapshotReadWrite,
     StaleReadOnly,
     OnlineReadOnly,
 }
@@ -36,6 +38,9 @@ fn tx_settings(mode: RawQueryTxMode) -> TransactionSettings {
         }
         RawQueryTxMode::SnapshotReadOnly => {
             transaction_settings::TxMode::SnapshotReadOnly(SnapshotModeSettings {})
+        }
+        RawQueryTxMode::SnapshotReadWrite => {
+            transaction_settings::TxMode::SnapshotReadWrite(SnapshotRwModeSettings {})
         }
         RawQueryTxMode::StaleReadOnly => {
             transaction_settings::TxMode::StaleReadOnly(StaleModeSettings {})

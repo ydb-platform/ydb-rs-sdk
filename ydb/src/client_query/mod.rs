@@ -5,12 +5,14 @@
 mod builders;
 mod exec;
 mod internal;
-mod scheme_query;
 mod script;
 mod stream_facade;
 
 #[cfg(test)]
 mod integration_test;
+
+#[cfg(test)]
+mod tx_modes_integration_test;
 
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
@@ -55,21 +57,56 @@ impl FromYdbRow for Row {
     }
 }
 
+/// Query Service transaction isolation mode.
+///
+/// | Mode | One-shot [`QueryClient`] | Interactive [`QueryTransaction`] |
+/// |------|--------------------------|----------------------------------|
+/// | [`Implicit`](Self::Implicit) | yes (default) | no |
+/// | [`SerializableReadWrite`](Self::SerializableReadWrite) | yes | yes (default) |
+/// | [`SnapshotReadOnly`](Self::SnapshotReadOnly) | yes | yes |
+/// | [`SnapshotReadWrite`](Self::SnapshotReadWrite) | yes | yes |
+/// | [`StaleReadOnly`](Self::StaleReadOnly) | yes | no |
+/// | [`OnlineReadOnly`](Self::OnlineReadOnly) | yes | no |
+///
+/// Default for one-shot calls is [`Implicit`](Self::Implicit) (`tx_control: None`): the server
+/// picks isolation from the SQL kind (DDL — non-transactional, `SELECT` — snapshot read-only,
+/// DML — serializable read-write). Override per call with [`CallBuilder::with_tx_mode`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum QueryTxMode {
+    /// Server-side inference (ImplicitTx / NoTx). One-shot only.
     #[default]
+    Implicit,
     SerializableReadWrite,
     SnapshotReadOnly,
+    SnapshotReadWrite,
     StaleReadOnly,
-    /// Online read-only mode with stale-replica reads disabled (`allow_inconsistent_reads: false`).
+    /// Online read-only with `allow_inconsistent_reads: false`.
     OnlineReadOnly,
 }
 
-#[derive(Clone, Debug, Default)]
+impl QueryTxMode {
+    pub(crate) fn supported_in_interactive(self) -> bool {
+        matches!(
+            self,
+            Self::SerializableReadWrite | Self::SnapshotReadOnly | Self::SnapshotReadWrite
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct QueryTransactionOptions {
     mode: QueryTxMode,
     /// Call `BeginTransaction` RPC before the first `ExecuteQuery` instead of lazy `BeginTx`.
     begin: bool,
+}
+
+impl Default for QueryTransactionOptions {
+    fn default() -> Self {
+        Self {
+            mode: QueryTxMode::SerializableReadWrite,
+            begin: false,
+        }
+    }
 }
 
 impl QueryTransactionOptions {

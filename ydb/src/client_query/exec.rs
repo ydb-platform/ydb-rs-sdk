@@ -30,12 +30,11 @@ pub(crate) struct CallOptions {
     pub idempotent: Option<bool>,
     pub collect_stats: bool,
     pub session_mode: Option<QuerySessionMode>,
-    /// Override Query Service `commit_tx`. `None` uses context default: `true` on
-    /// [`QueryClient`] one-shots, `false` on [`QueryTransaction`].
+    /// Override Query Service `commit_tx`. `None` uses context default.
     pub commit_tx: Option<bool>,
-    /// Skip `BeginTx` entirely (`tx_control: None`), like Go SDK `query.NoTx()`.
-    /// Scheme (DDL) statements are detected automatically; set this for explicit opt-out.
-    pub no_tx: bool,
+    /// Per-call isolation override. `None` → [`QueryTxMode::Implicit`] on client,
+    /// [`TransactionExecContext::tx_mode`] in interactive transactions.
+    pub tx_mode: Option<QueryTxMode>,
 }
 
 #[derive(Clone)]
@@ -125,10 +124,38 @@ fn session_id_for_mode(mode: QuerySessionMode) -> YdbResult<String> {
 
 fn tx_mode_to_raw(mode: QueryTxMode) -> RawQueryTxMode {
     match mode {
+        QueryTxMode::Implicit => RawQueryTxMode::SerializableReadWrite, // unreachable when used
         QueryTxMode::SerializableReadWrite => RawQueryTxMode::SerializableReadWrite,
         QueryTxMode::SnapshotReadOnly => RawQueryTxMode::SnapshotReadOnly,
+        QueryTxMode::SnapshotReadWrite => RawQueryTxMode::SnapshotReadWrite,
         QueryTxMode::StaleReadOnly => RawQueryTxMode::StaleReadOnly,
         QueryTxMode::OnlineReadOnly => RawQueryTxMode::OnlineReadOnly,
+    }
+}
+
+fn client_tx_mode(opts: &CallOptions) -> QueryTxMode {
+    opts.tx_mode.unwrap_or(QueryTxMode::Implicit)
+}
+
+fn interactive_tx_mode(tx: &TransactionExecContext, opts: &CallOptions) -> YdbResult<QueryTxMode> {
+    let mode = opts.tx_mode.unwrap_or(tx.tx_mode);
+    if !mode.supported_in_interactive() {
+        return Err(YdbError::Custom(format!(
+            "transaction mode {mode:?} is not supported in interactive transactions \
+             (use SerializableReadWrite, SnapshotReadOnly, or SnapshotReadWrite)"
+        )));
+    }
+    Ok(mode)
+}
+
+fn default_commit_tx_client(mode: QueryTxMode) -> bool {
+    match mode {
+        QueryTxMode::Implicit => true,
+        // Read-only one-shot modes must commit (open tx not supported).
+        QueryTxMode::SnapshotReadOnly
+        | QueryTxMode::StaleReadOnly
+        | QueryTxMode::OnlineReadOnly => true,
+        QueryTxMode::SerializableReadWrite | QueryTxMode::SnapshotReadWrite => true,
     }
 }
 
@@ -150,16 +177,22 @@ fn tx_control_for_transaction(
             "transaction already finished (committed or rolled back)".to_string(),
         ));
     }
+    let mode = interactive_tx_mode(tx, opts)?;
     let commit_tx = opts.commit_tx.unwrap_or(false);
     Ok(Some(match &tx.tx_id {
         Some(id) => tx_id_control(id, commit_tx),
-        None => begin_tx_control(tx_mode_to_raw(tx.tx_mode), commit_tx),
+        None => begin_tx_control(tx_mode_to_raw(mode), commit_tx),
     }))
 }
 
 pub(crate) fn resolve_commit_tx(core: &super::internal::ExecCoreRef, opts: &CallOptions) -> bool {
-    opts.commit_tx
-        .unwrap_or(matches!(core, super::internal::ExecCoreRef::Client(_)))
+    if let Some(v) = opts.commit_tx {
+        return v;
+    }
+    match core {
+        super::internal::ExecCoreRef::Client(_) => default_commit_tx_client(client_tx_mode(opts)),
+        super::internal::ExecCoreRef::Transaction(_) => false,
+    }
 }
 
 async fn retry_with_budget<T, F, Fut>(
@@ -193,20 +226,18 @@ where
 
 /// Build `tx_control` for one-shot [`QueryClient`] calls.
 ///
-/// Data statements use `BeginTx` with auto-commit by default
-/// ([#130](https://github.com/ydb-platform/ydb-rs-sdk/issues/130)). Scheme (DDL) statements
-/// and explicit [`CallOptions::no_tx`] omit `tx_control` — YDB rejects scheme ops inside a tx.
+/// Default [`QueryTxMode::Implicit`] omits `tx_control` (server-side inference).
 fn tx_control_for_client(
-    text: &str,
     opts: &CallOptions,
 ) -> Option<ydb_grpc::ydb_proto::query::TransactionControl> {
-    if opts.no_tx || super::scheme_query::is_scheme_query(text) {
+    let mode = client_tx_mode(opts);
+    if mode == QueryTxMode::Implicit {
         return None;
     }
-    Some(begin_tx_control(
-        RawQueryTxMode::SerializableReadWrite,
-        opts.commit_tx.unwrap_or(true),
-    ))
+    let commit_tx = opts
+        .commit_tx
+        .unwrap_or_else(|| default_commit_tx_client(mode));
+    Some(begin_tx_control(tx_mode_to_raw(mode), commit_tx))
 }
 
 async fn client_implicit_request(
@@ -221,7 +252,7 @@ async fn client_implicit_request(
         session_id,
         text,
         params.clone(),
-        tx_control_for_client(text, opts),
+        tx_control_for_client(opts),
         opts.collect_stats,
     );
     Ok((client, req))
