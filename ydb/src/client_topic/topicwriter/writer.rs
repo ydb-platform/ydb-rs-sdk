@@ -19,24 +19,12 @@ use crate::{YdbError, YdbResult};
 
 /// TopicWriter is currently in development.
 /// It is mostly usable, but has some unimplemented features.
-#[allow(dead_code)]
 pub struct TopicWriter {
-    pub(crate) path: String,
-    pub(crate) producer_id: Option<String>,
-    pub(crate) write_request_messages_chunk_size: usize,
-    pub(crate) write_request_send_messages_period: Duration,
-    pub(crate) auto_set_seq_no: bool,
-    pub(crate) flush_timeout: Duration,
-
-    cancellation_token: CancellationToken,
-
     fatal_error: Arc<TokioRwLock<Option<YdbError>>>,
     wait_for_fatal_error_handle: JoinHandle<()>,
-
     reconnector: Reconnector,
 }
 
-#[allow(dead_code)]
 pub struct AckFuture {
     receiver: oneshot::Receiver<YdbResult<MessageWriteStatus>>,
 }
@@ -73,7 +61,6 @@ impl TopicWriter {
         });
 
         let (fatal_error_tx, fatal_error_rx) = oneshot::channel();
-        let (init_tx, init_rx) = oneshot::channel();
 
         let reconnector = Reconnector::new(ReconnectorParams {
             writer_options: writer_options.clone(),
@@ -81,21 +68,10 @@ impl TopicWriter {
             connection_manager,
             cancellation_token: cancellation_token.clone(),
             retrier,
-            init_tx,
             fatal_error_tx,
             flush_timeout: writer_options.flush_timeout,
         })
-        .await;
-
-        match init_rx.await {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                return Err(err);
-            }
-            Err(err) => {
-                return Err(YdbError::from(err));
-            }
-        }
+        .await?;
 
         let fatal_error = Arc::new(TokioRwLock::new(None));
         let wait_for_fatal_error_handle = tokio::spawn(TopicWriter::wait_for_fatal_error(
@@ -105,13 +81,6 @@ impl TopicWriter {
         ));
 
         Ok(Self {
-            path: writer_options.topic_path.clone(),
-            producer_id: Some(producer_id),
-            write_request_messages_chunk_size: writer_options.write_request_messages_chunk_size,
-            write_request_send_messages_period: writer_options.write_request_send_messages_period,
-            auto_set_seq_no: writer_options.auto_seq_no,
-            flush_timeout: writer_options.flush_timeout,
-            cancellation_token,
             fatal_error,
             wait_for_fatal_error_handle,
             reconnector,

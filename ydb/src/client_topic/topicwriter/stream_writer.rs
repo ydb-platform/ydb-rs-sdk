@@ -1,8 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::Mutex as TokioMutex;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::log::{trace, warn};

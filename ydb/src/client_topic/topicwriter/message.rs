@@ -7,7 +7,6 @@ use crate::{errors, YdbError, YdbResult};
 
 #[derive(Builder)]
 #[builder(build_fn(error = "errors::YdbError", validate = "Self::validate"))]
-#[allow(dead_code)]
 pub struct TopicWriterMessage {
     #[builder(default = "None")]
     pub(crate) seq_no: Option<i64>,

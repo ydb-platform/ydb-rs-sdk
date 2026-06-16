@@ -1,12 +1,14 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use derive_builder::Builder;
+use prost::bytes::Bytes;
+
 use crate::client_topic::list_types::Codec;
 use crate::client_topic::topicwriter::partitioning::PartitioningStrategy;
 use crate::errors;
 use crate::retry::{IndefiniteRetrier, Retry};
-use derive_builder::Builder;
-use prost::bytes::Bytes;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::Duration;
 
 type EncoderFunc = fn(Bytes) -> Bytes;
 

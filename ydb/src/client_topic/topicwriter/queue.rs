@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::oneshot::Receiver;
+
 use tokio::sync::{oneshot, Mutex as TokioMutex, Notify, RwLock};
 use tokio::time::{sleep_until, Instant};
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
@@ -9,11 +9,10 @@ use crate::client_topic::topicwriter::message_queue::{
     AppendMessageToSendBufferResult, MessageQueue,
 };
 use crate::client_topic::topicwriter::message_write_status::{MessageWriteStatus, WriteAck};
-use crate::client_topic::topicwriter::writer_reception_queue::TopicWriterReceptionQueue;
-use crate::client_topic::topicwriter::writer_reception_queue::TopicWriterReceptionTicket;
-use crate::client_topic::topicwriter::writer_reception_queue::TopicWriterReceptionType;
-use crate::YdbError;
-use crate::YdbResult;
+use crate::client_topic::topicwriter::writer_reception_queue::{
+    TopicWriterReceptionQueue, TopicWriterReceptionTicket,
+};
+use crate::{YdbError, YdbResult};
 
 #[derive(Clone)]
 pub(crate) struct Queue {
@@ -39,13 +38,8 @@ impl Queue {
         message: MessageData,
         ack: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     ) -> YdbResult<()> {
-        let reception_type = ack.map_or(
-            TopicWriterReceptionType::NoConfirmationExpected,
-            TopicWriterReceptionType::AwaitingConfirmation,
-        );
-
         let mut inner = self.inner.lock().await;
-        inner.add_message(message, reception_type).await?;
+        inner.add_message(message, ack).await?;
         self.new_message_added.notify_one();
         Ok(())
     }
@@ -132,7 +126,7 @@ impl Queue {
         messages
     }
 
-    pub(crate) async fn notify_reception_tickets(&mut self, error: YdbError) {
+    pub(crate) async fn notify_reception_tickets(&self, error: YdbError) {
         let mut inner = self.inner.lock().await;
         inner.notify_reception_tickets(error)
     }
@@ -179,7 +173,7 @@ impl QueueInner {
     async fn add_message(
         &mut self,
         message: MessageData,
-        reception_type: TopicWriterReceptionType,
+        confirmation_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     ) -> YdbResult<()> {
         if !self.is_open_for_new_messages {
             return Err(YdbError::custom("message queue is closed for new messages"));
@@ -190,7 +184,7 @@ impl QueueInner {
         self.message_queue.add_message(message)?;
 
         self.reception_queue
-            .add_ticket(TopicWriterReceptionTicket::new(seq_no, reception_type));
+            .add_ticket(TopicWriterReceptionTicket::new(seq_no, confirmation_sender));
 
         self.last_added_seq_no = Some(seq_no);
 
@@ -206,9 +200,9 @@ impl QueueInner {
             ));
         };
         if write_ack.seq_no != expected_seq_no {
+            let actual_seq_no = write_ack.seq_no;
             return Err(YdbError::custom(format!(
-                "reception ticket and write ack seq_no mismatch: expected_seq_no: {}, actual_seq_no: {}",
-                write_ack.seq_no, expected_seq_no,
+                "reception ticket and write ack seq_no mismatch: expected_seq_no: {expected_seq_no}, actual_seq_no: {actual_seq_no}",
             )));
         }
 
@@ -242,7 +236,7 @@ impl QueueInner {
         self.reception_queue.send_error_to_tickets_and_clear(error)
     }
 
-    fn init_flush(&mut self) -> YdbResult<Receiver<()>> {
+    fn init_flush(&mut self) -> YdbResult<oneshot::Receiver<()>> {
         let receiver = self.reception_queue.init_flush_op()?;
         Ok(receiver)
     }

@@ -1,24 +1,24 @@
+use std::collections::VecDeque;
+
+use tokio::sync::oneshot;
+
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
 use crate::{YdbError, YdbResult};
 
-use std::collections::VecDeque;
-
-pub(crate) enum TopicWriterReceptionType {
-    AwaitingConfirmation(tokio::sync::oneshot::Sender<YdbResult<MessageWriteStatus>>),
-    NoConfirmationExpected,
-}
-
 pub(crate) struct TopicWriterReceptionTicket {
     seq_no: i64,
-    reception_type: TopicWriterReceptionType,
+    confirmation_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     flush_flag: bool,
 }
 
 impl TopicWriterReceptionTicket {
-    pub fn new(seq_no: i64, reception_type: TopicWriterReceptionType) -> Self {
+    pub fn new(
+        seq_no: i64,
+        confirmation_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
+    ) -> Self {
         Self {
             seq_no,
-            reception_type,
+            confirmation_sender,
             flush_flag: false,
         }
     }
@@ -36,7 +36,7 @@ impl TopicWriterReceptionTicket {
     }
 
     pub fn send_confirmation_if_needed(self, write_status: MessageWriteStatus) {
-        if let TopicWriterReceptionType::AwaitingConfirmation(sender) = self.reception_type {
+        if let Some(sender) = self.confirmation_sender {
             // drop is workaround for old rust: destructive assignment was unstable until 1.59
             // E0658
             drop(sender.send(Ok(write_status)));
@@ -44,7 +44,7 @@ impl TopicWriterReceptionTicket {
     }
 
     pub fn send_error_if_needed(self, error: YdbError) {
-        if let TopicWriterReceptionType::AwaitingConfirmation(sender) = self.reception_type {
+        if let Some(sender) = self.confirmation_sender {
             drop(sender.send(Err(error)));
         }
     }
