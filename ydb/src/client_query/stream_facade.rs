@@ -78,7 +78,7 @@ pub(crate) async fn materialize_query(
                 }
                 match ResultSet::try_from(raw) {
                     Ok(set) => sets.push(set),
-                    Err(err) => drain_err = Some(YdbError::from(err)),
+                    Err(err) => drain_err = Some(err),
                 }
             }
             Ok(None) => break,
