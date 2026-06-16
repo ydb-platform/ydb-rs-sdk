@@ -50,6 +50,38 @@ async fn query_client_exec_ddl() -> YdbResult<()> {
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
+async fn query_client_autocommit_by_default() -> YdbResult<()> {
+    let client = create_client().await?;
+    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let table_name = unique_table_name("query_client_with_commit");
+
+    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
+    qc.exec(format!(
+        "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
+    ))
+    .await?;
+
+    qc.exec(format!(
+        "DECLARE $id AS Int64; DECLARE $val AS Int64; \
+         UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
+    ))
+    .param("$id", 1_i64)
+    .param("$val", 77_i64)
+    .await?;
+
+    let mut row = qc
+        .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
+        .await?;
+    let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+    assert_eq!(val, Some(77));
+
+    qc.exec(format!("DROP TABLE {table_name}")).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
 async fn query_client_multi_result_set() -> YdbResult<()> {
     let client = create_client().await?;
     let qc = client.query_client().clone_with_idempotent_operations(true);
@@ -143,6 +175,175 @@ async fn query_client_snapshot_read_only_tx() -> YdbResult<()> {
         .await?;
 
     assert_eq!(value, 42);
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
+    let client = create_client().await?;
+    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let table_name = unique_table_name("query_lazy_tx");
+
+    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
+    qc.exec(format!(
+        "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
+    ))
+    .await?;
+
+    qc.retry_transaction(async |tx| {
+        assert!(
+            tx.tx_id_for_test().is_none(),
+            "lazy transaction must not have tx_id before the first query"
+        );
+
+        tx.exec(format!(
+            "DECLARE $id AS Int64; DECLARE $val AS Int64; \
+             UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
+        ))
+        .param("$id", 1_i64)
+        .param("$val", 42_i64)
+        .await?;
+
+        let _tx_id = tx
+            .tx_id_for_test()
+            .filter(|id| !id.is_empty())
+            .expect("lazy transaction must receive tx_id from the first ExecuteQuery");
+
+        let mut row = tx
+            .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
+            .await?;
+        let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+        assert_eq!(val, Some(42));
+
+        Ok(())
+    })
+    .await?;
+
+    let mut row = qc
+        .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
+        .await?;
+    let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+    assert_eq!(val, Some(42));
+
+    qc.exec(format!("DROP TABLE {table_name}")).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_lazy_tx_commit_without_queries() -> YdbResult<()> {
+    let client = create_client().await?;
+    let qc = client.query_client().clone_with_idempotent_operations(true);
+
+    let value = qc
+        .retry_transaction(async |tx| {
+            assert!(tx.tx_id_for_test().is_none());
+            Ok(7_i32)
+        })
+        .await?;
+
+    assert_eq!(value, 7);
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_explicit_begin_via_begin() -> YdbResult<()> {
+    let client = create_client().await?;
+    let qc = client.query_client().clone_with_idempotent_operations(true);
+
+    qc.retry_transaction(async |tx| {
+        assert!(
+            tx.tx_id_for_test().is_none(),
+            "lazy transaction must not have tx_id before begin()"
+        );
+        tx.begin().await?;
+        assert!(
+            tx.tx_id_for_test().is_some_and(|id| !id.is_empty()),
+            "explicit begin() must set tx_id before the first query"
+        );
+
+        let mut row = tx.query_row("SELECT 1 AS v").await?;
+        let v: i64 = row.remove_field_by_name("v")?.try_into()?;
+        assert_eq!(v, 1);
+        Ok(())
+    })
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_explicit_begin_via_client_option() -> YdbResult<()> {
+    let client = create_client().await?;
+    let qc = client
+        .query_client()
+        .clone_with_idempotent_operations(true)
+        .clone_with_transaction_options(QueryTransactionOptions::new().with_begin());
+
+    qc.retry_transaction(async |tx| {
+        tx.exec("SELECT 1 AS v").await?;
+        assert!(
+            tx.tx_id_for_test().is_some_and(|id| !id.is_empty()),
+            "with_begin must obtain tx_id on the first operation via BeginTransaction RPC"
+        );
+        Ok(())
+    })
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_with_commit_on_last_query() -> YdbResult<()> {
+    let client = create_client().await?;
+    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let table_name = unique_table_name("query_with_commit");
+
+    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
+    qc.exec(format!(
+        "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
+    ))
+    .await?;
+
+    qc.retry_transaction(async |tx| {
+        tx.exec(format!(
+            "DECLARE $id AS Int64; DECLARE $val AS Int64; \
+             UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
+        ))
+        .param("$id", 1_i64)
+        .param("$val", 99_i64)
+        .with_commit(true)
+        .await?;
+
+        let err = tx
+            .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("already finished"),
+            "query after with_commit must fail: {err}"
+        );
+
+        Ok(())
+    })
+    .await?;
+
+    let mut row = qc
+        .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
+        .await?;
+    let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+    assert_eq!(val, Some(99));
+
+    qc.exec(format!("DROP TABLE {table_name}")).await?;
     Ok(())
 }
 

@@ -11,6 +11,9 @@ mod stream_facade;
 #[cfg(test)]
 mod integration_test;
 
+#[cfg(test)]
+mod tx_modes_integration_test;
+
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
@@ -25,8 +28,9 @@ use crate::result::Row;
 
 use builders::impl_query_methods;
 use exec::{
-    check_retry_transaction_error, retry_wait, transaction_commit, transaction_exec_context,
-    transaction_rollback, ClientExecContext, TransactionExecContext, DEFAULT_QUERY_RETRY_BUDGET,
+    check_retry_transaction_error, retry_wait, transaction_commit, transaction_ensure_begin,
+    transaction_exec_context, transaction_rollback, ClientExecContext, TransactionExecContext,
+    DEFAULT_QUERY_RETRY_BUDGET,
 };
 use internal::{ExecCoreRef, HasCore};
 
@@ -53,19 +57,56 @@ impl FromYdbRow for Row {
     }
 }
 
+/// Query Service transaction isolation mode.
+///
+/// | Mode | One-shot [`QueryClient`] | Interactive [`QueryTransaction`] |
+/// |------|--------------------------|----------------------------------|
+/// | [`Implicit`](Self::Implicit) | yes (default) | no |
+/// | [`SerializableReadWrite`](Self::SerializableReadWrite) | yes | yes (default) |
+/// | [`SnapshotReadOnly`](Self::SnapshotReadOnly) | yes | yes |
+/// | [`SnapshotReadWrite`](Self::SnapshotReadWrite) | yes | yes |
+/// | [`StaleReadOnly`](Self::StaleReadOnly) | yes | no |
+/// | [`OnlineReadOnly`](Self::OnlineReadOnly) | yes | no |
+///
+/// Default for one-shot calls is [`Implicit`](Self::Implicit) (`tx_control: None`): the server
+/// picks isolation from the SQL kind (DDL — non-transactional, `SELECT` — snapshot read-only,
+/// DML — serializable read-write). Override per call with [`CallBuilder::with_tx_mode`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum QueryTxMode {
+    /// Server-side inference (ImplicitTx / NoTx). One-shot only.
     #[default]
+    Implicit,
     SerializableReadWrite,
     SnapshotReadOnly,
+    SnapshotReadWrite,
     StaleReadOnly,
-    /// Online read-only mode with stale-replica reads disabled (`allow_inconsistent_reads: false`).
+    /// Online read-only with `allow_inconsistent_reads: false`.
     OnlineReadOnly,
 }
 
-#[derive(Clone, Debug, Default)]
+impl QueryTxMode {
+    pub(crate) fn supported_in_interactive(self) -> bool {
+        matches!(
+            self,
+            Self::SerializableReadWrite | Self::SnapshotReadOnly | Self::SnapshotReadWrite
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct QueryTransactionOptions {
     mode: QueryTxMode,
+    /// Call `BeginTransaction` RPC before the first `ExecuteQuery` instead of lazy `BeginTx`.
+    begin: bool,
+}
+
+impl Default for QueryTransactionOptions {
+    fn default() -> Self {
+        Self {
+            mode: QueryTxMode::SerializableReadWrite,
+            begin: false,
+        }
+    }
 }
 
 impl QueryTransactionOptions {
@@ -78,8 +119,22 @@ impl QueryTransactionOptions {
         self
     }
 
+    /// Explicit transaction start: the first operation in [`QueryTransaction`] calls
+    /// `BeginTransaction` RPC and obtains `tx_id` before any `ExecuteQuery`.
+    ///
+    /// Default (lazy tx): the first `ExecuteQuery` carries `BeginTx` in `tx_control` without a
+    /// separate RPC — see [`QueryTransaction::begin`] for the same behavior inside the callback.
+    pub fn with_begin(mut self) -> Self {
+        self.begin = true;
+        self
+    }
+
     pub(crate) fn mode(&self) -> QueryTxMode {
         self.mode
+    }
+
+    pub(crate) fn begin(&self) -> bool {
+        self.begin
     }
 }
 
@@ -204,6 +259,10 @@ impl QueryClient {
                     if tx.state == TxState::RolledBack {
                         return Ok(value);
                     }
+                    if tx.ctx.finished {
+                        tx.state = TxState::Committed;
+                        return Ok(value);
+                    }
                     return match tx.commit().await {
                         Ok(()) => Ok(value),
                         // Commit outcome is ambiguous on transport errors; never retry.
@@ -274,8 +333,20 @@ impl QueryTransaction {
         self.ctx.tx_mode
     }
 
-    pub async fn rollback(&mut self) -> YdbResult<()> {
+    /// Explicitly open the transaction via `BeginTransaction` RPC.
+    ///
+    /// By default (lazy tx) the transaction materializes on the first query. Call this when you
+    /// need `tx_id` before any YQL, or configure [`QueryTransactionOptions::with_begin`]
+    /// on the client so the first operation does this automatically.
+    pub async fn begin(&mut self) -> YdbResult<()> {
         if self.state != TxState::Active {
+            return Err(YdbError::Custom("transaction already finished".to_string()));
+        }
+        transaction_ensure_begin(&mut self.ctx, false).await
+    }
+
+    pub async fn rollback(&mut self) -> YdbResult<()> {
+        if self.state != TxState::Active || self.ctx.finished {
             return Err(YdbError::Custom("transaction already finished".to_string()));
         }
         transaction_rollback(&mut self.ctx).await?;
@@ -284,16 +355,25 @@ impl QueryTransaction {
     }
 
     async fn commit(&mut self) -> YdbResult<()> {
+        if self.ctx.finished {
+            self.state = TxState::Committed;
+            return Ok(());
+        }
         transaction_commit(&mut self.ctx).await?;
         self.state = TxState::Committed;
         Ok(())
     }
 
     async fn rollback_quiet(&mut self) {
-        if self.state == TxState::Active {
+        if self.state == TxState::Active && !self.ctx.finished {
             let _ = transaction_rollback(&mut self.ctx).await;
             self.state = TxState::RolledBack;
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tx_id_for_test(&self) -> Option<&str> {
+        self.ctx.tx_id.as_deref()
     }
 }
 
