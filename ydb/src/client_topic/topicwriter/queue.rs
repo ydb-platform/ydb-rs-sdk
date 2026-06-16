@@ -192,21 +192,20 @@ impl QueueInner {
     }
 
     async fn acknowledge_message(&mut self, write_ack: WriteAck) -> YdbResult<()> {
-        let expected_seq_no = self.reception_queue.peek_ticket_seq_no();
-
-        let Some(expected_seq_no) = expected_seq_no else {
+        let Some(ticket_seq_no) = self.reception_queue.peek_ticket_seq_no() else {
             return Err(YdbError::custom(
                 "expected reception ticket to be actually present",
             ));
         };
-        if write_ack.seq_no != expected_seq_no {
-            let actual_seq_no = write_ack.seq_no;
+        let ack_seq_no = write_ack.seq_no;
+
+        if ticket_seq_no != ack_seq_no {
             return Err(YdbError::custom(format!(
-                "reception ticket and write ack seq_no mismatch: expected_seq_no: {expected_seq_no}, actual_seq_no: {actual_seq_no}",
+                "reception ticket and write ack seq_no mismatch: ack_seq_no: {ack_seq_no}, ticket_seq_no: {ticket_seq_no}",
             )));
         }
 
-        self.message_queue.acknowledge_message(write_ack.seq_no)?;
+        self.message_queue.acknowledge_message(ticket_seq_no)?;
 
         let ticket = self.reception_queue.try_get_ticket()?;
         let Some(ticket) = ticket else {
@@ -470,9 +469,10 @@ mod tests {
 
         let err = q.acknowledge_message(write_ack(99)).await.unwrap_err();
         let err_msg = err.to_string();
+        println!("err_msg: {err_msg}");
         assert!(err_msg.contains("reception ticket and write ack seq_no mismatch"));
-        assert!(err_msg.contains("expected_seq_no: 99"));
-        assert!(err_msg.contains("actual_seq_no: 1"));
+        assert!(err_msg.contains("ack_seq_no: 99"));
+        assert!(err_msg.contains("ticket_seq_no: 1"));
     }
 
     #[tokio::test]
