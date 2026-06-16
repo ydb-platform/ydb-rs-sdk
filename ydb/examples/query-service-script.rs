@@ -18,9 +18,11 @@ async fn main() -> YdbResult<()> {
     let op_client = client.operation_client();
 
     qc.exec("CREATE TABLE IF NOT EXISTS script_example (id Uint64, msg Utf8, PRIMARY KEY(id))")
+        .with_commit()
         .await?;
-    qc.exec("DELETE FROM script_example").await?;
+    qc.exec("DELETE FROM script_example").with_commit().await?;
     qc.exec("UPSERT INTO script_example (id, msg) VALUES (123, \"hello from script\");")
+        .with_commit()
         .await?;
 
     let op = qc

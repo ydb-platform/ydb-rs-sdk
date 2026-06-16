@@ -22,6 +22,14 @@ impl Drop for QueryStream<'_> {
                 apply_stream_tx_id(ctx, Some(tx_id));
             }
         }
+        if self.with_commit {
+            if let ExecCoreRef::Transaction(ctx) = &mut self.core {
+                // Server committed via `commit_tx`; sync client state so cleanup does not
+                // issue a spurious CommitTransaction. Session release runs in retry_transaction.
+                ctx.finished = true;
+                ctx.tx_id = None;
+            }
+        }
         self.stream.cancel();
     }
 }

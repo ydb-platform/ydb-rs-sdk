@@ -14,7 +14,7 @@ use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryReques
 use crate::grpc_wrapper::raw_query_service::session::AttachedQuerySession;
 use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::grpc_wrapper::raw_query_service::transaction_control::{
-    begin_tx_control, implicit_tx_control, tx_id_control, RawQueryTxMode,
+    begin_tx_control, tx_id_control, RawQueryTxMode,
 };
 use crate::grpc_wrapper::raw_services::Service;
 use crate::types::Value;
@@ -182,6 +182,17 @@ where
     }
 }
 
+/// Build `tx_control` for one-shot [`QueryClient`] calls.
+///
+/// Every `ExecuteQuery` carries explicit `BeginTx`; [`CallOptions::with_commit`] sets
+/// `commit_tx` (auto-commit, [#130](https://github.com/ydb-platform/ydb-rs-sdk/issues/130)).
+fn tx_control_for_client(opts: &CallOptions) -> Option<ydb_grpc::ydb_proto::query::TransactionControl> {
+    Some(begin_tx_control(
+        RawQueryTxMode::SerializableReadWrite,
+        opts.with_commit,
+    ))
+}
+
 async fn client_implicit_request(
     ctx: &ClientExecContext,
     text: &str,
@@ -194,7 +205,7 @@ async fn client_implicit_request(
         session_id,
         text,
         params.clone(),
-        implicit_tx_control(),
+        tx_control_for_client(opts),
         opts.collect_stats,
     );
     Ok((client, req))
@@ -324,6 +335,11 @@ pub(crate) async fn transaction_begin_stream(
     params: HashMap<String, Value>,
     opts: CallOptions,
 ) -> YdbResult<ExecuteQueryStream> {
+    if tx.finished {
+        return Err(YdbError::Custom(
+            "transaction already finished (committed or rolled back)".to_string(),
+        ));
+    }
     ensure_tx_session(tx).await?;
     if tx.begin {
         transaction_ensure_begin(tx).await?;

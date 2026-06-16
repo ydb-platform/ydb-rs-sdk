@@ -87,11 +87,16 @@ impl<'a, K> CallBuilder<'a, K> {
         self
     }
 
-    /// Commit the interactive transaction as part of this query (`commit_tx: true` in Query Service).
+    /// Auto-commit this query (`commit_tx: true` in Query Service `TxControl`).
     ///
-    /// Only meaningful on [`QueryTransaction`]: the server commits when the full response stream
-    /// is consumed. A later query in the same transaction fails; [`QueryClient::retry_transaction`]
-    /// treats the implicit commit as success (explicit `commit` is a no-op).
+    /// On [`QueryClient`] one-shot calls, every request sends `BeginTx`; without this flag
+    /// `commit_tx` stays `false` (writes are not persisted). With `.with_commit()` the server
+    /// commits when the full response stream is consumed — see
+    /// [#130](https://github.com/ydb-platform/ydb-rs-sdk/issues/130).
+    ///
+    /// On [`QueryTransaction`], a later query in the same transaction fails after commit;
+    /// [`QueryClient::retry_transaction`] treats the implicit commit as success (explicit
+    /// `commit` is a no-op).
     pub fn with_commit(mut self) -> Self {
         self.opts.with_commit = true;
         self

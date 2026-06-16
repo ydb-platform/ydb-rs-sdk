@@ -11,10 +11,6 @@ pub(crate) enum RawQueryTxMode {
     OnlineReadOnly,
 }
 
-pub(crate) fn implicit_tx_control() -> Option<TransactionControl> {
-    None
-}
-
 pub(crate) fn begin_tx_control(mode: RawQueryTxMode, commit_tx: bool) -> TransactionControl {
     TransactionControl {
         commit_tx,

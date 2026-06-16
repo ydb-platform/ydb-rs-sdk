@@ -26,9 +26,11 @@ async fn main() -> YdbResult<()> {
 
     let mut qc = client.query_client();
 
-    // 1. DDL / DML without result rows. One-shot client calls retry
-    //    internally — no closure needed for a single statement.
+    // 1. DDL / DML without result rows. Writes need `.with_commit()` so the
+    //    server commits (`commit_tx: true`); reads can omit it. One-shot client
+    //    calls retry internally — no closure needed for a single statement.
     qc.exec("CREATE TABLE test (id Int64, val Utf8, PRIMARY KEY(id))")
+        .with_commit()
         .await?;
 
     // 2. Parameters chain at the call site; no ExecuteOptions argument.
@@ -39,6 +41,7 @@ async fn main() -> YdbResult<()> {
     )
     .param("$id", 1_i64)
     .param("$val", "hello")
+    .with_commit()
     .await?;
 
     qc.exec(
@@ -46,6 +49,7 @@ async fn main() -> YdbResult<()> {
          UPSERT INTO test (id, val) VALUES ($id, $val)",
     )
     .params(ydb_params!("$id" => 2_i64, "$val" => "world"))
+    .with_commit()
     .await?;
 
     // 3. Exactly one row: 0 rows -> Err(NoRows), >1 -> error.
@@ -90,6 +94,7 @@ async fn main() -> YdbResult<()> {
         qc.exec(dynamic_sql.clone())
             .param("$id", id)
             .param("$payload", payload) // moved in, no extra copy
+            .with_commit()
             .await?;
     }
 

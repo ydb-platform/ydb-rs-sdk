@@ -69,7 +69,9 @@ impl Database for Storage {
         );
 
         let mut qc = self.idempotent_client();
-        tokio::time::timeout(self.write_timeout, async move { qc.exec(query).await })
+        tokio::time::timeout(self.write_timeout, async move {
+            qc.exec(query).with_commit().await
+        })
             .await
             .map_err(|_| "create table timeout".to_string())?
             .map_err(|err| err.to_string())
@@ -78,7 +80,9 @@ impl Database for Storage {
     async fn drop_table(&self) -> Result<(), String> {
         let query = format!("DROP TABLE `{table}`", table = self.table_path);
         let mut qc = self.idempotent_client();
-        tokio::time::timeout(self.write_timeout, async move { qc.exec(query).await })
+        tokio::time::timeout(self.write_timeout, async move {
+            qc.exec(query).with_commit().await
+        })
             .await
             .map_err(|_| "drop table timeout".to_string())?
             .map_err(|err| err.to_string())
@@ -150,6 +154,7 @@ impl Database for Storage {
                 .param("$payload_str", row.payload_str)
                 .param("$payload_double", row.payload_double)
                 .param("$payload_timestamp", row.payload_timestamp)
+                .with_commit()
                 .await
         })
         .await

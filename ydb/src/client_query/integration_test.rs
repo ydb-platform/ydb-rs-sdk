@@ -38,12 +38,57 @@ async fn query_client_exec_ddl() -> YdbResult<()> {
     let mut qc = client.query_client().clone_with_idempotent_operations(true);
     let table_name = unique_table_name("query_client_test_exec_ddl");
 
-    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
+    let _ = qc
+        .exec(format!("DROP TABLE IF EXISTS {table_name}"))
+        .with_commit()
+        .await;
     qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Utf8, PRIMARY KEY(id))"
     ))
+    .with_commit()
     .await?;
-    qc.exec(format!("DROP TABLE {table_name}")).await?;
+    qc.exec(format!("DROP TABLE {table_name}"))
+        .with_commit()
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_client_with_commit_autocommit() -> YdbResult<()> {
+    let client = create_client().await?;
+    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let table_name = unique_table_name("query_client_with_commit");
+
+    let _ = qc
+        .exec(format!("DROP TABLE IF EXISTS {table_name}"))
+        .with_commit()
+        .await;
+    qc.exec(format!(
+        "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
+    ))
+    .with_commit()
+    .await?;
+
+    qc.exec(format!(
+        "DECLARE $id AS Int64; DECLARE $val AS Int64; \
+         UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
+    ))
+    .param("$id", 1_i64)
+    .param("$val", 77_i64)
+    .with_commit()
+    .await?;
+
+    let mut row = qc
+        .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
+        .await?;
+    let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
+    assert_eq!(val, Some(77));
+
+    qc.exec(format!("DROP TABLE {table_name}"))
+        .with_commit()
+        .await?;
     Ok(())
 }
 
@@ -78,10 +123,14 @@ async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
     let mut qc = client.query_client().clone_with_idempotent_operations(true);
     let table_name = unique_table_name("query_client_test_upsert");
 
-    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
+    let _ = qc
+        .exec(format!("DROP TABLE IF EXISTS {table_name}"))
+        .with_commit()
+        .await;
     qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Utf8, PRIMARY KEY(id))"
     ))
+    .with_commit()
     .await?;
 
     let upsert = format!(
@@ -106,7 +155,9 @@ async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
     let cnt: u64 = row.remove_field_by_name("cnt")?.try_into()?;
     assert_eq!(cnt, 3);
 
-    qc.exec(format!("DROP TABLE {table_name}")).await?;
+    qc.exec(format!("DROP TABLE {table_name}"))
+        .with_commit()
+        .await?;
     Ok(())
 }
 
@@ -154,10 +205,14 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
     let mut qc = client.query_client().clone_with_idempotent_operations(true);
     let table_name = unique_table_name("query_lazy_tx");
 
-    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
+    let _ = qc
+        .exec(format!("DROP TABLE IF EXISTS {table_name}"))
+        .with_commit()
+        .await;
     qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
     ))
+    .with_commit()
     .await?;
 
     qc.retry_transaction(async |tx| {
@@ -195,7 +250,9 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     assert_eq!(val, Some(42));
 
-    qc.exec(format!("DROP TABLE {table_name}")).await?;
+    qc.exec(format!("DROP TABLE {table_name}"))
+        .with_commit()
+        .await?;
     Ok(())
 }
 
@@ -276,10 +333,14 @@ async fn query_with_commit_on_last_query() -> YdbResult<()> {
     let mut qc = client.query_client().clone_with_idempotent_operations(true);
     let table_name = unique_table_name("query_with_commit");
 
-    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
+    let _ = qc
+        .exec(format!("DROP TABLE IF EXISTS {table_name}"))
+        .with_commit()
+        .await;
     qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
     ))
+    .with_commit()
     .await?;
 
     qc.retry_transaction(async |tx| {
@@ -311,7 +372,9 @@ async fn query_with_commit_on_last_query() -> YdbResult<()> {
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     assert_eq!(val, Some(99));
 
-    qc.exec(format!("DROP TABLE {table_name}")).await?;
+    qc.exec(format!("DROP TABLE {table_name}"))
+        .with_commit()
+        .await?;
     Ok(())
 }
 
@@ -330,10 +393,14 @@ async fn query_execute_script() -> YdbResult<()> {
 
     assert_eq!(UPSERT_ROWS_COUNT % BATCH_SIZE, 0);
 
-    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
+    let _ = qc
+        .exec(format!("DROP TABLE IF EXISTS {table_name}"))
+        .with_commit()
+        .await;
     qc.exec(format!(
         "CREATE TABLE {table_name} (val Int64, PRIMARY KEY (val))"
     ))
+    .with_commit()
     .await?;
 
     let upsert_query = format!(
@@ -348,7 +415,7 @@ async fn query_execute_script() -> YdbResult<()> {
         let example = ydb_struct!("val" => 0_i32);
         let values: Vec<Value> = (from..to).map(|j| ydb_struct!("val" => j)).collect();
         let list = Value::list_from(example, values)?;
-        qc.exec(&upsert_query).param("$values", list).await?;
+        qc.exec(&upsert_query).param("$values", list).with_commit().await?;
         upserted += (to - from) as u32;
     }
     assert_eq!(upserted, UPSERT_ROWS_COUNT as u32);
@@ -412,6 +479,8 @@ async fn query_execute_script() -> YdbResult<()> {
     assert_eq!(checksum, EXPECTED_CHECKSUM);
 
     op_client.forget_operation(&op.id).await?;
-    qc.exec(format!("DROP TABLE {table_name}")).await?;
+    qc.exec(format!("DROP TABLE {table_name}"))
+        .with_commit()
+        .await?;
     Ok(())
 }

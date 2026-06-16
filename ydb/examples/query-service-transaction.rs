@@ -56,8 +56,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- 2. Rollback without an error ---------------------------------------
     // Requires `accounts` table; create minimal schema for the example.
     qc.exec("CREATE TABLE IF NOT EXISTS accounts (id Int64, balance Int64, PRIMARY KEY(id))")
+        .with_commit()
         .await?;
     qc.exec("UPSERT INTO accounts (id, balance) VALUES (1, 500)")
+        .with_commit()
         .await?;
 
     // A business outcome, not a failure: finish the transaction explicitly
@@ -129,6 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     qc.exec(format!(
         "CREATE TABLE IF NOT EXISTS {table} (id Int64, val Int64, PRIMARY KEY(id))"
     ))
+    .with_commit()
     .await?;
 
     qc.retry_transaction(async |tx: &mut QueryTransaction| {
