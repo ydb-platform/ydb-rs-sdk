@@ -273,7 +273,7 @@ async fn query_tx_implicit_rejected_in_interactive() {
         .unwrap_err();
     assert!(
         err.to_string()
-            .contains("not supported in interactive transactions"),
+            .contains("Implicit is not available inside QueryTransaction"),
         "unexpected error: {err}"
     );
 }
