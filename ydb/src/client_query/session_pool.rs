@@ -607,6 +607,50 @@ impl QuerySessionPoolInner {
     }
 }
 
+impl Drop for QuerySessionPoolInner {
+    fn drop(&mut self) {
+        let explicit: Vec<ExplicitIdleItem> = self
+            .explicit_idle
+            .lock()
+            .expect("explicit idle lock")
+            .drain(..)
+            .collect();
+        let implicit: Vec<ImplicitIdleItem> = self
+            .implicit_idle
+            .lock()
+            .expect("implicit idle lock")
+            .drain(..)
+            .collect();
+        if explicit.is_empty() && implicit.is_empty() {
+            return;
+        }
+        let connection_manager = self.connection_manager.clone();
+        spawn_pool_release(async move {
+            for item in explicit {
+                match connection_manager
+                    .get_auth_service_to_node(RawQueryClient::new, &item.node_uri)
+                    .await
+                {
+                    Ok(mut client) => {
+                        item.session.close(&mut client).await;
+                    }
+                    Err(err) => {
+                        warn!(
+                            session_id = item.session.session_id(),
+                            error = %err,
+                            "failed to connect for DeleteSession during pool shutdown; aborting attach listener"
+                        );
+                        item.session.abort_without_delete().await;
+                    }
+                }
+            }
+            for item in implicit {
+                item.session.close();
+            }
+        });
+    }
+}
+
 fn session_should_close(
     settings: &QuerySessionPoolSettings,
     use_count: u64,

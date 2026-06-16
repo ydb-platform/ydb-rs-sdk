@@ -402,18 +402,27 @@ pub(crate) async fn transaction_begin_stream(
     if let Some(lease) = &mut tx.pooled_lease {
         lease.begin_use();
     }
-    let (mut client, req) = transaction_execute_request(tx, text, params, &opts).await?;
-    let timeout_duration = operation_timeout(&opts, &tx.timeouts);
-    let stream = with_operation_timeout(timeout_duration, async {
-        client.execute_query(req).await.map_err(Into::into)
-    })
-    .await?;
-    let mut stream = ExecuteQueryStream::new(stream);
-    stream.prime_first_part().await?;
-    if let Some(id) = stream.take_captured_tx_id() {
-        apply_stream_tx_id(tx, Some(id));
+    let result: YdbResult<ExecuteQueryStream> = async {
+        let (mut client, req) = transaction_execute_request(tx, text, params, &opts).await?;
+        let timeout_duration = operation_timeout(&opts, &tx.timeouts);
+        let stream = with_operation_timeout(timeout_duration, async {
+            client.execute_query(req).await.map_err(Into::into)
+        })
+        .await?;
+        let mut stream = ExecuteQueryStream::new(stream);
+        stream.prime_first_part().await?;
+        if let Some(id) = stream.take_captured_tx_id() {
+            apply_stream_tx_id(tx, Some(id));
+        }
+        Ok(stream)
     }
-    Ok(stream)
+    .await;
+    if result.is_err() {
+        if let Some(lease) = &mut tx.pooled_lease {
+            lease.end_use();
+        }
+    }
+    result
 }
 
 pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbResult<()> {

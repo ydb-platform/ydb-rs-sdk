@@ -69,18 +69,39 @@ pub(crate) async fn materialize_query(
 ) -> YdbResult<Vec<ResultSet>> {
     let mut stream = core.begin_stream(text, params, opts).await?;
     let mut sets = Vec::new();
-    while let Some((raw, tx_id)) = stream.next_result_set().await.map_err(YdbError::from)? {
-        if let ExecCoreRef::Transaction(ctx) = core {
-            apply_stream_tx_id(ctx, tx_id);
+    let mut drain_err: Option<YdbError> = None;
+    while drain_err.is_none() {
+        match stream.next_result_set().await {
+            Ok(Some((raw, tx_id))) => {
+                if let ExecCoreRef::Transaction(ctx) = core {
+                    apply_stream_tx_id(ctx, tx_id);
+                }
+                match ResultSet::try_from(raw) {
+                    Ok(set) => sets.push(set),
+                    Err(err) => drain_err = Some(YdbError::from(err)),
+                }
+            }
+            Ok(None) => break,
+            Err(err) => drain_err = Some(YdbError::from(err)),
         }
-        sets.push(ResultSet::try_from(raw)?);
     }
-    let meta = stream.close().await.map_err(YdbError::from)?;
+    if drain_err.is_none() {
+        match stream.close().await {
+            Ok(meta) => {
+                if let ExecCoreRef::Transaction(ctx) = core {
+                    apply_stream_tx_id(ctx, meta.tx_id);
+                }
+            }
+            Err(err) => drain_err = Some(YdbError::from(err)),
+        }
+    }
     if let ExecCoreRef::Transaction(ctx) = core {
-        apply_stream_tx_id(ctx, meta.tx_id);
         if let Some(lease) = &mut ctx.pooled_lease {
             lease.end_use();
         }
+    }
+    if let Some(err) = drain_err {
+        return Err(err);
     }
     Ok(sets)
 }

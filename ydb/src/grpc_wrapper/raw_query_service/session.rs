@@ -120,7 +120,9 @@ impl AttachedQuerySession {
     }
 
     pub fn end_use(&self) {
-        if self.inner.in_use.fetch_sub(1, Ordering::SeqCst) == 1 {
+        let prev = self.inner.in_use.fetch_sub(1, Ordering::SeqCst);
+        debug_assert!(prev > 0, "end_use called when in_use is already 0");
+        if prev == 1 {
             self.inner.not_in_use.notify_waiters();
         }
     }
@@ -182,8 +184,17 @@ impl AttachedQuerySession {
         // `delete_timeout` on DeleteSession (worst case ≈ 2× delete_timeout).
         let drain_timeout = self.inner.delete_timeout;
         let _ = timeout(drain_timeout, async {
-            while self.inner.in_use.load(Ordering::Acquire) > 0 {
-                self.inner.not_in_use.notified().await;
+            loop {
+                if self.inner.in_use.load(Ordering::Acquire) == 0 {
+                    break;
+                }
+                let notified = self.inner.not_in_use.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
+                if self.inner.in_use.load(Ordering::Acquire) == 0 {
+                    break;
+                }
+                notified.await;
             }
         })
         .await;
