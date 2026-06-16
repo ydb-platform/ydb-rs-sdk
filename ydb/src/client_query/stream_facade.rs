@@ -6,13 +6,15 @@ use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::result::ResultSet;
 use crate::types::Value;
 
-use super::exec::{apply_stream_tx_id, transaction_finish_committed_via_query, CallOptions};
+use super::exec::{
+    apply_stream_tx_id, resolve_commit_tx, transaction_finish_committed_via_query, CallOptions,
+};
 use super::internal::ExecCoreRef;
 
 pub struct QueryStream<'a> {
     pub(crate) core: ExecCoreRef<'a>,
     pub(crate) stream: ExecuteQueryStream,
-    pub(crate) with_commit: bool,
+    pub(crate) commit_tx: bool,
 }
 
 impl Drop for QueryStream<'_> {
@@ -22,7 +24,7 @@ impl Drop for QueryStream<'_> {
                 apply_stream_tx_id(ctx, Some(tx_id));
             }
         }
-        if self.with_commit {
+        if self.commit_tx {
             if let ExecCoreRef::Transaction(ctx) = &mut self.core {
                 // Server committed via `commit_tx`; sync client state so cleanup does not
                 // issue a spurious CommitTransaction. Session release runs in retry_transaction.
@@ -56,7 +58,7 @@ impl QueryStream<'_> {
         let meta = self.stream.close().await.map_err(YdbError::from)?;
         if let ExecCoreRef::Transaction(ctx) = &mut self.core {
             apply_stream_tx_id(ctx, meta.tx_id.clone());
-            if self.with_commit {
+            if self.commit_tx {
                 transaction_finish_committed_via_query(ctx).await;
             }
         }
@@ -74,7 +76,7 @@ pub(crate) async fn materialize_query(
     params: HashMap<String, Value>,
     opts: CallOptions,
 ) -> YdbResult<Vec<ResultSet>> {
-    let with_commit = opts.with_commit;
+    let commit_tx = resolve_commit_tx(core, &opts);
     let mut stream = core.begin_stream(text, params, opts).await?;
     let mut sets = Vec::new();
     while let Some((raw, tx_id)) = stream.next_result_set().await.map_err(YdbError::from)? {
@@ -86,7 +88,7 @@ pub(crate) async fn materialize_query(
     let meta = stream.close().await.map_err(YdbError::from)?;
     if let ExecCoreRef::Transaction(ctx) = core {
         apply_stream_tx_id(ctx, meta.tx_id);
-        if with_commit {
+        if commit_tx {
             transaction_finish_committed_via_query(ctx).await;
         }
     }

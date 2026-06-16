@@ -9,7 +9,7 @@ use crate::result::{ResultSet, Row};
 use crate::types::Value;
 use crate::QuerySessionMode;
 
-use super::exec::CallOptions;
+use super::exec::{resolve_commit_tx, CallOptions};
 use super::internal::{ExecCoreRef, HasCore};
 use super::stream_facade::{materialize_query, QueryStream};
 use super::FromYdbRow;
@@ -38,18 +38,11 @@ pub struct CallBuilder<'a, K> {
 
 impl<'a, K> CallBuilder<'a, K> {
     pub(crate) fn new(core: ExecCoreRef<'a>, text: String) -> Self {
-        // One-shot QueryClient calls always open a server-side tx (`BeginTx`); default
-        // `commit_tx: true` avoids leaking uncommitted transactions when `.with_commit()`
-        // is omitted. Interactive [`QueryTransaction`] builders keep `commit_tx: false`.
-        let with_commit = matches!(core, ExecCoreRef::Client(_));
         Self {
             core,
             text,
             params: HashMap::new(),
-            opts: CallOptions {
-                with_commit,
-                ..CallOptions::default()
-            },
+            opts: CallOptions::default(),
             _kind: PhantomData,
         }
     }
@@ -94,20 +87,14 @@ impl<'a, K> CallBuilder<'a, K> {
         self
     }
 
-    /// Auto-commit this query (`commit_tx: true` in Query Service `TxControl`).
+    /// Override auto-commit (`commit_tx` in Query Service `TxControl`).
     ///
-    /// **Required on [`QueryClient`]**: every one-shot call opens a server-side transaction
-    /// (`BeginTx`); without `commit_tx: true` the transaction stays open and server resources
-    /// leak. Client builders default to `with_commit = true`; keep the flag explicit at call
-    /// sites — see [#130](https://github.com/ydb-platform/ydb-rs-sdk/issues/130).
-    ///
-    /// **Do not use inside [`QueryTransaction`]**, except on the last query when replacing an
-    /// explicit `commit()` hop. Mid-transaction queries must leave `commit_tx: false`.
-    /// After commit-in-query, a later query in the same transaction fails;
-    /// [`QueryClient::retry_transaction`] treats the implicit commit as success (explicit
-    /// `commit` is a no-op).
-    pub fn with_commit(mut self) -> Self {
-        self.opts.with_commit = true;
+    /// Defaults: [`QueryClient`] one-shots commit automatically (`true`); interactive
+    /// [`QueryTransaction`] queries do not (`false`). Pass `with_commit(false)` on a client
+    /// call or `with_commit(true)` on the last query in a transaction to override — see
+    /// [#130](https://github.com/ydb-platform/ydb-rs-sdk/issues/130).
+    pub fn with_commit(mut self, commit: bool) -> Self {
+        self.opts.commit_tx = Some(commit);
         self
     }
 
@@ -221,7 +208,7 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
-            let with_commit = self.opts.with_commit;
+            let commit_tx = resolve_commit_tx(&self.core, &self.opts);
             let stream = self
                 .core
                 .begin_stream(self.text, self.params, self.opts)
@@ -229,7 +216,7 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
             Ok(QueryStream {
                 core: self.core,
                 stream,
-                with_commit,
+                commit_tx,
             })
         })
     }

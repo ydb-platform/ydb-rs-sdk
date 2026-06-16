@@ -56,10 +56,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- 2. Rollback without an error ---------------------------------------
     // Requires `accounts` table; create minimal schema for the example.
     qc.exec("CREATE TABLE IF NOT EXISTS accounts (id Int64, balance Int64, PRIMARY KEY(id))")
-        .with_commit()
         .await?;
     qc.exec("UPSERT INTO accounts (id, balance) VALUES (1, 500)")
-        .with_commit()
         .await?;
 
     // A business outcome, not a failure: finish the transaction explicitly
@@ -131,7 +129,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     qc.exec(format!(
         "CREATE TABLE IF NOT EXISTS {table} (id Int64, val Int64, PRIMARY KEY(id))"
     ))
-    .with_commit()
     .await?;
 
     qc.retry_transaction(async |tx: &mut QueryTransaction| {
@@ -141,7 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ))
         .param("$id", 1_i64)
         .param("$val", 100_i64)
-        .with_commit() // server commits when the stream is fully read
+        .with_commit(true) // server commits when the stream is fully read
         .await?;
         // Transaction is already committed; further queries in this callback would fail.
         Ok(())
@@ -150,7 +147,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut row = qc
         .query_row(format!("SELECT val FROM {table} WHERE id = 1"))
-        .with_commit()
         .await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     println!("with_commit persisted val = {:?}", val);

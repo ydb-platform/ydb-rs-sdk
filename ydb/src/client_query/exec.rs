@@ -30,8 +30,9 @@ pub(crate) struct CallOptions {
     pub idempotent: Option<bool>,
     pub collect_stats: bool,
     pub session_mode: Option<QuerySessionMode>,
-    /// Commit the interactive transaction as part of this `ExecuteQuery` (Query Service `commit_tx`).
-    pub with_commit: bool,
+    /// Override Query Service `commit_tx`. `None` uses context default: `true` on
+    /// [`QueryClient`] one-shots, `false` on [`QueryTransaction`].
+    pub commit_tx: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -146,11 +147,16 @@ fn tx_control_for_transaction(
             "transaction already finished (committed or rolled back)".to_string(),
         ));
     }
-    let commit_tx = opts.with_commit;
+    let commit_tx = opts.commit_tx.unwrap_or(false);
     Ok(Some(match &tx.tx_id {
         Some(id) => tx_id_control(id, commit_tx),
         None => begin_tx_control(tx_mode_to_raw(tx.tx_mode), commit_tx),
     }))
+}
+
+pub(crate) fn resolve_commit_tx(core: &super::internal::ExecCoreRef, opts: &CallOptions) -> bool {
+    opts.commit_tx
+        .unwrap_or(matches!(core, super::internal::ExecCoreRef::Client(_)))
 }
 
 async fn retry_with_budget<T, F, Fut>(
@@ -184,14 +190,14 @@ where
 
 /// Build `tx_control` for one-shot [`QueryClient`] calls.
 ///
-/// Every `ExecuteQuery` carries explicit `BeginTx`. [`CallOptions::with_commit`] must be
-/// `true` on client calls — otherwise the server-side transaction is never committed
-/// ([#130](https://github.com/ydb-platform/ydb-rs-sdk/issues/130)). Client builders default
-/// to `with_commit = true`.
-fn tx_control_for_client(opts: &CallOptions) -> Option<ydb_grpc::ydb_proto::query::TransactionControl> {
+/// Every `ExecuteQuery` carries explicit `BeginTx` with auto-commit by default
+/// ([#130](https://github.com/ydb-platform/ydb-rs-sdk/issues/130)).
+fn tx_control_for_client(
+    opts: &CallOptions,
+) -> Option<ydb_grpc::ydb_proto::query::TransactionControl> {
     Some(begin_tx_control(
         RawQueryTxMode::SerializableReadWrite,
-        opts.with_commit,
+        opts.commit_tx.unwrap_or(true),
     ))
 }
 
