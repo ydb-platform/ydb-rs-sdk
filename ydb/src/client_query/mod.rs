@@ -25,8 +25,8 @@ use crate::result::Row;
 
 use builders::impl_query_methods;
 use exec::{
-    check_retry_transaction_error, retry_wait, transaction_commit, transaction_exec_context,
-    transaction_ensure_begin, transaction_rollback, ClientExecContext, TransactionExecContext,
+    check_retry_transaction_error, retry_wait, transaction_commit, transaction_ensure_begin,
+    transaction_exec_context, transaction_rollback, ClientExecContext, TransactionExecContext,
     DEFAULT_QUERY_RETRY_BUDGET,
 };
 use internal::{ExecCoreRef, HasCore};

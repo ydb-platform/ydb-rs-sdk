@@ -118,7 +118,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     // Or configure explicit begin on the client for every retry_transaction:
-    let with_begin_qc = qc.clone_with_transaction_options(QueryTransactionOptions::new().with_begin());
+    let with_begin_qc =
+        qc.clone_with_transaction_options(QueryTransactionOptions::new().with_begin());
     with_begin_qc
         .retry_transaction(async |tx: &mut QueryTransaction| {
             tx.exec("SELECT 1").await?; // BeginTransaction RPC runs first
