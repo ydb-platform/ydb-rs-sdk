@@ -9,7 +9,6 @@ pub(crate) struct MessageQueue {
     messages: VecDeque<MessageData>,
     // Messages awaiting to be acknowledged
     sent_messages: VecDeque<MessageData>,
-
     // Sequence number of the last message that has been added to the queue
     last_added_seq_no: Option<i64>,
 }
@@ -96,6 +95,10 @@ impl MessageQueue {
     pub(crate) fn reset_progress(&mut self) {
         self.sent_messages.append(&mut self.messages);
         swap(&mut self.messages, &mut self.sent_messages);
+    }
+
+    pub(crate) fn last_added_seq_no(&self) -> Option<i64> {
+        self.last_added_seq_no
     }
 }
 

@@ -157,7 +157,6 @@ struct QueueInner {
     message_queue: MessageQueue,
     reception_queue: TopicWriterReceptionQueue,
     is_open_for_new_messages: bool,
-    last_added_seq_no: Option<i64>,
 }
 
 impl QueueInner {
@@ -166,7 +165,6 @@ impl QueueInner {
             message_queue: MessageQueue::new(),
             reception_queue: TopicWriterReceptionQueue::new(),
             is_open_for_new_messages: true,
-            last_added_seq_no: None,
         }
     }
 
@@ -185,8 +183,6 @@ impl QueueInner {
 
         self.reception_queue
             .add_ticket(TopicWriterReceptionTicket::new(seq_no, confirmation_sender));
-
-        self.last_added_seq_no = Some(seq_no);
 
         Ok(())
     }
@@ -228,7 +224,7 @@ impl QueueInner {
     }
 
     fn last_added_seq_no(&self) -> Option<i64> {
-        self.last_added_seq_no
+        self.message_queue.last_added_seq_no()
     }
 
     fn notify_reception_tickets(&mut self, error: YdbError) {
@@ -251,10 +247,13 @@ impl QueueInner {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::client_topic::topicwriter::message_write_status::{MessageWriteStatus, WriteAck};
     use std::sync::Arc;
     use std::time::Duration;
+
+    use tokio::time::timeout;
+
+    use super::*;
+    use crate::client_topic::topicwriter::message_write_status::{MessageWriteStatus, WriteAck};
 
     fn create_message(seq_no: i64, data: Vec<u8>) -> MessageData {
         MessageData {
@@ -524,5 +523,24 @@ mod tests {
         let q = Queue::new();
 
         q.wait_for_messages_to_be_acknowledged().await;
+    }
+
+    #[tokio::test]
+    async fn wait_for_messages_to_be_acknowledged_completes_after_non_empty_queue_is_fully_drained()
+    {
+        let q = Queue::new();
+        q.add_message(create_message(1, vec![]), None)
+            .await
+            .unwrap();
+        let msgs = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        assert_eq!(msgs.len(), 1);
+
+        q.acknowledge_message(write_ack(1)).await.unwrap();
+        timeout(
+            Duration::from_millis(100),
+            q.wait_for_messages_to_be_acknowledged(),
+        )
+        .await
+        .expect("wait shall return immediately when non-empty queue is fully drained (0 messages to send and 0 messages to acknowledge)");
     }
 }
