@@ -105,17 +105,7 @@ impl MessageQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn create_message(seq_no: i64, data: Vec<u8>) -> MessageData {
-        MessageData {
-            seq_no,
-            created_at: None,
-            data,
-            uncompressed_size: 0,
-            metadata_items: vec![],
-            partitioning: None,
-        }
-    }
+    use crate::client_topic::topicwriter::test_helpers::create_message;
 
     fn move_all_pending_to_sent(q: &mut MessageQueue) {
         q.sent_messages.append(&mut q.messages);

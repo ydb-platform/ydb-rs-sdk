@@ -2,25 +2,23 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
 
-use tokio::sync::{oneshot, RwLock as TokioRwLock};
+use tokio::sync::{oneshot, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::log::trace;
+use tracing::trace;
 
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
 use crate::client_topic::topicwriter::reconnector::{Reconnector, ReconnectorParams};
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::retry::TimeoutRetrier;
 use crate::{YdbError, YdbResult};
 
 /// TopicWriter is currently in development.
 /// It is mostly usable, but has some unimplemented features.
 pub struct TopicWriter {
-    fatal_error: Arc<TokioRwLock<Option<YdbError>>>,
+    fatal_error: Arc<RwLock<Option<YdbError>>>,
     wait_for_fatal_error_handle: JoinHandle<()>,
     reconnector: Reconnector,
 }
@@ -54,11 +52,7 @@ impl TopicWriter {
 
         let cancellation_token = CancellationToken::new();
 
-        let retrier = writer_options.retrier.clone().unwrap_or_else(|| {
-            Arc::new(TimeoutRetrier {
-                timeout: Duration::from_secs(30),
-            })
-        });
+        let retrier = writer_options.retrier.clone();
 
         let (fatal_error_tx, fatal_error_rx) = oneshot::channel();
 
@@ -73,7 +67,7 @@ impl TopicWriter {
         })
         .await?;
 
-        let fatal_error = Arc::new(TokioRwLock::new(None));
+        let fatal_error = Arc::new(RwLock::new(None));
         let wait_for_fatal_error_handle = tokio::spawn(TopicWriter::wait_for_fatal_error(
             cancellation_token.clone(),
             fatal_error_rx,
@@ -87,12 +81,12 @@ impl TopicWriter {
         })
     }
 
-    pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
+    pub async fn write(&self, message: TopicWriterMessage) -> YdbResult<()> {
         self.write_message(message, None).await
     }
 
     pub async fn write_with_ack(
-        &mut self,
+        &self,
         message: TopicWriterMessage,
     ) -> YdbResult<MessageWriteStatus> {
         let (tx, rx) = oneshot::channel();
@@ -103,10 +97,7 @@ impl TopicWriter {
             .unwrap_or_else(|chan_err| Err(YdbError::from(chan_err)))
     }
 
-    pub async fn write_with_ack_future(
-        &mut self,
-        message: TopicWriterMessage,
-    ) -> YdbResult<AckFuture> {
+    pub async fn write_with_ack_future(&self, message: TopicWriterMessage) -> YdbResult<AckFuture> {
         let (tx, rx) = oneshot::channel();
 
         self.write_message(message, Some(tx)).await?;
@@ -115,17 +106,15 @@ impl TopicWriter {
     }
 
     async fn write_message(
-        &mut self,
+        &self,
         message: TopicWriterMessage,
-        wait_ack: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
+        ack_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     ) -> YdbResult<()> {
         if let Some(err) = self.fatal_error.read().await.as_ref() {
             return Err(err.clone());
         }
 
-        self.reconnector
-            .add_message_for_processing(message, wait_ack)
-            .await?;
+        self.reconnector.add_message(message, ack_sender).await?;
 
         Ok(())
     }
@@ -137,7 +126,7 @@ impl TopicWriter {
     async fn wait_for_fatal_error(
         cancellation_token: CancellationToken,
         fatal_error_rx: oneshot::Receiver<YdbError>,
-        fatal_error: Arc<TokioRwLock<Option<YdbError>>>,
+        fatal_error: Arc<RwLock<Option<YdbError>>>,
     ) {
         tokio::select! {
             _ = cancellation_token.cancelled() => {}

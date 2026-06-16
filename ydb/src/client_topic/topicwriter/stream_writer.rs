@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::log::{trace, warn};
+use tracing::{trace, warn};
 
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
 use ydb_grpc::ydb_proto::topic::stream_write_message::WriteRequest;
@@ -12,14 +12,15 @@ use ydb_grpc::ydb_proto::topic::{stream_write_message, Codec};
 
 use crate::client_topic::topicwriter::message_write_status::WriteAck;
 use crate::client_topic::topicwriter::queue::Queue;
+use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
-use crate::{TopicWriterOptions, YdbError, YdbResult};
+use crate::{YdbError, YdbResult};
 
 /// Manages the gRPC stream communications: write loop and receive-messages loop.
 /// Reports error via error_tx.
 pub(crate) struct StreamWriter {
-    writer_loop: JoinHandle<()>,
+    write_messages_loop: JoinHandle<()>,
     receive_messages_loop: JoinHandle<()>,
     cancellation_token: CancellationToken,
 }
@@ -31,7 +32,7 @@ struct WriterLoopParams {
 }
 
 impl StreamWriter {
-    pub async fn new(
+    pub(crate) async fn new(
         writer_options: TopicWriterOptions,
         mut stream: AsyncGrpcStreamWrapper<
             stream_write_message::FromClient,
@@ -43,9 +44,9 @@ impl StreamWriter {
         let cancellation_token = CancellationToken::new();
 
         // Both loops share the same oneshot error channel.
-        let shared_error_tx = Arc::new(TokioMutex::new(Some(error_tx)));
+        let shared_error_tx = Arc::new(Mutex::new(Some(error_tx)));
 
-        let writer_loop = tokio::spawn(StreamWriter::writer_loop(
+        let write_messages_loop = tokio::spawn(StreamWriter::write_messages_loop(
             cancellation_token.clone(),
             shared_error_tx.clone(),
             queue.clone(),
@@ -65,33 +66,33 @@ impl StreamWriter {
         ));
 
         Self {
-            writer_loop,
+            write_messages_loop,
             receive_messages_loop,
             cancellation_token,
         }
     }
 
-    async fn writer_loop(
+    async fn write_messages_loop(
         cancellation_token: CancellationToken,
-        error_tx: Arc<TokioMutex<Option<oneshot::Sender<YdbError>>>>,
+        error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
         queue: Queue,
         task_params: WriterLoopParams,
     ) {
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => { return; }
-                result = StreamWriter::writer_loop_iteration(&queue, &task_params) => {
-                    let Err(writer_iteration_error) = result else {
+                result = StreamWriter::write_messages_loop_iteration(&queue, &task_params) => {
+                    let Err(write_messages_iteration_error) = result else {
                         continue;
                     };
 
                     warn!(
-                        "error sending message in topic writer writer loop: {}",
-                        &writer_iteration_error
+                        "error sending message in topic writer write_messages_loop: {}",
+                        &write_messages_iteration_error
                     );
 
-                    if let Err(send_err) = StreamWriter::loop_iteration_error(cancellation_token, error_tx, writer_iteration_error).await {
-                        warn!("can't send error from stream writer writer_loop: {send_err}");
+                    if let Err(send_err) = StreamWriter::loop_iteration_error(cancellation_token, error_tx, write_messages_iteration_error).await {
+                        warn!("can't send error from stream writer write_messages_loop: {send_err}");
                     }
 
                     break;
@@ -100,7 +101,10 @@ impl StreamWriter {
         }
     }
 
-    async fn writer_loop_iteration(queue: &Queue, task_params: &WriterLoopParams) -> YdbResult<()> {
+    async fn write_messages_loop_iteration(
+        queue: &Queue,
+        task_params: &WriterLoopParams,
+    ) -> YdbResult<()> {
         let messages_to_send = queue
             .get_messages_to_send(
                 task_params.write_request_messages_chunk_size,
@@ -127,7 +131,7 @@ impl StreamWriter {
 
     async fn receive_messages_loop(
         cancellation_token: CancellationToken,
-        error_tx: Arc<TokioMutex<Option<oneshot::Sender<YdbError>>>>,
+        error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
         queue: Queue,
         mut stream: AsyncGrpcStreamWrapper<
             stream_write_message::FromClient,
@@ -137,20 +141,20 @@ impl StreamWriter {
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => { return; }
-                message_receive_it_res = StreamWriter::receive_messages_loop_iteration(
+                result = StreamWriter::receive_messages_loop_iteration(
                     &queue,
                     &mut stream,
                 ) => {
-                    let Err(receive_message_it_error) = message_receive_it_res else {
+                    let Err(receive_messages_iteration_error) = result else {
                         continue;
                     };
 
                     warn!(
                         "error receiving message in topic writer receiver stream loop: {}",
-                        &receive_message_it_error
+                        &receive_messages_iteration_error
                     );
 
-                    if let Err(send_err) = StreamWriter::loop_iteration_error(cancellation_token, error_tx, receive_message_it_error).await {
+                    if let Err(send_err) = StreamWriter::loop_iteration_error(cancellation_token, error_tx, receive_messages_iteration_error).await {
                         warn!("can't send error from stream writer receive_messages_loop: {send_err}");
                     }
                     break;
@@ -190,7 +194,7 @@ impl StreamWriter {
 
     async fn loop_iteration_error(
         cancellation_token: CancellationToken,
-        error_tx: Arc<TokioMutex<Option<oneshot::Sender<YdbError>>>>,
+        error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
         error: YdbError,
     ) -> Result<(), YdbError> {
         cancellation_token.cancel();
@@ -202,19 +206,19 @@ impl StreamWriter {
         tx.send(error)
     }
 
-    pub async fn stop(self) -> YdbResult<()> {
+    pub(crate) async fn stop(self) -> YdbResult<()> {
         trace!("stopping...");
 
         self.cancellation_token.cancel();
 
-        let writer_loop_result = self.writer_loop.await.map_err(|err| {
+        let write_messages_loop_result = self.write_messages_loop.await.map_err(|err| {
             let err = YdbError::custom(format!(
-                "stop: error while waiting for writer_loop to finish: {err}"
+                "stop: error while waiting for write_messages_loop_result to finish: {err}"
             ));
             trace!("{err}");
             err
         });
-        trace!("writer loop stopped");
+        trace!("write messages loop stopped");
 
         let receive_messages_loop_result = self.receive_messages_loop.await.map_err(|err| {
             let err = YdbError::custom(format!(
@@ -223,9 +227,9 @@ impl StreamWriter {
             trace!("{err}");
             err
         });
-        trace!("message receive loop stopped");
+        trace!("receive messages loop stopped");
 
-        writer_loop_result?;
+        write_messages_loop_result?;
         receive_messages_loop_result?;
 
         Ok(())

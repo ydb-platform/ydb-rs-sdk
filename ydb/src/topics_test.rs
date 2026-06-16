@@ -284,7 +284,7 @@ async fn send_message_test() -> YdbResult<()> {
     trace!("topic created");
 
     // manual seq
-    let mut writer_manual = topic_client
+    let writer_manual = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .auto_seq_no(false)
@@ -317,7 +317,7 @@ async fn send_message_test() -> YdbResult<()> {
     writer_manual.stop().await?;
 
     // auto-seq
-    let mut writer = topic_client
+    let writer = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .auto_seq_no(true)
@@ -536,7 +536,7 @@ async fn read_topic_message() -> YdbResult<()> {
     debug!("topic created");
 
     // manual seq
-    let mut writer_manual = topic_client
+    let writer_manual = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .auto_seq_no(false)
@@ -676,7 +676,7 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
     debug!("topic created");
 
     // Create writer with manual sequence numbers
-    let mut writer_manual = topic_client
+    let writer_manual = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .auto_seq_no(false)
@@ -1104,7 +1104,7 @@ async fn write_to_specific_partition() -> YdbResult<()> {
     // Write one tagged message to each target partition via explicit PartitionId strategy.
     for target_partition in [0i64, 1i64] {
         let payload = format!("msg-for-partition-{target_partition}");
-        let mut writer = topic_client
+        let writer = topic_client
             .create_writer_with_params(
                 TopicWriterOptionsBuilder::default()
                     .topic_path(topic_path.clone())
@@ -1208,7 +1208,7 @@ async fn read_batch_merges_and_respects_hard_limit() -> YdbResult<()> {
         const TOTAL: usize = 10;
         const BATCH_SIZE: usize = 3;
 
-        let mut writer = topic_client
+        let writer = topic_client
             .create_writer_with_params(
                 TopicWriterOptionsBuilder::default()
                     .topic_path(topic_path.clone())
@@ -1338,7 +1338,7 @@ async fn topic_writer_reconnects() -> YdbResult<()> {
     proxied_client.wait().await?;
 
     let mut proxied_topic_client = proxied_client.topic_client();
-    let mut writer = proxied_topic_client
+    let writer = proxied_topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())

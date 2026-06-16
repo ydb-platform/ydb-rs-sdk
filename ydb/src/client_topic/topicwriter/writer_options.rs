@@ -39,8 +39,8 @@ pub struct TopicWriterOptions {
     #[builder(default = "Duration::from_secs(3)")]
     pub(crate) flush_timeout: Duration,
 
-    #[builder(default = "Some(Arc::new(IndefiniteRetrier{ }))")]
-    pub(crate) retrier: Option<Arc<dyn Retry>>,
+    #[builder(default = "Arc::new(IndefiniteRetrier{ })")]
+    pub(crate) retrier: Arc<dyn Retry>,
 
     #[builder(default = "TopicWriterConnectionOptionsBuilder::default().build()?")]
     pub(crate) connection_options: TopicWriterConnectionOptions,

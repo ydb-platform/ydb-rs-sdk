@@ -1,24 +1,26 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::{oneshot, watch, Mutex as TokioMutex};
+use tokio::sync::{oneshot, watch, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
-use tracing::log::{error, trace};
+use tracing::{error, trace};
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
+use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
 use crate::client_topic::topicwriter::queue::Queue;
 use crate::client_topic::topicwriter::stream_writer::StreamWriter;
+use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
 use crate::errors::NeedRetry;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
 use crate::retry::{Retry, RetryParams};
-use crate::{TopicWriterMessage, TopicWriterOptions, YdbError, YdbResult};
+use crate::{YdbError, YdbResult};
 
 pub(crate) struct ReconnectorParams {
     pub(crate) writer_options: TopicWriterOptions,
@@ -52,11 +54,11 @@ struct ReconnectorState {
 }
 
 pub(crate) struct Reconnector {
-    state: Arc<TokioMutex<ReconnectorState>>,
+    state: Arc<Mutex<ReconnectorState>>,
     cancellation_token: CancellationToken,
-    loop_handle: JoinHandle<()>,
+    reconnect_loop: JoinHandle<()>,
     queue: Queue,
-    auto_set_seq_no: bool,
+    auto_seq_no: bool,
     flush_timeout: Duration,
     status_rx: watch::Receiver<ReconnectorStatus>,
 }
@@ -65,12 +67,12 @@ impl Reconnector {
     pub(crate) async fn new(params: ReconnectorParams) -> YdbResult<Self> {
         let queue = Queue::new();
         let cancellation_token = params.cancellation_token;
-        let auto_set_seq_no = params.writer_options.auto_seq_no;
+        let auto_seq_no = params.writer_options.auto_seq_no;
 
         let (init_tx, init_rx) = oneshot::channel();
         let (status_tx, status_rx) = watch::channel(ReconnectorStatus::Working);
 
-        let loop_handle = Reconnector::start_reconnection_loop(
+        let reconnect_loop = Reconnector::start_reconnection_loop(
             ReconnectionHelper {
                 connection_manager: params.connection_manager,
                 retrier: params.retrier,
@@ -82,8 +84,7 @@ impl Reconnector {
             params.fatal_error_tx,
             init_tx,
             status_tx,
-        )
-        .await;
+        );
 
         let connection_info = match init_rx.await {
             Ok(Ok(connection_info)) => connection_info,
@@ -95,20 +96,18 @@ impl Reconnector {
             }
         };
 
-        let r = Reconnector {
-            state: Arc::new(TokioMutex::new(ReconnectorState { connection_info })),
+        Ok(Reconnector {
+            state: Arc::new(Mutex::new(ReconnectorState { connection_info })),
             cancellation_token: cancellation_token.clone(),
-            loop_handle,
+            reconnect_loop,
             queue,
-            auto_set_seq_no,
+            auto_seq_no,
             flush_timeout: params.flush_timeout,
             status_rx,
-        };
-
-        Ok(r)
+        })
     }
 
-    async fn start_reconnection_loop(
+    fn start_reconnection_loop(
         helper: ReconnectionHelper,
         fatal_error_tx: oneshot::Sender<YdbError>,
         init_tx: oneshot::Sender<YdbResult<ConnectionInfo>>,
@@ -121,10 +120,10 @@ impl Reconnector {
         })
     }
 
-    pub(crate) async fn add_message_for_processing(
+    pub(crate) async fn add_message(
         &self,
         mut message: TopicWriterMessage,
-        wait_ack: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
+        ack_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     ) -> YdbResult<()> {
         self.check_working()?;
 
@@ -138,15 +137,15 @@ impl Reconnector {
         // 4. Thread1: add message<seq_no=1> to queue <--- ERROR: Message seq_no order is violated.
         let mut state_guard = self.state.lock().await;
 
-        if self.auto_set_seq_no {
+        if self.auto_seq_no {
             if message.seq_no.is_some() {
                 return Err(YdbError::custom(
-                        "explicitly specifying message.seq_no is only allowed if auto_set_seq_no is disabled",
+                        "explicitly specifying message.seq_no is only allowed if auto_seq_no is disabled",
                     ));
             }
             let last_seq_no_assigned = state_guard.connection_info.last_seq_no_assigned;
             message.seq_no = Some(last_seq_no_assigned + 1);
-        };
+        }
 
         let Some(message_seq_no) = message.seq_no else {
             return Err(YdbError::custom("empty message seq_no is provided"));
@@ -154,22 +153,20 @@ impl Reconnector {
         state_guard.connection_info.last_seq_no_assigned = message_seq_no;
 
         let message = message.try_into()?;
-        self.queue.add_message(message, wait_ack).await
+        self.queue.add_message(message, ack_sender).await
     }
 
     pub(crate) async fn flush(&self) -> YdbResult<()> {
         self.check_working()?;
-        self.queue.flush().await
+        match timeout(self.flush_timeout, self.queue.flush()).await {
+            Ok(result) => result,
+            Err(_) => Err(YdbError::custom("flush: timed out")),
+        }
     }
 
     pub(crate) async fn stop(self) -> YdbResult<()> {
         self.queue.close_for_new_messages().await;
-        let flush_result = match timeout(self.flush_timeout, self.queue.flush()).await {
-            Ok(result) => result,
-            Err(_) => Err(YdbError::custom(
-                "stop: flush() timed out while stopping topic writer",
-            )),
-        };
+        let flush_result = self.flush().await;
 
         self.cancellation_token.cancel();
 
@@ -184,7 +181,7 @@ impl Reconnector {
     async fn stop_inner(self) -> YdbResult<()> {
         match self.status() {
             ReconnectorStatus::Working => {
-                self.loop_handle.await.map_err(|err| {
+                self.reconnect_loop.await.map_err(|err| {
                     YdbError::custom(format!(
                         "stop: error while waiting for reconnection_loop to finish: {err}"
                     ))
@@ -374,7 +371,7 @@ impl ReconnectionLoop {
 
             if let Some(tx) = self.init_tx.take() {
                 let _ = tx.send(Err(final_error.clone()));
-            };
+            }
 
             if let Err(err) = fatal_error_tx.send(final_error) {
                 error!("can't send fatal error to TopicWriter: channel is closed: {err}");
@@ -387,7 +384,7 @@ impl ReconnectionLoop {
     fn update_status(&self, status: ReconnectorStatus) {
         if let Err(err) = self.status_tx.send(status) {
             error!("can't update status: status channel is closed: {err}");
-        };
+        }
     }
 
     async fn handle_error(&mut self, err: YdbError) -> ReconnectionLoopStatus {
@@ -427,7 +424,7 @@ impl ReconnectionLoop {
 
                 if let Some(tx) = self.init_tx.take() {
                     let _ = tx.send(Ok(swr.connection_info));
-                };
+                }
 
                 ReconnectionLoopStatus::WaitForErrorOrCancellation(error_receiver)
             }

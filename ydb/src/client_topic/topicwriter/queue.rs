@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{oneshot, Mutex as TokioMutex, Notify, RwLock};
+use tokio::sync::{oneshot, Mutex, Notify, RwLock};
 use tokio::time::{sleep_until, Instant};
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
@@ -9,14 +9,12 @@ use crate::client_topic::topicwriter::message_queue::{
     AppendMessageToSendBufferResult, MessageQueue,
 };
 use crate::client_topic::topicwriter::message_write_status::{MessageWriteStatus, WriteAck};
-use crate::client_topic::topicwriter::writer_reception_queue::{
-    TopicWriterReceptionQueue, TopicWriterReceptionTicket,
-};
+use crate::client_topic::topicwriter::reception_queue::{ReceptionQueue, ReceptionTicket};
 use crate::{YdbError, YdbResult};
 
 #[derive(Clone)]
 pub(crate) struct Queue {
-    inner: Arc<TokioMutex<QueueInner>>,
+    inner: Arc<Mutex<QueueInner>>,
 
     new_message_added: Arc<Notify>,
     last_acknowledged_seq_no: Arc<RwLock<Option<i64>>>,
@@ -26,7 +24,7 @@ pub(crate) struct Queue {
 impl Queue {
     pub(crate) fn new() -> Self {
         Self {
-            inner: Arc::new(TokioMutex::new(QueueInner::new())),
+            inner: Arc::new(Mutex::new(QueueInner::new())),
             new_message_added: Arc::new(Notify::new()),
             last_acknowledged_seq_no: Arc::new(RwLock::new(None)),
             message_acknowledged: Arc::new(Notify::new()),
@@ -36,10 +34,10 @@ impl Queue {
     pub(crate) async fn add_message(
         &self,
         message: MessageData,
-        ack: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
+        ack_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     ) -> YdbResult<()> {
         let mut inner = self.inner.lock().await;
-        inner.add_message(message, ack).await?;
+        inner.add_message(message, ack_sender)?;
         self.new_message_added.notify_one();
         Ok(())
     }
@@ -47,7 +45,7 @@ impl Queue {
     pub(crate) async fn acknowledge_message(&self, write_ack: WriteAck) -> YdbResult<()> {
         let mut inner = self.inner.lock().await;
         let seq_no = write_ack.seq_no;
-        inner.acknowledge_message(write_ack).await?;
+        inner.acknowledge_message(write_ack)?;
 
         *self.last_acknowledged_seq_no.write().await = Some(seq_no);
         self.message_acknowledged.notify_one();
@@ -136,7 +134,7 @@ impl Queue {
         inner.close_for_new_messages()
     }
 
-    pub(crate) async fn reset_progress(&self) -> () {
+    pub(crate) async fn reset_progress(&self) {
         let mut inner = self.inner.lock().await;
         inner.reset_progress()
     }
@@ -155,7 +153,7 @@ impl Queue {
 
 struct QueueInner {
     message_queue: MessageQueue,
-    reception_queue: TopicWriterReceptionQueue,
+    reception_queue: ReceptionQueue,
     is_open_for_new_messages: bool,
 }
 
@@ -163,15 +161,15 @@ impl QueueInner {
     fn new() -> Self {
         Self {
             message_queue: MessageQueue::new(),
-            reception_queue: TopicWriterReceptionQueue::new(),
+            reception_queue: ReceptionQueue::new(),
             is_open_for_new_messages: true,
         }
     }
 
-    async fn add_message(
+    fn add_message(
         &mut self,
         message: MessageData,
-        confirmation_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
+        ack_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     ) -> YdbResult<()> {
         if !self.is_open_for_new_messages {
             return Err(YdbError::custom("message queue is closed for new messages"));
@@ -182,12 +180,12 @@ impl QueueInner {
         self.message_queue.add_message(message)?;
 
         self.reception_queue
-            .add_ticket(TopicWriterReceptionTicket::new(seq_no, confirmation_sender));
+            .add_ticket(ReceptionTicket::new(seq_no, ack_sender));
 
         Ok(())
     }
 
-    async fn acknowledge_message(&mut self, write_ack: WriteAck) -> YdbResult<()> {
+    fn acknowledge_message(&mut self, write_ack: WriteAck) -> YdbResult<()> {
         let Some(ticket_seq_no) = self.reception_queue.peek_ticket_seq_no() else {
             return Err(YdbError::custom(
                 "expected reception ticket to be actually present",
@@ -232,7 +230,7 @@ impl QueueInner {
     }
 
     fn init_flush(&mut self) -> YdbResult<oneshot::Receiver<()>> {
-        let receiver = self.reception_queue.init_flush_op()?;
+        let receiver = self.reception_queue.init_flush()?;
         Ok(receiver)
     }
 
@@ -253,25 +251,7 @@ mod tests {
     use tokio::time::timeout;
 
     use super::*;
-    use crate::client_topic::topicwriter::message_write_status::{MessageWriteStatus, WriteAck};
-
-    fn create_message(seq_no: i64, data: Vec<u8>) -> MessageData {
-        MessageData {
-            seq_no,
-            created_at: None,
-            data,
-            uncompressed_size: 0,
-            metadata_items: vec![],
-            partitioning: None,
-        }
-    }
-
-    fn write_ack(seq_no: i64) -> WriteAck {
-        WriteAck {
-            seq_no,
-            status: MessageWriteStatus::Unknown,
-        }
-    }
+    use crate::client_topic::topicwriter::test_helpers::{create_message, write_ack};
 
     #[tokio::test]
     async fn add_message_rejects_when_queue_closed_for_new_messages() {
@@ -468,7 +448,6 @@ mod tests {
 
         let err = q.acknowledge_message(write_ack(99)).await.unwrap_err();
         let err_msg = err.to_string();
-        println!("err_msg: {err_msg}");
         assert!(err_msg.contains("reception ticket and write ack seq_no mismatch"));
         assert!(err_msg.contains("ack_seq_no: 99"));
         assert!(err_msg.contains("ticket_seq_no: 1"));
