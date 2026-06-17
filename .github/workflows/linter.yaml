@@ -52,7 +52,10 @@ jobs:
       uses: Swatinem/rust-cache@v2
 
     - name: Rustfmt check
-      run: cargo fmt --check
+      run: | 
+        # Do not check ydb-grpc workaround
+        cargo fmt -p ydb --check
+        cargo fmt -p tests --check
 
     - name: Clippy check
       run: |
@@ -81,7 +84,7 @@ jobs:
         uses: arduino/setup-protoc@v3
         with:
           version: "33.2"
-  
+
       - name: Install rust
         uses: dtolnay/rust-toolchain@v1
         with:
@@ -94,7 +97,7 @@ jobs:
           cargo --version
           echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
           echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
-  
+
       - name: Build tonic-grpc
         run: |
           cargo build -p ydb-grpc --features regenerate-sources
