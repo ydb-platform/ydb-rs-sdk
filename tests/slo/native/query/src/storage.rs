@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use slo_framework::kv::{Database, KvWorkload, Params};
 use slo_framework::{test_row_from_row, Framework, RowID, TestRow, Workload};
 use ydb::ClientBuilder;
-use ydb::QueryClient;
+use ydb::{QueryClient, QuerySessionPoolSettings};
 
 pub struct Storage {
     query_client: QueryClient,
@@ -27,8 +27,16 @@ impl Storage {
 
         client.wait().await.map_err(|err| err.to_string())?;
 
+        let pool_limit = params.pool_size() as usize;
+        let query_client = client
+            .query_client()
+            .with_session_pool(QuerySessionPoolSettings::new().with_limit(pool_limit))
+            .await
+            .map_err(|err| err.to_string())?
+            .clone_with_idempotent_operations(true);
+
         Ok(Self {
-            query_client: client.query_client(),
+            query_client,
             table_path: params.table_path.clone(),
             read_timeout: params.read_timeout,
             write_timeout: params.write_timeout,

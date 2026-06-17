@@ -20,6 +20,14 @@ use ydb_grpc::ydb_proto::query::{
     DeleteSessionRequest, ExecuteQueryResponsePart, RollbackTransactionRequest, SessionState,
 };
 
+/// gRPC metadata: enable server-side session balancing on CreateSession.
+pub(crate) const HEADER_CLIENT_CAPABILITIES: &str = "x-ydb-client-capabilities";
+pub(crate) const CLIENT_CAPABILITY_SESSION_BALANCER: &str = "session-balancer";
+
+pub(crate) struct CreateSessionResult {
+    pub session_id: String,
+}
+
 pub(crate) struct RawQueryClient {
     service: QueryServiceClient<InterceptedChannel>,
 }
@@ -78,11 +86,18 @@ impl RawQueryClient {
         parse_response(response.into_inner())
     }
 
-    pub async fn create_session(&mut self) -> RawResult<String> {
-        let response = self.service.create_session(CreateSessionRequest {}).await?;
+    pub async fn create_session(&mut self) -> RawResult<CreateSessionResult> {
+        let mut request = tonic::Request::new(CreateSessionRequest {});
+        request.metadata_mut().append(
+            HEADER_CLIENT_CAPABILITIES,
+            tonic::metadata::MetadataValue::from_static(CLIENT_CAPABILITY_SESSION_BALANCER),
+        );
+        let response = self.service.create_session(request).await?;
         let inner = response.into_inner();
         check_status(inner.status, &inner.issues)?;
-        Ok(inner.session_id)
+        Ok(CreateSessionResult {
+            session_id: inner.session_id,
+        })
     }
 
     pub async fn delete_session(&mut self, session_id: &str) -> RawResult<()> {

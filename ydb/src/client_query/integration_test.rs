@@ -1,4 +1,4 @@
-use super::{QuerySessionMode, QueryTransactionOptions, QueryTxMode};
+use super::{QuerySessionMode, QuerySessionPoolSettings, QueryTransactionOptions, QueryTxMode};
 use crate::errors::YdbResult;
 use crate::test_integration_helper::create_client;
 use crate::types::Value;
@@ -145,14 +145,35 @@ async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
-async fn query_client_pooled_session_not_implemented() {
+async fn query_client_pooled_session_not_configured() {
     let client = create_client().await.unwrap();
     let mut qc = client
         .query_client()
         .clone_with_session_mode(QuerySessionMode::Pool);
 
     let err = qc.query_row("SELECT 1").await.unwrap_err();
-    assert!(err.to_string().contains("session pool is not implemented"));
+    assert!(err.to_string().contains("session pool is not configured"));
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_client_pooled_session_select() -> YdbResult<()> {
+    let client = create_client().await?;
+    let mut qc = client
+        .query_client()
+        .clone_with_idempotent_operations(true)
+        .with_session_pool(
+            QuerySessionPoolSettings::new()
+                .with_limit(4)
+                .with_warm_up(1),
+        )
+        .await?;
+
+    let mut row = qc.query_row("SELECT 1 + 1 AS sum").await?;
+    let sum: i64 = row.remove_field_by_name("sum")?.try_into()?;
+    assert_eq!(sum, 2);
+    Ok(())
 }
 
 #[tokio::test]
