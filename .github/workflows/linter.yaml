@@ -24,21 +24,21 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+
     - name: Install rust
       uses: dtolnay/rust-toolchain@v1
       with:
         toolchain: ${{ env[matrix.rust_version] }}
         components: clippy, rustfmt
-          
+
     - name: Install taplo
       uses: uncenter/setup-taplo@v2
       with:
           version: "0.10.0"
-
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        submodules: true
 
     - name: Rust version
       id: rust_version_step
@@ -72,13 +72,26 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-    - name: Install rust
-      uses: dtolnay/rust-toolchain@v1
-      with:
-        toolchain: ${{ env[matrix.rust_version] }}
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+            submodules: true
+  
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env[matrix.rust_version] }}
 
-    - name: Build tonic-grpc
-      run: |
-        cargo build -p ydb-grpc --features regenerate-sources
-        git diff --exit-code
+      - name: Rust version
+        id: rust_version_step
+        run: |
+          rustc --version
+          cargo --version
+          echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
+          echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
+  
+      - name: Build tonic-grpc
+        run: |
+          cargo build -p ydb-grpc --features regenerate-sources
+          git diff --exit-code
 
