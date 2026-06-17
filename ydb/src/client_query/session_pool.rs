@@ -115,6 +115,18 @@ impl QuerySessionPoolSettings {
         self.idle_ttl = ttl;
         self
     }
+
+    /// Maximum time for CreateSession + AttachSession when the pool creates a session.
+    pub fn with_session_create_timeout(mut self, timeout: Duration) -> Self {
+        self.session_create_timeout = timeout;
+        self
+    }
+
+    /// Maximum time for DeleteSession when the pool closes a session.
+    pub fn with_session_delete_timeout(mut self, timeout: Duration) -> Self {
+        self.session_delete_timeout = timeout;
+        self
+    }
 }
 
 /// Pooled explicit session lease. Not concurrent-safe: one logical owner at a time.
@@ -744,6 +756,22 @@ fn session_should_close(
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+
+    #[test]
+    fn default_session_pool_timeouts_are_500ms() {
+        let settings = QuerySessionPoolSettings::default();
+        assert_eq!(settings.session_create_timeout, Duration::from_millis(500));
+        assert_eq!(settings.session_delete_timeout, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn session_pool_timeout_builders_override_defaults() {
+        let settings = QuerySessionPoolSettings::new()
+            .with_session_create_timeout(Duration::from_secs(2))
+            .with_session_delete_timeout(Duration::from_secs(3));
+        assert_eq!(settings.session_create_timeout, Duration::from_secs(2));
+        assert_eq!(settings.session_delete_timeout, Duration::from_secs(3));
+    }
 
     #[test]
     fn session_should_close_respects_usage_limit_and_ttl() {

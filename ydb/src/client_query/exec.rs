@@ -356,43 +356,37 @@ async fn client_begin_stream_once(
     let mode = effective_session_mode(ctx.session_mode, opts);
     let timeout_duration = operation_timeout(opts, &ctx.timeouts);
 
-    match mode {
-        QuerySessionMode::Pool => {
-            let pool = ctx.session_pool.as_ref().ok_or_else(|| {
-                YdbError::Custom(
-                    "query session pool is not configured; call QueryClient::with_session_pool"
-                        .to_string(),
-                )
-            })?;
-            let mut lease = pool.acquire_explicit().await?;
-            let (mut client, req) =
-                client_pooled_explicit_request(ctx, &mut lease, text, params, opts).await?;
-            let stream = with_operation_timeout(timeout_duration, async {
-                client.execute_query(req).await.map_err(Into::into)
-            })
-            .await?;
-            Ok(ExecuteQueryStream::new(stream).with_session_guard(lease))
+    with_operation_timeout(timeout_duration, async {
+        match mode {
+            QuerySessionMode::Pool => {
+                let pool = ctx.session_pool.as_ref().ok_or_else(|| {
+                    YdbError::Custom(
+                        "query session pool is not configured; call QueryClient::with_session_pool"
+                            .to_string(),
+                    )
+                })?;
+                let mut lease = pool.acquire_explicit().await?;
+                let (mut client, req) =
+                    client_pooled_explicit_request(ctx, &mut lease, text, params, opts).await?;
+                let stream = client.execute_query(req).await.map_err(YdbError::from)?;
+                Ok(ExecuteQueryStream::new(stream).with_session_guard(lease))
+            }
+            QuerySessionMode::Implicit if ctx.implicit_session_pool.is_some() => {
+                let pool = ctx.implicit_session_pool.as_ref().expect("checked");
+                let mut lease = pool.acquire_implicit().await?;
+                let (mut client, req) =
+                    client_pooled_implicit_request(ctx, &mut lease, text, params, opts).await?;
+                let stream = client.execute_query(req).await.map_err(YdbError::from)?;
+                Ok(ExecuteQueryStream::new(stream).with_session_guard(lease))
+            }
+            QuerySessionMode::Implicit => {
+                let (mut client, req) = client_implicit_request(ctx, text, params, opts).await?;
+                let stream = client.execute_query(req).await.map_err(YdbError::from)?;
+                Ok(ExecuteQueryStream::new(stream))
+            }
         }
-        QuerySessionMode::Implicit if ctx.implicit_session_pool.is_some() => {
-            let pool = ctx.implicit_session_pool.as_ref().expect("checked");
-            let mut lease = pool.acquire_implicit().await?;
-            let (mut client, req) =
-                client_pooled_implicit_request(ctx, &mut lease, text, params, opts).await?;
-            let stream = with_operation_timeout(timeout_duration, async {
-                client.execute_query(req).await.map_err(Into::into)
-            })
-            .await?;
-            Ok(ExecuteQueryStream::new(stream).with_session_guard(lease))
-        }
-        QuerySessionMode::Implicit => {
-            let (mut client, req) = client_implicit_request(ctx, text, params, opts).await?;
-            let stream = with_operation_timeout(timeout_duration, async {
-                client.execute_query(req).await.map_err(Into::into)
-            })
-            .await?;
-            Ok(ExecuteQueryStream::new(stream))
-        }
-    }
+    })
+    .await
 }
 
 pub(crate) async fn client_begin_stream(
@@ -543,27 +537,24 @@ pub(crate) async fn transaction_begin_stream(
             "transaction already finished (committed or rolled back)".to_string(),
         ));
     }
-    ensure_tx_session(tx).await?;
-    if let Some(lease) = &mut tx.pooled_lease {
-        lease.begin_use();
-    }
-    if tx.begin {
-        transaction_ensure_begin(tx, true).await?;
-    }
-    let result: YdbResult<ExecuteQueryStream> = async {
+    let timeout_duration = operation_timeout(&opts, &tx.timeouts);
+    let result: YdbResult<ExecuteQueryStream> = with_operation_timeout(timeout_duration, async {
+        ensure_tx_session(tx).await?;
+        if let Some(lease) = &mut tx.pooled_lease {
+            lease.begin_use();
+        }
+        if tx.begin {
+            transaction_ensure_begin(tx, true).await?;
+        }
         let (mut client, req) = transaction_execute_request(tx, text, params, &opts).await?;
-        let timeout_duration = operation_timeout(&opts, &tx.timeouts);
-        let stream = with_operation_timeout(timeout_duration, async {
-            client.execute_query(req).await.map_err(Into::into)
-        })
-        .await?;
+        let stream = client.execute_query(req).await.map_err(YdbError::from)?;
         let mut stream = ExecuteQueryStream::new(stream);
         stream.prime_first_part().await?;
         if let Some(id) = stream.take_captured_tx_id() {
             apply_stream_tx_id(tx, Some(id));
         }
         Ok(stream)
-    }
+    })
     .await;
     if result.is_err() {
         if let Some(lease) = &mut tx.pooled_lease {

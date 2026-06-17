@@ -13,6 +13,9 @@ mod stream_facade;
 mod integration_test;
 
 #[cfg(test)]
+mod session_pool_integration_test;
+
+#[cfg(test)]
 mod tx_modes_integration_test;
 
 use std::any::Any;
