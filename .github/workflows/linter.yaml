@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ master ]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
@@ -26,6 +29,11 @@ jobs:
       with:
         toolchain: ${{ env[matrix.rust_version] }}
         components: clippy, rustfmt
+          
+    - name: Install taplo
+      uses: uncenter/setup-taplo@v2
+      with:
+          version: "0.10.0"
 
     - name: Checkout
       uses: actions/checkout@v4
@@ -46,6 +54,31 @@ jobs:
     - name: Rustfmt check
       run: cargo fmt --check
 
-    - name: Linter
+    - name: Clippy check
       run: |
         cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
+
+    - name: Taplo check
+      run: |
+          taplo fmt --check
+          git diff --exit-code
+
+  check-grpc-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        rust_version: [ "RUST_VERSION_NEW" ]
+
+    runs-on: ubuntu-24.04
+
+    steps:
+    - name: Install rust
+      uses: dtolnay/rust-toolchain@v1
+      with:
+        toolchain: ${{ env[matrix.rust_version] }}
+
+    - name: Build tonic-grpc
+      run: |
+        cargo build -p ydb-grpc --features regenerate-sources
+        git diff --exit-code
+
