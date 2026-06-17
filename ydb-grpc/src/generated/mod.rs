@@ -66,4 +66,3 @@ pub mod ydb {
         }
     }
 }
-
