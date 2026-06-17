@@ -56,11 +56,9 @@ impl MessageQueue {
         send_buffer: &mut Vec<MessageData>,
         threshold: usize,
     ) -> AppendMessageToSendBufferResult {
-        let Some(_) = self.messages.front() else {
+        let Some(message) = self.messages.pop_front() else {
             return AppendMessageToSendBufferResult::CouldNotGetMessage;
         };
-
-        let message = self.messages.pop_front().unwrap();
         send_buffer.push(message.clone());
         self.sent_messages.push_back(message);
 

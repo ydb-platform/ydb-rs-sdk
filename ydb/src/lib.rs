@@ -144,8 +144,7 @@ pub use client_topic::topicwriter::partitioning::PartitioningStrategy;
 pub use client_topic::topicwriter::writer::TopicWriter;
 // full enum pub types
 pub use client_topic::topicwriter::writer_options::{
-    TopicWriterConnectionOptions, TopicWriterOptions, TopicWriterOptionsBuilder,
-    TopicWriterRetrySettings,
+    TopicWriterOptions, TopicWriterOptionsBuilder,
 };
 // full enum pub types
 pub use client::{Client, TimeoutSettings};

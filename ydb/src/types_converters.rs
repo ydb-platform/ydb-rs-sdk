@@ -248,3 +248,34 @@ pub(crate) fn try_vec_to_list_of_structs(values: Vec<Value>) -> YdbResult<Option
 
     Ok(Some(Value::list_from(example_value, values)?))
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{types_converters::try_vec_to_list_of_structs, ydb_struct};
+
+    #[test]
+    fn try_vec_empty() {
+        assert!(matches!(try_vec_to_list_of_structs(vec![]), Ok(None)));
+    }
+
+    #[test]
+    fn try_vec_same_structure() {
+        let values = vec![ydb_struct!("id" => 1), ydb_struct!("id" => 2)];
+        assert!(matches!(try_vec_to_list_of_structs(values), Ok(Some(_))));
+    }
+
+    #[test]
+    fn try_vec_different_structure() {
+        let values = vec![ydb_struct!("id" => 1), ydb_struct!("key" => 2)];
+        assert!(try_vec_to_list_of_structs(values).is_err());
+    }
+
+    #[test]
+    fn try_vec_non_struct() {
+        let values = vec![ydb_struct!("id" => 1), 42i64.into()];
+        assert!(try_vec_to_list_of_structs(values).is_err());
+
+        let values = vec![1i64.into()];
+        assert!(try_vec_to_list_of_structs(values).is_err());
+    }
+}
