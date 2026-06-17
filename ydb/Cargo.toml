@@ -1,7 +1,7 @@
 [package]
 publish = true
 name = "ydb"
-version = "0.13.2"
+version = "0.13.3"
 authors = ["rekby <timofey.koolin@gmail.com>"]
 edition = "2021"
 license = "Apache-2.0"
@@ -54,9 +54,11 @@ tonic = { workspace = true }
 tower = "0.4"
 url = "2.2"
 uuid = { version = "1.17.0", features = ["v4", "v7"] }
-ydb-grpc = { version = "0.2.0", path="../ydb-grpc"}
+ydb-grpc = { version = "0.2.2", path="../ydb-grpc"}
 
 [dev-dependencies]
 async_once = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 lazy_static = "1.4"
 ntest = "0.7"
+uuid = { version = "1.17.0", features = ["v4"] }
