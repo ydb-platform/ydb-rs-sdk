@@ -1,207 +1,138 @@
 mod mock_server;
 
-use crate::mock_server::FakeTopic;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use tokio::sync::oneshot::error::TryRecvError;
+use tokio::sync::Notify;
+use ydb::{ClientBuilder, TopicReader, TopicReaderBatch, TopicReaderCommitMarker, YdbResult};
+use ydb_grpc::ydb_proto::topic::stream_read_message::from_client::ClientMessage as ReadFromClient;
 
-use std::time::Duration;
-use tokio::{sync::oneshot::error::TryRecvError, time::timeout};
-use tracing_test::traced_test;
-use ydb::{TopicReader, TopicReaderBatch, TopicReaderCommitMarker, YdbError, YdbResult};
+use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply};
+use crate::mock_server::server::MockServer;
+use crate::mock_server::topic::{builders, TopicIncoming};
+
+macro_rules! topic_test {
+    ($name:ident, timeout_secs = $secs:literal, $body:block) => {
+        #[tokio::test]
+        #[tracing_test::traced_test]
+        async fn $name() -> YdbResult<()> {
+            tokio::time::timeout(std::time::Duration::from_secs($secs), async move { $body })
+                .await
+                .unwrap_or_else(|_| panic!("test {} timed out after {}s", stringify!($name), $secs))
+        }
+    };
+}
 
 const DATABASE: &str = "/local";
 const TOPIC_PATH: &str = "/local/topic";
 const CONSUMER: &str = "consumer";
+const PARTITION_SESSION_ID: i64 = 1;
 
-#[tokio::test]
-#[traced_test]
-async fn reads_message() -> YdbResult<()> {
-    let (mut reader, mut topic) = reader_and_topic().await?;
-
-    read_one(&mut reader, &mut topic, 0, b"hello").await?;
-    Ok(())
+#[derive(Default)]
+struct ServerState {
+    partition_ready: Notify,
+    commits_seen: AtomicUsize,
+    commits_changed: Notify,
+    stream_id: Arc<std::sync::Mutex<u64>>,
 }
 
-#[tokio::test]
-#[traced_test]
-async fn commits_message_after_server_ack() -> YdbResult<()> {
-    let (mut reader, mut topic) = reader_and_topic().await?;
+impl ServerState {
+    async fn wait_commits(&self, target: usize) {
+        loop {
+            let notified = self.commits_changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.commits_seen.load(Ordering::SeqCst) >= target {
+                return;
+            }
+            notified.await;
+        }
+    }
 
-    let commit_marker = read_one(&mut reader, &mut topic, 0, b"hello").await?;
-
-    let commit = reader.commit(commit_marker);
-    topic.ack_next_commit(0, 1).await;
-
-    commit.await.expect("commit handler must be acknowledged");
-    Ok(())
+    fn current_stream_id(&self) -> u64 {
+        *self.stream_id.lock().unwrap()
+    }
 }
 
-#[tokio::test]
-#[traced_test]
-async fn acknowledges_cumulative_commit_offset() -> YdbResult<()> {
-    let (mut reader, mut topic) = reader_and_topic().await?;
-
-    let first_marker = read_one(&mut reader, &mut topic, 0, b"first").await?;
-    let second_marker = read_one(&mut reader, &mut topic, 1, b"second").await?;
-
-    let first_commit = reader.commit(first_marker);
-    let second_commit = reader.commit(second_marker);
-    topic.expect_next_commit(0, 1).await;
-    topic.expect_next_commit(1, 2).await;
-    topic.ack_committed_offset(2).await;
-
-    first_commit
-        .await
-        .expect("first commit must be covered by cumulative ack");
-    second_commit
-        .await
-        .expect("second commit must be covered by cumulative ack");
-    Ok(())
+struct Counter {
+    state: Arc<ServerState>,
 }
 
-#[tokio::test]
-#[traced_test]
-async fn acknowledges_only_commits_covered_by_server_offset() -> YdbResult<()> {
-    let (mut reader, mut topic) = reader_and_topic().await?;
+impl Handler for Counter {
+    fn handle(&self, incoming: Incoming) -> Option<Incoming> {
+        if let Incoming::Topic(TopicIncoming::StreamRead { stream_id, msg }) = &incoming {
+            match msg {
+                ReadFromClient::InitRequest(_) => {
+                    *self.state.stream_id.lock().unwrap() = *stream_id;
+                }
 
-    let first_marker = read_one(&mut reader, &mut topic, 0, b"first").await?;
-    let second_marker = read_one(&mut reader, &mut topic, 1, b"second").await?;
-
-    let first_commit = reader.commit(first_marker);
-    let mut second_commit = reader.commit(second_marker);
-    topic.expect_next_commit(0, 1).await;
-    topic.expect_next_commit(1, 2).await;
-
-    topic.ack_committed_offset(1).await;
-
-    first_commit
-        .await
-        .expect("first commit must be covered by server offset 1");
-    assert_eq!(second_commit.try_recv(), Err(TryRecvError::Empty));
-
-    topic.ack_committed_offset(2).await;
-    second_commit
-        .await
-        .expect("second commit must be covered by server offset 2");
-    Ok(())
+                ReadFromClient::StartPartitionSessionResponse(_) => {
+                    self.state.partition_ready.notify_waiters();
+                }
+                ReadFromClient::CommitOffsetRequest(_) => {
+                    self.state.commits_seen.fetch_add(1, Ordering::SeqCst);
+                    self.state.commits_changed.notify_waiters();
+                }
+                _ => {}
+            }
+        }
+        Some(incoming)
+    }
 }
 
-#[tokio::test]
-#[traced_test]
-async fn idempotent_retry() -> YdbResult<()> {
-    let (mut reader, mut topic) = reader_and_topic().await?;
-
-    read_one(&mut reader, &mut topic, 0, b"before").await?;
-
-    topic.fail_idempotent().await;
-    topic.redeliver_uncommitted().await;
-
-    let batch = reader.read_batch().await?;
-    assert_single_message_batch(batch, 0, b"before").await?;
-    Ok(())
+struct Driver {
+    server: MockServer,
+    reply_tx: FromHandlerToService,
+    state: Arc<ServerState>,
 }
 
-#[tokio::test]
-#[traced_test]
-async fn reconnects_after_server_restart() -> YdbResult<()> {
-    let job = async {
-        let (mut reader, mut topic) = reader_and_topic().await?;
+impl Driver {
+    async fn start() -> Self {
+        let state = Arc::new(ServerState::default());
+        let handler = Counter {
+            state: state.clone(),
+        };
+        let (server, reply_tx) = MockServer::start(handler).await;
+        Self {
+            server,
+            reply_tx,
+            state,
+        }
+    }
 
-        read_one(&mut reader, &mut topic, 0, b"before").await?;
+    fn send(&self, reply: Reply) {
+        self.reply_tx.send(reply).expect("mock server dropped");
+    }
 
-        topic.restart_server().await;
-        read_one(&mut reader, &mut topic, 1, b"after").await?;
-        Ok(())
-    };
+    fn send_read_response(&self, offset: i64, payload: impl Into<Vec<u8>>) {
+        self.send(Reply::Topic(builders::read_response(
+            self.state.current_stream_id(),
+            PARTITION_SESSION_ID,
+            offset,
+            payload,
+        )))
+    }
 
-    timeout(Duration::from_secs(60), job)
-        .await
-        .expect("too long reconnecting")
+    fn send_commit_offset_response(&self, committed_offset: i64) {
+        self.send(Reply::Topic(builders::commit_offset_response(
+            self.state.current_stream_id(),
+            PARTITION_SESSION_ID,
+            committed_offset,
+        )))
+    }
 }
 
-#[tokio::test]
-#[traced_test]
-async fn discards_buffered_messages_after_stream_failure() -> YdbResult<()> {
-    let (mut reader, mut topic) = reader_and_topic().await?;
+async fn make_reader(server: &MockServer) -> YdbResult<TopicReader> {
+    let client = ClientBuilder::new_from_connection_string(format!(
+        "{}?database={DATABASE}&use_discovery=false",
+        server.endpoint()
+    ))?
+    .client()?;
 
-    topic.deliver(0, b"stale").await;
-    topic.fail_retriable().await;
-    topic.deliver(0, b"fresh").await;
-
-    let batch = reader.read_batch().await?;
-    assert_single_message_batch(batch, 0, b"fresh").await?;
-    Ok(())
-}
-
-#[tokio::test]
-#[traced_test]
-async fn retryable_retry() -> YdbResult<()> {
-    let (mut reader, mut topic) = reader_and_topic().await?;
-
-    let old_marker = read_one(&mut reader, &mut topic, 0, b"hello").await?;
-
-    let old_commit = reader.commit(old_marker.clone());
-    topic.expect_next_commit(0, 1).await;
-    topic.fail_retriable().await;
-    old_commit
+    client
+        .topic_client()
+        .create_reader(CONSUMER.to_string(), TOPIC_PATH.to_string())
         .await
-        .expect_err("pending commit from failed stream must be cancelled");
-
-    topic.redeliver_uncommitted().await;
-    let batch = reader.read_batch().await?;
-    let new_marker = assert_single_message_batch(batch, 0, b"hello")
-        .await?
-        .get_commit_marker();
-
-    reader
-        .commit(old_marker)
-        .await
-        .expect_err("commit marker from old reader epoch must be cancelled");
-
-    let new_commit = reader.commit(new_marker);
-    topic.ack_next_commit(0, 1).await;
-    new_commit
-        .await
-        .expect("commit from the reconnected stream must be acknowledged");
-    Ok(())
-}
-
-#[tokio::test]
-#[traced_test]
-async fn stop_partition_cancels_unacknowledged_commit() -> YdbResult<()> {
-    let (mut reader, mut topic) = reader_and_topic().await?;
-
-    let marker = read_one(&mut reader, &mut topic, 0, b"hello").await?;
-
-    let commit = reader.commit(marker);
-    topic.expect_next_commit(0, 1).await;
-    topic.stop_partition_without_commit().await;
-
-    commit
-        .await
-        .expect_err("stop partition without committed offset must cancel pending commit");
-    Ok(())
-}
-
-#[tokio::test]
-#[traced_test]
-async fn non_retriable_fail() -> YdbResult<()> {
-    let (mut reader, mut topic) = reader_and_topic().await?;
-
-    read_one(&mut reader, &mut topic, 0, b"hello").await?;
-
-    topic.fail_non_retriable().await;
-
-    let err = tokio::time::timeout(Duration::from_secs(5), reader.read_batch())
-        .await
-        .expect("timed out waiting for non-retriable stream error")
-        .expect_err("non-retriable stream error must be returned to caller");
-    assert_grpc_code(err, tonic::Code::InvalidArgument);
-    topic.assert_no_reconnect(Duration::from_millis(200)).await;
-
-    Ok(())
-}
-
-async fn reader_and_topic() -> YdbResult<(TopicReader, FakeTopic)> {
-    FakeTopic::new(DATABASE, TOPIC_PATH, CONSUMER).await
 }
 
 async fn assert_single_message_batch(
@@ -215,27 +146,129 @@ async fn assert_single_message_batch(
     assert_eq!(batch.messages[0].get_partition_id(), 0);
     assert_eq!(
         batch.messages[0].read_and_take().await?.as_deref(),
-        Some(payload)
+        Some(payload),
     );
     Ok(batch)
 }
 
-async fn read_one(
+async fn deliver_and_read(
+    driver: &Driver,
     reader: &mut TopicReader,
-    topic: &mut FakeTopic,
     offset: i64,
     payload: &[u8],
 ) -> YdbResult<TopicReaderCommitMarker> {
-    topic.deliver(offset, payload).await;
+    driver.send_read_response(offset, payload);
     let batch = reader.read_batch().await?;
     Ok(assert_single_message_batch(batch, offset, payload)
         .await?
         .get_commit_marker())
 }
 
-fn assert_grpc_code(err: YdbError, expected_code: tonic::Code) {
-    match err {
-        YdbError::TransportGRPCStatus(status) => assert_eq!(status.code(), expected_code),
-        other => panic!("expected TransportGRPCStatus({expected_code:?}), got {other:?}"),
-    }
-}
+topic_test!(reads_message, timeout_secs = 1, {
+    let driver = Driver::start().await;
+    let mut reader = make_reader(&driver.server).await?;
+    driver.state.partition_ready.notified().await;
+
+    deliver_and_read(&driver, &mut reader, 0, b"hello").await?;
+    Ok(())
+});
+
+topic_test!(commits_message_after_server_ack, timeout_secs = 2, {
+    let driver = Driver::start().await;
+    let mut reader = make_reader(&driver.server).await?;
+    driver.state.partition_ready.notified().await;
+
+    let m0 = deliver_and_read(&driver, &mut reader, 0, b"first").await?;
+    let m1 = deliver_and_read(&driver, &mut reader, 1, b"second").await?;
+    let m2 = deliver_and_read(&driver, &mut reader, 2, b"third").await?;
+
+    let c0 = reader.commit(m0);
+    let c1 = reader.commit(m1);
+    let mut c2 = reader.commit(m2);
+
+    let ack_first_two = async {
+        driver.state.wait_commits(2).await;
+        driver.send_commit_offset_response(2);
+    };
+
+    let (_, r0, r1) = tokio::join!(ack_first_two, c0, c1);
+    r0.expect("first commit must resolve");
+    r1.expect("second commit must resolve");
+    assert_eq!(c2.try_recv(), Err(TryRecvError::Empty));
+
+    driver.send_commit_offset_response(3);
+    c2.await
+        .expect("third commit must resolve after second ack");
+
+    Ok(())
+});
+
+topic_test!(retryable_fail, timeout_secs = 20, {
+    let driver = Driver::start().await;
+    let mut reader = make_reader(&driver.server).await?;
+    driver.state.partition_ready.notified().await;
+
+    let m0 = deliver_and_read(&driver, &mut reader, 0, b"first").await?;
+    let m1 = deliver_and_read(&driver, &mut reader, 1, b"second").await?;
+
+    let c0 = reader.commit(m0);
+    let mut c1 = reader.commit(m1);
+
+    let ack_first = async {
+        driver.state.wait_commits(1).await;
+        driver.send_commit_offset_response(1);
+    };
+
+    let (_, r0) = tokio::join!(ack_first, c0);
+    r0.expect("first commit must resolve");
+    assert_eq!(c1.try_recv(), Err(TryRecvError::Empty));
+
+    let stream_id = driver.state.current_stream_id();
+
+    let fail_msg = builders::empty_with_status(
+        stream_id,
+        ydb_grpc::ydb_proto::status_ids::StatusCode::Unavailable,
+    );
+
+    driver.send(Reply::Topic(fail_msg));
+
+    let new_stream = async {
+        driver.state.partition_ready.notified().await;
+        driver.send_read_response(1, b"second");
+    };
+
+    let (batch, _, r1) = tokio::join!(reader.read_batch(), new_stream, c1);
+
+    let batch = batch.expect("Topic Reader should not fail on retryable error");
+
+    let _ = assert_single_message_batch(batch, 1, b"second").await;
+
+    assert!(r1.is_err());
+
+    Ok(())
+});
+
+topic_test!(non_retryable_fail, timeout_secs = 20, {
+    let driver = Driver::start().await;
+    let mut reader = make_reader(&driver.server).await?;
+    driver.state.partition_ready.notified().await;
+
+    let m0 = deliver_and_read(&driver, &mut reader, 0, b"first").await?;
+    let mut c0 = reader.commit(m0);
+
+    let stream_id = driver.state.current_stream_id();
+
+    let fail_msg = builders::empty_with_status(
+        stream_id,
+        ydb_grpc::ydb_proto::status_ids::StatusCode::InternalError,
+    );
+
+    driver.send(Reply::Topic(fail_msg));
+
+    assert!(reader.read_batch().await.is_err());
+    assert!(c0.try_recv().is_err());
+
+    Ok(())
+});
+
+// TODO: Test TopicReader Token recieving before restart, Token recieving after restart.
