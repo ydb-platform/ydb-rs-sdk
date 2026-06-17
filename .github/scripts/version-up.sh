@@ -105,7 +105,9 @@ function version_set() {
   local VERSION="$2"
 
   sed -i.bak -e "s/^version *=.*/version = \"$VERSION\"/" "$CRATE_NAME/Cargo.toml"
-  sed -i -e "s/^ydb *=.*/ydb = \"$VERSION\"/" "README.md"
+  if [[ "$CRATE_NAME" == "ydb" ]]; then
+    sed -i -e "s/^ydb *=.*/ydb = \"$VERSION\"/" "README.md"
+  fi
 }
 
 function version_dep_set() {
@@ -139,7 +141,7 @@ function bump_version() {
       version_dep_set "ydb-grpc" "$VERSION"
       ;;
     ydb-grpc-helpers)
-      version_dep_set "ydb-grpc-helpers" "$VERSION"
+      # Deprecated crate; not a workspace dependency of ydb / ydb-grpc.
       ;;
     *)
       echo "Unexpected crate name '$CRATE_NAME'"

@@ -9,6 +9,10 @@ description = "Deprecated, not used now. Crate contain helpers for generate grpc
 repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/ydb-grpc-helpers-0.0.11/ydb-grpc-helpers"
 rust-version = "1.85"
 
+# Standalone workspace root so `cargo publish` works while this crate is outside
+# the repo workspace members list.
+[workspace]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
 
