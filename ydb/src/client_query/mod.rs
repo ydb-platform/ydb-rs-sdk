@@ -6,29 +6,37 @@ mod builders;
 mod exec;
 mod internal;
 mod script;
+mod session_pool;
 mod stream_facade;
 
 #[cfg(test)]
 mod integration_test;
 
+#[cfg(test)]
+mod tx_modes_integration_test;
+
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::FutureExt;
 use tokio::time::sleep;
 
 use crate::client::TimeoutSettings;
+use crate::discovery::Discovery;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::result::Row;
 
 use builders::impl_query_methods;
 use exec::{
-    check_retry_transaction_error, retry_wait, transaction_commit, transaction_exec_context,
-    transaction_rollback, ClientExecContext, TransactionExecContext, DEFAULT_QUERY_RETRY_BUDGET,
+    check_retry_transaction_error, retry_wait, transaction_commit, transaction_ensure_begin,
+    transaction_exec_context, transaction_rollback, ClientExecContext, TransactionExecContext,
+    DEFAULT_QUERY_RETRY_BUDGET,
 };
 use internal::{ExecCoreRef, HasCore};
+use session_pool::QuerySessionPool;
 
 /// How [`QueryClient`] acquires a YDB session for each call.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -37,8 +45,7 @@ pub enum QuerySessionMode {
     /// runs the query, and closes the session. This is the default mode.
     #[default]
     Implicit,
-    /// Reserved for an explicit session pool. Not implemented yet; selecting this
-    /// mode returns a runtime error until pool support lands.
+    /// Use an explicit session pool ([`QueryClient::with_session_pool`]).
     Pool,
 }
 
@@ -53,19 +60,56 @@ impl FromYdbRow for Row {
     }
 }
 
+/// Query Service transaction isolation mode.
+///
+/// | Mode | One-shot [`QueryClient`] | Interactive [`QueryTransaction`] |
+/// |------|--------------------------|----------------------------------|
+/// | [`Implicit`](Self::Implicit) | yes (default) | no |
+/// | [`SerializableReadWrite`](Self::SerializableReadWrite) | yes | yes (default) |
+/// | [`SnapshotReadOnly`](Self::SnapshotReadOnly) | yes | yes |
+/// | [`SnapshotReadWrite`](Self::SnapshotReadWrite) | yes | yes |
+/// | [`StaleReadOnly`](Self::StaleReadOnly) | yes | no |
+/// | [`OnlineReadOnly`](Self::OnlineReadOnly) | yes | no |
+///
+/// Default for one-shot calls is [`Implicit`](Self::Implicit) (`tx_control: None`): the server
+/// picks isolation from the SQL kind (DDL — non-transactional, `SELECT` — snapshot read-only,
+/// DML — serializable read-write). Override per call with [`CallBuilder::with_tx_mode`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum QueryTxMode {
+    /// Server-side inference (ImplicitTx / NoTx). One-shot only.
     #[default]
+    Implicit,
     SerializableReadWrite,
     SnapshotReadOnly,
+    SnapshotReadWrite,
     StaleReadOnly,
-    /// Online read-only mode with stale-replica reads disabled (`allow_inconsistent_reads: false`).
+    /// Online read-only with `allow_inconsistent_reads: false`.
     OnlineReadOnly,
 }
 
-#[derive(Clone, Debug, Default)]
+impl QueryTxMode {
+    pub(crate) fn supported_in_interactive(self) -> bool {
+        matches!(
+            self,
+            Self::SerializableReadWrite | Self::SnapshotReadOnly | Self::SnapshotReadWrite
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct QueryTransactionOptions {
     mode: QueryTxMode,
+    /// Call `BeginTransaction` RPC before the first `ExecuteQuery` instead of lazy `BeginTx`.
+    begin: bool,
+}
+
+impl Default for QueryTransactionOptions {
+    fn default() -> Self {
+        Self {
+            mode: QueryTxMode::SerializableReadWrite,
+            begin: false,
+        }
+    }
 }
 
 impl QueryTransactionOptions {
@@ -78,8 +122,22 @@ impl QueryTransactionOptions {
         self
     }
 
+    /// Explicit transaction start: the first operation in [`QueryTransaction`] calls
+    /// `BeginTransaction` RPC and obtains `tx_id` before any `ExecuteQuery`.
+    ///
+    /// Default (lazy tx): the first `ExecuteQuery` carries `BeginTx` in `tx_control` without a
+    /// separate RPC — see [`QueryTransaction::begin`] for the same behavior inside the callback.
+    pub fn with_begin(mut self) -> Self {
+        self.begin = true;
+        self
+    }
+
     pub(crate) fn mode(&self) -> QueryTxMode {
         self.mode
+    }
+
+    pub(crate) fn begin(&self) -> bool {
+        self.begin
     }
 }
 
@@ -103,17 +161,73 @@ impl QueryClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
+        discovery: Arc<Box<dyn Discovery>>,
     ) -> Self {
         Self {
             ctx: ClientExecContext {
                 connection_manager,
                 timeouts,
+                discovery,
                 session_mode: QuerySessionMode::Implicit,
                 idempotent_operation: false,
                 retry_budget: DEFAULT_QUERY_RETRY_BUDGET,
+                session_pool: None,
+                implicit_session_pool: None,
             },
             tx_options: QueryTransactionOptions::default(),
         }
+    }
+
+    /// Configure an explicit session pool (CreateSession + AttachSession) and switch to
+    /// [`QuerySessionMode::Pool`]. Sessions are not exposed to the caller; the pool owns
+    /// their lifecycle.
+    pub async fn with_session_pool(self, settings: QuerySessionPoolSettings) -> YdbResult<Self> {
+        let pool = QuerySessionPool::new_explicit(
+            self.ctx.connection_manager.clone(),
+            self.ctx.timeouts,
+            self.ctx.discovery.clone(),
+            settings,
+        )
+        .await?;
+        Ok(Self {
+            ctx: ClientExecContext {
+                session_pool: Some(pool),
+                session_mode: QuerySessionMode::Pool,
+                ..self.ctx
+            },
+            tx_options: self.tx_options,
+        })
+    }
+
+    /// Configure an implicit session pool (empty `session_id`, no AttachSession) while keeping
+    /// [`QuerySessionMode::Implicit`]. Limits concurrency and enables warm-up like the explicit pool.
+    pub fn with_implicit_session_pool(self, settings: QuerySessionPoolSettings) -> Self {
+        let pool = QuerySessionPool::new_implicit(
+            self.ctx.connection_manager.clone(),
+            self.ctx.timeouts,
+            self.ctx.discovery.clone(),
+            settings,
+        );
+        Self {
+            ctx: ClientExecContext {
+                implicit_session_pool: Some(pool),
+                ..self.ctx
+            },
+            tx_options: self.tx_options,
+        }
+    }
+
+    /// Pool stats for the explicit session pool ([`Self::with_session_pool`]), if configured.
+    pub fn session_pool_stats(&self) -> Option<QuerySessionPoolStats> {
+        self.ctx.session_pool.as_ref().map(|pool| pool.stats())
+    }
+
+    /// Pool stats for the implicit session pool ([`Self::with_implicit_session_pool`]), if configured.
+    pub fn implicit_session_pool_stats(&self) -> Option<QuerySessionPoolStats> {
+        self.ctx
+            .implicit_session_pool
+            .as_ref()
+            .map(|pool| pool.stats())
     }
 
     pub fn clone_with_idempotent_operations(&self, idempotent: bool) -> Self {
@@ -193,7 +307,9 @@ impl QueryClient {
             let mut tx = QueryTransaction::new(
                 self.ctx.connection_manager.clone(),
                 self.ctx.timeouts,
+                self.ctx.discovery.clone(),
                 self.ctx.session_mode,
+                self.ctx.session_pool.clone(),
                 self.tx_options.clone(),
             );
 
@@ -202,6 +318,10 @@ impl QueryClient {
             let err = match callback_result {
                 Ok(Ok(value)) => {
                     if tx.state == TxState::RolledBack {
+                        return Ok(value);
+                    }
+                    if tx.ctx.finished {
+                        tx.state = TxState::Committed;
                         return Ok(value);
                     }
                     return match tx.commit().await {
@@ -261,11 +381,20 @@ impl QueryTransaction {
     fn new(
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
+        discovery: Arc<Box<dyn Discovery>>,
         session_mode: QuerySessionMode,
+        session_pool: Option<QuerySessionPool>,
         options: QueryTransactionOptions,
     ) -> Self {
         Self {
-            ctx: transaction_exec_context(connection_manager, timeouts, session_mode, options),
+            ctx: transaction_exec_context(
+                connection_manager,
+                timeouts,
+                discovery,
+                session_mode,
+                session_pool,
+                options,
+            ),
             state: TxState::Active,
         }
     }
@@ -274,8 +403,20 @@ impl QueryTransaction {
         self.ctx.tx_mode
     }
 
-    pub async fn rollback(&mut self) -> YdbResult<()> {
+    /// Explicitly open the transaction via `BeginTransaction` RPC.
+    ///
+    /// By default (lazy tx) the transaction materializes on the first query. Call this when you
+    /// need `tx_id` before any YQL, or configure [`QueryTransactionOptions::with_begin`]
+    /// on the client so the first operation does this automatically.
+    pub async fn begin(&mut self) -> YdbResult<()> {
         if self.state != TxState::Active {
+            return Err(YdbError::Custom("transaction already finished".to_string()));
+        }
+        transaction_ensure_begin(&mut self.ctx, false).await
+    }
+
+    pub async fn rollback(&mut self) -> YdbResult<()> {
+        if self.state != TxState::Active || self.ctx.finished {
             return Err(YdbError::Custom("transaction already finished".to_string()));
         }
         transaction_rollback(&mut self.ctx).await?;
@@ -284,16 +425,25 @@ impl QueryTransaction {
     }
 
     async fn commit(&mut self) -> YdbResult<()> {
+        if self.ctx.finished {
+            self.state = TxState::Committed;
+            return Ok(());
+        }
         transaction_commit(&mut self.ctx).await?;
         self.state = TxState::Committed;
         Ok(())
     }
 
     async fn rollback_quiet(&mut self) {
-        if self.state == TxState::Active {
+        if self.state == TxState::Active && !self.ctx.finished {
             let _ = transaction_rollback(&mut self.ctx).await;
             self.state = TxState::RolledBack;
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tx_id_for_test(&self) -> Option<&str> {
+        self.ctx.tx_id.as_deref()
     }
 }
 
@@ -311,6 +461,7 @@ pub use builders::{
 };
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};
+pub use session_pool::{QuerySessionPoolSettings, QuerySessionPoolStats};
 pub use stream_facade::{QueryStats, QueryStream};
 
 fn panic_message(payload: Box<dyn Any + Send>) -> String {

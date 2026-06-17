@@ -13,6 +13,15 @@ pub(crate) struct StreamCloseMeta {
     pub tx_id: Option<String>,
 }
 
+/// Holds a pooled session lease until the stream is finished.
+struct SessionStreamGuard(#[allow(dead_code)] Option<Box<dyn std::any::Any + Send>>);
+
+impl SessionStreamGuard {
+    fn hold<T: Send + 'static>(value: T) -> Self {
+        Self(Some(Box::new(value)))
+    }
+}
+
 pub(crate) struct ExecuteQueryStream {
     grpc: Option<tonic::Streaming<ExecuteQueryResponsePart>>,
     next_index: i64,
@@ -20,6 +29,15 @@ pub(crate) struct ExecuteQueryStream {
     captured_tx_id: Option<String>,
     finished: bool,
     stats: Option<Duration>,
+    // Dropped last (after `grpc`) so the pooled lease outlives the stream.
+    // `Drop` also calls `cancel()` before field destructors run.
+    session_guard: SessionStreamGuard,
+}
+
+impl Drop for ExecuteQueryStream {
+    fn drop(&mut self) {
+        self.cancel();
+    }
 }
 
 impl ExecuteQueryStream {
@@ -31,7 +49,13 @@ impl ExecuteQueryStream {
             captured_tx_id: None,
             finished: false,
             stats: None,
+            session_guard: SessionStreamGuard(None),
         }
+    }
+
+    pub fn with_session_guard(mut self, guard: impl Send + 'static) -> Self {
+        self.session_guard = SessionStreamGuard::hold(guard);
+        self
     }
 
     pub fn stats(&self) -> Option<Duration> {

@@ -8,8 +8,9 @@ use crate::errors::{YdbError, YdbResult};
 use crate::result::{ResultSet, Row};
 use crate::types::Value;
 use crate::QuerySessionMode;
+use crate::QueryTxMode;
 
-use super::exec::CallOptions;
+use super::exec::{resolve_commit_tx, CallOptions};
 use super::internal::{ExecCoreRef, HasCore};
 use super::stream_facade::{materialize_query, QueryStream};
 use super::FromYdbRow;
@@ -85,6 +86,41 @@ impl<'a, K> CallBuilder<'a, K> {
     pub fn collect_stats(mut self) -> Self {
         self.opts.collect_stats = true;
         self
+    }
+
+    /// Override auto-commit (`commit_tx` in Query Service `TxControl`).
+    ///
+    /// One-shot defaults depend on [`Self::with_tx_mode`]: implicit mode relies on the server;
+    /// explicit modes default to `commit_tx: true`. Interactive transactions default to
+    /// `commit_tx: false` unless [`Self::with_commit(true)`] is set on the last query.
+    ///
+    /// When using [`Self::query`] with `with_commit(true)` inside a transaction, you must
+    /// fully drain the stream and call [`QueryStream::close`] — dropping the stream early
+    /// cancels the gRPC call and does not commit.
+    pub fn with_commit(mut self, commit: bool) -> Self {
+        self.opts.commit_tx = Some(commit);
+        self
+    }
+
+    /// Set transaction isolation for this call.
+    ///
+    /// Default on [`QueryClient`] is [`QueryTxMode::Implicit`] (no `tx_control`; the server
+    /// infers isolation from the SQL). Interactive transactions use the mode from
+    /// [`QueryTransactionOptions`] unless overridden here.
+    ///
+    /// [`QueryTxMode::Implicit`] inside [`QueryTransaction`] returns a runtime error — DDL and
+    /// other non-transactional statements must run on [`QueryClient`], not inside a transaction.
+    pub fn with_tx_mode(mut self, mode: QueryTxMode) -> Self {
+        self.opts.tx_mode = Some(mode);
+        self
+    }
+
+    /// Shorthand for [`Self::with_tx_mode`](QueryTxMode::Implicit) (ImplicitTx / NoTx).
+    ///
+    /// [`QueryTxMode::Implicit`] inside [`QueryTransaction`] returns a runtime error — DDL and
+    /// other non-transactional statements must run on [`QueryClient`], not inside a transaction.
+    pub fn implicit_tx(self) -> Self {
+        self.with_tx_mode(QueryTxMode::Implicit)
     }
 
     /// Override session acquisition for this call (default: implicit session).
@@ -197,6 +233,7 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
+            let commit_tx = resolve_commit_tx(&self.core, &self.opts);
             let stream = self
                 .core
                 .begin_stream(self.text, self.params, self.opts)
@@ -204,6 +241,7 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
             Ok(QueryStream {
                 core: self.core,
                 stream,
+                commit_tx,
             })
         })
     }

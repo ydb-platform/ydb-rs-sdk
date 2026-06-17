@@ -26,8 +26,9 @@ async fn main() -> YdbResult<()> {
 
     let mut qc = client.query_client();
 
-    // 1. DDL / DML without result rows. One-shot client calls retry
-    //    internally — no closure needed for a single statement.
+    // 1. QueryClient one-shots default to ImplicitTx (no explicit tx_control): the server
+    //    picks isolation from the SQL (DDL — non-transactional, SELECT — snapshot RO, DML — serializable RW).
+    //    One-shot calls retry internally — no closure needed for a single statement.
     qc.exec("CREATE TABLE test (id Int64, val Utf8, PRIMARY KEY(id))")
         .await?;
 

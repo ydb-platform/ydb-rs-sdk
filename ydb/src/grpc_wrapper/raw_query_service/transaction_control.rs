@@ -1,32 +1,34 @@
 use ydb_grpc::ydb_proto::query::{
     transaction_control, transaction_settings, OnlineModeSettings, SerializableModeSettings,
-    SnapshotModeSettings, StaleModeSettings, TransactionControl, TransactionSettings,
+    SnapshotModeSettings, SnapshotRwModeSettings, StaleModeSettings, TransactionControl,
+    TransactionSettings,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RawQueryTxMode {
     SerializableReadWrite,
     SnapshotReadOnly,
+    SnapshotReadWrite,
     StaleReadOnly,
     OnlineReadOnly,
 }
 
-pub(crate) fn implicit_tx_control() -> Option<TransactionControl> {
-    None
-}
-
-pub(crate) fn begin_tx_control(mode: RawQueryTxMode) -> TransactionControl {
+pub(crate) fn begin_tx_control(mode: RawQueryTxMode, commit_tx: bool) -> TransactionControl {
     TransactionControl {
-        commit_tx: false,
+        commit_tx,
         tx_selector: Some(transaction_control::TxSelector::BeginTx(tx_settings(mode))),
     }
 }
 
-pub(crate) fn tx_id_control(tx_id: &str) -> TransactionControl {
+pub(crate) fn tx_id_control(tx_id: &str, commit_tx: bool) -> TransactionControl {
     TransactionControl {
-        commit_tx: false,
+        commit_tx,
         tx_selector: Some(transaction_control::TxSelector::TxId(tx_id.to_string())),
     }
+}
+
+pub(crate) fn tx_settings_for_mode(mode: RawQueryTxMode) -> TransactionSettings {
+    tx_settings(mode)
 }
 
 fn tx_settings(mode: RawQueryTxMode) -> TransactionSettings {
@@ -36,6 +38,9 @@ fn tx_settings(mode: RawQueryTxMode) -> TransactionSettings {
         }
         RawQueryTxMode::SnapshotReadOnly => {
             transaction_settings::TxMode::SnapshotReadOnly(SnapshotModeSettings {})
+        }
+        RawQueryTxMode::SnapshotReadWrite => {
+            transaction_settings::TxMode::SnapshotReadWrite(SnapshotRwModeSettings {})
         }
         RawQueryTxMode::StaleReadOnly => {
             transaction_settings::TxMode::StaleReadOnly(StaleModeSettings {})

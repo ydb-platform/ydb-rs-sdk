@@ -1,4 +1,5 @@
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
+use crate::grpc_wrapper::raw_errors::RawError;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryRequest;
 use crate::grpc_wrapper::raw_query_service::execute_script::{
@@ -8,13 +9,24 @@ use crate::grpc_wrapper::raw_query_service::fetch_script_results::{
     parse_response, RawFetchScriptResultsRequest,
 };
 use crate::grpc_wrapper::raw_query_service::status::check_status;
+use crate::grpc_wrapper::raw_query_service::transaction_control::{
+    tx_settings_for_mode, RawQueryTxMode,
+};
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use ydb_grpc::ydb_proto::query::v1::query_service_client::QueryServiceClient;
 use ydb_grpc::ydb_proto::query::{
-    AttachSessionRequest, CommitTransactionRequest, CreateSessionRequest, DeleteSessionRequest,
-    ExecuteQueryResponsePart, RollbackTransactionRequest, SessionState,
+    AttachSessionRequest, BeginTransactionRequest, CommitTransactionRequest, CreateSessionRequest,
+    DeleteSessionRequest, ExecuteQueryResponsePart, RollbackTransactionRequest, SessionState,
 };
+
+/// gRPC metadata: enable server-side session balancing on CreateSession.
+pub(crate) const HEADER_CLIENT_CAPABILITIES: &str = "x-ydb-client-capabilities";
+pub(crate) const CLIENT_CAPABILITY_SESSION_BALANCER: &str = "session-balancer";
+
+pub(crate) struct CreateSessionResult {
+    pub session_id: String,
+}
 
 pub(crate) struct RawQueryClient {
     service: QueryServiceClient<InterceptedChannel>,
@@ -74,11 +86,18 @@ impl RawQueryClient {
         parse_response(response.into_inner())
     }
 
-    pub async fn create_session(&mut self) -> RawResult<String> {
-        let response = self.service.create_session(CreateSessionRequest {}).await?;
+    pub async fn create_session(&mut self) -> RawResult<CreateSessionResult> {
+        let mut request = tonic::Request::new(CreateSessionRequest {});
+        request.metadata_mut().append(
+            HEADER_CLIENT_CAPABILITIES,
+            tonic::metadata::MetadataValue::from_static(CLIENT_CAPABILITY_SESSION_BALANCER),
+        );
+        let response = self.service.create_session(request).await?;
         let inner = response.into_inner();
         check_status(inner.status, &inner.issues)?;
-        Ok(inner.session_id)
+        Ok(CreateSessionResult {
+            session_id: inner.session_id,
+        })
     }
 
     pub async fn delete_session(&mut self, session_id: &str) -> RawResult<()> {
@@ -103,6 +122,27 @@ impl RawQueryClient {
             })
             .await?;
         Ok(response.into_inner())
+    }
+
+    pub async fn begin_transaction(
+        &mut self,
+        session_id: &str,
+        mode: RawQueryTxMode,
+    ) -> RawResult<String> {
+        let response = self
+            .service
+            .begin_transaction(BeginTransactionRequest {
+                session_id: session_id.to_string(),
+                tx_settings: Some(tx_settings_for_mode(mode)),
+            })
+            .await?;
+        let inner = response.into_inner();
+        check_status(inner.status, &inner.issues)?;
+        inner
+            .tx_meta
+            .map(|meta| meta.id)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| RawError::custom("BeginTransaction response missing tx_meta.id"))
     }
 
     pub async fn commit_transaction(&mut self, session_id: &str, tx_id: &str) -> RawResult<()> {
