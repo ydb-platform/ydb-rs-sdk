@@ -19,7 +19,7 @@ Rust 1.85.0 or newer
 Add the YDB dependency to your project using `cargo add ydb` or add this your Cargo.toml:
 ```toml
 [dependencies]
-ydb = "0.2.2"
+ydb = "0.13.3"
 ```
 
 ### Example
