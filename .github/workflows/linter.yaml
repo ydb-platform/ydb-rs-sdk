@@ -53,9 +53,7 @@ jobs:
 
     - name: Rustfmt check
       run: | 
-        # Do not check ydb-grpc workaround
-        cargo fmt -p ydb --check
-        cargo fmt -p tests --check
+        cargo fmt --all --check
 
     - name: Clippy check
       run: |
