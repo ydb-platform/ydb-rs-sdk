@@ -41,16 +41,23 @@ function git_push_tags() {
 
 function publish_crate() {
     local CRATE_NAME="$1"
-    (
-      cd "$CRATE_NAME"
-      cargo publish
-    )
+    local publish_output
+    if publish_output="$(cd "$CRATE_NAME" && cargo publish 2>&1)"; then
+        echo "$publish_output"
+        return 0
+    fi
+    echo "$publish_output"
+    if echo "$publish_output" | grep -q 'already exists on crates.io'; then
+        echo "$CRATE_NAME is already on crates.io, continuing"
+        return 0
+    fi
+    return 1
 }
 
 function crate_published_on_crates_io() {
     local CRATE_NAME="$1"
     local VERSION="$2"
-    cargo search "$CRATE_NAME" --limit 1 2>/dev/null | grep -q "^${CRATE_NAME} = \"${VERSION}\""
+    cargo info --registry crates-io "${CRATE_NAME}@${VERSION}" >/dev/null 2>&1
 }
 
 function publish_ydb_dependency_crates() {
