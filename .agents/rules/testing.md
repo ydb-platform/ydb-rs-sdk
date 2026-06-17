@@ -33,6 +33,19 @@ cargo test --workspace
 
 CI also runs `cargo test --workspace -- --include-ignored` against `ydbplatform/local-ydb:nightly` on Rust 1.82 and 1.91.0.
 
+## What a test should assert
+
+Assert the specific fact the test is meant to defend — the concrete error type / status code or the concrete successful result — not a proxy symptom.
+
+Counting messages, sleeping for "a while", or matching on log output passes both when the code is correct and when an unrelated regression makes the proxy coincidentally match. The test is then green while the bug ships.
+
+Also cover paths the code explicitly rejects, so a future relaxation of those checks does not slip through unnoticed.
+
+## Integration test data
+
+- Use stable, deterministic table/topic names. Start the test with `DROP TABLE IF EXISTS …` → `CREATE …`.
+- Do **not** drop on teardown — a failed run is more debuggable if its data is still there.
+
 ## `ydb-grpc`
 
 Generated protobuf crate — clippy is excluded. Do not hand-edit generated files.

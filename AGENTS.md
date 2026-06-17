@@ -32,9 +32,16 @@ On **"update memory bank"** — review all core files in [`.agents/context/READM
 
 ## Non-obvious rules (always on)
 
+- Priorities: correctness → readability → public-API ergonomics → simple internal code → performance only where it matters.
+- Visibility: private by default, `pub(crate)` to share inside the crate, `pub` only for SDK consumers.
+- No `unwrap` / `expect` / `panic!` / `unsafe` in production code; `unreachable!` only with explicit human approval. Tests may use `unwrap`/`expect`.
+- No silent error swallowing on a broken invariant (`.ok()`, `unwrap_or_default()`, empty fallbacks).
+- Deadline-based retries via `tokio::time::timeout`; do not introduce `max_retries`.
+- No commented-out code or debug prints in committed code (including `examples/`).
 - Comments, doc comments, error messages, logs: **English**.
 - Match style in the touched module; do not reformat unrelated code.
 - Do **not** change `Cargo.toml` / `Cargo.lock` unless the task requires it.
+- MSRV is not pinned in policy, but CI runs on Rust 1.82 and 1.91 — newer features are fine if they compile there.
 - Integration tests are `#[ignore]`; need `YDB_CONNECTION_STRING` and `--include-ignored`.
 - `ydb-grpc` is generated; clippy excludes it. Do not bump crate versions unless asked.
 - Non-trivial changes: discuss in a GitHub issue first ([`CONTRIBUTING.md`](CONTRIBUTING.md)).
