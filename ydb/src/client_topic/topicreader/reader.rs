@@ -94,15 +94,15 @@ impl PendingCommits {
         };
 
         let acked = session.split_off(&std::cmp::Reverse(committed_offset));
-        Self::finish_session(acked);
+        Self::ack_commits(acked);
 
         if session.is_empty() {
             self.sessions.remove(&partition_session_id);
         }
     }
 
-    fn finish_session(session: BTreeMap<std::cmp::Reverse<i64>, oneshot::Sender<()>>) {
-        session.into_values().for_each(|sender| {
+    fn ack_commits(commits: BTreeMap<std::cmp::Reverse<i64>, oneshot::Sender<()>>) {
+        commits.into_values().for_each(|sender| {
             let _ = sender.send(());
         });
     }
