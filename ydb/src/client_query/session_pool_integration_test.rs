@@ -116,7 +116,7 @@ async fn query_call_timeout_preempts_pool_session_acquire() {
 #[ignore] // need YDB access
 async fn query_retry_transaction_call_timeout_preempts_pool_acquire() {
     let client = create_client().await.unwrap();
-    let mut qc = client
+    let qc = client
         .query_client()
         .clone_with_idempotent_operations(true)
         .with_session_pool(
