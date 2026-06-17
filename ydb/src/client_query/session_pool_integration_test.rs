@@ -151,6 +151,31 @@ async fn query_retry_transaction_call_timeout_preempts_pool_acquire() {
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
+async fn query_retry_transaction_uses_pool_session_rpc_timeouts() -> YdbResult<()> {
+    let client = create_client().await?;
+    let qc = client
+        .query_client()
+        .clone_with_idempotent_operations(true)
+        .with_implicit_session_pool(
+            QuerySessionPoolSettings::new()
+                .with_session_create_timeout(Duration::from_secs(30))
+                .with_session_delete_timeout(Duration::from_secs(30)),
+        );
+
+    let value: i64 = qc
+        .retry_transaction(async |tx| {
+            let mut row = tx.query_row("SELECT 7 AS v").await?;
+            Ok(row.remove_field_by_name("v")?.try_into()?)
+        })
+        .await?;
+
+    assert_eq!(value, 7);
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
 async fn query_session_pool_respects_custom_create_timeout() {
     let client = create_client().await.unwrap();
     let mut qc = client

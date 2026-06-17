@@ -15,8 +15,43 @@ use crate::grpc_wrapper::raw_query_service::session::{AttachedQuerySession, Impl
 use crate::grpc_wrapper::raw_services::Service;
 
 const DEFAULT_POOL_LIMIT: usize = 50;
-const DEFAULT_SESSION_CREATE_TIMEOUT: Duration = Duration::from_millis(500);
+pub(crate) const DEFAULT_SESSION_CREATE_TIMEOUT: Duration = Duration::from_millis(500);
 pub(crate) const DEFAULT_SESSION_DELETE_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// CreateSession / AttachSession / DeleteSession RPC limits for non-pooled attached sessions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct QuerySessionRpcTimeouts {
+    pub create: Duration,
+    pub delete: Duration,
+}
+
+impl Default for QuerySessionRpcTimeouts {
+    fn default() -> Self {
+        Self {
+            create: DEFAULT_SESSION_CREATE_TIMEOUT,
+            delete: DEFAULT_SESSION_DELETE_TIMEOUT,
+        }
+    }
+}
+
+impl From<&QuerySessionPoolSettings> for QuerySessionRpcTimeouts {
+    fn from(settings: &QuerySessionPoolSettings) -> Self {
+        Self {
+            create: settings.session_create_timeout,
+            delete: settings.session_delete_timeout,
+        }
+    }
+}
+
+/// Ensures `create_in_progress` is decremented when the outer future is dropped
+/// (e.g. per-call `with_operation_timeout` cancelling pool acquire + create).
+struct CreateInProgressGuard<'a>(&'a AtomicUsize);
+
+impl Drop for CreateInProgressGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 fn normalize_pool_settings(mut settings: QuerySessionPoolSettings) -> QuerySessionPoolSettings {
     settings.limit = settings.limit.max(1);
@@ -344,6 +379,10 @@ impl QuerySessionPool {
         self.inner.stats()
     }
 
+    pub(crate) fn session_rpc_timeouts(&self) -> QuerySessionRpcTimeouts {
+        QuerySessionRpcTimeouts::from(&self.inner.settings)
+    }
+
     pub async fn acquire_explicit(&self) -> YdbResult<QuerySessionLease> {
         if self.inner.kind != QuerySessionPoolKind::Explicit {
             return Err(YdbError::Custom(
@@ -515,9 +554,8 @@ impl QuerySessionPoolInner {
 
     async fn create_explicit_session(&self) -> YdbResult<ExplicitIdleItem> {
         self.create_in_progress.fetch_add(1, Ordering::SeqCst);
-        let result = self.create_explicit_session_inner().await;
-        self.create_in_progress.fetch_sub(1, Ordering::SeqCst);
-        result
+        let _guard = CreateInProgressGuard(&self.create_in_progress);
+        self.create_explicit_session_inner().await
     }
 
     async fn create_explicit_session_inner(&self) -> YdbResult<ExplicitIdleItem> {
@@ -771,6 +809,9 @@ mod unit_tests {
             .with_session_delete_timeout(Duration::from_secs(3));
         assert_eq!(settings.session_create_timeout, Duration::from_secs(2));
         assert_eq!(settings.session_delete_timeout, Duration::from_secs(3));
+        let rpc = QuerySessionRpcTimeouts::from(&settings);
+        assert_eq!(rpc.create, Duration::from_secs(2));
+        assert_eq!(rpc.delete, Duration::from_secs(3));
     }
 
     #[test]

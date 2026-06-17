@@ -23,7 +23,7 @@ use crate::types::Value;
 use crate::{QuerySessionMode, QueryTransactionOptions, QueryTxMode};
 
 use super::session_pool::{
-    ImplicitSessionLease, QuerySessionLease, QuerySessionPool, DEFAULT_SESSION_DELETE_TIMEOUT,
+    ImplicitSessionLease, QuerySessionLease, QuerySessionPool, QuerySessionRpcTimeouts,
 };
 
 const DEFAULT_RETRY_BUDGET: Duration = Duration::from_secs(5);
@@ -54,6 +54,7 @@ pub(crate) struct ClientExecContext {
     pub retry_budget: Duration,
     pub session_pool: Option<QuerySessionPool>,
     pub implicit_session_pool: Option<QuerySessionPool>,
+    pub session_rpc_timeouts: QuerySessionRpcTimeouts,
 }
 
 pub(crate) struct TransactionExecContext {
@@ -65,6 +66,7 @@ pub(crate) struct TransactionExecContext {
     pub session_pool: Option<QuerySessionPool>,
     /// When set, the first operation calls `BeginTransaction` RPC instead of lazy `BeginTx` in `ExecuteQuery`.
     pub begin: bool,
+    pub session_rpc_timeouts: QuerySessionRpcTimeouts,
     pub attached_session: Option<AttachedQuerySession>,
     pub pooled_lease: Option<QuerySessionLease>,
     pub query_node: Option<Uri>,
@@ -433,14 +435,25 @@ async fn ensure_tx_session(tx: &mut TransactionExecContext) -> YdbResult<()> {
                 .await?;
             let discovery = tx.discovery.clone();
             let on_node_shutdown = Arc::new(move |uri: Uri| discovery.pessimization(&uri));
+            let rpc_timeouts = tx.session_rpc_timeouts;
             tx.attached_session = Some(
-                AttachedQuerySession::create_and_open(
-                    &mut client,
-                    uri.clone(),
-                    on_node_shutdown,
-                    DEFAULT_SESSION_DELETE_TIMEOUT,
+                tokio::time::timeout(
+                    rpc_timeouts.create,
+                    AttachedQuerySession::create_and_open(
+                        &mut client,
+                        uri.clone(),
+                        on_node_shutdown,
+                        rpc_timeouts.delete,
+                    ),
                 )
-                .await?,
+                .await
+                .map_err(|_| {
+                    YdbError::Transport(format!(
+                        "create query session timed out after {:?}",
+                        rpc_timeouts.create
+                    ))
+                })?
+                .map_err(YdbError::from)?,
             );
             tx.query_node = Some(uri);
             Ok(())
@@ -625,6 +638,7 @@ pub(crate) fn transaction_exec_context(
     discovery: Arc<Box<dyn Discovery>>,
     session_mode: QuerySessionMode,
     session_pool: Option<QuerySessionPool>,
+    session_rpc_timeouts: QuerySessionRpcTimeouts,
     options: QueryTransactionOptions,
 ) -> TransactionExecContext {
     TransactionExecContext {
@@ -633,6 +647,7 @@ pub(crate) fn transaction_exec_context(
         discovery,
         session_mode,
         session_pool,
+        session_rpc_timeouts,
         tx_mode: options.mode(),
         begin: options.begin(),
         attached_session: None,

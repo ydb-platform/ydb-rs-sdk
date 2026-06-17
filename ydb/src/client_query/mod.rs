@@ -39,7 +39,7 @@ use exec::{
     DEFAULT_QUERY_RETRY_BUDGET,
 };
 use internal::{ExecCoreRef, HasCore};
-use session_pool::QuerySessionPool;
+use session_pool::{QuerySessionPool, QuerySessionRpcTimeouts};
 
 /// How [`QueryClient`] acquires a YDB session for each call.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -176,6 +176,7 @@ impl QueryClient {
                 retry_budget: DEFAULT_QUERY_RETRY_BUDGET,
                 session_pool: None,
                 implicit_session_pool: None,
+                session_rpc_timeouts: QuerySessionRpcTimeouts::default(),
             },
             tx_options: QueryTransactionOptions::default(),
         }
@@ -194,8 +195,9 @@ impl QueryClient {
         .await?;
         Ok(Self {
             ctx: ClientExecContext {
-                session_pool: Some(pool),
+                session_pool: Some(pool.clone()),
                 session_mode: QuerySessionMode::Pool,
+                session_rpc_timeouts: pool.session_rpc_timeouts(),
                 ..self.ctx
             },
             tx_options: self.tx_options,
@@ -213,7 +215,8 @@ impl QueryClient {
         );
         Self {
             ctx: ClientExecContext {
-                implicit_session_pool: Some(pool),
+                implicit_session_pool: Some(pool.clone()),
+                session_rpc_timeouts: pool.session_rpc_timeouts(),
                 ..self.ctx
             },
             tx_options: self.tx_options,
@@ -313,6 +316,7 @@ impl QueryClient {
                 self.ctx.discovery.clone(),
                 self.ctx.session_mode,
                 self.ctx.session_pool.clone(),
+                self.ctx.session_rpc_timeouts,
                 self.tx_options.clone(),
             );
 
@@ -387,6 +391,7 @@ impl QueryTransaction {
         discovery: Arc<Box<dyn Discovery>>,
         session_mode: QuerySessionMode,
         session_pool: Option<QuerySessionPool>,
+        session_rpc_timeouts: QuerySessionRpcTimeouts,
         options: QueryTransactionOptions,
     ) -> Self {
         Self {
@@ -396,6 +401,7 @@ impl QueryTransaction {
                 discovery,
                 session_mode,
                 session_pool,
+                session_rpc_timeouts,
                 options,
             ),
             state: TxState::Active,
