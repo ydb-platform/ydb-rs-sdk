@@ -80,7 +80,7 @@ jobs:
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
-          version: "31.0"
+          version: "32.0"
   
       - name: Install rust
         uses: dtolnay/rust-toolchain@v1
