@@ -87,6 +87,7 @@ jobs:
         uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ env[matrix.rust_version] }}
+          components: rustfmt
 
       - name: Rust version
         id: rust_version_step
