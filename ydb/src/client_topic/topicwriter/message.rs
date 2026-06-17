@@ -1,10 +1,12 @@
-use crate::{errors, YdbResult};
+use std::time::{self, UNIX_EPOCH};
+
 use derive_builder::Builder;
-use std::time;
+use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
+
+use crate::{errors, YdbError, YdbResult};
 
 #[derive(Builder)]
 #[builder(build_fn(error = "errors::YdbError", validate = "Self::validate"))]
-#[allow(dead_code)]
 pub struct TopicWriterMessage {
     #[builder(default = "None")]
     pub(crate) seq_no: Option<i64>,
@@ -17,5 +19,31 @@ pub struct TopicWriterMessage {
 impl TopicWriterMessageBuilder {
     fn validate(&self) -> YdbResult<()> {
         Ok(())
+    }
+}
+
+impl TryFrom<TopicWriterMessage> for MessageData {
+    type Error = YdbError;
+
+    fn try_from(value: TopicWriterMessage) -> Result<Self, Self::Error> {
+        let data_size = value.data.len() as i64;
+
+        let seq_no = value
+            .seq_no
+            .ok_or_else(|| YdbError::custom("empty message seq_no is provided"))?;
+
+        let created_at = value.created_at.duration_since(UNIX_EPOCH)?;
+
+        Ok(MessageData {
+            seq_no,
+            created_at: Some(ydb_grpc::google_proto_workaround::protobuf::Timestamp {
+                seconds: created_at.as_secs() as i64,
+                nanos: created_at.subsec_nanos() as i32,
+            }),
+            metadata_items: vec![],
+            data: value.data,
+            uncompressed_size: data_size,
+            partitioning: None,
+        })
     }
 }

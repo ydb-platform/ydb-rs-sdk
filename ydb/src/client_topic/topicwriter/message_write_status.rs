@@ -1,4 +1,4 @@
-use ydb_grpc::generated::ydb::topic::stream_write_message::write_response;
+use ydb_grpc::ydb_proto::topic::stream_write_message::write_response;
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 pub struct MessageWriteInfo {
