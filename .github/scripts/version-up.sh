@@ -47,6 +47,23 @@ function publish_crate() {
     )
 }
 
+function crate_published_on_crates_io() {
+    local CRATE_NAME="$1"
+    local VERSION="$2"
+    cargo search "$CRATE_NAME" --limit 1 2>/dev/null | grep -q "^${CRATE_NAME} = \"${VERSION}\""
+}
+
+function publish_ydb_dependency_crates() {
+    local GRPC_VERSION
+    GRPC_VERSION=$(version_get "ydb-grpc")
+    if crate_published_on_crates_io "ydb-grpc" "$GRPC_VERSION"; then
+        echo "ydb-grpc $GRPC_VERSION is already on crates.io"
+        return
+    fi
+    echo "Publishing ydb-grpc $GRPC_VERSION before ydb (crates.io tarball drops path= deps)"
+    publish_crate "ydb-grpc"
+}
+
 function version_get() {
   local CRATE_NAME="$1"
   local VERSION_LINE VERSION
@@ -142,6 +159,10 @@ git_set_tags
 
 # push tags before publish - for fix repository state if failed in middle of publish crates
 git_push_tags
+
+if [[ "$CRATE_NAME" == "ydb" ]]; then
+  publish_ydb_dependency_crates
+fi
 
 for CRATE in "${CRATES[@]}"; do
   publish_crate "$CRATE"
