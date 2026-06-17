@@ -53,7 +53,7 @@ jobs:
 
     - name: Rustfmt check
       run: | 
-        cargo fmt -p ydb --check
+        cargo fmt --all -- --check
 
     - name: Clippy check
       run: |
@@ -99,5 +99,6 @@ jobs:
       - name: Build tonic-grpc
         run: |
           cargo build -p ydb-grpc --features regenerate-sources
+          cargo fmt -p ydb-grpc
           git diff --exit-code
 
