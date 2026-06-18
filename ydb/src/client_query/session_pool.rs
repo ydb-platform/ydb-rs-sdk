@@ -215,6 +215,13 @@ impl QuerySessionLease {
             self.pool.release_explicit_item(item, permit).await;
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn bench_invalidate_session(&mut self) {
+        if let Some(item) = &self.item {
+            item.session.bench_invalidate();
+        }
+    }
 }
 
 impl Drop for QuerySessionLease {
@@ -302,6 +309,9 @@ struct QuerySessionPoolInner {
     on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync>,
     create_in_progress: AtomicUsize,
     sessions_created: AtomicU64,
+    /// Stub create/close paths without RPC (see `session_pool_bench`).
+    #[cfg(test)]
+    bench_mode: bool,
 }
 
 impl QuerySessionPool {
@@ -329,6 +339,8 @@ impl QuerySessionPool {
             on_node_shutdown,
             create_in_progress: AtomicUsize::new(0),
             sessions_created: AtomicU64::new(0),
+            #[cfg(test)]
+            bench_mode: false,
         });
 
         if warm_up > 0 {
@@ -362,6 +374,8 @@ impl QuerySessionPool {
             on_node_shutdown,
             create_in_progress: AtomicUsize::new(0),
             sessions_created: AtomicU64::new(0),
+            #[cfg(test)]
+            bench_mode: false,
         });
 
         if warm_up > 0 {
@@ -565,6 +579,11 @@ impl QuerySessionPoolInner {
     }
 
     async fn create_explicit_session_inner(&self) -> YdbResult<ExplicitIdleItem> {
+        #[cfg(test)]
+        if self.bench_mode {
+            return self.create_explicit_session_bench().await;
+        }
+
         let node_uri = self.connection_manager.endpoint(Service::Query)?;
         let mut client = self
             .connection_manager
@@ -622,6 +641,22 @@ impl QuerySessionPoolInner {
         })
     }
 
+    #[cfg(test)]
+    async fn create_explicit_session_bench(&self) -> YdbResult<ExplicitIdleItem> {
+        static BENCH_SESSION_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = BENCH_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let node_uri = Uri::from_static("http://127.0.0.1/bench");
+        let now = Instant::now();
+        self.sessions_created.fetch_add(1, Ordering::Relaxed);
+        Ok(ExplicitIdleItem {
+            session: AttachedQuerySession::new_bench_stub(format!("bench-{id}"), node_uri.clone()),
+            node_uri,
+            created: now,
+            last_used: now,
+            use_count: 0,
+        })
+    }
+
     fn pop_explicit_idle(&self) -> Option<ExplicitIdleItem> {
         let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
         idle.pop()
@@ -653,6 +688,12 @@ impl QuerySessionPoolInner {
     }
 
     async fn close_explicit_item(&self, item: ExplicitIdleItem) {
+        #[cfg(test)]
+        if self.bench_mode {
+            item.session.bench_close();
+            return;
+        }
+
         match self
             .connection_manager
             .get_auth_service_to_node(RawQueryClient::new, &item.node_uri)
@@ -749,6 +790,16 @@ impl Drop for QuerySessionPoolInner {
         if explicit.is_empty() && implicit.is_empty() {
             return;
         }
+        #[cfg(test)]
+        if self.bench_mode {
+            for item in explicit {
+                item.session.bench_close();
+            }
+            for item in implicit {
+                item.session.close();
+            }
+            return;
+        }
         let connection_manager = self.connection_manager.clone();
         spawn_pool_release(async move {
             for item in explicit {
@@ -796,6 +847,66 @@ fn session_should_close(
         return true;
     }
     false
+}
+
+#[cfg(test)]
+impl QuerySessionPool {
+    /// Explicit pool backed by in-memory stub sessions (no CreateSession / Attach / Delete RPC).
+    pub(crate) fn new_explicit_bench(settings: QuerySessionPoolSettings) -> Self {
+        use crate::grpc_connection_manager::GrpcConnectionManager;
+        use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
+        use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+        use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+
+        let settings = normalize_pool_settings(settings);
+        let warm_up = settings.warm_up;
+        let limit = settings.limit;
+        let on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync> = Arc::new(|_: Uri| {});
+
+        let connection_manager = GrpcConnectionManager::new(
+            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
+                Uri::from_static("http://127.0.0.1/bench"),
+            ))),
+            "bench".to_string(),
+            MultiInterceptor::new(),
+            None,
+            DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+        );
+
+        let inner = Arc::new(QuerySessionPoolInner {
+            kind: QuerySessionPoolKind::Explicit,
+            settings,
+            acquire_timeout: Duration::ZERO,
+            connection_manager,
+            semaphore: Arc::new(Semaphore::new(limit)),
+            explicit_idle: Mutex::new(Vec::new()),
+            implicit_idle: Mutex::new(Vec::new()),
+            on_node_shutdown,
+            create_in_progress: AtomicUsize::new(0),
+            sessions_created: AtomicU64::new(0),
+            bench_mode: true,
+        });
+
+        if warm_up > 0 {
+            let mut idle = inner.explicit_idle.lock().expect("explicit idle lock");
+            for i in 0..warm_up {
+                let node_uri = Uri::from_static("http://127.0.0.1/bench");
+                let now = Instant::now();
+                idle.push(ExplicitIdleItem {
+                    session: AttachedQuerySession::new_bench_stub(
+                        format!("bench-prefill-{i}"),
+                        node_uri.clone(),
+                    ),
+                    node_uri,
+                    created: now,
+                    last_used: now,
+                    use_count: 0,
+                });
+            }
+        }
+
+        Self { inner }
+    }
 }
 
 #[cfg(test)]
