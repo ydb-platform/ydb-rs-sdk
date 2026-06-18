@@ -23,7 +23,7 @@ use crate::types::Value;
 use crate::{QuerySessionMode, QueryTransactionOptions, QueryTxMode};
 
 use super::session_pool::{
-    ImplicitSessionLease, QuerySessionLease, QuerySessionPool, DEFAULT_SESSION_DELETE_TIMEOUT,
+    ImplicitSessionLease, QuerySessionLease, QuerySessionPool, QuerySessionRpcTimeouts,
 };
 
 const DEFAULT_RETRY_BUDGET: Duration = Duration::from_secs(5);
@@ -54,6 +54,7 @@ pub(crate) struct ClientExecContext {
     pub retry_budget: Duration,
     pub session_pool: Option<QuerySessionPool>,
     pub implicit_session_pool: Option<QuerySessionPool>,
+    pub session_rpc_timeouts: QuerySessionRpcTimeouts,
 }
 
 pub(crate) struct TransactionExecContext {
@@ -65,6 +66,7 @@ pub(crate) struct TransactionExecContext {
     pub session_pool: Option<QuerySessionPool>,
     /// When set, the first operation calls `BeginTransaction` RPC instead of lazy `BeginTx` in `ExecuteQuery`.
     pub begin: bool,
+    pub session_rpc_timeouts: QuerySessionRpcTimeouts,
     pub attached_session: Option<AttachedQuerySession>,
     pub pooled_lease: Option<QuerySessionLease>,
     pub query_node: Option<Uri>,
@@ -356,43 +358,37 @@ async fn client_begin_stream_once(
     let mode = effective_session_mode(ctx.session_mode, opts);
     let timeout_duration = operation_timeout(opts, &ctx.timeouts);
 
-    match mode {
-        QuerySessionMode::Pool => {
-            let pool = ctx.session_pool.as_ref().ok_or_else(|| {
-                YdbError::Custom(
-                    "query session pool is not configured; call QueryClient::with_session_pool"
-                        .to_string(),
-                )
-            })?;
-            let mut lease = pool.acquire_explicit().await?;
-            let (mut client, req) =
-                client_pooled_explicit_request(ctx, &mut lease, text, params, opts).await?;
-            let stream = with_operation_timeout(timeout_duration, async {
-                client.execute_query(req).await.map_err(Into::into)
-            })
-            .await?;
-            Ok(ExecuteQueryStream::new(stream).with_session_guard(lease))
+    with_operation_timeout(timeout_duration, async {
+        match mode {
+            QuerySessionMode::Pool => {
+                let pool = ctx.session_pool.as_ref().ok_or_else(|| {
+                    YdbError::Custom(
+                        "query session pool is not configured; call QueryClient::with_session_pool"
+                            .to_string(),
+                    )
+                })?;
+                let mut lease = pool.acquire_explicit().await?;
+                let (mut client, req) =
+                    client_pooled_explicit_request(ctx, &mut lease, text, params, opts).await?;
+                let stream = client.execute_query(req).await.map_err(YdbError::from)?;
+                Ok(ExecuteQueryStream::new(stream).with_session_guard(lease))
+            }
+            QuerySessionMode::Implicit if ctx.implicit_session_pool.is_some() => {
+                let pool = ctx.implicit_session_pool.as_ref().expect("checked");
+                let mut lease = pool.acquire_implicit().await?;
+                let (mut client, req) =
+                    client_pooled_implicit_request(ctx, &mut lease, text, params, opts).await?;
+                let stream = client.execute_query(req).await.map_err(YdbError::from)?;
+                Ok(ExecuteQueryStream::new(stream).with_session_guard(lease))
+            }
+            QuerySessionMode::Implicit => {
+                let (mut client, req) = client_implicit_request(ctx, text, params, opts).await?;
+                let stream = client.execute_query(req).await.map_err(YdbError::from)?;
+                Ok(ExecuteQueryStream::new(stream))
+            }
         }
-        QuerySessionMode::Implicit if ctx.implicit_session_pool.is_some() => {
-            let pool = ctx.implicit_session_pool.as_ref().expect("checked");
-            let mut lease = pool.acquire_implicit().await?;
-            let (mut client, req) =
-                client_pooled_implicit_request(ctx, &mut lease, text, params, opts).await?;
-            let stream = with_operation_timeout(timeout_duration, async {
-                client.execute_query(req).await.map_err(Into::into)
-            })
-            .await?;
-            Ok(ExecuteQueryStream::new(stream).with_session_guard(lease))
-        }
-        QuerySessionMode::Implicit => {
-            let (mut client, req) = client_implicit_request(ctx, text, params, opts).await?;
-            let stream = with_operation_timeout(timeout_duration, async {
-                client.execute_query(req).await.map_err(Into::into)
-            })
-            .await?;
-            Ok(ExecuteQueryStream::new(stream))
-        }
-    }
+    })
+    .await
 }
 
 pub(crate) async fn client_begin_stream(
@@ -439,14 +435,25 @@ async fn ensure_tx_session(tx: &mut TransactionExecContext) -> YdbResult<()> {
                 .await?;
             let discovery = tx.discovery.clone();
             let on_node_shutdown = Arc::new(move |uri: Uri| discovery.pessimization(&uri));
+            let rpc_timeouts = tx.session_rpc_timeouts;
             tx.attached_session = Some(
-                AttachedQuerySession::create_and_open(
-                    &mut client,
-                    uri.clone(),
-                    on_node_shutdown,
-                    DEFAULT_SESSION_DELETE_TIMEOUT,
+                tokio::time::timeout(
+                    rpc_timeouts.create,
+                    AttachedQuerySession::create_and_open(
+                        &mut client,
+                        uri.clone(),
+                        on_node_shutdown,
+                        rpc_timeouts.delete,
+                    ),
                 )
-                .await?,
+                .await
+                .map_err(|_| {
+                    YdbError::Transport(format!(
+                        "create query session timed out after {:?}",
+                        rpc_timeouts.create
+                    ))
+                })?
+                .map_err(YdbError::from)?,
             );
             tx.query_node = Some(uri);
             Ok(())
@@ -543,27 +550,24 @@ pub(crate) async fn transaction_begin_stream(
             "transaction already finished (committed or rolled back)".to_string(),
         ));
     }
-    ensure_tx_session(tx).await?;
-    if let Some(lease) = &mut tx.pooled_lease {
-        lease.begin_use();
-    }
-    if tx.begin {
-        transaction_ensure_begin(tx, true).await?;
-    }
-    let result: YdbResult<ExecuteQueryStream> = async {
+    let timeout_duration = operation_timeout(&opts, &tx.timeouts);
+    let result: YdbResult<ExecuteQueryStream> = with_operation_timeout(timeout_duration, async {
+        ensure_tx_session(tx).await?;
+        if let Some(lease) = &mut tx.pooled_lease {
+            lease.begin_use();
+        }
+        if tx.begin {
+            transaction_ensure_begin(tx, true).await?;
+        }
         let (mut client, req) = transaction_execute_request(tx, text, params, &opts).await?;
-        let timeout_duration = operation_timeout(&opts, &tx.timeouts);
-        let stream = with_operation_timeout(timeout_duration, async {
-            client.execute_query(req).await.map_err(Into::into)
-        })
-        .await?;
+        let stream = client.execute_query(req).await.map_err(YdbError::from)?;
         let mut stream = ExecuteQueryStream::new(stream);
         stream.prime_first_part().await?;
         if let Some(id) = stream.take_captured_tx_id() {
             apply_stream_tx_id(tx, Some(id));
         }
         Ok(stream)
-    }
+    })
     .await;
     if result.is_err() {
         if let Some(lease) = &mut tx.pooled_lease {
@@ -634,6 +638,7 @@ pub(crate) fn transaction_exec_context(
     discovery: Arc<Box<dyn Discovery>>,
     session_mode: QuerySessionMode,
     session_pool: Option<QuerySessionPool>,
+    session_rpc_timeouts: QuerySessionRpcTimeouts,
     options: QueryTransactionOptions,
 ) -> TransactionExecContext {
     TransactionExecContext {
@@ -642,6 +647,7 @@ pub(crate) fn transaction_exec_context(
         discovery,
         session_mode,
         session_pool,
+        session_rpc_timeouts,
         tx_mode: options.mode(),
         begin: options.begin(),
         attached_session: None,
