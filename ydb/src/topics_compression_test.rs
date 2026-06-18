@@ -630,7 +630,10 @@ async fn codec_auto() -> YdbResult<()> {
     let message_count = 500;
     let mut expected_messages: Vec<Vec<u8>> = Vec::new();
     for i in 0..message_count {
-        let mut data: Vec<u8> = "this text is boring this text is boring this text is boring this text is boring".to_string().into_bytes();
+        let mut data: Vec<u8> =
+            "this text is boring this text is boring this text is boring this text is boring"
+                .to_string()
+                .into_bytes();
         if i < 101 || i > 300 {
             data.iter_mut().for_each(|x| *x = rand::random());
         }

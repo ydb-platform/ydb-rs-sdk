@@ -3,10 +3,7 @@ use crate::client_topic::compression::codec_registry::CodecRegistry;
 use crate::client_topic::compression::error_strategy::ErrorHandlingStrategy;
 use crate::client_topic::compression::executor::Executor;
 use crate::client_topic::list_types::Codec;
-use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
-    RawBatch, RawBatchWithId, RawMessageData,
-};
-use crate::YdbResult;
+use crate::{TopicReaderMessage, YdbResult};
 use prost::bytes::Bytes;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -16,7 +13,7 @@ pub struct DecompressionWorker {
     codec_registry: Arc<CodecRegistry>,
     error_strategy: ErrorHandlingStrategy,
     parallelism: usize,
-    queue: OrderedTaskQueue<RawBatchWithId>,
+    queue: OrderedTaskQueue<Vec<TopicReaderMessage>>,
 }
 
 impl DecompressionWorker {
@@ -24,7 +21,10 @@ impl DecompressionWorker {
         codec_registry: Arc<CodecRegistry>,
         error_strategy: ErrorHandlingStrategy,
         executor: Arc<dyn Executor>,
-    ) -> (Self, mpsc::UnboundedReceiver<YdbResult<RawBatchWithId>>) {
+    ) -> (
+        Self,
+        mpsc::UnboundedReceiver<YdbResult<Vec<TopicReaderMessage>>>,
+    ) {
         let parallelism = executor.available_parallelism();
         let (queue, receiver) = OrderedTaskQueue::new(executor);
         (
@@ -38,58 +38,40 @@ impl DecompressionWorker {
         )
     }
 
-    pub fn process_batch(&self, mut batch: RawBatchWithId) {
-        let chunk_size = (batch.batch.message_data.len() / self.parallelism).max(1);
-        let total_bytes = batch.read_session_size_bytes;
+    pub fn process_batch(&self, mut batch: Vec<TopicReaderMessage>, codec: Codec) {
+        let chunk_size = (batch.len() / self.parallelism).max(1);
 
-        while !batch.batch.message_data.is_empty() {
-            let chunk: Vec<RawMessageData> = batch
-                .batch
-                .message_data
-                .drain(..chunk_size.min(batch.batch.message_data.len()))
-                .collect();
-            let is_last = batch.batch.message_data.is_empty();
-
-            let chunk_batch = RawBatchWithId {
-                partition_session_id: batch.partition_session_id,
-                read_session_size_bytes: if is_last { total_bytes } else { 0 },
-                batch: RawBatch {
-                    producer_id: batch.batch.producer_id.clone(),
-                    write_session_meta: batch.batch.write_session_meta.clone(),
-                    codec: batch.batch.codec.clone(),
-                    written_at: batch.batch.written_at.clone(),
-                    message_data: chunk,
-                },
-            };
+        while !batch.is_empty() {
+            let chunk: Vec<TopicReaderMessage> =
+                batch.drain(..chunk_size.min(batch.len())).collect();
             let registry = self.codec_registry.clone();
             let strategy = self.error_strategy.clone();
 
             self.queue.submit(Box::new(move || {
-                decompress_batch(chunk_batch, &registry, &strategy)
+                decompress_batch(chunk, codec, &registry, &strategy)
             }));
         }
     }
 }
 
 fn decompress_batch(
-    mut batch: RawBatchWithId,
+    mut batch: Vec<TopicReaderMessage>,
+    codec: Codec,
     registry: &CodecRegistry,
     strategy: &ErrorHandlingStrategy,
-) -> YdbResult<RawBatchWithId> {
-    let codec = Codec {
-        code: batch.batch.codec.code,
-    };
+) -> YdbResult<Vec<TopicReaderMessage>> {
     if codec == Codec::RAW {
         return Ok(batch);
     }
 
-    let mut failed_offsets = Vec::new();
-
-    for message in batch.batch.message_data.iter_mut() {
-        let data_bytes = Bytes::from(std::mem::take(&mut message.data));
+    for message in batch.iter_mut() {
+        if message.raw_data.is_none() {
+            continue;
+        }
+        let data_bytes = Bytes::from(std::mem::take(message.raw_data.as_mut().unwrap()));
         match registry.decompress(&data_bytes, &codec) {
             Ok(decompressed) => {
-                message.data = decompressed.to_vec();
+                message.raw_data = Some(decompressed.to_vec());
             }
             Err(err) => match strategy {
                 ErrorHandlingStrategy::FailFast => {
@@ -101,17 +83,10 @@ fn decompress_batch(
                          dropping message: {}",
                         message.offset, message.seq_no, err
                     );
-                    failed_offsets.push(message.offset);
+                    message.decompression_failed = true;
                 }
             },
         }
-    }
-
-    if !failed_offsets.is_empty() {
-        batch
-            .batch
-            .message_data
-            .retain(|m| !failed_offsets.contains(&m.offset));
     }
 
     Ok(batch)

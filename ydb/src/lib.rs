@@ -145,7 +145,8 @@ pub use client_topic::topicwriter::partitioning::PartitioningStrategy;
 pub use client_topic::topicwriter::writer::TopicWriter;
 // full enum pub types
 pub use client_topic::compression::{
-    default_executor, CodecRegistry, ErrorHandlingStrategy, Executor, RayonExecutor,
+    default_executor, CodecRegistry, ErrorHandlingStrategy, Executor, InplaceExecutor,
+    RayonExecutor,
 };
 pub use client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
