@@ -30,8 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The query text lives outside the callback and is reused on every
     // attempt; the attempt counter is a plain `u32` captured mutably (the
     // table API needed AtomicUsize here).
-    let upsert = "DECLARE $id AS Int64; DECLARE $val AS Utf8; \
-                  UPSERT INTO test (id, val) VALUES ($id, $val)";
+    let upsert = "UPSERT INTO test (id, val) VALUES ($id, $val)";
     let mut attempts = 0_u32;
 
     let total: i64 = qc
@@ -65,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let outcome = qc
         .retry_transaction(async |tx: &mut QueryTransaction| {
             let mut row = tx
-                .query_row("DECLARE $id AS Int64; SELECT balance FROM accounts WHERE id = $id")
+                .query_row("SELECT balance FROM accounts WHERE id = $id")
                 .param("$id", 1_i64)
                 .await?;
             let balance: i64 = row.remove_field_by_name("balance")?.try_into()?;
@@ -132,14 +131,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     qc.retry_transaction(async |tx: &mut QueryTransaction| {
-        tx.exec(format!(
-            "DECLARE $id AS Int64; DECLARE $val AS Int64; \
-             UPSERT INTO {table} (id, val) VALUES ($id, $val)"
-        ))
-        .param("$id", 1_i64)
-        .param("$val", 100_i64)
-        .with_commit(true) // server commits when the stream is fully read
-        .await?;
+        tx.exec(format!("UPSERT INTO {table} (id, val) VALUES ($id, $val)"))
+            .param("$id", 1_i64)
+            .param("$val", 100_i64)
+            .with_commit(true) // server commits when the stream is fully read
+            .await?;
         // Transaction is already committed; further queries in this callback would fail.
         Ok(())
     })

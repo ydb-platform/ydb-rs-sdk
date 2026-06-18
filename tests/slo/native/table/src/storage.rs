@@ -87,8 +87,6 @@ impl Database for Storage {
         let attempts = Arc::new(AtomicUsize::new(0));
         let query = Query::from(format!(
             r#"
-            DECLARE $id AS Uint64;
-
             SELECT id, payload_str, payload_double, payload_timestamp, payload_hash
             FROM `{table}`
             WHERE id = $id AND hash = Digest::NumericHash($id);
@@ -124,11 +122,6 @@ impl Database for Storage {
         let attempts = Arc::new(AtomicUsize::new(0));
         let query = Query::from(format!(
             r#"
-            DECLARE $id AS Uint64;
-            DECLARE $payload_str AS Utf8;
-            DECLARE $payload_double AS Double;
-            DECLARE $payload_timestamp AS Timestamp;
-
             UPSERT INTO `{table}` (
                 id,
                 hash,

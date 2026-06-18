@@ -25,8 +25,6 @@ async fn main() -> YdbResult<()> {
                 .query(
                     Query::new(
                         "
-                    DECLARE $val AS List<Int32>;
-
                     SELECT $val AS val;
                 ",
                     )
@@ -59,12 +57,6 @@ async fn main() -> YdbResult<()> {
                 .query(
                     Query::new(
                         "
-            DECLARE $val AS Struct<
-                a: Int32,
-                b: Utf8,
-                c: Double,
-            >;
-
             SELECT $val AS res;
         ",
                     )

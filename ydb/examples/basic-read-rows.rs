@@ -51,11 +51,7 @@ async fn main() -> YdbResult<()> {
     let list = Value::list_from(example, rows)?;
 
     let query = Query::new(
-        "DECLARE $list AS List<Struct<
-id: Int64,
-val: Utf8,
->>;
-
+        "
 UPSERT INTO test
 SELECT * FROM AS_TABLE($list)
 ",
