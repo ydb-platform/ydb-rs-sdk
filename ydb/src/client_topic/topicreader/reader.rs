@@ -372,8 +372,8 @@ impl StreamReader {
     }
 
     fn cancelled_commit_handle() -> TopicCommitHandler {
-        let (_sender, reciever) = oneshot::channel();
-        reciever
+        let (_sender, receiver) = oneshot::channel();
+        receiver
     }
 
     fn commit(&mut self, commit_marker: TopicReaderCommitMarker) -> YdbResult<TopicCommitHandler> {
