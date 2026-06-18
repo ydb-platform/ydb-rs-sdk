@@ -139,7 +139,7 @@ pub struct StaticDiscovery {
 ///
 /// # fn main()->YdbResult<()>{
 /// let discovery = StaticDiscovery::new_from_str("grpc://localhost:2136")?;
-/// let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/?database=/local")?.with_discovery(discovery).client()?;
+/// let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.with_discovery(discovery).client()?;
 /// # return Ok(());
 /// # }
 /// ```

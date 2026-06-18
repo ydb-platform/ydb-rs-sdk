@@ -31,7 +31,7 @@ use ydb::{ClientBuilder, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
+    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
         .client()?;
 
     // wait until the background initialization of the driver finishes
@@ -68,7 +68,7 @@ use ydb::{ydb_params, ClientBuilder, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
+    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
         .client()?;
     client.wait().await?;
 

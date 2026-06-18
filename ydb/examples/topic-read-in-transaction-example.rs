@@ -290,7 +290,7 @@ async fn main() -> YdbResult<()> {
 
     // Establish database connection
     // In production, use environment variables or configuration files for connection strings
-    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
+    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
         .client()?;
 
     // Wait for connection with timeout to fail fast if database is unavailable

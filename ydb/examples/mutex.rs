@@ -25,7 +25,7 @@ async fn mutex_work(session: CoordinationSession) {
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
+    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
         .client()?;
 
     if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
