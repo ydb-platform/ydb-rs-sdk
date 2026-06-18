@@ -15,4 +15,6 @@ RUN curl -fsSL -o /tmp/protoc.zip \
     && rm /tmp/protoc.zip \
     && protoc --version
 
+RUN rustup component add rustfmt
+
 WORKDIR /workspace
