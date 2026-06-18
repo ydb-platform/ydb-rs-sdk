@@ -35,7 +35,9 @@ impl Handler for TopicDefaultHandler {
         let replies = default_replies(incoming);
 
         for reply in replies {
-            self.tx.send(Reply::Topic(reply));
+            self.tx
+                .send(Reply::Topic(reply))
+                .expect("topic service closed channel");
         }
 
         None
