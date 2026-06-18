@@ -54,11 +54,14 @@ tonic = { workspace = true }
 tower = "0.4"
 url = "2.2"
 uuid = { version = "1.17.0", features = ["v4", "v7"] }
-ydb-grpc = { version = "0.2.2", path="../ydb-grpc"}
+ydb-grpc = { version = "0.2.2", path = "../ydb-grpc" }
 
 [dev-dependencies]
 async_once = "0.2"
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+chrono = { version = "0.4", default-features = false, features = [
+    "clock",
+    "std",
+] }
 lazy_static = "1.4"
 ntest = "0.7"
 tokio = { version = "1.22", features = ["test-util"] }

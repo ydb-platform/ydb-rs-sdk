@@ -2,9 +2,12 @@ name: Linter
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -16,21 +19,26 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust_version: [ "RUST_VERSION_NEW" ]
+        rust_version: ["RUST_VERSION_NEW"]
 
     runs-on: ubuntu-24.04
 
     steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+
     - name: Install rust
       uses: dtolnay/rust-toolchain@v1
       with:
         toolchain: ${{ env[matrix.rust_version] }}
         components: clippy, rustfmt
 
-    - name: Checkout
-      uses: actions/checkout@v4
+    - name: Install taplo
+      uses: uncenter/setup-taplo@v2
       with:
-        submodules: true
+        version: "0.10.0"
 
     - name: Rust version
       id: rust_version_step
@@ -44,8 +52,37 @@ jobs:
       uses: Swatinem/rust-cache@v2
 
     - name: Rustfmt check
-      run: cargo fmt --check
+      run: |
+        cargo fmt --all
+        git diff --exit-code
 
-    - name: Linter
+    - name: Clippy check
       run: |
         cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
+
+    - name: Taplo check
+      run: |
+        taplo fmt
+        git diff --exit-code
+
+  check-grpc-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        rust_version: ["RUST_VERSION_NEW"]
+
+    runs-on: ubuntu-24.04
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        submodules: true
+
+    - name: Build ydb-grpc
+      run: |
+        make proto
+
+    - name: Compare submitted ydb-grpc
+      run: |-
+        git diff --exit-code

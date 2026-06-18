@@ -24,7 +24,7 @@ pbjson-types = "0.8.0"
 pbjson-build = "0.8.0"
 
 # Versions of those crates should match, that's why all of them are here.
-tonic = { version = "0.14.2", features = [ "tls-ring", "tls-native-roots" ] }
+tonic = { version = "0.14.2", features = ["tls-ring", "tls-native-roots"] }
 tonic-prost = "0.14.2"
 tonic-prost-build = "0.14.2"
 
