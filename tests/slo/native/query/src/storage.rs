@@ -28,9 +28,14 @@ impl Storage {
         client.wait().await.map_err(|err| err.to_string())?;
 
         let pool_limit = params.pool_size() as usize;
+        // SLO experiment (H1): oversized pool + warm-up vs default pool_size=RPS.
         let query_client = client
             .query_client()
-            .with_session_pool(QuerySessionPoolSettings::new().with_limit(pool_limit))
+            .with_session_pool(
+                QuerySessionPoolSettings::new()
+                    .with_limit(pool_limit.saturating_mul(3))
+                    .with_warm_up(pool_limit),
+            )
             .await
             .map_err(|err| err.to_string())?
             .clone_with_idempotent_operations(true);
