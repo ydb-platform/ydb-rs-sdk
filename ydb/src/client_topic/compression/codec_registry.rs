@@ -1,5 +1,5 @@
 use crate::client_topic::compression::builtin_codecs::{gzip_compress, gzip_decompress};
-use crate::{YdbError, YdbResult, Codec};
+use crate::{Codec, YdbError, YdbResult};
 use prost::bytes::Bytes;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
