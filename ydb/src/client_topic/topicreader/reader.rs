@@ -188,6 +188,12 @@ impl TopicReader {
         }
     }
 
+    /// WARN: DO NOT USE IN PRODUCTION
+    ///
+    /// Read a batch of messages within a transaction context.
+    /// The TopicReaderBatch from the result will be committed within the `tx` transaction.
+    /// This is an EXAMPLE of the interface. IT IS NOT PRODUCTION READY.
+    /// The reader will fail consistently on ANY error, including TLI.
     pub async fn pop_batch_in_tx(
         &mut self,
         tx: &mut Box<dyn Transaction>,
