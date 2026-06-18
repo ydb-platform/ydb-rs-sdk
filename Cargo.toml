@@ -4,12 +4,13 @@ members = [
     "ydb",
     "ydb-grpc",
     #    "ydb-grpc-helpers",
-    "ydb-example-urlshortener",
-    "ydb-slo-tests",
+    "tests/slo/slo-framework",
+    "tests/slo/native/table",
+    "tests/slo/native/query",
 ]
 
 [workspace.package]
-rust-version = "1.82"
+rust-version = "1.85"
 
 [workspace.dependencies]
 # Versions of those crates should match, that's why all of them are here.

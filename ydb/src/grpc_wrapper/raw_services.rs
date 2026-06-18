@@ -29,6 +29,9 @@ pub(crate) enum Service {
     #[strum(serialize = "table_service")]
     Table,
 
+    #[strum(serialize = "query_service")]
+    Query,
+
     #[strum(serialize = "scheme_service")]
     Scheme,
 
@@ -37,6 +40,9 @@ pub(crate) enum Service {
 
     #[strum(serialize = "coordination_service")]
     Coordination,
+
+    #[strum(serialize = "operation_service")]
+    Operation,
 
     #[strum(serialize = "auth_service")]
     Auth,

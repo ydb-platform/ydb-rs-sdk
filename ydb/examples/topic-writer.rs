@@ -17,7 +17,7 @@ async fn main() -> YdbResult<()> {
     };
 
     let mut topic_client = client.topic_client();
-    let mut writer: TopicWriter = topic_client
+    let writer: TopicWriter = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default() // TODO: is it really should be mutable?
                 .topic_path("/local/my-topic".to_string())

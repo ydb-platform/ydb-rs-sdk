@@ -1,13 +1,13 @@
 [package]
 publish = true
 name = "ydb"
-version = "0.12.3"
+version = "0.13.4"
 authors = ["rekby <timofey.koolin@gmail.com>"]
 edition = "2021"
 license = "Apache-2.0"
 description = "Crate contains generated low-level grpc code from YDB API protobuf, used as base for ydb crate"
 repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb"
-rust-version = "1.82"
+rust-version = "1.85"
 
 [features]
 force-exhaustive-all = [
@@ -54,10 +54,12 @@ tonic = { workspace = true }
 tower = "0.4"
 url = "2.2"
 uuid = { version = "1.17.0", features = ["v4", "v7"] }
-ydb-grpc = { version = "0.2.0", path="../ydb-grpc"}
+ydb-grpc = { version = "0.2.2", path="../ydb-grpc"}
 
 [dev-dependencies]
 async_once = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 lazy_static = "1.4"
 ntest = "0.7"
 tokio = { version = "1.22", features = ["test-util"] }
+uuid = { version = "1.17.0", features = ["v4"] }

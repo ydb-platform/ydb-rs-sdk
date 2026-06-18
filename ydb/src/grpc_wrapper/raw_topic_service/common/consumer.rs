@@ -54,6 +54,7 @@ impl From<RawConsumer> for Consumer {
             supported_codecs: Some(value.supported_codecs.into()),
             attributes: value.attributes,
             consumer_stats: None,
+            ..Default::default()
         }
     }
 }
@@ -75,6 +76,7 @@ impl From<RawAlterConsumer> for AlterConsumer {
             set_read_from: value.set_read_from.map(|x| x.into()),
             set_supported_codecs: value.set_supported_codecs.map(|x| x.into()),
             alter_attributes: value.alter_attributes,
+            ..Default::default()
         }
     }
 }

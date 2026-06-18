@@ -78,7 +78,7 @@ impl QueryResult {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ResultSet {
     columns: Vec<crate::types::Column>,
     columns_by_name: HashMap<String, usize>,

@@ -23,6 +23,7 @@ use crate::grpc_wrapper::raw_table_service::explain_data_query::{
     RawExplainDataQueryRequest, RawExplainDataQueryResult,
 };
 use crate::grpc_wrapper::raw_table_service::keepalive::{RawKeepAliveRequest, RawKeepAliveResult};
+use crate::grpc_wrapper::raw_table_service::read_rows::{RawReadRowsRequest, RawReadRowsResponse};
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use tracing::trace;
@@ -105,6 +106,14 @@ impl RawTableClient {
         request_without_result!(
             self.service.execute_scheme_query,
             req => ydb_grpc::ydb_proto::table::ExecuteSchemeQueryRequest
+        );
+    }
+
+    pub async fn read_rows(&mut self, req: RawReadRowsRequest) -> RawResult<RawReadRowsResponse> {
+        request_with_result!(
+            self.service.read_rows,
+            req => ydb_grpc::ydb_proto::table::ReadRowsRequest,
+            ydb_grpc::ydb_proto::table::ReadRowsResponse => RawReadRowsResponse
         );
     }
 

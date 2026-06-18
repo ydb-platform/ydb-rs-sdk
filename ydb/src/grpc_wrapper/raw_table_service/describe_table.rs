@@ -18,6 +18,7 @@ impl From<RawDescribeTableRequest> for ydb_grpc::ydb_proto::table::DescribeTable
             include_table_stats: false,
             include_partition_stats: false,
             include_shard_nodes_info: false,
+            ..Default::default()
         }
     }
 }

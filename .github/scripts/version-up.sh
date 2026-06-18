@@ -17,16 +17,58 @@ function git_set_tags(){
 
   local GIT_TAG
   for GIT_TAG in "${GIT_TAGS[@]}";  do
-    git tag "$GIT_TAG"
+    git tag -f "$GIT_TAG"
+  done
+}
+
+function git_push_tags() {
+  local GIT_TAG remote_sha local_sha
+  for GIT_TAG in "${GIT_TAGS[@]}"; do
+    remote_sha="$(git ls-remote --tags origin "refs/tags/$GIT_TAG" | cut -f1)"
+    local_sha="$(git rev-parse "$GIT_TAG")"
+    if [ -n "$remote_sha" ]; then
+      if [ "$remote_sha" = "$local_sha" ]; then
+        echo "Tag $GIT_TAG already exists on remote at the same commit, skipping push"
+      else
+        echo "Tag $GIT_TAG exists on remote at a different commit, force-updating"
+        git push origin "refs/tags/$GIT_TAG":refs/tags/"$GIT_TAG" --force
+      fi
+    else
+      git push origin "$GIT_TAG"
+    fi
   done
 }
 
 function publish_crate() {
     local CRATE_NAME="$1"
-    (
-      cd "$CRATE_NAME"
-      cargo publish
-    )
+    local publish_output
+    if publish_output="$(cd "$CRATE_NAME" && cargo publish 2>&1)"; then
+        echo "$publish_output"
+        return 0
+    fi
+    echo "$publish_output"
+    if echo "$publish_output" | grep -q 'already exists on crates.io'; then
+        echo "$CRATE_NAME is already on crates.io, continuing"
+        return 0
+    fi
+    return 1
+}
+
+function crate_published_on_crates_io() {
+    local CRATE_NAME="$1"
+    local VERSION="$2"
+    cargo info --registry crates-io "${CRATE_NAME}@${VERSION}" >/dev/null 2>&1
+}
+
+function publish_ydb_dependency_crates() {
+    local GRPC_VERSION
+    GRPC_VERSION=$(version_get "ydb-grpc")
+    if crate_published_on_crates_io "ydb-grpc" "$GRPC_VERSION"; then
+        echo "ydb-grpc $GRPC_VERSION is already on crates.io"
+        return
+    fi
+    echo "Publishing ydb-grpc $GRPC_VERSION before ydb (crates.io tarball drops path= deps)"
+    publish_crate "ydb-grpc"
 }
 
 function version_get() {
@@ -70,7 +112,9 @@ function version_set() {
   local VERSION="$2"
 
   sed -i.bak -e "s/^version *=.*/version = \"$VERSION\"/" "$CRATE_NAME/Cargo.toml"
-  sed -i -e "s/^ydb *=.*/ydb = \"$VERSION\"/" "README.md"
+  if [[ "$CRATE_NAME" == "ydb" ]]; then
+    sed -i -e "s/^ydb *=.*/ydb = \"$VERSION\"/" "README.md"
+  fi
 }
 
 function version_dep_set() {
@@ -104,7 +148,7 @@ function bump_version() {
       version_dep_set "ydb-grpc" "$VERSION"
       ;;
     ydb-grpc-helpers)
-      version_dep_set "ydb-grpc-helpers" "$VERSION"
+      # Deprecated crate; not a workspace dependency of ydb / ydb-grpc.
       ;;
     *)
       echo "Unexpected crate name '$CRATE_NAME'"
@@ -123,7 +167,11 @@ git diff
 git_set_tags
 
 # push tags before publish - for fix repository state if failed in middle of publish crates
-git push --tags
+git_push_tags
+
+if [[ "$CRATE_NAME" == "ydb" ]]; then
+  publish_ydb_dependency_crates
+fi
 
 for CRATE in "${CRATES[@]}"; do
   publish_crate "$CRATE"

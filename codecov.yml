@@ -1,0 +1,5 @@
+# https://github.com/codecov/support/blob/master/codecov.yml
+ignore:
+  - ydb-grpc/src/generated
+  - ydb/examples
+  - tests/slo

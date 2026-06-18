@@ -1,18 +1,25 @@
 # Rust YDB SDK
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/ydb-platform/ydb/blob/main/LICENSE)
 [![Latest Version](https://img.shields.io/crates/v/ydb.svg)](https://crates.io/crates/ydb)
 [![Released API docs](https://docs.rs/ydb/badge.svg)](https://docs.rs/ydb)
+[![Linter](https://github.com/ydb-platform/ydb-rs-sdk/workflows/Linter/badge.svg)](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/linter.yml)
 [![YDB tests](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-tests.yml/badge.svg?branch=master&event=schedule)](https://github.com/ydb-platform/ydb-rs-sdk/actions/workflows/rust-tests.yml)
+[![codecov](https://codecov.io/gh/ydb-platform/ydb-rs-sdk/badge.svg?precision=2)](https://app.codecov.io/gh/ydb-platform/ydb-rs-sdk)
+[![View examples](https://img.shields.io/badge/learn-examples-brightgreen.svg)](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
+[![Telegram](https://img.shields.io/badge/chat-on%20Telegram-2ba2d9.svg)](https://t.me/ydb_en)
+[![WebSite](https://img.shields.io/badge/website-ydb.tech-blue.svg)](https://ydb.tech)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/ydb-platform/ydb-rs-sdk/blob/master/CONTRIBUTING.md)
 
 Rust SDK for YDB.
 
 ### Prerequisites
-Rust 1.82.0 or newer
+Rust 1.85.0 or newer
 
 ### Installation
 Add the YDB dependency to your project using `cargo add ydb` or add this your Cargo.toml:
 ```toml
 [dependencies]
-ydb = "0.12.3"
+ydb = "0.13.4"
 ```
 
 ### Example
@@ -58,7 +65,7 @@ async fn main() -> YdbResult<()> {
 }
 ```
 
-For more examples, check out the [URL shortener application](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-example-urlshortener) or [many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples).
+For more examples, see [ydb/examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples).
 
 ## Tests
 

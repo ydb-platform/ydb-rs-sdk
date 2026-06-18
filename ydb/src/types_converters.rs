@@ -1,6 +1,6 @@
 use crate::errors::YdbError;
 use crate::types::{Bytes, Value, ValueOptional};
-use crate::{ValueList, ValueStruct};
+use crate::{ValueList, ValueStruct, YdbResult};
 use itertools::Itertools;
 use std::any::type_name;
 use std::collections::HashMap;
@@ -229,5 +229,53 @@ impl TryFrom<Value> for HashMap<String, Value> {
             }
         };
         Ok(value_struct.into())
+    }
+}
+
+/// Tries to construct [`Value::List`] of [`Value::Struct`] from `values`.
+/// If `values` are empty (no example value), return None.
+/// If any of values is not [`Value::Struct`] or differs from others by structure, returns [`YdbError`]
+pub(crate) fn try_vec_to_list_of_structs(values: Vec<Value>) -> YdbResult<Option<Value>> {
+    let Some(example_value) = values.first().cloned() else {
+        return Ok(None);
+    };
+
+    if !matches!(example_value, Value::Struct(_)) {
+        return Err(YdbError::Custom(
+            "expected ValueStruct type for items".to_string(),
+        ));
+    }
+
+    Ok(Some(Value::list_from(example_value, values)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{types_converters::try_vec_to_list_of_structs, ydb_struct};
+
+    #[test]
+    fn try_vec_empty() {
+        assert!(matches!(try_vec_to_list_of_structs(vec![]), Ok(None)));
+    }
+
+    #[test]
+    fn try_vec_same_structure() {
+        let values = vec![ydb_struct!("id" => 1), ydb_struct!("id" => 2)];
+        assert!(matches!(try_vec_to_list_of_structs(values), Ok(Some(_))));
+    }
+
+    #[test]
+    fn try_vec_different_structure() {
+        let values = vec![ydb_struct!("id" => 1), ydb_struct!("key" => 2)];
+        assert!(try_vec_to_list_of_structs(values).is_err());
+    }
+
+    #[test]
+    fn try_vec_non_struct() {
+        let values = vec![ydb_struct!("id" => 1), 42i64.into()];
+        assert!(try_vec_to_list_of_structs(values).is_err());
+
+        let values = vec![1i64.into()];
+        assert!(try_vec_to_list_of_structs(values).is_err());
     }
 }

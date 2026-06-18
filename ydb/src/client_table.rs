@@ -10,18 +10,16 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
+use crate::retry::{NoRetrier, Retry, RetryParams, TimeoutRetrier};
 use crate::table_service_types::{CopyTableItem, TableDescription};
+use crate::types_converters::try_vec_to_list_of_structs;
 use crate::{Query, StreamResult};
-use num::pow;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{instrument, trace};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
-
-const DEFAULT_RETRY_TIMEOUT: Duration = Duration::from_secs(5);
-const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
 
 pub(crate) type TableServiceClientType = TableServiceClient<InterceptedChannel>;
 
@@ -261,6 +259,57 @@ impl TableClient {
         .await
     }
 
+    /// From table with given path `table_path` request rows by primary keys `keys`, which must be
+    /// vector of [`Value::Struct`]. If any key does not meet requirement, error will be returned.
+    ///
+    /// If `columns` is `None`, all columns of requested rows will be returned. Otherwise, only
+    /// `columns` will be returned.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use ydb::{TableClient, YdbResult, ydb_struct};
+    /// # async fn example(table_client: TableClient) -> YdbResult<()> {
+    /// let keys = vec![
+    ///     ydb_struct!("id" => 1_i64),
+    ///     ydb_struct!("id" => 2_i64),
+    /// ];
+    ///
+    /// let columns = Some(vec!["date".to_string(), "count".to_string()]);
+    ///
+    /// let result_set = table_client
+    ///     .retry_read_rows("/local/my_table".to_string(), keys, columns)
+    ///     .await?;
+    ///
+    /// for row in result_set.rows() {
+    ///     // Your code here.
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn retry_read_rows(
+        &self,
+        table_path: impl Into<String>,
+        keys: Vec<Value>,
+        columns: Option<Vec<String>>,
+    ) -> YdbResult<crate::ResultSet> {
+        let Some(keys) = try_vec_to_list_of_structs(keys)? else {
+            return Ok(crate::ResultSet::default());
+        };
+
+        let table_path: String = table_path.into();
+
+        let columns = columns.unwrap_or_default();
+
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            session
+                .read_rows(table_path.clone(), keys.clone(), columns.clone())
+                .await
+        })
+        .await
+    }
+
     /// Execute explain data query with retry policy
     ///
     /// # Type Parameters
@@ -308,18 +357,9 @@ impl TableClient {
         table_path: String,
         rows: Vec<Value>,
     ) -> YdbResult<()> {
-        if rows.is_empty() {
+        let Some(value) = try_vec_to_list_of_structs(rows)? else {
             return Ok(());
-        }
-
-        let examle_value = rows[0].clone();
-        if !matches!(&examle_value, Value::Struct(_)) {
-            return Err(YdbError::Custom(
-                "expected ValueStruct type for items".to_string(),
-            ));
-        }
-
-        let value = Value::list_from(examle_value, rows)?;
+        };
 
         self.retry(|| async {
             let mut session = self.create_session().await?;
@@ -535,63 +575,5 @@ impl TableClient {
         })
         .await
         .map_err(YdbOrCustomerError::to_ydb_error)
-    }
-}
-
-#[derive(Debug)]
-struct RetryParams {
-    pub(crate) attempt: usize,
-    pub(crate) time_from_start: Duration,
-}
-
-// May be extend in feature
-#[derive(Default, Debug)]
-struct RetryDecision {
-    pub(crate) allow_retry: bool,
-    pub(crate) wait_timeout: Duration,
-}
-
-trait Retry: Send + Sync {
-    fn wait_duration(&self, params: RetryParams) -> RetryDecision;
-}
-
-#[derive(Debug)]
-struct TimeoutRetrier {
-    timeout: Duration,
-}
-
-impl Default for TimeoutRetrier {
-    fn default() -> Self {
-        Self {
-            timeout: DEFAULT_RETRY_TIMEOUT,
-        }
-    }
-}
-
-impl Retry for TimeoutRetrier {
-    #[instrument(ret)]
-    fn wait_duration(&self, params: RetryParams) -> RetryDecision {
-        let mut res = RetryDecision::default();
-        if params.time_from_start < self.timeout {
-            if params.attempt > 0 {
-                res.wait_timeout =
-                    Duration::from_millis(pow(INITIAL_RETRY_BACKOFF_MILLISECONDS, params.attempt));
-            }
-            res.allow_retry = (params.time_from_start + res.wait_timeout) < self.timeout;
-        };
-
-        res
-    }
-}
-
-struct NoRetrier {}
-
-impl Retry for NoRetrier {
-    #[instrument(skip_all)]
-    fn wait_duration(&self, _: RetryParams) -> RetryDecision {
-        RetryDecision {
-            allow_retry: false,
-            wait_timeout: Duration::default(),
-        }
     }
 }

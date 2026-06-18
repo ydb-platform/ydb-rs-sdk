@@ -40,9 +40,7 @@
 //! ```
 //!
 //! # More examples
-//! [Url shorneter application](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-example-urlshortener)
-//!
-//! [Many small examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
+//! [Examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
 //!
 extern crate core;
 
@@ -52,6 +50,8 @@ pub(crate) mod client_common;
 pub(crate) mod client_coordination;
 #[cfg(test)]
 mod client_directory_test_integration;
+pub(crate) mod client_operation;
+pub(crate) mod client_query;
 pub(crate) mod client_scheme;
 pub(crate) mod client_table;
 #[cfg(test)]
@@ -68,6 +68,7 @@ mod load_balancer;
 mod pub_traits;
 pub(crate) mod query;
 pub(crate) mod result;
+mod retry;
 mod session;
 mod session_pool;
 mod sugar;
@@ -143,14 +144,22 @@ pub use client_topic::topicwriter::partitioning::PartitioningStrategy;
 pub use client_topic::topicwriter::writer::TopicWriter;
 // full enum pub types
 pub use client_topic::topicwriter::writer_options::{
-    TopicWriterConnectionOptions, TopicWriterOptions, TopicWriterOptionsBuilder,
-    TopicWriterRetrySettings,
+    TopicWriterOptions, TopicWriterOptionsBuilder,
 };
 // full enum pub types
 pub use client::{Client, TimeoutSettings};
 
 // full enum pub types
 pub use client_builder::ClientBuilder;
+
+// full enum pub types
+pub use client_query::{
+    CallBuilder, ExecBuilder, ExecCall, ExecuteScriptBuilder, ExecuteScriptOperation,
+    FetchScriptResult, FetchScriptResultsBuilder, FromYdbRow, OneResultSet, OneRow, OptionalRow,
+    OptionalRowBuilder, QueryClient, QueryExecutor, QueryRowBuilder, QuerySessionMode,
+    QuerySessionPoolSettings, QuerySessionPoolStats, QueryStats, QueryStream, QueryStreamBuilder,
+    QueryTransaction, QueryTransactionOptions, QueryTxMode, ResultSetBuilder, Streamed,
+};
 
 // full enum pub types
 pub use client_table::{RetryOptions, TableClient, TransactionOptions};
@@ -164,6 +173,10 @@ pub use table_service_types::{
 // full enum pub types
 pub use client_scheme::client::SchemeClient;
 pub use client_scheme::list_types::{SchemeEntry, SchemeEntryType, SchemePermissions};
+
+pub use client_operation::{
+    ListOperationsRequest, ListOperationsResult, OperationClient, OperationInfo, OperationKind,
+};
 
 // full enum pub types
 pub use discovery::{Discovery, DiscoveryState, StaticDiscovery};

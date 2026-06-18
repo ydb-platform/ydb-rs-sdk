@@ -1,6 +1,7 @@
 use crate::client::TimeoutSettings;
 use crate::client_table::TableServiceClientType;
 use crate::errors::{YdbError, YdbResult};
+use crate::grpc_wrapper::raw_table_service::read_rows::RawReadRowsRequest;
 use crate::query::Query;
 use crate::result::{ExplainResult, QueryResult, StreamResult};
 use crate::types::Value;
@@ -117,6 +118,29 @@ impl Session {
             .await;
         self.handle_raw_result(res)?;
         Ok(())
+    }
+
+    pub(crate) async fn read_rows(
+        &mut self,
+        table_path: String,
+        keys: Value,
+        columns: Vec<String>,
+    ) -> YdbResult<crate::ResultSet> {
+        debug_assert!(matches!(keys, Value::List(_)));
+
+        let req = RawReadRowsRequest {
+            session_id: self.id.clone(),
+            path: table_path,
+            keys: keys.try_into()?,
+            columns,
+        };
+
+        let mut table_client = self.get_table_client().await?;
+        let raw_res = table_client.read_rows(req).await;
+
+        let raw_read_rows_response = self.handle_raw_result(raw_res)?;
+
+        raw_read_rows_response.result_set.try_into()
     }
 
     pub(crate) async fn execute_bulk_upsert(
