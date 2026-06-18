@@ -146,7 +146,6 @@ async fn execute_data_query_params() -> YdbResult<()> {
         .query(
             Query::new(
                 "
-                DECLARE $v AS Int32;
                 SELECT $v+$v
 ",
             )
@@ -176,8 +175,7 @@ async fn query_yson() -> YdbResult<()> {
     let res = client
         .table_client()
         .retry_transaction(|mut t| async move {
-            let tst_query = "DECLARE $p AS YSON; \
-SELECT $p";
+            let tst_query = "SELECT $p";
 
             let res = t
                 .query(
@@ -231,9 +229,6 @@ async fn interactive_transaction() -> YdbResult<()> {
     tx.query(
         Query::new(
             "
-                DECLARE $key AS Int64;
-                DECLARE $val AS Int64;
-
                 UPSERT INTO test_values (id, vInt64) VALUES ($key, $val)
             ",
         )
@@ -657,8 +652,6 @@ async fn select_int() -> YdbResult<()> {
         .query(
             Query::new(
                 "
-DECLARE $test AS Int32;
-
 SELECT $test AS test;
 ",
             )
@@ -685,8 +678,6 @@ async fn select_optional() -> YdbResult<()> {
         .query(
             Query::new(
                 "
-DECLARE $test AS Optional<Int32>;
-
 SELECT $test AS test;
 ",
             )
@@ -719,8 +710,6 @@ async fn select_list() -> YdbResult<()> {
         .query(
             Query::new(
                 "
-DECLARE $l AS List<Int32>;
-
 SELECT $l AS l;
 ",
             )
@@ -758,10 +747,6 @@ async fn select_struct() -> YdbResult<()> {
         .query(
             Query::new(
                 "
-DECLARE $l AS List<Struct<
-    a: Int64
->>;
-
 SELECT
     SUM(a) AS s
 FROM
@@ -844,7 +829,6 @@ async fn select_with_u8_param() -> YdbResult<()> {
         .query(
             Query::from(
                 r#"
-            DECLARE $val AS Uint8;
             SELECT $val as s
         "#,
             )
@@ -879,7 +863,6 @@ async fn select_with_u16_param() -> YdbResult<()> {
         .query(
             Query::from(
                 r#"
-            DECLARE $val AS Uint16;
             SELECT $val as s
         "#,
             )
@@ -978,11 +961,6 @@ async fn stream_query() -> YdbResult<()> {
 
                 let query = Query::new(
                     "
-DECLARE $values AS List<Struct<
-    id: Int64,
-    val: Bytes,
-> >;
-
 UPSERT INTO stream_query
 SELECT
     *
@@ -1273,8 +1251,7 @@ async fn grpc_max_message_size_limit_exceeded() -> YdbResult<()> {
             async move {
                 tr.query(
                     Query::new(format!(
-                        "DECLARE $id AS Int64; DECLARE $val AS Bytes;
-                         UPSERT INTO {TABLE} (id, val) VALUES ($id, $val)"
+                        "UPSERT INTO {TABLE} (id, val) VALUES ($id, $val)"
                     ))
                     .with_params(ydb_params!(
                         "$id" => Value::Int64(1),
@@ -1303,8 +1280,7 @@ async fn grpc_max_message_size_limit_exceeded() -> YdbResult<()> {
     let encode_err = tx
         .query(
             Query::new(format!(
-                "DECLARE $id AS Int64; DECLARE $val AS Bytes;
-                 UPSERT INTO {TABLE} (id, val) VALUES ($id, $val)"
+                "UPSERT INTO {TABLE} (id, val) VALUES ($id, $val)"
             ))
             .with_params(ydb_params!(
                 "$id" => Value::Int64(2),

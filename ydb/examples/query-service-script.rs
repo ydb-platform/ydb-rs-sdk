@@ -25,8 +25,7 @@ async fn main() -> YdbResult<()> {
 
     let op = qc
         .execute_script(
-            "DECLARE $id AS Uint64; \
-             SELECT id, msg FROM script_example WHERE id = $id;",
+            "SELECT id, msg FROM script_example WHERE id = $id;",
         )
         .param("$id", 123_u64)
         .results_ttl(Duration::from_secs(3600))

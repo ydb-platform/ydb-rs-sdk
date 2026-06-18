@@ -105,8 +105,8 @@ async fn test_decimal() -> YdbResult<()> {
 /// Adding coverage for a new type/value is a single row in `type_cases()`.
 #[derive(Debug, Clone)]
 struct TypeCase {
-    /// YQL type name as used in `DECLARE $x AS <yql_type>`. May contain
-    /// parameters (e.g. `"Decimal(22, 9)"`).
+    /// YQL type name for parameter values (e.g. `"Decimal(22, 9)"`). Types are
+    /// inferred from proto; this field documents the expected YQL type.
     yql_type: String,
     /// Value sent as parameter; also expected back from the server.
     value: Value,
@@ -798,12 +798,8 @@ fn type_cases() -> Vec<TypeCase> {
 ///    the expected value.
 async fn check_type_roundtrip(client: &Client, case: &TypeCase) -> YdbResult<()> {
     // --- 1) Value → server (no cast) → Value ---
-    let q1 = format!(
-        "\
-declare $val AS {t};
-select $val AS db_result",
-        t = case.yql_type,
-    );
+    let q1 = "\
+select $val AS db_result";
     let recv_passthrough = client
         .table_client()
         .retry_transaction(|mut t| {
@@ -829,7 +825,6 @@ select $val AS db_result",
     // --- 2) Value → CAST AS Utf8 → string ---
     let q2 = format!(
         "\
-declare $val AS {t};
 select cast(cast($val AS {t}) AS Utf8) AS db_result",
         t = case.yql_type,
     );
@@ -859,7 +854,6 @@ select cast(cast($val AS {t}) AS Utf8) AS db_result",
     // --- 3) Text → CAST AS yql_type → Value ---
     let q3 = format!(
         "\
-declare $val AS Text;
 select cast($val AS {t}) AS db_result",
         t = case.yql_type,
     );

@@ -33,9 +33,6 @@ async fn main() -> YdbResult<()> {
                 t.query(
                     Query::new(
                         "
-                    DECLARE $id AS Int64;
-                    DECLARE $val AS Utf8;
-
                     UPSERT INTO test (id, val) VALUES ($id, $val)
                     ",
                     )

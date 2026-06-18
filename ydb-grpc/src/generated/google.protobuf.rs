@@ -326,7 +326,7 @@ pub struct ExtensionRangeOptions {
 pub mod extension_range_options {
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Declaration {
-        /// The extension number declared within the extension range.
+        /// The extension number assigned within the extension range.
         #[prost(int32, optional, tag = "1")]
         pub number: ::core::option::Option<i32>,
         /// The fully-qualified name of the extension field. There must be a leading
@@ -340,7 +340,7 @@ pub mod extension_range_options {
         pub r#type: ::core::option::Option<::prost::alloc::string::String>,
         /// If true, indicates that the number is reserved in the extension range,
         /// and any extension field with the number will fail to compile. Set this
-        /// when a declared extension field is deleted.
+        /// when a registered extension field is deleted.
         #[prost(bool, optional, tag = "5")]
         pub reserved: ::core::option::Option<bool>,
         /// If true, indicates that the extension must be defined as repeated.
@@ -362,7 +362,7 @@ pub mod extension_range_options {
     )]
     #[repr(i32)]
     pub enum VerificationState {
-        /// All the extensions of the range must be declared.
+        /// All the extensions of the range must be registered.
         Declaration = 0,
         Unverified = 1,
     }

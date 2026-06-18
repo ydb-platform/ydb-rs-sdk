@@ -394,11 +394,6 @@ async fn main() -> YdbResult<()> {
                                 t.query(
                                     Query::new(
                                         "
-                                        DECLARE $topic AS Text;
-                                        DECLARE $partition AS Int64;
-                                        DECLARE $offset AS Int64;
-                                        DECLARE $body AS Text;
-
                                         INSERT INTO topic_offset_storage (topic, partition, offset, body)
                                         VALUES ($topic, $partition, $offset, $body)
                                         "

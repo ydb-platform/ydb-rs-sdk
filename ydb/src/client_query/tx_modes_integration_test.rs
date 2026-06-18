@@ -70,8 +70,7 @@ async fn query_client_implicit_tx_ddl_and_dml() -> YdbResult<()> {
     ))
     .await?;
     qc.exec(format!(
-        "DECLARE $id AS Int64; DECLARE $val AS Int64; \
-         UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
+        "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
     ))
     .param("$id", 1_i64)
     .param("$val", 7_i64)
@@ -198,8 +197,7 @@ async fn query_tx_snapshot_rw_upsert() -> YdbResult<()> {
     if let Err(err) = qc
         .retry_transaction(async |tx| {
             tx.exec(format!(
-                "DECLARE $id AS Int64; DECLARE $val AS Int64; \
-                 UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
+                "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
             ))
             .param("$id", 1_i64)
             .param("$val", 55_i64)

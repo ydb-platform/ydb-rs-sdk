@@ -78,8 +78,7 @@ async fn main() -> YdbResult<()> {
         .await?;
 
     qc.exec(
-        "DECLARE $id AS Int64; DECLARE $val AS Utf8; \
-         UPSERT INTO test (id, val) VALUES ($id, $val)",
+        "UPSERT INTO test (id, val) VALUES ($id, $val)",
     )
     .param("$id", 1_i64)
     .param("$val", "hello")

@@ -62,8 +62,7 @@ async fn query_client_autocommit_by_default() -> YdbResult<()> {
     .await?;
 
     qc.exec(format!(
-        "DECLARE $id AS Int64; DECLARE $val AS Int64; \
-         UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
+        "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
     ))
     .param("$id", 1_i64)
     .param("$val", 77_i64)
@@ -117,8 +116,7 @@ async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
     .await?;
 
     let upsert = format!(
-        "DECLARE $id AS Int64; DECLARE $val AS Utf8; \
-         UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
+        "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
     );
 
     qc.retry_transaction(async |tx| {
@@ -220,8 +218,7 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
         );
 
         tx.exec(format!(
-            "DECLARE $id AS Int64; DECLARE $val AS Int64; \
-             UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
+            "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
         ))
         .param("$id", 1_i64)
         .param("$val", 42_i64)
@@ -337,8 +334,7 @@ async fn query_with_commit_on_last_query() -> YdbResult<()> {
 
     qc.retry_transaction(async |tx| {
         tx.exec(format!(
-            "DECLARE $id AS Int64; DECLARE $val AS Int64; \
-             UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
+            "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
         ))
         .param("$id", 1_i64)
         .param("$val", 99_i64)
@@ -390,8 +386,7 @@ async fn query_execute_script() -> YdbResult<()> {
     .await?;
 
     let upsert_query = format!(
-        "DECLARE $values AS List<Struct<val: Int32>>; \
-         UPSERT INTO {table_name} SELECT val FROM AS_TABLE($values);"
+        "UPSERT INTO {table_name} SELECT val FROM AS_TABLE($values);"
     );
 
     let mut upserted = 0_u32;

@@ -35,7 +35,6 @@ impl Query {
     /// ```
     /// # use ydb::{ydb_params, Query};
     /// let query = Query::new("
-    /// DECLARE $val AS Int64;
     ///
     /// SELECT $val AS res
     /// ").with_params(ydb_params!("$val" => 123 as i64));
@@ -48,7 +47,6 @@ impl Query {
     /// let mut params: HashMap::<String,Value> = HashMap::new();
     /// params.insert("$val".to_string(), Value::from(123 as i64));
     /// let query = Query::new("
-    /// DECLARE $val AS Int64;
     ///
     /// SELECT $val AS res
     /// ").with_params(params);
@@ -73,8 +71,7 @@ impl Query {
     /// let q = Query::new("SELECT 1").with_keep_in_cache(true);
     ///
     /// // force disable server cache for the query
-    ///  let q = Query::new("
-    /// DECLARE $res AS Int64")
+    ///  let q = Query::new("SELECT $res AS res")
     /// .with_params(ydb_params!("$val" => 123 as i64))
     /// .with_keep_in_cache(false);
     /// ```

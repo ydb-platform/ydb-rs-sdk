@@ -44,7 +44,7 @@ CI uses `ydbplatform/local-ydb:nightly` (see `rust-tests.yml`); image tag may di
 
 ## Workspace dependency policy
 
-Shared versions for `prost`, `tonic`, `pbjson` are declared in the root `Cargo.toml` under `[workspace.dependencies]`. Member crates reference them with `workspace = true`.
+Shared versions for `prost`, `tonic`, `pbjson` are specified in the root `Cargo.toml` under `[workspace.dependencies]`. Member crates reference them with `workspace = true`.
 
 Do not run `cargo update` or bump dependency versions unless the task requires it.
 

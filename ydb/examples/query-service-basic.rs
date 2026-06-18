@@ -34,18 +34,12 @@ async fn main() -> YdbResult<()> {
 
     // 2. Parameters chain at the call site; no ExecuteOptions argument.
     //    `.params(ydb_params!(...))` works too, for migration from table API.
-    qc.exec(
-        "DECLARE $id AS Int64; DECLARE $val AS Utf8; \
-         UPSERT INTO test (id, val) VALUES ($id, $val)",
-    )
+    qc.exec("UPSERT INTO test (id, val) VALUES ($id, $val)")
     .param("$id", 1_i64)
     .param("$val", "hello")
     .await?;
 
-    qc.exec(
-        "DECLARE $id AS Int64; DECLARE $val AS Utf8; \
-         UPSERT INTO test (id, val) VALUES ($id, $val)",
-    )
+    qc.exec("UPSERT INTO test (id, val) VALUES ($id, $val)")
     .params(ydb_params!("$id" => 2_i64, "$val" => "world"))
     .await?;
 
@@ -56,7 +50,7 @@ async fn main() -> YdbResult<()> {
 
     // 4. Optional row — the sqlx `fetch_optional` analogue.
     let found: Option<Row> = qc
-        .query_row("DECLARE $id AS Int64; SELECT val FROM test WHERE id = $id")
+        .query_row("SELECT val FROM test WHERE id = $id")
         .param("$id", 42_i64)
         .optional()
         .await?;
@@ -82,10 +76,7 @@ async fn main() -> YdbResult<()> {
     //    Table/identifier names cannot be YQL parameters — validate any user-
     //    controlled identifier before interpolating into SQL (literal is safe).
     let table = "test";
-    let dynamic_sql = format!(
-        "DECLARE $id AS Int64; DECLARE $payload AS Utf8; \
-         UPSERT INTO {table} (id, val) VALUES ($id, $payload)"
-    );
+    let dynamic_sql = format!("UPSERT INTO {table} (id, val) VALUES ($id, $payload)");
     for id in 0..100_i64 {
         let payload = format!("payload for row {id}");
         qc.exec(dynamic_sql.clone())
