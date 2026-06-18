@@ -28,11 +28,10 @@ impl Storage {
         client.wait().await.map_err(|err| err.to_string())?;
 
         let pool_limit = params.pool_size() as usize;
+        // SLO experiment (H2): implicit session pool (no CreateSession/Attach) vs explicit pool.
         let query_client = client
             .query_client()
-            .with_session_pool(QuerySessionPoolSettings::new().with_limit(pool_limit))
-            .await
-            .map_err(|err| err.to_string())?
+            .with_implicit_session_pool(QuerySessionPoolSettings::new().with_limit(pool_limit))
             .clone_with_idempotent_operations(true);
 
         Ok(Self {
