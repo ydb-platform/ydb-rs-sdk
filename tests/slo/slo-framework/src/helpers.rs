@@ -5,10 +5,15 @@ use ratelimit::Ratelimiter;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
+/// Shared rate limiter aligned with Go SLO: `rate.NewLimiter(rate.Limit(rps), 1)`.
+///
+/// Refills 1 token every `1/rps` seconds, burst capacity 1, one token available at start.
 pub fn new_rate_limiter(rps: u32) -> Ratelimiter {
     let rps = rps.max(1) as u64;
-    Ratelimiter::builder(rps, Duration::from_secs(1))
-        .max_tokens(rps)
+    let interval = Duration::from_nanos(1_000_000_000 / rps);
+    Ratelimiter::builder(1, interval)
+        .max_tokens(1)
+        .initial_available(1)
         .build()
         .expect("valid ratelimiter")
 }
@@ -49,8 +54,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rate_limiter_supports_default_slo_rps() {
-        new_rate_limiter(1000);
-        new_rate_limiter(100);
+    fn go_style_rate_limiter_supports_default_slo_rps() {
+        let rl = new_rate_limiter(1000);
+        assert!((rl.rate() - 1000.0).abs() < 1.0);
+        let rl = new_rate_limiter(100);
+        assert!((rl.rate() - 100.0).abs() < 1.0);
     }
 }
