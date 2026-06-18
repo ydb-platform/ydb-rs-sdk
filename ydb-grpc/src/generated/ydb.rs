@@ -544,68 +544,13 @@ pub struct Column {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ResultSet {
-    /// Metadata of columns.
-    /// May be empty for custom Ydb.Query.SchemaInclusionMode.
+    /// Metadata of columns
     #[prost(message, repeated, tag = "1")]
     pub columns: ::prost::alloc::vec::Vec<Column>,
-    /// Rows of table, are only filled for FORMAT_VALUE
+    /// Rows of table
     #[prost(message, repeated, tag = "2")]
     pub rows: ::prost::alloc::vec::Vec<Value>,
     /// Flag indicates the result was truncated
     #[prost(bool, tag = "3")]
     pub truncated: bool,
-    /// Format of the result set rows
-    #[prost(enumeration = "result_set::Format", tag = "4")]
-    pub format: i32,
-    /// Metadata of the result set rows, only used for FORMAT_ARROW
-    #[prost(message, optional, tag = "5")]
-    pub arrow_format_meta: ::core::option::Option<formats::ArrowFormatMeta>,
-    /// Binary data for compressible formats of rows
-    #[prost(bytes = "vec", tag = "15")]
-    pub data: ::prost::alloc::vec::Vec<u8>,
-}
-/// Nested message and enum types in `ResultSet`.
-pub mod result_set {
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive(
-        Clone,
-        Copy,
-        Debug,
-        PartialEq,
-        Eq,
-        Hash,
-        PartialOrd,
-        Ord,
-        ::prost::Enumeration
-    )]
-    #[repr(i32)]
-    pub enum Format {
-        /// Unspecified, corresponds to FORMAT_VALUE
-        Unspecified = 0,
-        /// Used to get Ydb.Value as a result in Ydb.ResultSet.rows field
-        Value = 1,
-        /// Used to get Arrow record batch as a result in Ydb.ResultSet.data field
-        Arrow = 2,
-    }
-    impl Format {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Self::Unspecified => "FORMAT_UNSPECIFIED",
-                Self::Value => "FORMAT_VALUE",
-                Self::Arrow => "FORMAT_ARROW",
-            }
-        }
-        /// Creates an enum from field names used in the ProtoBuf definition.
-        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-            match value {
-                "FORMAT_UNSPECIFIED" => Some(Self::Unspecified),
-                "FORMAT_VALUE" => Some(Self::Value),
-                "FORMAT_ARROW" => Some(Self::Arrow),
-                _ => None,
-            }
-        }
-    }
 }

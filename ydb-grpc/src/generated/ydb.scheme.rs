@@ -112,9 +112,6 @@ pub mod entry {
         ExternalTable = 18,
         ExternalDataSource = 19,
         View = 20,
-        ResourcePool = 21,
-        Transfer = 23,
-        SysView = 24,
     }
     impl Type {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -138,9 +135,6 @@ pub mod entry {
                 Self::ExternalTable => "EXTERNAL_TABLE",
                 Self::ExternalDataSource => "EXTERNAL_DATA_SOURCE",
                 Self::View => "VIEW",
-                Self::ResourcePool => "RESOURCE_POOL",
-                Self::Transfer => "TRANSFER",
-                Self::SysView => "SYS_VIEW",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -162,9 +156,6 @@ pub mod entry {
                 "EXTERNAL_TABLE" => Some(Self::ExternalTable),
                 "EXTERNAL_DATA_SOURCE" => Some(Self::ExternalDataSource),
                 "VIEW" => Some(Self::View),
-                "RESOURCE_POOL" => Some(Self::ResourcePool),
-                "TRANSFER" => Some(Self::Transfer),
-                "SYS_VIEW" => Some(Self::SysView),
                 _ => None,
             }
         }

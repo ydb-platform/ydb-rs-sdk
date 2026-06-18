@@ -77,7 +77,7 @@ pub mod table_index {
         GlobalUniqueIndex(super::GlobalUniqueIndex),
     }
 }
-/// Represent table index with index state
+/// Represent secondary index with index state
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TableIndexDescription {
@@ -389,9 +389,6 @@ pub struct Changefeed {
     pub topic_partitioning_settings: ::core::option::Option<
         super::topic::PartitioningSettings,
     >,
-    /// Emit schema change events or not
-    #[prost(bool, tag = "11")]
-    pub schema_changes: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -425,25 +422,9 @@ pub struct ChangefeedDescription {
     pub resolved_timestamps_interval: ::core::option::Option<
         super::super::google::protobuf::Duration,
     >,
-    /// Progress of initial scan. If unspecified, initial scan was not launched.
-    #[prost(message, optional, tag = "9")]
-    pub initial_scan_progress: ::core::option::Option<
-        changefeed_description::InitialScanProgress,
-    >,
-    /// State of emitting of schema change events
-    #[prost(bool, tag = "10")]
-    pub schema_changes: bool,
 }
 /// Nested message and enum types in `ChangefeedDescription`.
 pub mod changefeed_description {
-    #[derive(serde::Serialize, serde::Deserialize)]
-    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-    pub struct InitialScanProgress {
-        #[prost(uint32, tag = "1")]
-        pub parts_total: u32,
-        #[prost(uint32, tag = "2")]
-        pub parts_completed: u32,
-    }
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(
         Clone,
@@ -818,7 +799,7 @@ pub mod column_meta {
         FromSequence(super::SequenceDescription),
     }
 }
-/// The row will be considered as expired or assigned a tier at the moment of time, when the value
+/// The row will be considered as expired at the moment of time, when the value
 /// stored in \<column_name> is less than or equal to the current time (in epoch
 /// time format), and \<expire_after_seconds> has passed since that moment;
 /// i.e. the expiration threshold is the value of \<column_name> plus \<expire_after_seconds>.
@@ -1080,7 +1061,7 @@ pub struct CreateTableRequest {
     pub profile: ::core::option::Option<TableProfile>,
     #[prost(message, optional, tag = "6")]
     pub operation_params: ::core::option::Option<super::operations::OperationParams>,
-    /// List of table indexes
+    /// List of secondary indexes
     #[prost(message, repeated, tag = "7")]
     pub indexes: ::prost::alloc::vec::Vec<TableIndex>,
     /// Table rows time to live settings
@@ -1197,10 +1178,10 @@ pub struct AlterTableRequest {
     /// Columns to alter
     #[prost(message, repeated, tag = "6")]
     pub alter_columns: ::prost::alloc::vec::Vec<ColumnMeta>,
-    /// Add table indexes
+    /// Add secondary indexes
     #[prost(message, repeated, tag = "9")]
     pub add_indexes: ::prost::alloc::vec::Vec<TableIndex>,
-    /// Remove table indexes
+    /// Remove secondary indexes
     #[prost(string, repeated, tag = "10")]
     pub drop_indexes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// Change table storage settings
@@ -1381,9 +1362,6 @@ pub struct DescribeTableRequest {
     /// Includes partition statistics (required include_table_statistics)
     #[prost(bool, tag = "7")]
     pub include_partition_stats: bool,
-    /// Includes set_val settings for sequences
-    #[prost(bool, tag = "8")]
-    pub include_set_val: bool,
     /// Includes shard -> node id maping (required include_partition_stats)
     #[prost(bool, tag = "9")]
     pub include_shard_nodes_info: bool,
@@ -1491,11 +1469,8 @@ pub struct StaleModeSettings {}
 pub struct SnapshotModeSettings {}
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SnapshotRwModeSettings {}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TransactionSettings {
-    #[prost(oneof = "transaction_settings::TxMode", tags = "1, 2, 3, 4, 5")]
+    #[prost(oneof = "transaction_settings::TxMode", tags = "1, 2, 3, 4")]
     pub tx_mode: ::core::option::Option<transaction_settings::TxMode>,
 }
 /// Nested message and enum types in `TransactionSettings`.
@@ -1511,8 +1486,6 @@ pub mod transaction_settings {
         StaleReadOnly(super::StaleModeSettings),
         #[prost(message, tag = "4")]
         SnapshotReadOnly(super::SnapshotModeSettings),
-        #[prost(message, tag = "5")]
-        SnapshotReadWrite(super::SnapshotRwModeSettings),
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -2212,7 +2185,6 @@ pub struct ExecuteScanQueryRequest {
     pub collect_stats: i32,
     /// works only in mode: MODE_EXPLAIN,
     /// collects additional diagnostics about query compilation, including query plan and scheme
-    #[deprecated]
     #[prost(bool, tag = "9")]
     pub collect_full_diagnostics: bool,
 }
@@ -2278,121 +2250,8 @@ pub struct ExecuteScanQueryPartialResult {
     pub query_stats: ::core::option::Option<super::table_stats::QueryStats>,
     /// works only in mode: MODE_EXPLAIN,
     /// collects additional diagnostics about query compilation, including query plan and scheme
-    #[deprecated]
     #[prost(string, tag = "7")]
     pub query_full_diagnostics: ::prost::alloc::string::String,
-    /// Optional snapshot that corresponds to the returned data
-    #[prost(message, optional, tag = "8")]
-    pub snapshot: ::core::option::Option<super::VirtualTimestamp>,
-}
-/// Returns information about an external data source with a given path.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DescribeExternalDataSourceRequest {
-    #[prost(message, optional, tag = "1")]
-    pub operation_params: ::core::option::Option<super::operations::OperationParams>,
-    #[prost(string, tag = "2")]
-    pub path: ::prost::alloc::string::String,
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DescribeExternalDataSourceResponse {
-    /// Holds DescribeExternalDataSourceResult in case of a successful call.
-    #[prost(message, optional, tag = "1")]
-    pub operation: ::core::option::Option<super::operations::Operation>,
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DescribeExternalDataSourceResult {
-    /// Description of a generic scheme object.
-    #[prost(message, optional, tag = "1")]
-    pub self_: ::core::option::Option<super::scheme::Entry>,
-    #[prost(string, optional, tag = "2")]
-    pub source_type: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, optional, tag = "3")]
-    pub location: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(map = "string, string", tag = "4")]
-    pub properties: ::std::collections::HashMap<
-        ::prost::alloc::string::String,
-        ::prost::alloc::string::String,
-    >,
-}
-/// Returns information about an external table with a given path.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DescribeExternalTableRequest {
-    #[prost(message, optional, tag = "1")]
-    pub operation_params: ::core::option::Option<super::operations::OperationParams>,
-    #[prost(string, tag = "2")]
-    pub path: ::prost::alloc::string::String,
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DescribeExternalTableResponse {
-    /// Holds DescribeExternalTableResult in case of a successful call.
-    #[prost(message, optional, tag = "1")]
-    pub operation: ::core::option::Option<super::operations::Operation>,
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DescribeExternalTableResult {
-    /// Description of a generic scheme object.
-    #[prost(message, optional, tag = "1")]
-    pub self_: ::core::option::Option<super::scheme::Entry>,
-    #[prost(string, optional, tag = "2")]
-    pub source_type: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, optional, tag = "3")]
-    pub data_source_path: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, optional, tag = "4")]
-    pub location: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(message, repeated, tag = "5")]
-    pub columns: ::prost::alloc::vec::Vec<ColumnMeta>,
-    #[prost(map = "string, string", tag = "6")]
-    pub content: ::std::collections::HashMap<
-        ::prost::alloc::string::String,
-        ::prost::alloc::string::String,
-    >,
-}
-/// Returns information about a system view with a given path.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DescribeSystemViewRequest {
-    #[prost(message, optional, tag = "1")]
-    pub operation_params: ::core::option::Option<super::operations::OperationParams>,
-    #[prost(string, tag = "2")]
-    pub path: ::prost::alloc::string::String,
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DescribeSystemViewResponse {
-    /// Holds DescribeSystemViewResult in case of a successful call.
-    #[prost(message, optional, tag = "1")]
-    pub operation: ::core::option::Option<super::operations::Operation>,
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DescribeSystemViewResult {
-    /// Description of scheme object
-    #[prost(message, optional, tag = "1")]
-    pub self_: ::core::option::Option<super::scheme::Entry>,
-    /// Id of system view (Enum value from NKikimrSysView.ESysViewType)
-    #[prost(uint64, tag = "2")]
-    pub sys_view_id: u64,
-    /// NameId of system view
-    #[prost(string, tag = "3")]
-    pub sys_view_name: ::prost::alloc::string::String,
-    /// List of columns
-    #[prost(message, repeated, tag = "4")]
-    pub columns: ::prost::alloc::vec::Vec<ColumnMeta>,
-    /// List of primary key columns
-    #[prost(string, repeated, tag = "5")]
-    pub primary_key: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// Attributes
-    #[prost(map = "string, string", tag = "6")]
-    pub attributes: ::std::collections::HashMap<
-        ::prost::alloc::string::String,
-        ::prost::alloc::string::String,
-    >,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
