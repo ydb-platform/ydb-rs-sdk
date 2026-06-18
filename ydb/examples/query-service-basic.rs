@@ -35,13 +35,13 @@ async fn main() -> YdbResult<()> {
     // 2. Parameters chain at the call site; no ExecuteOptions argument.
     //    `.params(ydb_params!(...))` works too, for migration from table API.
     qc.exec("UPSERT INTO test (id, val) VALUES ($id, $val)")
-    .param("$id", 1_i64)
-    .param("$val", "hello")
-    .await?;
+        .param("$id", 1_i64)
+        .param("$val", "hello")
+        .await?;
 
     qc.exec("UPSERT INTO test (id, val) VALUES ($id, $val)")
-    .params(ydb_params!("$id" => 2_i64, "$val" => "world"))
-    .await?;
+        .params(ydb_params!("$id" => 2_i64, "$val" => "world"))
+        .await?;
 
     // 3. Exactly one row: 0 rows -> Err(NoRows), >1 -> error.
     let mut row = qc.query_row("SELECT COUNT(*) AS cnt FROM test").await?;

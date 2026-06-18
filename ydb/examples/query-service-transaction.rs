@@ -131,13 +131,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     qc.retry_transaction(async |tx: &mut QueryTransaction| {
-        tx.exec(format!(
-            "UPSERT INTO {table} (id, val) VALUES ($id, $val)"
-        ))
-        .param("$id", 1_i64)
-        .param("$val", 100_i64)
-        .with_commit(true) // server commits when the stream is fully read
-        .await?;
+        tx.exec(format!("UPSERT INTO {table} (id, val) VALUES ($id, $val)"))
+            .param("$id", 1_i64)
+            .param("$val", 100_i64)
+            .with_commit(true) // server commits when the stream is fully read
+            .await?;
         // Transaction is already committed; further queries in this callback would fail.
         Ok(())
     })

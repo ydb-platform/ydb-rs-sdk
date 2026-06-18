@@ -115,9 +115,7 @@ async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
     ))
     .await?;
 
-    let upsert = format!(
-        "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
-    );
+    let upsert = format!("UPSERT INTO {table_name} (id, val) VALUES ($id, $val)");
 
     qc.retry_transaction(async |tx| {
         for id in 0..3_i64 {
@@ -385,9 +383,7 @@ async fn query_execute_script() -> YdbResult<()> {
     ))
     .await?;
 
-    let upsert_query = format!(
-        "UPSERT INTO {table_name} SELECT val FROM AS_TABLE($values);"
-    );
+    let upsert_query = format!("UPSERT INTO {table_name} SELECT val FROM AS_TABLE($values);");
 
     let mut upserted = 0_u32;
     for batch in 0..(UPSERT_ROWS_COUNT / BATCH_SIZE) {

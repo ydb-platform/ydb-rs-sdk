@@ -803,11 +803,10 @@ select $val AS db_result";
     let recv_passthrough = client
         .table_client()
         .retry_transaction(|mut t| {
-            let q = q1.clone();
             let v = case.value.clone();
             async move {
                 let res = t
-                    .query(Query::new(q).with_params(ydb_params! {
+                    .query(Query::new(q1).with_params(ydb_params! {
                         "$val" => v,
                     }))
                     .await?;

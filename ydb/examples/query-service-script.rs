@@ -24,9 +24,7 @@ async fn main() -> YdbResult<()> {
         .await?;
 
     let op = qc
-        .execute_script(
-            "SELECT id, msg FROM script_example WHERE id = $id;",
-        )
+        .execute_script("SELECT id, msg FROM script_example WHERE id = $id;")
         .param("$id", 123_u64)
         .results_ttl(Duration::from_secs(3600))
         .await?;

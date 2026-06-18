@@ -1250,13 +1250,11 @@ async fn grpc_max_message_size_limit_exceeded() -> YdbResult<()> {
             let payload = payload.clone();
             async move {
                 tr.query(
-                    Query::new(format!(
-                        "UPSERT INTO {TABLE} (id, val) VALUES ($id, $val)"
-                    ))
-                    .with_params(ydb_params!(
-                        "$id" => Value::Int64(1),
-                        "$val" => Value::Bytes(Bytes::from(payload))
-                    )),
+                    Query::new(format!("UPSERT INTO {TABLE} (id, val) VALUES ($id, $val)"))
+                        .with_params(ydb_params!(
+                            "$id" => Value::Int64(1),
+                            "$val" => Value::Bytes(Bytes::from(payload))
+                        )),
                 )
                 .await?;
                 tr.commit().await?;
@@ -1279,13 +1277,12 @@ async fn grpc_max_message_size_limit_exceeded() -> YdbResult<()> {
     let mut tx = limited.create_interactive_transaction();
     let encode_err = tx
         .query(
-            Query::new(format!(
-                "UPSERT INTO {TABLE} (id, val) VALUES ($id, $val)"
-            ))
-            .with_params(ydb_params!(
-                "$id" => Value::Int64(2),
-                "$val" => Value::Bytes(Bytes::from(vec![0xCDu8; PAYLOAD_BYTES]))
-            )),
+            Query::new(format!("UPSERT INTO {TABLE} (id, val) VALUES ($id, $val)")).with_params(
+                ydb_params!(
+                    "$id" => Value::Int64(2),
+                    "$val" => Value::Bytes(Bytes::from(vec![0xCDu8; PAYLOAD_BYTES]))
+                ),
+            ),
         )
         .await
         .expect_err("upsert exceeding grpc encoding limit must fail");
