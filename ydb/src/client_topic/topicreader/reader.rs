@@ -206,20 +206,41 @@ impl TopicReader {
         Ok(batch)
     }
 
+    /// Sends a commit for the given [`TopicReaderCommitMarker`] to the server.
+    ///
+    /// Returns as soon as the commit message has been queued for sending; it does
+    /// not wait for the server to acknowledge the commit. Use
+    /// [`commit_with_ack`](Self::commit_with_ack) if you need that guarantee.
+    ///
+    /// # Errors
+    ///
+    /// the reader has been closed).
+    /// Returns an error if the commit message could not be queued (for example,kjkjkj
     pub fn commit(&mut self, commit_marker: TopicReaderCommitMarker) -> YdbResult<()> {
         self.reader.commit(commit_marker).map(|_| ())
     }
 
-    pub async fn commit_with_ack(
+    /// Sends a commit for the given [`TopicReaderCommitMarker`] and returns a
+    /// handle that resolves once the server acknowledges it.
+    ///
+    /// `.await` the returned handle to wait for the acknowledgement; it
+    /// resolves to `Ok(())` when the server acks the commit.
+    ///
+    /// # Errors
+    ///
+    /// The handle resolves to an error if the acknowledgement will never
+    /// arrive — either because the initial send failed, or because the reader
+    /// was closed before the server replied.
+    ///
+    /// **Unstable:** the returned handle type and its error will change in a
+    /// future release.
+    pub fn commit_with_ack(
         &mut self,
         commit_marker: TopicReaderCommitMarker,
-    ) -> YdbResult<()> {
-        let handler = self.reader.commit(commit_marker)?;
-
-        // TODO: In CommitHandler return custom TopicError
-        handler
-            .await
-            .map_err(|_| YdbError::Transport("commit was aborted".to_string()))
+    ) -> TopicCommitHandler {
+        self.reader
+            .commit(commit_marker)
+            .unwrap_or(Self::dangling_handler())
     }
 
     async fn try_reconnect_on_err(&mut self, err: YdbError) -> YdbResult<()> {
@@ -266,6 +287,11 @@ impl TopicReader {
         self.reader = reader;
 
         Ok(())
+    }
+
+    fn dangling_handler() -> TopicCommitHandler {
+        let (_, handler) = tokio::sync::oneshot::channel();
+        handler
     }
 
     /// Converts a retriable error into `Ok(())` and returns non-retriable errors unchanged.
