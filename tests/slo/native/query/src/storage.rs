@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use slo_framework::kv::{Database, KvWorkload, Params};
 use slo_framework::{test_row_from_row, Framework, RowID, TestRow, Workload};
 use ydb::ClientBuilder;
-use ydb::{QueryClient, QuerySessionPoolSettings};
+use ydb::{QueryClient, QuerySessionPoolSettings, QueryTxMode};
 
 pub struct Storage {
     query_client: QueryClient,
@@ -111,7 +111,10 @@ impl Database for Storage {
         // retries inside query_row — the one-shot API has no attempt callback (unlike table retry_transaction).
         let row = tokio::time::timeout(self.read_timeout, async move {
             attempts_for_op.fetch_add(1, Ordering::Relaxed);
-            qc.query_row(select_sql).param("$id", id).await
+            qc.query_row(select_sql)
+                .param("$id", id)
+                .with_tx_mode(QueryTxMode::SnapshotReadOnly)
+                .await
         })
         .await
         .map_err(|_| "read timeout".to_string())?
