@@ -34,7 +34,7 @@ struct WriterLoopParams {
 impl StreamWriter {
     pub(crate) async fn new(
         writer_options: TopicWriterOptions,
-        mut stream: AsyncGrpcStreamWrapper<
+        stream: AsyncGrpcStreamWrapper<
             stream_write_message::FromClient,
             stream_write_message::FromServer,
         >,

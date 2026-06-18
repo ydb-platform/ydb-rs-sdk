@@ -61,4 +61,5 @@ async_once = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 lazy_static = "1.4"
 ntest = "0.7"
+tokio = { version = "1.22", features = ["test-util"] }
 uuid = { version = "1.17.0", features = ["v4"] }

@@ -347,6 +347,7 @@ impl From<RawError> for YdbError {
             RawError::ProtobufDecodeError(message) => {
                 YdbError::Custom(format!("decode protobuf error: {message}"))
             }
+            RawError::Transport(message) => YdbError::Transport(message),
             RawError::TonicStatus(s) => YdbError::TransportGRPCStatus(Arc::new(*s)),
             RawError::YdbStatus(status_error) => YdbError::YdbStatusError(status_error),
         }
