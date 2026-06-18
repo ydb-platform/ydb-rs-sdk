@@ -67,7 +67,7 @@ jobs:
 
     - name: Run tests with coverage
       env:
-        YDB_CONNECTION_STRING: grpc://localhost:2136//ocal
+        YDB_CONNECTION_STRING: grpc://localhost:2136/local
       run: cargo llvm-cov --workspace --exclude slo-framework --exclude slo-native-table --exclude slo-native-query --lcov --output-path lcov.info -- --include-ignored
 
     - name: Upload coverage report to Codecov
