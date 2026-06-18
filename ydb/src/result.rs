@@ -3,7 +3,7 @@ use crate::errors::{YdbError, YdbResult, YdbStatusError};
 use crate::grpc::proto_issues_to_ydb_issues;
 use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryResult;
 use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawTypedValue, RawValue};
-use crate::trace_helpers::ensure_len_string;
+use crate::traces::helpers::ensure_len_string;
 use crate::types::Value;
 use itertools::Itertools;
 use std::collections::HashMap;
