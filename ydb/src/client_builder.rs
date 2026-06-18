@@ -396,7 +396,7 @@ mod test {
 
     #[test]
     fn database_from_arg() -> YdbResult<()> {
-        let builder = ClientBuilder::new_from_connection_string("http://asd:222/?database=/qwe2")?;
+        let builder = ClientBuilder::new_from_connection_string("http://asd:222/qwe2")?;
         assert_eq!(builder.database, "/qwe2".to_string());
         Ok(())
     }

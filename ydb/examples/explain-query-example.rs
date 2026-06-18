@@ -6,7 +6,7 @@ use ydb::{ClientBuilder, YdbError, YdbResult};
 async fn main() -> YdbResult<()> {
     // Get connection string from environment variable or use default
     let connection_string = std::env::var("YDB_CONNECTION_STRING")
-        .unwrap_or_else(|_| "grpc://localhost:2136?database=local".to_string());
+        .unwrap_or_else(|_| "grpc://localhost:2136/local".to_string());
 
     // Create a client from connection string
     let client = ClientBuilder::new_from_connection_string(&connection_string)?.client()?;

@@ -19,7 +19,7 @@
 
 ## Developer experience goals
 
-- **Connection string** as the primary entry point: `grpc://host:port?database=/path`.
+- **Connection string** as the primary entry point: `grpc://host:port/database`.
 - **Automatic retries** on retriable errors for table operations (configurable).
 - **Type-safe row access** via `result` types and `try_into` conversions.
 - **Examples**: `ydb/examples/` — runnable `cargo example` snippets.

@@ -124,7 +124,7 @@ impl Driver {
 
 async fn make_reader(server: &MockServer) -> YdbResult<TopicReader> {
     let client = ClientBuilder::new_from_connection_string(format!(
-        "{}?database={DATABASE}&use_discovery=false",
+        "{}{DATABASE}?use_discovery=false",
         server.endpoint()
     ))?
     .client()?;

@@ -6,7 +6,7 @@ Authoritative CI/toolchain reference: [`.agents/context/techContext.md`](../cont
 
 ```bash
 docker compose up -d
-export YDB_CONNECTION_STRING='grpc://localhost:2136?database=/local'
+export YDB_CONNECTION_STRING='grpc://localhost:2136/local'
 ```
 
 ## Build, lint, test
