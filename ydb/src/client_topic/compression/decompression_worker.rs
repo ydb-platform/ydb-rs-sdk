@@ -1,9 +1,10 @@
 use super::ordered_task_queue::OrderedTaskQueue;
 use crate::client_topic::compression::codec_registry::CodecRegistry;
 use crate::client_topic::compression::error_strategy::ErrorHandlingStrategy;
+use crate::client_topic::compression::executor::Executor;
 use crate::client_topic::list_types::Codec;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
-    DecompressedBatch, RawBatchWithId,
+    RawBatch, RawBatchWithId, RawMessageData,
 };
 use crate::YdbResult;
 use prost::bytes::Bytes;
@@ -14,59 +15,77 @@ use tracing::warn;
 pub struct DecompressionWorker {
     codec_registry: Arc<CodecRegistry>,
     error_strategy: ErrorHandlingStrategy,
-    queue: OrderedTaskQueue<DecompressedBatch>,
+    parallelism: usize,
+    queue: OrderedTaskQueue<RawBatchWithId>,
 }
 
 impl DecompressionWorker {
     pub fn new(
         codec_registry: Arc<CodecRegistry>,
         error_strategy: ErrorHandlingStrategy,
-    ) -> (Self, mpsc::UnboundedReceiver<YdbResult<DecompressedBatch>>) {
-        let (queue, receiver) = OrderedTaskQueue::new();
+        executor: Arc<dyn Executor>,
+    ) -> (Self, mpsc::UnboundedReceiver<YdbResult<RawBatchWithId>>) {
+        let parallelism = executor.available_parallelism();
+        let (queue, receiver) = OrderedTaskQueue::new(executor);
         (
             Self {
                 codec_registry,
                 error_strategy,
+                parallelism,
                 queue,
             },
             receiver,
         )
     }
 
-    pub async fn process_batch(&self, batch: RawBatchWithId) -> YdbResult<()> {
-        let registry = self.codec_registry.clone();
-        let strategy = self.error_strategy.clone();
+    pub fn process_batch(&self, mut batch: RawBatchWithId) {
+        let chunk_size = (batch.batch.message_data.len() / self.parallelism).max(1);
+        let total_bytes = batch.read_session_size_bytes;
 
-        self.queue
-            .submit(Box::new(move || {
-                decompress_batch(batch, &registry, &strategy)
-            }))
-            .await
+        while !batch.batch.message_data.is_empty() {
+            let chunk: Vec<RawMessageData> = batch
+                .batch
+                .message_data
+                .drain(..chunk_size.min(batch.batch.message_data.len()))
+                .collect();
+            let is_last = batch.batch.message_data.is_empty();
+
+            let chunk_batch = RawBatchWithId {
+                partition_session_id: batch.partition_session_id,
+                read_session_size_bytes: if is_last { total_bytes } else { 0 },
+                batch: RawBatch {
+                    producer_id: batch.batch.producer_id.clone(),
+                    write_session_meta: batch.batch.write_session_meta.clone(),
+                    codec: batch.batch.codec.clone(),
+                    written_at: batch.batch.written_at.clone(),
+                    message_data: chunk,
+                },
+            };
+            let registry = self.codec_registry.clone();
+            let strategy = self.error_strategy.clone();
+
+            self.queue.submit(Box::new(move || {
+                decompress_batch(chunk_batch, &registry, &strategy)
+            }));
+        }
     }
 }
 
 fn decompress_batch(
-    mut batch_with_id: RawBatchWithId,
+    mut batch: RawBatchWithId,
     registry: &CodecRegistry,
     strategy: &ErrorHandlingStrategy,
-) -> YdbResult<DecompressedBatch> {
-    let read_session_size_bytes = batch_with_id.batch.get_read_session_size();
-    let partition_session_id = batch_with_id.partition_session_id;
-    let batch = &mut batch_with_id.batch;
+) -> YdbResult<RawBatchWithId> {
     let codec = Codec {
-        code: batch.codec.code,
+        code: batch.batch.codec.code,
     };
     if codec == Codec::RAW {
-        return Ok(DecompressedBatch {
-            partition_session_id,
-            batch: batch_with_id.batch,
-            read_session_size_bytes,
-        });
+        return Ok(batch);
     }
 
     let mut failed_offsets = Vec::new();
 
-    for message in batch.message_data.iter_mut() {
+    for message in batch.batch.message_data.iter_mut() {
         let data_bytes = Bytes::from(std::mem::take(&mut message.data));
         match registry.decompress(&data_bytes, &codec) {
             Ok(decompressed) => {
@@ -90,13 +109,10 @@ fn decompress_batch(
 
     if !failed_offsets.is_empty() {
         batch
+            .batch
             .message_data
             .retain(|m| !failed_offsets.contains(&m.offset));
     }
 
-    Ok(DecompressedBatch {
-        partition_session_id,
-        batch: batch_with_id.batch,
-        read_session_size_bytes,
-    })
+    Ok(batch)
 }

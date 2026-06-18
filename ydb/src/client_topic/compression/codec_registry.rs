@@ -1,8 +1,7 @@
 use crate::client_topic::compression::builtin_codecs::{gzip_compress, gzip_decompress};
-use crate::client_topic::list_types::Codec;
-use crate::{YdbError, YdbResult};
+use crate::{YdbError, YdbResult, Codec};
 use prost::bytes::Bytes;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub type EncoderFunc = Arc<dyn Fn(&Bytes) -> YdbResult<Bytes> + Send + Sync>;
@@ -57,6 +56,13 @@ impl CodecRegistry {
         self.funcs
             .get(codec)
             .ok_or_else(|| YdbError::custom(format!("unsupported codec {:?}", codec)))
+    }
+
+    pub fn supported_codecs(&self) -> HashSet<Codec> {
+        let mut codecs = HashSet::new();
+        codecs.insert(Codec::RAW);
+        codecs.extend(self.funcs.keys());
+        codecs
     }
 
     pub fn compress(&self, data: &Bytes, codec: &Codec) -> YdbResult<Bytes> {

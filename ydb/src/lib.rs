@@ -90,6 +90,8 @@ mod table_service_types;
 mod test_integration_helper;
 #[cfg(test)]
 pub(crate) mod topics_test;
+#[cfg(test)]
+pub(crate) mod topics_compression_test;
 mod trace_helpers;
 mod trait_operation;
 pub(crate) mod transaction;
@@ -142,7 +144,9 @@ pub use client_topic::topicwriter::partitioning::PartitioningStrategy;
 // full enum pub types
 pub use client_topic::topicwriter::writer::TopicWriter;
 // full enum pub types
-pub use client_topic::compression::{CodecRegistry, ErrorHandlingStrategy};
+pub use client_topic::compression::{
+    default_executor, CodecRegistry, ErrorHandlingStrategy, Executor, RayonExecutor,
+};
 pub use client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
 };
