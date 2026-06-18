@@ -6,8 +6,8 @@ CRATE_NAME="$1"
 VERSION_PART="$2"
 GIT_EMAIL="$3"
 
-GIT_TAGS=()
-CRATES=()
+declare -a GIT_TAGS
+declare -a CRATES
 
 function git_set_tags(){
   git config user.name "robot"
