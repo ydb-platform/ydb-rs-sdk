@@ -53,7 +53,8 @@ jobs:
 
     - name: Rustfmt check
       run: |
-        cargo fmt --all -- --check
+        cargo fmt --all
+        git diff --exit-code
 
     - name: Clippy check
       run: |
