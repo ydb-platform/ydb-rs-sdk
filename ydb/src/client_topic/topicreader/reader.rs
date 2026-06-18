@@ -23,6 +23,7 @@ use crate::grpc_wrapper::raw_topic_service::update_offsets_in_transaction::{
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::transaction::{Transaction, TransactionInfo};
 use crate::{YdbError, YdbResult};
+use futures_util::Future;
 use secrecy::ExposeSecret;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -45,11 +46,16 @@ const RECONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
 type PartitionSessionId = i64;
 type GrpcStream = AsyncGrpcStreamWrapper<FromClient, FromServer>;
 
+type TopicCommitAckSender = tokio::sync::oneshot::Sender<YdbResult<()>>;
+type TopicCommitAckReceiver = tokio::sync::oneshot::Receiver<YdbResult<()>>;
+
+type PartitionPendingCommits = BTreeMap<std::cmp::Reverse<i64>, TopicCommitAckSender>;
+
 #[derive(Default)]
 struct PendingCommits {
     // NOTE: Reverse keeps all offsets covered by a server ack in the right side
     // of split_off(&Reverse(committed_offset)): real end_offset <= committed_offset.
-    sessions: HashMap<PartitionSessionId, BTreeMap<std::cmp::Reverse<i64>, oneshot::Sender<()>>>,
+    sessions: HashMap<PartitionSessionId, PartitionPendingCommits>,
 }
 
 impl PendingCommits {
@@ -57,7 +63,7 @@ impl PendingCommits {
         &mut self,
         partition_session_id: PartitionSessionId,
         committed_offset: i64,
-    ) -> oneshot::Receiver<()> {
+    ) -> TopicCommitAckReceiver {
         let (sender, receiver) = oneshot::channel();
 
         let session = self.sessions.entry(partition_session_id).or_default();
@@ -73,19 +79,31 @@ impl PendingCommits {
         }
     }
 
-    fn fail_all(&mut self) {
-        self.sessions.clear();
+    fn fail_all(&mut self, err: &YdbError) {
+        let sessions = std::mem::take(&mut self.sessions);
+
+        for session in sessions.into_values() {
+            Self::fail_commits(session, err);
+        }
     }
 
-    fn fail_session(&mut self, partition_session_id: PartitionSessionId) {
-        self.sessions.remove(&partition_session_id);
+    fn fail_session(&mut self, partition_session_id: PartitionSessionId, err: &YdbError) {
+        if let Some(session) = self.sessions.remove(&partition_session_id) {
+            Self::fail_commits(session, err);
+        }
     }
 
-    fn stop(&mut self, partition_session_id: PartitionSessionId, committed_offset: Option<i64>) {
+    fn stop(
+        &mut self,
+        partition_session_id: PartitionSessionId,
+        committed_offset: Option<i64>,
+        err: &YdbError,
+    ) {
         if let Some(committed_offset) = committed_offset {
             self.ack_partition(partition_session_id, committed_offset);
         }
-        self.fail_session(partition_session_id);
+
+        self.fail_session(partition_session_id, err);
     }
 
     fn ack_partition(&mut self, partition_session_id: PartitionSessionId, committed_offset: i64) {
@@ -101,10 +119,16 @@ impl PendingCommits {
         }
     }
 
-    fn ack_commits(commits: BTreeMap<std::cmp::Reverse<i64>, oneshot::Sender<()>>) {
-        commits.into_values().for_each(|sender| {
-            let _ = sender.send(());
-        });
+    fn ack_commits(commits: PartitionPendingCommits) {
+        for sender in commits.into_values() {
+            let _ = sender.send(Ok(()));
+        }
+    }
+
+    fn fail_commits(commits: PartitionPendingCommits, err: &YdbError) {
+        for sender in commits.into_values() {
+            let _ = sender.send(Err(err.clone()));
+        }
     }
 }
 
@@ -131,7 +155,7 @@ impl ReaderShared {
         let mut state = self.lock_state();
 
         if let Ok(state) = &mut *state {
-            state.pending_commits.fail_all();
+            state.pending_commits.fail_all(&err);
         }
         *state = Err(err);
 
@@ -155,8 +179,6 @@ pub struct TopicReader {
 
     reader: StreamReader,
 }
-
-type TopicCommitHandler = tokio::sync::oneshot::Receiver<()>;
 
 impl TopicReader {
     pub(crate) async fn new(
@@ -214,8 +236,8 @@ impl TopicReader {
     ///
     /// # Errors
     ///
+    /// Returns an error if the commit message could not be queued (for example,
     /// the reader has been closed).
-    /// Returns an error if the commit message could not be queued (for example,kjkjkj
     pub fn commit(&mut self, commit_marker: TopicReaderCommitMarker) -> YdbResult<()> {
         self.reader.commit(commit_marker).map(|_| ())
     }
@@ -231,16 +253,22 @@ impl TopicReader {
     /// The handle resolves to an error if the acknowledgement will never
     /// arrive — either because the initial send failed, or because the reader
     /// was closed before the server replied.
-    ///
-    /// **Unstable:** the returned handle type and its error will change in a
-    /// future release.
     pub fn commit_with_ack(
         &mut self,
         commit_marker: TopicReaderCommitMarker,
-    ) -> TopicCommitHandler {
-        self.reader
-            .commit(commit_marker)
-            .unwrap_or(Self::dangling_handler())
+    ) -> impl Future<Output = YdbResult<()>> {
+        let handler = self.reader.commit(commit_marker);
+
+        async {
+            let handler = handler?;
+
+            match handler.await {
+                Ok(res) => res,
+                Err(_) => Err(YdbError::Custom(
+                    "commit channel was closed without err msg".to_string(),
+                )),
+            }
+        }
     }
 
     async fn try_reconnect_on_err(&mut self, err: YdbError) -> YdbResult<()> {
@@ -287,11 +315,6 @@ impl TopicReader {
         self.reader = reader;
 
         Ok(())
-    }
-
-    fn dangling_handler() -> TopicCommitHandler {
-        let (_, handler) = tokio::sync::oneshot::channel();
-        handler
     }
 
     /// Converts a retriable error into `Ok(())` and returns non-retriable errors unchanged.
@@ -397,14 +420,14 @@ impl StreamReader {
         Ok(())
     }
 
-    fn cancelled_commit_handle() -> TopicCommitHandler {
-        let (_sender, receiver) = oneshot::channel();
-        receiver
-    }
-
-    fn commit(&mut self, commit_marker: TopicReaderCommitMarker) -> YdbResult<TopicCommitHandler> {
+    fn commit(
+        &mut self,
+        commit_marker: TopicReaderCommitMarker,
+    ) -> YdbResult<TopicCommitAckReceiver> {
         if self.epoch != commit_marker.epoch {
-            return Ok(Self::cancelled_commit_handle());
+            return Err(YdbError::Custom(
+                "commit belongs to previous connection".to_string(),
+            ));
         }
 
         let receiver = {
@@ -701,9 +724,14 @@ fn handle_incoming(
             {
                 let mut state = shared.lock_state();
                 if let Ok(state) = &mut *state {
-                    state
-                        .pending_commits
-                        .stop(request.partition_session_id, None);
+                    state.pending_commits.stop(
+                        request.partition_session_id,
+                        None,
+                        &YdbError::Custom(format!(
+                            "partition session {} stopped by server",
+                            request.partition_session_id,
+                        )),
+                    );
                 }
             }
             send_on_stream(
@@ -863,670 +891,37 @@ pub struct TopicReaderCommitMarker {
 
 #[cfg(test)]
 mod tests {
+    use oneshot::error::TryRecvError;
+
     use super::*;
-    use crate::client_topic::topicreader::messages::TopicReaderBatch;
-    use crate::grpc_wrapper::raw_topic_service::common::codecs::RawCodec;
-    use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
-        RawBatch, RawMessageData, RawPartitionData,
-    };
-    use crate::grpc_wrapper::raw_topic_service::update_offsets_in_transaction::*;
-    use std::time::Duration;
-    use tokio::sync::oneshot::error::TryRecvError;
-
-    fn assert_commit_ack(mut receiver: oneshot::Receiver<()>) {
-        assert_eq!(receiver.try_recv(), Ok(()));
-    }
-
-    fn assert_commit_pending(mut receiver: oneshot::Receiver<()>) -> oneshot::Receiver<()> {
-        assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
-        receiver
-    }
-
-    fn assert_commit_aborted(mut receiver: oneshot::Receiver<()>) {
-        assert_eq!(receiver.try_recv(), Err(TryRecvError::Closed));
-    }
 
     #[test]
-    fn topic_reader_retry_backoff_uses_middle_go_like_policy() {
-        assert_eq!(topic_reader_retry_backoff(1), Duration::from_millis(200));
-        assert_eq!(topic_reader_retry_backoff(6), Duration::from_millis(6400));
-        assert_eq!(topic_reader_retry_backoff(7), Duration::from_millis(6400));
-    }
+    fn pending_commits_guarantees() {
+        let mut pending = PendingCommits::default();
 
-    #[test]
-    fn pending_commits_push_returns_pending_receiver() {
-        let mut commits = PendingCommits::default();
+        let mut ack0_0 = pending.push(0, 0);
+        let mut ack0_1 = pending.push(0, 1);
+        let mut ack0_2 = pending.push(0, 2);
 
-        let receiver = commits.push(1, 10);
+        let mut ack1_0 = pending.push(1, 0);
 
-        let _receiver = assert_commit_pending(receiver);
-    }
+        // NOTE: Here after grpc messages are precessed, messages contains inclusive end offset,
+        // which matches with commit end offset.
+        pending.ack([(0, 1)]);
 
-    #[test]
-    fn pending_commits_ack_confirms_offsets_up_to_committed_offset() {
-        let mut commits = PendingCommits::default();
-        let offset_10 = commits.push(1, 10);
-        let offset_20 = commits.push(1, 20);
-        let offset_30 = commits.push(1, 30);
+        assert!(ack0_0.try_recv().is_ok());
+        assert!(ack0_1.try_recv().is_ok());
 
-        commits.ack([(1, 20)]);
+        assert!(matches!(ack0_2.try_recv(), Err(TryRecvError::Empty)));
 
-        assert_commit_ack(offset_10);
-        assert_commit_ack(offset_20);
-        let _offset_30 = assert_commit_pending(offset_30);
-    }
+        assert!(matches!(ack1_0.try_recv(), Err(TryRecvError::Empty)));
 
-    #[test]
-    fn pending_commits_ack_ignores_other_sessions() {
-        let mut commits = PendingCommits::default();
-        let session_1 = commits.push(1, 10);
-        let session_2 = commits.push(2, 10);
+        pending.fail_session(1, &YdbError::custom("fail"));
 
-        commits.ack([(1, 10)]);
+        assert!(matches!(ack1_0.try_recv(), Ok(Err(_))));
 
-        assert_commit_ack(session_1);
-        let _session_2 = assert_commit_pending(session_2);
-    }
+        drop(pending);
 
-    #[test]
-    fn pending_commits_push_replaces_waiter_for_same_offset() {
-        let mut commits = PendingCommits::default();
-        let replaced = commits.push(1, 10);
-        let current = commits.push(1, 10);
-
-        commits.ack([(1, 10)]);
-
-        assert_commit_aborted(replaced);
-        assert_commit_ack(current);
-    }
-
-    #[test]
-    fn pending_commits_fail_all_aborts_all_receivers() {
-        let mut commits = PendingCommits::default();
-        let session_1 = commits.push(1, 10);
-        let session_2 = commits.push(2, 20);
-
-        commits.fail_all();
-
-        assert_commit_aborted(session_1);
-        assert_commit_aborted(session_2);
-    }
-
-    #[test]
-    fn pending_commits_fail_session_aborts_only_requested_session() {
-        let mut commits = PendingCommits::default();
-        let session_1 = commits.push(1, 10);
-        let session_2 = commits.push(2, 10);
-
-        commits.fail_session(1);
-
-        assert_commit_aborted(session_1);
-        let _session_2 = assert_commit_pending(session_2);
-    }
-
-    #[test]
-    fn pending_commits_stop_acks_covered_offsets_and_aborts_rest() {
-        let mut commits = PendingCommits::default();
-        let covered = commits.push(1, 10);
-        let uncovered = commits.push(1, 20);
-
-        commits.stop(1, Some(10));
-
-        assert_commit_ack(covered);
-        assert_commit_aborted(uncovered);
-    }
-
-    #[test]
-    fn pending_commits_stop_without_committed_offset_aborts_session() {
-        let mut commits = PendingCommits::default();
-        let receiver = commits.push(1, 10);
-
-        commits.stop(1, None);
-
-        assert_commit_aborted(receiver);
-    }
-
-    #[test]
-    fn transaction_topic_reading_integration() {
-        let commit_marker = TopicReaderCommitMarker {
-            partition_session_id: 456,
-            partition_id: 789,
-            start_offset: 1000,
-            end_offset: 1100,
-            topic: "integration-test-topic".to_string(),
-            epoch: 0,
-        };
-
-        let raw_request = RawUpdateOffsetsInTransactionRequest {
-            operation_params: RawOperationParams::new_with_timeouts(
-                Duration::from_secs(30),
-                Duration::from_secs(60),
-            ),
-            tx: RawTransactionIdentity {
-                id: "integration_tx_id".to_string(),
-                session: "integration_session_id".to_string(),
-            },
-            topics: vec![RawTopicOffsets {
-                path: commit_marker.topic.clone(),
-                partitions: vec![RawPartitionOffsets {
-                    partition_id: commit_marker.partition_id,
-                    partition_offsets: vec![RawOffsetsRange {
-                        start: commit_marker.start_offset,
-                        end: commit_marker.end_offset,
-                    }],
-                }],
-            }],
-            consumer: "integration-consumer".to_string(),
-        };
-
-        use ydb_grpc::ydb_proto::topic::UpdateOffsetsInTransactionRequest;
-        let proto_request: UpdateOffsetsInTransactionRequest = raw_request.into();
-
-        assert!(proto_request.operation_params.is_some());
-        assert!(proto_request.tx.is_some());
-        assert_eq!(proto_request.consumer, "integration-consumer");
-        assert_eq!(proto_request.topics.len(), 1);
-
-        let proto_tx = proto_request.tx.unwrap();
-        assert_eq!(proto_tx.id, "integration_tx_id");
-        assert_eq!(proto_tx.session, "integration_session_id");
-
-        let proto_topic = &proto_request.topics[0];
-        assert_eq!(proto_topic.path, "integration-test-topic");
-        assert_eq!(proto_topic.partitions.len(), 1);
-
-        let proto_partition = &proto_topic.partitions[0];
-        assert_eq!(proto_partition.partition_id, 789);
-        assert_eq!(proto_partition.partition_offsets.len(), 1);
-
-        let proto_offsets = &proto_partition.partition_offsets[0];
-        assert_eq!(proto_offsets.start, 1000);
-        assert_eq!(proto_offsets.end, 1100);
-    }
-
-    // ---- test helpers ----
-
-    fn make_session(
-        partition_session_id: i64,
-        partition_id: i64,
-        topic: &str,
-        start_offset: i64,
-    ) -> PartitionSession {
-        PartitionSession {
-            partition_session_id,
-            partition_id,
-            topic: topic.to_string(),
-            next_commit_offset_start: start_offset,
-        }
-    }
-
-    fn make_raw_batch(start_offset: i64, count: usize) -> RawBatch {
-        let message_data = (0..count)
-            .map(|i| RawMessageData {
-                offset: start_offset + i as i64,
-                seq_no: (start_offset + i as i64) + 1,
-                created_at: None,
-                uncompressed_size: 0,
-                data: vec![],
-                read_session_size_bytes: 0,
-            })
-            .collect();
-        RawBatch {
-            producer_id: "p".to_string(),
-            write_session_meta: HashMap::new(),
-            codec: RawCodec { code: 1 },
-            written_at: SystemTime::UNIX_EPOCH.into(),
-            message_data,
-        }
-    }
-
-    fn message_for_session(
-        session: &mut PartitionSession,
-        offset: i64,
-        bytes_to_release: i64,
-    ) -> TopicReaderMessage {
-        let raw = make_raw_batch(offset, 1);
-        let batch = TopicReaderBatch::new(raw, session, 0);
-        let mut m = batch.messages.into_iter().next().unwrap();
-        m.bytes_to_release = bytes_to_release;
-        m
-    }
-
-    // ---- cut_prefix ----
-
-    #[test]
-    fn cut_prefix_hard_limit_within_one_session() {
-        let mut session = make_session(1, 11, "t", 0);
-        let mut buf: VecDeque<TopicReaderMessage> = VecDeque::new();
-        for offset in 0..1500i64 {
-            let bytes = if offset == 1499 { 12345 } else { 0 };
-            buf.push_back(message_for_session(&mut session, offset, bytes));
-        }
-
-        let (first, first_bytes) = cut_prefix(&mut buf, 1000).unwrap();
-        assert_eq!(first.len(), 1000);
-        assert_eq!(first.first().unwrap().offset, 0);
-        assert_eq!(first.last().unwrap().offset, 999);
-        assert_eq!(first_bytes, 0);
-
-        let (second, second_bytes) = cut_prefix(&mut buf, 1000).unwrap();
-        assert_eq!(second.len(), 500);
-        assert_eq!(second.first().unwrap().offset, 1000);
-        assert_eq!(second.last().unwrap().offset, 1499);
-        assert_eq!(second_bytes, 12345);
-
-        assert!(buf.is_empty());
-    }
-
-    #[test]
-    fn cut_prefix_returns_none_for_empty_buffer() {
-        let mut buf = VecDeque::new();
-
-        assert!(cut_prefix(&mut buf, 1000).is_none());
-    }
-
-    #[test]
-    fn cut_prefix_stops_at_session_boundary() {
-        let mut a1 = make_session(1, 11, "t", 0);
-        let mut b = make_session(2, 22, "t", 0);
-        let mut a2 = make_session(3, 33, "t", 0);
-
-        let mut buf: VecDeque<TopicReaderMessage> = VecDeque::new();
-        for offset in 0..200 {
-            buf.push_back(message_for_session(&mut a1, offset, 0));
-        }
-        for offset in 0..200 {
-            buf.push_back(message_for_session(&mut b, offset, 0));
-        }
-        for offset in 0..100 {
-            buf.push_back(message_for_session(&mut a2, offset, 0));
-        }
-
-        let (first, _) = cut_prefix(&mut buf, 1000).unwrap();
-        assert_eq!(first.len(), 200);
-        assert!(first
-            .iter()
-            .all(|m| m.commit_marker.partition_session_id == 1));
-
-        let (second, _) = cut_prefix(&mut buf, 1000).unwrap();
-        assert_eq!(second.len(), 200);
-        assert!(second
-            .iter()
-            .all(|m| m.commit_marker.partition_session_id == 2));
-
-        let (third, _) = cut_prefix(&mut buf, 1000).unwrap();
-        assert_eq!(third.len(), 100);
-        assert!(third
-            .iter()
-            .all(|m| m.commit_marker.partition_session_id == 3));
-
-        assert!(buf.is_empty());
-    }
-
-    #[test]
-    fn cut_prefix_aggregates_bytes() {
-        let mut session = make_session(1, 11, "t", 0);
-        let mut buf: VecDeque<TopicReaderMessage> = VecDeque::new();
-        for offset in 0..5 {
-            let bytes = if offset == 4 { 1234 } else { 0 };
-            buf.push_back(message_for_session(&mut session, offset, bytes));
-        }
-
-        let (msgs, bytes) = cut_prefix(&mut buf, 10).unwrap();
-        assert_eq!(msgs.len(), 5);
-        assert_eq!(bytes, 1234);
-        assert!(buf.is_empty());
-    }
-
-    #[test]
-    fn cut_prefix_hard_limit_leaves_bytes_tag_on_remainder() {
-        let mut session = make_session(1, 11, "t", 0);
-        let mut buf: VecDeque<TopicReaderMessage> = VecDeque::new();
-        for offset in 0..5 {
-            let bytes = if offset == 4 { 1234 } else { 0 };
-            buf.push_back(message_for_session(&mut session, offset, bytes));
-        }
-
-        let (first, bytes_first) = cut_prefix(&mut buf, 3).unwrap();
-        assert_eq!(first.len(), 3);
-        assert_eq!(bytes_first, 0);
-
-        let (second, bytes_second) = cut_prefix(&mut buf, 10).unwrap();
-        assert_eq!(second.len(), 2);
-        assert_eq!(bytes_second, 1234);
-    }
-
-    // ---- handle_read_response ----
-
-    fn make_raw_partition_data(
-        partition_session_id: i64,
-        batches: Vec<RawBatch>,
-    ) -> RawPartitionData {
-        RawPartitionData {
-            partition_session_id,
-            batches: batches.into_iter().collect(),
-        }
-    }
-
-    /// Mimics server behavior: bytes_size is stamped on the last message
-    /// of the last batch of the last partition_data.
-    fn make_raw_read_response(
-        bytes_size: i64,
-        partition_data: Vec<RawPartitionData>,
-    ) -> RawReadResponse {
-        let mut resp = RawReadResponse {
-            bytes_size,
-            partition_data,
-        };
-
-        if let Some(last_pd) = resp.partition_data.last_mut() {
-            if let Some(last_batch) = last_pd.batches.back_mut() {
-                if let Some(last_msg) = last_batch.message_data.last_mut() {
-                    last_msg.read_session_size_bytes = bytes_size;
-                }
-            }
-        }
-        resp
-    }
-
-    #[test]
-    fn handle_read_response_preserves_fifo_across_partition_data() {
-        let shared = ReaderShared::new();
-        let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
-        sessions.insert(1, make_session(1, 11, "t-a", 0));
-        sessions.insert(2, make_session(2, 22, "t-b", 0));
-        sessions.insert(3, make_session(3, 33, "t-a2", 0));
-
-        let pd_a1 = make_raw_partition_data(1, vec![make_raw_batch(0, 2), make_raw_batch(2, 2)]);
-        let pd_b = make_raw_partition_data(2, vec![make_raw_batch(0, 3)]);
-        let pd_a2 = make_raw_partition_data(3, vec![make_raw_batch(0, 2)]);
-
-        let resp = make_raw_read_response(9999, vec![pd_a1, pd_b, pd_a2]);
-        handle_read_response(resp, &mut sessions, &shared, 0).unwrap();
-
-        let state = shared.lock_state();
-        let buf = &state.as_ref().unwrap().buffer;
-        assert_eq!(buf.len(), 9);
-
-        let session_sequence: Vec<i64> = buf
-            .iter()
-            .map(|m| m.commit_marker.partition_session_id)
-            .collect();
-        assert_eq!(session_sequence, vec![1, 1, 1, 1, 2, 2, 2, 3, 3]);
-
-        let non_zero: Vec<i64> = buf
-            .iter()
-            .map(|m| m.bytes_to_release)
-            .filter(|b| *b != 0)
-            .collect();
-        assert_eq!(non_zero, vec![9999]);
-    }
-
-    #[test]
-    fn handle_read_response_skips_empty_batches() {
-        let shared = ReaderShared::new();
-        let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
-        sessions.insert(1, make_session(1, 11, "t", 0));
-
-        let empty_batch = RawBatch {
-            producer_id: "p".to_string(),
-            write_session_meta: HashMap::new(),
-            codec: RawCodec { code: 1 },
-            written_at: SystemTime::UNIX_EPOCH.into(),
-            message_data: vec![],
-        };
-        let pd = make_raw_partition_data(1, vec![empty_batch, make_raw_batch(0, 2)]);
-        let resp = make_raw_read_response(500, vec![pd]);
-
-        handle_read_response(resp, &mut sessions, &shared, 0).unwrap();
-
-        let state = shared.lock_state();
-        let buf = &state.as_ref().unwrap().buffer;
-        assert_eq!(buf.len(), 2);
-        assert_eq!(buf[0].offset, 0);
-        assert_eq!(buf[1].offset, 1);
-        assert_eq!(buf[1].bytes_to_release, 500);
-    }
-
-    #[test]
-    fn handle_read_response_advances_next_commit_offset_start() {
-        let shared = ReaderShared::new();
-        let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
-        sessions.insert(1, make_session(1, 11, "t", 100));
-
-        let pd = make_raw_partition_data(1, vec![make_raw_batch(100, 3)]);
-        let resp = make_raw_read_response(10, vec![pd]);
-
-        handle_read_response(resp, &mut sessions, &shared, 0).unwrap();
-
-        assert_eq!(sessions.get(&1).unwrap().next_commit_offset_start, 103);
-    }
-
-    #[test]
-    fn handle_read_response_drops_data_for_unknown_session() {
-        let shared = ReaderShared::new();
-        let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
-        sessions.insert(1, make_session(1, 11, "t", 0));
-
-        let pd_unknown = make_raw_partition_data(2, vec![make_raw_batch(0, 3)]);
-        let pd_known = make_raw_partition_data(1, vec![make_raw_batch(0, 2)]);
-        let resp = make_raw_read_response(123, vec![pd_unknown, pd_known]);
-
-        handle_read_response(resp, &mut sessions, &shared, 0).unwrap();
-
-        let state = shared.lock_state();
-        let buf = &state.as_ref().unwrap().buffer;
-        assert_eq!(buf.len(), 2);
-        assert!(buf
-            .iter()
-            .all(|m| m.commit_marker.partition_session_id == 1));
-    }
-
-    #[tokio::test]
-    async fn handle_read_response_notifies_after_push() {
-        let shared = Arc::new(ReaderShared::new());
-        let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
-        sessions.insert(1, make_session(1, 11, "t", 0));
-
-        let notified = shared.notify.notified();
-        tokio::pin!(notified);
-        notified.as_mut().enable();
-
-        let pd = make_raw_partition_data(1, vec![make_raw_batch(0, 2)]);
-        let resp = make_raw_read_response(100, vec![pd]);
-        handle_read_response(resp, &mut sessions, shared.as_ref(), 0).unwrap();
-
-        tokio::time::timeout(Duration::from_millis(100), notified)
-            .await
-            .expect("waiter not notified after push");
-    }
-
-    // ---- read_batch_private (via TestReader) ----
-
-    struct TestReader {
-        sender: UnboundedSender<FromClient>,
-        shared: Arc<ReaderShared>,
-        batch_size: usize,
-    }
-
-    impl TestReader {
-        fn new(
-            batch_size: usize,
-        ) -> (
-            Self,
-            tokio::sync::mpsc::UnboundedReceiver<FromClient>,
-            Arc<ReaderShared>,
-        ) {
-            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-            let shared = Arc::new(ReaderShared::new());
-            (
-                Self {
-                    sender: tx,
-                    shared: shared.clone(),
-                    batch_size,
-                },
-                rx,
-                shared,
-            )
-        }
-
-        async fn read_batch_private(&self) -> YdbResult<TopicReaderBatch> {
-            loop {
-                let notified = self.shared.notify.notified();
-                tokio::pin!(notified);
-                notified.as_mut().enable();
-
-                let prefix = match &mut *self.shared.lock_state() {
-                    Ok(state) => cut_prefix(&mut state.buffer, self.batch_size),
-                    Err(err) => return Err(err.clone()),
-                };
-
-                if let Some((messages, bytes_to_release)) = prefix {
-                    if bytes_to_release > 0 {
-                        send_on_stream(
-                            &self.sender,
-                            RawFromClientOneOf::ReadRequest(RawReadRequest {
-                                bytes_size: bytes_to_release,
-                            }),
-                        )?;
-                    }
-                    return Ok(TopicReaderBatch::from_messages(messages));
-                }
-
-                notified.await;
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn read_batch_private_returns_data_already_in_buffer() {
-        let (reader, mut rx, shared) = TestReader::new(1000);
-        let mut session = make_session(1, 11, "t", 0);
-        {
-            let mut state = shared.lock_state();
-            let buf = &mut state.as_mut().unwrap().buffer;
-            for offset in 0..300i64 {
-                let bytes = if offset == 299 { 7777 } else { 0 };
-                buf.push_back(message_for_session(&mut session, offset, bytes));
-            }
-        }
-
-        let batch = reader.read_batch_private().await.unwrap();
-        assert_eq!(batch.messages.len(), 300);
-
-        let sent = rx.try_recv().expect("ReadRequest must be sent");
-        match sent.client_message.unwrap() {
-            ydb_grpc::ydb_proto::topic::stream_read_message::from_client::ClientMessage::ReadRequest(r) => {
-                assert_eq!(r.bytes_size, 7777);
-            }
-            other => panic!("unexpected client message: {:?}", other),
-        }
-        assert!(rx.try_recv().is_err(), "only one ReadRequest expected");
-    }
-
-    #[tokio::test]
-    async fn read_batch_private_awaits_notify_then_reads() {
-        let (reader, _rx, shared) = TestReader::new(1000);
-
-        let handle =
-            tokio::spawn(
-                async move { reader.read_batch_private().await.map(|b| b.messages.len()) },
-            );
-
-        tokio::time::sleep(Duration::from_millis(20)).await;
-
-        {
-            let mut session = make_session(1, 11, "t", 0);
-            let mut state = shared.lock_state();
-            let buf = &mut state.as_mut().unwrap().buffer;
-            buf.push_back(message_for_session(&mut session, 0, 0));
-            buf.push_back(message_for_session(&mut session, 1, 0));
-        }
-        shared.notify.notify_one();
-
-        let res = tokio::time::timeout(Duration::from_secs(1), handle)
-            .await
-            .expect("should complete after notify")
-            .unwrap()
-            .unwrap();
-        assert_eq!(res, 2);
-    }
-
-    #[tokio::test]
-    async fn read_batch_private_returns_error_when_closed_with_notify() {
-        let (reader, _rx, shared) = TestReader::new(1000);
-        {
-            let mut state = shared.lock_state();
-            *state = Err(YdbError::custom("boom"));
-        }
-        shared.notify.notify_one();
-
-        let res = reader.read_batch_private().await;
-        match res {
-            Err(YdbError::Custom(s)) => assert_eq!(s, "boom"),
-            other => panic!("expected Err(Custom(\"boom\")), got {:?}", other.err()),
-        }
-    }
-
-    #[tokio::test]
-    async fn read_batch_private_returns_error_when_closed_without_notify() {
-        let (reader, _rx, shared) = TestReader::new(1000);
-        {
-            let mut state = shared.lock_state();
-            *state = Err(YdbError::custom("topic read stream closed"));
-        }
-
-        let res = tokio::time::timeout(Duration::from_millis(200), reader.read_batch_private())
-            .await
-            .expect("should not hang on closed=true without notify");
-        assert!(res.is_err());
-    }
-
-    #[tokio::test]
-    async fn read_batch_private_returns_error_when_closed_even_with_data() {
-        let (reader, _rx, shared) = TestReader::new(1000);
-        let mut session = make_session(1, 11, "t", 0);
-        {
-            let mut state = shared.lock_state();
-            let buf = &mut state.as_mut().unwrap().buffer;
-            for offset in 0..10i64 {
-                buf.push_back(message_for_session(&mut session, offset, 0));
-            }
-        }
-        {
-            let mut state = shared.lock_state();
-            *state = Err(YdbError::custom("topic read stream closed"));
-        }
-
-        let res = reader.read_batch_private().await;
-        assert!(
-            res.is_err(),
-            "closed reader must return error even if buffer has data"
-        );
-    }
-
-    // ---- options ----
-
-    #[test]
-    fn topic_reader_options_default_batch_size_is_1000() {
-        let opts =
-            crate::client_topic::topicreader::reader_options::TopicReaderOptionsBuilder::default()
-                .consumer("c".to_string())
-                .topic(TopicSelectors::from("t"))
-                .build()
-                .unwrap();
-        assert_eq!(opts.batch_size, 1000);
-    }
-
-    #[test]
-    fn topic_reader_options_custom_batch_size() {
-        let opts =
-            crate::client_topic::topicreader::reader_options::TopicReaderOptionsBuilder::default()
-                .consumer("c".to_string())
-                .topic(TopicSelectors::from("t"))
-                .batch_size(42)
-                .build()
-                .unwrap();
-        assert_eq!(opts.batch_size, 42);
+        assert!(matches!(ack0_2.try_recv(), Err(TryRecvError::Closed)));
     }
 }

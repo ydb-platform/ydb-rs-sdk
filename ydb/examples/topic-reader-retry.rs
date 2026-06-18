@@ -29,10 +29,10 @@ async fn main() -> YdbResult<()> {
     info!(?batch0, "Batch0 processed");
     reader.commit(batch0.get_commit_marker())?;
 
-    let handler1 = reader.commit_with_ack(batch1.get_commit_marker());
-    let handler2 = reader.commit_with_ack(batch2.get_commit_marker());
+    let ack1 = reader.commit_with_ack(batch1.get_commit_marker());
+    let ack2 = reader.commit_with_ack(batch2.get_commit_marker());
 
-    tokio::try_join!(handler1, handler2)?;
+    tokio::try_join!(ack1, ack2)?;
     info!("Both batch1 and batch2 were committed and confirmed to be acked by server");
 
     Ok(())

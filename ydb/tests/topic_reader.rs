@@ -2,7 +2,7 @@ mod mock_server;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use tokio::sync::oneshot::error::TryRecvError;
+use std::task::Poll;
 use tokio::sync::Notify;
 use ydb::{ClientBuilder, TopicReader, TopicReaderBatch, TopicReaderCommitMarker, YdbResult};
 use ydb_grpc::ydb_proto::topic::stream_read_message::from_client::ClientMessage as ReadFromClient;
@@ -184,7 +184,7 @@ topic_test!(commits_message_after_server_ack, timeout_secs = 2, {
 
     let c0 = reader.commit_with_ack(m0);
     let c1 = reader.commit_with_ack(m1);
-    let mut c2 = reader.commit_with_ack(m2);
+    let mut c2 = Box::pin(reader.commit_with_ack(m2));
 
     let ack_first_two = async {
         driver.state.wait_commits(2).await;
@@ -194,7 +194,10 @@ topic_test!(commits_message_after_server_ack, timeout_secs = 2, {
     let (_, r0, r1) = tokio::join!(ack_first_two, c0, c1);
     r0.expect("first commit must resolve");
     r1.expect("second commit must resolve");
-    assert_eq!(c2.try_recv(), Err(TryRecvError::Empty));
+    assert!(
+        matches!(futures_util::poll!(&mut c2), Poll::Pending),
+        "c2 must not have been resolved yet"
+    );
 
     driver.send_commit_offset_response(3);
     c2.await
@@ -212,7 +215,7 @@ topic_test!(retryable_fail, timeout_secs = 20, {
     let m1 = deliver_and_read(&driver, &mut reader, 1, b"second").await?;
 
     let c0 = reader.commit_with_ack(m0);
-    let mut c1 = reader.commit_with_ack(m1);
+    let mut c1 = Box::pin(reader.commit_with_ack(m1));
 
     let ack_first = async {
         driver.state.wait_commits(1).await;
@@ -221,7 +224,10 @@ topic_test!(retryable_fail, timeout_secs = 20, {
 
     let (_, r0) = tokio::join!(ack_first, c0);
     r0.expect("first commit must resolve");
-    assert_eq!(c1.try_recv(), Err(TryRecvError::Empty));
+    assert!(
+        matches!(futures_util::poll!(&mut c1), Poll::Pending),
+        "c1 must not have resolved yet"
+    );
 
     let stream_id = driver.state.current_stream_id();
 
@@ -254,7 +260,7 @@ topic_test!(non_retryable_fail, timeout_secs = 20, {
     driver.state.partition_ready.notified().await;
 
     let m0 = deliver_and_read(&driver, &mut reader, 0, b"first").await?;
-    let mut c0 = reader.commit_with_ack(m0);
+    let c0 = reader.commit_with_ack(m0);
 
     let stream_id = driver.state.current_stream_id();
 
@@ -266,7 +272,7 @@ topic_test!(non_retryable_fail, timeout_secs = 20, {
     driver.send(Reply::Topic(fail_msg));
 
     assert!(reader.read_batch().await.is_err());
-    assert!(c0.try_recv().is_err());
+    assert!(c0.await.is_err());
 
     Ok(())
 });
