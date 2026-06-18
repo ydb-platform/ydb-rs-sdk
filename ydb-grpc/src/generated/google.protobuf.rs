@@ -2233,6 +2233,17 @@ impl NullValue {
         }
     }
 }
+/// A generic empty message that you can re-use to avoid defining duplicated
+/// empty messages in your APIs. A typical example is to use it as the request
+/// or the response type of an API method. For instance:
+/// ```text
+/// service Foo {
+///    rpc Bar(google.protobuf.Empty) returns (google.protobuf.Empty);
+/// }
+/// ```
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Empty {}
 /// A Timestamp represents a point in time independent of any time zone or local
 /// calendar, encoded as a count of seconds and fractions of seconds at
 /// nanosecond resolution. The count is relative to an epoch at UTC midnight on
@@ -2325,14 +2336,3 @@ pub struct Timestamp {
     #[prost(int32, tag = "2")]
     pub nanos: i32,
 }
-/// A generic empty message that you can re-use to avoid defining duplicated
-/// empty messages in your APIs. A typical example is to use it as the request
-/// or the response type of an API method. For instance:
-/// ```text
-/// service Foo {
-///    rpc Bar(google.protobuf.Empty) returns (google.protobuf.Empty);
-/// }
-/// ```
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct Empty {}

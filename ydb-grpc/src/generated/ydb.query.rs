@@ -39,12 +39,33 @@ pub struct AttachSessionRequest {
     pub session_id: ::prost::alloc::string::String,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionShutdownHint {}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NodeShutdownHint {}
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SessionState {
     #[prost(enumeration = "super::status_ids::StatusCode", tag = "1")]
     pub status: i32,
     #[prost(message, repeated, tag = "2")]
     pub issues: ::prost::alloc::vec::Vec<super::issue::IssueMessage>,
+    /// The reason the session is ending, for SDK-side handling
+    #[prost(oneof = "session_state::SessionHint", tags = "3, 4")]
+    pub session_hint: ::core::option::Option<session_state::SessionHint>,
+}
+/// Nested message and enum types in `SessionState`.
+pub mod session_state {
+    /// The reason the session is ending, for SDK-side handling
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum SessionHint {
+        #[prost(message, tag = "3")]
+        SessionShutdown(super::SessionShutdownHint),
+        #[prost(message, tag = "4")]
+        NodeShutdown(super::NodeShutdownHint),
+    }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
@@ -63,8 +84,11 @@ pub struct StaleModeSettings {}
 pub struct SnapshotModeSettings {}
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SnapshotRwModeSettings {}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TransactionSettings {
-    #[prost(oneof = "transaction_settings::TxMode", tags = "1, 2, 3, 4")]
+    #[prost(oneof = "transaction_settings::TxMode", tags = "1, 2, 3, 4, 5")]
     pub tx_mode: ::core::option::Option<transaction_settings::TxMode>,
 }
 /// Nested message and enum types in `TransactionSettings`.
@@ -80,6 +104,8 @@ pub mod transaction_settings {
         StaleReadOnly(super::StaleModeSettings),
         #[prost(message, tag = "4")]
         SnapshotReadOnly(super::SnapshotModeSettings),
+        #[prost(message, tag = "5")]
+        SnapshotReadWrite(super::SnapshotRwModeSettings),
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -198,6 +224,24 @@ pub struct ExecuteQueryRequest {
     /// Workload manager pool id
     #[prost(string, tag = "10")]
     pub pool_id: ::prost::alloc::string::String,
+    /// Time interval for sending periodical query statistics.
+    /// When query statistics are enabled (stats_mode != STATS_MODE_NONE), by default statistics will be sent only once after query execution is finished.
+    /// In case when stats_period_ms is specified and is non-zero, query statistics will be additionally sent every stats_period_ms milliseconds beginning from the start of query execution.
+    #[prost(int64, tag = "11")]
+    pub stats_period_ms: i64,
+    /// Schema inclusion mode for the result sets.
+    /// If is not specified, SchemaInclusionMode.SCHEMA_INCLUSION_MODE_ALWAYS is used.
+    #[prost(enumeration = "SchemaInclusionMode", tag = "12")]
+    pub schema_inclusion_mode: i32,
+    /// Format of the result sets.
+    /// If is not specified, Ydb.ResultSet.Format.FORMAT_VALUE is used.
+    #[prost(enumeration = "super::result_set::Format", tag = "13")]
+    pub result_set_format: i32,
+    /// Format settings, only used for Ydb.ResultSet.Format.FORMAT_ARROW
+    #[prost(message, optional, tag = "14")]
+    pub arrow_format_settings: ::core::option::Option<
+        super::formats::ArrowFormatSettings,
+    >,
     #[prost(oneof = "execute_query_request::Query", tags = "4")]
     pub query: ::core::option::Option<execute_query_request::Query>,
 }
@@ -409,6 +453,38 @@ impl StatsMode {
             "STATS_MODE_BASIC" => Some(Self::Basic),
             "STATS_MODE_FULL" => Some(Self::Full),
             "STATS_MODE_PROFILE" => Some(Self::Profile),
+            _ => None,
+        }
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SchemaInclusionMode {
+    /// Unspecified mode, corresponds to SCHEMA_INCLUSION_MODE_ALWAYS.
+    Unspecified = 0,
+    /// Always include schema in every Ydb.ResultSet in the response stream.
+    Always = 1,
+    /// Include schema only in the first Ydb.ResultSet per result_set_index of the response stream.
+    FirstOnly = 2,
+}
+impl SchemaInclusionMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SCHEMA_INCLUSION_MODE_UNSPECIFIED",
+            Self::Always => "SCHEMA_INCLUSION_MODE_ALWAYS",
+            Self::FirstOnly => "SCHEMA_INCLUSION_MODE_FIRST_ONLY",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SCHEMA_INCLUSION_MODE_UNSPECIFIED" => Some(Self::Unspecified),
+            "SCHEMA_INCLUSION_MODE_ALWAYS" => Some(Self::Always),
+            "SCHEMA_INCLUSION_MODE_FIRST_ONLY" => Some(Self::FirstOnly),
             _ => None,
         }
     }

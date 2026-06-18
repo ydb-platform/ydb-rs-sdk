@@ -36,3 +36,89 @@ pub mod csv_settings {
         pub double_quote_disabled: bool,
     }
 }
+/// *
+/// ArrowFormatSettings is settings for Ydb.ResultSet.Format.FORMAT_ARROW in Ydb.Query.ExecuteQueryRequest.
+/// It is used to configure compression for record batches in Ydb.ResultSet.data field.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ArrowFormatSettings {
+    /// Codec for compressing binary data in Ydb.ResultSet.data field
+    #[prost(message, optional, tag = "1")]
+    pub compression_codec: ::core::option::Option<
+        arrow_format_settings::CompressionCodec,
+    >,
+}
+/// Nested message and enum types in `ArrowFormatSettings`.
+pub mod arrow_format_settings {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct CompressionCodec {
+        /// Type of the compression codec
+        #[prost(enumeration = "compression_codec::Type", tag = "1")]
+        pub r#type: i32,
+        /// Compression level for the codec.
+        /// If is not specified, the default level of the codec type is used.
+        #[prost(int32, optional, tag = "2")]
+        pub level: ::core::option::Option<i32>,
+    }
+    /// Nested message and enum types in `CompressionCodec`.
+    pub mod compression_codec {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[derive(
+            Clone,
+            Copy,
+            Debug,
+            PartialEq,
+            Eq,
+            Hash,
+            PartialOrd,
+            Ord,
+            ::prost::Enumeration
+        )]
+        #[repr(i32)]
+        pub enum Type {
+            /// Unspecified mode, corresponds to TYPE_NONE
+            Unspecified = 0,
+            /// Binary data without compression
+            None = 1,
+            /// Zstandard compression
+            Zstd = 2,
+            /// LZ4 frame compression
+            Lz4Frame = 3,
+        }
+        impl Type {
+            /// String value of the enum field names used in the ProtoBuf definition.
+            /// The values are not transformed in any way and thus are considered stable
+            /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+            pub fn as_str_name(&self) -> &'static str {
+                match self {
+                    Self::Unspecified => "TYPE_UNSPECIFIED",
+                    Self::None => "TYPE_NONE",
+                    Self::Zstd => "TYPE_ZSTD",
+                    Self::Lz4Frame => "TYPE_LZ4_FRAME",
+                }
+            }
+            /// Creates an enum from field names used in the ProtoBuf definition.
+            pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+                match value {
+                    "TYPE_UNSPECIFIED" => Some(Self::Unspecified),
+                    "TYPE_NONE" => Some(Self::None),
+                    "TYPE_ZSTD" => Some(Self::Zstd),
+                    "TYPE_LZ4_FRAME" => Some(Self::Lz4Frame),
+                    _ => None,
+                }
+            }
+        }
+    }
+}
+/// *
+/// ArrowFormatMeta is a metadata for Ydb.ResultSet.Format.FORMAT_ARROW in Ydb.ResultSet.
+/// It is used to get the schema of the Arrow record batch.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ArrowFormatMeta {
+    /// Schema of the arrow batch of the result.
+    /// May be empty for custom Ydb.Query.SchemaInclusionMode
+    #[prost(bytes = "vec", tag = "1")]
+    pub schema: ::prost::alloc::vec::Vec<u8>,
+}
