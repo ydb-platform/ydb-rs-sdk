@@ -267,10 +267,11 @@ async fn query_session_pool_reuses_sessions_under_parallel_load() -> YdbResult<(
     run_parallel_query_rows(&qc, SESSION_POOL_REUSE_PARALLELISM).await?;
     wait_explicit_pool_idle(&qc, SESSION_POOL_REUSE_PARALLELISM).await;
 
-    let after_first_wave = qc.session_pool_stats().expect("explicit session pool configured");
+    let after_first_wave = qc
+        .session_pool_stats()
+        .expect("explicit session pool configured");
     assert_eq!(
-        after_first_wave.sessions_created,
-        SESSION_POOL_REUSE_PARALLELISM as u64,
+        after_first_wave.sessions_created, SESSION_POOL_REUSE_PARALLELISM as u64,
         "first wave should create one session per concurrent query, stats: {after_first_wave:?}"
     );
     assert!(
@@ -281,10 +282,11 @@ async fn query_session_pool_reuses_sessions_under_parallel_load() -> YdbResult<(
     run_parallel_query_rows(&qc, SESSION_POOL_REUSE_PARALLELISM).await?;
     wait_explicit_pool_idle(&qc, SESSION_POOL_REUSE_PARALLELISM).await;
 
-    let after_second_wave = qc.session_pool_stats().expect("explicit session pool configured");
+    let after_second_wave = qc
+        .session_pool_stats()
+        .expect("explicit session pool configured");
     assert_eq!(
-        after_second_wave.sessions_created,
-        SESSION_POOL_REUSE_PARALLELISM as u64,
+        after_second_wave.sessions_created, SESSION_POOL_REUSE_PARALLELISM as u64,
         "second wave must reuse idle sessions without CreateSession, stats: {after_second_wave:?}"
     );
     assert!(

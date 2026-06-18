@@ -55,10 +55,7 @@ fn report_bench_latency(label: &str, samples: &mut [Duration]) {
     let mean = total / n as u32;
     let p50 = percentile(samples, 50.0);
     let p99 = percentile(samples, 99.0);
-    eprintln!(
-        "{label}: n={n} mean={:?} p50={:?} p99={:?}",
-        mean, p50, p99
-    );
+    eprintln!("{label}: n={n} mean={:?} p50={:?} p99={:?}", mean, p50, p99);
 }
 
 async fn benchmark_pool_with_concurrency(goroutines: usize) {
