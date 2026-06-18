@@ -786,19 +786,31 @@ impl TopicSelector {
     }
 }
 
-impl From<String> for TopicSelectors {
-    fn from(path: String) -> Self {
-        TopicSelectors(vec![TopicSelector {
-            path,
+impl TopicSelector {
+    pub fn new(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
             partition_ids: None,
             read_from: Some(UNIX_EPOCH),
-        }])
+        }
     }
 }
 
-impl From<&str> for TopicSelectors {
-    fn from(path: &str) -> Self {
-        path.to_owned().into()
+impl<S: Into<String>> From<S> for TopicSelector {
+    fn from(path: S) -> Self {
+        Self::new(path)
+    }
+}
+
+impl<S: Into<TopicSelector>> From<S> for TopicSelectors {
+    fn from(s: S) -> Self {
+        Self(vec![s.into()])
+    }
+}
+
+impl<S: Into<TopicSelector>> FromIterator<S> for TopicSelectors {
+    fn from_iter<I: IntoIterator<Item = S>>(iter: I) -> Self {
+        Self(iter.into_iter().map(Into::into).collect())
     }
 }
 
