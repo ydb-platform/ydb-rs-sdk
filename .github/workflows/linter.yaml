@@ -78,27 +78,10 @@ jobs:
       with:
         submodules: true
 
-    - name: Install protoc
-      uses: arduino/setup-protoc@v3
-      with:
-        version: "33.2"
-
-    - name: Install rust
-      uses: dtolnay/rust-toolchain@v1
-      with:
-        toolchain: ${{ env[matrix.rust_version] }}
-        components: rustfmt
-
-    - name: Rust version
-      id: rust_version_step
+    - name: Build ydb-grpc
       run: |
-        rustc --version
-        cargo --version
-        echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
-        echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
+        make proto
 
-    - name: Build tonic-grpc
+    - name: Compare submitted ydb-grpc
       run: |-
-        cargo build -p ydb-grpc --features regenerate-sources
-        cargo fmt -p ydb-grpc
         git diff --exit-code
