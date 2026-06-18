@@ -206,10 +206,20 @@ impl TopicReader {
         Ok(batch)
     }
 
-    pub fn commit(&mut self, commit_marker: TopicReaderCommitMarker) -> TopicCommitHandler {
-        self.reader
-            .commit(commit_marker)
-            .unwrap_or_else(|_| StreamReader::cancelled_commit_handle())
+    pub fn commit(&mut self, commit_marker: TopicReaderCommitMarker) -> YdbResult<()> {
+        self.reader.commit(commit_marker).map(|_| ())
+    }
+
+    pub async fn commit_with_ack(
+        &mut self,
+        commit_marker: TopicReaderCommitMarker,
+    ) -> YdbResult<()> {
+        let handler = self.reader.commit(commit_marker)?;
+
+        // TODO: In CommitHandler return custom TopicError
+        handler
+            .await
+            .map_err(|_| YdbError::Transport("commit was aborted".to_string()))
     }
 
     async fn try_reconnect_on_err(&mut self, err: YdbError) -> YdbResult<()> {
