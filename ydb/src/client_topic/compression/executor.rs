@@ -48,17 +48,12 @@ pub fn default_executor() -> Arc<dyn Executor> {
     DEFAULT_EXECUTOR.clone()
 }
 
+#[derive(Default)]
 pub struct InplaceExecutor {}
 
 impl InplaceExecutor {
     pub fn new() -> Self {
         Self::default()
-    }
-}
-
-impl Default for InplaceExecutor {
-    fn default() -> Self {
-        Self {}
     }
 }
 

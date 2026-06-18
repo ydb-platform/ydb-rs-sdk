@@ -634,7 +634,7 @@ async fn codec_auto() -> YdbResult<()> {
             "this text is boring this text is boring this text is boring this text is boring"
                 .to_string()
                 .into_bytes();
-        if i < 101 || i > 300 {
+        if !(101..=300).contains(&i) {
             data.iter_mut().for_each(|x| *x = rand::random());
         }
         expected_messages.push(data.clone());
