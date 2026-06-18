@@ -62,6 +62,7 @@ impl From<RawFromClientOneOf> for stream_read_message::from_client::ClientMessag
 pub(crate) enum RawFromServer {
     InitResponse(RawInitResponse),
     ReadResponse(RawReadResponse),
+    CommitOffsetResponse(RawCommitOffsetResponse),
     StartPartitionSessionRequest(RawStartPartitionSessionRequest),
     StopPartitionSessionRequest(RawStopPartitionSessionRequest),
     UpdateTokenResponse(RawUpdateTokenResponse),
@@ -92,6 +93,9 @@ impl TryFrom<stream_read_message::FromServer> for RawFromServer {
             stream_read_message::from_server::ServerMessage::ReadResponse(read_response) => {
                 RawFromServer::ReadResponse(read_response.into())
             }
+            stream_read_message::from_server::ServerMessage::CommitOffsetResponse(
+                commit_offset_response,
+            ) => RawFromServer::CommitOffsetResponse(commit_offset_response.into()),
             stream_read_message::from_server::ServerMessage::StartPartitionSessionRequest(
                 start_partition_session_request,
             ) => {
@@ -218,6 +222,40 @@ impl From<stream_read_message::ReadResponse> for RawReadResponse {
         }
 
         res
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct RawPartitionCommittedOffset {
+    pub partition_session_id: i64,
+    pub committed_offset: i64,
+}
+
+impl From<stream_read_message::commit_offset_response::PartitionCommittedOffset>
+    for RawPartitionCommittedOffset
+{
+    fn from(value: stream_read_message::commit_offset_response::PartitionCommittedOffset) -> Self {
+        Self {
+            partition_session_id: value.partition_session_id,
+            committed_offset: value.committed_offset,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct RawCommitOffsetResponse {
+    pub partitions_committed_offsets: Vec<RawPartitionCommittedOffset>,
+}
+
+impl From<stream_read_message::CommitOffsetResponse> for RawCommitOffsetResponse {
+    fn from(value: stream_read_message::CommitOffsetResponse) -> Self {
+        Self {
+            partitions_committed_offsets: value
+                .partitions_committed_offsets
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }
     }
 }
 

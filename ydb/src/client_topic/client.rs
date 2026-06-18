@@ -206,11 +206,11 @@ impl TopicClient {
 
     pub async fn create_reader(
         &mut self,
-        consumer: String,
+        consumer: impl Into<String>,
         topic: impl Into<TopicSelectors>,
     ) -> YdbResult<TopicReader> {
         let options = TopicReaderOptionsBuilder::default()
-            .consumer(consumer)
+            .consumer(consumer.into())
             .topic(topic.into())
             .build()?;
         TopicReader::new(
