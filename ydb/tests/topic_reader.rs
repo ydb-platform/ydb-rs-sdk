@@ -182,9 +182,9 @@ topic_test!(commits_message_after_server_ack, timeout_secs = 2, {
     let m1 = deliver_and_read(&driver, &mut reader, 1, b"second").await?;
     let m2 = deliver_and_read(&driver, &mut reader, 2, b"third").await?;
 
-    let c0 = reader.commit(m0);
-    let c1 = reader.commit(m1);
-    let mut c2 = reader.commit(m2);
+    let c0 = reader.commit_with_ack(m0);
+    let c1 = reader.commit_with_ack(m1);
+    let mut c2 = reader.commit_with_ack(m2);
 
     let ack_first_two = async {
         driver.state.wait_commits(2).await;
@@ -211,8 +211,8 @@ topic_test!(retryable_fail, timeout_secs = 20, {
     let m0 = deliver_and_read(&driver, &mut reader, 0, b"first").await?;
     let m1 = deliver_and_read(&driver, &mut reader, 1, b"second").await?;
 
-    let c0 = reader.commit(m0);
-    let mut c1 = reader.commit(m1);
+    let c0 = reader.commit_with_ack(m0);
+    let mut c1 = reader.commit_with_ack(m1);
 
     let ack_first = async {
         driver.state.wait_commits(1).await;
@@ -254,7 +254,7 @@ topic_test!(non_retryable_fail, timeout_secs = 20, {
     driver.state.partition_ready.notified().await;
 
     let m0 = deliver_and_read(&driver, &mut reader, 0, b"first").await?;
-    let mut c0 = reader.commit(m0);
+    let mut c0 = reader.commit_with_ack(m0);
 
     let stream_id = driver.state.current_stream_id();
 
