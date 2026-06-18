@@ -821,7 +821,8 @@ async fn check_type_roundtrip(client: &Client, case: &TypeCase) -> YdbResult<()>
     );
 
     // --- 2) Value → CAST AS Utf8 → string ---
-    let q2 = format!("select cast(cast($val AS {t}) AS Utf8) AS db_result",
+    let q2 = format!(
+        "select cast(cast($val AS {t}) AS Utf8) AS db_result",
         t = case.yql_type,
     );
     let (db_text,): (Option<String>,) = client
@@ -848,9 +849,7 @@ async fn check_type_roundtrip(client: &Client, case: &TypeCase) -> YdbResult<()>
     );
 
     // --- 3) Text → CAST AS yql_type → Value ---
-    let q3 = format!("select cast($val AS {t}) AS db_result",
-        t = case.yql_type,
-    );
+    let q3 = format!("select cast($val AS {t}) AS db_result", t = case.yql_type);
     let recv_parsed = client
         .table_client()
         .retry_transaction(|mut t| {
