@@ -26,7 +26,7 @@ use crate::grpc_wrapper::raw_table_service::keepalive::{RawKeepAliveRequest, Raw
 use crate::grpc_wrapper::raw_table_service::read_rows::{RawReadRowsRequest, RawReadRowsResponse};
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
-use tracing::trace;
+use tracing::{instrument, trace};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 
 pub(crate) struct RawTableClient {
@@ -54,6 +54,7 @@ impl RawTableClient {
         self
     }
 
+    #[instrument(name = "ydb.grpc.CommitTransaction", skip_all, fields(db.system.name = "ydb", ydb.session.id = %req.session_id), err)]
     pub async fn commit_transaction(
         &mut self,
         req: RawCommitTransactionRequest,
@@ -65,6 +66,7 @@ impl RawTableClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.CreateSession", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn create_session(&mut self) -> RawResult<RawCreateSessionResult> {
         let req = RawCreateSessionRequest {
             operation_params: self.timeouts.operation_params(),
@@ -77,6 +79,7 @@ impl RawTableClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.ExecuteDataQuery", skip_all, fields(db.system.name = "ydb", ydb.session.id = %req.session_id, ydb.query.text = %crate::traces::helpers::ensure_len_string(&req.yql_text)), err)]
     pub async fn execute_data_query(
         &mut self,
         req: RawExecuteDataQueryRequest,
@@ -88,6 +91,7 @@ impl RawTableClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.ExplainDataQuery", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn explain_data_query(
         &mut self,
         req: RawExplainDataQueryRequest,
@@ -99,6 +103,7 @@ impl RawTableClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.ExecuteSchemeQuery", skip_all, fields(db.system.name = "ydb", ydb.query.text = %crate::traces::helpers::ensure_len_string(&req.yql_text)), err)]
     pub async fn execute_scheme_query(
         &mut self,
         req: RawExecuteSchemeQueryRequest,
@@ -109,6 +114,7 @@ impl RawTableClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.ReadRows", skip_all, fields(db.system.name = "ydb", ydb.table.path = %req.path), err)]
     pub async fn read_rows(&mut self, req: RawReadRowsRequest) -> RawResult<RawReadRowsResponse> {
         request_with_result!(
             self.service.read_rows,
@@ -117,6 +123,7 @@ impl RawTableClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.KeepAlive", skip_all, fields(db.system.name = "ydb", ydb.session.id = %req.session_id), err)]
     pub async fn keep_alive(&mut self, req: RawKeepAliveRequest) -> RawResult<RawKeepAliveResult> {
         request_with_result!(
             self.service.keep_alive,
@@ -125,6 +132,7 @@ impl RawTableClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.RollbackTransaction", skip_all, fields(db.system.name = "ydb", ydb.session.id = %req.session_id), err)]
     pub async fn rollback_transaction(
         &mut self,
         req: RawRollbackTransactionRequest,
@@ -135,6 +143,7 @@ impl RawTableClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.CopyTable", skip_all, fields(db.system.name = "ydb", ydb.table.path = %req.source_path), err)]
     pub async fn copy_table(&mut self, req: RawCopyTableRequest) -> RawResult<()> {
         request_without_result!(
             self.service.copy_table,
@@ -142,6 +151,7 @@ impl RawTableClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.CopyTables", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn copy_tables(&mut self, req: RawCopyTablesRequest) -> RawResult<()> {
         request_without_result!(
             self.service.copy_tables,
@@ -149,6 +159,7 @@ impl RawTableClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.BulkUpsert", skip_all, fields(db.system.name = "ydb", ydb.table.path = %req.table), err)]
     pub async fn bulk_upsert(&mut self, req: RawBulkUpsertRequest) -> RawResult<()> {
         request_without_result!(
             self.service.bulk_upsert,
@@ -156,6 +167,7 @@ impl RawTableClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.DescribeTable", skip_all, fields(db.system.name = "ydb", ydb.table.path = %req.path), err)]
     pub async fn describe_table(
         &mut self,
         req: RawDescribeTableRequest,

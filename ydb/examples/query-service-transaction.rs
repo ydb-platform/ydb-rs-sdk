@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! `retry_transaction` with `AsyncFnMut(&mut QueryTransaction)` on implicit sessions.
 
 use ydb::{

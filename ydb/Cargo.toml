@@ -69,5 +69,9 @@ chrono = { version = "0.4", default-features = false, features = [
 ] }
 lazy_static = "1.4"
 ntest = "0.7"
+opentelemetry = "0.32.0"
+opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"] }
+opentelemetry_sdk = "0.32.1"
 tokio = { version = "1.22", features = ["test-util"] }
+tracing-opentelemetry = "0.33.0"
 uuid = { version = "1.17.0", features = ["v4"] }

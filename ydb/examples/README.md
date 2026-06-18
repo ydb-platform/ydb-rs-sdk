@@ -9,3 +9,5 @@ The auth-yc-cmdline.rs example need installed [yc cli](https://cloud.yandex.com/
 
 ### auth-ycloud-metadata
 The auth-ycloud-metadata.rs example need to be run from Compute Engine in Yandex Cloud with service account - for receive auth token.
+
+### tracing-select-upsert

@@ -86,6 +86,7 @@ mod test {
             None,
             DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
         )
+        .unwrap()
     }
 
     #[tokio::test]

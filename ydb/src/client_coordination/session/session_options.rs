@@ -3,7 +3,7 @@ use derive_builder::Builder;
 use std::time::Duration;
 
 #[allow(dead_code)]
-#[derive(Builder, Clone)]
+#[derive(Builder, Clone, Debug)]
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct SessionOptions {
     #[builder(default = "Duration::from_secs(20)")]

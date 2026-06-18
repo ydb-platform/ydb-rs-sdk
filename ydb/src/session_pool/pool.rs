@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tracing::instrument;
 
+use crate::traces::span_names::{CREATE_SESSION, YDB};
 use http::Uri;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{trace, warn};
@@ -520,6 +522,15 @@ impl SessionPoolInner {
         self.create_explicit_session_inner().await
     }
 
+    #[instrument(
+        name = CREATE_SESSION,
+        skip_all,
+        fields(
+            db.system.name = YDB,
+            ydb.operation.attempt = tracing::field::Empty,
+        ),
+        err
+    )]
     async fn create_explicit_session_inner(&self) -> YdbResult<ExplicitIdleItem> {
         #[cfg(test)]
         if self.bench_mode {
@@ -765,7 +776,8 @@ impl SessionPool {
             MultiInterceptor::new(),
             None,
             DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
-        );
+        )
+        .unwrap();
 
         let inner = Arc::new(SessionPoolInner {
             settings,

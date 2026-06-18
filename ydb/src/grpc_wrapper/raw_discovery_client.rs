@@ -28,7 +28,7 @@ impl GrpcDiscoveryClient {
         }
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(name = "ydb.grpc.Discover", skip(self), fields(db.system.name = "ydb", db.namespace = %database))]
     pub(crate) async fn list_endpoints(
         &mut self,
         database: String,

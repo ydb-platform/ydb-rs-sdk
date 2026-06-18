@@ -20,7 +20,7 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use crate::grpc_wrapper::raw_discovery_client::{EndpointInfo, GrpcDiscoveryClient};
 use crate::grpc_wrapper::raw_services::Service;
-use tracing::trace;
+use tracing::{info_span, trace, Instrument};
 
 /// Current discovery state
 #[derive(Clone, Debug, PartialEq)]
@@ -315,12 +315,14 @@ impl DiscoverySharedState {
         let _ = self.state_received_sender.send(true);
     }
 
-    #[tracing::instrument(skip(state))]
     async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
         while let Some(state) = state.upgrade() {
-            trace!("rekby-discovery");
-            let res = state.discovery_now().await;
-            trace!("rekby-res: {:?}", res);
+            {
+                let span = tracing::info_span!(parent: None, "ydb.Discovery.Timer", db.system.name = "ydb");
+                trace!("rekby-discovery");
+                let res = state.discovery_now().instrument(span).await;
+                trace!("rekby-res: {:?}", res);
+            }
             // return;
             tokio::time::sleep(interval).await;
         }
@@ -425,7 +427,7 @@ mod test {
             interceptor,
             None,
             crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
-        );
+        )?;
 
         let discovery_shared =
             DiscoverySharedState::new(connection_manager, test_client_builder().endpoint.as_str())?;

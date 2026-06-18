@@ -58,7 +58,7 @@ impl From<RawRateLimiterCountersMode> for Option<RateLimiterCountersMode> {
     }
 }
 
-#[derive(Builder)]
+#[derive(Builder, Debug)]
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct NodeConfig {
     // Use NodeConfigBuilder
@@ -86,6 +86,7 @@ impl From<RawCoordinationNodeConfig> for NodeConfig {
     }
 }
 
+#[derive(Debug)]
 pub struct NodeDescription {
     pub entry: SchemeEntry,
     pub config: NodeConfig,

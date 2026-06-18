@@ -5,6 +5,7 @@ use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterce
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::YdbResult;
 use http::Uri;
+use tracing::instrument;
 
 pub(crate) type GrpcConnectionManager = GrpcConnectionManagerGeneric<SharedLoadBalancer>;
 
@@ -20,18 +21,26 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
         interceptor: MultiInterceptor,
         cert_path: Option<String>,
         grpc_max_message_size: usize,
-    ) -> Self {
-        GrpcConnectionManagerGeneric {
-            state: State::new(
-                balancer,
-                database,
-                interceptor,
-                cert_path,
-                grpc_max_message_size,
-            ),
-        }
+    ) -> YdbResult<Self> {
+        let state = State::new(
+            balancer,
+            database,
+            interceptor,
+            cert_path,
+            grpc_max_message_size,
+        )?;
+        Ok(GrpcConnectionManagerGeneric { state })
     }
 
+    #[instrument(
+        name = "ydb.ConnectionManager.GetAuthService",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.service.name = ?T::get_grpc_discovery_service(),
+        ),
+        err
+    )]
     pub(crate) async fn get_auth_service<
         T: GrpcServiceForDiscovery + WithGrpcMaxMessageSize,
         F: FnOnce(InterceptedChannel) -> T,
@@ -46,6 +55,14 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
         self.get_auth_service_to_node(new, &uri).await
     }
 
+    #[instrument(
+        name = "ydb.ConnectionManager.GetAuthServiceToNode",
+        skip_all,
+        fields(
+            ydb.service.name = tracing::field::Empty,
+        ),
+        err
+    )]
     pub(crate) async fn get_auth_service_to_node<
         T: GrpcServiceForDiscovery + WithGrpcMaxMessageSize,
         F: FnOnce(InterceptedChannel) -> T,
@@ -60,6 +77,12 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
         Ok(new(intercepted_channel).with_grpc_max_message_size(self.state.grpc_max_message_size))
     }
 
+    #[instrument(
+        name = "ydb.ConnectionManager.GetEndpoint",
+        skip_all,
+        fields(ydb.service.name = ?service),
+        err
+    )]
     pub(crate) fn endpoint(&self, service: Service) -> YdbResult<Uri> {
         self.state.balancer.endpoint(service)
     }
@@ -85,18 +108,18 @@ impl<TBalancer: LoadBalancer> State<TBalancer> {
         interceptor: MultiInterceptor,
         cert_path: Option<String>,
         grpc_max_message_size: usize,
-    ) -> Self {
+    ) -> YdbResult<Self> {
         let mut cp = ConnectionPool::new();
         if let Some(cert_path) = cert_path {
-            cp = cp.load_certificate(cert_path);
+            cp = cp.load_certificate(cert_path)?;
         }
 
-        State {
+        Ok(State {
             balancer,
             connections_pool: cp,
             interceptor,
             database,
             grpc_max_message_size,
-        }
+        })
     }
 }

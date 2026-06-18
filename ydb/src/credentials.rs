@@ -546,7 +546,7 @@ impl StaticCredentials {
             crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
         );
 
-        let mut auth_client = empty_connection_manager
+        let mut auth_client = empty_connection_manager?
             .get_auth_service(RawAuthClient::new)
             .await
             .unwrap();

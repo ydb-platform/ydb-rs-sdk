@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 
 use rand::Rng;
 use tokio::time::{sleep, timeout};
+use tracing::instrument;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::client::TimeoutSettings;
@@ -54,8 +55,15 @@ impl OperationClient {
         }
     }
 
+    #[instrument(
+        name = "ydb.OperationClient.GetOperation",
+        skip_all,
+        fields(ydb.operation.id = tracing::field::Empty),
+        err
+    )]
     pub async fn get_operation(&self, id: impl Into<String>) -> YdbResult<OperationInfo> {
         let id = id.into();
+        tracing::Span::current().record("ydb.operation.id", &id);
         self.retry(|| async {
             let mut client = self.raw_client().await?;
             let op = self
@@ -67,6 +75,12 @@ impl OperationClient {
         .await
     }
 
+    #[instrument(
+        name = "ydb.OperationClient.ListOperations", 
+        skip_all,
+        fields(ydb.operation.request = ?request),
+        err
+    )]
     pub async fn list_operations(
         &self,
         request: ListOperationsRequest,
@@ -91,8 +105,15 @@ impl OperationClient {
     ///
     /// If the operation was already forgotten (e.g. a retry after a successful first attempt
     /// that lost the response), `NOT_FOUND` is treated as success.
+    #[instrument(
+        name = "ydb.OperationClient.ForgetOperation",
+        skip_all,
+        fields(ydb.operation.id = tracing::field::Empty),
+        err
+    )]
     pub async fn forget_operation(&self, id: impl Into<String>) -> YdbResult<()> {
         let id = id.into();
+        tracing::Span::current().record("ydb.operation.id", &id);
         self.retry(|| async {
             let mut client = self.raw_client().await?;
             match self.with_rpc_timeout(|| client.forget_operation(&id)).await {
@@ -108,8 +129,15 @@ impl OperationClient {
         .await
     }
 
+    #[instrument(
+        name = "ydb.OperationClient.CancelOperation",
+        skip_all,
+        fields(ydb.operation.id = tracing::field::Empty),
+        err
+    )]
     pub async fn cancel_operation(&self, id: impl Into<String>) -> YdbResult<()> {
         let id = id.into();
+        tracing::Span::current().record("ydb.operation.id", &id);
         self.retry(|| async {
             let mut client = self.raw_client().await?;
             self.with_rpc_timeout(|| client.cancel_operation(&id))
@@ -126,6 +154,7 @@ impl OperationClient {
             .await
     }
 
+    #[instrument(name = "ydb.OperationClient.WithRpcTimeout", skip_all, err)]
     async fn with_rpc_timeout<T, F, Fut>(&self, operation: F) -> Result<T, RawError>
     where
         F: FnOnce() -> Fut,
@@ -140,6 +169,12 @@ impl OperationClient {
         }
     }
 
+    #[instrument(
+        name = "ydb.OperationClient.Retry",
+        skip_all,
+        fields(ydb.operation.attempt = tracing::field::Empty),
+        err
+    )]
     async fn retry<T, F, Fut>(&self, mut attempt_fn: F) -> YdbResult<T>
     where
         F: FnMut() -> Fut,
@@ -149,6 +184,7 @@ impl OperationClient {
         let mut attempt = 0usize;
         loop {
             attempt += 1;
+            tracing::Span::current().record("ydb.operation.attempts", attempt);
             match attempt_fn().await {
                 Ok(value) => return Ok(value),
                 Err(err) => {

@@ -27,7 +27,7 @@ use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSche
 use crate::grpc_wrapper::raw_table_service::explain_data_query::RawExplainDataQueryRequest;
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::table_service_types::{ColumnDescription, CopyTableItem, TableDescription};
-use crate::trace_helpers::ensure_len_string;
+use crate::traces::helpers::ensure_len_string;
 use tracing::{debug, trace};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 use ydb_grpc::ydb_proto::table::{execute_scan_query_request, ExecuteScanQueryRequest};
@@ -247,7 +247,7 @@ impl Session {
         };
         debug!(
             "request: {}",
-            crate::trace_helpers::ensure_len_string(serde_json::to_string(&req)?)
+            crate::traces::helpers::ensure_len_string(serde_json::to_string(&req)?)
         );
         let mut in_flight = InFlightTableRpcGuard {
             session: self,
@@ -514,7 +514,8 @@ mod discard_session_tests {
                     MultiInterceptor::new(),
                     None,
                     DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
-                ),
+                )
+                .unwrap(),
                 Uri::from_static("http://127.0.0.1/bench"),
             ),
             TimeoutSettings::default(),

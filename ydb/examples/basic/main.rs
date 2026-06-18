@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! Basic "series / seasons / episodes" demo via Query Service (parity with
 //! `ydb-go-sdk/examples/basic/native/query`).
 

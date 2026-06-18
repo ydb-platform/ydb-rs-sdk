@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
-use tracing::trace;
+use tracing::{instrument, trace};
 
 #[derive(Clone)]
 pub(crate) struct ConnectionPool {
@@ -21,17 +21,35 @@ impl ConnectionPool {
         }
     }
 
-    pub(crate) fn load_certificate(self, path: String) -> Self {
-        let pem = std::fs::read_to_string(path).unwrap();
+    #[instrument(
+        level = "trace",
+        name = "ydb.ConnectionPool.LoadCertificate",
+        skip_all,
+        fields(
+            ydb.pool.certificate = %path,
+        ),
+        err
+    )]
+    pub(crate) fn load_certificate(self, path: String) -> YdbResult<Self> {
+        let pem = std::fs::read_to_string(path).map_err(|err| YdbError::custom(err.to_string()))?;
         trace!("loaded cert: {}", pem);
         let ca = Certificate::from_pem(pem);
         let config = ClientTlsConfig::new().ca_certificate(ca);
-        Self {
+        Ok(Self {
             tls_config: Some(config).into(),
             ..self
-        }
+        })
     }
 
+    #[instrument(
+        name = "ydb.ConnectionPool.GetConnection",
+        skip_all,
+        fields(
+            network.peer.address = uri.host(),
+            network.peer.port = uri.port_u16()
+        ),
+        err
+    )]
     pub(crate) async fn connection(&self, uri: &Uri) -> YdbResult<Channel> {
         let now = Instant::now();
         let mut lock = self.state.lock().unwrap();

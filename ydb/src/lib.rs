@@ -1,3 +1,11 @@
+// This workaround solves compiler error
+// ```
+// error: queries overflow the depth limit!
+//   |
+//   = help: consider increasing the recursion limit by adding a `#![recursion_limit = "256"]` attribute to your crate ...
+// ```
+// because queue depth limit has changed since 1.94. See https://github.com/rust-lang/rust/issues/152942
+#![recursion_limit = "256"]
 //! YDB SDK - a client for YDB.
 //!
 //! # Example
@@ -92,7 +100,7 @@ mod test_integration_helper;
 pub(crate) mod topics_compression_test;
 #[cfg(test)]
 pub(crate) mod topics_test;
-mod trace_helpers;
+pub mod traces;
 mod trait_operation;
 pub(crate) mod transaction;
 mod types;
