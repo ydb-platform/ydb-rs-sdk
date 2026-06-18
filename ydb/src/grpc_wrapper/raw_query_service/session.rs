@@ -222,6 +222,35 @@ impl AttachedQuerySession {
     }
 }
 
+#[cfg(test)]
+impl AttachedQuerySession {
+    /// In-memory session for pool benchmarks: no CreateSession, AttachStream, or DeleteSession.
+    pub(crate) fn new_bench_stub(session_id: String, node_uri: Uri) -> Self {
+        Self {
+            inner: Arc::new(AttachedQuerySessionInner {
+                session_id,
+                node_uri,
+                in_use: AtomicUsize::new(0),
+                alive: AtomicBool::new(true),
+                attach_task: Mutex::new(None),
+                explicitly_closed: AtomicBool::new(false),
+                on_node_shutdown: Arc::new(|_| {}),
+                delete_timeout: Duration::ZERO,
+                not_in_use: Notify::new(),
+            }),
+        }
+    }
+
+    pub(crate) fn bench_invalidate(&self) {
+        self.inner.alive.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn bench_close(self) {
+        self.inner.explicitly_closed.store(true, Ordering::Release);
+        self.inner.alive.store(false, Ordering::Release);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ShutdownHint {
     SessionShutdown,

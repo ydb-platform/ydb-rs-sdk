@@ -3,6 +3,7 @@
 use super::QuerySessionPoolSettings;
 use crate::errors::YdbResult;
 use crate::test_integration_helper::create_client;
+use crate::QueryClient;
 use std::time::Duration;
 use tracing_test::traced_test;
 
@@ -203,4 +204,95 @@ async fn query_session_pool_respects_custom_create_timeout() {
             );
         }
     }
+}
+
+const SESSION_POOL_REUSE_PARALLELISM: usize = 100;
+
+async fn wait_explicit_pool_idle(qc: &QueryClient, expected_idle: usize) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let stats = qc
+            .session_pool_stats()
+            .expect("explicit session pool configured");
+        if stats.idle >= expected_idle && stats.create_in_progress == 0 {
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!(
+                "session pool did not return {expected_idle} idle sessions, last stats: {stats:?}"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn run_parallel_query_rows(qc: &QueryClient, count: usize) -> YdbResult<()> {
+    let mut handles = Vec::with_capacity(count);
+    for _ in 0..count {
+        let mut qc = qc.clone();
+        handles.push(tokio::spawn(async move {
+            let mut row = qc.query_row("SELECT 1 AS one").await?;
+            let one: i64 = row.remove_field_by_name("one")?.try_into()?;
+            YdbResult::Ok(one)
+        }));
+    }
+    for handle in handles {
+        let one = handle.await??;
+        assert_eq!(one, 1);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_session_pool_reuses_sessions_under_parallel_load() -> YdbResult<()> {
+    let client = create_client().await?;
+    let qc = client
+        .query_client()
+        .clone_with_idempotent_operations(true)
+        .with_session_pool(
+            QuerySessionPoolSettings::new()
+                .with_limit(SESSION_POOL_REUSE_PARALLELISM)
+                .with_warm_up(0),
+        )
+        .await?;
+
+    let initial = qc
+        .session_pool_stats()
+        .expect("explicit session pool configured");
+    assert_eq!(initial.sessions_created, 0);
+    assert_eq!(initial.idle, 0);
+
+    run_parallel_query_rows(&qc, SESSION_POOL_REUSE_PARALLELISM).await?;
+    wait_explicit_pool_idle(&qc, SESSION_POOL_REUSE_PARALLELISM).await;
+
+    let after_first_wave = qc
+        .session_pool_stats()
+        .expect("explicit session pool configured");
+    assert_eq!(
+        after_first_wave.sessions_created, SESSION_POOL_REUSE_PARALLELISM as u64,
+        "first wave should create one session per concurrent query, stats: {after_first_wave:?}"
+    );
+    assert!(
+        after_first_wave.idle >= SESSION_POOL_REUSE_PARALLELISM,
+        "sessions should return to idle stack, stats: {after_first_wave:?}"
+    );
+
+    run_parallel_query_rows(&qc, SESSION_POOL_REUSE_PARALLELISM).await?;
+    wait_explicit_pool_idle(&qc, SESSION_POOL_REUSE_PARALLELISM).await;
+
+    let after_second_wave = qc
+        .session_pool_stats()
+        .expect("explicit session pool configured");
+    assert_eq!(
+        after_second_wave.sessions_created, SESSION_POOL_REUSE_PARALLELISM as u64,
+        "second wave must reuse idle sessions without CreateSession, stats: {after_second_wave:?}"
+    );
+    assert!(
+        after_second_wave.idle >= SESSION_POOL_REUSE_PARALLELISM,
+        "sessions should return to idle stack after second wave, stats: {after_second_wave:?}"
+    );
+
+    Ok(())
 }
