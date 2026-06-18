@@ -6,8 +6,8 @@ use ydb::{
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
-        .client()?;
+    let client =
+        ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.client()?;
     client.wait().await?;
 
     let mut qc = client.query_client().clone_with_idempotent_operations(true);
