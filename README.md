@@ -20,52 +20,114 @@ Add the YDB dependency to your project using `cargo add ydb` or add this your Ca
 ```toml
 [dependencies]
 ydb = "0.13.5"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ### Example
 Create a new Rust file (e.g., main.rs) and add the following code:
 
 ```rust
-use ydb::{ClientBuilder, Query, AccessTokenCredentials, YdbResult};
+use ydb::{ClientBuilder, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
+    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
+        .client()?;
 
- // create the driver
- let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
-    .with_credentials(AccessTokenCredentials::from("asd"))
-    .client()?;
+    // wait until the background initialization of the driver finishes
+    client.wait().await?;
 
- // wait until the background initialization of the driver finishes
- // In this example, it will never be resolved because YDB methods have
- // infinite retries by default. You can manage it using a standard
- // Tokio timeout.
- client.wait().await?;
+    let mut qc = client.query_client();
 
- // read the query result
- let sum: i32 = client
-    .table_client() // create table client
-    .retry_transaction(|mut t| async move {
-        // the code in transaction can retry a few times if there was a retriable error
+    // one-shot: retries internally, no closure for a single statement
+    let mut row = qc.query_row("SELECT 1 + 1 AS sum").await?;
+    let sum: i32 = row.remove_field_by_name("sum")?.try_into()?;
 
-        // send the query to the database
-        let res = t.query(Query::from("SELECT 1 + 1 AS sum")).await?;
-
-        // read exactly one result from the db
-        let field_val: i32 = res.into_only_row()?.remove_field_by_name("sum")?.try_into()?;
-
-        // return result
-        return Ok(field_val);
-    })
-    .await?;
-
- // this will print "sum: 2"
- println!("sum: {}", sum);
-    return Ok(());
+    println!("sum: {sum}");
+    Ok(())
 }
 ```
 
 For more examples, see [ydb/examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples).
+
+### QueryClient one-shot methods
+
+For a single YQL statement you usually do not need `retry_transaction` — call a builder and `.await?`:
+
+| Method | Returns | Use for |
+|--------|---------|---------|
+| [`exec`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html) | `()` | DDL, DML without rows (`CREATE TABLE`, `UPSERT`, `DELETE`) |
+| [`query_row`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html) | one [`Row`](https://docs.rs/ydb/latest/ydb/struct.Row.html) | exactly one row (`SELECT COUNT(*) …`) |
+| [`query_result_set`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html) | one [`ResultSet`](https://docs.rs/ydb/latest/ydb/struct.ResultSet.html) | all rows of one result set |
+| [`query`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html) | [`QueryStream`](https://docs.rs/ydb/latest/ydb/struct.QueryStream.html) | multiple result sets, large reads |
+
+Parameters chain at the call site:
+
+```rust
+use ydb::{ydb_params, ClientBuilder, YdbResult};
+
+#[tokio::main]
+async fn main() -> YdbResult<()> {
+    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
+        .client()?;
+    client.wait().await?;
+
+    let mut qc = client.query_client();
+
+    qc.exec("CREATE TABLE IF NOT EXISTS test (id Int64, val Utf8, PRIMARY KEY(id))")
+        .await?;
+
+    qc.exec(
+        "DECLARE $id AS Int64; DECLARE $val AS Utf8; \
+         UPSERT INTO test (id, val) VALUES ($id, $val)",
+    )
+    .param("$id", 1_i64)
+    .param("$val", "hello")
+    .await?;
+
+    // or: .params(ydb_params!("$id" => 2_i64, "$val" => "world"))
+
+    let mut row = qc.query_row("SELECT COUNT(*) AS cnt FROM test").await?;
+    let cnt: i64 = row.remove_field_by_name("cnt")?.try_into()?;
+    println!("cnt = {cnt}");
+
+    Ok(())
+}
+```
+
+Use `.optional()` when zero rows is OK, `.typed::<T>()` to map a row into your struct (see [`query-service-basic`](ydb/examples/query-service-basic.rs)).
+
+For multi-statement atomic work, use [`QueryClient::retry_transaction`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html) with `async |tx: &mut QueryTransaction| { … }` (see [`query-service-transaction`](ydb/examples/query-service-transaction.rs)).
+
+### Try QueryClient locally
+
+**New project**
+
+1. Start local YDB from the repository root: `docker compose up -d`
+2. Add `ydb` and `tokio` to `Cargo.toml` (see [Installation](#installation)).
+3. Copy the [Example](#example) or run the SDK example:
+   ```bash
+   cd ydb
+   cargo run --example query-service-basic
+   ```
+
+**Migrating from `table_client`**
+
+Replace `client.table_client()` with `client.query_client()` and simplify call sites:
+
+| Table API | Query API |
+|-----------|-----------|
+| `retry_execute_scheme_query(sql)` | `qc.exec(sql).await?` |
+| `retry_transaction` + one `t.query(...)` | one-shot: `qc.exec(...)` / `qc.query_row(...)` / `qc.query_result_set(...)` |
+| `retry_transaction` + several statements | `qc.retry_transaction` + `tx.exec(...)` (see example below) |
+| `Query::from(sql).with_params(...)` | `qc.exec(sql).params(ydb_params!(...)).await?` or `.param("$name", value)` |
+| `res.into_only_row()?` | `qc.query_row(sql).await?` |
+| `res.into_only_result()?.rows()` | `qc.query_result_set(sql).await?` |
+
+Notes:
+- One-shot calls use implicit sessions and server-side transaction mode by default (DDL — non-transactional, `SELECT` — snapshot read-only, DML — serializable read-write).
+- `table_client` remains available for legacy code; new code should prefer `query_client`.
+- Full before/after: compare [`basic-select-upsert.rs`](ydb/examples/basic-select-upsert.rs) (table) with [`query-service-basic.rs`](ydb/examples/query-service-basic.rs) (query).
 
 ## Tests
 
