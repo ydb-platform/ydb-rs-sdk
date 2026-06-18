@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -119,6 +119,8 @@ pub struct QuerySessionPoolStats {
     pub in_use: usize,
     /// CreateSession RPCs in progress.
     pub create_in_progress: usize,
+    /// Total successful explicit session creations (CreateSession + Attach) since pool init.
+    pub sessions_created: u64,
 }
 
 impl QuerySessionPoolSettings {
@@ -299,6 +301,7 @@ struct QuerySessionPoolInner {
     implicit_idle: Mutex<Vec<ImplicitIdleItem>>,
     on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync>,
     create_in_progress: AtomicUsize,
+    sessions_created: AtomicU64,
 }
 
 impl QuerySessionPool {
@@ -325,6 +328,7 @@ impl QuerySessionPool {
             implicit_idle: Mutex::new(Vec::new()),
             on_node_shutdown,
             create_in_progress: AtomicUsize::new(0),
+            sessions_created: AtomicU64::new(0),
         });
 
         if warm_up > 0 {
@@ -357,6 +361,7 @@ impl QuerySessionPool {
             implicit_idle: Mutex::new(Vec::new()),
             on_node_shutdown,
             create_in_progress: AtomicUsize::new(0),
+            sessions_created: AtomicU64::new(0),
         });
 
         if warm_up > 0 {
@@ -514,6 +519,7 @@ impl QuerySessionPoolInner {
             idle,
             in_use,
             create_in_progress,
+            sessions_created: self.sessions_created.load(Ordering::Relaxed),
         }
     }
 
@@ -606,6 +612,7 @@ impl QuerySessionPoolInner {
         };
 
         let now = Instant::now();
+        self.sessions_created.fetch_add(1, Ordering::Relaxed);
         Ok(ExplicitIdleItem {
             session,
             node_uri,
