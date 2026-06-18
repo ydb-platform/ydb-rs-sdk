@@ -20,19 +20,20 @@ async fn main() -> YdbResult<()> {
 
     let mut topic_client = client.topic_client();
 
-    let mut reader = topic_client
-        .create_reader("consumer".to_string(), "test-topic".to_string())
-        .await?;
+    let mut reader = topic_client.create_reader("consumer", "test-topic").await?;
 
     let batch0 = reader.read_batch().await?;
     let batch1 = reader.read_batch().await?;
+    let batch2 = reader.read_batch().await?;
 
     info!(?batch0, "Batch0 processed");
     reader.commit(batch0.get_commit_marker())?;
 
-    info!(?batch1, "Batch1 processed");
-    reader.commit_with_ack(batch1.get_commit_marker()).await?;
-    info!("Batch1 is guaranteed to be committed");
+    let handler1 = reader.commit_with_ack(batch1.get_commit_marker());
+    let handler2 = reader.commit_with_ack(batch2.get_commit_marker());
+
+    tokio::try_join!(handler1, handler2)?;
+    info!("Both batch1 and batch2 were committed and confirmed to be acked by server");
 
     Ok(())
 }
