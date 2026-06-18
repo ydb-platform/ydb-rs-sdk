@@ -44,6 +44,28 @@ pub async fn run_workers<F, Fut>(
     }
 }
 
+/// Workers fire operations as fast as the SDK allows (no shared rate limiter).
+pub async fn run_workers_unlimited<F, Fut>(ctx: &CancellationToken, workers: usize, f: F)
+where
+    F: Fn() -> Fut + Clone + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send,
+{
+    let mut handles = Vec::with_capacity(workers);
+    for _ in 0..workers {
+        let ctx = ctx.clone();
+        let f = f.clone();
+        handles.push(tokio::spawn(async move {
+            while !ctx.is_cancelled() {
+                f().await;
+            }
+        }));
+    }
+
+    for handle in handles {
+        let _ = handle.await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

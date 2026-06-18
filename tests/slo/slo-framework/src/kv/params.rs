@@ -23,6 +23,9 @@ pub struct KvFlags {
     pub min_partition_count: u64,
     #[arg(long, default_value_t = 1000)]
     pub max_partition_count: u64,
+    /// Skip shared rate limiter; workers run ops as fast as the SDK allows.
+    #[arg(long, default_value_t = true)]
+    pub no_rate_limit: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +39,7 @@ pub struct Params {
     pub partition_size: u64,
     pub min_partition_count: u64,
     pub max_partition_count: u64,
+    pub no_rate_limit: bool,
 }
 
 impl Params {
@@ -63,5 +67,6 @@ pub fn parse_params(fw: &Framework) -> Params {
         partition_size: flags.partition_size,
         min_partition_count: flags.min_partition_count,
         max_partition_count: flags.max_partition_count,
+        no_rate_limit: flags.no_rate_limit,
     }
 }
