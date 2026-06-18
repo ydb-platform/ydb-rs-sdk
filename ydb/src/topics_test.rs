@@ -590,7 +590,7 @@ async fn read_topic_message() -> YdbResult<()> {
     assert_eq!(msg.read_and_take().await?.unwrap(), "test-1".as_bytes());
     // assert_eq!(msg.get_topic_path(), topic_path);
 
-    let _ = reader.commit(commit_marker).await;
+    reader.commit(commit_marker)?;
 
     let start = std::time::Instant::now();
     let mut consumer_description_after_commit;
