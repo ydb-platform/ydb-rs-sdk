@@ -1,104 +1,143 @@
-use super::ordered_task_queue::OrderedTaskQueue;
+use super::ordered_task_queue::{self, OrderedTaskQueue};
 use crate::client_topic::compression::codec_registry::CodecRegistry;
-use crate::client_topic::compression::codec_selector::CodecSelector;
+use crate::client_topic::compression::codec_selector::{CodecSelection, CodecSelector};
 use crate::client_topic::compression::error_strategy::ErrorHandlingStrategy;
 use crate::client_topic::compression::executor::Executor;
 use crate::client_topic::list_types::Codec;
-use crate::client_topic::topicwriter::message::TopicWriterMessage;
-use crate::YdbResult;
+use crate::{YdbError, YdbResult};
 use prost::bytes::Bytes;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use tracing::warn;
+use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
-pub struct CompressionWorker {
+/// One chunk may produce multiple sub-batches when `Skip` falls back to RAW for
+/// individual messages — each group is one wire-level `WriteRequest`.
+pub(crate) type CompressedGroups = Vec<(Codec, Vec<MessageData>)>;
+type ChunkResult = YdbResult<CompressedGroups>;
+type InputRx = mpsc::UnboundedReceiver<Vec<MessageData>>;
+type OutputTx = mpsc::UnboundedSender<ChunkResult>;
+
+pub(crate) struct CompressionWorker {
     codec_selector: CodecSelector,
     codec_registry: Arc<CodecRegistry>,
     error_strategy: ErrorHandlingStrategy,
+    queue: OrderedTaskQueue<CompressedGroups>,
+    results_rx: ordered_task_queue::TaskResultRx<CompressedGroups>,
     parallelism: usize,
-    queue: OrderedTaskQueue<Vec<TopicWriterMessage>>,
 }
 
 impl CompressionWorker {
-    pub fn new(
-        codec: Option<Codec>,
+    pub(crate) fn new(
+        selection: CodecSelection,
         codec_registry: Arc<CodecRegistry>,
         error_strategy: ErrorHandlingStrategy,
         executor: Arc<dyn Executor>,
         server_codecs: Vec<Codec>,
-    ) -> YdbResult<(
-        Self,
-        mpsc::UnboundedReceiver<YdbResult<Vec<TopicWriterMessage>>>,
-    )> {
-        let codec_selector = CodecSelector::new(codec, server_codecs, codec_registry.clone())?;
+    ) -> YdbResult<Self> {
+        let codec_selector = CodecSelector::new(selection, server_codecs, codec_registry.clone())?;
         let parallelism = executor.available_parallelism();
-        let (queue, receiver) = OrderedTaskQueue::new(executor);
-        Ok((
-            Self {
-                codec_selector,
-                codec_registry,
-                error_strategy,
-                parallelism,
-                queue,
-            },
-            receiver,
-        ))
+        let (queue, results_rx) = OrderedTaskQueue::new(executor, parallelism);
+
+        Ok(Self {
+            codec_selector,
+            codec_registry,
+            error_strategy,
+            queue,
+            results_rx,
+            parallelism,
+        })
     }
 
-    pub fn process_batch(&mut self, mut batch: Vec<TopicWriterMessage>) {
-        self.codec_selector.step(&batch);
-        let codec = self.codec_selector.codec();
+    pub(crate) fn spawn_into(self, tasks: &mut JoinSet<()>, mut rx: InputRx, tx: OutputTx) {
+        let CompressionWorker {
+            mut codec_selector,
+            codec_registry,
+            error_strategy,
+            queue,
+            mut results_rx,
+            parallelism,
+        } = self;
 
-        let chunk_size = (batch.len() / self.parallelism).max(1);
-        while !batch.is_empty() {
-            let chunk: Vec<TopicWriterMessage> =
-                batch.drain(..chunk_size.min(batch.len())).collect();
-            let registry = self.codec_registry.clone();
-            let strategy = self.error_strategy.clone();
+        tasks.spawn(async move {
+            while let Some(mut batch) = rx.recv().await {
+                codec_selector.step(&batch);
+                let codec = codec_selector.codec();
+                let chunk_size = (batch.len() / parallelism).max(1);
 
-            self.queue.submit(Box::new(move || {
-                compress_batch(chunk, &registry, codec, &strategy)
-            }));
-        }
+                while !batch.is_empty() {
+                    let chunk: Vec<MessageData> =
+                        batch.drain(..chunk_size.min(batch.len())).collect();
+
+                    let registry = codec_registry.clone();
+                    let strategy = error_strategy;
+
+                    queue
+                        .submit(Box::new(move || {
+                            compress_batch(chunk, codec, registry, strategy)
+                        }))
+                        .await;
+                }
+            }
+        });
+
+        tasks.spawn(async move {
+            while let Some(result_tx) = results_rx.recv().await {
+                let result = result_tx
+                    .await
+                    .unwrap_or(Err(YdbError::custom("executor compression task panicked")));
+
+                if tx.send(result).is_err() {
+                    break;
+                }
+            }
+        });
     }
 }
 
 fn compress_batch(
-    mut batch: Vec<TopicWriterMessage>,
-    registry: &CodecRegistry,
+    batch: Vec<MessageData>,
     codec: Codec,
-    strategy: &ErrorHandlingStrategy,
-) -> YdbResult<Vec<TopicWriterMessage>> {
+    registry: Arc<CodecRegistry>,
+    strategy: ErrorHandlingStrategy,
+) -> ChunkResult {
     if codec == Codec::RAW {
-        return Ok(batch);
+        return Ok(vec![(codec, batch)]);
     }
 
-    for message in batch.iter_mut() {
-        message
-            .uncompressed_size
-            .get_or_insert(message.data.len() as i64);
-
+    let mut groups: CompressedGroups = Vec::new();
+    for mut message in batch {
         let data_bytes = Bytes::from(std::mem::take(&mut message.data));
+
         match registry.compress(&data_bytes, &codec) {
             Ok(compressed) => {
                 message.data = compressed.to_vec();
-                message.codec = Some(codec);
+                push_to_group(&mut groups, codec, message);
             }
             Err(err) => match strategy {
-                ErrorHandlingStrategy::FailFast => {
-                    return Err(err);
-                }
+                ErrorHandlingStrategy::FailFast => return Err(err),
                 ErrorHandlingStrategy::Skip => {
                     warn!(
-                        "compression failed for message (seq_no: {:?}), sending as RAW: {}",
+                        "compression failed for message (seq_no: {}), falling back to RAW: {}",
                         message.seq_no, err
                     );
                     message.data = data_bytes.to_vec();
-                    message.codec = Some(Codec::RAW);
+                    push_to_group(&mut groups, Codec::RAW, message);
                 }
             },
         }
     }
 
-    Ok(batch)
+    Ok(groups)
+}
+
+fn push_to_group(groups: &mut CompressedGroups, codec: Codec, message: MessageData) {
+    if let Some((last_codec, last_messages)) = groups.last_mut() {
+        if *last_codec == codec {
+            last_messages.push(message);
+            return;
+        }
+    }
+    groups.push((codec, vec![message]));
 }

@@ -1,56 +1,114 @@
-use super::ordered_task_queue::OrderedTaskQueue;
+use super::ordered_task_queue::{self, OrderedTaskQueue};
 use crate::client_topic::compression::codec_registry::CodecRegistry;
 use crate::client_topic::compression::error_strategy::ErrorHandlingStrategy;
 use crate::client_topic::compression::executor::Executor;
 use crate::client_topic::list_types::Codec;
-use crate::{TopicReaderMessage, YdbResult};
-use prost::bytes::Bytes;
+use crate::{TopicReaderMessage, YdbError, YdbResult};
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-pub struct DecompressionWorker {
+type BatchRx = mpsc::UnboundedReceiver<(Vec<TopicReaderMessage>, Codec)>;
+
+type DecompressedBatchTx = mpsc::UnboundedSender<YdbResult<Vec<TopicReaderMessage>>>;
+
+pub(crate) struct DecompressionWorker {
     codec_registry: Arc<CodecRegistry>,
     error_strategy: ErrorHandlingStrategy,
-    parallelism: usize,
     queue: OrderedTaskQueue<Vec<TopicReaderMessage>>,
+    results_rx: ordered_task_queue::TaskResultRx<Vec<TopicReaderMessage>>,
+    parallelism: usize,
 }
 
 impl DecompressionWorker {
-    pub fn new(
+    pub(crate) fn new(
         codec_registry: Arc<CodecRegistry>,
         error_strategy: ErrorHandlingStrategy,
         executor: Arc<dyn Executor>,
-    ) -> (
-        Self,
-        mpsc::UnboundedReceiver<YdbResult<Vec<TopicReaderMessage>>>,
-    ) {
-        let parallelism = executor.available_parallelism();
-        let (queue, receiver) = OrderedTaskQueue::new(executor);
-        (
-            Self {
-                codec_registry,
-                error_strategy,
-                parallelism,
-                queue,
-            },
-            receiver,
-        )
+    ) -> Self {
+        let parallelism = executor.available_parallelism().max(1);
+        let (queue, results_rx) = OrderedTaskQueue::new(executor, parallelism);
+
+        Self {
+            codec_registry,
+            error_strategy,
+            queue,
+            results_rx,
+            parallelism,
+        }
     }
 
-    pub fn process_batch(&self, mut batch: Vec<TopicReaderMessage>, codec: Codec) {
-        let chunk_size = (batch.len() / self.parallelism).max(1);
+    pub(crate) fn spawn_into(
+        self,
+        tasks: &mut JoinSet<()>,
+        mut rx: BatchRx,
+        tx: DecompressedBatchTx,
+        cancellation_token: CancellationToken,
+    ) {
+        let DecompressionWorker {
+            codec_registry,
+            error_strategy,
+            queue,
+            mut results_rx,
+            parallelism,
+        } = self;
 
-        while !batch.is_empty() {
-            let chunk: Vec<TopicReaderMessage> =
-                batch.drain(..chunk_size.min(batch.len())).collect();
-            let registry = self.codec_registry.clone();
-            let strategy = self.error_strategy.clone();
+        let schedule_cancellation_token = cancellation_token.clone();
+        tasks.spawn(async move {
+            loop {
+                let Some((batch, codec)) = (tokio::select! {
+                    _ = schedule_cancellation_token.cancelled() => return,
+                    batch = rx.recv() => batch,
+                }) else {
+                    return;
+                };
 
-            self.queue.submit(Box::new(move || {
-                decompress_batch(chunk, codec, &registry, &strategy)
-            }));
-        }
+                let chunk_size = (batch.len() / parallelism).max(1);
+
+                let mut batch_iter = batch.into_iter();
+                loop {
+                    let chunk: Vec<TopicReaderMessage> =
+                        batch_iter.by_ref().take(chunk_size).collect();
+                    if chunk.is_empty() {
+                        break;
+                    }
+
+                    let registry = codec_registry.clone();
+                    let strategy = error_strategy;
+
+                    tokio::select! {
+                        _ = schedule_cancellation_token.cancelled() => return,
+                        _ = queue.submit(Box::new(move || {
+                            decompress_batch(chunk, codec, registry, strategy)
+                        })) => {}
+                    }
+                }
+            }
+        });
+
+        tasks.spawn(async move {
+            loop {
+                let Some(result_rx) = (tokio::select! {
+                    _ = cancellation_token.cancelled() => return,
+                    result_rx = results_rx.recv() => result_rx,
+                }) else {
+                    return;
+                };
+
+                let result = tokio::select! {
+                    _ = cancellation_token.cancelled() => return,
+                    result = result_rx => result.unwrap_or(Err(YdbError::custom(
+                        "executor decompression task panicked",
+                    ))),
+                };
+
+                if tx.send(result).is_err() {
+                    break;
+                }
+            }
+        });
     }
 }
 
@@ -65,49 +123,30 @@ fn decompress_batch(
     }
 
     for message in batch.iter_mut() {
-        let Some(raw_data) = message.raw_data.as_mut() else {
+        let Some(raw_data) = message.raw_data.take() else {
             continue;
         };
 
-        let raw_data = std::mem::take(raw_data);
-
-        match registry.decompress(&raw_data.into(), &codec) {
+        let data = prost::bytes::Bytes::from(raw_data);
+        match registry.decompress(&data, &codec) {
             Ok(decompressed) => {
                 message.raw_data = Some(decompressed.into());
             }
-            Err(err) => {
-                handle_error(strategy, err, message)?;
-            }
+            Err(err) => match strategy {
+                ErrorHandlingStrategy::FailFast => return Err(err),
+                ErrorHandlingStrategy::Skip => {
+                    warn!(
+                        message.offset,
+                        message.seq_no,
+                        ?err,
+                        "decompression failed; keeping original payload"
+                    );
+                    message.raw_data = Some(data.to_vec());
+                    message.decompression_failed = true;
+                }
+            },
         }
     }
 
     Ok(batch)
-}
-
-fn handle_error(
-    strategy: ErrorHandlingStrategy,
-    err: YdbError,
-    message: &mut TopicReaderMessage,
-) -> YdbResult<()> {
-    match strategy {
-        ErrorHandlingStrategy::FailFast => {
-            error!(
-                "decompression failed for message (offset: {}, seq_no: {}), \
-                    dropping message: {}",
-                message.offset, message.seq_no, err
-            );
-
-            Err(err)
-        }
-        ErrorHandlingStrategy::Skip => {
-            warn!(
-                "decompression failed for message (offset: {}, seq_no: {}), \
-                    dropping message: {}",
-                message.offset, message.seq_no, err
-            );
-            message.decompression_failed = true;
-
-            Ok(())
-        }
-    }
 }
