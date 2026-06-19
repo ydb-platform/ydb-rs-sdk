@@ -114,7 +114,7 @@ pub struct TopicReaderMessage {
     // Non-zero only on the last message of a server ReadResponse; carries the
     // response's bytes_size for flow-control (sent back as ReadRequest).
     pub(crate) bytes_to_release: i64,
-    pub(crate) decompression_failed: bool,
+    pub decompression_failed: bool,
 }
 
 impl TopicReaderMessage {
