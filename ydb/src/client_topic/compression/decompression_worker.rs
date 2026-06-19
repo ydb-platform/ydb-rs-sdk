@@ -57,37 +57,57 @@ impl DecompressionWorker {
 fn decompress_batch(
     mut batch: Vec<TopicReaderMessage>,
     codec: Codec,
-    registry: &CodecRegistry,
-    strategy: &ErrorHandlingStrategy,
+    registry: Arc<CodecRegistry>,
+    strategy: ErrorHandlingStrategy,
 ) -> YdbResult<Vec<TopicReaderMessage>> {
     if codec == Codec::RAW {
         return Ok(batch);
     }
 
     for message in batch.iter_mut() {
-        if message.raw_data.is_none() {
+        let Some(raw_data) = message.raw_data.as_mut() else {
             continue;
-        }
-        let data_bytes = Bytes::from(std::mem::take(message.raw_data.as_mut().unwrap()));
-        match registry.decompress(&data_bytes, &codec) {
+        };
+
+        let raw_data = std::mem::take(raw_data);
+
+        match registry.decompress(&raw_data.into(), &codec) {
             Ok(decompressed) => {
-                message.raw_data = Some(decompressed.to_vec());
+                message.raw_data = Some(decompressed.into());
             }
-            Err(err) => match strategy {
-                ErrorHandlingStrategy::FailFast => {
-                    return Err(err);
-                }
-                ErrorHandlingStrategy::Skip => {
-                    warn!(
-                        "decompression failed for message (offset: {}, seq_no: {}), \
-                         dropping message: {}",
-                        message.offset, message.seq_no, err
-                    );
-                    message.decompression_failed = true;
-                }
-            },
+            Err(err) => {
+                handle_error(strategy, err, message)?;
+            }
         }
     }
 
     Ok(batch)
+}
+
+fn handle_error(
+    strategy: ErrorHandlingStrategy,
+    err: YdbError,
+    message: &mut TopicReaderMessage,
+) -> YdbResult<()> {
+    match strategy {
+        ErrorHandlingStrategy::FailFast => {
+            error!(
+                "decompression failed for message (offset: {}, seq_no: {}), \
+                    dropping message: {}",
+                message.offset, message.seq_no, err
+            );
+
+            Err(err)
+        }
+        ErrorHandlingStrategy::Skip => {
+            warn!(
+                "decompression failed for message (offset: {}, seq_no: {}), \
+                    dropping message: {}",
+                message.offset, message.seq_no, err
+            );
+            message.decompression_failed = true;
+
+            Ok(())
+        }
+    }
 }
