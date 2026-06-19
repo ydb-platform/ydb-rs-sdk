@@ -29,7 +29,7 @@ async fn main() -> YdbResult<()> {
         ("StaleRO", QueryTxMode::StaleReadOnly),
         ("OnlineRO", QueryTxMode::OnlineReadOnly),
         (
-            "OnlineInconsistentRO", 
+            "OnlineInconsistentRO",
             QueryTxMode::OnlineReadOnlyInconsistent,
         ),
     ] {
