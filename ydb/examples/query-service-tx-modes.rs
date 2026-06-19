@@ -28,6 +28,7 @@ async fn main() -> YdbResult<()> {
         ("SnapshotRW", QueryTxMode::SnapshotReadWrite),
         ("StaleRO", QueryTxMode::StaleReadOnly),
         ("OnlineRO", QueryTxMode::OnlineReadOnly),
+        ("OnlineInconsistentRO", QueryTxMode::OnlineReadOnlyInconsistent),
     ] {
         match qc.query_row("SELECT 42 AS v").with_tx_mode(mode).await {
             Ok(mut row) => {
