@@ -2,14 +2,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot, Mutex};
-use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{trace, warn};
 
+use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
+use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 use ydb_grpc::ydb_proto::topic::stream_write_message::WriteRequest;
-use ydb_grpc::ydb_proto::topic::{stream_write_message, Codec};
 
+use crate::client_topic::compression::{CompressedGroups, CompressionWorker, Executor};
+use crate::client_topic::list_types::Codec;
 use crate::client_topic::topicwriter::message_write_status::WriteAck;
 use crate::client_topic::topicwriter::queue::Queue;
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
@@ -20,15 +23,8 @@ use crate::{YdbError, YdbResult};
 /// Manages the gRPC stream communications: write loop and receive-messages loop.
 /// Reports error via error_tx.
 pub(crate) struct StreamWriter {
-    write_messages_loop: JoinHandle<()>,
-    receive_messages_loop: JoinHandle<()>,
+    tasks: JoinSet<()>,
     cancellation_token: CancellationToken,
-}
-
-struct WriterLoopParams {
-    write_request_messages_chunk_size: usize,
-    write_request_send_messages_period: Duration,
-    request_stream: mpsc::UnboundedSender<stream_write_message::FromClient>,
 }
 
 impl StreamWriter {
@@ -40,93 +36,129 @@ impl StreamWriter {
         >,
         queue: Queue,
         error_tx: oneshot::Sender<YdbError>,
-    ) -> Self {
+        server_codecs: Vec<Codec>,
+        executor: Arc<dyn Executor>,
+    ) -> YdbResult<Self> {
         let cancellation_token = CancellationToken::new();
 
         // Both loops share the same oneshot error channel.
         let shared_error_tx = Arc::new(Mutex::new(Some(error_tx)));
 
-        let write_messages_loop = tokio::spawn(StreamWriter::write_messages_loop(
+        let worker = CompressionWorker::new(
+            writer_options.codec,
+            writer_options.codec_registry.clone(),
+            writer_options.compression_error_strategy,
+            executor,
+            server_codecs,
+        )?;
+
+        let (batch_tx, batch_rx) = mpsc::unbounded_channel::<Vec<MessageData>>();
+        let (compressed_tx, compressed_rx) =
+            mpsc::unbounded_channel::<YdbResult<CompressedGroups>>();
+
+        let request_stream = stream.clone_sender();
+
+        let mut tasks = JoinSet::new();
+
+        tasks.spawn(StreamWriter::write_messages_loop(
             cancellation_token.clone(),
             shared_error_tx.clone(),
             queue.clone(),
-            WriterLoopParams {
-                write_request_messages_chunk_size: writer_options.write_request_messages_chunk_size,
-                write_request_send_messages_period: writer_options
-                    .write_request_send_messages_period,
-                request_stream: stream.clone_sender(),
-            },
+            writer_options.write_request_messages_chunk_size,
+            writer_options.write_request_send_messages_period,
+            batch_tx,
         ));
 
-        let receive_messages_loop = tokio::spawn(StreamWriter::receive_messages_loop(
+        worker.spawn_into(&mut tasks, batch_rx, compressed_tx);
+
+        tasks.spawn(StreamWriter::grpc_send_loop(
+            cancellation_token.clone(),
+            shared_error_tx.clone(),
+            compressed_rx,
+            request_stream,
+        ));
+
+        tasks.spawn(StreamWriter::receive_messages_loop(
             cancellation_token.clone(),
             shared_error_tx,
-            queue.clone(),
+            queue,
             stream,
         ));
 
-        Self {
-            write_messages_loop,
-            receive_messages_loop,
+        Ok(Self {
+            tasks,
             cancellation_token,
-        }
+        })
     }
 
     async fn write_messages_loop(
         cancellation_token: CancellationToken,
         error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
         queue: Queue,
-        task_params: WriterLoopParams,
+        chunk_size: usize,
+        period: Duration,
+        batch_tx: mpsc::UnboundedSender<Vec<MessageData>>,
     ) {
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => { return; }
-                result = StreamWriter::write_messages_loop_iteration(&queue, &task_params) => {
-                    let Err(write_messages_iteration_error) = result else {
+                messages = queue.get_messages_to_send(chunk_size, period) => {
+                    if messages.is_empty() {
                         continue;
-                    };
-
-                    warn!(
-                        "error sending message in topic writer write_messages_loop: {}",
-                        &write_messages_iteration_error
-                    );
-
-                    if let Err(send_err) = StreamWriter::loop_iteration_error(cancellation_token, error_tx, write_messages_iteration_error).await {
-                        warn!("can't send error from stream writer write_messages_loop: {send_err}");
                     }
-
-                    break;
+                    if batch_tx.send(messages).is_err() {
+                        let err = YdbError::custom("compression worker input channel closed");
+                        warn!("error sending message in topic writer write_messages_loop: {}", &err);
+                        if let Err(send_err) = StreamWriter::loop_iteration_error(cancellation_token, error_tx, err).await {
+                            warn!("can't send error from stream writer write_messages_loop: {send_err}");
+                        }
+                        break;
+                    }
                 }
             }
         }
     }
 
-    async fn write_messages_loop_iteration(
-        queue: &Queue,
-        task_params: &WriterLoopParams,
-    ) -> YdbResult<()> {
-        let messages_to_send = queue
-            .get_messages_to_send(
-                task_params.write_request_messages_chunk_size,
-                task_params.write_request_send_messages_period,
-            )
-            .await;
+    async fn grpc_send_loop(
+        cancellation_token: CancellationToken,
+        error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
+        mut compressed_rx: mpsc::UnboundedReceiver<YdbResult<CompressedGroups>>,
+        request_stream: mpsc::UnboundedSender<stream_write_message::FromClient>,
+    ) {
+        loop {
+            tokio::select! {
+                _ = cancellation_token.cancelled() => { return; }
+                next = compressed_rx.recv() => {
+                    let Some(chunk_result) = next else { return; };
+                    let result = chunk_result.and_then(|groups| {
+                        for (codec, messages) in groups {
+                            if messages.is_empty() {
+                                continue;
+                            }
+                            trace!("sending topic message to grpc stream");
+                            request_stream
+                                .send(stream_write_message::FromClient {
+                                    client_message: Some(ClientMessage::WriteRequest(WriteRequest {
+                                        messages,
+                                        codec: codec.code,
+                                        tx: None,
+                                    })),
+                                })
+                                .map_err(|err| YdbError::Transport(err.to_string()))?;
+                        }
+                        Ok(())
+                    });
 
-        if messages_to_send.is_empty() {
-            return Ok(());
+                    let Err(err) = result else { continue; };
+
+                    warn!("error sending message in topic writer grpc_send_loop: {}", &err);
+                    if let Err(send_err) = StreamWriter::loop_iteration_error(cancellation_token, error_tx, err).await {
+                        warn!("can't send error from stream writer grpc_send_loop: {send_err}");
+                    }
+                    break;
+                }
+            }
         }
-
-        trace!("sending topic message to grpc stream");
-        task_params
-            .request_stream
-            .send(stream_write_message::FromClient {
-                client_message: Some(ClientMessage::WriteRequest(WriteRequest {
-                    messages: messages_to_send,
-                    codec: Codec::Raw as i32,
-                    tx: None,
-                })),
-            })
-            .map_or_else(|err| Err(YdbError::Transport(err.to_string())), |_| Ok(()))
     }
 
     async fn receive_messages_loop(
@@ -206,32 +238,18 @@ impl StreamWriter {
         tx.send(error)
     }
 
-    pub(crate) async fn stop(self) -> YdbResult<()> {
+    pub(crate) async fn stop(mut self) -> YdbResult<()> {
         trace!("stopping...");
 
         self.cancellation_token.cancel();
 
-        let write_messages_loop_result = self.write_messages_loop.await.map_err(|err| {
-            let err = YdbError::custom(format!(
-                "stop: error while waiting for write_messages_loop_result to finish: {err}"
-            ));
-            trace!("{err}");
-            err
-        });
-        trace!("write messages loop stopped");
+        while let Some(join_result) = self.tasks.join_next().await {
+            if let Err(err) = join_result {
+                warn!("stream writer task join error: {err}");
+            }
+        }
 
-        let receive_messages_loop_result = self.receive_messages_loop.await.map_err(|err| {
-            let err = YdbError::custom(format!(
-                "stop: error while waiting for receive_messages_loop to finish: {err}"
-            ));
-            trace!("{err}");
-            err
-        });
-        trace!("receive messages loop stopped");
-
-        write_messages_loop_result?;
-        receive_messages_loop_result?;
-
+        trace!("stream writer stopped");
         Ok(())
     }
 }
