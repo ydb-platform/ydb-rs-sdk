@@ -15,11 +15,9 @@ fn convert_vector_to_bytes(vector: &[f32]) -> Bytes {
     Bytes::from(buf)
 }
 
-async fn drop_vector_table_if_exists(
-    qc: &mut ydb::QueryClient,
-    table_name: &str,
-) -> YdbResult<()> {
-    qc.exec(format!("DROP TABLE IF EXISTS `{table_name}`")).await?;
+async fn drop_vector_table_if_exists(qc: &mut ydb::QueryClient, table_name: &str) -> YdbResult<()> {
+    qc.exec(format!("DROP TABLE IF EXISTS `{table_name}`"))
+        .await?;
     println!("Vector table dropped");
     Ok(())
 }
@@ -51,12 +49,6 @@ async fn insert_items_as_bytes(
 ) -> YdbResult<()> {
     let query = format!(
         r#"
-        DECLARE $items AS List<Struct<
-            id: Utf8,
-            document: Utf8,
-            embedding: String
-        >>;
-
         UPSERT INTO `{table_name}`
         (id, document, embedding)
         SELECT id, document, embedding
@@ -147,8 +139,6 @@ async fn search_items_as_bytes(
 
     let query = format!(
         r#"
-        DECLARE $embedding AS String;
-
         SELECT
             id,
             document,
@@ -184,10 +174,7 @@ fn print_results(items: &[SearchHit]) {
         return;
     }
     for item in items {
-        println!(
-            "[score={}] {}: {}",
-            item.score, item.id, item.document
-        );
+        println!("[score={}] {}: {}", item.score, item.id, item.document);
     }
 }
 
