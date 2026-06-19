@@ -157,10 +157,13 @@ async fn search_items_as_bytes(
     let mut hits = Vec::new();
     while let Some(result_set) = stream.next_result_set().await? {
         for mut row in result_set {
+            let id: Option<String> = row.remove_field_by_name("id")?.try_into()?;
+            let document: Option<String> = row.remove_field_by_name("document")?.try_into()?;
+            let score: Option<f32> = row.remove_field_by_name("score")?.try_into()?;
             hits.push(SearchHit {
-                id: row.remove_field_by_name("id")?.try_into()?,
-                document: row.remove_field_by_name("document")?.try_into()?,
-                score: row.remove_field_by_name("score")?.try_into()?,
+                id: id.unwrap_or_default(),
+                document: document.unwrap_or_default(),
+                score: score.unwrap_or(f32::NAN),
             });
         }
     }
