@@ -1,4 +1,5 @@
 use crate::client_common::{DBCredentials, TokenCache};
+use crate::client_topic::compression::Executor;
 use crate::credentials::{
     credencials_ref, AccessTokenCredentials, CredentialsRef, GCEMetadata,
     ServiceAccountCredentials, StaticCredentials,
@@ -237,6 +238,7 @@ pub struct ClientBuilder {
     discovery_enabled: bool,
     pub cert_path: Option<String>,
     grpc_max_message_size: usize,
+    executor: Option<Arc<dyn Executor>>,
 }
 
 impl ClientBuilder {
@@ -303,7 +305,13 @@ impl ClientBuilder {
             self.grpc_max_message_size,
         );
 
-        Client::new(db_cred, discovery, connection_manager, load_balancer)
+        Client::new(
+            db_cred,
+            discovery,
+            connection_manager,
+            load_balancer,
+            self.executor,
+        )
     }
 
     pub fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
@@ -347,6 +355,13 @@ impl ClientBuilder {
         self
     }
 
+    /// Set the executor used for topic compression / decompression work.
+    /// If unset, `default_executor()` is used.
+    pub fn with_executor(mut self, executor: Arc<dyn Executor>) -> Self {
+        self.executor = Some(executor);
+        self
+    }
+
     fn new() -> Self {
         Self {
             credentials: credencials_ref(AccessTokenCredentials::from("")),
@@ -357,6 +372,7 @@ impl ClientBuilder {
             discovery_enabled: true,
             cert_path: None,
             grpc_max_message_size: DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+            executor: None,
         }
     }
 

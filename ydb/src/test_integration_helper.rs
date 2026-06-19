@@ -1,5 +1,6 @@
 use crate::client::Client;
 use crate::client::TimeoutSettings;
+use crate::client_topic::compression::TokioExecutor;
 use crate::errors::{YdbError, YdbResult};
 use crate::test_helpers::test_custom_ca_client_builder;
 use crate::test_helpers::{test_client_builder, test_with_password_builder};
@@ -17,7 +18,7 @@ use tracing::trace;
 lazy_static! {
     static ref TEST_CLIENT: AsyncOnce<Arc<Client>> = AsyncOnce::new(async {
         trace!("create client");
-        connect().await.unwrap()
+        connect(Arc::new(TokioExecutor::new())).await.unwrap()
     });
 }
 
@@ -26,11 +27,12 @@ pub(crate) async fn create_client() -> YdbResult<Arc<Client>> {
     trace!("get client");
     // https://github.com/ydb-platform/ydb-rs-sdk/issues/92
     // return Ok(TEST_CLIENT.get().await.clone());
-    connect().await
+    connect(Arc::new(TokioExecutor::new())).await
 }
 
-async fn connect() -> YdbResult<Arc<Client>> {
+async fn connect(executor: Arc<dyn crate::Executor>) -> YdbResult<Arc<Client>> {
     let client = test_client_builder()
+        .with_executor(executor)
         .client()
         .unwrap()
         .with_timeouts(TimeoutSettings {

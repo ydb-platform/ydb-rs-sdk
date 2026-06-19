@@ -66,3 +66,25 @@ impl Executor for InplaceExecutor {
         task();
     }
 }
+
+/// Runs each task on `tokio::task::spawn_blocking`. Requires a tokio runtime.
+#[derive(Default)]
+pub struct TokioExecutor {}
+
+impl TokioExecutor {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Executor for TokioExecutor {
+    fn available_parallelism(&self) -> usize {
+        std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+    }
+
+    fn execute(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+        tokio::task::spawn_blocking(task);
+    }
+}

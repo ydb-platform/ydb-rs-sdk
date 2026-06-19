@@ -8,7 +8,8 @@ mod executor;
 mod ordered_task_queue;
 
 pub use codec_registry::CodecRegistry;
-pub use compression_worker::CompressionWorker;
-pub use decompression_worker::DecompressionWorker;
+pub use codec_selector::CodecSelection;
+pub(crate) use compression_worker::{CompressedGroups, CompressionWorker};
+pub(crate) use decompression_worker::DecompressionWorker;
 pub use error_strategy::ErrorHandlingStrategy;
-pub use executor::{default_executor, Executor, InplaceExecutor, RayonExecutor};
+pub use executor::{default_executor, Executor, InplaceExecutor, RayonExecutor, TokioExecutor};

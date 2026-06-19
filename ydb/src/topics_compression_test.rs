@@ -12,7 +12,7 @@ use crate::client_topic::list_types::ConsumerBuilder;
 use crate::test_integration_helper::create_client;
 use crate::ErrorHandlingStrategy;
 use crate::{
-    client_topic::client::CreateTopicOptionsBuilder, Codec, CodecRegistry, RayonExecutor,
+    client_topic::client::CreateTopicOptionsBuilder, Codec, CodecRegistry, CodecSelection,
     TopicReaderOptionsBuilder, TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError,
     YdbResult,
 };
@@ -87,12 +87,12 @@ async fn codec_fail_fast_write() -> YdbResult<()> {
         .await?;
     trace!("topic created");
 
-    let mut writer = topic_client
+    let writer = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
                 .codec_registry(registry.clone())
-                .codec(Codec::INC13)
+                .codec(CodecSelection::Fixed(Codec::INC13))
                 .build()?,
         )
         .await?;
@@ -138,9 +138,6 @@ async fn codec_fail_fast_read() -> YdbResult<()> {
         Ok(data.iter().map(|x| *x - 13).collect())
     };
 
-    // single-threaded to correctly track skipped messages
-    let executor = Arc::new(RayonExecutor::new(1));
-
     let mut registry = CodecRegistry::default();
     registry.register_codec(
         Codec::INC13,
@@ -162,11 +159,11 @@ async fn codec_fail_fast_read() -> YdbResult<()> {
         .await?;
     trace!("topic created");
 
-    let mut writer = topic_client
+    let writer = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
-                .codec(Codec::INC13)
+                .codec(CodecSelection::Fixed(Codec::INC13))
                 .codec_registry(registry.clone())
                 .build()?,
         )
@@ -188,7 +185,6 @@ async fn codec_fail_fast_read() -> YdbResult<()> {
                 .topic(topic_path.clone().into())
                 .consumer(consumer_name)
                 .codec_registry(registry.clone())
-                .compression_executor(executor)
                 .build()?,
         )
         .await?;
@@ -255,9 +251,6 @@ async fn codec_skip_errors() -> YdbResult<()> {
         Ok(data.iter().map(|x| *x - 13).collect())
     };
 
-    // single-threaded to correctly track skipped messages
-    let executor = Arc::new(RayonExecutor::new(1));
-
     let mut registry = CodecRegistry::default();
     registry.register_codec(
         Codec::INC13,
@@ -279,11 +272,11 @@ async fn codec_skip_errors() -> YdbResult<()> {
         .await?;
     trace!("topic created");
 
-    let mut writer = topic_client
+    let writer = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
-                .codec(Codec::INC13)
+                .codec(CodecSelection::Fixed(Codec::INC13))
                 .codec_registry(registry.clone())
                 .compression_error_strategy(ErrorHandlingStrategy::Skip)
                 .build()?,
@@ -291,19 +284,21 @@ async fn codec_skip_errors() -> YdbResult<()> {
         .await?;
     trace!("writer created");
 
-    let mut message_count: usize = 20;
-    let mut expected_messages: Vec<Vec<u8>> = Vec::new();
-    for i in 0..message_count {
+    // Writer Skip: first 4 compress calls fail (cnt < 5), so messages 0..=3 fall
+    // back to RAW. Messages 4..=19 are sent compressed (INC13: data + 13).
+    // Reader Skip: RAW messages bypass the codec; the 16 INC13 messages drive
+    // the reader counter to 16, so 2 of them fail decompression and are marked
+    // with `decompression_failed`. Which 2 fail is non-deterministic because
+    // decompression runs in parallel — the assertion below tolerates that.
+    // For decompression-failed messages, read_and_take() returns the original
+    // (compressed) payload rather than None.
+    let write_count: usize = 20;
+    for i in 0..write_count {
         let data: Vec<u8> = vec![i as u8];
-        if i < 18 {
-            expected_messages.push(data.clone());
-        }
         writer
             .write(TopicWriterMessageBuilder::default().data(data).build()?)
             .await?;
     }
-    message_count -= 2;
-    expected_messages = expected_messages[0..message_count].to_vec();
     writer.stop().await?;
 
     let mut reader = topic_client
@@ -313,26 +308,40 @@ async fn codec_skip_errors() -> YdbResult<()> {
                 .compression_error_strategy(ErrorHandlingStrategy::Skip)
                 .consumer(consumer_name)
                 .codec_registry(registry.clone())
-                .compression_executor(executor)
                 .build()?,
         )
         .await?;
 
-    let mut received_messages: Vec<Vec<u8>> = Vec::new();
-    while received_messages.len() < message_count {
+    let mut received: Vec<(Vec<u8>, bool)> = Vec::new();
+    while received.len() < write_count {
         let batch = timeout(Duration::from_secs(2), reader.read_batch())
             .await
             .map_err(|err| YdbError::custom(format!("timeout waiting reader batch: {err}")))??;
         for mut message in batch.messages {
-            if let Some(data) = message.read_and_take().await? {
-                trace!("got message with {:?}", data);
-                received_messages.push(data);
-            }
+            let data = message
+                .read_and_take()
+                .await?
+                .expect("reader must return original payload");
+            trace!(
+                "got message with {:?}, decompression_failed = {}",
+                data,
+                message.decompression_failed
+            );
+            received.push((data, message.decompression_failed));
         }
     }
 
-    assert_eq!(received_messages.len(), message_count);
-    assert_eq!(received_messages, expected_messages);
+    assert_eq!(received.len(), write_count);
+    let decompression_failed = received.iter().filter(|(_, f)| *f).count();
+    assert_eq!(decompression_failed, 2);
+    for (i, (data, failed)) in received.iter().enumerate() {
+        let expected: Vec<u8> = if *failed {
+            vec![i as u8 + 13]
+        } else {
+            vec![i as u8]
+        };
+        assert_eq!(data, &expected, "message at index {i} mismatch");
+    }
 
     Ok(())
 }
@@ -363,11 +372,11 @@ async fn codec_gzip_roundtrip() -> YdbResult<()> {
         .await?;
     trace!("topic created");
 
-    let mut writer = topic_client
+    let writer = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
-                .codec(Codec::GZIP)
+                .codec(CodecSelection::Fixed(Codec::GZIP))
                 .build()?,
         )
         .await?;
@@ -442,11 +451,11 @@ async fn codec_custom_roundtrip() -> YdbResult<()> {
     )?;
     let registry = Arc::new(registry);
 
-    let mut writer = topic_client
+    let writer = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
-                .codec(Codec::INC13)
+                .codec(CodecSelection::Fixed(Codec::INC13))
                 .codec_registry(registry.clone())
                 .build()?,
         )
@@ -528,13 +537,12 @@ async fn codec_parallelism() -> YdbResult<()> {
         .await?;
     trace!("topic created");
 
-    let mut writer = topic_client
+    let writer = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
-                .codec(Codec::SLOW_INC13)
+                .codec(CodecSelection::Fixed(Codec::SLOW_INC13))
                 .codec_registry(registry.clone())
-                .compression_executor(Arc::new(RayonExecutor::new(8)))
                 .build()?,
         )
         .await?;
@@ -617,7 +625,7 @@ async fn codec_auto() -> YdbResult<()> {
         .await?;
     trace!("topic created");
 
-    let mut writer = topic_client
+    let writer = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())

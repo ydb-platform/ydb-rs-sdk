@@ -10,7 +10,6 @@ use crate::client_topic::topicwriter::writer::TopicWriter;
 use crate::client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
 };
-use crate::errors;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::alter_topic::RawAlterTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
@@ -18,9 +17,11 @@ use crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsum
 use crate::grpc_wrapper::raw_topic_service::describe_topic::RawDescribeTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::drop_topic::RawDropTopicRequest;
 use crate::YdbError::InternalError;
+use crate::{errors, Executor};
 use crate::{grpc_wrapper, YdbResult};
 use derive_builder::{Builder, UninitializedFieldError};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Builder)]
@@ -121,6 +122,7 @@ pub struct TopicClient {
     timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
     token_cache: TokenCache,
+    executor: Arc<dyn Executor>,
 }
 
 impl TopicClient {
@@ -128,11 +130,13 @@ impl TopicClient {
         timeouts: TimeoutSettings,
         connection_manager: GrpcConnectionManager,
         token_cache: TokenCache,
+        executor: Arc<dyn Executor>,
     ) -> Self {
         Self {
             timeouts,
             connection_manager,
             token_cache,
+            executor,
         }
     }
 
@@ -217,6 +221,7 @@ impl TopicClient {
             options,
             self.connection_manager.clone(),
             self.token_cache.clone(),
+            self.executor.clone(),
         )
         .await
     }
@@ -229,6 +234,7 @@ impl TopicClient {
             options,
             self.connection_manager.clone(),
             self.token_cache.clone(),
+            self.executor.clone(),
         )
         .await
     }
@@ -241,7 +247,9 @@ impl TopicClient {
         TopicWriter::new(
             writer_options,
             self.connection_manager.clone(),
-            // currently custom codecs are returned as 0 from InitRequest, so we pass them separately
+            self.executor.clone(),
+            // YDB server collapses custom codec codes to UNSPECIFIED in stream-write
+            // InitResponse, so the supported codec list is fetched via describe_topic instead.
             self.describe_topic(topic_path, DescribeTopicOptionsBuilder::default().build()?)
                 .await?
                 .supported_codecs,
@@ -250,15 +258,21 @@ impl TopicClient {
     }
 
     pub async fn create_writer(&mut self, path: String) -> YdbResult<TopicWriter> {
+        let supported_codecs = self
+            .describe_topic(
+                path.clone(),
+                DescribeTopicOptionsBuilder::default().build()?,
+            )
+            .await?
+            .supported_codecs;
         TopicWriter::new(
             TopicWriterOptionsBuilder::default()
-                .topic_path(path.clone())
+                .topic_path(path)
                 .build()
                 .unwrap(),
             self.connection_manager.clone(),
-            self.describe_topic(path, DescribeTopicOptionsBuilder::default().build()?)
-                .await?
-                .supported_codecs,
+            self.executor.clone(),
+            supported_codecs,
         )
         .await
     }

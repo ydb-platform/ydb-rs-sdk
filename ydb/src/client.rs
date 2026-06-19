@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::client_topic::client::TopicClient;
+use crate::client_topic::compression::{default_executor, Executor};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use tracing::trace;
@@ -24,6 +25,7 @@ pub struct Client {
     discovery: Arc<Box<dyn Discovery>>,
     timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
+    executor: Arc<dyn Executor>,
 }
 
 impl Client {
@@ -32,6 +34,7 @@ impl Client {
         discovery: Arc<Box<dyn Discovery>>,
         connection_manager: GrpcConnectionManager,
         load_balancer: SharedLoadBalancer,
+        executor: Option<Arc<dyn Executor>>,
     ) -> YdbResult<Self> {
         Ok(Client {
             credentials,
@@ -39,6 +42,7 @@ impl Client {
             discovery,
             timeouts: TimeoutSettings::default(),
             connection_manager,
+            executor: executor.unwrap_or_else(default_executor),
         })
     }
 
@@ -71,6 +75,7 @@ impl Client {
             self.timeouts,
             self.connection_manager.clone(),
             self.credentials.token_cache.clone(),
+            self.executor.clone(),
         )
     }
 
