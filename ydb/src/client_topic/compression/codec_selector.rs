@@ -1,11 +1,21 @@
 use crate::client_topic::compression::codec_registry::CodecRegistry;
 use crate::client_topic::list_types::Codec;
-use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::{YdbError, YdbResult};
 use prost::bytes::Bytes;
 use std::sync::Arc;
+use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
 const DEFAULT_MEASURE_INTERVAL: usize = 100;
+
+/// User-facing codec choice for a topic writer.
+/// `Auto` samples each batch and picks the smallest among server-allowed codecs.
+/// `Fixed(c)` pins every WriteRequest to `c`.
+#[derive(Clone, Debug, Default)]
+pub enum CodecSelection {
+    #[default]
+    Auto,
+    Fixed(Codec),
+}
 
 pub enum CodecSelector {
     Fixed(Codec),
@@ -20,13 +30,15 @@ pub enum CodecSelector {
 
 impl CodecSelector {
     pub fn new(
-        user_codec: Option<Codec>,
+        selection: CodecSelection,
         server_codecs: Vec<Codec>,
         codec_registry: Arc<CodecRegistry>,
     ) -> YdbResult<Self> {
-        match user_codec {
-            Some(codec) => {
-                if !server_codecs.contains(&codec) {
+        match selection {
+            CodecSelection::Fixed(codec) => {
+                // Empty server_codecs means "all defaults allowed" — same semantics
+                // as in calculate_allowed_codecs below.
+                if !server_codecs.is_empty() && !server_codecs.contains(&codec) {
                     return Err(YdbError::custom(format!(
                         "codec {:?} is not supported by the topic (supported_codecs: {:?})",
                         codec, server_codecs
@@ -40,7 +52,7 @@ impl CodecSelector {
                 }
                 Ok(Self::Fixed(codec))
             }
-            None => {
+            CodecSelection::Auto => {
                 let allowed = calculate_allowed_codecs(&codec_registry, &server_codecs);
                 if allowed.is_empty() {
                     return Err(YdbError::custom(
@@ -68,7 +80,7 @@ impl CodecSelector {
         }
     }
 
-    pub fn step(&mut self, sample: &[TopicWriterMessage]) {
+    pub fn step(&mut self, sample: &[MessageData]) {
         if let Self::Auto {
             allowed_codecs,
             codec_registry,
@@ -103,7 +115,7 @@ fn calculate_allowed_codecs(registry: &CodecRegistry, server_codecs: &[Codec]) -
 }
 
 fn measure_codecs(
-    sample: &[TopicWriterMessage],
+    sample: &[MessageData],
     codecs: &[Codec],
     registry: &CodecRegistry,
 ) -> Option<Codec> {
