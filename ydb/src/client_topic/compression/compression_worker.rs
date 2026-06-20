@@ -5,7 +5,6 @@ use crate::client_topic::compression::error_strategy::ErrorHandlingStrategy;
 use crate::client_topic::compression::executor::Executor;
 use crate::client_topic::list_types::Codec;
 use crate::{YdbError, YdbResult};
-use prost::bytes::Bytes;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -106,38 +105,66 @@ fn compress_batch(
         return Ok(vec![(codec, batch)]);
     }
 
-    let mut groups: CompressedGroups = Vec::new();
-    for mut message in batch {
-        let data_bytes = Bytes::from(std::mem::take(&mut message.data));
+    let Some(encoder) = registry.get_encoder(codec) else {
+        return process_missing_encoder(batch, codec, strategy);
+    };
 
-        match registry.compress(&data_bytes, &codec) {
-            Ok(compressed) => {
-                message.data = compressed.to_vec();
+    let mut groups: CompressedGroups = Vec::new();
+
+    for mut message in batch.into_iter() {
+        match (encoder.encode(message.data.as_slice()), strategy) {
+            (Ok(compressed), _) => {
+                message.data = compressed;
                 push_to_group(&mut groups, codec, message);
             }
-            Err(err) => match strategy {
-                ErrorHandlingStrategy::FailFast => return Err(err),
-                ErrorHandlingStrategy::Skip => {
-                    warn!(
-                        "compression failed for message (seq_no: {}), falling back to RAW: {}",
-                        message.seq_no, err
-                    );
-                    message.data = data_bytes.to_vec();
-                    push_to_group(&mut groups, Codec::RAW, message);
-                }
-            },
-        }
+
+            (Err(err), ErrorHandlingStrategy::Skip) => {
+                warn!(
+                    ?encoder,
+                    ?err,
+                    message.seq_no,
+                    "failed to encode, pass as RAW message"
+                );
+                push_to_group(&mut groups, Codec::RAW, message);
+            }
+
+            (Err(err), ErrorHandlingStrategy::FailFast) => {
+                return Err(err);
+            }
+        };
     }
 
     Ok(groups)
 }
 
-fn push_to_group(groups: &mut CompressedGroups, codec: Codec, message: MessageData) {
-    if let Some((last_codec, last_messages)) = groups.last_mut() {
-        if *last_codec == codec {
-            last_messages.push(message);
-            return;
+fn process_missing_encoder(
+    batch: Vec<MessageData>,
+    codec: Codec,
+    strategy: ErrorHandlingStrategy,
+) -> ChunkResult {
+    match strategy {
+        ErrorHandlingStrategy::FailFast => Err(YdbError::custom(format!(
+            "no encoder found for codec {}",
+            codec.code
+        ))),
+        ErrorHandlingStrategy::Skip => {
+            warn!(
+                "no encoder found for codec {}, passing raw messages",
+                codec.code
+            );
+            Ok(vec![(Codec::RAW, batch)])
         }
     }
-    groups.push((codec, vec![message]));
+}
+
+fn push_to_group(groups: &mut CompressedGroups, codec: Codec, message: MessageData) {
+    match groups.last_mut() {
+        Some((last_codec, last_messages)) if *last_codec == codec => {
+            last_messages.push(message);
+        }
+
+        _ => {
+            groups.push((codec, vec![message]));
+        }
+    }
 }

@@ -1,15 +1,23 @@
-use crate::client_topic::compression::builtin_codecs::{gzip_compress, gzip_decompress};
-use crate::{Codec, YdbError, YdbResult};
-use prost::bytes::Bytes;
+use crate::client_topic::compression::builtin_codecs::*;
+use crate::{Codec, YdbResult};
 use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
 use std::sync::Arc;
 
-pub type EncoderFunc = Arc<dyn Fn(&Bytes) -> YdbResult<Bytes> + Send + Sync>;
-pub type DecoderFunc = Arc<dyn Fn(&Bytes) -> YdbResult<Bytes> + Send + Sync>;
+pub trait CompressionEncoder: Debug + Send + Sync {
+    fn encode(&self, data: &[u8]) -> YdbResult<Vec<u8>>;
+    fn codec(&self) -> Codec;
+}
+
+pub trait CompressionDecoder: Debug + Send + Sync {
+    fn decode(&self, data: &[u8]) -> YdbResult<Vec<u8>>;
+    fn codec(&self) -> Codec;
+}
 
 #[derive(Clone)]
 pub struct CodecRegistry {
-    funcs: HashMap<Codec, (EncoderFunc, DecoderFunc)>,
+    encoders: HashMap<Codec, Arc<dyn CompressionEncoder>>,
+    decoders: HashMap<Codec, Arc<dyn CompressionDecoder>>,
 }
 
 impl Default for CodecRegistry {
@@ -20,56 +28,45 @@ impl Default for CodecRegistry {
 
 impl CodecRegistry {
     pub fn new() -> Self {
-        let mut funcs: HashMap<Codec, (EncoderFunc, DecoderFunc)> = HashMap::new();
-        funcs.insert(
-            Codec::GZIP,
-            (Arc::new(gzip_compress), Arc::new(gzip_decompress)),
-        );
-        Self { funcs }
+        let mut registry = Self {
+            encoders: HashMap::new(),
+            decoders: HashMap::new(),
+        };
+
+        registry.register_encoder(Arc::new(RawEncoder));
+        registry.register_decoder(Arc::new(RawDecoder));
+
+        registry.register_encoder(Arc::new(GzipEncoder));
+        registry.register_decoder(Arc::new(GzipDecoder));
+
+        registry
     }
 
-    pub fn register_codec(
-        &mut self,
-        codec: Codec,
-        compress: EncoderFunc,
-        decompress: DecoderFunc,
-    ) -> YdbResult<()> {
-        if !codec.is_custom() {
-            return Err(YdbError::custom(format!(
-                "non-custom codec {:?} cannot be registered",
-                codec
-            )));
-        }
-
-        if self.funcs.contains_key(&codec) {
-            return Err(YdbError::custom(format!(
-                "codec {:?} is already registered",
-                codec
-            )));
-        }
-
-        self.funcs.insert(codec, (compress, decompress));
-        Ok(())
+    pub fn register_encoder(&mut self, encoder: Arc<dyn CompressionEncoder>) {
+        let _ = self.encoders.insert(encoder.codec(), encoder);
     }
 
-    fn get_codec(&self, codec: &Codec) -> YdbResult<&(EncoderFunc, DecoderFunc)> {
-        self.funcs
-            .get(codec)
-            .ok_or_else(|| YdbError::custom(format!("unsupported codec {:?}", codec)))
+    pub fn register_decoder(&mut self, decoder: Arc<dyn CompressionDecoder>) {
+        let _ = self.decoders.insert(decoder.codec(), decoder);
     }
 
-    pub fn supported_codecs(&self) -> HashSet<Codec> {
-        let mut codecs = HashSet::new();
-        codecs.insert(Codec::RAW);
-        codecs.extend(self.funcs.keys());
-        codecs
+    pub fn supported_encoders(&self) -> HashSet<Codec> {
+        Self::supported(&self.encoders)
     }
 
-    pub fn compress(&self, data: &Bytes, codec: &Codec) -> YdbResult<Bytes> {
-        self.get_codec(codec).and_then(|(encode, _)| encode(data))
+    pub fn supported_decoders(&self) -> HashSet<Codec> {
+        Self::supported(&self.decoders)
     }
 
-    pub fn decompress(&self, data: &Bytes, codec: &Codec) -> YdbResult<Bytes> {
-        self.get_codec(codec).and_then(|(_, decode)| decode(data))
+    fn supported<T>(container: &HashMap<Codec, T>) -> HashSet<Codec> {
+        container.keys().copied().collect()
+    }
+
+    pub(crate) fn get_encoder(&self, codec: Codec) -> Option<Arc<dyn CompressionEncoder>> {
+        self.encoders.get(&codec).cloned()
+    }
+
+    pub(crate) fn get_decoder(&self, codec: Codec) -> Option<Arc<dyn CompressionDecoder>> {
+        self.decoders.get(&codec).cloned()
     }
 }

@@ -1,7 +1,7 @@
 use crate::client_topic::compression::codec_registry::CodecRegistry;
 use crate::client_topic::list_types::Codec;
 use crate::{YdbError, YdbResult};
-use prost::bytes::Bytes;
+use itertools::Itertools;
 use std::sync::Arc;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
@@ -17,7 +17,7 @@ pub enum CodecSelection {
     Fixed(Codec),
 }
 
-pub enum CodecSelector {
+pub(crate) enum CodecSelector {
     Fixed(Codec),
     Auto {
         allowed_codecs: Vec<Codec>,
@@ -29,7 +29,7 @@ pub enum CodecSelector {
 }
 
 impl CodecSelector {
-    pub fn new(
+    pub(crate) fn new(
         selection: CodecSelection,
         server_codecs: Vec<Codec>,
         codec_registry: Arc<CodecRegistry>,
@@ -44,16 +44,18 @@ impl CodecSelector {
                         codec, server_codecs
                     )));
                 }
-                if codec != Codec::RAW && !codec_registry.supported_codecs().contains(&codec) {
+
+                if !codec_registry.supported_encoders().contains(&codec) {
                     return Err(YdbError::custom(format!(
                         "codec {:?} is not registered in the codec registry",
                         codec
                     )));
                 }
+
                 Ok(Self::Fixed(codec))
             }
             CodecSelection::Auto => {
-                let allowed = calculate_allowed_codecs(&codec_registry, &server_codecs);
+                let allowed = calculate_allowed_codecs(&codec_registry, server_codecs);
                 if allowed.is_empty() {
                     return Err(YdbError::custom(
                         "no common codecs between server and client",
@@ -73,14 +75,14 @@ impl CodecSelector {
         }
     }
 
-    pub fn codec(&self) -> Codec {
+    pub(crate) fn codec(&self) -> Codec {
         match self {
             Self::Fixed(c) => *c,
             Self::Auto { current_codec, .. } => *current_codec,
         }
     }
 
-    pub fn step(&mut self, sample: &[MessageData]) {
+    pub(crate) fn step(&mut self, sample: &[MessageData]) {
         if let Self::Auto {
             allowed_codecs,
             codec_registry,
@@ -99,19 +101,17 @@ impl CodecSelector {
     }
 }
 
-fn calculate_allowed_codecs(registry: &CodecRegistry, server_codecs: &[Codec]) -> Vec<Codec> {
-    let server_list = if server_codecs.is_empty() {
-        vec![Codec::RAW, Codec::GZIP]
+fn calculate_allowed_codecs(registry: &CodecRegistry, server_codecs: Vec<Codec>) -> Vec<Codec> {
+    let server_encoders = if server_codecs.is_empty() {
+        CodecRegistry::default().supported_encoders()
     } else {
-        server_codecs.to_vec()
+        server_codecs.into_iter().collect()
     };
 
-    let supported = registry.supported_codecs();
-
-    server_list
-        .into_iter()
-        .filter(|c| supported.contains(c))
-        .collect()
+    server_encoders
+        .intersection(&registry.supported_encoders())
+        .copied()
+        .collect_vec()
 }
 
 fn measure_codecs(
@@ -126,24 +126,22 @@ fn measure_codecs(
     let mut best_codec = None;
     let mut best_size = usize::MAX;
 
-    for &codec in codecs {
+    'codecs: for &codec in codecs {
         let total_size: usize = if codec == Codec::RAW {
             sample.iter().map(|m| m.data.len()).sum()
         } else {
+            let Some(encoder) = registry.get_encoder(codec) else {
+                continue 'codecs;
+            };
+
             let mut size = 0;
-            let mut failed = false;
             for msg in sample {
-                match registry.compress(&Bytes::copy_from_slice(&msg.data), &codec) {
+                match encoder.encode(&msg.data) {
                     Ok(compressed) => size += compressed.len(),
-                    Err(_) => {
-                        failed = true;
-                        break;
-                    }
+                    Err(_) => continue 'codecs,
                 }
             }
-            if failed {
-                continue; // skip codecs that fail to compress
-            }
+
             size
         };
 

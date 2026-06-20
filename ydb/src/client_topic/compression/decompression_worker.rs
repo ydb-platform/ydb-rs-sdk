@@ -122,31 +122,56 @@ fn decompress_batch(
         return Ok(batch);
     }
 
+    let Some(decoder) = registry.get_decoder(codec) else {
+        return process_missing_decoder(batch, codec, strategy);
+    };
+
     for message in batch.iter_mut() {
-        let Some(raw_data) = message.raw_data.take() else {
+        let Some(raw_data) = message.raw_data.as_ref() else {
             continue;
         };
 
-        let data = prost::bytes::Bytes::from(raw_data);
-        match registry.decompress(&data, &codec) {
-            Ok(decompressed) => {
-                message.raw_data = Some(decompressed.into());
+        match (decoder.decode(raw_data.as_slice()), strategy) {
+            (Ok(decompressed), _) => {
+                message.raw_data = Some(decompressed);
             }
-            Err(err) => match strategy {
-                ErrorHandlingStrategy::FailFast => return Err(err),
-                ErrorHandlingStrategy::Skip => {
-                    warn!(
-                        message.offset,
-                        message.seq_no,
-                        ?err,
-                        "decompression failed; keeping original payload"
-                    );
-                    message.raw_data = Some(data.to_vec());
-                    message.decompression_failed = true;
-                }
-            },
+
+            (Err(err), ErrorHandlingStrategy::Skip) => {
+                warn!(
+                    ?decoder,
+                    ?err,
+                    message.seq_no,
+                    message.offset,
+                    "decoder failed, kepp original payload"
+                );
+                message.decompression_failed = true;
+            }
+
+            (Err(err), ErrorHandlingStrategy::FailFast) => {
+                return Err(err);
+            }
         }
     }
 
     Ok(batch)
+}
+
+fn process_missing_decoder(
+    batch: Vec<TopicReaderMessage>,
+    codec: Codec,
+    strategy: ErrorHandlingStrategy,
+) -> YdbResult<Vec<TopicReaderMessage>> {
+    match strategy {
+        ErrorHandlingStrategy::FailFast => Err(YdbError::custom(format!(
+            "no encoder found for codec {}",
+            codec.code
+        ))),
+        ErrorHandlingStrategy::Skip => {
+            warn!(
+                "no encoder found for codec {}, passing raw messages",
+                codec.code
+            );
+            Ok(batch)
+        }
+    }
 }

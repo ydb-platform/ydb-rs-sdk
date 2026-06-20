@@ -1,13 +1,13 @@
 mod mock_server;
 
-use prost::bytes::Bytes;
+use flate2::{write::GzEncoder, Compression};
+use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
 use tokio::sync::Notify;
 use ydb::{
-    ClientBuilder, Codec, CodecRegistry, TopicReader, TopicReaderBatch, TopicReaderCommitMarker,
-    YdbResult,
+    ClientBuilder, Codec, TopicReader, TopicReaderBatch, TopicReaderCommitMarker, YdbResult,
 };
 use ydb_grpc::ydb_proto::topic::stream_read_message::from_client::ClientMessage as ReadFromClient;
 
@@ -201,9 +201,9 @@ topic_test!(reads_gzip_message, timeout_secs = 1, {
     driver.state.partition_ready.notified().await;
 
     let payload = b"hello gzip";
-    let compressed = CodecRegistry::default()
-        .compress(&Bytes::copy_from_slice(payload), &Codec::GZIP)?
-        .to_vec();
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(payload)?;
+    let compressed = encoder.finish()?;
     driver.send_read_response_with_codec(0, payload.len() as i64, compressed, Codec::GZIP);
 
     let batch = reader.read_batch().await?;

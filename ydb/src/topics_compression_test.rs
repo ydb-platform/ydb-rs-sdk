@@ -1,4 +1,4 @@
-use prost::bytes::Bytes;
+use std::fmt;
 use std::sync::Arc;
 use std::thread;
 use std::time;
@@ -13,8 +13,8 @@ use crate::test_integration_helper::create_client;
 use crate::ErrorHandlingStrategy;
 use crate::{
     client_topic::client::CreateTopicOptionsBuilder, Codec, CodecRegistry, CodecSelection,
-    TopicReaderOptionsBuilder, TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError,
-    YdbResult,
+    CompressionDecoder, CompressionEncoder, TopicReaderOptionsBuilder, TopicWriterMessageBuilder,
+    TopicWriterOptionsBuilder, YdbError, YdbResult,
 };
 use tracing::trace;
 
@@ -24,20 +24,81 @@ impl Codec {
     pub const FAILY: Codec = Codec { code: 10003 };
 }
 
-fn inc13_compress(data: &Bytes) -> YdbResult<Bytes> {
+struct TestEncoder<F> {
+    codec: Codec,
+    encode: F,
+}
+
+impl<F> fmt::Debug for TestEncoder<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TestEncoder")
+            .field("codec", &self.codec)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<F> CompressionEncoder for TestEncoder<F>
+where
+    F: Fn(&[u8]) -> YdbResult<Vec<u8>> + Send + Sync,
+{
+    fn encode(&self, data: &[u8]) -> YdbResult<Vec<u8>> {
+        (self.encode)(data)
+    }
+
+    fn codec(&self) -> Codec {
+        self.codec
+    }
+}
+
+struct TestDecoder<F> {
+    codec: Codec,
+    decode: F,
+}
+
+impl<F> fmt::Debug for TestDecoder<F> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TestDecoder")
+            .field("codec", &self.codec)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<F> CompressionDecoder for TestDecoder<F>
+where
+    F: Fn(&[u8]) -> YdbResult<Vec<u8>> + Send + Sync,
+{
+    fn decode(&self, data: &[u8]) -> YdbResult<Vec<u8>> {
+        (self.decode)(data)
+    }
+
+    fn codec(&self) -> Codec {
+        self.codec
+    }
+}
+
+fn register_codec<E, D>(registry: &mut CodecRegistry, codec: Codec, encode: E, decode: D)
+where
+    E: Fn(&[u8]) -> YdbResult<Vec<u8>> + Send + Sync + 'static,
+    D: Fn(&[u8]) -> YdbResult<Vec<u8>> + Send + Sync + 'static,
+{
+    registry.register_encoder(Arc::new(TestEncoder { codec, encode }));
+    registry.register_decoder(Arc::new(TestDecoder { codec, decode }));
+}
+
+fn inc13_compress(data: &[u8]) -> YdbResult<Vec<u8>> {
     Ok(data.iter().map(|x| ((*x as i32) + 13) as u8).collect())
 }
 
-fn inc13_decompress(data: &Bytes) -> YdbResult<Bytes> {
+fn inc13_decompress(data: &[u8]) -> YdbResult<Vec<u8>> {
     Ok(data.iter().map(|x| ((*x as i32) - 13) as u8).collect())
 }
 
-fn slow_inc13_compress(data: &Bytes) -> YdbResult<Bytes> {
+fn slow_inc13_compress(data: &[u8]) -> YdbResult<Vec<u8>> {
     thread::sleep(time::Duration::from_secs(1));
     inc13_compress(data)
 }
 
-fn slow_inc13_decompress(data: &Bytes) -> YdbResult<Bytes> {
+fn slow_inc13_decompress(data: &[u8]) -> YdbResult<Vec<u8>> {
     thread::sleep(time::Duration::from_secs(1));
     inc13_decompress(data)
 }
@@ -58,7 +119,7 @@ async fn codec_fail_fast_write() -> YdbResult<()> {
 
     // Codec that fails first 5 iterations
     let counter = Arc::new(AtomicI64::new(0));
-    let faily_inc13_compress = move |data: &Bytes| -> YdbResult<Bytes> {
+    let faily_inc13_compress = move |data: &[u8]| -> YdbResult<Vec<u8>> {
         if counter.fetch_add(1, Ordering::Relaxed) < 5 {
             return Err(YdbError::from_str("failing for compression testing"));
         }
@@ -66,11 +127,12 @@ async fn codec_fail_fast_write() -> YdbResult<()> {
     };
 
     let mut registry = CodecRegistry::default();
-    registry.register_codec(
+    register_codec(
+        &mut registry,
         Codec::INC13,
-        Arc::new(faily_inc13_compress),
-        Arc::new(inc13_decompress),
-    )?;
+        faily_inc13_compress,
+        inc13_decompress,
+    );
     let registry = Arc::new(registry);
     trace!("codec registry created");
 
@@ -129,7 +191,7 @@ async fn codec_fail_fast_read() -> YdbResult<()> {
     trace!("previous topic removed");
 
     let other_counter = Arc::new(std::sync::Mutex::new(0));
-    let faily_inc13_decompress = move |data: &Bytes| -> YdbResult<Bytes> {
+    let faily_inc13_decompress = move |data: &[u8]| -> YdbResult<Vec<u8>> {
         let mut cnt = other_counter.lock()?;
         *cnt += 1;
         if *cnt == 20 {
@@ -139,11 +201,12 @@ async fn codec_fail_fast_read() -> YdbResult<()> {
     };
 
     let mut registry = CodecRegistry::default();
-    registry.register_codec(
+    register_codec(
+        &mut registry,
         Codec::INC13,
-        Arc::new(inc13_compress),
-        Arc::new(faily_inc13_decompress),
-    )?;
+        inc13_compress,
+        faily_inc13_decompress,
+    );
     let registry = Arc::new(registry);
 
     topic_client
@@ -231,7 +294,7 @@ async fn codec_skip_errors() -> YdbResult<()> {
     trace!("previous topic removed");
 
     let counter = Arc::new(std::sync::Mutex::new(0));
-    let faily_inc13_compress = move |data: &Bytes| -> YdbResult<Bytes> {
+    let faily_inc13_compress = move |data: &[u8]| -> YdbResult<Vec<u8>> {
         let mut cnt = counter.lock()?;
         *cnt += 1;
         if *cnt < 5 {
@@ -241,7 +304,7 @@ async fn codec_skip_errors() -> YdbResult<()> {
     };
 
     let other_counter = Arc::new(std::sync::Mutex::new(0));
-    let faily_inc13_decompress = move |data: &Bytes| -> YdbResult<Bytes> {
+    let faily_inc13_decompress = move |data: &[u8]| -> YdbResult<Vec<u8>> {
         let mut cnt = other_counter.lock()?;
         *cnt += 1;
         if *cnt > 14 {
@@ -252,11 +315,12 @@ async fn codec_skip_errors() -> YdbResult<()> {
     };
 
     let mut registry = CodecRegistry::default();
-    registry.register_codec(
+    register_codec(
+        &mut registry,
         Codec::INC13,
-        Arc::new(faily_inc13_compress),
-        Arc::new(faily_inc13_decompress),
-    )?;
+        faily_inc13_compress,
+        faily_inc13_decompress,
+    );
     let registry = Arc::new(registry);
 
     topic_client
@@ -444,11 +508,12 @@ async fn codec_custom_roundtrip() -> YdbResult<()> {
     trace!("topic created");
 
     let mut registry = CodecRegistry::default();
-    registry.register_codec(
+    register_codec(
+        &mut registry,
         Codec::INC13,
-        Arc::new(inc13_compress),
-        Arc::new(inc13_decompress),
-    )?;
+        inc13_compress,
+        inc13_decompress,
+    );
     let registry = Arc::new(registry);
 
     let writer = topic_client
@@ -517,11 +582,12 @@ async fn codec_parallelism() -> YdbResult<()> {
     trace!("previous topic removed");
 
     let mut registry = CodecRegistry::default();
-    registry.register_codec(
+    register_codec(
+        &mut registry,
         Codec::SLOW_INC13,
-        Arc::new(slow_inc13_compress),
-        Arc::new(slow_inc13_decompress),
-    )?;
+        slow_inc13_compress,
+        slow_inc13_decompress,
+    );
     let registry = Arc::new(registry);
 
     topic_client
@@ -605,11 +671,12 @@ async fn codec_auto() -> YdbResult<()> {
     trace!("previous topic removed");
 
     let mut registry = CodecRegistry::default();
-    registry.register_codec(
+    register_codec(
+        &mut registry,
         Codec::INC13,
-        Arc::new(inc13_compress),
-        Arc::new(inc13_decompress),
-    )?;
+        inc13_compress,
+        inc13_decompress,
+    );
     let registry = Arc::new(registry);
 
     topic_client
