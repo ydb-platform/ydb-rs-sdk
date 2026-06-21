@@ -4,7 +4,7 @@ use crate::client_topic::compression::error_strategy::ErrorHandlingStrategy;
 use crate::client_topic::compression::executor::Executor;
 use crate::client_topic::list_types::Codec;
 use crate::{TopicReaderMessage, YdbError, YdbResult};
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -19,7 +19,7 @@ pub(crate) struct DecompressionWorker {
     error_strategy: ErrorHandlingStrategy,
     queue: OrderedTaskQueue<Vec<TopicReaderMessage>>,
     results_rx: ordered_task_queue::TaskResultRx<Vec<TopicReaderMessage>>,
-    parallelism: usize,
+    parallelism: NonZeroUsize,
 }
 
 impl DecompressionWorker {
@@ -28,8 +28,9 @@ impl DecompressionWorker {
         error_strategy: ErrorHandlingStrategy,
         executor: Arc<dyn Executor>,
     ) -> Self {
-        let parallelism = executor.available_parallelism().max(1);
-        let (queue, results_rx) = OrderedTaskQueue::new(executor, parallelism);
+        let parallelism = executor.available_parallelism();
+        let output_backlog = parallelism.saturating_mul(super::OUTPUT_BACKLOG_PER_TASK);
+        let (queue, results_rx) = OrderedTaskQueue::new(executor, parallelism, output_backlog);
 
         Self {
             codec_registry,
@@ -65,7 +66,8 @@ impl DecompressionWorker {
                     return;
                 };
 
-                let chunk_size = (batch.len() / parallelism).max(1);
+                let chunk_size =
+                    (batch.len() / parallelism.get()).clamp(1, super::MAX_MESSAGES_PER_CHUNK);
 
                 let mut batch_iter = batch.into_iter();
                 loop {
