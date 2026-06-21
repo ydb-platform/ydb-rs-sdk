@@ -241,6 +241,7 @@ async fn codec_fail_fast_read() -> YdbResult<()> {
         .await?;
 
     let mut received_messages: Vec<Vec<u8>> = Vec::new();
+    let mut read_error = None;
     while received_messages.len() < message_count {
         let batch = timeout(Duration::from_secs(5), reader.read_batch())
             .await
@@ -257,12 +258,16 @@ async fn codec_fail_fast_read() -> YdbResult<()> {
             }
             Err(err) => {
                 trace!("got error reading batch {}", err);
+                read_error = Some(err);
                 break;
             }
         }
     }
 
-    assert!(received_messages.len() < message_count);
+    let Some(err) = read_error else {
+        return Err(YdbError::custom("expected fail fast reader error"));
+    };
+    trace!("got expected fail fast reader error: {err}");
 
     Ok(())
 }
