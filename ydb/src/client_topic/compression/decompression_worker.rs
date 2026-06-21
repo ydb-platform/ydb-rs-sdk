@@ -1,7 +1,6 @@
 use super::ordered_task_queue::{self, OrderedTaskQueue};
 use crate::client_topic::compression::codec_registry::CodecRegistry;
-use crate::client_topic::compression::error_strategy::ErrorHandlingStrategy;
-use crate::client_topic::compression::executor::Executor;
+use crate::client_topic::compression::executor::{ErrorHandlingStrategy, Executor};
 use crate::client_topic::list_types::Codec;
 use crate::{TopicReaderMessage, YdbError, YdbResult};
 use std::{num::NonZeroUsize, sync::Arc};

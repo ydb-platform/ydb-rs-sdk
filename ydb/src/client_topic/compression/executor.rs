@@ -1,11 +1,17 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ErrorHandlingStrategy {
+    FailFast,
+    Skip,
+}
+
 pub trait Executor: Send + Sync {
     /// Returns an estimate amount of parallelism an executor should use.
     fn available_parallelism(&self) -> NonZeroUsize;
 
-    /// Submits a task for execution. Fire-and-forget.
-    fn execute(&self, task: Box<dyn FnOnce() + Send + 'static>);
+    /// Spawns a task for execution. Fire-and-forget.
+    fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>);
 }
 
 pub struct RayonExecutor {
@@ -37,7 +43,7 @@ impl Executor for RayonExecutor {
             .unwrap_or(const { NonZeroUsize::new(1).unwrap() })
     }
 
-    fn execute(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+    fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>) {
         self.pool.spawn(task);
     }
 }
@@ -60,7 +66,7 @@ impl Executor for InplaceExecutor {
         const { NonZeroUsize::new(1).unwrap() }
     }
 
-    fn execute(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+    fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>) {
         task();
     }
 }
@@ -80,7 +86,7 @@ impl Executor for TokioExecutor {
         std::thread::available_parallelism().unwrap_or(const { NonZeroUsize::new(1).unwrap() })
     }
 
-    fn execute(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+    fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>) {
         tokio::task::spawn_blocking(task);
     }
 }

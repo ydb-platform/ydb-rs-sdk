@@ -48,7 +48,7 @@ impl<T: Send + 'static> OrderedTaskQueue<T> {
             return;
         }
 
-        self.executor.execute(Box::new(move || {
+        self.executor.spawn(Box::new(move || {
             let result = task();
             drop(task_permit);
             let _ = tx.send(result);
