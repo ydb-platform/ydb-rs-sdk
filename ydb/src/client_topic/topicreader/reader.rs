@@ -1,5 +1,5 @@
 use crate::client_common::TokenCache;
-use crate::client_topic::compression::{DecompressionWorker, Executor};
+use crate::client_topic::compression::{CodecRegistry, DecompressionWorker, Executor};
 use crate::client_topic::topicreader::cancelation_token::YdbCancellationToken;
 use crate::client_topic::topicreader::messages::{TopicReaderBatch, TopicReaderMessage};
 use crate::client_topic::topicreader::partition_state::PartitionSession;
@@ -486,8 +486,13 @@ impl StreamReader {
             topic_service,
         };
 
+        let mut codec_registry = CodecRegistry::new();
+        for dec in &context.options.custom_decoders {
+            codec_registry.register_decoder(dec.clone());
+        }
+
         let worker = DecompressionWorker::new(
-            context.options.codec_registry.clone(),
+            Arc::new(codec_registry),
             context.options.compression_error_strategy,
             context.compression_executor.clone(),
         );

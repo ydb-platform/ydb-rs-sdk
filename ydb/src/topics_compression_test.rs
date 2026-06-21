@@ -12,8 +12,8 @@ use crate::client_topic::list_types::ConsumerBuilder;
 use crate::test_integration_helper::create_client;
 use crate::ErrorHandlingStrategy;
 use crate::{
-    client_topic::client::CreateTopicOptionsBuilder, Codec, CodecRegistry, CodecSelection,
-    CompressionDecoder, CompressionEncoder, TopicReaderOptionsBuilder, TopicWriterMessageBuilder,
+    client_topic::client::CreateTopicOptionsBuilder, Codec, CodecSelection, CompressionDecoder,
+    CompressionEncoder, TopicReaderOptionsBuilder, TopicWriterMessageBuilder,
     TopicWriterOptionsBuilder, YdbError, YdbResult,
 };
 use tracing::trace;
@@ -76,13 +76,18 @@ where
     }
 }
 
-fn register_codec<E, D>(registry: &mut CodecRegistry, codec: Codec, encode: E, decode: D)
+fn encoder<F>(codec: Codec, encode: F) -> Arc<dyn CompressionEncoder>
 where
-    E: Fn(&[u8]) -> YdbResult<Vec<u8>> + Send + Sync + 'static,
-    D: Fn(&[u8]) -> YdbResult<Vec<u8>> + Send + Sync + 'static,
+    F: Fn(&[u8]) -> YdbResult<Vec<u8>> + Send + Sync + 'static,
 {
-    registry.register_encoder(Arc::new(TestEncoder { codec, encode }));
-    registry.register_decoder(Arc::new(TestDecoder { codec, decode }));
+    Arc::new(TestEncoder { codec, encode })
+}
+
+fn decoder<F>(codec: Codec, decode: F) -> Arc<dyn CompressionDecoder>
+where
+    F: Fn(&[u8]) -> YdbResult<Vec<u8>> + Send + Sync + 'static,
+{
+    Arc::new(TestDecoder { codec, decode })
 }
 
 fn inc13_compress(data: &[u8]) -> YdbResult<Vec<u8>> {
@@ -126,14 +131,6 @@ async fn codec_fail_fast_write() -> YdbResult<()> {
         Ok(data.iter().map(|x| *x + 13).collect())
     };
 
-    let mut registry = CodecRegistry::default();
-    register_codec(
-        &mut registry,
-        Codec::INC13,
-        faily_inc13_compress,
-        inc13_decompress,
-    );
-    let registry = Arc::new(registry);
     trace!("codec registry created");
 
     topic_client
@@ -153,7 +150,7 @@ async fn codec_fail_fast_write() -> YdbResult<()> {
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
-                .codec_registry(registry.clone())
+                .custom_encoders(vec![encoder(Codec::INC13, faily_inc13_compress)])
                 .codec(CodecSelection::Fixed(Codec::INC13))
                 .build()?,
         )
@@ -200,15 +197,6 @@ async fn codec_fail_fast_read() -> YdbResult<()> {
         Ok(data.iter().map(|x| *x - 13).collect())
     };
 
-    let mut registry = CodecRegistry::default();
-    register_codec(
-        &mut registry,
-        Codec::INC13,
-        inc13_compress,
-        faily_inc13_decompress,
-    );
-    let registry = Arc::new(registry);
-
     topic_client
         .create_topic(
             topic_path.clone(),
@@ -227,7 +215,7 @@ async fn codec_fail_fast_read() -> YdbResult<()> {
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
                 .codec(CodecSelection::Fixed(Codec::INC13))
-                .codec_registry(registry.clone())
+                .custom_encoders(vec![encoder(Codec::INC13, inc13_compress)])
                 .build()?,
         )
         .await?;
@@ -247,7 +235,7 @@ async fn codec_fail_fast_read() -> YdbResult<()> {
             TopicReaderOptionsBuilder::default()
                 .topic(topic_path.clone().into())
                 .consumer(consumer_name)
-                .codec_registry(registry.clone())
+                .custom_decoders(vec![decoder(Codec::INC13, faily_inc13_decompress)])
                 .build()?,
         )
         .await?;
@@ -314,15 +302,6 @@ async fn codec_skip_errors() -> YdbResult<()> {
         Ok(data.iter().map(|x| *x - 13).collect())
     };
 
-    let mut registry = CodecRegistry::default();
-    register_codec(
-        &mut registry,
-        Codec::INC13,
-        faily_inc13_compress,
-        faily_inc13_decompress,
-    );
-    let registry = Arc::new(registry);
-
     topic_client
         .create_topic(
             topic_path.clone(),
@@ -341,7 +320,7 @@ async fn codec_skip_errors() -> YdbResult<()> {
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
                 .codec(CodecSelection::Fixed(Codec::INC13))
-                .codec_registry(registry.clone())
+                .custom_encoders(vec![encoder(Codec::INC13, faily_inc13_compress)])
                 .compression_error_strategy(ErrorHandlingStrategy::Skip)
                 .build()?,
         )
@@ -371,7 +350,7 @@ async fn codec_skip_errors() -> YdbResult<()> {
                 .topic(topic_path.clone().into())
                 .compression_error_strategy(ErrorHandlingStrategy::Skip)
                 .consumer(consumer_name)
-                .codec_registry(registry.clone())
+                .custom_decoders(vec![decoder(Codec::INC13, faily_inc13_decompress)])
                 .build()?,
         )
         .await?;
@@ -507,21 +486,12 @@ async fn codec_custom_roundtrip() -> YdbResult<()> {
         .await?;
     trace!("topic created");
 
-    let mut registry = CodecRegistry::default();
-    register_codec(
-        &mut registry,
-        Codec::INC13,
-        inc13_compress,
-        inc13_decompress,
-    );
-    let registry = Arc::new(registry);
-
     let writer = topic_client
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
                 .codec(CodecSelection::Fixed(Codec::INC13))
-                .codec_registry(registry.clone())
+                .custom_encoders(vec![encoder(Codec::INC13, inc13_compress)])
                 .build()?,
         )
         .await?;
@@ -544,7 +514,7 @@ async fn codec_custom_roundtrip() -> YdbResult<()> {
             TopicReaderOptionsBuilder::default()
                 .topic(topic_path.clone().into())
                 .consumer(consumer_name)
-                .codec_registry(registry.clone())
+                .custom_decoders(vec![decoder(Codec::INC13, inc13_decompress)])
                 .build()?,
         )
         .await?;
@@ -581,15 +551,6 @@ async fn codec_parallelism() -> YdbResult<()> {
     let _ = topic_client.drop_topic(topic_path.clone()).await; // ignoring error
     trace!("previous topic removed");
 
-    let mut registry = CodecRegistry::default();
-    register_codec(
-        &mut registry,
-        Codec::SLOW_INC13,
-        slow_inc13_compress,
-        slow_inc13_decompress,
-    );
-    let registry = Arc::new(registry);
-
     topic_client
         .create_topic(
             topic_path.clone(),
@@ -608,7 +569,7 @@ async fn codec_parallelism() -> YdbResult<()> {
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
                 .codec(CodecSelection::Fixed(Codec::SLOW_INC13))
-                .codec_registry(registry.clone())
+                .custom_encoders(vec![encoder(Codec::SLOW_INC13, slow_inc13_compress)])
                 .build()?,
         )
         .await?;
@@ -633,7 +594,7 @@ async fn codec_parallelism() -> YdbResult<()> {
             TopicReaderOptionsBuilder::default()
                 .topic(topic_path.clone().into())
                 .consumer(consumer_name)
-                .codec_registry(registry.clone())
+                .custom_decoders(vec![decoder(Codec::SLOW_INC13, slow_inc13_decompress)])
                 .build()?,
         )
         .await?;
@@ -670,15 +631,6 @@ async fn codec_auto() -> YdbResult<()> {
     let _ = topic_client.drop_topic(topic_path.clone()).await; // ignoring error
     trace!("previous topic removed");
 
-    let mut registry = CodecRegistry::default();
-    register_codec(
-        &mut registry,
-        Codec::INC13,
-        inc13_compress,
-        inc13_decompress,
-    );
-    let registry = Arc::new(registry);
-
     topic_client
         .create_topic(
             topic_path.clone(),
@@ -696,7 +648,7 @@ async fn codec_auto() -> YdbResult<()> {
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
-                .codec_registry(registry.clone())
+                .custom_encoders(vec![encoder(Codec::INC13, inc13_compress)])
                 .build()?,
         )
         .await?;
@@ -724,7 +676,7 @@ async fn codec_auto() -> YdbResult<()> {
             TopicReaderOptionsBuilder::default()
                 .topic(topic_path.clone().into())
                 .consumer(consumer_name)
-                .codec_registry(registry.clone())
+                .custom_decoders(vec![decoder(Codec::INC13, inc13_decompress)])
                 .build()?,
         )
         .await?;

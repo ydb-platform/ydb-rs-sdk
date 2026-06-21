@@ -11,7 +11,9 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 use ydb_grpc::ydb_proto::topic::stream_write_message::WriteRequest;
 
-use crate::client_topic::compression::{CompressedGroups, CompressionWorker, Executor};
+use crate::client_topic::compression::{
+    CodecRegistry, CompressedGroups, CompressionWorker, Executor,
+};
 use crate::client_topic::list_types::Codec;
 use crate::client_topic::topicwriter::message_write_status::WriteAck;
 use crate::client_topic::topicwriter::queue::Queue;
@@ -44,9 +46,14 @@ impl StreamWriter {
         // Both loops share the same oneshot error channel.
         let shared_error_tx = Arc::new(Mutex::new(Some(error_tx)));
 
+        let mut codec_registry = CodecRegistry::new();
+        for enc in &writer_options.custom_encoders {
+            codec_registry.register_encoder(enc.clone());
+        }
+
         let worker = CompressionWorker::new(
             writer_options.codec,
-            writer_options.codec_registry.clone(),
+            Arc::new(codec_registry),
             writer_options.compression_error_strategy,
             executor,
             server_codecs,

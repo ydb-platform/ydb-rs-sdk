@@ -15,7 +15,7 @@ pub trait CompressionDecoder: Debug + Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct CodecRegistry {
+pub(crate) struct CodecRegistry {
     encoders: HashMap<Codec, Arc<dyn CompressionEncoder>>,
     decoders: HashMap<Codec, Arc<dyn CompressionDecoder>>,
 }
@@ -27,7 +27,7 @@ impl Default for CodecRegistry {
 }
 
 impl CodecRegistry {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut registry = Self {
             encoders: HashMap::new(),
             decoders: HashMap::new(),
@@ -42,20 +42,16 @@ impl CodecRegistry {
         registry
     }
 
-    pub fn register_encoder(&mut self, encoder: Arc<dyn CompressionEncoder>) {
+    pub(crate) fn register_encoder(&mut self, encoder: Arc<dyn CompressionEncoder>) {
         let _ = self.encoders.insert(encoder.codec(), encoder);
     }
 
-    pub fn register_decoder(&mut self, decoder: Arc<dyn CompressionDecoder>) {
+    pub(crate) fn register_decoder(&mut self, decoder: Arc<dyn CompressionDecoder>) {
         let _ = self.decoders.insert(decoder.codec(), decoder);
     }
 
-    pub fn supported_encoders(&self) -> HashSet<Codec> {
+    pub(crate) fn supported_encoders(&self) -> HashSet<Codec> {
         Self::supported(&self.encoders)
-    }
-
-    pub fn supported_decoders(&self) -> HashSet<Codec> {
-        Self::supported(&self.decoders)
     }
 
     fn supported<T>(container: &HashMap<Codec, T>) -> HashSet<Codec> {

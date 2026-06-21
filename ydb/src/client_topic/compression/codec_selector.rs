@@ -16,12 +16,12 @@ pub enum CodecSelection {
     Fixed(Codec),
 }
 
-pub(crate) enum CodecSelector {
+pub(super) enum CodecSelector {
     Fixed(Codec),
     Auto(AutoSelectorState),
 }
 
-pub(crate) struct AutoSelectorState {
+pub(super) struct AutoSelectorState {
     accepted_encoders: Vec<Arc<dyn CompressionEncoder>>,
     batch_counter: usize,
     current_codec: Codec,
@@ -34,26 +34,23 @@ impl CodecSelector {
     /// Fixed selection pins one codec. Auto selection stores topic-accepted
     /// encoders and periodically measures them against message samples.
     ///
-    /// Empty `server_codecs` means the topic accepts SDK defaults from
-    /// `CodecRegistry::default()`.
+    /// Normalizes topic codec metadata before selection. Empty codec metadata
+    /// falls back to SDK defaults. RAW is always added because it is valid on
+    /// the wire even when omitted from topic metadata.
     ///
     /// # Errors
-    ///
-    /// Returns an error if the normalized topic codec list does not include
-    /// `Codec::RAW`.
     ///
     /// For fixed selection, returns an error if the requested codec is not
     /// accepted by the topic or has no registered encoder.
     ///
     /// For auto selection, returns an error if no topic-accepted codec has a
     /// registered encoder.
-    pub(crate) fn new(
+    pub(super) fn new(
         selection: CodecSelection,
         server_codecs: Vec<Codec>,
         codec_registry: Arc<CodecRegistry>,
     ) -> YdbResult<Self> {
-        let server_codecs = ensure_default_server_codecs(server_codecs);
-        ensure_raw_supported(&server_codecs)?;
+        let server_codecs = normalize_server_codecs(server_codecs);
 
         match selection {
             CodecSelection::Fixed(codec) => {
@@ -64,14 +61,14 @@ impl CodecSelector {
         }
     }
 
-    pub(crate) fn codec(&self) -> Codec {
+    pub(super) fn codec(&self) -> Codec {
         match self {
             Self::Fixed(c) => *c,
             Self::Auto(auto) => auto.current_codec,
         }
     }
 
-    pub(crate) fn step(&mut self, sample: &[MessageData]) {
+    pub(super) fn step(&mut self, sample: &[MessageData]) {
         if let Self::Auto(auto) = self {
             if auto.batch_counter % auto.measure_interval == 0 {
                 auto.current_codec = measure_codecs(sample, &auto.accepted_encoders);
@@ -175,27 +172,25 @@ fn measure_codecs(sample: &[MessageData], encoders: &[Arc<dyn CompressionEncoder
     best_codec
 }
 
-fn ensure_default_server_codecs(server_codecs: Vec<Codec>) -> Vec<Codec> {
-    if server_codecs.is_empty() {
-        CodecRegistry::default()
-            .supported_encoders()
-            .into_iter()
-            .collect()
+fn normalize_server_codecs(server_codecs: Vec<Codec>) -> Vec<Codec> {
+    let mut codecs = if server_codecs.is_empty() {
+        default_server_codecs()
     } else {
         server_codecs
+    };
+
+    if !codecs.contains(&Codec::RAW) {
+        codecs.push(Codec::RAW);
     }
+
+    codecs
 }
 
-fn ensure_raw_supported(server_codecs: &[Codec]) -> YdbResult<()> {
-    if server_codecs.contains(&Codec::RAW) {
-        return Ok(());
-    }
-
-    Err(YdbError::custom(format!(
-        "codec {:?} is not supported by the topic (supported_codecs: {:?})",
-        Codec::RAW,
-        server_codecs
-    )))
+fn default_server_codecs() -> Vec<Codec> {
+    CodecRegistry::default()
+        .supported_encoders()
+        .into_iter()
+        .collect()
 }
 
 #[cfg(test)]
@@ -260,15 +255,15 @@ mod tests {
     }
 
     #[test]
-    fn selector_auto_fails_on_missing_raw() {
+    fn selector_auto_adds_missing_raw() {
         let registry = CodecRegistry::new();
         let selector = CodecSelector::new(CodecSelection::Auto, vec![Codec::GZIP], registry.into());
 
-        assert!(selector.is_err());
+        assert!(selector.is_ok());
     }
 
     #[test]
-    fn selector_fixed_fails_on_missing() {
+    fn selector_fixed_adds_missing_raw() {
         let registry = CodecRegistry::new();
         let selector = CodecSelector::new(
             CodecSelection::Fixed(Codec::RAW),
@@ -276,6 +271,6 @@ mod tests {
             registry.into(),
         );
 
-        assert!(selector.is_err());
+        assert!(selector.is_ok());
     }
 }
