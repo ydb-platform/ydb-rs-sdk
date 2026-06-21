@@ -482,7 +482,7 @@ async fn codec_custom_roundtrip() -> YdbResult<()> {
         .create_topic(
             topic_path.clone(),
             CreateTopicOptionsBuilder::default()
-                .supported_codecs(vec![Codec::INC13])
+                .supported_codecs(vec![Codec::RAW, Codec::INC13])
                 .consumers(vec![ConsumerBuilder::default()
                     .name(consumer_name.clone())
                     .build()?])
@@ -560,7 +560,7 @@ async fn codec_parallelism() -> YdbResult<()> {
         .create_topic(
             topic_path.clone(),
             CreateTopicOptionsBuilder::default()
-                .supported_codecs(vec![Codec::SLOW_INC13])
+                .supported_codecs(vec![Codec::RAW, Codec::SLOW_INC13])
                 .consumers(vec![ConsumerBuilder::default()
                     .name(consumer_name.clone())
                     .build()?])

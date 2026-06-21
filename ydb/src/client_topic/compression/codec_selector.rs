@@ -34,9 +34,10 @@ impl CodecSelector {
     /// Fixed selection pins one codec. Auto selection stores topic-accepted
     /// encoders and periodically measures them against message samples.
     ///
-    /// Normalizes topic codec metadata before selection. Empty codec metadata
-    /// falls back to SDK defaults. RAW is always added because it is valid on
-    /// the wire even when omitted from topic metadata.
+    /// Resolves the effective server codec set before selection. Empty metadata
+    /// falls back to SDK built-in codecs. Returns an error if the resolved set
+    /// does not contain RAW, which is required for both Auto measurement and
+    /// Skip error handling.
     ///
     /// # Errors
     ///
@@ -50,7 +51,7 @@ impl CodecSelector {
         server_codecs: Vec<Codec>,
         codec_registry: Arc<CodecRegistry>,
     ) -> YdbResult<Self> {
-        let server_codecs = normalize_server_codecs(server_codecs);
+        let server_codecs = resolve_server_codecs(server_codecs)?;
 
         match selection {
             CodecSelection::Fixed(codec) => {
@@ -172,21 +173,23 @@ fn measure_codecs(sample: &[MessageData], encoders: &[Arc<dyn CompressionEncoder
     best_codec
 }
 
-fn normalize_server_codecs(server_codecs: Vec<Codec>) -> Vec<Codec> {
-    let mut codecs = if server_codecs.is_empty() {
-        default_server_codecs()
+fn resolve_server_codecs(server_codecs: Vec<Codec>) -> YdbResult<Vec<Codec>> {
+    let codecs = if server_codecs.is_empty() {
+        sdk_builtin_codecs()
     } else {
         server_codecs
     };
 
     if !codecs.contains(&Codec::RAW) {
-        codecs.push(Codec::RAW);
+        Err(YdbError::custom("server codecs do not contain RAW codec"))
+    } else {
+        Ok(codecs)
     }
-
-    codecs
 }
 
-fn default_server_codecs() -> Vec<Codec> {
+/// Codecs assumed when the server reports none: all SDK built-in implementations.
+/// Custom codecs are never assumed — they require explicit server declaration.
+fn sdk_builtin_codecs() -> Vec<Codec> {
     CodecRegistry::default()
         .supported_encoders()
         .into_iter()
@@ -255,15 +258,15 @@ mod tests {
     }
 
     #[test]
-    fn selector_auto_adds_missing_raw() {
+    fn selector_auto_errors_on_missing_raw() {
         let registry = CodecRegistry::new();
         let selector = CodecSelector::new(CodecSelection::Auto, vec![Codec::GZIP], registry.into());
 
-        assert!(selector.is_ok());
+        assert!(selector.is_err());
     }
 
     #[test]
-    fn selector_fixed_adds_missing_raw() {
+    fn selector_fixed_errors_on_missing_raw() {
         let registry = CodecRegistry::new();
         let selector = CodecSelector::new(
             CodecSelection::Fixed(Codec::RAW),
@@ -271,6 +274,6 @@ mod tests {
             registry.into(),
         );
 
-        assert!(selector.is_ok());
+        assert!(selector.is_err());
     }
 }
