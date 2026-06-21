@@ -542,7 +542,7 @@ async fn codec_custom_roundtrip() -> YdbResult<()> {
     Ok(())
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[traced_test]
 #[ignore] // need YDB access
 async fn codec_parallelism() -> YdbResult<()> {
