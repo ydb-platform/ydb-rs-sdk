@@ -488,7 +488,7 @@ impl StreamReader {
 
         let mut codec_registry = CodecRegistry::new();
         for dec in &context.options.custom_decoders {
-            codec_registry.register_decoder(dec.clone());
+            codec_registry.register_decoder(dec.clone())?;
         }
 
         let worker = DecompressionWorker::new(

@@ -1,4 +1,6 @@
-use crate::client_topic::compression::codec_registry::{CodecRegistry, CompressionEncoder};
+use crate::client_topic::compression::codec_registry::{
+    validate_codec_id, CodecRegistry, CompressionEncoder,
+};
 use crate::client_topic::list_types::Codec;
 use crate::{YdbError, YdbResult};
 use std::sync::Arc;
@@ -31,33 +33,24 @@ pub(super) struct AutoSelectorState {
 impl CodecSelector {
     /// Builds a writer-side codec selector.
     ///
-    /// Fixed selection pins one codec. Auto selection stores topic-accepted
-    /// encoders and periodically measures them against message samples.
+    /// # Fixed
+    /// Validates the codec ID, requires a registered encoder, and — when the
+    /// server reports a non-empty codec list — requires the codec to appear in
+    /// that list. Empty server list means no topic restriction.
     ///
-    /// Resolves the effective server codec set before selection. Empty metadata
-    /// falls back to SDK built-in codecs. Returns an error if the resolved set
-    /// does not contain RAW, which is required for both Auto measurement and
-    /// Skip error handling.
-    ///
-    /// # Errors
-    ///
-    /// For fixed selection, returns an error if the requested codec is not
-    /// accepted by the topic or has no registered encoder.
-    ///
-    /// For auto selection, returns an error if no topic-accepted codec has a
-    /// registered encoder.
+    /// # Auto
+    /// Candidates are `server_codecs ∩ registered_encoders` when the server
+    /// list is non-empty, or SDK built-ins (`registered_encoders ∩ [RAW, GZIP]`)
+    /// when the server list is empty. Returns an error if there are no candidates.
     pub(super) fn new(
         selection: CodecSelection,
         server_codecs: Vec<Codec>,
         codec_registry: Arc<CodecRegistry>,
     ) -> YdbResult<Self> {
-        let server_codecs = resolve_server_codecs(server_codecs)?;
-
         match selection {
             CodecSelection::Fixed(codec) => {
                 build_fixed_selector(codec, &server_codecs, &codec_registry)
             }
-
             CodecSelection::Auto => build_auto_selector(&server_codecs, &codec_registry),
         }
     }
@@ -84,7 +77,9 @@ fn build_fixed_selector(
     server_codecs: &[Codec],
     registry: &CodecRegistry,
 ) -> YdbResult<CodecSelector> {
-    if !server_codecs.contains(&codec) {
+    validate_codec_id(codec)?;
+
+    if !server_codecs.is_empty() && !server_codecs.contains(&codec) {
         return Err(YdbError::custom(format!(
             "codec {:?} is not supported by the topic (supported_codecs: {:?})",
             codec, server_codecs
@@ -105,7 +100,16 @@ fn build_auto_selector(
     server_codecs: &[Codec],
     registry: &CodecRegistry,
 ) -> YdbResult<CodecSelector> {
-    let accepted_encoders = resolve_accepted_encoders(registry, server_codecs);
+    let candidates: Vec<Codec> = if server_codecs.is_empty() {
+        CodecRegistry::sdk_builtin_codecs()
+    } else {
+        server_codecs.to_vec()
+    };
+
+    let accepted_encoders: Vec<Arc<dyn CompressionEncoder>> = candidates
+        .iter()
+        .filter_map(|&codec| registry.get_encoder(codec))
+        .collect();
 
     let Some(first_encoder) = accepted_encoders.first() else {
         return Err(YdbError::custom(
@@ -113,10 +117,6 @@ fn build_auto_selector(
         ));
     };
     let first_codec = first_encoder.codec();
-
-    debug_assert!(accepted_encoders
-        .iter()
-        .any(|encoder| encoder.codec() == Codec::RAW));
 
     if accepted_encoders.len() == 1 {
         return Ok(CodecSelector::Fixed(first_codec));
@@ -130,30 +130,13 @@ fn build_auto_selector(
     }))
 }
 
-fn resolve_accepted_encoders(
-    registry: &CodecRegistry,
-    server_codecs: &[Codec],
-) -> Vec<Arc<dyn CompressionEncoder>> {
-    server_codecs
-        .iter()
-        .filter_map(|&codec| registry.get_encoder(codec))
-        .collect()
-}
-
-/// Picks the smallest codec for this sample.
-///
-/// Assumes that `encoders` is non-empty and contains a RAW encoder, so failed
-/// probes of other encoders do not make measurement fallible.
+/// Picks the codec producing the smallest output for this sample.
+/// Falls back to the first encoder if all encoders fail.
 fn measure_codecs(sample: &[MessageData], encoders: &[Arc<dyn CompressionEncoder>]) -> Codec {
     debug_assert!(!encoders.is_empty());
-    debug_assert!(encoders.iter().any(|encoder| encoder.codec() == Codec::RAW));
 
-    if sample.is_empty() {
-        return Codec::RAW;
-    }
-
-    let mut best_codec = Codec::RAW;
-    let mut best_size = sample.iter().map(|m| m.data.len()).sum();
+    let mut best_codec = encoders[0].codec();
+    let mut best_size = usize::MAX;
 
     'encoders: for encoder in encoders {
         let mut size = 0;
@@ -173,29 +156,6 @@ fn measure_codecs(sample: &[MessageData], encoders: &[Arc<dyn CompressionEncoder
     best_codec
 }
 
-fn resolve_server_codecs(server_codecs: Vec<Codec>) -> YdbResult<Vec<Codec>> {
-    let codecs = if server_codecs.is_empty() {
-        sdk_builtin_codecs()
-    } else {
-        server_codecs
-    };
-
-    if !codecs.contains(&Codec::RAW) {
-        Err(YdbError::custom("server codecs do not contain RAW codec"))
-    } else {
-        Ok(codecs)
-    }
-}
-
-/// Codecs assumed when the server reports none: all SDK built-in implementations.
-/// Custom codecs are never assumed — they require explicit server declaration.
-fn sdk_builtin_codecs() -> Vec<Codec> {
-    CodecRegistry::default()
-        .supported_encoders()
-        .into_iter()
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,7 +171,7 @@ mod tests {
         }
     }
 
-    const FAILING_CODEC: Codec = Codec { code: 9001 };
+    const FAILING_CODEC: Codec = Codec { code: 10999 };
 
     #[derive(Debug)]
     struct FailingEncoder;
@@ -227,9 +187,20 @@ mod tests {
     }
 
     #[test]
+    fn measure_codecs_falls_back_to_first_when_all_fail() {
+        let mut registry = CodecRegistry::new();
+        registry.register_encoder(Arc::new(FailingEncoder)).unwrap();
+
+        let sample = vec![msg(b"payload".to_vec())];
+        let encoders = vec![registry.get_encoder(FAILING_CODEC).unwrap()];
+
+        assert_eq!(measure_codecs(&sample, &encoders), FAILING_CODEC);
+    }
+
+    #[test]
     fn measure_codecs_falls_back_to_raw_when_other_encoder_fails() {
         let mut registry = CodecRegistry::new();
-        registry.register_encoder(Arc::new(FailingEncoder));
+        registry.register_encoder(Arc::new(FailingEncoder)).unwrap();
 
         let sample = vec![msg(b"payload".to_vec())];
         let encoders = vec![
@@ -243,7 +214,7 @@ mod tests {
     #[test]
     fn measure_codecs_selects_best_non_failing() {
         let mut registry = CodecRegistry::new();
-        registry.register_encoder(Arc::new(FailingEncoder));
+        registry.register_encoder(Arc::new(FailingEncoder)).unwrap();
 
         let sample = vec![msg(vec![0u8; 1024])];
         let encoders = vec![
@@ -252,25 +223,52 @@ mod tests {
             registry.get_encoder(FAILING_CODEC).unwrap(),
         ];
 
-        let picked = measure_codecs(&sample, &encoders);
-
-        assert_eq!(picked, Codec::GZIP);
+        assert_eq!(measure_codecs(&sample, &encoders), Codec::GZIP);
     }
 
     #[test]
-    fn selector_auto_errors_on_missing_raw() {
+    fn selector_auto_with_non_empty_server_list_no_raw_succeeds() {
         let registry = CodecRegistry::new();
         let selector = CodecSelector::new(CodecSelection::Auto, vec![Codec::GZIP], registry.into());
+
+        assert!(selector.is_ok());
+    }
+
+    #[test]
+    fn selector_auto_empty_server_list_uses_sdk_builtins() {
+        let registry = CodecRegistry::new();
+        let selector = CodecSelector::new(CodecSelection::Auto, vec![], registry.into());
+
+        assert!(selector.is_ok());
+    }
+
+    #[test]
+    fn selector_fixed_empty_server_list_allows_any_valid_codec() {
+        let registry = CodecRegistry::new();
+        let selector =
+            CodecSelector::new(CodecSelection::Fixed(Codec::GZIP), vec![], registry.into());
+
+        assert!(selector.is_ok());
+    }
+
+    #[test]
+    fn selector_fixed_non_empty_server_list_rejects_missing_codec() {
+        let registry = CodecRegistry::new();
+        let selector = CodecSelector::new(
+            CodecSelection::Fixed(Codec::RAW),
+            vec![Codec::GZIP],
+            registry.into(),
+        );
 
         assert!(selector.is_err());
     }
 
     #[test]
-    fn selector_fixed_errors_on_missing_raw() {
+    fn selector_rejects_invalid_codec_id() {
         let registry = CodecRegistry::new();
         let selector = CodecSelector::new(
-            CodecSelection::Fixed(Codec::RAW),
-            vec![Codec::GZIP, FAILING_CODEC],
+            CodecSelection::Fixed(Codec { code: 9001 }),
+            vec![],
             registry.into(),
         );
 
