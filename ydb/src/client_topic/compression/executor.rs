@@ -1,8 +1,8 @@
-use std::sync::{Arc, LazyLock};
+use std::{num::NonZeroUsize, sync::Arc};
 
 pub trait Executor: Send + Sync {
-    /// Returns the number of threads available for parallel processing.
-    fn available_parallelism(&self) -> usize;
+    /// Returns an estimate amount of parallelism an executor should use.
+    fn available_parallelism(&self) -> NonZeroUsize;
 
     /// Submits a task for execution. Fire-and-forget.
     fn execute(&self, task: Box<dyn FnOnce() + Send + 'static>);
@@ -32,8 +32,9 @@ impl Default for RayonExecutor {
 }
 
 impl Executor for RayonExecutor {
-    fn available_parallelism(&self) -> usize {
-        self.pool.current_num_threads()
+    fn available_parallelism(&self) -> NonZeroUsize {
+        NonZeroUsize::new(self.pool.current_num_threads())
+            .unwrap_or(const { NonZeroUsize::new(1).unwrap() })
     }
 
     fn execute(&self, task: Box<dyn FnOnce() + Send + 'static>) {
@@ -41,11 +42,8 @@ impl Executor for RayonExecutor {
     }
 }
 
-static DEFAULT_EXECUTOR: LazyLock<Arc<dyn Executor>> =
-    LazyLock::new(|| Arc::new(RayonExecutor::default()));
-
 pub fn default_executor() -> Arc<dyn Executor> {
-    DEFAULT_EXECUTOR.clone()
+    Arc::new(RayonExecutor::default())
 }
 
 #[derive(Default)]
@@ -58,8 +56,8 @@ impl InplaceExecutor {
 }
 
 impl Executor for InplaceExecutor {
-    fn available_parallelism(&self) -> usize {
-        1
+    fn available_parallelism(&self) -> NonZeroUsize {
+        const { NonZeroUsize::new(1).unwrap() }
     }
 
     fn execute(&self, task: Box<dyn FnOnce() + Send + 'static>) {
@@ -78,10 +76,8 @@ impl TokioExecutor {
 }
 
 impl Executor for TokioExecutor {
-    fn available_parallelism(&self) -> usize {
-        std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1)
+    fn available_parallelism(&self) -> NonZeroUsize {
+        std::thread::available_parallelism().unwrap_or(const { NonZeroUsize::new(1).unwrap() })
     }
 
     fn execute(&self, task: Box<dyn FnOnce() + Send + 'static>) {
