@@ -9,7 +9,7 @@ use ydb::{ClientBuilder, YdbError, YdbResult};
 #[tokio::main]
 async fn main() -> YdbResult<()> {
     let connection_string = std::env::var("YDB_CONNECTION_STRING")
-        .unwrap_or_else(|_| "grpc://localhost:2136?database=local".to_string());
+        .unwrap_or_else(|_| "grpc://localhost:2136/local".to_string());
 
     let client = ClientBuilder::new_from_connection_string(connection_string)?.client()?;
     client.wait().await?;
@@ -24,10 +24,7 @@ async fn main() -> YdbResult<()> {
         .await?;
 
     let op = qc
-        .execute_script(
-            "DECLARE $id AS Uint64; \
-             SELECT id, msg FROM script_example WHERE id = $id;",
-        )
+        .execute_script("SELECT id, msg FROM script_example WHERE id = $id;")
         .param("$id", 123_u64)
         .results_ttl(Duration::from_secs(3600))
         .await?;

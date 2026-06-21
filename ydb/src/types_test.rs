@@ -798,16 +798,10 @@ fn type_cases() -> Vec<TypeCase> {
 ///    the expected value.
 async fn check_type_roundtrip(client: &Client, case: &TypeCase) -> YdbResult<()> {
     // --- 1) Value → server (no cast) → Value ---
-    let q1 = format!(
-        "\
-declare $val AS {t};
-select $val AS db_result",
-        t = case.yql_type,
-    );
+    let q = "select $val AS db_result";
     let recv_passthrough = client
         .table_client()
         .retry_transaction(|mut t| {
-            let q = q1.clone();
             let v = case.value.clone();
             async move {
                 let res = t
@@ -828,9 +822,7 @@ select $val AS db_result",
 
     // --- 2) Value → CAST AS Utf8 → string ---
     let q2 = format!(
-        "\
-declare $val AS {t};
-select cast(cast($val AS {t}) AS Utf8) AS db_result",
+        "select cast(cast($val AS {t}) AS Utf8) AS db_result",
         t = case.yql_type,
     );
     let (db_text,): (Option<String>,) = client
@@ -857,12 +849,7 @@ select cast(cast($val AS {t}) AS Utf8) AS db_result",
     );
 
     // --- 3) Text → CAST AS yql_type → Value ---
-    let q3 = format!(
-        "\
-declare $val AS Text;
-select cast($val AS {t}) AS db_result",
-        t = case.yql_type,
-    );
+    let q3 = format!("select cast($val AS {t}) AS db_result", t = case.yql_type);
     let recv_parsed = client
         .table_client()
         .retry_transaction(|mut t| {

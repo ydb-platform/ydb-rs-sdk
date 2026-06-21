@@ -15,7 +15,7 @@ No YDB instance required. Integration tests are excluded unless `--include-ignor
 - Run with a local YDB instance:
 
 ```bash
-export YDB_CONNECTION_STRING='grpc://localhost:2136?database=/local'
+export YDB_CONNECTION_STRING='grpc://localhost:2136/local'
 cargo test --workspace -- --include-ignored
 ```
 

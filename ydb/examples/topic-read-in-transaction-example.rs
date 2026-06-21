@@ -290,8 +290,8 @@ async fn main() -> YdbResult<()> {
 
     // Establish database connection
     // In production, use environment variables or configuration files for connection strings
-    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
-        .client()?;
+    let client =
+        ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.client()?;
 
     // Wait for connection with timeout to fail fast if database is unavailable
     if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
@@ -394,11 +394,6 @@ async fn main() -> YdbResult<()> {
                                 t.query(
                                     Query::new(
                                         "
-                                        DECLARE $topic AS Text;
-                                        DECLARE $partition AS Int64;
-                                        DECLARE $offset AS Int64;
-                                        DECLARE $body AS Text;
-
                                         INSERT INTO topic_offset_storage (topic, partition, offset, body)
                                         VALUES ($topic, $partition, $offset, $body)
                                         "

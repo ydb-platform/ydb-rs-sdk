@@ -11,6 +11,7 @@ pub(crate) enum RawQueryTxMode {
     SnapshotReadWrite,
     StaleReadOnly,
     OnlineReadOnly,
+    OnlineReadOnlyInconsistent,
 }
 
 pub(crate) fn begin_tx_control(mode: RawQueryTxMode, commit_tx: bool) -> TransactionControl {
@@ -46,9 +47,13 @@ fn tx_settings(mode: RawQueryTxMode) -> TransactionSettings {
             transaction_settings::TxMode::StaleReadOnly(StaleModeSettings {})
         }
         RawQueryTxMode::OnlineReadOnly => {
-            // Public API does not expose allow_inconsistent_reads; keep stale-replica reads disabled.
             transaction_settings::TxMode::OnlineReadOnly(OnlineModeSettings {
                 allow_inconsistent_reads: false,
+            })
+        }
+        RawQueryTxMode::OnlineReadOnlyInconsistent => {
+            transaction_settings::TxMode::OnlineReadOnly(OnlineModeSettings {
+                allow_inconsistent_reads: true,
             })
         }
     };

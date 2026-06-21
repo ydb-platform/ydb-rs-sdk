@@ -76,6 +76,7 @@ impl FromYdbRow for Row {
 /// | [`SnapshotReadWrite`](Self::SnapshotReadWrite) | yes | yes |
 /// | [`StaleReadOnly`](Self::StaleReadOnly) | yes | no |
 /// | [`OnlineReadOnly`](Self::OnlineReadOnly) | yes | no |
+/// | [`OnlineReadOnlyInconsistent`](Self::OnlineReadOnlyInconsistent) | yes | no |
 ///
 /// Default for one-shot calls is [`Implicit`](Self::Implicit) (`tx_control: None`): the server
 /// picks isolation from the SQL kind (DDL — non-transactional, `SELECT` — snapshot read-only,
@@ -89,8 +90,10 @@ pub enum QueryTxMode {
     SnapshotReadOnly,
     SnapshotReadWrite,
     StaleReadOnly,
-    /// Online read-only with `allow_inconsistent_reads: false`.
+    /// Online read-only with `allow_inconsistent_reads: false` (consistent reads).
     OnlineReadOnly,
+    /// Online read-only with `allow_inconsistent_reads: true` (inconsistent reads).
+    OnlineReadOnlyInconsistent,
 }
 
 impl QueryTxMode {

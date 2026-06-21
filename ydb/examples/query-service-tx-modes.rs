@@ -6,8 +6,8 @@ use ydb::{
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
-        .client()?;
+    let client =
+        ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.client()?;
     client.wait().await?;
 
     let mut qc = client.query_client().clone_with_idempotent_operations(true);
@@ -28,6 +28,10 @@ async fn main() -> YdbResult<()> {
         ("SnapshotRW", QueryTxMode::SnapshotReadWrite),
         ("StaleRO", QueryTxMode::StaleReadOnly),
         ("OnlineRO", QueryTxMode::OnlineReadOnly),
+        (
+            "OnlineInconsistentRO",
+            QueryTxMode::OnlineReadOnlyInconsistent,
+        ),
     ] {
         match qc.query_row("SELECT 42 AS v").with_tx_mode(mode).await {
             Ok(mut row) => {

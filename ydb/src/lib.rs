@@ -9,7 +9,7 @@
 //! # async fn main() -> YdbResult<()> {
 //!
 //!  // create driver
-//!  let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
+//!  let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
 //!     .with_credentials(StaticToken::from("asd"))
 //!     .client()?;
 //!

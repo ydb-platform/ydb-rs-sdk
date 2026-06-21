@@ -63,13 +63,7 @@ pub async fn create_tables(qc: &mut QueryClient, prefix: &str) -> YdbResult<()> 
 pub async fn fill_tables(qc: &mut QueryClient, prefix: &str, data: SampleData) -> YdbResult<()> {
     let series_list = Value::list_from(data.series_example, data.series)?;
     qc.exec(format!(
-        "DECLARE $seriesData AS List<Struct<
-            series_id: Bytes,
-            title: Utf8,
-            series_info: Utf8,
-            release_date: Date,
-            comment: Optional<Utf8>>>;
-        REPLACE INTO {}
+        "REPLACE INTO {}
         SELECT series_id, title, series_info, release_date, comment
         FROM AS_TABLE($seriesData);",
         table_path(prefix, "series")
@@ -79,13 +73,7 @@ pub async fn fill_tables(qc: &mut QueryClient, prefix: &str, data: SampleData) -
 
     let seasons_list = Value::list_from(data.seasons_example, data.seasons)?;
     qc.exec(format!(
-        "DECLARE $seasonsData AS List<Struct<
-            series_id: Bytes,
-            season_id: Bytes,
-            title: Utf8,
-            first_aired: Date,
-            last_aired: Date>>;
-        REPLACE INTO {}
+        "REPLACE INTO {}
         SELECT series_id, season_id, title, first_aired, last_aired
         FROM AS_TABLE($seasonsData);",
         table_path(prefix, "seasons")
@@ -95,13 +83,7 @@ pub async fn fill_tables(qc: &mut QueryClient, prefix: &str, data: SampleData) -
 
     let episodes_list = Value::list_from(data.episodes_example, data.episodes)?;
     qc.exec(format!(
-        "DECLARE $episodesData AS List<Struct<
-            series_id: Bytes,
-            season_id: Bytes,
-            episode_id: Bytes,
-            title: Utf8,
-            air_date: Date>>;
-        REPLACE INTO {}
+        "REPLACE INTO {}
         SELECT series_id, season_id, episode_id, title, air_date
         FROM AS_TABLE($episodesData);",
         table_path(prefix, "episodes")

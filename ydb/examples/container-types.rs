@@ -5,8 +5,8 @@ use ydb::{ydb_params, ClientBuilder, Query, Value, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
-        .client()?;
+    let client =
+        ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.client()?;
 
     if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
         res?
@@ -25,8 +25,6 @@ async fn main() -> YdbResult<()> {
                 .query(
                     Query::new(
                         "
-                    DECLARE $val AS List<Int32>;
-
                     SELECT $val AS val;
                 ",
                     )
@@ -59,12 +57,6 @@ async fn main() -> YdbResult<()> {
                 .query(
                     Query::new(
                         "
-            DECLARE $val AS Struct<
-                a: Int32,
-                b: Utf8,
-                c: Double,
-            >;
-
             SELECT $val AS res;
         ",
                     )

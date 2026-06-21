@@ -26,7 +26,7 @@ cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnin
 
 ```bash
 docker compose up -d
-export YDB_CONNECTION_STRING='grpc://localhost:2136?database=/local'
+export YDB_CONNECTION_STRING='grpc://localhost:2136/local'
 cargo test --workspace -- --include-ignored
 ```
 

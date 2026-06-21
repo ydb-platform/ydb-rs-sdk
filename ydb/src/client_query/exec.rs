@@ -150,6 +150,7 @@ fn tx_mode_to_raw(mode: QueryTxMode) -> RawQueryTxMode {
         QueryTxMode::SnapshotReadWrite => RawQueryTxMode::SnapshotReadWrite,
         QueryTxMode::StaleReadOnly => RawQueryTxMode::StaleReadOnly,
         QueryTxMode::OnlineReadOnly => RawQueryTxMode::OnlineReadOnly,
+        QueryTxMode::OnlineReadOnlyInconsistent => RawQueryTxMode::OnlineReadOnlyInconsistent,
     }
 }
 
