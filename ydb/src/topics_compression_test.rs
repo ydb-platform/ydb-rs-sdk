@@ -10,7 +10,9 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::test_integration_helper::create_client;
+use crate::test_integration_helper::create_client_with_executor;
 use crate::ErrorHandlingStrategy;
+use crate::RayonExecutor;
 use crate::{
     client_topic::client::CreateTopicOptionsBuilder, Codec, CodecSelection, CompressionDecoder,
     CompressionEncoder, TopicReaderOptionsBuilder, TopicWriterMessageBuilder,
@@ -542,11 +544,11 @@ async fn codec_custom_roundtrip() -> YdbResult<()> {
     Ok(())
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
 async fn codec_parallelism() -> YdbResult<()> {
-    let client = create_client().await?;
+    let client = create_client_with_executor(Arc::new(RayonExecutor::new(5))).await?;
     let database_path = client.database();
     let topic_name = "codec_parallelism".to_string();
     let topic_path = format!("{database_path}/{topic_name}");

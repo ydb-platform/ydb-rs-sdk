@@ -22,12 +22,18 @@ lazy_static! {
     });
 }
 
-#[tracing::instrument]
-pub(crate) async fn create_client() -> YdbResult<Arc<Client>> {
+pub(crate) async fn create_client_with_executor(
+    executor: Arc<dyn crate::Executor>,
+) -> YdbResult<Arc<Client>> {
     trace!("get client");
     // https://github.com/ydb-platform/ydb-rs-sdk/issues/92
     // return Ok(TEST_CLIENT.get().await.clone());
-    connect(Arc::new(TokioExecutor::new())).await
+    connect(executor).await
+}
+
+#[tracing::instrument]
+pub(crate) async fn create_client() -> YdbResult<Arc<Client>> {
+    create_client_with_executor(Arc::new(TokioExecutor::new())).await
 }
 
 async fn connect(executor: Arc<dyn crate::Executor>) -> YdbResult<Arc<Client>> {
