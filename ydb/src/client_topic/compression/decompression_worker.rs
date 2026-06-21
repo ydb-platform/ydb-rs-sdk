@@ -158,7 +158,7 @@ fn decompress_batch(
 }
 
 fn process_missing_decoder(
-    batch: Vec<TopicReaderMessage>,
+    mut batch: Vec<TopicReaderMessage>,
     codec: Codec,
     strategy: ErrorHandlingStrategy,
 ) -> YdbResult<Vec<TopicReaderMessage>> {
@@ -169,9 +169,12 @@ fn process_missing_decoder(
         ))),
         ErrorHandlingStrategy::Skip => {
             warn!(
-                "no decoder found for codec {}, passing raw messages",
+                "no decoder found for codec {}, marking messages as decompression failed",
                 codec.code
             );
+            for message in batch.iter_mut() {
+                message.decompression_failed = true;
+            }
             Ok(batch)
         }
     }
