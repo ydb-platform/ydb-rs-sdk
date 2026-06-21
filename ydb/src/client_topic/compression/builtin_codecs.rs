@@ -52,7 +52,7 @@ pub(super) struct GzipDecoder;
 
 impl CompressionDecoder for GzipDecoder {
     fn decode(&self, data: &[u8]) -> YdbResult<Vec<u8>> {
-        let mut decoder = flate2::read::GzDecoder::new(data.as_ref());
+        let mut decoder = flate2::read::GzDecoder::new(data);
         let mut output = Vec::new();
         decoder
             .read_to_end(&mut output)

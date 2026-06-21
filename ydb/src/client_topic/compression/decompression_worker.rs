@@ -142,7 +142,7 @@ fn decompress_batch(
                     ?err,
                     message.seq_no,
                     message.offset,
-                    "decoder failed, kepp original payload"
+                    "decoder failed, keep original payload"
                 );
                 message.decompression_failed = true;
             }
@@ -163,12 +163,12 @@ fn process_missing_decoder(
 ) -> YdbResult<Vec<TopicReaderMessage>> {
     match strategy {
         ErrorHandlingStrategy::FailFast => Err(YdbError::custom(format!(
-            "no encoder found for codec {}",
+            "no decoder found for codec {}",
             codec.code
         ))),
         ErrorHandlingStrategy::Skip => {
             warn!(
-                "no encoder found for codec {}, passing raw messages",
+                "no decoder found for codec {}, passing raw messages",
                 codec.code
             );
             Ok(batch)
