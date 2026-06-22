@@ -487,7 +487,7 @@ impl StreamReader {
         };
 
         let mut codec_registry = CodecRegistry::new();
-        for dec in &context.options.custom_decoders {
+        for dec in &context.options.extra_decoders {
             codec_registry.register_decoder(dec.clone())?;
         }
 

@@ -12,8 +12,20 @@ pub struct TopicReaderOptions {
 
     #[builder(default = "1000")]
     pub(crate) batch_size: usize,
-    #[builder(default)]
-    pub(crate) custom_decoders: Vec<Arc<dyn CompressionDecoder>>,
+    #[builder(setter(custom), default)]
+    pub(crate) extra_decoders: Vec<Arc<dyn CompressionDecoder>>,
     #[builder(default = "ErrorHandlingStrategy::FailFast")]
     pub(crate) compression_error_strategy: ErrorHandlingStrategy,
+}
+
+impl TopicReaderOptionsBuilder {
+    pub fn add_decoder<D>(&mut self, decoder: D) -> &mut Self
+    where
+        D: CompressionDecoder + 'static,
+    {
+        self.extra_decoders
+            .get_or_insert_default()
+            .push(Arc::new(decoder));
+        self
+    }
 }

@@ -47,12 +47,12 @@ impl StreamWriter {
         let shared_error_tx = Arc::new(Mutex::new(Some(error_tx)));
 
         let mut codec_registry = CodecRegistry::new();
-        for enc in &writer_options.custom_encoders {
+        for enc in &writer_options.extra_encoders {
             codec_registry.register_encoder(enc.clone())?;
         }
 
         let worker = CompressionWorker::new(
-            writer_options.codec,
+            writer_options.codec_selector,
             Arc::new(codec_registry),
             writer_options.compression_error_strategy,
             executor,

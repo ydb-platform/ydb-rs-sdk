@@ -33,9 +33,21 @@ pub struct TopicWriterOptions {
     pub(crate) retrier: Arc<dyn Retry>,
 
     #[builder(default)]
-    pub(crate) codec: CodecSelection,
-    #[builder(default)]
-    pub(crate) custom_encoders: Vec<Arc<dyn CompressionEncoder>>,
+    pub(crate) codec_selector: CodecSelection,
+    #[builder(setter(custom), default)]
+    pub(crate) extra_encoders: Vec<Arc<dyn CompressionEncoder>>,
     #[builder(default = "ErrorHandlingStrategy::FailFast")]
     pub(crate) compression_error_strategy: ErrorHandlingStrategy,
+}
+
+impl TopicWriterOptionsBuilder {
+    pub fn add_encoder<E>(&mut self, encoder: E) -> &mut Self
+    where
+        E: CompressionEncoder + 'static,
+    {
+        self.extra_encoders
+            .get_or_insert_default()
+            .push(Arc::new(encoder));
+        self
+    }
 }

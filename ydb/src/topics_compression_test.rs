@@ -78,18 +78,18 @@ where
     }
 }
 
-fn encoder<F>(codec: Codec, encode: F) -> Arc<dyn CompressionEncoder>
+fn encoder<F>(codec: Codec, encode: F) -> TestEncoder<F>
 where
     F: Fn(&[u8]) -> YdbResult<Vec<u8>> + Send + Sync + 'static,
 {
-    Arc::new(TestEncoder { codec, encode })
+    TestEncoder { codec, encode }
 }
 
-fn decoder<F>(codec: Codec, decode: F) -> Arc<dyn CompressionDecoder>
+fn decoder<F>(codec: Codec, decode: F) -> TestDecoder<F>
 where
     F: Fn(&[u8]) -> YdbResult<Vec<u8>> + Send + Sync + 'static,
 {
-    Arc::new(TestDecoder { codec, decode })
+    TestDecoder { codec, decode }
 }
 
 fn inc13_compress(data: &[u8]) -> YdbResult<Vec<u8>> {
@@ -152,8 +152,8 @@ async fn codec_fail_fast_write() -> YdbResult<()> {
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
-                .custom_encoders(vec![encoder(Codec::INC13, faily_inc13_compress)])
-                .codec(CodecSelection::Fixed(Codec::INC13))
+                .add_encoder(encoder(Codec::INC13, faily_inc13_compress))
+                .codec_selector(CodecSelection::Fixed(Codec::INC13))
                 .build()?,
         )
         .await?;
@@ -216,8 +216,8 @@ async fn codec_fail_fast_read() -> YdbResult<()> {
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
-                .codec(CodecSelection::Fixed(Codec::INC13))
-                .custom_encoders(vec![encoder(Codec::INC13, inc13_compress)])
+                .codec_selector(CodecSelection::Fixed(Codec::INC13))
+                .add_encoder(encoder(Codec::INC13, inc13_compress))
                 .build()?,
         )
         .await?;
@@ -237,7 +237,7 @@ async fn codec_fail_fast_read() -> YdbResult<()> {
             TopicReaderOptionsBuilder::default()
                 .topic(topic_path.clone().into())
                 .consumer(consumer_name)
-                .custom_decoders(vec![decoder(Codec::INC13, faily_inc13_decompress)])
+                .add_decoder(decoder(Codec::INC13, faily_inc13_decompress))
                 .build()?,
         )
         .await?;
@@ -326,8 +326,8 @@ async fn codec_skip_errors() -> YdbResult<()> {
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
-                .codec(CodecSelection::Fixed(Codec::INC13))
-                .custom_encoders(vec![encoder(Codec::INC13, faily_inc13_compress)])
+                .codec_selector(CodecSelection::Fixed(Codec::INC13))
+                .add_encoder(encoder(Codec::INC13, faily_inc13_compress))
                 .compression_error_strategy(ErrorHandlingStrategy::Skip)
                 .build()?,
         )
@@ -357,7 +357,7 @@ async fn codec_skip_errors() -> YdbResult<()> {
                 .topic(topic_path.clone().into())
                 .compression_error_strategy(ErrorHandlingStrategy::Skip)
                 .consumer(consumer_name)
-                .custom_decoders(vec![decoder(Codec::INC13, faily_inc13_decompress)])
+                .add_decoder(decoder(Codec::INC13, faily_inc13_decompress))
                 .build()?,
         )
         .await?;
@@ -426,7 +426,7 @@ async fn codec_gzip_roundtrip() -> YdbResult<()> {
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
-                .codec(CodecSelection::Fixed(Codec::GZIP))
+                .codec_selector(CodecSelection::Fixed(Codec::GZIP))
                 .build()?,
         )
         .await?;
@@ -497,8 +497,8 @@ async fn codec_custom_roundtrip() -> YdbResult<()> {
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
-                .codec(CodecSelection::Fixed(Codec::INC13))
-                .custom_encoders(vec![encoder(Codec::INC13, inc13_compress)])
+                .codec_selector(CodecSelection::Fixed(Codec::INC13))
+                .add_encoder(encoder(Codec::INC13, inc13_compress))
                 .build()?,
         )
         .await?;
@@ -521,7 +521,7 @@ async fn codec_custom_roundtrip() -> YdbResult<()> {
             TopicReaderOptionsBuilder::default()
                 .topic(topic_path.clone().into())
                 .consumer(consumer_name)
-                .custom_decoders(vec![decoder(Codec::INC13, inc13_decompress)])
+                .add_decoder(decoder(Codec::INC13, inc13_decompress))
                 .build()?,
         )
         .await?;
@@ -575,8 +575,8 @@ async fn codec_parallelism() -> YdbResult<()> {
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
-                .codec(CodecSelection::Fixed(Codec::SLOW_INC13))
-                .custom_encoders(vec![encoder(Codec::SLOW_INC13, slow_inc13_compress)])
+                .codec_selector(CodecSelection::Fixed(Codec::SLOW_INC13))
+                .add_encoder(encoder(Codec::SLOW_INC13, slow_inc13_compress))
                 .build()?,
         )
         .await?;
@@ -601,7 +601,7 @@ async fn codec_parallelism() -> YdbResult<()> {
             TopicReaderOptionsBuilder::default()
                 .topic(topic_path.clone().into())
                 .consumer(consumer_name)
-                .custom_decoders(vec![decoder(Codec::SLOW_INC13, slow_inc13_decompress)])
+                .add_decoder(decoder(Codec::SLOW_INC13, slow_inc13_decompress))
                 .build()?,
         )
         .await?;
@@ -655,7 +655,7 @@ async fn codec_auto() -> YdbResult<()> {
         .create_writer_with_params(
             TopicWriterOptionsBuilder::default()
                 .topic_path(topic_path.clone())
-                .custom_encoders(vec![encoder(Codec::INC13, inc13_compress)])
+                .add_encoder(encoder(Codec::INC13, inc13_compress))
                 .build()?,
         )
         .await?;
@@ -683,7 +683,7 @@ async fn codec_auto() -> YdbResult<()> {
             TopicReaderOptionsBuilder::default()
                 .topic(topic_path.clone().into())
                 .consumer(consumer_name)
-                .custom_decoders(vec![decoder(Codec::INC13, inc13_decompress)])
+                .add_decoder(decoder(Codec::INC13, inc13_decompress))
                 .build()?,
         )
         .await?;
