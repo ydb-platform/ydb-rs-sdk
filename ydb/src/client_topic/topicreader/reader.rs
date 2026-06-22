@@ -493,7 +493,6 @@ impl StreamReader {
 
         let worker = DecompressionWorker::new(
             Arc::new(codec_registry),
-            context.options.compression_error_strategy,
             context.compression_executor.clone(),
         );
 

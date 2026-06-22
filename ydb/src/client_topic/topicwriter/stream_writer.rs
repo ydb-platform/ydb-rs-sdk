@@ -11,9 +11,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 use ydb_grpc::ydb_proto::topic::stream_write_message::WriteRequest;
 
-use crate::client_topic::compression::{
-    CodecRegistry, CompressedGroups, CompressionWorker, Executor,
-};
+use crate::client_topic::compression::{CodecRegistry, CompressionWorker, Executor};
 use crate::client_topic::list_types::Codec;
 use crate::client_topic::topicwriter::message_write_status::WriteAck;
 use crate::client_topic::topicwriter::queue::Queue;
@@ -54,14 +52,12 @@ impl StreamWriter {
         let worker = CompressionWorker::new(
             writer_options.codec_selector,
             Arc::new(codec_registry),
-            writer_options.compression_error_strategy,
             executor,
             server_codecs,
         )?;
 
         let (batch_tx, batch_rx) = mpsc::unbounded_channel::<Vec<MessageData>>();
-        let (compressed_tx, compressed_rx) =
-            mpsc::unbounded_channel::<YdbResult<CompressedGroups>>();
+        let (compressed_tx, compressed_rx) = mpsc::unbounded_channel::<YdbResult<WriteRequest>>();
 
         let request_stream = stream.clone_sender();
 
@@ -129,7 +125,7 @@ impl StreamWriter {
     async fn grpc_send_loop(
         cancellation_token: CancellationToken,
         error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
-        mut compressed_rx: mpsc::UnboundedReceiver<YdbResult<CompressedGroups>>,
+        mut compressed_rx: mpsc::UnboundedReceiver<YdbResult<WriteRequest>>,
         request_stream: mpsc::UnboundedSender<stream_write_message::FromClient>,
     ) {
         loop {
@@ -137,23 +133,16 @@ impl StreamWriter {
                 _ = cancellation_token.cancelled() => { return; }
                 next = compressed_rx.recv() => {
                     let Some(chunk_result) = next else { return; };
-                    let result = chunk_result.and_then(|groups| {
-                        for (codec, messages) in groups {
-                            if messages.is_empty() {
-                                continue;
-                            }
-                            trace!("sending topic message to grpc stream");
-                            request_stream
-                                .send(stream_write_message::FromClient {
-                                    client_message: Some(ClientMessage::WriteRequest(WriteRequest {
-                                        messages,
-                                        codec: codec.code,
-                                        tx: None,
-                                    })),
-                                })
-                                .map_err(|err| YdbError::Transport(err.to_string()))?;
+                    let result = chunk_result.and_then(|write_request| {
+                        if write_request.messages.is_empty() {
+                            return Ok(());
                         }
-                        Ok(())
+                        trace!("sending topic message to grpc stream");
+                        request_stream
+                            .send(stream_write_message::FromClient {
+                                client_message: Some(ClientMessage::WriteRequest(write_request)),
+                            })
+                            .map_err(|err| YdbError::Transport(err.to_string()))
                     });
 
                     let Err(err) = result else { continue; };

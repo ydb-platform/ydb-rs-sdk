@@ -1,4 +1,4 @@
-use crate::client_topic::compression::{CompressionDecoder, ErrorHandlingStrategy};
+use crate::client_topic::compression::CompressionDecoder;
 use crate::client_topic::topicreader::reader::TopicSelectors;
 use crate::errors;
 use derive_builder::Builder;
@@ -14,8 +14,6 @@ pub struct TopicReaderOptions {
     pub(crate) batch_size: usize,
     #[builder(setter(custom), default)]
     pub(crate) extra_decoders: Vec<Arc<dyn CompressionDecoder>>,
-    #[builder(default = "ErrorHandlingStrategy::FailFast")]
-    pub(crate) compression_error_strategy: ErrorHandlingStrategy,
 }
 
 impl TopicReaderOptionsBuilder {

@@ -1,13 +1,12 @@
 use super::ordered_task_queue::{self, OrderedTaskQueue};
 use crate::client_topic::compression::codec_registry::CodecRegistry;
-use crate::client_topic::compression::executor::{ErrorHandlingStrategy, Executor};
+use crate::client_topic::compression::executor::Executor;
 use crate::client_topic::list_types::Codec;
 use crate::{TopicReaderMessage, YdbError, YdbResult};
 use std::{num::NonZeroUsize, sync::Arc};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
 
 type BatchRx = mpsc::UnboundedReceiver<(Vec<TopicReaderMessage>, Codec)>;
 
@@ -15,25 +14,19 @@ type DecompressedBatchTx = mpsc::UnboundedSender<YdbResult<Vec<TopicReaderMessag
 
 pub(crate) struct DecompressionWorker {
     codec_registry: Arc<CodecRegistry>,
-    error_strategy: ErrorHandlingStrategy,
     queue: OrderedTaskQueue<Vec<TopicReaderMessage>>,
     results_rx: ordered_task_queue::TaskResultRx<Vec<TopicReaderMessage>>,
     parallelism: NonZeroUsize,
 }
 
 impl DecompressionWorker {
-    pub(crate) fn new(
-        codec_registry: Arc<CodecRegistry>,
-        error_strategy: ErrorHandlingStrategy,
-        executor: Arc<dyn Executor>,
-    ) -> Self {
+    pub(crate) fn new(codec_registry: Arc<CodecRegistry>, executor: Arc<dyn Executor>) -> Self {
         let parallelism = executor.available_parallelism();
         let output_backlog = parallelism.saturating_mul(super::OUTPUT_BACKLOG_PER_TASK);
         let (queue, results_rx) = OrderedTaskQueue::new(executor, parallelism, output_backlog);
 
         Self {
             codec_registry,
-            error_strategy,
             queue,
             results_rx,
             parallelism,
@@ -49,7 +42,6 @@ impl DecompressionWorker {
     ) {
         let DecompressionWorker {
             codec_registry,
-            error_strategy,
             queue,
             mut results_rx,
             parallelism,
@@ -77,12 +69,11 @@ impl DecompressionWorker {
                     }
 
                     let registry = codec_registry.clone();
-                    let strategy = error_strategy;
 
                     tokio::select! {
                         _ = schedule_cancellation_token.cancelled() => return,
                         _ = queue.submit(Box::new(move || {
-                            decompress_batch(chunk, codec, registry, strategy)
+                            decompress_batch(chunk, codec, registry)
                         })) => {}
                     }
                 }
@@ -117,14 +108,16 @@ fn decompress_batch(
     mut batch: Vec<TopicReaderMessage>,
     codec: Codec,
     registry: Arc<CodecRegistry>,
-    strategy: ErrorHandlingStrategy,
 ) -> YdbResult<Vec<TopicReaderMessage>> {
     if codec == Codec::RAW {
         return Ok(batch);
     }
 
     let Some(decoder) = registry.get_decoder(codec) else {
-        return process_missing_decoder(batch, codec, strategy);
+        return Err(YdbError::custom(format!(
+            "no decoder found for codec {}",
+            codec.code
+        )));
     };
 
     for message in batch.iter_mut() {
@@ -132,53 +125,13 @@ fn decompress_batch(
             continue;
         };
 
-        match (decoder.decode(raw_data.as_slice()), strategy) {
-            (Ok(decompressed), _) => {
-                message.raw_data = Some(decompressed);
-            }
-
-            (Err(err), ErrorHandlingStrategy::Skip) => {
-                warn!(
-                    ?decoder,
-                    ?err,
-                    message.seq_no,
-                    message.offset,
-                    "decoder failed, keep original payload"
-                );
-                message.decompression_failed = true;
-            }
-
-            (Err(err), ErrorHandlingStrategy::FailFast) => {
-                return Err(YdbError::custom(format!(
-                    "{decoder:?} failed to decode: {err}, message seq_no: {}, message offset: {}",
-                    message.seq_no, message.offset,
-                )));
-            }
-        }
+        message.raw_data = Some(decoder.decode(raw_data.as_slice()).map_err(|err| {
+            YdbError::custom(format!(
+                "{decoder:?} failed to decode: {err}, message seq_no: {}, message offset: {}",
+                message.seq_no, message.offset,
+            ))
+        })?);
     }
 
     Ok(batch)
-}
-
-fn process_missing_decoder(
-    mut batch: Vec<TopicReaderMessage>,
-    codec: Codec,
-    strategy: ErrorHandlingStrategy,
-) -> YdbResult<Vec<TopicReaderMessage>> {
-    match strategy {
-        ErrorHandlingStrategy::FailFast => Err(YdbError::custom(format!(
-            "no decoder found for codec {}",
-            codec.code
-        ))),
-        ErrorHandlingStrategy::Skip => {
-            warn!(
-                "no decoder found for codec {}, marking messages as decompression failed",
-                codec.code
-            );
-            for message in batch.iter_mut() {
-                message.decompression_failed = true;
-            }
-            Ok(batch)
-        }
-    }
 }

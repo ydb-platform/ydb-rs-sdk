@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::test_integration_helper::create_client;
 use crate::test_integration_helper::create_client_with_executor;
-use crate::ErrorHandlingStrategy;
 use crate::RayonExecutor;
 use crate::{
     client_topic::client::CreateTopicOptionsBuilder, Codec, CodecSelection, CompressionDecoder,
@@ -270,128 +269,6 @@ async fn codec_fail_fast_read() -> YdbResult<()> {
         return Err(YdbError::custom("expected fail fast reader error"));
     };
     trace!("got expected fail fast reader error: {err}");
-
-    Ok(())
-}
-
-#[tokio::test]
-#[traced_test]
-#[ignore] // need YDB access
-async fn codec_skip_errors() -> YdbResult<()> {
-    let client = create_client().await?;
-    let database_path = client.database();
-    let topic_name = "codec_skip_errors".to_string();
-    let topic_path = format!("{database_path}/{topic_name}");
-    let consumer_name = format!("test-consumer-{topic_name}");
-
-    let mut topic_client = client.topic_client();
-    let _ = topic_client.drop_topic(topic_path.clone()).await; // ignoring error
-    trace!("previous topic removed");
-
-    let counter = Arc::new(std::sync::Mutex::new(0));
-    let faily_inc13_compress = move |data: &[u8]| -> YdbResult<Vec<u8>> {
-        let mut cnt = counter.lock()?;
-        *cnt += 1;
-        if *cnt < 5 {
-            return Err(YdbError::from_str("compression error"));
-        }
-        Ok(data.iter().map(|x| *x + 13).collect())
-    };
-
-    let other_counter = Arc::new(std::sync::Mutex::new(0));
-    let faily_inc13_decompress = move |data: &[u8]| -> YdbResult<Vec<u8>> {
-        let mut cnt = other_counter.lock()?;
-        *cnt += 1;
-        if *cnt > 14 {
-            // do not count messages skipped in write, because they are not compressed
-            return Err(YdbError::from_str("compression error"));
-        }
-        Ok(data.iter().map(|x| *x - 13).collect())
-    };
-
-    topic_client
-        .create_topic(
-            topic_path.clone(),
-            CreateTopicOptionsBuilder::default()
-                .supported_codecs(vec![Codec::RAW, Codec::INC13])
-                .consumers(vec![ConsumerBuilder::default()
-                    .name(consumer_name.clone())
-                    .build()?])
-                .build()?,
-        )
-        .await?;
-    trace!("topic created");
-
-    let writer = topic_client
-        .create_writer_with_params(
-            TopicWriterOptionsBuilder::default()
-                .topic_path(topic_path.clone())
-                .codec_selector(CodecSelection::Fixed(Codec::INC13))
-                .add_encoder(encoder(Codec::INC13, faily_inc13_compress))
-                .compression_error_strategy(ErrorHandlingStrategy::Skip)
-                .build()?,
-        )
-        .await?;
-    trace!("writer created");
-
-    // Writer Skip: first 4 compress calls fail (cnt < 5), so messages 0..=3 fall
-    // back to RAW. Messages 4..=19 are sent compressed (INC13: data + 13).
-    // Reader Skip: RAW messages bypass the codec; the 16 INC13 messages drive
-    // the reader counter to 16, so 2 of them fail decompression and are marked
-    // with `decompression_failed`. Which 2 fail is non-deterministic because
-    // decompression runs in parallel — the assertion below tolerates that.
-    // For decompression-failed messages, read_and_take() returns the original
-    // (compressed) payload rather than None.
-    let write_count: usize = 20;
-    for i in 0..write_count {
-        let data: Vec<u8> = vec![i as u8];
-        writer
-            .write(TopicWriterMessageBuilder::default().data(data).build()?)
-            .await?;
-    }
-    writer.stop().await?;
-
-    let mut reader = topic_client
-        .create_reader_with_params(
-            TopicReaderOptionsBuilder::default()
-                .topic(topic_path.clone().into())
-                .compression_error_strategy(ErrorHandlingStrategy::Skip)
-                .consumer(consumer_name)
-                .add_decoder(decoder(Codec::INC13, faily_inc13_decompress))
-                .build()?,
-        )
-        .await?;
-
-    let mut received: Vec<(Vec<u8>, bool)> = Vec::new();
-    while received.len() < write_count {
-        let batch = timeout(Duration::from_secs(2), reader.read_batch())
-            .await
-            .map_err(|err| YdbError::custom(format!("timeout waiting reader batch: {err}")))??;
-        for mut message in batch.messages {
-            let data = message
-                .read_and_take()
-                .await?
-                .expect("reader must return original payload");
-            trace!(
-                "got message with {:?}, decompression_failed = {}",
-                data,
-                message.decompression_failed
-            );
-            received.push((data, message.decompression_failed));
-        }
-    }
-
-    assert_eq!(received.len(), write_count);
-    let decompression_failed = received.iter().filter(|(_, f)| *f).count();
-    assert_eq!(decompression_failed, 2);
-    for (i, (data, failed)) in received.iter().enumerate() {
-        let expected: Vec<u8> = if *failed {
-            vec![i as u8 + 13]
-        } else {
-            vec![i as u8]
-        };
-        assert_eq!(data, &expected, "message at index {i} mismatch");
-    }
 
     Ok(())
 }

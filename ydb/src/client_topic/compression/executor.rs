@@ -1,16 +1,5 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
-/// Describes, how reader/writer handle compression/decompression errors.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ErrorHandlingStrategy {
-    /// On any compression/decompression error propagates the error to the reader/writer.
-    FailFast,
-
-    /// Reader: on decompression failure returns the raw compressed bytes with `decompression_failed` set.
-    /// Writer: on compression failure sends the message as RAW instead of compressed.
-    Skip,
-}
-
 pub trait Executor: Send + Sync {
     /// Returns a concurrency hint for blocking compression work.
     ///

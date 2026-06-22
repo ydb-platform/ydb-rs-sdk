@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use derive_builder::Builder;
 
-use crate::client_topic::compression::{CodecSelection, CompressionEncoder, ErrorHandlingStrategy};
+use crate::client_topic::compression::{CodecSelection, CompressionEncoder};
 use crate::client_topic::topicwriter::partitioning::PartitioningStrategy;
 use crate::errors;
 use crate::retry::{IndefiniteRetrier, Retry};
@@ -36,8 +36,6 @@ pub struct TopicWriterOptions {
     pub(crate) codec_selector: CodecSelection,
     #[builder(setter(custom), default)]
     pub(crate) extra_encoders: Vec<Arc<dyn CompressionEncoder>>,
-    #[builder(default = "ErrorHandlingStrategy::FailFast")]
-    pub(crate) compression_error_strategy: ErrorHandlingStrategy,
 }
 
 impl TopicWriterOptionsBuilder {

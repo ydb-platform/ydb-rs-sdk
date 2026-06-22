@@ -13,9 +13,6 @@ const OUTPUT_BACKLOG_PER_TASK: std::num::NonZeroUsize =
 pub(crate) use codec_registry::CodecRegistry;
 pub use codec_registry::{CompressionDecoder, CompressionEncoder};
 pub use codec_selector::CodecSelection;
-pub(crate) use compression_worker::{CompressedGroups, CompressionWorker};
+pub(crate) use compression_worker::CompressionWorker;
 pub(crate) use decompression_worker::DecompressionWorker;
-pub use executor::{
-    default_executor, ErrorHandlingStrategy, Executor, InplaceExecutor, RayonExecutor,
-    TokioExecutor,
-};
+pub use executor::{default_executor, Executor, InplaceExecutor, RayonExecutor, TokioExecutor};
