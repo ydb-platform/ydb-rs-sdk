@@ -149,7 +149,10 @@ fn decompress_batch(
             }
 
             (Err(err), ErrorHandlingStrategy::FailFast) => {
-                return Err(err);
+                return Err(YdbError::custom(format!(
+                    "{decoder:?} failed to decode: {err}, message seq_no: {}, message offset: {}",
+                    message.seq_no, message.offset,
+                )));
             }
         }
     }

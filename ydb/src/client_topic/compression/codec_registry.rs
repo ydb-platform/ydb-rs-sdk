@@ -5,14 +5,14 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 pub trait CompressionEncoder: Debug + Send + Sync {
-    fn encode(&self, data: &[u8]) -> YdbResult<Vec<u8>>;
+    fn encode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + 'static>>;
 
     /// Returns the codec this encoder handles; custom codec IDs must satisfy [`Codec::is_custom`].
     fn codec(&self) -> Codec;
 }
 
 pub trait CompressionDecoder: Debug + Send + Sync {
-    fn decode(&self, data: &[u8]) -> YdbResult<Vec<u8>>;
+    fn decode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + 'static>>;
 
     /// Returns the codec this decoder handles; custom codec IDs must satisfy [`Codec::is_custom`].
     fn codec(&self) -> Codec;

@@ -43,8 +43,8 @@ impl<F> CompressionEncoder for TestEncoder<F>
 where
     F: Fn(&[u8]) -> YdbResult<Vec<u8>> + Send + Sync,
 {
-    fn encode(&self, data: &[u8]) -> YdbResult<Vec<u8>> {
-        (self.encode)(data)
+    fn encode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + 'static>> {
+        (self.encode)(data).map_err(Into::into)
     }
 
     fn codec(&self) -> Codec {
@@ -69,8 +69,8 @@ impl<F> CompressionDecoder for TestDecoder<F>
 where
     F: Fn(&[u8]) -> YdbResult<Vec<u8>> + Send + Sync,
 {
-    fn decode(&self, data: &[u8]) -> YdbResult<Vec<u8>> {
-        (self.decode)(data)
+    fn decode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + 'static>> {
+        (self.decode)(data).map_err(Into::into)
     }
 
     fn codec(&self) -> Codec {

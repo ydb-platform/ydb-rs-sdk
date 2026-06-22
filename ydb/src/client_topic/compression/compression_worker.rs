@@ -130,7 +130,10 @@ fn compress_batch(
             }
 
             (Err(err), ErrorHandlingStrategy::FailFast) => {
-                return Err(err);
+                return Err(YdbError::custom(format!(
+                    "{encoder:?} failed to encode: {err}, message seq_no: {}",
+                    message.seq_no,
+                )));
             }
         };
     }

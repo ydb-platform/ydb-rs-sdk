@@ -177,8 +177,8 @@ mod tests {
     struct FailingEncoder;
 
     impl CompressionEncoder for FailingEncoder {
-        fn encode(&self, _data: &[u8]) -> YdbResult<Vec<u8>> {
-            Err(YdbError::custom("test: encoder always fails"))
+        fn encode(&self, _data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + 'static>> {
+            Err(YdbError::custom("test: encoder always fails").into())
         }
 
         fn codec(&self) -> Codec {

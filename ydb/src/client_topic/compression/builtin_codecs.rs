@@ -1,6 +1,10 @@
-use crate::{Codec, YdbError, YdbResult};
+use crate::Codec;
 use flate2::Compression;
-use std::io::{Read, Write};
+use std::{
+    error::Error,
+    io::{Read, Write},
+    vec::Vec,
+};
 
 use super::codec_registry::{CompressionDecoder, CompressionEncoder};
 
@@ -8,7 +12,7 @@ use super::codec_registry::{CompressionDecoder, CompressionEncoder};
 pub(super) struct RawEncoder;
 
 impl CompressionEncoder for RawEncoder {
-    fn encode(&self, data: &[u8]) -> YdbResult<Vec<u8>> {
+    fn encode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn Error + 'static>> {
         Ok(data.to_vec())
     }
 
@@ -21,7 +25,7 @@ impl CompressionEncoder for RawEncoder {
 pub(super) struct RawDecoder;
 
 impl CompressionDecoder for RawDecoder {
-    fn decode(&self, data: &[u8]) -> YdbResult<Vec<u8>> {
+    fn decode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn Error + 'static>> {
         Ok(data.to_vec())
     }
 
@@ -34,12 +38,10 @@ impl CompressionDecoder for RawDecoder {
 pub(super) struct GzipEncoder;
 
 impl CompressionEncoder for GzipEncoder {
-    fn encode(&self, data: &[u8]) -> YdbResult<Vec<u8>> {
+    fn encode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn Error + 'static>> {
         let mut encoder = flate2::write::GzEncoder::new(Vec::new(), Compression::default());
-        encoder
-            .write_all(data)
-            .and_then(|_| encoder.finish())
-            .map_err(|err| YdbError::custom(format!("gzip compress failed: {err}")))
+        encoder.write_all(data)?;
+        Ok(encoder.finish()?)
     }
 
     fn codec(&self) -> Codec {
@@ -51,12 +53,10 @@ impl CompressionEncoder for GzipEncoder {
 pub(super) struct GzipDecoder;
 
 impl CompressionDecoder for GzipDecoder {
-    fn decode(&self, data: &[u8]) -> YdbResult<Vec<u8>> {
+    fn decode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn Error + 'static>> {
         let mut decoder = flate2::read::GzDecoder::new(data);
         let mut output = Vec::new();
-        decoder
-            .read_to_end(&mut output)
-            .map_err(|err| YdbError::custom(format!("gzip decompress failed: {err}")))?;
+        decoder.read_to_end(&mut output)?;
 
         Ok(output)
     }
