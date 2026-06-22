@@ -29,7 +29,12 @@ impl CompressionWorker {
         executor: Arc<dyn Executor>,
         server_codecs: Vec<Codec>,
     ) -> YdbResult<Self> {
-        let codec_selector = CodecSelector::new(selection, server_codecs, codec_registry.clone())?;
+        let codec_selector = CodecSelector::new(
+            selection,
+            server_codecs,
+            codec_registry.clone(),
+            executor.clone(),
+        )?;
         let parallelism = executor.available_parallelism();
         let output_backlog = parallelism.saturating_mul(super::OUTPUT_BACKLOG_PER_TASK);
         let (queue, results_rx) = OrderedTaskQueue::new(executor, parallelism, output_backlog);
@@ -54,7 +59,7 @@ impl CompressionWorker {
 
         tasks.spawn(async move {
             while let Some(mut batch) = rx.recv().await {
-                codec_selector.step(&batch);
+                codec_selector.step(&batch).await;
                 let codec = codec_selector.codec();
                 let chunk_size =
                     (batch.len() / parallelism).clamp(1, super::MAX_MESSAGES_PER_CHUNK);
