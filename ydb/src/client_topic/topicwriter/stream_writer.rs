@@ -48,7 +48,7 @@ impl StreamWriter {
 
         let mut codec_registry = CodecRegistry::new();
         for enc in &writer_options.extra_encoders {
-            codec_registry.register_encoder(enc.clone())?;
+            codec_registry.register_encoder(enc.clone());
         }
 
         let worker = CompressionWorker::new(

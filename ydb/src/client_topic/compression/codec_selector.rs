@@ -1,6 +1,4 @@
-use crate::client_topic::compression::codec_registry::{
-    validate_codec_id, CodecRegistry, CompressionEncoder,
-};
+use crate::client_topic::compression::codec_registry::{CodecRegistry, CompressionEncoder};
 use crate::client_topic::list_types::Codec;
 use crate::{YdbError, YdbResult};
 use std::sync::Arc;
@@ -77,8 +75,6 @@ fn build_fixed_selector(
     server_codecs: &[Codec],
     registry: &CodecRegistry,
 ) -> YdbResult<CodecSelector> {
-    validate_codec_id(codec)?;
-
     if !server_codecs.is_empty() && !server_codecs.contains(&codec) {
         return Err(YdbError::custom(format!(
             "codec {:?} is not supported by the topic (supported_codecs: {:?})",
