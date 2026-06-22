@@ -426,6 +426,13 @@ impl ReconnectionLoop {
             return ReconnectionLoopStatus::Exit(None);
         }
 
+        // Wait ending old stream writer before recreating
+        if let Some(old) = self.stream_writer.take() {
+            if let Err(err) = old.stop().await {
+                return ReconnectionLoopStatus::HandleError(err);
+            }
+        }
+
         let (error_sender, error_receiver) = oneshot::channel();
         match self.helper.recreate_stream_writer(error_sender).await {
             Ok(swr) => {
