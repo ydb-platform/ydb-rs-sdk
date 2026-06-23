@@ -1,3 +1,4 @@
+use super::compression::Executor;
 use super::list_types::{Codec, TopicDescription};
 use crate::client::TimeoutSettings;
 use crate::client_common::TokenCache;
@@ -10,6 +11,7 @@ use crate::client_topic::topicwriter::writer::TopicWriter;
 use crate::client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
 };
+use crate::errors;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::alter_topic::RawAlterTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
@@ -17,7 +19,6 @@ use crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsum
 use crate::grpc_wrapper::raw_topic_service::describe_topic::RawDescribeTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::drop_topic::RawDropTopicRequest;
 use crate::YdbError::InternalError;
-use crate::{errors, Executor};
 use crate::{grpc_wrapper, YdbResult};
 use derive_builder::{Builder, UninitializedFieldError};
 use std::collections::HashMap;
@@ -243,28 +244,15 @@ impl TopicClient {
         &mut self,
         writer_options: TopicWriterOptions,
     ) -> YdbResult<TopicWriter> {
-        let topic_path = writer_options.topic_path.clone();
         TopicWriter::new(
             writer_options,
             self.connection_manager.clone(),
             self.executor.clone(),
-            // YDB server collapses custom codec codes to UNSPECIFIED in stream-write
-            // InitResponse, so the supported codec list is fetched via describe_topic instead.
-            self.describe_topic(topic_path, DescribeTopicOptionsBuilder::default().build()?)
-                .await?
-                .supported_codecs,
         )
         .await
     }
 
     pub async fn create_writer(&mut self, path: String) -> YdbResult<TopicWriter> {
-        let supported_codecs = self
-            .describe_topic(
-                path.clone(),
-                DescribeTopicOptionsBuilder::default().build()?,
-            )
-            .await?
-            .supported_codecs;
         TopicWriter::new(
             TopicWriterOptionsBuilder::default()
                 .topic_path(path)
@@ -272,7 +260,6 @@ impl TopicClient {
                 .unwrap(),
             self.connection_manager.clone(),
             self.executor.clone(),
-            supported_codecs,
         )
         .await
     }

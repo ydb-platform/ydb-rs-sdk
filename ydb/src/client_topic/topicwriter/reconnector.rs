@@ -9,7 +9,6 @@ use tracing::{error, trace};
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 
 use crate::client_topic::compression::Executor;
-use crate::client_topic::list_types::Codec;
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
@@ -33,7 +32,6 @@ pub(crate) struct ReconnectorParams {
     pub(crate) fatal_error_tx: oneshot::Sender<YdbError>,
     pub(crate) flush_timeout: Duration,
     pub(crate) executor: Arc<dyn Executor>,
-    pub(crate) supported_codecs: Vec<Codec>,
 }
 
 #[derive(Clone)]
@@ -85,7 +83,6 @@ impl Reconnector {
                 producer_id: params.producer_id,
                 queue: queue.clone(),
                 executor: params.executor,
-                supported_codecs: params.supported_codecs,
             },
             params.fatal_error_tx,
             init_tx,
@@ -217,7 +214,6 @@ struct ReconnectionHelper {
     cancellation_token: CancellationToken,
     producer_id: String,
     executor: Arc<dyn Executor>,
-    supported_codecs: Vec<Codec>,
 }
 
 enum WaitBeforeReconnectResult {
@@ -239,6 +235,7 @@ impl ReconnectionHelper {
 
         let mut stream = self.connect().await?;
         let init_response = ConnectionInfo::try_from(stream.receive::<RawServerMessage>().await?)?;
+        let server_codecs = init_response.codecs_from_server.clone().into();
 
         Ok(RecreateStreamWriterResult {
             stream_writer: StreamWriter::new(
@@ -246,7 +243,7 @@ impl ReconnectionHelper {
                 stream,
                 self.queue.clone(),
                 error_sender,
-                self.supported_codecs.clone(),
+                server_codecs,
                 self.executor.clone(),
             )
             .await?,
