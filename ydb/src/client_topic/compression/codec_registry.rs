@@ -4,17 +4,27 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+/// Encodes topic message payloads for one codec.
+///
+/// Register your own to add a custom codec (codes `10_000..20_000`) or
+/// override one of the built-ins (`RAW`, `GZIP`, `LZOP`, `ZSTD` — codes 1–4).
+/// Implementations must be safe to call from multiple worker threads.
 pub trait CompressionEncoder: Debug + Send + Sync {
     fn encode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + 'static>>;
 
-    /// Returns the codec this encoder handles
+    /// Codec this encoder produces.
     fn codec(&self) -> Codec;
 }
 
+/// Decodes topic message payloads for one codec.
+///
+/// Register your own to add a custom codec (codes `10_000..20_000`) or
+/// override one of the built-ins (`RAW`, `GZIP`, `LZOP`, `ZSTD` — codes 1–4).
+/// Implementations must be safe to call from multiple worker threads.
 pub trait CompressionDecoder: Debug + Send + Sync {
     fn decode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + 'static>>;
 
-    /// Returns the codec this decoder handles
+    /// Codec this decoder accepts.
     fn codec(&self) -> Codec;
 }
 
@@ -45,10 +55,12 @@ impl CodecRegistry {
         registry
     }
 
+    /// Registers an encoder, replacing any encoder already registered for the same codec.
     pub(crate) fn register_encoder(&mut self, encoder: Arc<dyn CompressionEncoder>) {
         let _ = self.encoders.insert(encoder.codec(), encoder);
     }
 
+    /// Registers a decoder, replacing any decoder already registered for the same codec.
     pub(crate) fn register_decoder(&mut self, decoder: Arc<dyn CompressionDecoder>) {
         let _ = self.decoders.insert(decoder.codec(), decoder);
     }

@@ -36,15 +36,14 @@ pub(super) struct AutoSelectorState {
 impl CodecSelector {
     /// Builds a writer-side codec selector.
     ///
-    /// # Fixed
-    /// Validates the codec ID, requires a registered encoder, and — when the
-    /// server reports a non-empty codec list — requires the codec to appear in
-    /// that list. Empty server list means no topic restriction.
+    /// Fixed mode requires a registered encoder for the requested codec.
+    /// If the server reports codec restrictions, the codec must be allowed by that list.
     ///
-    /// # Auto
-    /// Candidates are `server_codecs ∩ registered_encoders` when the server
-    /// list is non-empty, or SDK built-ins (`registered_encoders ∩ [RAW, GZIP]`)
-    /// when the server list is empty. Returns an error if there are no candidates.
+    /// Auto mode chooses between registered encoders allowed by the server.
+    /// Empty server codec list means no server-side restriction.
+    ///
+    /// Custom codecs are codec codes in `10_000..20_000`. For stream-write `InitResponse`,
+    /// `UNSPECIFIED` in the server list allows registered custom codecs.
     pub(super) fn new(
         selection: CodecSelection,
         server_codecs: Vec<Codec>,
@@ -82,11 +81,20 @@ fn build_fixed_selector(
     server_codecs: &[Codec],
     registry: &CodecRegistry,
 ) -> YdbResult<CodecSelector> {
-    if !server_codecs.is_empty() && !server_codecs.contains(&codec) {
-        return Err(YdbError::custom(format!(
-            "codec {:?} is not supported by the topic (supported_codecs: {:?})",
-            codec, server_codecs
-        )));
+    if !server_codecs.is_empty() {
+        let explicitly_allowed = server_codecs.contains(&codec);
+
+        // BUG: This is a workaround for YDB server-side bug: topic writer InitRequest returns custom
+        // codecs as [`Codec::UNSPECIFIED`]
+        let custom_slot_available =
+            codec.is_custom() && server_codecs.contains(&Codec::UNSPECIFIED);
+
+        if !explicitly_allowed && !custom_slot_available {
+            return Err(YdbError::custom(format!(
+                "codec {:?} is not supported by the topic (supported_codecs: {:?})",
+                codec, server_codecs
+            )));
+        }
     }
 
     if registry.get_encoder(codec).is_none() {
@@ -342,6 +350,62 @@ mod tests {
             test_executor(),
         );
 
+        assert!(selector.is_err());
+    }
+
+    const CUSTOM_CODEC: Codec = Codec { code: 10001 };
+
+    #[derive(Debug)]
+    struct CustomEncoder;
+
+    impl CompressionEncoder for CustomEncoder {
+        fn encode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + 'static>> {
+            Ok(data.to_vec())
+        }
+        fn codec(&self) -> Codec {
+            CUSTOM_CODEC
+        }
+    }
+
+    fn registry_with_custom() -> CodecRegistry {
+        let mut registry = CodecRegistry::new();
+        registry.register_encoder(Arc::new(CustomEncoder));
+        registry
+    }
+
+    #[test]
+    fn selector_fixed_custom_codec_with_unspecified_in_server_list_succeeds() {
+        // Server returns [RAW, UNSPECIFIED] — custom codec slot is present.
+        let selector = CodecSelector::new(
+            CodecSelection::Fixed(CUSTOM_CODEC),
+            vec![Codec::RAW, Codec::UNSPECIFIED],
+            registry_with_custom().into(),
+            test_executor(),
+        );
+        assert!(selector.is_ok());
+    }
+
+    #[test]
+    fn selector_fixed_custom_codec_without_unspecified_in_server_list_fails() {
+        // Server returns [RAW] only — no custom codec slot.
+        let selector = CodecSelector::new(
+            CodecSelection::Fixed(CUSTOM_CODEC),
+            vec![Codec::RAW],
+            registry_with_custom().into(),
+            test_executor(),
+        );
+        assert!(selector.is_err());
+    }
+
+    #[test]
+    fn selector_fixed_standard_codec_with_unspecified_in_server_list_fails() {
+        // UNSPECIFIED does not grant access to a standard codec not in the list.
+        let selector = CodecSelector::new(
+            CodecSelection::Fixed(Codec::GZIP),
+            vec![Codec::RAW, Codec::UNSPECIFIED],
+            CodecRegistry::new().into(),
+            test_executor(),
+        );
         assert!(selector.is_err());
     }
 }

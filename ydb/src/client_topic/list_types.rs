@@ -18,10 +18,21 @@ pub struct Codec {
 }
 
 impl Codec {
+    pub const UNSPECIFIED: Codec = Codec { code: 0 };
     pub const RAW: Codec = Codec { code: 1 };
     pub const GZIP: Codec = Codec { code: 2 };
     pub const LZOP: Codec = Codec { code: 3 };
     pub const ZSTD: Codec = Codec { code: 4 };
+
+    /// Standard server-defined codec range: codes 1–4 (RAW, GZIP, LZOP, ZSTD).
+    pub fn is_standard(self) -> bool {
+        matches!(self.code, 1..=4)
+    }
+
+    /// User-defined custom codec range: codes [10_000, 20_000).
+    pub fn is_custom(self) -> bool {
+        matches!(self.code, 10_000..=19_999)
+    }
 }
 
 impl From<RawCodec> for Codec {
