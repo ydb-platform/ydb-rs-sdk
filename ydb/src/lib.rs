@@ -142,11 +142,11 @@ pub use client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMess
 // full enum pub types
 pub use client_topic::topicwriter::partitioning::PartitioningStrategy;
 // full enum pub types
+pub use client_topic::compression::Executor;
 pub use client_topic::topicwriter::writer::TopicWriter;
 pub use client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
 };
-pub use client_topic::compression::Executor;
 // full enum pub types
 pub use client::{Client, TimeoutSettings};
 

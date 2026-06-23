@@ -335,7 +335,9 @@ async fn codec_fail_fast() -> YdbResult<()> {
     assert!(timeout(reader.read_batch()).await.is_err());
 
     fail_decoder.store(false, Ordering::Relaxed);
-    writer.write(message("would decode fine, but reader is dead")).await?;
+    writer
+        .write(message("would decode fine, but reader is dead"))
+        .await?;
     timeout(writer.flush()).await?;
     stop_writer(writer).await?;
 
