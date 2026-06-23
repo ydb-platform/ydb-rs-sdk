@@ -48,4 +48,3 @@ pub(crate) fn default_executor() -> YdbResult<Arc<dyn Executor>> {
 
     Ok(Arc::new(executor))
 }
-
