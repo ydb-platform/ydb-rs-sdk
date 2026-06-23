@@ -240,9 +240,7 @@ impl StreamWriter {
         self.cancellation_token.cancel();
 
         while let Some(join_result) = self.tasks.join_next().await {
-            if let Err(err) = join_result {
-                warn!("stream writer task join error: {err}");
-            }
+            join_result?;
         }
 
         trace!("stream writer stopped");
