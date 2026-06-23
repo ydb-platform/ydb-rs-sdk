@@ -1,5 +1,7 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
+use crate::{YdbError, YdbResult};
+
 pub trait Executor: Send + Sync {
     /// Returns a concurrency hint for blocking compression work.
     ///
@@ -18,23 +20,17 @@ pub struct RayonExecutor {
 }
 
 impl RayonExecutor {
-    pub fn new(num_threads: usize) -> Self {
-        Self {
-            pool: rayon::ThreadPoolBuilder::new()
-                .num_threads(num_threads)
-                .build()
-                .expect("failed to create rayon thread pool"),
-        }
+    pub fn new(num_threads: usize) -> YdbResult<Self> {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()
+            .map_err(|err| YdbError::custom(format!("thread pool did not build: {err}")))?;
+
+        Ok(Self { pool })
     }
 }
 
 const DEFAULT_THREAD_COUNT: usize = 4;
-
-impl Default for RayonExecutor {
-    fn default() -> Self {
-        Self::new(DEFAULT_THREAD_COUNT)
-    }
-}
 
 impl Executor for RayonExecutor {
     fn available_parallelism(&self) -> NonZeroUsize {
@@ -47,8 +43,10 @@ impl Executor for RayonExecutor {
     }
 }
 
-pub fn default_executor() -> Arc<dyn Executor> {
-    Arc::new(RayonExecutor::default())
+pub fn default_executor() -> YdbResult<Arc<dyn Executor>> {
+    let executor = RayonExecutor::new(DEFAULT_THREAD_COUNT)?;
+
+    Ok(Arc::new(executor))
 }
 
 /// Executor that runs tasks immediately on the caller thread.

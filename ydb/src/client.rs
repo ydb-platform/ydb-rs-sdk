@@ -36,13 +36,18 @@ impl Client {
         load_balancer: SharedLoadBalancer,
         executor: Option<Arc<dyn Executor>>,
     ) -> YdbResult<Self> {
+        let executor = match executor {
+            Some(e) => e,
+            None => default_executor()?,
+        };
+
         Ok(Client {
             credentials,
             load_balancer,
             discovery,
             timeouts: TimeoutSettings::default(),
             connection_manager,
-            executor: executor.unwrap_or_else(default_executor),
+            executor,
         })
     }
 
