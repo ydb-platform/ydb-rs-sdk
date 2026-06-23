@@ -104,11 +104,14 @@ fn build_auto_selector(
     registry: &CodecRegistry,
     executor: Arc<dyn Executor>,
 ) -> YdbResult<CodecSelector> {
-    let candidates: Vec<Codec> = if server_codecs.is_empty() {
+    let mut candidates: Vec<Codec> = if server_codecs.is_empty() {
         CodecRegistry::sdk_builtin_codecs()
     } else {
         server_codecs.to_vec()
     };
+
+    // Ensure deterministic order of codecs
+    candidates.sort();
 
     let accepted_encoders: Vec<Arc<dyn CompressionEncoder>> = candidates
         .iter()

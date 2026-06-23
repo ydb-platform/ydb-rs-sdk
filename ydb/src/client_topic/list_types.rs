@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::option::Option;
 use std::time::SystemTime;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Copy)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
 pub struct Codec {
     pub code: i32,
 }
@@ -22,10 +22,6 @@ impl Codec {
     pub const GZIP: Codec = Codec { code: 2 };
     pub const LZOP: Codec = Codec { code: 3 };
     pub const ZSTD: Codec = Codec { code: 4 };
-
-    pub fn is_custom(&self) -> bool {
-        self.code >= 10000 && self.code < 20000
-    }
 }
 
 impl From<RawCodec> for Codec {
