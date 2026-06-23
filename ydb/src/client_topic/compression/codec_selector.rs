@@ -204,10 +204,10 @@ async fn measure_codecs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client_topic::compression::executor::InplaceExecutor;
+    use crate::test_integration_helper::InplaceExecutor;
 
     fn test_executor() -> Arc<dyn Executor> {
-        Arc::new(InplaceExecutor::new())
+        Arc::new(InplaceExecutor)
     }
 
     fn msg(data: Vec<u8>) -> MessageData {

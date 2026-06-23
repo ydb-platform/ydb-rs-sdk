@@ -1,7 +1,5 @@
 use crate::client::Client;
 use crate::client::TimeoutSettings;
-use crate::client_topic::compression::InplaceExecutor;
-use crate::client_topic::compression::TokioExecutor;
 use crate::errors::{YdbError, YdbResult};
 use crate::test_helpers::test_custom_ca_client_builder;
 use crate::test_helpers::{test_client_builder, test_with_password_builder};
@@ -9,6 +7,7 @@ use crate::Executor;
 use async_once::AsyncOnce;
 use lazy_static::lazy_static;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use tokio::io::copy_bidirectional;
@@ -17,10 +16,23 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::trace;
 
+/// Executor that runs tasks immediately on the caller thread.
+pub(crate) struct InplaceExecutor;
+
+impl Executor for InplaceExecutor {
+    fn available_parallelism(&self) -> NonZeroUsize {
+        const { NonZeroUsize::new(1).unwrap() }
+    }
+
+    fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+        task();
+    }
+}
+
 lazy_static! {
     static ref TEST_CLIENT: AsyncOnce<Arc<Client>> = AsyncOnce::new(async {
         trace!("create client");
-        connect(Arc::new(TokioExecutor::new())).await.unwrap()
+        connect(Arc::new(InplaceExecutor)).await.unwrap()
     });
 }
 
@@ -35,7 +47,7 @@ pub(crate) async fn create_client_with_executor(
 
 #[tracing::instrument]
 pub(crate) async fn create_client() -> YdbResult<Arc<Client>> {
-    create_client_with_executor(Arc::new(InplaceExecutor::new())).await
+    create_client_with_executor(Arc::new(InplaceExecutor)).await
 }
 
 async fn connect(executor: Arc<dyn Executor>) -> YdbResult<Arc<Client>> {

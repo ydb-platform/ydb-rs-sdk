@@ -18,4 +18,4 @@ pub(crate) use decompression_worker::DecompressionWorker;
 pub(crate) use executor::default_executor;
 pub use executor::Executor;
 #[cfg(test)]
-pub(crate) use executor::{InplaceExecutor, RayonExecutor, TokioExecutor};
+pub(crate) use executor::RayonExecutor;

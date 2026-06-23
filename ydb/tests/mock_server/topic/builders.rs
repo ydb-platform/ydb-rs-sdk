@@ -85,22 +85,6 @@ pub fn read_response_with_codec(
     )
 }
 
-pub fn read_response_batch(
-    stream_id: u64,
-    partition_session_id: i64,
-    messages: Vec<(i64, Vec<u8>)>,
-) -> TopicReply {
-    let messages = messages
-        .into_iter()
-        .map(|(offset, data)| {
-            let uncompressed_size = data.len() as i64;
-            (offset, uncompressed_size, data)
-        })
-        .collect();
-
-    read_response_batch_with_codec(stream_id, partition_session_id, messages, ydb::Codec::RAW)
-}
-
 pub fn read_response_batch_with_codec(
     stream_id: u64,
     partition_session_id: i64,
