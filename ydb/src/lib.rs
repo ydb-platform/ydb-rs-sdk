@@ -143,14 +143,10 @@ pub use client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMess
 pub use client_topic::topicwriter::partitioning::PartitioningStrategy;
 // full enum pub types
 pub use client_topic::topicwriter::writer::TopicWriter;
-// full enum pub types
-pub use client_topic::compression::{
-    default_executor, CodecSelection, CompressionDecoder, CompressionEncoder, Executor,
-    InplaceExecutor, RayonExecutor, TokioExecutor,
-};
 pub use client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
 };
+pub use client_topic::compression::Executor;
 // full enum pub types
 pub use client::{Client, TimeoutSettings};
 

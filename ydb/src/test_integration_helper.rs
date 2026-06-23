@@ -1,9 +1,11 @@
 use crate::client::Client;
 use crate::client::TimeoutSettings;
+use crate::client_topic::compression::InplaceExecutor;
 use crate::client_topic::compression::TokioExecutor;
 use crate::errors::{YdbError, YdbResult};
 use crate::test_helpers::test_custom_ca_client_builder;
 use crate::test_helpers::{test_client_builder, test_with_password_builder};
+use crate::Executor;
 use async_once::AsyncOnce;
 use lazy_static::lazy_static;
 use std::net::SocketAddr;
@@ -23,7 +25,7 @@ lazy_static! {
 }
 
 pub(crate) async fn create_client_with_executor(
-    executor: Arc<dyn crate::Executor>,
+    executor: Arc<dyn Executor>,
 ) -> YdbResult<Arc<Client>> {
     trace!("get client");
     // https://github.com/ydb-platform/ydb-rs-sdk/issues/92
@@ -33,10 +35,10 @@ pub(crate) async fn create_client_with_executor(
 
 #[tracing::instrument]
 pub(crate) async fn create_client() -> YdbResult<Arc<Client>> {
-    create_client_with_executor(Arc::new(TokioExecutor::new())).await
+    create_client_with_executor(Arc::new(InplaceExecutor::new())).await
 }
 
-async fn connect(executor: Arc<dyn crate::Executor>) -> YdbResult<Arc<Client>> {
+async fn connect(executor: Arc<dyn Executor>) -> YdbResult<Arc<Client>> {
     let client = test_client_builder()
         .with_executor(executor)
         .client()

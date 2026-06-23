@@ -15,12 +15,12 @@ pub trait Executor: Send + Sync {
 }
 
 /// Dedicated Rayon-backed executor for compression work.
-pub struct RayonExecutor {
+pub(crate) struct RayonExecutor {
     pool: rayon::ThreadPool,
 }
 
 impl RayonExecutor {
-    pub fn new(num_threads: usize) -> YdbResult<Self> {
+    pub(crate) fn new(num_threads: usize) -> YdbResult<Self> {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads)
             .build()
@@ -43,7 +43,7 @@ impl Executor for RayonExecutor {
     }
 }
 
-pub fn default_executor() -> YdbResult<Arc<dyn Executor>> {
+pub(crate) fn default_executor() -> YdbResult<Arc<dyn Executor>> {
     let executor = RayonExecutor::new(DEFAULT_THREAD_COUNT)?;
 
     Ok(Arc::new(executor))
@@ -52,15 +52,18 @@ pub fn default_executor() -> YdbResult<Arc<dyn Executor>> {
 /// Executor that runs tasks immediately on the caller thread.
 ///
 /// Intended for tests and controlled environments.
+#[cfg(test)]
 #[derive(Default)]
-pub struct InplaceExecutor {}
+pub(crate) struct InplaceExecutor {}
 
+#[cfg(test)]
 impl InplaceExecutor {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 }
 
+#[cfg(test)]
 impl Executor for InplaceExecutor {
     fn available_parallelism(&self) -> NonZeroUsize {
         const { NonZeroUsize::new(1).unwrap() }
@@ -74,15 +77,18 @@ impl Executor for InplaceExecutor {
 /// Executor that uses `tokio::task::spawn_blocking`.
 ///
 /// Requires an active Tokio runtime.
+#[cfg(test)]
 #[derive(Default)]
-pub struct TokioExecutor {}
+pub(crate) struct TokioExecutor {}
 
+#[cfg(test)]
 impl TokioExecutor {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 }
 
+#[cfg(test)]
 impl Executor for TokioExecutor {
     fn available_parallelism(&self) -> NonZeroUsize {
         std::thread::available_parallelism().unwrap_or(const { NonZeroUsize::new(1).unwrap() })

@@ -57,7 +57,6 @@ impl TopicReaderBatch {
                         },
 
                         bytes_to_release: 0,
-                        decompression_failed: false,
                     }
                 })
                 .collect(),
@@ -114,7 +113,6 @@ pub struct TopicReaderMessage {
     // Non-zero only on the last message of a server ReadResponse; carries the
     // response's bytes_size for flow-control (sent back as ReadRequest).
     pub(crate) bytes_to_release: i64,
-    pub decompression_failed: bool,
 }
 
 impl TopicReaderMessage {

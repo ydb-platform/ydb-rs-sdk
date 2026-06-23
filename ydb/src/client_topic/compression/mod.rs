@@ -15,4 +15,7 @@ pub use codec_registry::{CompressionDecoder, CompressionEncoder};
 pub use codec_selector::CodecSelection;
 pub(crate) use compression_worker::CompressionWorker;
 pub(crate) use decompression_worker::DecompressionWorker;
-pub use executor::{default_executor, Executor, InplaceExecutor, RayonExecutor, TokioExecutor};
+pub(crate) use executor::default_executor;
+pub use executor::Executor;
+#[cfg(test)]
+pub(crate) use executor::{InplaceExecutor, RayonExecutor, TokioExecutor};
