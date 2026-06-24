@@ -26,8 +26,8 @@ pub struct QueueFlags {
     pub consumer_count: u32,
     #[arg(long, default_value = "producer")]
     pub producer_id_prefix: String,
-    #[arg(long, default_value_t = 1)]
-    pub writers_per_partition: u32,
+    #[arg(long, default_value_t = 10)]
+    pub writer_count: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -41,7 +41,7 @@ pub struct Params {
     pub consumer_prefix: String,
     pub consumer_count: u32,
     pub producer_id_prefix: String,
-    pub writers_per_partition: u32,
+    pub writer_count: u32,
     pub topic_path: String,
 }
 
@@ -66,7 +66,7 @@ pub fn parse_params(fw: &Framework) -> Params {
         consumer_prefix: flags.consumer_prefix,
         consumer_count: flags.consumer_count,
         producer_id_prefix: flags.producer_id_prefix,
-        writers_per_partition: flags.writers_per_partition,
+        writer_count: flags.writer_count,
 
         topic_path,
     }

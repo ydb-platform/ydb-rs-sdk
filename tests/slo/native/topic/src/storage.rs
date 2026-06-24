@@ -13,8 +13,8 @@ fn consumer_name(prefix: &str, index: u32) -> String {
     format!("{prefix}-{index}")
 }
 
-fn producer_id(prefix: &str, partition_id: i64, writer_idx: u32) -> String {
-    format!("{prefix}-{partition_id}-{writer_idx}")
+fn producer_id(prefix: &str, idx: u32) -> String {
+    format!("{prefix}-{idx}")
 }
 
 pub struct TopicStorage {
@@ -71,28 +71,25 @@ impl Topic for TopicStorage {
     }
 
     async fn open_writers(&self) -> Result<Vec<TopicWriter>, String> {
-        let total = (self.params.partition_count * self.params.writers_per_partition) as usize;
-        let mut writers: Vec<TopicWriter> = Vec::with_capacity(total);
+        let mut writers: Vec<TopicWriter> = Vec::with_capacity(self.params.writer_count as usize);
         let mut tc = self.topic_client.lock().await;
 
-        for partition_id in 0..self.params.partition_count as i64 {
-            for writer_idx in 0..self.params.writers_per_partition {
-                let id = producer_id(&self.params.producer_id_prefix, partition_id, writer_idx);
+        for i in 0..self.params.writer_count {
+            let id = producer_id(&self.params.producer_id_prefix, i);
 
-                let options = TopicWriterOptionsBuilder::default()
-                    .topic_path(self.params.topic_path.clone())
-                    .producer_id(id)
-                    .partitioning(PartitioningStrategy::ByProducerId)
-                    .build()
-                    .map_err(|err| err.to_string())?;
+            let options = TopicWriterOptionsBuilder::default()
+                .topic_path(self.params.topic_path.clone())
+                .producer_id(id)
+                .partitioning(PartitioningStrategy::ByProducerId)
+                .build()
+                .map_err(|err| err.to_string())?;
 
-                let writer = tc
-                    .create_writer_with_params(options)
-                    .await
-                    .map_err(|err| err.to_string())?;
+            let writer = tc
+                .create_writer_with_params(options)
+                .await
+                .map_err(|err| err.to_string())?;
 
-                writers.push(writer);
-            }
+            writers.push(writer);
         }
 
         Ok(writers)
