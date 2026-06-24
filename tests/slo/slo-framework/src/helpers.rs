@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,6 +45,19 @@ pub async fn run_workers<F, Fut>(
     for handle in handles {
         let _ = handle.await;
     }
+}
+
+pub async fn run_workers_for<I, F, Fut>(tasks: I)
+where
+    I: IntoIterator<Item = F>,
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let mut set = tokio::task::JoinSet::new();
+    for task in tasks {
+        set.spawn(task());
+    }
+    while set.join_next().await.is_some() {}
 }
 
 #[cfg(test)]
