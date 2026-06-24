@@ -4,14 +4,9 @@ use tokio::sync::Mutex;
 use slo_framework::topic::{Params, Topic};
 use slo_framework::{Framework, TopicWorkload, Workload};
 use ydb::{
-    ClientBuilder, Consumer, ConsumerBuilder, CreateTopicOptionsBuilder, PartitioningStrategy,
-    TopicClient, TopicReader, TopicReaderOptionsBuilder, TopicSelector, TopicWriter,
-    TopicWriterOptionsBuilder,
+    ClientBuilder, ConsumerBuilder, CreateTopicOptionsBuilder, PartitioningStrategy, TopicClient,
+    TopicReader, TopicReaderOptionsBuilder, TopicSelector, TopicWriter, TopicWriterOptionsBuilder,
 };
-
-fn consumer_name(prefix: &str, index: u32) -> String {
-    format!("{prefix}-{index}")
-}
 
 fn producer_id(prefix: &str, idx: u32) -> String {
     format!("{prefix}-{idx}")
@@ -41,19 +36,15 @@ impl TopicStorage {
 #[async_trait]
 impl Topic for TopicStorage {
     async fn create_topic(&self) -> Result<(), String> {
-        let consumers: Vec<Consumer> = (0..self.params.consumer_count)
-            .map(|i| {
-                ConsumerBuilder::default()
-                    .name(consumer_name(&self.params.consumer_prefix, i))
-                    .important(true)
-                    .build()
-                    .map_err(|err| err.to_string())
-            })
-            .collect::<Result<_, _>>()?;
+        let consumer = ConsumerBuilder::default()
+            .name(self.params.consumer_name.clone())
+            .important(true)
+            .build()
+            .map_err(|err| err.to_string())?;
 
         let options = CreateTopicOptionsBuilder::default()
             .min_active_partitions(self.params.partition_count as i64)
-            .consumers(consumers)
+            .consumers(vec![consumer])
             .build()
             .map_err(|err| err.to_string())?;
 
@@ -96,17 +87,18 @@ impl Topic for TopicStorage {
     }
 
     async fn open_readers(&self) -> Result<Vec<TopicReader>, String> {
-        let total = self.params.consumer_count as usize;
-        let mut readers: Vec<TopicReader> = Vec::with_capacity(total);
+        let mut readers: Vec<TopicReader> = Vec::with_capacity(self.params.reader_count as usize);
         let mut tc = self.topic_client.lock().await;
 
-        for consumer_idx in 0..self.params.consumer_count {
-            let consumer = consumer_name(&self.params.consumer_prefix, consumer_idx);
+        for _ in 0..self.params.reader_count {
             let selector = TopicSelector::new(self.params.topic_path.clone());
 
-            let options = TopicReaderOptionsBuilder::from_consumer_topic(consumer, selector)
-                .build()
-                .map_err(|err| err.to_string())?;
+            let options = TopicReaderOptionsBuilder::from_consumer_topic(
+                self.params.consumer_name.clone(),
+                selector,
+            )
+            .build()
+            .map_err(|err| err.to_string())?;
 
             let reader = tc
                 .create_reader_with_params(options)

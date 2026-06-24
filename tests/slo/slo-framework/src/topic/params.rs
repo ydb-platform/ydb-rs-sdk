@@ -21,9 +21,9 @@ pub struct QueueFlags {
     #[arg(long, default_value_t = 10)]
     pub partition_count: u32,
     #[arg(long, default_value = "slo-consumer")]
-    pub consumer_prefix: String,
+    pub consumer_name: String,
     #[arg(long, default_value_t = 10)]
-    pub consumer_count: u32,
+    pub reader_count: u32,
     #[arg(long, default_value = "producer")]
     pub producer_id_prefix: String,
     #[arg(long, default_value_t = 10)]
@@ -38,8 +38,8 @@ pub struct Params {
     pub write_timeout: Duration,
     pub commit_delay: Duration,
     pub partition_count: u32,
-    pub consumer_prefix: String,
-    pub consumer_count: u32,
+    pub consumer_name: String,
+    pub reader_count: u32,
     pub producer_id_prefix: String,
     pub writer_count: u32,
     pub topic_path: String,
@@ -63,8 +63,8 @@ pub fn parse_params(fw: &Framework) -> Params {
         commit_delay: Duration::from_millis(flags.commit_delay),
 
         partition_count: flags.partition_count,
-        consumer_prefix: flags.consumer_prefix,
-        consumer_count: flags.consumer_count,
+        consumer_name: flags.consumer_name,
+        reader_count: flags.reader_count,
         producer_id_prefix: flags.producer_id_prefix,
         writer_count: flags.writer_count,
 
