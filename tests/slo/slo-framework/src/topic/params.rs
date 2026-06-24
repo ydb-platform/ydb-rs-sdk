@@ -8,7 +8,7 @@ use crate::Framework;
 #[derive(Debug, Clone, Parser)]
 #[command(disable_help_flag = true, disable_version_flag = true)]
 pub struct QueueFlags {
-    #[arg(long, default_value_t = 1000)]
+    #[arg(long, default_value_t = 1_000)]
     pub read_rps: u32,
     #[arg(long, default_value_t = 100)]
     pub write_rps: u32,
@@ -16,8 +16,8 @@ pub struct QueueFlags {
     pub read_timeout: u64,
     #[arg(long, default_value_t = 10_000)]
     pub write_timeout: u64,
-    #[arg(long, default_value_t = 10_000)]
-    pub commit_timeout: u64,
+    #[arg(long, default_value_t = 100)]
+    pub commit_delay: u64,
     #[arg(long, default_value_t = 10)]
     pub partition_count: u32,
     #[arg(long, default_value = "slo-consumer")]
@@ -36,7 +36,7 @@ pub struct Params {
     pub write_rps: u32,
     pub read_timeout: Duration,
     pub write_timeout: Duration,
-    pub commit_timeout: Duration,
+    pub commit_delay: Duration,
     pub partition_count: u32,
     pub consumer_prefix: String,
     pub consumer_count: u32,
@@ -60,7 +60,7 @@ pub fn parse_params(fw: &Framework) -> Params {
 
         read_timeout: Duration::from_millis(flags.read_timeout),
         write_timeout: Duration::from_millis(flags.write_timeout),
-        commit_timeout: Duration::from_millis(flags.commit_timeout),
+        commit_delay: Duration::from_millis(flags.commit_delay),
 
         partition_count: flags.partition_count,
         consumer_prefix: flags.consumer_prefix,
