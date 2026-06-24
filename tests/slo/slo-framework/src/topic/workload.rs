@@ -93,7 +93,7 @@ fn spawn_writer_workers(
         let limiter = limiter.clone();
 
         move || async move {
-            let mut seq_no: i64 = 0;
+            let mut seq_no: i64 = 1;
 
             while !ctx.is_cancelled() {
                 if let Err(wait) = limiter.try_wait() {
@@ -166,8 +166,10 @@ fn spawn_reader_workers(
                 let result = tokio::time::timeout(timeout, reader.lock().await.read_batch()).await;
 
                 match result {
-                    Ok(Ok(batch)) => {
-                        if let Err(err) = process_batch(&messages_order, &offset_order, &batch) {
+                    Ok(Ok(mut batch)) => {
+                        if let Err(err) =
+                            process_batch(&messages_order, &offset_order, &mut batch).await
+                        {
                             fw.logger.errorf(format!("invariant violated: {err}"));
                             span.finish(Some(&err), 1);
                             continue;
@@ -200,12 +202,26 @@ fn spawn_reader_workers(
     })))
 }
 
-fn process_batch(
+async fn process_batch(
     messages_order: &verification::MessagesOrder,
     offset_order: &verification::OffsetOrder,
-    batch: &ydb::TopicReaderBatch,
+    batch: &mut ydb::TopicReaderBatch,
 ) -> Result<(), String> {
-    for message in &batch.messages {
+    for message in batch.messages.iter_mut() {
+        let payload = message
+            .read_and_take()
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("message payload violated: no payload".to_string())?;
+
+        if payload != message.seq_no.to_string().into_bytes() {
+            return Err(format!(
+                "message payload violated: expected: {}, got: {}",
+                message.seq_no,
+                String::from_utf8_lossy(&payload)
+            ));
+        }
+
         messages_order.insert(message)?;
         offset_order.ack_message(message)?;
     }
