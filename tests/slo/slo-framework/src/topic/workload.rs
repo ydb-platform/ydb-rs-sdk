@@ -144,7 +144,8 @@ fn spawn_reader_workers(
     commit_delay: Duration,
 ) -> tokio::task::JoinHandle<()> {
     let limiter = Arc::new(new_rate_limiter(rps));
-    let messages = Arc::new(verification::MessagesOrder::default());
+    let messages_order = Arc::new(verification::MessagesOrder::default());
+    let offsets_order = Arc::new(verification::OffsetOrder::default());
 
     tokio::spawn(run_workers_for(readers.into_iter().map(move |reader| {
         let ctx = ctx.clone();
@@ -152,8 +153,8 @@ fn spawn_reader_workers(
         let limiter = limiter.clone();
 
         let reader = Arc::new(tokio::sync::Mutex::new(reader));
-        let messages_order = messages.clone();
-        let offset_order = Arc::new(verification::OffsetOrder::default());
+        let messages_order = messages_order.clone();
+        let offset_order = offsets_order.clone();
 
         move || async move {
             while !ctx.is_cancelled() {
