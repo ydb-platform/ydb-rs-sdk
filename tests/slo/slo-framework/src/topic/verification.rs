@@ -53,13 +53,23 @@ impl MessagesOrder {
             }
         }
 
-        match self.per_stream.insert(key, seq_no) {
-            Some(prev_value) if prev_value + 1 != seq_no => {
-                Err("messages seq_no order violated".to_string())
+        match self.per_stream.entry(key) {
+            dashmap::Entry::Occupied(mut e) => {
+                let prev = *e.get();
+                if prev + 1 != seq_no {
+                    return Err(format!(
+                        "messages seq_no order violated: expected {}, got {seq_no}",
+                        prev + 1
+                    ));
+                }
+                *e.get_mut() = seq_no;
             }
-
-            _ => Ok(()),
+            dashmap::Entry::Vacant(e) => {
+                e.insert(seq_no);
+            }
         }
+
+        Ok(())
     }
 }
 
