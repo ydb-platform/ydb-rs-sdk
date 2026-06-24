@@ -22,7 +22,7 @@ pub struct QueueFlags {
     pub partition_count: u32,
     #[arg(long, default_value = "slo-consumer")]
     pub consumer_prefix: String,
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 10)]
     pub consumer_count: u32,
     #[arg(long, default_value = "producer")]
     pub producer_id_prefix: String,
