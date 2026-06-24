@@ -8,10 +8,11 @@ SLO tests exercise the SDK against a YDB cluster under chaos (node failures, net
 
 ```
 tests/slo/
-  Dockerfile                 # builds slo-native-table / slo-native-query binaries
+  Dockerfile                 # builds slo-native-table / slo-native-query / slo-native-topic binaries
   slo-framework/             # shared framework (config, metrics, kv workload)
   native/table/              # TableClient key-value workload (#420)
   native/query/              # QueryClient key-value workload (#453)
+  native/topic/              # Topic workload
 ```
 
 ## CI
@@ -28,6 +29,8 @@ The workload runs **setup → run → teardown** in one process (create table, p
 cargo build --release -p slo-native-table
 # or
 cargo build --release -p slo-native-query
+# or
+cargo build --release -p slo-native-topic
 
 export YDB_CONNECTION_STRING=grpc://localhost:2136/local
 export WORKLOAD_REF=local
@@ -46,6 +49,11 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:9090/api/v1/otlp
   --read-rps 100 \
   --write-rps 10 \
   --prefill-count 1000
+
+# Topic workload (set WORKLOAD_NAME=native-topic):
+./target/release/slo-native-topic \
+  --read-rps 100 \
+  --write-rps 10
 ```
 
 Or via cargo:
@@ -63,6 +71,13 @@ WORKLOAD_REF=local \
 WORKLOAD_NAME=native-query \
 WORKLOAD_DURATION=60 \
 cargo run --release -p slo-native-query -- --read-rps 100 --write-rps 10
+
+# Topic:
+YDB_CONNECTION_STRING=grpc://localhost:2136/local \
+WORKLOAD_REF=local \
+WORKLOAD_NAME=native-topic \
+WORKLOAD_DURATION=60 \
+cargo run --release -p slo-native-topic -- --read-rps 100 --write-rps 10
 ```
 
 ### CLI flags
