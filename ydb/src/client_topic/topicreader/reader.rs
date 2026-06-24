@@ -26,6 +26,7 @@ use crate::{YdbError, YdbResult};
 use futures_util::Future;
 use secrecy::ExposeSecret;
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -171,16 +172,24 @@ struct TopicReaderContext {
     manager: GrpcConnectionManager,
     options: TopicReaderOptions,
     token_cache: TokenCache,
+
+    epoch: usize,
+    reader_id: usize,
 }
 
 pub struct TopicReader {
     context: TopicReaderContext,
-    epoch: usize,
 
     reader: StreamReader,
 }
 
+static READER_IDS: AtomicUsize = AtomicUsize::new(0);
+
 impl TopicReader {
+    fn new_reader_id() -> usize {
+        READER_IDS.fetch_add(1, Ordering::Relaxed)
+    }
+
     pub(crate) async fn new(
         options: TopicReaderOptions,
         manager: GrpcConnectionManager,
@@ -190,15 +199,13 @@ impl TopicReader {
             manager,
             options,
             token_cache,
+            epoch: 0,
+            reader_id: Self::new_reader_id(),
         };
-        let epoch = 0;
-        let reader = StreamReader::new(&context, epoch).await?;
 
-        Ok(Self {
-            context,
-            epoch,
-            reader,
-        })
+        let reader = StreamReader::new(&context).await?;
+
+        Ok(Self { context, reader })
     }
 
     pub async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
@@ -275,7 +282,7 @@ impl TopicReader {
         self.ensure_retriable(err)?;
 
         self.reader.cancel().await;
-        self.epoch += 1;
+        self.context.epoch += 1;
 
         let mut attempts: usize = 0;
         let start = std::time::Instant::now();
@@ -283,18 +290,15 @@ impl TopicReader {
         let reader = loop {
             attempts += 1;
 
-            match tokio::time::timeout(
-                RECONNECT_ATTEMPT_TIMEOUT,
-                StreamReader::new(&self.context, self.epoch),
-            )
-            .await
+            match tokio::time::timeout(RECONNECT_ATTEMPT_TIMEOUT, StreamReader::new(&self.context))
+                .await
             {
                 Ok(Ok(reader)) => break reader,
                 Ok(Err(err)) => self.ensure_retriable(err)?,
                 Err(_) => {
                     debug!(
                         consumer = self.context.options.consumer,
-                        epoch = self.epoch,
+                        epoch = self.context.epoch,
                         attempt = attempts,
                         "topic reader reconnect attempt timed out"
                     );
@@ -306,7 +310,7 @@ impl TopicReader {
 
         info!(
             consumer = self.context.options.consumer,
-            epoch = self.epoch,
+            epoch = self.context.epoch,
             elapsed = ?start.elapsed(),
             attempts = attempts,
             "topic reader reconnected"
@@ -323,7 +327,7 @@ impl TopicReader {
             NeedRetry::True | NeedRetry::IdempotentOnly => {
                 info!(
                     consumer = self.context.options.consumer,
-                    epoch = self.epoch,
+                    epoch = self.context.epoch,
                     err = %err,
                     "topic reader error is retriable, reconnecting"
                 );
@@ -332,7 +336,7 @@ impl TopicReader {
             NeedRetry::False => {
                 error!(
                     consumer = self.context.options.consumer,
-                    epoch = self.epoch,
+                    epoch = self.context.epoch,
                     err = %err,
                     "topic reader error is non-retriable"
                 );
@@ -350,6 +354,7 @@ struct StreamReader {
     consumer: String,
     stop_background_work_token: YdbCancellationToken,
     batch_size: usize,
+    reader_id: usize,
     epoch: usize,
 
     background: tokio::task::JoinSet<()>,
@@ -464,7 +469,7 @@ impl StreamReader {
         }
     }
 
-    pub(crate) async fn new(context: &TopicReaderContext, epoch: usize) -> YdbResult<Self> {
+    pub(crate) async fn new(context: &TopicReaderContext) -> YdbResult<Self> {
         let (stream, topic_service) =
             Self::grpc_connect(&context.manager, &context.options).await?;
 
@@ -472,7 +477,8 @@ impl StreamReader {
             stream_sender: stream.clone_sender(),
             shared: Arc::new(ReaderShared::new()),
             stop_background_work_token: YdbCancellationToken::new(),
-            epoch,
+            reader_id: context.reader_id,
+            epoch: context.epoch,
             background: Default::default(),
             consumer: context.options.consumer.clone(),
             batch_size: context.options.batch_size,
@@ -495,6 +501,7 @@ impl StreamReader {
             stream,
             self.shared.clone(),
             self.stop_background_work_token.clone(),
+            self.reader_id,
             self.epoch,
         ));
 
@@ -634,6 +641,7 @@ async fn receive_loop(
     mut stream: AsyncGrpcStreamWrapper<FromClient, FromServer>,
     shared: Arc<ReaderShared>,
     stop: YdbCancellationToken,
+    reader_id: usize,
     epoch: usize,
 ) {
     let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
@@ -656,6 +664,7 @@ async fn receive_loop(
                             &mut sessions,
                             &sender_for_responses,
                             &shared,
+                            reader_id,
                             epoch,
                         ) {
                             break Some(e);
@@ -683,10 +692,13 @@ fn handle_incoming(
     sessions: &mut HashMap<i64, PartitionSession>,
     sender: &UnboundedSender<FromClient>,
     shared: &ReaderShared,
+    reader_id: usize,
     epoch: usize,
 ) -> YdbResult<()> {
     match msg {
-        RawFromServer::ReadResponse(resp) => handle_read_response(resp, sessions, shared, epoch)?,
+        RawFromServer::ReadResponse(resp) => {
+            handle_read_response(resp, sessions, shared, reader_id, epoch)?
+        }
         RawFromServer::InitResponse(_) => debug!("topic reader initialized"),
         RawFromServer::CommitOffsetResponse(resp) => {
             debug!("commit offset response for topic reader: {:?}", resp);
@@ -756,6 +768,7 @@ pub(crate) fn handle_read_response(
     resp: RawReadResponse,
     sessions: &mut HashMap<i64, PartitionSession>,
     shared: &ReaderShared,
+    reader_id: usize,
     epoch: usize,
 ) -> YdbResult<()> {
     for partition_data in resp.partition_data {
@@ -775,7 +788,7 @@ pub(crate) fn handle_read_response(
                 continue;
             }
             let batch_bytes = raw_batch.get_read_session_size();
-            let batch = TopicReaderBatch::new(raw_batch, session, epoch);
+            let batch = TopicReaderBatch::new(raw_batch, session, reader_id, epoch);
             let mut messages = batch.messages;
             if let Some(last) = messages.last_mut() {
                 last.bytes_to_release = batch_bytes;
