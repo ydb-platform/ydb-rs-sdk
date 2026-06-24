@@ -43,8 +43,10 @@ impl MessagesOrder {
             }
 
             dashmap::Entry::Vacant(vacant_entry) => {
-                if seq_no != 0 {
-                    return Err("messages seq_no violdated: starting seq_no {seq_no}".to_string());
+                if seq_no != 1 {
+                    return Err(format!(
+                        "messages seq_no violdated: starting seq_no {seq_no}"
+                    ));
                 }
 
                 vacant_entry.insert(seq_no);
