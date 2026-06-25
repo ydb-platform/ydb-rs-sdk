@@ -19,6 +19,7 @@ const HDR_SIGNIFICANT_DIGITS: u8 = 5;
 pub type OperationType = &'static str;
 pub const OPERATION_READ: OperationType = "read";
 pub const OPERATION_WRITE: OperationType = "write";
+pub const OPERATION_MESSAGE_RTT: OperationType = "message_rtt";
 
 const STATUS_SUCCESS: &str = "success";
 const STATUS_FAILURE: &str = "failure";
@@ -216,6 +217,23 @@ impl Metrics {
         })
     }
 
+    pub fn record_latency_with_attrs_key(&self, attrs_key: String, latency: Duration) {
+        self.inner
+            .latency
+            .lock()
+            .unwrap()
+            .record(latency.as_micros() as u64, attrs_key);
+    }
+
+    pub fn record_latency_with_operation(&self, operation_type: OperationType, latency: Duration) {
+        let attrs_key = format!(
+            "ref={};operation_type={};operation_status={}",
+            self.inner.ref_name, operation_type, STATUS_SUCCESS
+        );
+
+        self.record_latency_with_attrs_key(attrs_key, latency);
+    }
+
     pub fn start(&self, operation_type: OperationType) -> Span {
         if let Some(counter) = &self.inner.pending_operations {
             counter.add(
@@ -262,11 +280,7 @@ impl Span {
         let attrs = attrs_from_key(&attrs_key);
 
         self.metrics
-            .inner
-            .latency
-            .lock()
-            .unwrap()
-            .record(self.started.elapsed().as_micros() as u64, attrs_key.clone());
+            .record_latency_with_attrs_key(attrs_key, self.started.elapsed());
 
         if let Some(counter) = &self.metrics.inner.operations_total {
             counter.add(1, &attrs);
@@ -299,18 +313,6 @@ impl Span {
                 error_attrs.push(KeyValue::new("error_name", err_msg.to_string()));
                 counter.add(1, &error_attrs);
             }
-        }
-    }
-
-    pub fn cancel(self) {
-        if let Some(counter) = &self.metrics.inner.pending_operations {
-            counter.add(
-                -1,
-                &[
-                    KeyValue::new("ref", self.metrics.inner.ref_name.clone()),
-                    KeyValue::new("operation_type", self.operation_type),
-                ],
-            );
         }
     }
 }
