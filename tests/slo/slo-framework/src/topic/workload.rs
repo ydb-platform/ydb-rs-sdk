@@ -5,7 +5,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::framework::Workload;
 use crate::helpers::{new_rate_limiter, run_workers_for};
-use crate::metrics::{OPERATION_READ, OPERATION_WRITE};
+use crate::metrics::{OPERATION_MESSAGE_RTT, OPERATION_READ, OPERATION_WRITE};
 use crate::Framework;
 
 use super::{verification, Params, Topic};
@@ -169,7 +169,7 @@ fn spawn_reader_workers(
                 match result {
                     Ok(Ok(mut batch)) => {
                         if let Err(err) =
-                            process_batch(&messages_order, &offset_order, &mut batch).await
+                            process_batch(&fw, &messages_order, &offset_order, &mut batch).await
                         {
                             fw.logger.errorf(format!("invariant violated: {err}"));
                             span.finish(Some(&err), 1);
@@ -194,8 +194,8 @@ fn spawn_reader_workers(
                         fw.logger.errorf(format!("read failed: {msg}"));
                     }
                     Err(_) => {
-                        span.cancel();
-                        fw.logger.printf("read failed: timeout");
+                        span.finish(Some("read timout"), 1);
+                        fw.logger.errorf("read failed: timeout");
                     }
                 }
             }
@@ -204,10 +204,13 @@ fn spawn_reader_workers(
 }
 
 async fn process_batch(
+    fw: &Framework,
     messages_order: &verification::MessagesOrder,
     offset_order: &verification::OffsetOrder,
     batch: &mut ydb::TopicReaderBatch,
 ) -> Result<(), String> {
+    let now = std::time::SystemTime::now();
+
     for message in batch.messages.iter_mut() {
         let payload = message
             .read_and_take()
@@ -225,7 +228,27 @@ async fn process_batch(
 
         messages_order.insert(message)?;
         offset_order.ack_message(message)?;
+        log_message_rtt_latency(fw, message, now)?;
     }
+
+    Ok(())
+}
+
+fn log_message_rtt_latency(
+    fw: &Framework,
+    message: &ydb::TopicReaderMessage,
+    now: std::time::SystemTime,
+) -> Result<(), String> {
+    let created_at = message
+        .created_at
+        .ok_or_else(|| "message has no timestamp".to_string())?;
+
+    let latency = now
+        .duration_since(created_at)
+        .map_err(|e| format!("message timestamp in the future: {e}"))?;
+
+    fw.metrics
+        .record_latency_with_operation(OPERATION_MESSAGE_RTT, latency);
 
     Ok(())
 }
