@@ -315,6 +315,18 @@ impl Span {
             }
         }
     }
+
+    pub fn cancel(self) {
+        if let Some(counter) = &self.metrics.inner.pending_operations {
+            counter.add(
+                -1,
+                &[
+                    KeyValue::new("ref", self.metrics.inner.ref_name.clone()),
+                    KeyValue::new("operation_type", self.operation_type),
+                ],
+            );
+        }
+    }
 }
 
 fn attrs_from_key(key: &str) -> Vec<KeyValue> {

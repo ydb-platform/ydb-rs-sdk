@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 use crate::framework::Workload;
-use crate::helpers::{new_rate_limiter, run_workers_for};
+use crate::helpers::{new_rate_limiter, run_workers_for, timeout_or_cancel, TimeoutOutcome};
 use crate::metrics::{OPERATION_MESSAGE_RTT, OPERATION_READ, OPERATION_WRITE};
 use crate::Framework;
 
@@ -117,18 +117,20 @@ fn spawn_writer_workers(
                 };
 
                 let span = fw.metrics.start(OPERATION_WRITE);
-                let result = tokio::time::timeout(timeout, writer.write(message)).await;
-
-                match result {
-                    Ok(Ok(())) => span.finish(None, 1),
-                    Ok(Err(err)) => {
+                match timeout_or_cancel(&ctx, timeout, writer.write(message)).await {
+                    TimeoutOutcome::Completed(Ok(())) => span.finish(None, 1),
+                    TimeoutOutcome::Completed(Err(err)) => {
                         let msg = err.to_string();
                         span.finish(Some(&msg), 1);
                         fw.logger.errorf(format!("write failed: {msg}"));
                     }
-                    Err(_) => {
+                    TimeoutOutcome::TimedOut => {
                         span.finish(Some("write timeout"), 1);
                         fw.logger.errorf("write failed: timeout");
+                    }
+                    TimeoutOutcome::Cancelled => {
+                        span.cancel();
+                        break;
                     }
                 }
             }
@@ -165,10 +167,9 @@ fn spawn_reader_workers(
                 }
 
                 let span = fw.metrics.start(OPERATION_READ);
-                let result = tokio::time::timeout(timeout, reader.lock().await.read_batch()).await;
 
-                match result {
-                    Ok(Ok(mut batch)) => {
+                match timeout_or_cancel(&ctx, timeout, reader.lock().await.read_batch()).await {
+                    TimeoutOutcome::Completed(Ok(mut batch)) => {
                         if let Err(err) =
                             process_batch(&fw, &messages_order, &offset_order, &mut batch).await
                         {
@@ -189,14 +190,18 @@ fn spawn_reader_workers(
 
                         span.finish(None, 1)
                     }
-                    Ok(Err(err)) => {
+                    TimeoutOutcome::Completed(Err(err)) => {
                         let msg = err.to_string();
                         span.finish(Some(&msg), 1);
                         fw.logger.errorf(format!("read failed: {msg}"));
                     }
-                    Err(_) => {
+                    TimeoutOutcome::TimedOut => {
                         span.finish(Some("read timeout"), 1);
                         fw.logger.errorf("read failed: timeout");
+                    }
+                    TimeoutOutcome::Cancelled => {
+                        span.cancel();
+                        break;
                     }
                 }
             }
