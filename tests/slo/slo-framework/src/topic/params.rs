@@ -10,11 +10,11 @@ use crate::Framework;
 pub struct QueueFlags {
     #[arg(long, default_value_t = 1_000)]
     pub read_rps: u32,
-    #[arg(long, default_value_t = 100)]
+    #[arg(long, default_value_t = 2_000)]
     pub write_rps: u32,
-    #[arg(long, default_value_t = 10_000)]
+    #[arg(long, default_value_t = 120_000 /* two minutes */)]
     pub read_timeout: u64,
-    #[arg(long, default_value_t = 10_000)]
+    #[arg(long, default_value_t = 120_000 /* two minutes */)]
     pub write_timeout: u64,
     #[arg(long, default_value_t = 100)]
     pub commit_delay: u64,
@@ -22,11 +22,11 @@ pub struct QueueFlags {
     pub partition_count: u32,
     #[arg(long, default_value = "slo-consumer")]
     pub consumer_name: String,
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 5)]
     pub reader_count: u32,
     #[arg(long, default_value = "producer")]
     pub producer_id_prefix: String,
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 20)]
     pub writer_count: u32,
 }
 
