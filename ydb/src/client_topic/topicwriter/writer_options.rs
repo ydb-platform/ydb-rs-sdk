@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use derive_builder::Builder;
 
+use crate::client_topic::compression::{CodecSelection, CompressionEncoder};
 use crate::client_topic::topicwriter::partitioning::PartitioningStrategy;
 use crate::errors;
 use crate::retry::{IndefiniteRetrier, Retry};
@@ -30,4 +31,21 @@ pub struct TopicWriterOptions {
 
     #[builder(default = "Arc::new(IndefiniteRetrier{ })")]
     pub(crate) retrier: Arc<dyn Retry>,
+
+    #[builder(default)]
+    pub(crate) codec_selector: CodecSelection,
+    #[builder(setter(custom), default)]
+    pub(crate) extra_encoders: Vec<Arc<dyn CompressionEncoder>>,
+}
+
+impl TopicWriterOptionsBuilder {
+    pub fn add_encoder<E>(&mut self, encoder: E) -> &mut Self
+    where
+        E: CompressionEncoder + 'static,
+    {
+        self.extra_encoders
+            .get_or_insert_default()
+            .push(Arc::new(encoder));
+        self
+    }
 }

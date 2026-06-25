@@ -3,10 +3,10 @@ use std::time::{self, UNIX_EPOCH};
 use derive_builder::Builder;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
-use crate::{errors, YdbError, YdbResult};
+use crate::{errors, YdbError};
 
 #[derive(Builder)]
-#[builder(build_fn(error = "errors::YdbError", validate = "Self::validate"))]
+#[builder(build_fn(error = "errors::YdbError"))]
 pub struct TopicWriterMessage {
     #[builder(default = "None")]
     pub(crate) seq_no: Option<i64>,
@@ -14,12 +14,6 @@ pub struct TopicWriterMessage {
     pub(crate) created_at: time::SystemTime,
 
     pub(crate) data: Vec<u8>,
-}
-
-impl TopicWriterMessageBuilder {
-    fn validate(&self) -> YdbResult<()> {
-        Ok(())
-    }
 }
 
 impl TryFrom<TopicWriterMessage> for MessageData {

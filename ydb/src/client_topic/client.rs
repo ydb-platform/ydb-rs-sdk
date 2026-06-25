@@ -1,3 +1,4 @@
+use super::compression::Executor;
 use super::list_types::{Codec, TopicDescription};
 use crate::client::TimeoutSettings;
 use crate::client_common::TokenCache;
@@ -21,6 +22,7 @@ use crate::YdbError::InternalError;
 use crate::{grpc_wrapper, YdbResult};
 use derive_builder::{Builder, UninitializedFieldError};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Builder)]
@@ -121,6 +123,7 @@ pub struct TopicClient {
     timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
     token_cache: TokenCache,
+    executor: Arc<dyn Executor>,
 }
 
 impl TopicClient {
@@ -128,11 +131,13 @@ impl TopicClient {
         timeouts: TimeoutSettings,
         connection_manager: GrpcConnectionManager,
         token_cache: TokenCache,
+        executor: Arc<dyn Executor>,
     ) -> Self {
         Self {
             timeouts,
             connection_manager,
             token_cache,
+            executor,
         }
     }
 
@@ -217,6 +222,7 @@ impl TopicClient {
             options,
             self.connection_manager.clone(),
             self.token_cache.clone(),
+            self.executor.clone(),
         )
         .await
     }
@@ -229,6 +235,7 @@ impl TopicClient {
             options,
             self.connection_manager.clone(),
             self.token_cache.clone(),
+            self.executor.clone(),
         )
         .await
     }
@@ -237,7 +244,12 @@ impl TopicClient {
         &mut self,
         writer_options: TopicWriterOptions,
     ) -> YdbResult<TopicWriter> {
-        TopicWriter::new(writer_options, self.connection_manager.clone()).await
+        TopicWriter::new(
+            writer_options,
+            self.connection_manager.clone(),
+            self.executor.clone(),
+        )
+        .await
     }
 
     pub async fn create_writer(&mut self, path: String) -> YdbResult<TopicWriter> {
@@ -247,6 +259,7 @@ impl TopicClient {
                 .build()
                 .unwrap(),
             self.connection_manager.clone(),
+            self.executor.clone(),
         )
         .await
     }

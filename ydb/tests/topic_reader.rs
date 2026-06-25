@@ -1,10 +1,14 @@
 mod mock_server;
 
+use flate2::{write::GzEncoder, Compression};
+use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
 use tokio::sync::Notify;
-use ydb::{ClientBuilder, TopicReader, TopicReaderBatch, TopicReaderCommitMarker, YdbResult};
+use ydb::{
+    ClientBuilder, Codec, TopicReader, TopicReaderBatch, TopicReaderCommitMarker, YdbResult,
+};
 use ydb_grpc::ydb_proto::topic::stream_read_message::from_client::ClientMessage as ReadFromClient;
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply};
@@ -27,6 +31,7 @@ const DATABASE: &str = "/local";
 const TOPIC_PATH: &str = "/local/topic";
 const CONSUMER: &str = "consumer";
 const PARTITION_SESSION_ID: i64 = 1;
+const UNKNOWN_CODEC: Codec = Codec { code: 10001 };
 
 #[derive(Default)]
 struct ServerState {
@@ -113,6 +118,23 @@ impl Driver {
         )))
     }
 
+    fn send_read_response_with_codec(
+        &self,
+        offset: i64,
+        uncompressed_size: i64,
+        payload: impl Into<Vec<u8>>,
+        codec: Codec,
+    ) {
+        self.send(Reply::Topic(builders::read_response_with_codec(
+            self.state.current_stream_id(),
+            PARTITION_SESSION_ID,
+            offset,
+            uncompressed_size,
+            payload,
+            codec,
+        )))
+    }
+
     fn send_commit_offset_response(&self, committed_offset: i64) {
         self.send(Reply::Topic(builders::commit_offset_response(
             self.state.current_stream_id(),
@@ -170,6 +192,35 @@ topic_test!(reads_message, timeout_secs = 1, {
     driver.state.partition_ready.notified().await;
 
     deliver_and_read(&driver, &mut reader, 0, b"hello").await?;
+    Ok(())
+});
+
+topic_test!(reads_gzip_message, timeout_secs = 1, {
+    let driver = Driver::start().await;
+    let mut reader = make_reader(&driver.server).await?;
+    driver.state.partition_ready.notified().await;
+
+    let payload = b"hello gzip";
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(payload)?;
+    let compressed = encoder.finish()?;
+    driver.send_read_response_with_codec(0, payload.len() as i64, compressed, Codec::GZIP);
+
+    let batch = reader.read_batch().await?;
+    assert_single_message_batch(batch, 0, payload).await?;
+
+    Ok(())
+});
+
+topic_test!(unknown_codec_fails_reader, timeout_secs = 1, {
+    let driver = Driver::start().await;
+    let mut reader = make_reader(&driver.server).await?;
+    driver.state.partition_ready.notified().await;
+
+    driver.send_read_response_with_codec(0, 5, b"hello", UNKNOWN_CODEC);
+
+    assert!(reader.read_batch().await.is_err());
+
     Ok(())
 });
 

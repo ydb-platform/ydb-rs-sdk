@@ -12,19 +12,26 @@ use std::collections::HashMap;
 use std::option::Option;
 use std::time::SystemTime;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Copy)]
 pub struct Codec {
     pub code: i32,
 }
 
 impl Codec {
+    pub const UNSPECIFIED: Codec = Codec { code: 0 };
     pub const RAW: Codec = Codec { code: 1 };
     pub const GZIP: Codec = Codec { code: 2 };
     pub const LZOP: Codec = Codec { code: 3 };
     pub const ZSTD: Codec = Codec { code: 4 };
 
-    pub fn is_custom(&self) -> bool {
-        self.code >= 10000 && self.code < 20000
+    /// Standard server-defined codec range: codes 1–4 (RAW, GZIP, LZOP, ZSTD).
+    pub fn is_standard(self) -> bool {
+        matches!(self.code, 1..=4)
+    }
+
+    /// User-defined custom codec range: codes [10_000, 20_000).
+    pub fn is_custom(self) -> bool {
+        matches!(self.code, 10_000..=19_999)
     }
 }
 

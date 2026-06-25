@@ -1,7 +1,7 @@
 use itertools::Itertools;
 use ydb_grpc::ydb_proto::topic::{Codec, SupportedCodecs};
 
-#[derive(serde::Serialize, Clone, Debug)]
+#[derive(serde::Serialize, Clone, Copy, Debug)]
 pub(crate) struct RawCodec {
     pub code: i32,
 }

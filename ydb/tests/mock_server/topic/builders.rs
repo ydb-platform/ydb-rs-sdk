@@ -58,19 +58,43 @@ pub fn read_response(
     offset: i64,
     data: impl Into<Vec<u8>>,
 ) -> TopicReply {
-    read_response_batch(stream_id, partition_session_id, vec![(offset, data.into())])
+    let data = data.into();
+    read_response_with_codec(
+        stream_id,
+        partition_session_id,
+        offset,
+        data.len() as i64,
+        data,
+        ydb::Codec::RAW,
+    )
 }
 
-pub fn read_response_batch(
+pub fn read_response_with_codec(
     stream_id: u64,
     partition_session_id: i64,
-    messages: Vec<(i64, Vec<u8>)>,
+    offset: i64,
+    uncompressed_size: i64,
+    data: impl Into<Vec<u8>>,
+    codec: ydb::Codec,
+) -> TopicReply {
+    read_response_batch_with_codec(
+        stream_id,
+        partition_session_id,
+        vec![(offset, uncompressed_size, data.into())],
+        codec,
+    )
+}
+
+pub fn read_response_batch_with_codec(
+    stream_id: u64,
+    partition_session_id: i64,
+    messages: Vec<(i64, i64, Vec<u8>)>,
+    codec: ydb::Codec,
 ) -> TopicReply {
     let message_data = messages
         .into_iter()
-        .map(|(offset, data)| {
-            let uncompressed_size = data.len() as i64;
-            stream_read_message::read_response::MessageData {
+        .map(
+            |(offset, uncompressed_size, data)| stream_read_message::read_response::MessageData {
                 offset,
                 seq_no: offset,
                 created_at: None,
@@ -78,8 +102,8 @@ pub fn read_response_batch(
                 uncompressed_size,
                 message_group_id: String::new(),
                 metadata_items: Vec::new(),
-            }
-        })
+            },
+        )
         .collect::<Vec<_>>();
 
     let bytes_size = message_data
@@ -98,7 +122,7 @@ pub fn read_response_batch(
                         message_data,
                         producer_id: "mock-producer".to_string(),
                         write_session_meta: HashMap::new(),
-                        codec: 0,
+                        codec: codec.code,
                         written_at: Some(Timestamp {
                             seconds: 0,
                             nanos: 0,
