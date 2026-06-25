@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, trace};
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 
+use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
@@ -30,6 +31,7 @@ pub(crate) struct ReconnectorParams {
     pub(crate) retrier: Arc<dyn Retry>,
     pub(crate) fatal_error_tx: oneshot::Sender<YdbError>,
     pub(crate) flush_timeout: Duration,
+    pub(crate) executor: Arc<dyn Executor>,
 }
 
 #[derive(Clone)]
@@ -80,6 +82,7 @@ impl Reconnector {
                 writer_options: params.writer_options,
                 producer_id: params.producer_id,
                 queue: queue.clone(),
+                executor: params.executor,
             },
             params.fatal_error_tx,
             init_tx,
@@ -210,6 +213,7 @@ struct ReconnectionHelper {
     retrier: Arc<dyn Retry>,
     cancellation_token: CancellationToken,
     producer_id: String,
+    executor: Arc<dyn Executor>,
 }
 
 enum WaitBeforeReconnectResult {
@@ -231,6 +235,7 @@ impl ReconnectionHelper {
 
         let mut stream = self.connect().await?;
         let init_response = ConnectionInfo::try_from(stream.receive::<RawServerMessage>().await?)?;
+        let server_codecs = init_response.codecs_from_server.clone().into();
 
         Ok(RecreateStreamWriterResult {
             stream_writer: StreamWriter::new(
@@ -238,8 +243,10 @@ impl ReconnectionHelper {
                 stream,
                 self.queue.clone(),
                 error_sender,
+                server_codecs,
+                self.executor.clone(),
             )
-            .await,
+            .await?,
             connection_info: init_response,
         })
     }
@@ -414,6 +421,13 @@ impl ReconnectionLoop {
     async fn recreate_stream_writer(&mut self) -> ReconnectionLoopStatus {
         if self.helper.cancellation_token.is_cancelled() {
             return ReconnectionLoopStatus::Exit(None);
+        }
+
+        // Wait ending old stream writer before recreating
+        if let Some(old) = self.stream_writer.take() {
+            if let Err(err) = old.stop().await {
+                return ReconnectionLoopStatus::HandleError(err);
+            }
         }
 
         let (error_sender, error_receiver) = oneshot::channel();

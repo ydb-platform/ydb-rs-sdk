@@ -89,6 +89,8 @@ mod table_service_types;
 #[cfg(test)]
 mod test_integration_helper;
 #[cfg(test)]
+pub(crate) mod topics_compression_test;
+#[cfg(test)]
 pub(crate) mod topics_test;
 mod trace_helpers;
 mod trait_operation;
@@ -134,7 +136,6 @@ pub use client_topic::topicreader::messages::{
 pub use client_topic::topicreader::reader::{
     TopicReader, TopicReaderCommitMarker, TopicSelector, TopicSelectors,
 };
-// full enum pub types
 pub use client_topic::topicreader::reader_options::{
     TopicReaderOptions, TopicReaderOptionsBuilder,
 };
@@ -143,8 +144,8 @@ pub use client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMess
 // full enum pub types
 pub use client_topic::topicwriter::partitioning::PartitioningStrategy;
 // full enum pub types
+pub use client_topic::compression::{CompressionDecoder, CompressionEncoder, Executor};
 pub use client_topic::topicwriter::writer::TopicWriter;
-// full enum pub types
 pub use client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
 };

@@ -8,6 +8,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
 
+use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
 use crate::client_topic::topicwriter::reconnector::{Reconnector, ReconnectorParams};
@@ -44,6 +45,7 @@ impl TopicWriter {
     pub(crate) async fn new(
         writer_options: TopicWriterOptions,
         connection_manager: GrpcConnectionManager,
+        executor: Arc<dyn Executor>,
     ) -> YdbResult<Self> {
         let producer_id = writer_options
             .producer_id
@@ -64,6 +66,7 @@ impl TopicWriter {
             retrier,
             fatal_error_tx,
             flush_timeout: writer_options.flush_timeout,
+            executor,
         })
         .await?;
 
