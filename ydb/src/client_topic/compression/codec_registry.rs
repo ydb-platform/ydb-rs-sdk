@@ -5,10 +5,6 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 /// Encodes topic message payloads for one codec.
-///
-/// Register your own to add a custom codec (codes `10_000..20_000`) or
-/// override one of the built-ins (`RAW`, `GZIP`, `LZOP`, `ZSTD` — codes 1–4).
-/// Implementations must be safe to call from multiple worker threads.
 pub trait CompressionEncoder: Debug + Send + Sync {
     fn encode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + 'static>>;
 
@@ -17,10 +13,6 @@ pub trait CompressionEncoder: Debug + Send + Sync {
 }
 
 /// Decodes topic message payloads for one codec.
-///
-/// Register your own to add a custom codec (codes `10_000..20_000`) or
-/// override one of the built-ins (`RAW`, `GZIP`, `LZOP`, `ZSTD` — codes 1–4).
-/// Implementations must be safe to call from multiple worker threads.
 pub trait CompressionDecoder: Debug + Send + Sync {
     fn decode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + 'static>>;
 
