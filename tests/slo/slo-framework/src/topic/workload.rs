@@ -40,9 +40,10 @@ impl<T: Topic + 'static> Workload for TopicWorkload<T> {
         let readers = self.topic.open_readers().await?;
 
         self.fw.logger.printf(format!(
-            "opened {} writer(s), {} reader(s)",
+            "opened {} partition(s), {} writer(s), {} reader(s)",
+            self.params.partition_count,
             writers.len(),
-            readers.len()
+            readers.len(),
         ));
 
         let write_handle = spawn_writer_workers(
@@ -194,7 +195,7 @@ fn spawn_reader_workers(
                         fw.logger.errorf(format!("read failed: {msg}"));
                     }
                     Err(_) => {
-                        span.finish(Some("read timout"), 1);
+                        span.finish(Some("read timeout"), 1);
                         fw.logger.errorf("read failed: timeout");
                     }
                 }
