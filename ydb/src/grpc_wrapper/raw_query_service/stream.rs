@@ -368,10 +368,14 @@ mod tests {
             items: vec![RawValue::Int64(value).into()],
             ..Default::default()
         };
-        part_with_rows(index, Some(vec![ydb_grpc::ydb_proto::Column {
-            name: column.to_string(),
-            r#type: Some(col_type),
-        }]), vec![row])
+        part_with_rows(
+            index,
+            Some(vec![ydb_grpc::ydb_proto::Column {
+                name: column.to_string(),
+                r#type: Some(col_type),
+            }]),
+            vec![row],
+        )
     }
 
     fn part_with_rows(
@@ -466,10 +470,8 @@ mod tests {
 
     #[tokio::test]
     async fn materialize_all_result_sets_propagates_part_errors() {
-        let mut stream = ExecuteQueryStream::from_test_parts(vec![
-            part_with_row(0, "a", 10),
-            error_part(1),
-        ]);
+        let mut stream =
+            ExecuteQueryStream::from_test_parts(vec![part_with_row(0, "a", 10), error_part(1)]);
 
         let err = stream
             .materialize_all_result_sets()
