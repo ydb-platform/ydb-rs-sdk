@@ -80,9 +80,7 @@ pub(crate) async fn materialize_query(
     opts: CallOptions,
 ) -> YdbResult<Vec<ResultSet>> {
     let commit_tx = resolve_commit_tx(core, &opts);
-    let mut stream = core
-        .begin_stream(text, params, opts, true)
-        .await?;
+    let mut stream = core.begin_stream(text, params, opts, true).await?;
     let mut sets = Vec::new();
     let mut drain_err: Option<YdbError> = None;
     while drain_err.is_none() {

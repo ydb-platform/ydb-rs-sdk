@@ -418,14 +418,9 @@ async fn client_begin_stream_once(
                 Ok(ExecuteQueryStream::new(stream).with_session_guard(lease))
             }
             QuerySessionMode::Implicit => {
-                let (mut client, req) = client_implicit_request(
-                    ctx,
-                    text,
-                    params,
-                    opts,
-                    concurrent_result_sets,
-                )
-                .await?;
+                let (mut client, req) =
+                    client_implicit_request(ctx, text, params, opts, concurrent_result_sets)
+                        .await?;
                 let stream = client.execute_query(req).await.map_err(YdbError::from)?;
                 Ok(ExecuteQueryStream::new(stream))
             }
