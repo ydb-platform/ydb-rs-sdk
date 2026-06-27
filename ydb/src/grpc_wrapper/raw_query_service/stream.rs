@@ -157,9 +157,7 @@ impl ExecuteQueryStream {
         drop(self.grpc.take());
         self.finished = true;
 
-        Ok(by_index
-            .into_iter()
-            .map(|(_, partial)| RawResultSet {
+        Ok(by_index.into_values().map(|partial| RawResultSet {
                 columns: partial.columns,
                 rows: partial.rows,
                 truncated: partial.truncated,
