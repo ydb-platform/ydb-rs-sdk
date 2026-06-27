@@ -43,42 +43,6 @@ pub(crate) struct CallOptions {
     pub tx_mode: Option<QueryTxMode>,
 }
 
-/// Wraps [`CallOptions`] and forces `concurrent_result_sets=true` for materialized queries.
-pub(crate) struct CallOptionsWithConcurrentResultSets<'a> {
-    inner: &'a CallOptions,
-}
-
-impl<'a> CallOptionsWithConcurrentResultSets<'a> {
-    pub(crate) fn wrap(inner: &'a CallOptions) -> Self {
-        Self { inner }
-    }
-
-    pub(crate) fn concurrent_result_sets(&self) -> bool {
-        true
-    }
-}
-
-pub(crate) enum ExecuteQueryCallOptions<'a> {
-    Sequential(&'a CallOptions),
-    Concurrent(CallOptionsWithConcurrentResultSets<'a>),
-}
-
-impl ExecuteQueryCallOptions<'_> {
-    fn inner(&self) -> &CallOptions {
-        match self {
-            Self::Sequential(opts) => opts,
-            Self::Concurrent(wrapper) => wrapper.inner,
-        }
-    }
-
-    fn concurrent_result_sets(&self) -> bool {
-        match self {
-            Self::Sequential(_) => false,
-            Self::Concurrent(wrapper) => wrapper.concurrent_result_sets(),
-        }
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct ClientExecContext {
     pub connection_manager: GrpcConnectionManager,
@@ -326,9 +290,9 @@ fn tx_control_for_client(
 
 fn finish_execute_request(
     mut req: RawExecuteQueryRequest,
-    execute_opts: ExecuteQueryCallOptions<'_>,
+    concurrent_result_sets: bool,
 ) -> RawExecuteQueryRequest {
-    req.concurrent_result_sets = execute_opts.concurrent_result_sets();
+    req.concurrent_result_sets = concurrent_result_sets;
     req
 }
 
@@ -336,9 +300,9 @@ async fn client_implicit_request(
     ctx: &ClientExecContext,
     text: &str,
     params: &HashMap<String, Value>,
-    execute_opts: ExecuteQueryCallOptions<'_>,
+    opts: &CallOptions,
+    concurrent_result_sets: bool,
 ) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
-    let opts = execute_opts.inner();
     let mode = effective_session_mode(ctx.session_mode, opts);
     let session_id = session_id_for_mode(mode)?;
     let client = query_client(ctx).await?;
@@ -350,7 +314,7 @@ async fn client_implicit_request(
             tx_control_for_client(opts),
             opts.collect_stats,
         ),
-        execute_opts,
+        concurrent_result_sets,
     );
     Ok((client, req))
 }
@@ -360,9 +324,9 @@ async fn client_pooled_explicit_request(
     lease: &mut QuerySessionLease,
     text: &str,
     params: &HashMap<String, Value>,
-    execute_opts: ExecuteQueryCallOptions<'_>,
+    opts: &CallOptions,
+    concurrent_result_sets: bool,
 ) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
-    let opts = execute_opts.inner();
     lease.ensure_alive()?;
     lease.begin_use();
     let node_uri = lease.node_uri().clone();
@@ -378,7 +342,7 @@ async fn client_pooled_explicit_request(
             tx_control_for_client(opts),
             opts.collect_stats,
         ),
-        execute_opts,
+        concurrent_result_sets,
     );
     Ok((client, req))
 }
@@ -388,9 +352,9 @@ async fn client_pooled_implicit_request(
     lease: &mut ImplicitSessionLease,
     text: &str,
     params: &HashMap<String, Value>,
-    execute_opts: ExecuteQueryCallOptions<'_>,
+    opts: &CallOptions,
+    concurrent_result_sets: bool,
 ) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
-    let opts = execute_opts.inner();
     lease.begin_use();
     let client = query_client(ctx).await?;
     let req = finish_execute_request(
@@ -401,7 +365,7 @@ async fn client_pooled_implicit_request(
             tx_control_for_client(opts),
             opts.collect_stats,
         ),
-        execute_opts,
+        concurrent_result_sets,
     );
     Ok((client, req))
 }
@@ -410,9 +374,9 @@ async fn client_begin_stream_once(
     ctx: &ClientExecContext,
     text: &str,
     params: &HashMap<String, Value>,
-    execute_opts: ExecuteQueryCallOptions<'_>,
+    opts: &CallOptions,
+    concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
-    let opts = execute_opts.inner();
     let mode = effective_session_mode(ctx.session_mode, opts);
     let timeout_duration = operation_timeout(opts, &ctx.timeouts);
 
@@ -431,7 +395,8 @@ async fn client_begin_stream_once(
                     &mut lease,
                     text,
                     params,
-                    execute_opts,
+                    opts,
+                    concurrent_result_sets,
                 )
                 .await?;
                 let stream = client.execute_query(req).await.map_err(YdbError::from)?;
@@ -445,15 +410,22 @@ async fn client_begin_stream_once(
                     &mut lease,
                     text,
                     params,
-                    execute_opts,
+                    opts,
+                    concurrent_result_sets,
                 )
                 .await?;
                 let stream = client.execute_query(req).await.map_err(YdbError::from)?;
                 Ok(ExecuteQueryStream::new(stream).with_session_guard(lease))
             }
             QuerySessionMode::Implicit => {
-                let (mut client, req) =
-                    client_implicit_request(ctx, text, params, execute_opts).await?;
+                let (mut client, req) = client_implicit_request(
+                    ctx,
+                    text,
+                    params,
+                    opts,
+                    concurrent_result_sets,
+                )
+                .await?;
                 let stream = client.execute_query(req).await.map_err(YdbError::from)?;
                 Ok(ExecuteQueryStream::new(stream))
             }
@@ -467,33 +439,11 @@ pub(crate) async fn client_begin_stream(
     text: String,
     params: HashMap<String, Value>,
     opts: CallOptions,
+    concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
     let idempotent = opts.idempotent.unwrap_or(ctx.idempotent_operation);
     retry_with_budget(idempotent, ctx.retry_budget, || {
-        client_begin_stream_once(
-            ctx,
-            &text,
-            &params,
-            ExecuteQueryCallOptions::Sequential(&opts),
-        )
-    })
-    .await
-}
-
-pub(crate) async fn client_begin_materialized_stream(
-    ctx: &ClientExecContext,
-    text: String,
-    params: HashMap<String, Value>,
-    opts: CallOptions,
-) -> YdbResult<ExecuteQueryStream> {
-    let idempotent = opts.idempotent.unwrap_or(ctx.idempotent_operation);
-    retry_with_budget(idempotent, ctx.retry_budget, || {
-        client_begin_stream_once(
-            ctx,
-            &text,
-            &params,
-            ExecuteQueryCallOptions::Concurrent(CallOptionsWithConcurrentResultSets::wrap(&opts)),
-        )
+        client_begin_stream_once(ctx, &text, &params, &opts, concurrent_result_sets)
     })
     .await
 }
@@ -581,9 +531,9 @@ async fn transaction_execute_request(
     tx: &TransactionExecContext,
     yql_text: String,
     parameters: HashMap<String, Value>,
-    execute_opts: ExecuteQueryCallOptions<'_>,
+    opts: &CallOptions,
+    concurrent_result_sets: bool,
 ) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
-    let opts = execute_opts.inner();
     let session_id = tx_session_id(tx)?.to_string();
     let client = query_client_from_tx(tx).await?;
     let req = finish_execute_request(
@@ -594,7 +544,7 @@ async fn transaction_execute_request(
             tx_control_for_transaction(tx, opts)?,
             opts.collect_stats,
         ),
-        execute_opts,
+        concurrent_result_sets,
     );
     Ok((client, req))
 }
@@ -642,25 +592,7 @@ pub(crate) async fn transaction_begin_stream(
     text: String,
     params: HashMap<String, Value>,
     opts: CallOptions,
-) -> YdbResult<ExecuteQueryStream> {
-    transaction_begin_stream_inner(tx, text, params, opts, false).await
-}
-
-pub(crate) async fn transaction_begin_materialized_stream(
-    tx: &mut TransactionExecContext,
-    text: String,
-    params: HashMap<String, Value>,
-    opts: CallOptions,
-) -> YdbResult<ExecuteQueryStream> {
-    transaction_begin_stream_inner(tx, text, params, opts, true).await
-}
-
-async fn transaction_begin_stream_inner(
-    tx: &mut TransactionExecContext,
-    text: String,
-    params: HashMap<String, Value>,
-    opts: CallOptions,
-    materialized: bool,
+    concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
     if tx.finished {
         return Err(YdbError::Custom(
@@ -668,11 +600,6 @@ async fn transaction_begin_stream_inner(
         ));
     }
     let timeout_duration = operation_timeout(&opts, &tx.timeouts);
-    let execute_opts = if materialized {
-        ExecuteQueryCallOptions::Concurrent(CallOptionsWithConcurrentResultSets::wrap(&opts))
-    } else {
-        ExecuteQueryCallOptions::Sequential(&opts)
-    };
     let result: YdbResult<ExecuteQueryStream> = with_operation_timeout(timeout_duration, async {
         ensure_tx_session(tx).await?;
         if let Some(lease) = &mut tx.pooled_lease {
@@ -682,7 +609,7 @@ async fn transaction_begin_stream_inner(
             transaction_ensure_begin(tx, true).await?;
         }
         let (mut client, req) =
-            transaction_execute_request(tx, text, params, execute_opts).await?;
+            transaction_execute_request(tx, text, params, &opts, concurrent_result_sets).await?;
         let stream = client.execute_query(req).await.map_err(YdbError::from)?;
         let mut stream = ExecuteQueryStream::new(stream);
         stream.prime_first_part().await?;
@@ -845,6 +772,23 @@ pub(crate) fn retry_wait(
 }
 
 pub(crate) const DEFAULT_QUERY_RETRY_BUDGET: Duration = DEFAULT_RETRY_BUDGET;
+
+#[cfg(test)]
+pub(super) fn build_client_execute_request_for_test(
+    opts: &CallOptions,
+    concurrent_result_sets: bool,
+) -> RawExecuteQueryRequest {
+    finish_execute_request(
+        RawExecuteQueryRequest::new(
+            String::new(),
+            "SELECT 1".to_string(),
+            HashMap::new(),
+            tx_control_for_client(opts),
+            opts.collect_stats,
+        ),
+        concurrent_result_sets,
+    )
+}
 
 #[cfg(test)]
 mod unit_tests {

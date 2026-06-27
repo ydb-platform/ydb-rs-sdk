@@ -236,7 +236,7 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
             let commit_tx = resolve_commit_tx(&self.core, &self.opts);
             let stream = self
                 .core
-                .begin_stream(self.text, self.params, self.opts)
+                .begin_stream(self.text, self.params, self.opts, false)
                 .await?;
             Ok(QueryStream {
                 core: self.core,
