@@ -1,4 +1,5 @@
 use crate::client_common::TokenCache;
+use crate::client_topic::compression::{CodecRegistry, DecompressionWorker, Executor};
 use crate::client_topic::topicreader::cancelation_token::YdbCancellationToken;
 use crate::client_topic::topicreader::messages::{TopicReaderBatch, TopicReaderMessage};
 use crate::client_topic::topicreader::partition_state::PartitionSession;
@@ -22,7 +23,7 @@ use crate::grpc_wrapper::raw_topic_service::update_offsets_in_transaction::{
 };
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::transaction::{Transaction, TransactionInfo};
-use crate::{YdbError, YdbResult};
+use crate::{Codec, YdbError, YdbResult};
 use futures_util::Future;
 use secrecy::ExposeSecret;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -30,7 +31,7 @@ use std::sync::{Arc, Mutex};
 use std::time;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::select;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::{oneshot, Notify};
 use tracing::{debug, error, info};
 use ydb_grpc::ydb_proto::topic::stream_read_message::{FromClient, FromServer};
@@ -171,6 +172,7 @@ struct TopicReaderContext {
     manager: GrpcConnectionManager,
     options: TopicReaderOptions,
     token_cache: TokenCache,
+    compression_executor: Arc<dyn Executor>,
 }
 
 pub struct TopicReader {
@@ -185,14 +187,16 @@ impl TopicReader {
         options: TopicReaderOptions,
         manager: GrpcConnectionManager,
         token_cache: TokenCache,
+        compression_executor: Arc<dyn Executor>,
     ) -> YdbResult<Self> {
         let context = TopicReaderContext {
             manager,
             options,
             token_cache,
+            compression_executor,
         };
         let epoch = 0;
-        let reader = StreamReader::new(&context, epoch).await?;
+        let reader = StreamReader::from_context(&context, epoch).await?;
 
         Ok(Self {
             context,
@@ -285,7 +289,7 @@ impl TopicReader {
 
             match tokio::time::timeout(
                 RECONNECT_ATTEMPT_TIMEOUT,
-                StreamReader::new(&self.context, self.epoch),
+                StreamReader::from_context(&self.context, self.epoch),
             )
             .await
             {
@@ -464,7 +468,10 @@ impl StreamReader {
         }
     }
 
-    pub(crate) async fn new(context: &TopicReaderContext, epoch: usize) -> YdbResult<Self> {
+    pub(crate) async fn from_context(
+        context: &TopicReaderContext,
+        epoch: usize,
+    ) -> YdbResult<Self> {
         let (stream, topic_service) =
             Self::grpc_connect(&context.manager, &context.options).await?;
 
@@ -479,7 +486,17 @@ impl StreamReader {
             topic_service,
         };
 
-        stream_reader.start_background_jobs(stream, context.token_cache.clone());
+        let mut codec_registry = CodecRegistry::new();
+        for dec in &context.options.extra_decoders {
+            codec_registry.register_decoder(dec.clone());
+        }
+
+        let worker = DecompressionWorker::new(
+            Arc::new(codec_registry),
+            context.compression_executor.clone(),
+        );
+
+        stream_reader.start_background_jobs(stream, context.token_cache.clone(), worker);
 
         debug!(
             consumer = stream_reader.consumer,
@@ -490,10 +507,18 @@ impl StreamReader {
         Ok(stream_reader)
     }
 
-    fn start_background_jobs(&mut self, stream: GrpcStream, token_cache: TokenCache) {
+    fn start_background_jobs(
+        &mut self,
+        stream: GrpcStream,
+        token_cache: TokenCache,
+        worker: DecompressionWorker,
+    ) {
+        let (decompression_input_tx, decompression_input_rx) = mpsc::unbounded_channel();
+
         self.background.spawn(receive_loop(
             stream,
             self.shared.clone(),
+            decompression_input_tx,
             self.stop_background_work_token.clone(),
             self.epoch,
         ));
@@ -503,6 +528,21 @@ impl StreamReader {
             self.stream_sender.clone(),
             self.shared.clone(),
             token_cache,
+        ));
+
+        let (decompressed_tx, decompressed_rx) = mpsc::unbounded_channel();
+
+        worker.spawn_into(
+            &mut self.background,
+            decompression_input_rx,
+            decompressed_tx,
+            self.stop_background_work_token.to_tokio_token(),
+        );
+
+        self.background.spawn(Self::handle_decompressed(
+            decompressed_rx,
+            self.shared.clone(),
+            self.stop_background_work_token.clone(),
         ));
     }
 
@@ -587,6 +627,45 @@ impl StreamReader {
         Ok((stream, topic_client))
     }
 
+    async fn handle_decompressed(
+        mut rx: mpsc::UnboundedReceiver<YdbResult<Vec<TopicReaderMessage>>>,
+        shared: Arc<ReaderShared>,
+        stop: YdbCancellationToken,
+    ) {
+        let tokio_stop = stop.to_tokio_token();
+
+        loop {
+            let Some(messages) = (select! {
+                _ = tokio_stop.cancelled() => return,
+                messages = rx.recv() => messages,
+            }) else {
+                return;
+            };
+
+            {
+                let mut state = shared.lock_state();
+
+                let messages = match messages {
+                    Ok(messages) => messages,
+                    Err(err) => {
+                        *state = Err(err);
+                        stop.cancel();
+                        shared.notify.notify_one();
+                        return;
+                    }
+                };
+
+                match &mut *state {
+                    Ok(state) => state.buffer.extend(messages),
+                    Err(_) => return,
+                }
+            }
+
+            // push-then-notify: no lost wakeups
+            shared.notify.notify_one();
+        }
+    }
+
     async fn cancel(&mut self) {
         self.stop_background_work_token.cancel();
         self.background.shutdown().await;
@@ -633,6 +712,7 @@ pub(crate) fn cut_prefix(
 async fn receive_loop(
     mut stream: AsyncGrpcStreamWrapper<FromClient, FromServer>,
     shared: Arc<ReaderShared>,
+    decompression_input_tx: mpsc::UnboundedSender<(Vec<TopicReaderMessage>, Codec)>,
     stop: YdbCancellationToken,
     epoch: usize,
 ) {
@@ -655,6 +735,7 @@ async fn receive_loop(
                             msg,
                             &mut sessions,
                             &sender_for_responses,
+                            &decompression_input_tx,
                             &shared,
                             epoch,
                         ) {
@@ -682,11 +763,14 @@ fn handle_incoming(
     msg: RawFromServer,
     sessions: &mut HashMap<i64, PartitionSession>,
     sender: &UnboundedSender<FromClient>,
+    decompression_input_tx: &mpsc::UnboundedSender<(Vec<TopicReaderMessage>, Codec)>,
     shared: &ReaderShared,
     epoch: usize,
 ) -> YdbResult<()> {
     match msg {
-        RawFromServer::ReadResponse(resp) => handle_read_response(resp, sessions, shared, epoch)?,
+        RawFromServer::ReadResponse(resp) => {
+            handle_read_response(resp, sessions, decompression_input_tx, epoch)?
+        }
         RawFromServer::InitResponse(_) => debug!("topic reader initialized"),
         RawFromServer::CommitOffsetResponse(resp) => {
             debug!("commit offset response for topic reader: {:?}", resp);
@@ -748,14 +832,14 @@ fn handle_incoming(
     Ok(())
 }
 
-/// Parses a RawReadResponse into TopicReaderMessages and appends them to the
-/// shared buffer in FIFO order. The `bytes_to_release` tag is set by
+/// Parses a RawReadResponse into TopicReaderMessages and sends them to the
+/// decompression queue in FIFO order. The `bytes_to_release` tag is set by
 /// `RawBatch::get_read_session_size()` — non-zero only on the very last message
 /// of the entire response (see `From<ReadResponse> for RawReadResponse`).
 pub(crate) fn handle_read_response(
     resp: RawReadResponse,
     sessions: &mut HashMap<i64, PartitionSession>,
-    shared: &ReaderShared,
+    decompression_input_tx: &mpsc::UnboundedSender<(Vec<TopicReaderMessage>, Codec)>,
     epoch: usize,
 ) -> YdbResult<()> {
     for partition_data in resp.partition_data {
@@ -774,6 +858,8 @@ pub(crate) fn handle_read_response(
             if raw_batch.message_data.is_empty() {
                 continue;
             }
+
+            let codec = raw_batch.codec.into();
             let batch_bytes = raw_batch.get_read_session_size();
             let batch = TopicReaderBatch::new(raw_batch, session, epoch);
             let mut messages = batch.messages;
@@ -781,15 +867,9 @@ pub(crate) fn handle_read_response(
                 last.bytes_to_release = batch_bytes;
             }
 
-            {
-                let mut state = shared.lock_state();
-                match &mut *state {
-                    Ok(state) => state.buffer.extend(messages),
-                    Err(err) => return Err(err.clone()),
-                }
-            }
-            // push-then-notify: no lost wakeups
-            shared.notify.notify_one();
+            decompression_input_tx
+                .send((messages, codec))
+                .map_err(|err| YdbError::custom(format!("decompression queue closed: {err}")))?;
         }
     }
     Ok(())

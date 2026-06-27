@@ -1,6 +1,8 @@
+use crate::client_topic::compression::CompressionDecoder;
 use crate::client_topic::topicreader::reader::TopicSelectors;
 use crate::errors;
 use derive_builder::Builder;
+use std::sync::Arc;
 
 #[derive(Builder, Clone)]
 #[builder(build_fn(error = "errors::YdbError"))]
@@ -10,4 +12,18 @@ pub struct TopicReaderOptions {
 
     #[builder(default = "1000")]
     pub(crate) batch_size: usize,
+    #[builder(setter(custom), default)]
+    pub(crate) extra_decoders: Vec<Arc<dyn CompressionDecoder>>,
+}
+
+impl TopicReaderOptionsBuilder {
+    pub fn add_decoder<D>(&mut self, decoder: D) -> &mut Self
+    where
+        D: CompressionDecoder + 'static,
+    {
+        self.extra_decoders
+            .get_or_insert_default()
+            .push(Arc::new(decoder));
+        self
+    }
 }
