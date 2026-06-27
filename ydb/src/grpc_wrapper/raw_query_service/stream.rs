@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use tracing::warn;
@@ -11,6 +12,13 @@ use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
 
 pub(crate) struct StreamCloseMeta {
     pub tx_id: Option<String>,
+}
+
+#[derive(Default)]
+struct PartialResultSet {
+    columns: Vec<crate::grpc_wrapper::raw_table_service::value::RawColumn>,
+    rows: Vec<Vec<crate::grpc_wrapper::raw_table_service::value::RawValue>>,
+    truncated: bool,
 }
 
 /// Holds a pooled session lease until the stream is finished.
@@ -32,6 +40,8 @@ pub(crate) struct ExecuteQueryStream {
     // Dropped last (after `grpc`) so the pooled lease outlives the stream.
     // `Drop` also calls `cancel()` before field destructors run.
     session_guard: SessionStreamGuard,
+    #[cfg(test)]
+    test_parts: Option<Vec<ExecuteQueryResponsePart>>,
 }
 
 impl Drop for ExecuteQueryStream {
@@ -50,6 +60,23 @@ impl ExecuteQueryStream {
             finished: false,
             stats: None,
             session_guard: SessionStreamGuard(None),
+            #[cfg(test)]
+            test_parts: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_test_parts(mut parts: Vec<ExecuteQueryResponsePart>) -> Self {
+        parts.reverse();
+        Self {
+            grpc: None,
+            next_index: 0,
+            pending_part: None,
+            captured_tx_id: None,
+            finished: false,
+            stats: None,
+            session_guard: SessionStreamGuard(None),
+            test_parts: Some(parts),
         }
     }
 
@@ -77,6 +104,67 @@ impl ExecuteQueryStream {
         let tx_id = self.absorb_part_metadata(part);
         check_part(part)?;
         Ok(tx_id)
+    }
+
+    async fn recv_part(&mut self) -> RawResult<Option<ExecuteQueryResponsePart>> {
+        if self.finished {
+            return Ok(None);
+        }
+        if let Some(part) = self.pending_part.take() {
+            return Ok(Some(part));
+        }
+        #[cfg(test)]
+        if let Some(parts) = &mut self.test_parts {
+            return Ok(parts.pop());
+        }
+        match self.grpc.as_mut() {
+            Some(stream) => match stream.message().await? {
+                Some(part) => Ok(Some(part)),
+                None => {
+                    self.finished = true;
+                    Ok(None)
+                }
+            },
+            None => Ok(None),
+        }
+    }
+
+    fn append_part_to_index(
+        by_index: &mut BTreeMap<i64, PartialResultSet>,
+        part: ExecuteQueryResponsePart,
+    ) -> RawResult<()> {
+        let index = part.result_set_index;
+        let partial = by_index.entry(index).or_default();
+        append_rows_from_part(
+            &mut partial.columns,
+            &mut partial.rows,
+            &mut partial.truncated,
+            part,
+        )
+    }
+
+    /// Drain the stream and assemble all result sets, buffering parts by
+    /// `result_set_index`. Required when `concurrent_result_sets=true` because
+    /// the server may interleave parts from different result sets.
+    pub async fn materialize_all_result_sets(&mut self) -> RawResult<Vec<RawResultSet>> {
+        let mut by_index: BTreeMap<i64, PartialResultSet> = BTreeMap::new();
+
+        while let Some(part) = self.recv_part().await? {
+            self.ingest_part(&part)?;
+            Self::append_part_to_index(&mut by_index, part)?;
+        }
+
+        drop(self.grpc.take());
+        self.finished = true;
+
+        Ok(by_index
+            .into_iter()
+            .map(|(_, partial)| RawResultSet {
+                columns: partial.columns,
+                rows: partial.rows,
+                truncated: partial.truncated,
+            })
+            .collect())
     }
 
     /// Read the first response part so transaction `tx_id` is captured before iteration.
@@ -251,5 +339,67 @@ impl ExecuteQueryStream {
         Ok(StreamCloseMeta {
             tx_id: self.captured_tx_id.take(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawValue};
+    use ydb_grpc::ydb_proto::status_ids::StatusCode;
+    use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
+
+    fn part_with_row(index: i64, column: &str, value: i64) -> ExecuteQueryResponsePart {
+        let col_type = crate::grpc_wrapper::raw_table_service::value::r#type::RawType::Int64.into();
+        let row = ydb_grpc::ydb_proto::Value {
+            items: vec![RawValue::Int64(value).into()],
+            ..Default::default()
+        };
+        ExecuteQueryResponsePart {
+            status: StatusCode::Success as i32,
+            issues: vec![],
+            result_set_index: index,
+            result_set: Some(ydb_grpc::ydb_proto::ResultSet {
+                columns: vec![ydb_grpc::ydb_proto::Column {
+                    name: column.to_string(),
+                    r#type: Some(col_type),
+                }],
+                rows: vec![row],
+                truncated: false,
+                ..Default::default()
+            }),
+            exec_stats: None,
+            tx_meta: None,
+        }
+    }
+
+    fn row_values(set: &RawResultSet) -> Vec<i64> {
+        set.rows
+            .iter()
+            .map(|row| match row.first() {
+                Some(RawValue::Int64(v)) => *v,
+                other => panic!("unexpected cell: {other:?}"),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn materialize_all_result_sets_reassembles_interleaved_parts() {
+        // Server may deliver RS0/RS1 parts out of order when concurrent_result_sets=true.
+        let mut stream = ExecuteQueryStream::from_test_parts(vec![
+            part_with_row(0, "a", 10),
+            part_with_row(1, "b", 20),
+            part_with_row(0, "a", 11),
+            part_with_row(1, "b", 21),
+        ]);
+
+        let sets = stream
+            .materialize_all_result_sets()
+            .await
+            .expect("materialize stream");
+
+        assert_eq!(sets.len(), 2);
+        assert_eq!(row_values(&sets[0]), vec![10, 11]);
+        assert_eq!(row_values(&sets[1]), vec![20, 21]);
     }
 }
