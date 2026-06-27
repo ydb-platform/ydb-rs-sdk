@@ -21,6 +21,9 @@ mod session_pool_bench;
 #[cfg(test)]
 mod tx_modes_integration_test;
 
+#[cfg(test)]
+mod concurrent_result_sets_test;
+
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
