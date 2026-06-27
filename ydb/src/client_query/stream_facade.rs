@@ -77,11 +77,10 @@ pub(crate) async fn materialize_query(
     core: &mut ExecCoreRef<'_>,
     text: String,
     params: HashMap<String, Value>,
-    mut opts: CallOptions,
+    opts: CallOptions,
 ) -> YdbResult<Vec<ResultSet>> {
-    opts.concurrent_result_sets = true;
     let commit_tx = resolve_commit_tx(core, &opts);
-    let mut stream = core.begin_stream(text, params, opts).await?;
+    let mut stream = core.begin_materialized_stream(text, params, opts).await?;
     let mut sets = Vec::new();
     let mut drain_err: Option<YdbError> = None;
     while drain_err.is_none() {

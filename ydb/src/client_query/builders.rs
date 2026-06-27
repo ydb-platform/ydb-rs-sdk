@@ -140,15 +140,6 @@ impl<'a, K> CallBuilder<'a, K> {
     pub fn pooled_session(self) -> Self {
         self.session_mode(QuerySessionMode::Pool)
     }
-
-    /// Deprecated: has no effect. Materialized query methods (`exec`, `query_row`, `query_result_set`)
-    /// always enable concurrent result sets internally.
-    #[deprecated(
-        note = "with_concurrent_result_sets has no effect; materialized query methods always enable concurrent result sets internally"
-    )]
-    pub fn with_concurrent_result_sets(self, _enabled: bool) -> Self {
-        self
-    }
 }
 
 impl<'a, T> CallBuilder<'a, OneRow<T>> {
