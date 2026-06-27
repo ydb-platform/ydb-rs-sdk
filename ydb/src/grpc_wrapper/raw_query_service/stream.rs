@@ -346,8 +346,8 @@ impl ExecuteQueryStream {
 mod tests {
     use super::*;
     use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawValue};
-    use ydb_grpc::ydb_proto::status_ids::StatusCode;
     use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
+    use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
     fn part_with_row(index: i64, column: &str, value: i64) -> ExecuteQueryResponsePart {
         let col_type = crate::grpc_wrapper::raw_table_service::value::r#type::RawType::Int64.into();
