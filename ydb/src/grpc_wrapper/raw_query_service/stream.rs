@@ -115,7 +115,13 @@ impl ExecuteQueryStream {
         }
         #[cfg(test)]
         if let Some(parts) = &mut self.test_parts {
-            return Ok(parts.pop());
+            return match parts.pop() {
+                Some(part) => Ok(Some(part)),
+                None => {
+                    self.finished = true;
+                    Ok(None)
+                }
+            };
         }
         match self.grpc.as_mut() {
             Some(stream) => match stream.message().await? {
@@ -125,7 +131,10 @@ impl ExecuteQueryStream {
                     Ok(None)
                 }
             },
-            None => Ok(None),
+            None => {
+                self.finished = true;
+                Ok(None)
+            }
         }
     }
 
@@ -149,22 +158,26 @@ impl ExecuteQueryStream {
     pub async fn materialize_all_result_sets(&mut self) -> RawResult<Vec<RawResultSet>> {
         let mut by_index: BTreeMap<i64, PartialResultSet> = BTreeMap::new();
 
-        while let Some(part) = self.recv_part().await? {
-            self.ingest_part(&part)?;
-            Self::append_part_to_index(&mut by_index, part)?;
+        let result: RawResult<Vec<RawResultSet>> = async {
+            while let Some(part) = self.recv_part().await? {
+                self.ingest_part(&part)?;
+                Self::append_part_to_index(&mut by_index, part)?;
+            }
+
+            Ok(by_index
+                .into_values()
+                .map(|partial| RawResultSet {
+                    columns: partial.columns,
+                    rows: partial.rows,
+                    truncated: partial.truncated,
+                })
+                .collect())
         }
+        .await;
 
         drop(self.grpc.take());
         self.finished = true;
-
-        Ok(by_index
-            .into_values()
-            .map(|partial| RawResultSet {
-                columns: partial.columns,
-                rows: partial.rows,
-                truncated: partial.truncated,
-            })
-            .collect())
+        result
     }
 
     /// Read the first response part so transaction `tx_id` is captured before iteration.
@@ -355,19 +368,38 @@ mod tests {
             items: vec![RawValue::Int64(value).into()],
             ..Default::default()
         };
+        part_with_rows(index, Some(vec![ydb_grpc::ydb_proto::Column {
+            name: column.to_string(),
+            r#type: Some(col_type),
+        }]), vec![row])
+    }
+
+    fn part_with_rows(
+        index: i64,
+        columns: Option<Vec<ydb_grpc::ydb_proto::Column>>,
+        rows: Vec<ydb_grpc::ydb_proto::Value>,
+    ) -> ExecuteQueryResponsePart {
         ExecuteQueryResponsePart {
             status: StatusCode::Success as i32,
             issues: vec![],
             result_set_index: index,
-            result_set: Some(ydb_grpc::ydb_proto::ResultSet {
-                columns: vec![ydb_grpc::ydb_proto::Column {
-                    name: column.to_string(),
-                    r#type: Some(col_type),
-                }],
-                rows: vec![row],
+            result_set: columns.map(|columns| ydb_grpc::ydb_proto::ResultSet {
+                columns,
+                rows,
                 truncated: false,
                 ..Default::default()
             }),
+            exec_stats: None,
+            tx_meta: None,
+        }
+    }
+
+    fn error_part(index: i64) -> ExecuteQueryResponsePart {
+        ExecuteQueryResponsePart {
+            status: StatusCode::BadRequest as i32,
+            issues: vec![],
+            result_set_index: index,
+            result_set: None,
             exec_stats: None,
             tx_meta: None,
         }
@@ -401,5 +433,54 @@ mod tests {
         assert_eq!(sets.len(), 2);
         assert_eq!(row_values(&sets[0]), vec![10, 11]);
         assert_eq!(row_values(&sets[1]), vec![20, 21]);
+    }
+
+    #[tokio::test]
+    async fn materialize_all_result_sets_accepts_empty_continuation_parts() {
+        let col_type = crate::grpc_wrapper::raw_table_service::value::r#type::RawType::Int64.into();
+        let row = |v: i64| ydb_grpc::ydb_proto::Value {
+            items: vec![RawValue::Int64(v).into()],
+            ..Default::default()
+        };
+        let columns = vec![ydb_grpc::ydb_proto::Column {
+            name: "a".to_string(),
+            r#type: Some(col_type),
+        }];
+
+        let mut stream = ExecuteQueryStream::from_test_parts(vec![
+            part_with_rows(0, Some(columns.clone()), vec![row(10)]),
+            part_with_rows(0, None, vec![]),
+            part_with_rows(0, Some(vec![]), vec![row(11)]),
+        ]);
+
+        let sets = stream
+            .materialize_all_result_sets()
+            .await
+            .expect("materialize stream");
+
+        assert_eq!(sets.len(), 1);
+        assert_eq!(row_values(&sets[0]), vec![10, 11]);
+        assert!(stream.finished);
+        assert!(stream.grpc.is_none());
+    }
+
+    #[tokio::test]
+    async fn materialize_all_result_sets_propagates_part_errors() {
+        let mut stream = ExecuteQueryStream::from_test_parts(vec![
+            part_with_row(0, "a", 10),
+            error_part(1),
+        ]);
+
+        let err = stream
+            .materialize_all_result_sets()
+            .await
+            .expect_err("expected part status error");
+
+        assert!(matches!(
+            err,
+            crate::grpc_wrapper::raw_errors::RawError::YdbStatus(_)
+        ));
+        assert!(stream.finished);
+        assert!(stream.grpc.is_none());
     }
 }

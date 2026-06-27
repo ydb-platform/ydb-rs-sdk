@@ -80,26 +80,34 @@ pub(crate) async fn materialize_query(
     opts: CallOptions,
 ) -> YdbResult<Vec<ResultSet>> {
     let commit_tx = resolve_commit_tx(core, &opts);
-    let mut stream = core.begin_stream(text, params, opts, true).await?;
-    let raw_sets = stream
-        .materialize_all_result_sets()
-        .await
-        .map_err(YdbError::from)?;
-    let mut sets = Vec::with_capacity(raw_sets.len());
-    for raw in raw_sets {
-        sets.push(ResultSet::try_from(raw)?);
-    }
-    let meta = stream.close().await.map_err(YdbError::from)?;
-    if let ExecCoreRef::Transaction(ctx) = core {
-        apply_stream_tx_id(ctx, meta.tx_id);
-        if commit_tx {
-            transaction_finish_committed_via_query(ctx).await;
+    let result: YdbResult<Vec<ResultSet>> = async {
+        let mut stream = core.begin_stream(text, params, opts, true).await?;
+        let raw_sets = stream
+            .materialize_all_result_sets()
+            .await
+            .map_err(YdbError::from)?;
+        let mut sets = Vec::with_capacity(raw_sets.len());
+        for raw in raw_sets {
+            sets.push(ResultSet::try_from(raw)?);
         }
+        let meta = stream.close().await.map_err(YdbError::from)?;
+        if let ExecCoreRef::Transaction(ctx) = core {
+            apply_stream_tx_id(ctx, meta.tx_id);
+            if commit_tx {
+                transaction_finish_committed_via_query(ctx).await;
+            }
+        }
+        Ok(sets)
+    }
+    .await;
+
+    if let ExecCoreRef::Transaction(ctx) = core {
         if let Some(lease) = &mut ctx.pooled_lease {
             lease.end_use();
         }
     }
-    Ok(sets)
+
+    result
 }
 
 #[derive(Debug, Default)]
