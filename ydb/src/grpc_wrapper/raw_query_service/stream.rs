@@ -142,6 +142,9 @@ impl ExecuteQueryStream {
         by_index: &mut BTreeMap<i64, PartialResultSet>,
         part: ExecuteQueryResponsePart,
     ) -> RawResult<()> {
+        if part.result_set.is_none() {
+            return Ok(());
+        }
         let index = part.result_set_index;
         let partial = by_index.entry(index).or_default();
         append_rows_from_part(
@@ -409,6 +412,17 @@ mod tests {
         }
     }
 
+    fn metadata_only_part(index: i64) -> ExecuteQueryResponsePart {
+        ExecuteQueryResponsePart {
+            status: StatusCode::Success as i32,
+            issues: vec![],
+            result_set_index: index,
+            result_set: None,
+            exec_stats: None,
+            tx_meta: None,
+        }
+    }
+
     fn row_values(set: &RawResultSet) -> Vec<i64> {
         set.rows
             .iter()
@@ -484,5 +498,22 @@ mod tests {
         ));
         assert!(stream.finished);
         assert!(stream.grpc.is_none());
+    }
+
+    #[tokio::test]
+    async fn materialize_all_result_sets_skips_metadata_only_parts() {
+        let mut stream = ExecuteQueryStream::from_test_parts(vec![
+            metadata_only_part(0),
+            part_with_row(0, "a", 10),
+            metadata_only_part(1),
+        ]);
+
+        let sets = stream
+            .materialize_all_result_sets()
+            .await
+            .expect("materialize stream");
+
+        assert_eq!(sets.len(), 1);
+        assert_eq!(row_values(&sets[0]), vec![10]);
     }
 }

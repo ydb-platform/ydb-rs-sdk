@@ -288,14 +288,6 @@ fn tx_control_for_client(
     Some(begin_tx_control(tx_mode_to_raw(mode), commit_tx))
 }
 
-fn finish_execute_request(
-    mut req: RawExecuteQueryRequest,
-    concurrent_result_sets: bool,
-) -> RawExecuteQueryRequest {
-    req.concurrent_result_sets = concurrent_result_sets;
-    req
-}
-
 async fn client_implicit_request(
     ctx: &ClientExecContext,
     text: &str,
@@ -306,16 +298,14 @@ async fn client_implicit_request(
     let mode = effective_session_mode(ctx.session_mode, opts);
     let session_id = session_id_for_mode(mode)?;
     let client = query_client(ctx).await?;
-    let req = finish_execute_request(
-        RawExecuteQueryRequest::new(
-            session_id,
-            text,
-            params.clone(),
-            tx_control_for_client(opts),
-            opts.collect_stats,
-        ),
-        concurrent_result_sets,
+    let mut req = RawExecuteQueryRequest::new(
+        session_id,
+        text,
+        params.clone(),
+        tx_control_for_client(opts),
+        opts.collect_stats,
     );
+    req.concurrent_result_sets = concurrent_result_sets;
     Ok((client, req))
 }
 
@@ -334,16 +324,14 @@ async fn client_pooled_explicit_request(
         .connection_manager
         .get_auth_service_to_node(RawQueryClient::new, &node_uri)
         .await?;
-    let req = finish_execute_request(
-        RawExecuteQueryRequest::new(
-            lease.session_id(),
-            text,
-            params.clone(),
-            tx_control_for_client(opts),
-            opts.collect_stats,
-        ),
-        concurrent_result_sets,
+    let mut req = RawExecuteQueryRequest::new(
+        lease.session_id(),
+        text,
+        params.clone(),
+        tx_control_for_client(opts),
+        opts.collect_stats,
     );
+    req.concurrent_result_sets = concurrent_result_sets;
     Ok((client, req))
 }
 
@@ -357,16 +345,14 @@ async fn client_pooled_implicit_request(
 ) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
     lease.begin_use();
     let client = query_client(ctx).await?;
-    let req = finish_execute_request(
-        RawExecuteQueryRequest::new(
-            lease.session_id(),
-            text,
-            params.clone(),
-            tx_control_for_client(opts),
-            opts.collect_stats,
-        ),
-        concurrent_result_sets,
+    let mut req = RawExecuteQueryRequest::new(
+        lease.session_id(),
+        text,
+        params.clone(),
+        tx_control_for_client(opts),
+        opts.collect_stats,
     );
+    req.concurrent_result_sets = concurrent_result_sets;
     Ok((client, req))
 }
 
@@ -531,16 +517,14 @@ async fn transaction_execute_request(
 ) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
     let session_id = tx_session_id(tx)?.to_string();
     let client = query_client_from_tx(tx).await?;
-    let req = finish_execute_request(
-        RawExecuteQueryRequest::new(
-            session_id,
-            yql_text,
-            parameters,
-            tx_control_for_transaction(tx, opts)?,
-            opts.collect_stats,
-        ),
-        concurrent_result_sets,
+    let mut req = RawExecuteQueryRequest::new(
+        session_id,
+        yql_text,
+        parameters,
+        tx_control_for_transaction(tx, opts)?,
+        opts.collect_stats,
     );
+    req.concurrent_result_sets = concurrent_result_sets;
     Ok((client, req))
 }
 
@@ -773,16 +757,15 @@ pub(super) fn build_client_execute_request_for_test(
     opts: &CallOptions,
     concurrent_result_sets: bool,
 ) -> RawExecuteQueryRequest {
-    finish_execute_request(
-        RawExecuteQueryRequest::new(
-            String::new(),
-            "SELECT 1".to_string(),
-            HashMap::new(),
-            tx_control_for_client(opts),
-            opts.collect_stats,
-        ),
-        concurrent_result_sets,
-    )
+    let mut req = RawExecuteQueryRequest::new(
+        String::new(),
+        "SELECT 1".to_string(),
+        HashMap::new(),
+        tx_control_for_client(opts),
+        opts.collect_stats,
+    );
+    req.concurrent_result_sets = concurrent_result_sets;
+    req
 }
 
 #[cfg(test)]
