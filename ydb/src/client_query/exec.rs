@@ -41,6 +41,8 @@ pub(crate) struct CallOptions {
     /// Per-call isolation override. `None` → [`QueryTxMode::Implicit`] on client,
     /// [`TransactionExecContext::tx_mode`] in interactive transactions.
     pub tx_mode: Option<QueryTxMode>,
+    /// When true, YDB may deliver result set parts out of order (faster for multi-statement queries).
+    pub(crate) concurrent_result_sets: bool,
 }
 
 #[derive(Clone)]
@@ -288,6 +290,14 @@ fn tx_control_for_client(
     Some(begin_tx_control(tx_mode_to_raw(mode), commit_tx))
 }
 
+fn finish_execute_request(
+    mut req: RawExecuteQueryRequest,
+    opts: &CallOptions,
+) -> RawExecuteQueryRequest {
+    req.concurrent_result_sets = opts.concurrent_result_sets;
+    req
+}
+
 async fn client_implicit_request(
     ctx: &ClientExecContext,
     text: &str,
@@ -297,12 +307,15 @@ async fn client_implicit_request(
     let mode = effective_session_mode(ctx.session_mode, opts);
     let session_id = session_id_for_mode(mode)?;
     let client = query_client(ctx).await?;
-    let req = RawExecuteQueryRequest::new(
-        session_id,
-        text,
-        params.clone(),
-        tx_control_for_client(opts),
-        opts.collect_stats,
+    let req = finish_execute_request(
+        RawExecuteQueryRequest::new(
+            session_id,
+            text,
+            params.clone(),
+            tx_control_for_client(opts),
+            opts.collect_stats,
+        ),
+        opts,
     );
     Ok((client, req))
 }
@@ -321,12 +334,15 @@ async fn client_pooled_explicit_request(
         .connection_manager
         .get_auth_service_to_node(RawQueryClient::new, &node_uri)
         .await?;
-    let req = RawExecuteQueryRequest::new(
-        lease.session_id(),
-        text,
-        params.clone(),
-        tx_control_for_client(opts),
-        opts.collect_stats,
+    let req = finish_execute_request(
+        RawExecuteQueryRequest::new(
+            lease.session_id(),
+            text,
+            params.clone(),
+            tx_control_for_client(opts),
+            opts.collect_stats,
+        ),
+        opts,
     );
     Ok((client, req))
 }
@@ -340,12 +356,15 @@ async fn client_pooled_implicit_request(
 ) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
     lease.begin_use();
     let client = query_client(ctx).await?;
-    let req = RawExecuteQueryRequest::new(
-        lease.session_id(),
-        text,
-        params.clone(),
-        tx_control_for_client(opts),
-        opts.collect_stats,
+    let req = finish_execute_request(
+        RawExecuteQueryRequest::new(
+            lease.session_id(),
+            text,
+            params.clone(),
+            tx_control_for_client(opts),
+            opts.collect_stats,
+        ),
+        opts,
     );
     Ok((client, req))
 }
@@ -492,12 +511,15 @@ async fn transaction_execute_request(
 ) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
     let session_id = tx_session_id(tx)?.to_string();
     let client = query_client_from_tx(tx).await?;
-    let req = RawExecuteQueryRequest::new(
-        session_id,
-        yql_text,
-        parameters,
-        tx_control_for_transaction(tx, opts)?,
-        opts.collect_stats,
+    let req = finish_execute_request(
+        RawExecuteQueryRequest::new(
+            session_id,
+            yql_text,
+            parameters,
+            tx_control_for_transaction(tx, opts)?,
+            opts.collect_stats,
+        ),
+        opts,
     );
     Ok((client, req))
 }
