@@ -159,6 +159,27 @@ async fn query_client_pooled_session_select() -> YdbResult<()> {
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
+async fn query_client_implicit_session_select() -> YdbResult<()> {
+    let client =
+        create_client_with_session_pool(QuerySessionPoolSettings::new().with_limit(1)).await?;
+    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+
+    let mut row = qc
+        .query_row("SELECT 1 + 1 AS sum")
+        .with_implicit_session()
+        .await?;
+    let sum: i64 = row.remove_field_by_name("sum")?.try_into()?;
+    assert_eq!(sum, 2);
+
+    let stats = client.session_pool_stats();
+    assert_eq!(stats.in_use, 0);
+    assert_eq!(stats.idle, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
 async fn query_client_snapshot_read_only_tx() -> YdbResult<()> {
     let client = create_client().await?;
     let qc = client

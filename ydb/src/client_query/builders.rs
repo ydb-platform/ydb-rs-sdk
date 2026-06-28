@@ -9,8 +9,8 @@ use crate::result::{ResultSet, Row};
 use crate::types::Value;
 use crate::QueryTxMode;
 
-use super::exec::{resolve_commit_tx, CallOptions};
-use super::internal::{ExecCoreRef, HasCore};
+use super::exec::{resolve_commit_tx, CallOptions, ClientExecContext, TransactionExecContext};
+use super::internal::ExecCoreRef;
 use super::stream_facade::{materialize_query, QueryStream};
 use super::FromYdbRow;
 
@@ -22,38 +22,68 @@ pub struct OptionalRow<T>(PhantomData<T>);
 pub enum OneResultSet {}
 pub enum Streamed {}
 
-pub type ExecBuilder<'a> = CallBuilder<'a, ExecCall>;
-pub type QueryRowBuilder<'a, T = Row> = CallBuilder<'a, OneRow<T>>;
-pub type OptionalRowBuilder<'a, T = Row> = CallBuilder<'a, OptionalRow<T>>;
-pub type ResultSetBuilder<'a> = CallBuilder<'a, OneResultSet>;
-pub type QueryStreamBuilder<'a> = CallBuilder<'a, Streamed>;
+/// One-shot [`QueryClient`] calls (`exec`, `query_row`, …).
+pub struct ClientOneShot;
+/// Calls inside [`QueryTransaction`] (`retry_transaction` callback).
+pub struct Interactive;
 
-pub struct CallBuilder<'a, K> {
+pub type ExecBuilder<'a, S = ClientOneShot> = CallBuilder<'a, ExecCall, S>;
+pub type QueryRowBuilder<'a, T = Row, S = ClientOneShot> = CallBuilder<'a, OneRow<T>, S>;
+pub type OptionalRowBuilder<'a, T = Row, S = ClientOneShot> = CallBuilder<'a, OptionalRow<T>, S>;
+pub type ResultSetBuilder<'a, S = ClientOneShot> = CallBuilder<'a, OneResultSet, S>;
+pub type QueryStreamBuilder<'a, S = ClientOneShot> = CallBuilder<'a, Streamed, S>;
+
+pub struct CallBuilder<'a, K, S = ClientOneShot> {
     core: ExecCoreRef<'a>,
     text: String,
     params: HashMap<String, Value>,
     opts: CallOptions,
     _kind: PhantomData<fn() -> K>,
+    _scope: PhantomData<S>,
 }
 
-impl<'a, K> CallBuilder<'a, K> {
-    pub(crate) fn new(core: ExecCoreRef<'a>, text: String) -> Self {
+impl<'a, K> CallBuilder<'a, K, ClientOneShot> {
+    pub(crate) fn new_client(ctx: &'a mut ClientExecContext, text: String) -> Self {
         Self {
-            core,
+            core: ExecCoreRef::Client(ctx),
             text,
             params: HashMap::new(),
             opts: CallOptions::default(),
             _kind: PhantomData,
+            _scope: PhantomData,
         }
     }
 
-    fn into_kind<K2>(self) -> CallBuilder<'a, K2> {
+    /// Execute with an empty `session_id` (server-side implicit session) instead of
+    /// leasing from the driver pool.
+    pub fn with_implicit_session(mut self) -> Self {
+        self.opts.implicit_session = true;
+        self
+    }
+}
+
+impl<'a, K> CallBuilder<'a, K, Interactive> {
+    pub(crate) fn new_transaction(ctx: &'a mut TransactionExecContext, text: String) -> Self {
+        Self {
+            core: ExecCoreRef::Transaction(ctx),
+            text,
+            params: HashMap::new(),
+            opts: CallOptions::default(),
+            _kind: PhantomData,
+            _scope: PhantomData,
+        }
+    }
+}
+
+impl<'a, K, S> CallBuilder<'a, K, S> {
+    fn into_kind<K2>(self) -> CallBuilder<'a, K2, S> {
         CallBuilder {
             core: self.core,
             text: self.text,
             params: self.params,
             opts: self.opts,
             _kind: PhantomData,
+            _scope: PhantomData,
         }
     }
 
@@ -123,12 +153,12 @@ impl<'a, K> CallBuilder<'a, K> {
     }
 }
 
-impl<'a, T> CallBuilder<'a, OneRow<T>> {
-    pub fn typed<U: FromYdbRow>(self) -> CallBuilder<'a, OneRow<U>> {
+impl<'a, T, S> CallBuilder<'a, OneRow<T>, S> {
+    pub fn typed<U: FromYdbRow>(self) -> CallBuilder<'a, OneRow<U>, S> {
         self.into_kind()
     }
 
-    pub fn optional(self) -> CallBuilder<'a, OptionalRow<T>> {
+    pub fn optional(self) -> CallBuilder<'a, OptionalRow<T>, S> {
         self.into_kind()
     }
 }
@@ -154,7 +184,7 @@ pub(crate) fn take_single_row(result_set: ResultSet) -> YdbResult<Option<Row>> {
     Ok(row)
 }
 
-impl<'a> IntoFuture for CallBuilder<'a, ExecCall> {
+impl<'a, S> IntoFuture for CallBuilder<'a, ExecCall, S> {
     type Output = YdbResult<()>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
@@ -166,7 +196,7 @@ impl<'a> IntoFuture for CallBuilder<'a, ExecCall> {
     }
 }
 
-impl<'a, T: FromYdbRow + 'a> IntoFuture for CallBuilder<'a, OneRow<T>> {
+impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OneRow<T>, S> {
     type Output = YdbResult<T>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
@@ -181,7 +211,7 @@ impl<'a, T: FromYdbRow + 'a> IntoFuture for CallBuilder<'a, OneRow<T>> {
     }
 }
 
-impl<'a, T: FromYdbRow + 'a> IntoFuture for CallBuilder<'a, OptionalRow<T>> {
+impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OptionalRow<T>, S> {
     type Output = YdbResult<Option<T>>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
@@ -195,7 +225,7 @@ impl<'a, T: FromYdbRow + 'a> IntoFuture for CallBuilder<'a, OptionalRow<T>> {
     }
 }
 
-impl<'a> IntoFuture for CallBuilder<'a, OneResultSet> {
+impl<'a, S> IntoFuture for CallBuilder<'a, OneResultSet, S> {
     type Output = YdbResult<ResultSet>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
@@ -208,7 +238,7 @@ impl<'a> IntoFuture for CallBuilder<'a, OneResultSet> {
     }
 }
 
-impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
+impl<'a, S> IntoFuture for CallBuilder<'a, Streamed, S> {
     type Output = YdbResult<QueryStream<'a>>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
@@ -237,43 +267,65 @@ impl<'a> IntoFuture for CallBuilder<'a, Streamed> {
 /// - [`Self::query_result_set`] — `query` + drain + exactly one result set
 /// - [`Self::query_row`] — `query_result_set` + at most one row
 /// - [`Self::exec`] — `query` + drain and discard (success = no error)
-#[allow(private_bounds)]
-pub trait QueryExecutor: HasCore {
-    fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_> {
-        CallBuilder::new(self.core_mut(), text.into())
-    }
-
-    fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_> {
-        CallBuilder::new(self.core_mut(), text.into())
-    }
-
-    fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_> {
-        CallBuilder::new(self.core_mut(), text.into())
-    }
-
-    fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row> {
-        CallBuilder::new(self.core_mut(), text.into())
-    }
+pub trait QueryExecutor {
+    type Scope;
+    fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_, Self::Scope>;
+    fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_, Self::Scope>;
+    fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_, Self::Scope>;
+    fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row, Self::Scope>;
 }
 
-macro_rules! impl_query_methods {
+macro_rules! impl_client_query_methods {
     () => {
-        pub fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_> {
-            QueryExecutor::exec(self, text)
+        pub fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_, ClientOneShot> {
+            CallBuilder::new_client(&mut self.ctx, text.into())
         }
 
-        pub fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_> {
-            QueryExecutor::query(self, text)
+        pub fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_, ClientOneShot> {
+            CallBuilder::new_client(&mut self.ctx, text.into())
         }
 
-        pub fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_> {
-            QueryExecutor::query_result_set(self, text)
+        pub fn query_result_set(
+            &mut self,
+            text: impl Into<String>,
+        ) -> ResultSetBuilder<'_, ClientOneShot> {
+            CallBuilder::new_client(&mut self.ctx, text.into())
         }
 
-        pub fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row> {
-            QueryExecutor::query_row(self, text)
+        pub fn query_row(
+            &mut self,
+            text: impl Into<String>,
+        ) -> QueryRowBuilder<'_, Row, ClientOneShot> {
+            CallBuilder::new_client(&mut self.ctx, text.into())
         }
     };
 }
 
-pub(crate) use impl_query_methods;
+macro_rules! impl_transaction_query_methods {
+    () => {
+        pub fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_, Interactive> {
+            CallBuilder::new_transaction(&mut self.ctx, text.into())
+        }
+
+        pub fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_, Interactive> {
+            CallBuilder::new_transaction(&mut self.ctx, text.into())
+        }
+
+        pub fn query_result_set(
+            &mut self,
+            text: impl Into<String>,
+        ) -> ResultSetBuilder<'_, Interactive> {
+            CallBuilder::new_transaction(&mut self.ctx, text.into())
+        }
+
+        pub fn query_row(
+            &mut self,
+            text: impl Into<String>,
+        ) -> QueryRowBuilder<'_, Row, Interactive> {
+            CallBuilder::new_transaction(&mut self.ctx, text.into())
+        }
+    };
+}
+
+pub(crate) use impl_client_query_methods;
+pub(crate) use impl_transaction_query_methods;

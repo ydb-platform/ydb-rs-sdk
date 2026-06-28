@@ -36,13 +36,12 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::result::Row;
 
 use crate::session_pool::QuerySessionPool;
-use builders::impl_query_methods;
+use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{
     check_retry_transaction_error, retry_wait, transaction_commit, transaction_ensure_begin,
     transaction_exec_context, transaction_rollback, ClientExecContext, TransactionExecContext,
     DEFAULT_QUERY_RETRY_BUDGET,
 };
-use internal::{ExecCoreRef, HasCore};
 
 /// Row-to-struct mapping (the sqlx `FromRow` analogue).
 pub trait FromYdbRow: Sized {
@@ -154,7 +153,7 @@ impl Clone for QueryClient {
 }
 
 impl QueryClient {
-    impl_query_methods!();
+    impl_client_query_methods!();
 
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
@@ -286,13 +285,25 @@ impl QueryClient {
     }
 }
 
-impl HasCore for QueryClient {
-    fn core_mut(&mut self) -> ExecCoreRef<'_> {
-        ExecCoreRef::Client(&mut self.ctx)
+impl QueryExecutor for QueryClient {
+    type Scope = builders::ClientOneShot;
+
+    fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_, Self::Scope> {
+        QueryClient::exec(self, text)
+    }
+
+    fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_, Self::Scope> {
+        QueryClient::query(self, text)
+    }
+
+    fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_, Self::Scope> {
+        QueryClient::query_result_set(self, text)
+    }
+
+    fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row, Self::Scope> {
+        QueryClient::query_row(self, text)
     }
 }
-
-impl QueryExecutor for QueryClient {}
 
 #[derive(Debug, PartialEq, Eq)]
 enum TxState {
@@ -307,7 +318,7 @@ pub struct QueryTransaction {
 }
 
 impl QueryTransaction {
-    impl_query_methods!();
+    impl_transaction_query_methods!();
 
     fn new(
         connection_manager: GrpcConnectionManager,
@@ -369,18 +380,31 @@ impl QueryTransaction {
     }
 }
 
-impl HasCore for QueryTransaction {
-    fn core_mut(&mut self) -> ExecCoreRef<'_> {
-        ExecCoreRef::Transaction(&mut self.ctx)
+impl QueryExecutor for QueryTransaction {
+    type Scope = builders::Interactive;
+
+    fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_, Self::Scope> {
+        QueryTransaction::exec(self, text)
+    }
+
+    fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_, Self::Scope> {
+        QueryTransaction::query(self, text)
+    }
+
+    fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_, Self::Scope> {
+        QueryTransaction::query_result_set(self, text)
+    }
+
+    fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row, Self::Scope> {
+        QueryTransaction::query_row(self, text)
     }
 }
 
-impl QueryExecutor for QueryTransaction {}
-
 pub use crate::session_pool::QuerySessionPoolSettings;
 pub use builders::{
-    CallBuilder, ExecBuilder, ExecCall, OneResultSet, OneRow, OptionalRow, OptionalRowBuilder,
-    QueryExecutor, QueryRowBuilder, QueryStreamBuilder, ResultSetBuilder, Streamed,
+    CallBuilder, ClientOneShot, ExecBuilder, ExecCall, Interactive, OneResultSet, OneRow,
+    OptionalRow, OptionalRowBuilder, QueryExecutor, QueryRowBuilder, QueryStreamBuilder,
+    ResultSetBuilder, Streamed,
 };
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};

@@ -34,6 +34,8 @@ pub(crate) struct CallOptions {
     /// Per-call isolation override. `None` → [`QueryTxMode::Implicit`] on client,
     /// [`TransactionExecContext::tx_mode`] in interactive transactions.
     pub tx_mode: Option<QueryTxMode>,
+    /// One-shot [`QueryClient`] only: send `ExecuteQuery` with an empty `session_id`.
+    pub implicit_session: bool,
 }
 
 #[derive(Clone)]
@@ -254,6 +256,28 @@ fn tx_control_for_client(
     Some(begin_tx_control(tx_mode_to_raw(mode), commit_tx))
 }
 
+async fn client_implicit_session_request(
+    ctx: &ClientExecContext,
+    text: &str,
+    params: &HashMap<String, Value>,
+    opts: &CallOptions,
+    concurrent_result_sets: bool,
+) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
+    let client = ctx
+        .connection_manager
+        .get_auth_service(RawQueryClient::new)
+        .await?;
+    let mut req = RawExecuteQueryRequest::new(
+        "",
+        text,
+        params.clone(),
+        tx_control_for_client(opts),
+        opts.collect_stats,
+    );
+    req.concurrent_result_sets = concurrent_result_sets;
+    Ok((client, req))
+}
+
 async fn client_begin_stream_once(
     ctx: &ClientExecContext,
     text: &str,
@@ -264,6 +288,14 @@ async fn client_begin_stream_once(
     let timeout_duration = operation_timeout(opts, &ctx.timeouts);
 
     with_operation_timeout(timeout_duration, async {
+        if opts.implicit_session {
+            let (mut client, req) =
+                client_implicit_session_request(ctx, text, params, opts, concurrent_result_sets)
+                    .await?;
+            let stream = client.execute_query(req).await.map_err(YdbError::from)?;
+            return Ok(ExecuteQueryStream::new(stream));
+        }
+
         let mut lease = ctx.session_pool.acquire_explicit().await?;
         let (mut client, req) = client_pooled_explicit_request(
             ctx,
@@ -411,6 +443,10 @@ pub(crate) async fn transaction_begin_stream(
     opts: CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
+    debug_assert!(
+        !opts.implicit_session,
+        "implicit_session is only available on QueryClient one-shot builders"
+    );
     if tx.finished {
         return Err(YdbError::Custom(
             "transaction already finished (committed or rolled back)".to_string(),
