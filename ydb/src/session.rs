@@ -408,10 +408,7 @@ mod discard_session_tests {
             "connection refused".into()
         )));
         assert!(should_discard_session_from_pool(
-            &YdbError::TransportGRPCStatus(Arc::new(Status::new(
-                Code::Unavailable,
-                "node down"
-            )))
+            &YdbError::TransportGRPCStatus(Arc::new(Status::new(Code::Unavailable, "node down")))
         ));
     }
 
