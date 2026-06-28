@@ -71,6 +71,10 @@ impl Client {
     /// Replace the driver session pool (CreateSession + AttachSession) and optionally warm it up.
     ///
     /// Table and query clients created from this driver share the same pool.
+    ///
+    /// Pool acquire timeout is taken from [`Self::timeouts`] at creation time. Call
+    /// [`Self::with_timeouts`] **before** this method if a custom operation timeout should
+    /// apply to session pool acquisition.
     pub async fn with_session_pool(self, settings: QuerySessionPoolSettings) -> YdbResult<Self> {
         let session_pool = QuerySessionPool::new_explicit(
             self.connection_manager.clone(),
@@ -137,6 +141,10 @@ impl Client {
         OperationClient::new(self.timeouts, self.connection_manager.clone())
     }
 
+    /// Update operation timeouts on the driver.
+    ///
+    /// Does not retroactively change an existing session pool's acquire timeout; call this
+    /// **before** [`Self::with_session_pool`] to apply custom timeouts to pool acquisition.
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {
         self.timeouts = timeouts;
         self

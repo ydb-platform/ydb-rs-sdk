@@ -14,7 +14,8 @@ use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::session::AttachedQuerySession;
 use crate::grpc_wrapper::raw_services::Service;
 
-const DEFAULT_POOL_LIMIT: usize = 50;
+/// Default pool size for [`QuerySessionPoolSettings::default()`] and the driver built-in pool.
+pub(crate) const DEFAULT_POOL_LIMIT: usize = 1000;
 pub(crate) const DEFAULT_SESSION_CREATE_TIMEOUT: Duration = Duration::from_millis(500);
 pub(crate) const DEFAULT_SESSION_DELETE_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -52,6 +53,9 @@ where
 #[derive(Clone, Debug)]
 pub struct QuerySessionPoolSettings {
     /// Maximum concurrent sessions (pool size limit).
+    ///
+    /// Normalized to at least 1 when a pool is created (`with_limit` and pool constructors
+    /// apply the same rule).
     pub limit: usize,
     /// Minimum sessions to pre-create at pool initialization (warm-up).
     pub warm_up: usize,
@@ -429,12 +433,21 @@ impl QuerySessionPoolInner {
             }
         }
 
-        if let Some(err) = first_err {
-            for item in created {
-                inner.close_explicit_item(item).await;
+        if created.is_empty() {
+            if let Some(err) = first_err {
+                inner.drain_and_close_explicit_idle().await;
+                return Err(err);
             }
-            inner.drain_and_close_explicit_idle().await;
-            return Err(err);
+            return Ok(());
+        }
+
+        if let Some(err) = &first_err {
+            warn!(
+                requested = count,
+                warmed = created.len(),
+                error = %err,
+                "session pool warm-up completed partially; remaining sessions will be created on demand"
+            );
         }
 
         for item in created {
@@ -767,8 +780,19 @@ mod unit_tests {
     #[test]
     fn default_session_pool_timeouts_are_500ms() {
         let settings = QuerySessionPoolSettings::default();
+        assert_eq!(settings.limit, DEFAULT_POOL_LIMIT);
         assert_eq!(settings.session_create_timeout, Duration::from_millis(500));
         assert_eq!(settings.session_delete_timeout, Duration::from_millis(500));
+    }
+
+    #[test]
+    fn normalize_pool_settings_enforces_minimum_limit() {
+        let settings = normalize_pool_settings(QuerySessionPoolSettings {
+            limit: 0,
+            warm_up: 0,
+            ..QuerySessionPoolSettings::default()
+        });
+        assert_eq!(settings.limit, 1);
     }
 
     #[test]

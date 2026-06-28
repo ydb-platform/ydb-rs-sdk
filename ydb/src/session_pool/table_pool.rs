@@ -45,6 +45,8 @@ impl SessionPool {
             if !s.can_pooled {
                 lease.invalidate_session();
             }
+            // Drop the in-use guard synchronously so AttachSession close can drain in-flight
+            // table RPCs before async return_to_pool (return_to_pool also calls end_use).
             lease.end_use();
             spawn_pool_release(async move {
                 lease.return_to_pool().await;
