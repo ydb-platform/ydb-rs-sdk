@@ -15,7 +15,7 @@ use crate::grpc_wrapper::raw_query_service::session::AttachedQuerySession;
 use crate::grpc_wrapper::raw_services::Service;
 
 /// Default pool size for [`QuerySessionPoolSettings::default()`] and the driver built-in pool.
-pub(crate) const DEFAULT_POOL_LIMIT: usize = 1000;
+pub(crate) const DEFAULT_POOL_LIMIT: usize = 50;
 pub(crate) const DEFAULT_SESSION_CREATE_TIMEOUT: Duration = Duration::from_millis(500);
 pub(crate) const DEFAULT_SESSION_DELETE_TIMEOUT: Duration = Duration::from_millis(500);
 
