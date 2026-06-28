@@ -1,9 +1,17 @@
 use crate::client_topic::topicreader::partition_state::PartitionSession;
 use crate::client_topic::topicreader::reader::TopicReaderCommitMarker;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::RawBatch;
-use crate::YdbResult;
+use crate::{Codec, YdbResult};
 use std::time;
 use std::time::SystemTime;
+
+/// Internal pre-decompression batch carried from `grpc_stream` to `decompressor`.
+/// Each `MessageBatch` is one `RawBatch`'s worth of messages plus the codec they
+/// were compressed with.
+pub(super) struct MessageBatch {
+    pub(super) messages: Vec<TopicReaderMessage>,
+    pub(super) codec: Codec,
+}
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 #[derive(Debug)]
@@ -134,6 +142,28 @@ impl TopicReaderMessage {
 
     pub fn get_partition_id(&self) -> i64 {
         self.commit_marker.partition_id
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_message(epoch: usize, bytes_to_release: i64) -> Self {
+        Self {
+            seq_no: 0,
+            created_at: None,
+            offset: 0,
+            written_at: time::SystemTime::UNIX_EPOCH,
+            uncompressed_size: 0,
+            producer_id: String::new(),
+            raw_data: Some(vec![]),
+            commit_marker: TopicReaderCommitMarker {
+                partition_session_id: 1,
+                partition_id: 1,
+                start_offset: 0,
+                end_offset: 1,
+                topic: "test".into(),
+                epoch,
+            },
+            bytes_to_release,
+        }
     }
 }
 
