@@ -320,6 +320,10 @@ impl QuerySessionPool {
                 stale_items.push(item);
                 continue;
             }
+            if item.session.ensure_alive().is_err() {
+                stale_items.push(item);
+                continue;
+            }
             for stale in stale_items {
                 let inner = self.inner.clone();
                 spawn_pool_release(async move {

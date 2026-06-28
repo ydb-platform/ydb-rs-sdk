@@ -30,6 +30,7 @@ impl SessionPool {
 
     pub(crate) async fn session(&self) -> YdbResult<Session> {
         let mut lease = self.pool.acquire_explicit().await?;
+        lease.ensure_alive()?;
         lease.begin_use();
         let session_id = lease.session_id().to_string();
         let node_uri = lease.node_uri().clone();

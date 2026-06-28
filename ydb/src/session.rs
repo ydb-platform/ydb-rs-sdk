@@ -73,13 +73,8 @@ impl Session {
     }
 
     pub(crate) fn handle_error(&mut self, err: &YdbError) {
-        if let YdbError::YdbStatusError(err) = err {
-            use ydb_grpc::ydb_proto::status_ids::StatusCode;
-            if let Ok(status) = StatusCode::try_from(err.operation_status) {
-                if status == StatusCode::BadSession || status == StatusCode::SessionExpired {
-                    self.can_pooled = false;
-                }
-            }
+        if should_discard_session_from_pool(err) {
+            self.can_pooled = false;
         }
     }
 
@@ -324,8 +319,14 @@ impl Session {
         self.channel_pool.create_grpc_table_client().await
     }
 
-    async fn get_table_client(&self) -> YdbResult<RawTableClient> {
-        self.channel_pool.create_table_client(self.timeouts).await
+    async fn get_table_client(&mut self) -> YdbResult<RawTableClient> {
+        match self.channel_pool.create_table_client(self.timeouts).await {
+            Ok(client) => Ok(client),
+            Err(err) => {
+                self.handle_error(&err);
+                Err(err)
+            }
+        }
     }
 
     pub(crate) fn on_drop(&mut self, f: Box<dyn FnOnce(&mut Self) + Send + Sync>) {
@@ -339,6 +340,89 @@ impl Drop for Session {
         while let Some(on_drop) = self.on_drop_callbacks.pop() {
             on_drop(self)
         }
+    }
+}
+
+/// Whether a failed RPC means the pooled session must not be reused (aligned with go-sdk
+/// `xerrors.MustDeleteTableOrQuerySession`).
+fn should_discard_session_from_pool(err: &YdbError) -> bool {
+    match err {
+        YdbError::YdbStatusError(ydb_err) => {
+            use ydb_grpc::ydb_proto::status_ids::StatusCode;
+            StatusCode::try_from(ydb_err.operation_status).is_ok_and(|status| {
+                matches!(
+                    status,
+                    StatusCode::BadSession | StatusCode::SessionBusy | StatusCode::SessionExpired
+                )
+            })
+        }
+        YdbError::Transport(_) | YdbError::TransportDial(_) => true,
+        YdbError::TransportGRPCStatus(status) => {
+            use tonic::Code;
+            matches!(
+                status.code(),
+                Code::Cancelled
+                    | Code::Unknown
+                    | Code::InvalidArgument
+                    | Code::DeadlineExceeded
+                    | Code::NotFound
+                    | Code::AlreadyExists
+                    | Code::PermissionDenied
+                    | Code::FailedPrecondition
+                    | Code::Aborted
+                    | Code::Unimplemented
+                    | Code::Internal
+                    | Code::Unavailable
+                    | Code::DataLoss
+                    | Code::Unauthenticated
+            )
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod discard_session_tests {
+    use super::*;
+    use std::sync::Arc;
+    use tonic::{Code, Status};
+    use ydb_grpc::ydb_proto::status_ids::StatusCode;
+
+    fn ydb_status(status: StatusCode) -> YdbError {
+        YdbError::YdbStatusError(crate::errors::YdbStatusError {
+            message: "test".into(),
+            operation_status: status as i32,
+            issues: vec![],
+        })
+    }
+
+    #[test]
+    fn discard_on_bad_session_and_transport() {
+        assert!(should_discard_session_from_pool(&ydb_status(
+            StatusCode::BadSession
+        )));
+        assert!(should_discard_session_from_pool(&ydb_status(
+            StatusCode::SessionBusy
+        )));
+        assert!(should_discard_session_from_pool(&YdbError::Transport(
+            "connection refused".into()
+        )));
+        assert!(should_discard_session_from_pool(
+            &YdbError::TransportGRPCStatus(Arc::new(Status::new(
+                Code::Unavailable,
+                "node down"
+            )))
+        ));
+    }
+
+    #[test]
+    fn keep_session_on_business_errors() {
+        assert!(!should_discard_session_from_pool(&ydb_status(
+            StatusCode::PreconditionFailed
+        )));
+        assert!(!should_discard_session_from_pool(&YdbError::Custom(
+            "customer".into()
+        )));
     }
 }
 
