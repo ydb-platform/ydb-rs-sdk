@@ -55,10 +55,7 @@ impl Client {
     }
 
     /// Configure a shared session pool (CreateSession + AttachSession) for table and query clients.
-    pub async fn with_session_pool(
-        self,
-        settings: QuerySessionPoolSettings,
-    ) -> YdbResult<Self> {
+    pub async fn with_session_pool(self, settings: QuerySessionPoolSettings) -> YdbResult<Self> {
         let pool = QuerySessionPool::new_explicit(
             self.connection_manager.clone(),
             self.timeouts,

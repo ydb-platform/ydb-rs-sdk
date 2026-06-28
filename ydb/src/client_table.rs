@@ -3,7 +3,9 @@ use crate::client::TimeoutSettings;
 use crate::discovery::Discovery;
 use crate::errors::*;
 use crate::session::Session;
-use crate::session_pool::{QuerySessionPool, QuerySessionPoolSettings, QuerySessionPoolStats, SessionPool};
+use crate::session_pool::{
+    QuerySessionPool, QuerySessionPoolSettings, QuerySessionPoolStats, SessionPool,
+};
 use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 use crate::types::Value;
 
@@ -156,10 +158,7 @@ impl TableClient {
     ///
     /// When [`crate::Client::with_session_pool`] is used, table and query clients share one pool;
     /// calling this method replaces the table client's pool with a dedicated instance.
-    pub async fn with_session_pool(
-        self,
-        settings: QuerySessionPoolSettings,
-    ) -> YdbResult<Self> {
+    pub async fn with_session_pool(self, settings: QuerySessionPoolSettings) -> YdbResult<Self> {
         let session_pool = SessionPool::with_settings(
             self.session_pool.connection_manager(),
             self.session_pool.discovery(),

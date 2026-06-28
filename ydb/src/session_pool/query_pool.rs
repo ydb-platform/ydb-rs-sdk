@@ -357,12 +357,7 @@ impl QuerySessionPool {
     ) -> YdbResult<Self> {
         let settings = normalize_pool_settings(settings);
         let warm_up = settings.warm_up;
-        let pool = Self::new_explicit_sync(
-            connection_manager,
-            timeouts,
-            discovery,
-            settings,
-        );
+        let pool = Self::new_explicit_sync(connection_manager, timeouts, discovery, settings);
 
         if warm_up > 0 {
             pool.inner.warm_up_explicit(warm_up).await?;

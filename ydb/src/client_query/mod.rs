@@ -37,6 +37,7 @@ use crate::errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustom
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::result::Row;
 
+use crate::session_pool::{QuerySessionPool, QuerySessionRpcTimeouts};
 use builders::impl_query_methods;
 use exec::{
     check_retry_transaction_error, retry_wait, transaction_commit, transaction_ensure_begin,
@@ -44,7 +45,6 @@ use exec::{
     DEFAULT_QUERY_RETRY_BUDGET,
 };
 use internal::{ExecCoreRef, HasCore};
-use crate::session_pool::{QuerySessionPool, QuerySessionRpcTimeouts};
 
 /// How [`QueryClient`] acquires a YDB session for each call.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -476,13 +476,13 @@ impl HasCore for QueryTransaction {
 
 impl QueryExecutor for QueryTransaction {}
 
+pub use crate::session_pool::{QuerySessionPoolSettings, QuerySessionPoolStats};
 pub use builders::{
     CallBuilder, ExecBuilder, ExecCall, OneResultSet, OneRow, OptionalRow, OptionalRowBuilder,
     QueryExecutor, QueryRowBuilder, QueryStreamBuilder, ResultSetBuilder, Streamed,
 };
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};
-pub use crate::session_pool::{QuerySessionPoolSettings, QuerySessionPoolStats};
 pub use stream_facade::{QueryStats, QueryStream};
 
 fn panic_message(payload: Box<dyn Any + Send>) -> String {

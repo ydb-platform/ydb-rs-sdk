@@ -147,7 +147,9 @@ mod test {
 
     fn bench_pool() -> QuerySessionPool {
         QuerySessionPool::new_explicit_bench(
-            QuerySessionPoolSettings::new().with_limit(1).with_warm_up(1),
+            QuerySessionPoolSettings::new()
+                .with_limit(1)
+                .with_warm_up(1),
         )
     }
 

@@ -245,10 +245,6 @@ impl AttachedQuerySession {
         }
     }
 
-    pub(crate) fn bench_invalidate(&self) {
-        self.inner.alive.store(false, Ordering::Release);
-    }
-
     pub(crate) fn bench_close(self) {
         self.inner.explicitly_closed.store(true, Ordering::Release);
         self.inner.alive.store(false, Ordering::Release);

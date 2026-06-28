@@ -12,9 +12,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use http::Uri;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::grpc_wrapper::raw_table_service::client::{
-    CollectStatsMode, RawTableClient, SessionStatus,
-};
+use crate::grpc_wrapper::raw_table_service::client::{CollectStatsMode, RawTableClient};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
 use crate::grpc_wrapper::raw_errors::RawResult;
@@ -27,7 +25,6 @@ use crate::grpc_wrapper::raw_table_service::describe_table::RawDescribeTableRequ
 use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryRequest;
 use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
 use crate::grpc_wrapper::raw_table_service::explain_data_query::RawExplainDataQueryRequest;
-use crate::grpc_wrapper::raw_table_service::keepalive::RawKeepAliveRequest;
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::table_service_types::{ColumnDescription, CopyTableItem, TableDescription};
 use crate::trace_helpers::ensure_len_string;
@@ -317,26 +314,6 @@ impl Session {
         })
     }
 
-    pub(crate) async fn keepalive(&mut self) -> YdbResult<()> {
-        let mut table = self.get_table_client().await?;
-        let res = table
-            .keep_alive(RawKeepAliveRequest {
-                operation_params: self.timeouts.operation_params(),
-                session_id: self.id.clone(),
-            })
-            .await;
-
-        let res = self.handle_raw_result(res)?;
-
-        if let SessionStatus::Ready = res.session_status {
-            Ok(())
-        } else {
-            let err = YdbError::from_str(format!("bad status while session ping: {res:?}"));
-            self.handle_error(&err);
-            Err(err)
-        }
-    }
-
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {
         self.timeouts = timeouts;
         self
@@ -351,19 +328,8 @@ impl Session {
         self.channel_pool.create_table_client(self.timeouts).await
     }
 
-    #[allow(dead_code)]
     pub(crate) fn on_drop(&mut self, f: Box<dyn FnOnce(&mut Self) + Send + Sync>) {
         self.on_drop_callbacks.push(f)
-    }
-
-    pub(crate) fn clone_without_ondrop(&self) -> Self {
-        Self {
-            id: self.id.clone(),
-            can_pooled: self.can_pooled,
-            on_drop_callbacks: Vec::new(),
-            channel_pool: self.channel_pool.clone_box(),
-            timeouts: self.timeouts,
-        }
     }
 }
 
@@ -380,7 +346,6 @@ impl Drop for Session {
 pub(crate) trait CreateTableClient: Send + Sync {
     async fn create_grpc_table_client(&self) -> YdbResult<TableServiceClient<InterceptedChannel>>;
     async fn create_table_client(&self, timeouts: TimeoutSettings) -> YdbResult<RawTableClient>;
-    fn clone_box(&self) -> Box<dyn CreateTableClient>;
 }
 
 #[async_trait::async_trait]
@@ -394,10 +359,6 @@ impl CreateTableClient for GrpcConnectionManager {
         self.get_auth_service(RawTableClient::new)
             .await
             .map(|item| item.with_timeout(timeouts))
-    }
-
-    fn clone_box(&self) -> Box<dyn CreateTableClient> {
-        Box::new(self.clone())
     }
 }
 
@@ -433,9 +394,5 @@ impl CreateTableClient for NodePinnedTableClient {
             .get_auth_service_to_node(RawTableClient::new, &self.node_uri)
             .await
             .map(|item| item.with_timeout(timeouts))
-    }
-
-    fn clone_box(&self) -> Box<dyn CreateTableClient> {
-        Box::new(self.clone())
     }
 }
