@@ -12,9 +12,9 @@ use ydb_grpc::ydb_proto::scheme::{
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 use ydb_grpc::ydb_proto::table::{
     BulkUpsertResponse, CommitTransactionResponse, CopyTableResponse, CopyTablesResponse,
-    CreateSessionResponse, DeleteSessionResponse, DescribeTableResponse, ExecuteDataQueryResponse,
-    ExecuteSchemeQueryResponse, ExplainDataQueryResponse, KeepAliveResponse, ReadRowsResponse,
-    RollbackTransactionResponse,
+    CreateSessionResponse, CreateTableResponse, DeleteSessionResponse, DescribeTableResponse,
+    ExecuteDataQueryResponse, ExecuteSchemeQueryResponse, ExplainDataQueryResponse,
+    KeepAliveResponse, ReadRowsResponse, RollbackTransactionResponse,
 };
 use ydb_grpc::ydb_proto::topic::{
     AlterTopicResponse, CreateTopicResponse, DescribeConsumerResponse, DescribeTopicResponse,
@@ -114,6 +114,7 @@ operation_impl_for!(AlterNodeResponse);
 operation_impl_for!(DropNodeResponse);
 operation_impl_for!(CopyTableResponse);
 operation_impl_for!(CopyTablesResponse);
+operation_impl_for!(CreateTableResponse);
 operation_impl_for!(DescribeTableResponse);
 operation_impl_for!(LoginResponse);
 operation_impl_for!(DescribeConsumerResponse);

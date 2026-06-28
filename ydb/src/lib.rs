@@ -58,6 +58,7 @@ pub(crate) mod client_table;
 mod client_table_test_integration;
 pub(crate) mod client_topic;
 pub(crate) mod connection_pool;
+mod create_table_types;
 mod credentials;
 pub(crate) mod discovery;
 mod errors;
@@ -164,6 +165,15 @@ pub use client_query::{
 
 // full enum pub types
 pub use client_table::{RetryOptions, TableClient, TransactionOptions};
+
+pub use create_table_types::{
+    AutoPartitioningPolicy, CachingPolicy, ColumnDefault, ColumnFamily, ColumnFamilyCompression,
+    ColumnFamilyPolicy, ColumnFamilyPolicyCompression, CompactionPolicy, CreateTableIndex,
+    CreateTableOptions, CreateTableOptionsBuilder, DateTypeColumnTtl, ExecutionPolicy, FeatureFlag,
+    PartitioningPolicy, ReadReplicasSettings, ReplicationPolicy, SequenceOptions, StoragePolicy,
+    StoragePool, StorageSettings, TableColumn, TablePartitioningSettings, TablePartitions, TtlMode,
+    TtlSettings, UnixEpochUnit, ValueSinceUnixEpochTtl,
+};
 
 // full enum pub types
 pub use table_service_types::{

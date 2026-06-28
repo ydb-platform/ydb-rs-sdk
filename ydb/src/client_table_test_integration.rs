@@ -12,6 +12,7 @@ use tracing::trace;
 use tracing_test::traced_test;
 
 use crate::client_table::RetryOptions;
+use crate::create_table_types::{CreateTableIndex, CreateTableOptionsBuilder, TableColumn};
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::query::Query;
 use crate::table_service_types::{CopyTableItem, IndexType, StoreType};
@@ -1210,6 +1211,82 @@ async fn describe_table() -> YdbResult<()> {
             Ok(())
         })
         .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn create_table() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let table_name = "temp_create_table_test";
+
+    table_client
+        .retry_with_session(RetryOptions::new(), |session| async {
+            let mut session = session;
+            session
+                .execute_schema_query(format!("DROP TABLE IF EXISTS {table_name}"))
+                .await?;
+            Ok(())
+        })
+        .await?;
+
+    let database_path = client.database();
+    let table_path = format!("{database_path}/{table_name}");
+
+    table_client
+        .create_table(
+            table_path.clone(),
+            CreateTableOptionsBuilder::default()
+                .columns(vec![
+                    TableColumn::required("id", Value::Text(String::new())),
+                    TableColumn::required("id_hash", Value::Uint32(0)),
+                    TableColumn::nullable("message", Value::Text(String::new()))?,
+                    TableColumn::nullable("timestamp", Value::Timestamp(UNIX_EPOCH))?,
+                    TableColumn::nullable("level", Value::Int32(0))?,
+                ])
+                .primary_key(vec!["id_hash".into(), "id".into()])
+                .indexes(vec![CreateTableIndex::global(
+                    "idx_timestamp",
+                    vec!["timestamp".into()],
+                )])
+                .build()?,
+        )
+        .await?;
+
+    let table_desc = table_client.describe_table(table_path).await?;
+
+    assert_eq!(table_desc.columns.len(), 5);
+    assert_eq!(table_desc.primary_key, vec!["id_hash", "id"]);
+    assert_eq!(table_desc.indexes.len(), 1);
+    assert_eq!(table_desc.indexes[0].name, "idx_timestamp");
+    assert_eq!(table_desc.indexes[0].index_type, IndexType::Global);
+
+    let mut transaction = table_client.create_autocommit_transaction(Mode::SerializableReadWrite);
+    transaction
+        .query(
+            format!("UPSERT INTO {table_name} (id_hash, id, message) VALUES (1, \"a\", \"hello\")")
+                .into(),
+        )
+        .await?;
+
+    let res = transaction
+        .query(format!("SELECT message FROM {table_name} WHERE id_hash = 1 AND id = \"a\"").into())
+        .await?;
+
+    assert_eq!(
+        Value::optional_from(
+            Value::Text(String::new()),
+            Some(Value::Text("hello".into()))
+        )?,
+        res.into_only_result()?
+            .rows()
+            .next()
+            .unwrap()
+            .remove_field_by_name("message")?
+    );
 
     Ok(())
 }

@@ -8,6 +8,7 @@ use crate::types::Value;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
 
+use crate::create_table_types::CreateTableOptions;
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::retry::{NoRetrier, Retry, RetryParams, TimeoutRetrier};
@@ -561,6 +562,21 @@ impl TableClient {
             let mut session = session; // force borrow for lifetime of t inside closure
             session.copy_tables(tables.to_vec()).await?;
 
+            Ok(())
+        })
+        .await
+        .map_err(YdbOrCustomerError::to_ydb_error)
+    }
+
+    pub async fn create_table(
+        &self,
+        path: impl Into<String>,
+        options: CreateTableOptions,
+    ) -> YdbResult<()> {
+        let path = path.into();
+        self.retry_with_session(RetryOptions::new(), |session| async {
+            let mut session = session;
+            session.create_table(path.clone(), options.clone()).await?;
             Ok(())
         })
         .await

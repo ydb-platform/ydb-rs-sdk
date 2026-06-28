@@ -15,12 +15,14 @@ use crate::grpc_wrapper::raw_table_service::client::{
 };
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
+use crate::create_table_types::CreateTableOptions;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertRequest;
 use crate::grpc_wrapper::raw_table_service::commit_transaction::RawCommitTransactionRequest;
 use crate::grpc_wrapper::raw_table_service::copy_table::{
     RawCopyTableRequest, RawCopyTablesRequest,
 };
+use crate::grpc_wrapper::raw_table_service::create_table::RawCreateTableRequest;
 use crate::grpc_wrapper::raw_table_service::describe_table::RawDescribeTableRequest;
 use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryRequest;
 use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
@@ -269,6 +271,24 @@ impl Session {
                 operation_params: self.timeouts.operation_params(),
                 session_id: self.id.clone(),
                 tables: tables.into_iter().map_into().collect(),
+            })
+            .await;
+
+        self.handle_raw_result(res)
+    }
+
+    pub async fn create_table(
+        &mut self,
+        path: String,
+        options: CreateTableOptions,
+    ) -> YdbResult<()> {
+        let mut table = self.get_table_client().await?;
+        let res = table
+            .create_table(RawCreateTableRequest {
+                session_id: self.id.clone(),
+                path,
+                options,
+                operation_params: self.timeouts.operation_params(),
             })
             .await;
 
