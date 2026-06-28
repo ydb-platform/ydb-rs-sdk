@@ -22,7 +22,7 @@ use crate::grpc_wrapper::raw_services::Service;
 use crate::types::Value;
 use crate::{QuerySessionMode, QueryTransactionOptions, QueryTxMode};
 
-use super::session_pool::{
+use crate::session_pool::{
     ImplicitSessionLease, QuerySessionLease, QuerySessionPool, QuerySessionRpcTimeouts,
 };
 

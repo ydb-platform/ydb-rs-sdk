@@ -59,7 +59,7 @@ fn normalize_pool_settings(mut settings: QuerySessionPoolSettings) -> QuerySessi
     settings
 }
 
-fn spawn_pool_release<F>(future: F)
+pub(crate) fn spawn_pool_release<F>(future: F)
 where
     F: std::future::Future<Output = ()> + Send + 'static,
 {
@@ -216,11 +216,15 @@ impl QuerySessionLease {
         }
     }
 
+    pub(crate) fn invalidate_session(&mut self) {
+        if let Some(item) = &self.item {
+            item.session.invalidate();
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn bench_invalidate_session(&mut self) {
-        if let Some(item) = &self.item {
-            item.session.bench_invalidate();
-        }
+        self.invalidate_session();
     }
 }
 
@@ -315,6 +319,36 @@ struct QuerySessionPoolInner {
 }
 
 impl QuerySessionPool {
+    pub fn new_explicit_sync(
+        connection_manager: GrpcConnectionManager,
+        timeouts: TimeoutSettings,
+        discovery: Arc<Box<dyn Discovery>>,
+        settings: QuerySessionPoolSettings,
+    ) -> Self {
+        let settings = normalize_pool_settings(settings);
+        let limit = settings.limit;
+        let discovery_for_shutdown = discovery.clone();
+        let on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync> =
+            Arc::new(move |uri: Uri| discovery_for_shutdown.pessimization(&uri));
+
+        Self {
+            inner: Arc::new(QuerySessionPoolInner {
+                kind: QuerySessionPoolKind::Explicit,
+                settings,
+                acquire_timeout: timeouts.operation_timeout,
+                connection_manager,
+                semaphore: Arc::new(Semaphore::new(limit)),
+                explicit_idle: Mutex::new(Vec::new()),
+                implicit_idle: Mutex::new(Vec::new()),
+                on_node_shutdown,
+                create_in_progress: AtomicUsize::new(0),
+                sessions_created: AtomicU64::new(0),
+                #[cfg(test)]
+                bench_mode: false,
+            }),
+        }
+    }
+
     pub async fn new_explicit(
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
@@ -323,31 +357,18 @@ impl QuerySessionPool {
     ) -> YdbResult<Self> {
         let settings = normalize_pool_settings(settings);
         let warm_up = settings.warm_up;
-        let limit = settings.limit;
-        let discovery_for_shutdown = discovery.clone();
-        let on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync> =
-            Arc::new(move |uri: Uri| discovery_for_shutdown.pessimization(&uri));
-
-        let inner = Arc::new(QuerySessionPoolInner {
-            kind: QuerySessionPoolKind::Explicit,
-            settings,
-            acquire_timeout: timeouts.operation_timeout,
+        let pool = Self::new_explicit_sync(
             connection_manager,
-            semaphore: Arc::new(Semaphore::new(limit)),
-            explicit_idle: Mutex::new(Vec::new()),
-            implicit_idle: Mutex::new(Vec::new()),
-            on_node_shutdown,
-            create_in_progress: AtomicUsize::new(0),
-            sessions_created: AtomicU64::new(0),
-            #[cfg(test)]
-            bench_mode: false,
-        });
+            timeouts,
+            discovery,
+            settings,
+        );
 
         if warm_up > 0 {
-            inner.warm_up_explicit(warm_up).await?;
+            pool.inner.warm_up_explicit(warm_up).await?;
         }
 
-        Ok(Self { inner })
+        Ok(pool)
     }
 
     pub fn new_implicit(

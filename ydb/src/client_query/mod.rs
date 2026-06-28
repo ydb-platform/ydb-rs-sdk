@@ -6,7 +6,6 @@ mod builders;
 mod exec;
 mod internal;
 mod script;
-mod session_pool;
 mod stream_facade;
 
 #[cfg(test)]
@@ -45,7 +44,7 @@ use exec::{
     DEFAULT_QUERY_RETRY_BUDGET,
 };
 use internal::{ExecCoreRef, HasCore};
-use session_pool::{QuerySessionPool, QuerySessionRpcTimeouts};
+use crate::session_pool::{QuerySessionPool, QuerySessionRpcTimeouts};
 
 /// How [`QueryClient`] acquires a YDB session for each call.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -202,7 +201,11 @@ impl QueryClient {
             settings,
         )
         .await?;
-        Ok(Self {
+        Ok(self.with_shared_session_pool(pool))
+    }
+
+    pub(crate) fn with_shared_session_pool(self, pool: QuerySessionPool) -> Self {
+        Self {
             ctx: ClientExecContext {
                 session_pool: Some(pool.clone()),
                 session_mode: QuerySessionMode::Pool,
@@ -210,7 +213,7 @@ impl QueryClient {
                 ..self.ctx
             },
             tx_options: self.tx_options,
-        })
+        }
     }
 
     /// Configure an implicit session pool (empty `session_id`, no AttachSession) while keeping
@@ -479,7 +482,7 @@ pub use builders::{
 };
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};
-pub use session_pool::{QuerySessionPoolSettings, QuerySessionPoolStats};
+pub use crate::session_pool::{QuerySessionPoolSettings, QuerySessionPoolStats};
 pub use stream_facade::{QueryStats, QueryStream};
 
 fn panic_message(payload: Box<dyn Any + Send>) -> String {

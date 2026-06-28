@@ -131,6 +131,10 @@ impl AttachedQuerySession {
         self.inner.alive.load(Ordering::Acquire)
     }
 
+    pub(crate) fn invalidate(&self) {
+        self.mark_not_alive();
+    }
+
     pub fn ensure_alive(&self) -> RawResult<()> {
         if self.is_alive() {
             Ok(())

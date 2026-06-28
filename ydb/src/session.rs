@@ -9,6 +9,8 @@ use derivative::Derivative;
 use itertools::Itertools;
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use http::Uri;
+
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_table_service::client::{
     CollectStatsMode, RawTableClient, SessionStatus,
@@ -390,6 +392,45 @@ impl CreateTableClient for GrpcConnectionManager {
 
     async fn create_table_client(&self, timeouts: TimeoutSettings) -> YdbResult<RawTableClient> {
         self.get_auth_service(RawTableClient::new)
+            .await
+            .map(|item| item.with_timeout(timeouts))
+    }
+
+    fn clone_box(&self) -> Box<dyn CreateTableClient> {
+        Box::new(self.clone())
+    }
+}
+
+/// Routes table RPCs to the node that owns the pooled query session.
+#[derive(Clone)]
+pub(crate) struct NodePinnedTableClient {
+    connection_manager: GrpcConnectionManager,
+    node_uri: Uri,
+}
+
+impl NodePinnedTableClient {
+    pub(crate) fn new(connection_manager: GrpcConnectionManager, node_uri: Uri) -> Self {
+        Self {
+            connection_manager,
+            node_uri,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl CreateTableClient for NodePinnedTableClient {
+    async fn create_grpc_table_client(&self) -> YdbResult<TableServiceClient<InterceptedChannel>> {
+        self.connection_manager
+            .get_auth_service_to_node(
+                TableServiceClient::<InterceptedChannel>::new,
+                &self.node_uri,
+            )
+            .await
+    }
+
+    async fn create_table_client(&self, timeouts: TimeoutSettings) -> YdbResult<RawTableClient> {
+        self.connection_manager
+            .get_auth_service_to_node(RawTableClient::new, &self.node_uri)
             .await
             .map(|item| item.with_timeout(timeouts))
     }

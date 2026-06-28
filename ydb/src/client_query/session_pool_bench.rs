@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::{QuerySessionPool, QuerySessionPoolSettings};
+use crate::session_pool::{QuerySessionPool, QuerySessionPoolSettings};
 
 const BENCH_POOL_LIMIT: usize = 500;
 const BENCH_PREFILL_ITEMS: usize = BENCH_POOL_LIMIT / 3;

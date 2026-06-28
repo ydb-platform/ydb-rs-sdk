@@ -5,7 +5,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use slo_framework::kv::{Database, KvWorkload, Params};
 use slo_framework::{test_row_from_row, Framework, RowID, TestRow, Workload};
-use ydb::{ydb_params, ClientBuilder, Query, TableClient, YdbOrCustomerError};
+use ydb::{ydb_params, ClientBuilder, Query, QuerySessionPoolSettings, TableClient, YdbOrCustomerError};
 
 pub struct Storage {
     table_client: TableClient,
@@ -26,8 +26,20 @@ impl Storage {
 
         client.wait().await.map_err(|err| err.to_string())?;
 
+        let pool_limit = params.pool_size() as usize;
+        let client = client
+            .with_session_pool(
+                QuerySessionPoolSettings::new()
+                    .with_limit(pool_limit)
+                    .with_warm_up(pool_limit),
+            )
+            .await
+            .map_err(|err| err.to_string())?;
+
         Ok(Self {
-            table_client: client.table_client(),
+            table_client: client
+                .table_client()
+                .clone_with_idempotent_operations(true),
             table_path: params.table_path.clone(),
             read_timeout: params.read_timeout,
             write_timeout: params.write_timeout,

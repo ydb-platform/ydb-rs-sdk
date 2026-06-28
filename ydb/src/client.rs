@@ -1,12 +1,13 @@
 use crate::client_common::DBCredentials;
 use crate::client_coordination::client::CoordinationClient;
 use crate::client_operation::OperationClient;
-use crate::client_query::QueryClient;
+use crate::client_query::{QueryClient, QuerySessionPoolSettings};
 use crate::client_scheme::client::SchemeClient;
 use crate::client_table::TableClient;
 use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::load_balancer::SharedLoadBalancer;
+use crate::session_pool::QuerySessionPool;
 use crate::waiter::Waiter;
 
 use std::sync::Arc;
@@ -26,6 +27,7 @@ pub struct Client {
     timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
     executor: Arc<dyn Executor>,
+    session_pool: Option<QuerySessionPool>,
 }
 
 impl Client {
@@ -48,7 +50,31 @@ impl Client {
             timeouts: TimeoutSettings::default(),
             connection_manager,
             executor,
+            session_pool: None,
         })
+    }
+
+    /// Configure a shared session pool (CreateSession + AttachSession) for table and query clients.
+    pub async fn with_session_pool(
+        self,
+        settings: QuerySessionPoolSettings,
+    ) -> YdbResult<Self> {
+        let pool = QuerySessionPool::new_explicit(
+            self.connection_manager.clone(),
+            self.timeouts,
+            self.discovery.clone(),
+            settings,
+        )
+        .await?;
+        Ok(Self {
+            session_pool: Some(pool),
+            ..self
+        })
+    }
+
+    /// Pool stats when [`Self::with_session_pool`] was configured.
+    pub fn session_pool_stats(&self) -> Option<crate::session_pool::QuerySessionPoolStats> {
+        self.session_pool.as_ref().map(|pool| pool.stats())
     }
 
     pub fn database(&self) -> String {
@@ -57,16 +83,26 @@ impl Client {
 
     /// Create instance of client for table service
     pub fn table_client(&self) -> TableClient {
-        TableClient::new(self.connection_manager.clone(), self.timeouts)
+        TableClient::new(
+            self.connection_manager.clone(),
+            self.timeouts,
+            self.discovery.clone(),
+            self.session_pool.clone(),
+        )
     }
 
     /// Create instance of client for query service.
     pub fn query_client(&self) -> QueryClient {
-        QueryClient::new(
+        let client = QueryClient::new(
             self.connection_manager.clone(),
             self.timeouts,
             self.discovery.clone(),
-        )
+        );
+        if let Some(pool) = &self.session_pool {
+            client.with_shared_session_pool(pool.clone())
+        } else {
+            client
+        }
     }
 
     /// Create instance of client for directory service
