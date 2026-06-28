@@ -256,24 +256,38 @@ impl QuerySessionPool {
     ) -> Self {
         let settings = normalize_pool_settings(settings);
         let limit = settings.limit;
-        let discovery_for_shutdown = discovery.clone();
-        let on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync> =
-            Arc::new(move |uri: Uri| discovery_for_shutdown.pessimization(&uri));
-
-        Self {
-            inner: Arc::new(QuerySessionPoolInner {
-                settings,
+        let inner = Arc::new_cyclic(|weak: &std::sync::Weak<QuerySessionPoolInner>| {
+            let discovery_for_shutdown = discovery.clone();
+            let pool_weak = weak.clone();
+            QuerySessionPoolInner {
+                settings: settings.clone(),
                 acquire_timeout: timeouts.operation_timeout,
-                connection_manager,
+                connection_manager: connection_manager.clone(),
                 semaphore: Arc::new(Semaphore::new(limit)),
                 explicit_idle: Mutex::new(Vec::new()),
-                on_node_shutdown,
+                on_node_shutdown: Arc::new(move |uri: Uri| {
+                    discovery_for_shutdown.pessimization(&uri);
+                    let Some(inner) = pool_weak.upgrade() else {
+                        return;
+                    };
+                    let drained = inner.drain_idle_for_node(&uri);
+                    if drained.is_empty() {
+                        return;
+                    }
+                    spawn_pool_release(async move {
+                        for item in drained {
+                            inner.close_explicit_item(item).await;
+                        }
+                    });
+                }),
                 create_in_progress: AtomicUsize::new(0),
                 sessions_created: AtomicU64::new(0),
                 #[cfg(test)]
                 bench_mode: false,
-            }),
-        }
+            }
+        });
+
+        Self { inner }
     }
 
     pub async fn new_explicit(
@@ -287,7 +301,7 @@ impl QuerySessionPool {
         let pool = Self::new_explicit_sync(connection_manager, timeouts, discovery, settings);
 
         if warm_up > 0 {
-            pool.inner.warm_up_explicit(warm_up).await?;
+            QuerySessionPoolInner::warm_up_parallel(pool.inner.clone(), warm_up).await?;
         }
 
         Ok(pool)
@@ -386,18 +400,43 @@ impl QuerySessionPoolInner {
         }
     }
 
-    async fn warm_up_explicit(&self, count: usize) -> YdbResult<()> {
+    async fn warm_up_parallel(inner: Arc<Self>, count: usize) -> YdbResult<()> {
+        let mut tasks = Vec::with_capacity(count);
         for _ in 0..count {
-            let item = match self.create_explicit_session().await {
-                Ok(item) => item,
-                Err(err) => {
-                    self.drain_and_close_explicit_idle().await;
-                    return Err(err);
+            let inner = inner.clone();
+            tasks.push(tokio::spawn(async move {
+                inner.create_explicit_session().await
+            }));
+        }
+
+        let mut created = Vec::with_capacity(count);
+        let mut first_err: Option<YdbError> = None;
+        for task in tasks {
+            match task.await {
+                Ok(Ok(item)) => created.push(item),
+                Ok(Err(err)) if first_err.is_none() => first_err = Some(err),
+                Ok(Err(_)) => {}
+                Err(join_err) if first_err.is_none() => {
+                    first_err = Some(YdbError::Transport(format!(
+                        "session pool warm-up task failed: {join_err}"
+                    )));
                 }
-            };
+                Err(_) => {}
+            }
+        }
+
+        if let Some(err) = first_err {
+            for item in created {
+                inner.close_explicit_item(item).await;
+            }
+            inner.drain_and_close_explicit_idle().await;
+            return Err(err);
+        }
+
+        for item in created {
             let overflow = {
-                let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
-                if idle.len() < self.settings.limit {
+                let mut idle = inner.explicit_idle.lock().expect("explicit idle lock");
+                if idle.len() < inner.settings.limit {
                     idle.push(item);
                     None
                 } else {
@@ -405,10 +444,26 @@ impl QuerySessionPoolInner {
                 }
             };
             if let Some(item) = overflow {
-                self.close_explicit_item(item).await;
+                inner.close_explicit_item(item).await;
             }
         }
         Ok(())
+    }
+
+    fn drain_idle_for_node(&self, node_uri: &Uri) -> Vec<ExplicitIdleItem> {
+        let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
+        let all: Vec<_> = idle.drain(..).collect();
+        let mut kept = Vec::with_capacity(all.len());
+        let mut drained = Vec::new();
+        for item in all {
+            if &item.node_uri == node_uri {
+                drained.push(item);
+            } else {
+                kept.push(item);
+            }
+        }
+        *idle = kept;
+        drained
     }
 
     async fn drain_and_close_explicit_idle(&self) {

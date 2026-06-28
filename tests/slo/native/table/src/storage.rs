@@ -29,11 +29,14 @@ impl Storage {
         client.wait().await.map_err(|err| err.to_string())?;
 
         let pool_limit = params.pool_size() as usize;
+        let session_rpc_timeout = params.read_timeout.max(params.write_timeout);
         let client = client
             .with_session_pool(
                 QuerySessionPoolSettings::new()
                     .with_limit(pool_limit)
-                    .with_warm_up(pool_limit),
+                    .with_warm_up(pool_limit)
+                    .with_session_create_timeout(session_rpc_timeout)
+                    .with_session_delete_timeout(session_rpc_timeout),
             )
             .await
             .map_err(|err| err.to_string())?;
