@@ -46,31 +46,6 @@ impl Drop for AttachedQuerySession {
 }
 
 impl AttachedQuerySession {
-    pub async fn create_and_open(
-        client: &mut RawQueryClient,
-        node_uri: Uri,
-        on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync>,
-        delete_timeout: Duration,
-    ) -> RawResult<Self> {
-        let created = client.create_session().await?;
-        let session_id = created.session_id;
-        match Self::open(
-            client,
-            node_uri,
-            session_id.clone(),
-            on_node_shutdown,
-            delete_timeout,
-        )
-        .await
-        {
-            Ok(session) => Ok(session),
-            Err(err) => {
-                let _ = timeout(delete_timeout, client.delete_session(&session_id)).await;
-                Err(err)
-            }
-        }
-    }
-
     pub async fn open(
         client: &mut RawQueryClient,
         node_uri: Uri,
@@ -275,35 +250,4 @@ fn shutdown_hint_error(hint: ShutdownHint) -> RawError {
 
 fn check_attach_state(state: &SessionState) -> RawResult<()> {
     check_status(state.status, &state.issues)
-}
-
-/// Implicit pool item: no CreateSession/AttachSession; ExecuteQuery uses an empty session id.
-pub(crate) struct ImplicitQuerySession {
-    alive: AtomicBool,
-}
-
-impl Default for ImplicitQuerySession {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ImplicitQuerySession {
-    pub fn new() -> Self {
-        Self {
-            alive: AtomicBool::new(true),
-        }
-    }
-
-    pub fn session_id(&self) -> &str {
-        ""
-    }
-
-    pub fn is_alive(&self) -> bool {
-        self.alive.load(Ordering::Acquire)
-    }
-
-    pub fn close(&self) {
-        self.alive.store(false, Ordering::Release);
-    }
 }

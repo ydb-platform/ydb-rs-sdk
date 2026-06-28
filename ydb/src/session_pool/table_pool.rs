@@ -1,111 +1,36 @@
-use std::sync::Arc;
-
 use tracing::trace;
 
 use crate::client::TimeoutSettings;
-use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::session::{NodePinnedTableClient, Session};
 
-use super::query_pool::{
-    spawn_pool_release, QuerySessionPool, QuerySessionPoolSettings, QuerySessionPoolStats,
-};
+use super::query_pool::{spawn_pool_release, QuerySessionPool};
 
-const TABLE_DEFAULT_POOL_LIMIT: usize = 1000;
-
-/// Table service session pool backed by Query Service CreateSession + AttachSession.
-///
-/// Session IDs from the query service are valid for table RPCs; AttachSession keeps sessions alive
-/// without periodic Table KeepAlive calls.
+/// Table-side adapter over the driver session pool.
 #[derive(Clone)]
 pub(crate) struct SessionPool {
     pool: QuerySessionPool,
     connection_manager: GrpcConnectionManager,
-    discovery: Arc<Box<dyn Discovery>>,
     timeouts: TimeoutSettings,
 }
 
 impl SessionPool {
-    pub(crate) fn new_default(
-        connection_manager: GrpcConnectionManager,
-        discovery: Arc<Box<dyn Discovery>>,
-        timeouts: TimeoutSettings,
-    ) -> Self {
-        Self {
-            pool: QuerySessionPool::new_explicit_sync(
-                connection_manager.clone(),
-                timeouts,
-                discovery.clone(),
-                QuerySessionPoolSettings::default().with_limit(TABLE_DEFAULT_POOL_LIMIT),
-            ),
-            connection_manager,
-            discovery,
-            timeouts,
-        }
-    }
-
     pub(crate) fn from_shared(
         pool: QuerySessionPool,
         connection_manager: GrpcConnectionManager,
-        discovery: Arc<Box<dyn Discovery>>,
         timeouts: TimeoutSettings,
     ) -> Self {
         Self {
             pool,
             connection_manager,
-            discovery,
             timeouts,
-        }
-    }
-
-    pub(crate) async fn with_settings(
-        connection_manager: GrpcConnectionManager,
-        discovery: Arc<Box<dyn Discovery>>,
-        timeouts: TimeoutSettings,
-        settings: QuerySessionPoolSettings,
-    ) -> YdbResult<Self> {
-        let pool = QuerySessionPool::new_explicit(
-            connection_manager.clone(),
-            timeouts,
-            discovery.clone(),
-            settings,
-        )
-        .await?;
-        Ok(Self {
-            pool,
-            connection_manager,
-            discovery,
-            timeouts,
-        })
-    }
-
-    pub(crate) fn stats(&self) -> QuerySessionPoolStats {
-        self.pool.stats()
-    }
-
-    pub(crate) fn connection_manager(&self) -> GrpcConnectionManager {
-        self.connection_manager.clone()
-    }
-
-    pub(crate) fn discovery(&self) -> Arc<Box<dyn Discovery>> {
-        self.discovery.clone()
-    }
-
-    pub(crate) fn with_max_active_sessions(self, size: usize) -> Self {
-        Self {
-            pool: QuerySessionPool::new_explicit_sync(
-                self.connection_manager.clone(),
-                self.timeouts,
-                self.discovery.clone(),
-                QuerySessionPoolSettings::default().with_limit(size),
-            ),
-            ..self
         }
     }
 
     pub(crate) async fn session(&self) -> YdbResult<Session> {
         let mut lease = self.pool.acquire_explicit().await?;
+        lease.begin_use();
         let session_id = lease.session_id().to_string();
         let node_uri = lease.node_uri().clone();
 
@@ -119,13 +44,14 @@ impl SessionPool {
             if !s.can_pooled {
                 lease.invalidate_session();
             }
+            lease.end_use();
             spawn_pool_release(async move {
                 lease.return_to_pool().await;
             });
         }));
 
         trace!("leased table session: {}", session.id);
-        Ok(session.with_timeouts(TimeoutSettings::default()))
+        Ok(session)
     }
 }
 
@@ -133,7 +59,6 @@ impl SessionPool {
 mod test {
     use super::SessionPool;
     use crate::client::TimeoutSettings;
-    use crate::discovery::StaticDiscovery;
     use crate::errors::YdbResult;
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
@@ -141,7 +66,6 @@ mod test {
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
     use crate::session_pool::{QuerySessionPool, QuerySessionPoolSettings};
     use http::Uri;
-    use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::oneshot;
 
@@ -170,9 +94,6 @@ mod test {
         let pool = SessionPool::from_shared(
             bench_pool(),
             bench_connection_manager(),
-            Arc::new(Box::new(
-                StaticDiscovery::new_from_str("http://127.0.0.1/bench").unwrap(),
-            )),
             TimeoutSettings::default(),
         );
         let first_session = pool.session().await?;

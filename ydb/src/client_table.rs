@@ -1,11 +1,8 @@
 use crate::client::TimeoutSettings;
 
-use crate::discovery::Discovery;
 use crate::errors::*;
 use crate::session::Session;
-use crate::session_pool::{
-    QuerySessionPool, QuerySessionPoolSettings, QuerySessionPoolStats, SessionPool,
-};
+use crate::session_pool::{QuerySessionPool, SessionPool};
 use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 use crate::types::Value;
 
@@ -132,55 +129,16 @@ impl TableClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
-        discovery: Arc<Box<dyn Discovery>>,
-        shared_pool: Option<QuerySessionPool>,
+        session_pool: QuerySessionPool,
     ) -> Self {
-        let session_pool = match shared_pool {
-            Some(pool) => SessionPool::from_shared(
-                pool,
-                connection_manager.clone(),
-                discovery.clone(),
-                timeouts,
-            ),
-            None => SessionPool::new_default(connection_manager.clone(), discovery, timeouts),
-        };
         Self {
             error_on_truncate: false,
-            session_pool,
+            session_pool: SessionPool::from_shared(session_pool, connection_manager, timeouts),
             retrier: Arc::new(Box::<TimeoutRetrier>::default()),
             transaction_options: TransactionOptions::new(),
             idempotent_operation: false,
             timeouts,
         }
-    }
-
-    /// Configure the session pool (CreateSession + AttachSession via query service) with warm-up.
-    ///
-    /// When [`crate::Client::with_session_pool`] is used, table and query clients share one pool;
-    /// calling this method replaces the table client's pool with a dedicated instance.
-    pub async fn with_session_pool(self, settings: QuerySessionPoolSettings) -> YdbResult<Self> {
-        let session_pool = SessionPool::with_settings(
-            self.session_pool.connection_manager(),
-            self.session_pool.discovery(),
-            self.timeouts,
-            settings,
-        )
-        .await?;
-        Ok(Self {
-            session_pool,
-            ..self
-        })
-    }
-
-    /// Snapshot of table session pool counters (same pool type as [`crate::QueryClient`]).
-    pub fn session_pool_stats(&self) -> QuerySessionPoolStats {
-        self.session_pool.stats()
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn with_max_active_sessions(mut self, size: usize) -> Self {
-        self.session_pool = self.session_pool.with_max_active_sessions(size);
-        self
     }
 
     // Clone the table client and set new timeouts settings

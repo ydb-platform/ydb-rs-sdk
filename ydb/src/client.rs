@@ -1,13 +1,16 @@
 use crate::client_common::DBCredentials;
 use crate::client_coordination::client::CoordinationClient;
 use crate::client_operation::OperationClient;
-use crate::client_query::{QueryClient, QuerySessionPoolSettings};
+use crate::client_query::QueryClient;
 use crate::client_scheme::client::SchemeClient;
 use crate::client_table::TableClient;
 use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::load_balancer::SharedLoadBalancer;
-use crate::session_pool::QuerySessionPool;
+use crate::session_pool::{
+    default_session_pool_settings, QuerySessionPool, QuerySessionPoolSettings,
+    QuerySessionPoolStats,
+};
 use crate::waiter::Waiter;
 
 use std::sync::Arc;
@@ -19,6 +22,10 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use tracing::trace;
 
+pub use crate::session_pool::{
+    QuerySessionPoolSettings as SessionPoolSettings, QuerySessionPoolStats as SessionPoolStats,
+};
+
 /// YDB client
 pub struct Client {
     credentials: DBCredentials,
@@ -27,7 +34,7 @@ pub struct Client {
     timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
     executor: Arc<dyn Executor>,
-    session_pool: Option<QuerySessionPool>,
+    session_pool: QuerySessionPool,
 }
 
 impl Client {
@@ -43,6 +50,13 @@ impl Client {
             None => default_executor()?,
         };
 
+        let session_pool = QuerySessionPool::new_explicit_sync(
+            connection_manager.clone(),
+            TimeoutSettings::default(),
+            discovery.clone(),
+            default_session_pool_settings(),
+        );
+
         Ok(Client {
             credentials,
             load_balancer,
@@ -50,13 +64,15 @@ impl Client {
             timeouts: TimeoutSettings::default(),
             connection_manager,
             executor,
-            session_pool: None,
+            session_pool,
         })
     }
 
-    /// Configure a shared session pool (CreateSession + AttachSession) for table and query clients.
+    /// Replace the driver session pool (CreateSession + AttachSession) and optionally warm it up.
+    ///
+    /// Table and query clients created from this driver share the same pool.
     pub async fn with_session_pool(self, settings: QuerySessionPoolSettings) -> YdbResult<Self> {
-        let pool = QuerySessionPool::new_explicit(
+        let session_pool = QuerySessionPool::new_explicit(
             self.connection_manager.clone(),
             self.timeouts,
             self.discovery.clone(),
@@ -64,14 +80,14 @@ impl Client {
         )
         .await?;
         Ok(Self {
-            session_pool: Some(pool),
+            session_pool,
             ..self
         })
     }
 
-    /// Pool stats when [`Self::with_session_pool`] was configured.
-    pub fn session_pool_stats(&self) -> Option<crate::session_pool::QuerySessionPoolStats> {
-        self.session_pool.as_ref().map(|pool| pool.stats())
+    /// Session pool counters for the driver (shared by table and query clients).
+    pub fn session_pool_stats(&self) -> QuerySessionPoolStats {
+        self.session_pool.stats()
     }
 
     pub fn database(&self) -> String {
@@ -83,23 +99,17 @@ impl Client {
         TableClient::new(
             self.connection_manager.clone(),
             self.timeouts,
-            self.discovery.clone(),
             self.session_pool.clone(),
         )
     }
 
     /// Create instance of client for query service.
     pub fn query_client(&self) -> QueryClient {
-        let client = QueryClient::new(
+        QueryClient::new(
             self.connection_manager.clone(),
             self.timeouts,
-            self.discovery.clone(),
-        );
-        if let Some(pool) = &self.session_pool {
-            client.with_shared_session_pool(pool.clone())
-        } else {
-            client
-        }
+            self.session_pool.clone(),
+        )
     }
 
     /// Create instance of client for directory service

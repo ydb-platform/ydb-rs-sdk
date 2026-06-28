@@ -28,12 +28,16 @@ impl Storage {
         client.wait().await.map_err(|err| err.to_string())?;
 
         let pool_limit = params.pool_size() as usize;
-        let query_client = client
-            .query_client()
-            .with_session_pool(QuerySessionPoolSettings::new().with_limit(pool_limit))
+        let client = client
+            .with_session_pool(
+                QuerySessionPoolSettings::new()
+                    .with_limit(pool_limit)
+                    .with_warm_up(pool_limit),
+            )
             .await
-            .map_err(|err| err.to_string())?
-            .clone_with_idempotent_operations(true);
+            .map_err(|err| err.to_string())?;
+
+        let query_client = client.query_client().clone_with_idempotent_operations(true);
 
         Ok(Self {
             query_client,

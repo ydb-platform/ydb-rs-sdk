@@ -11,37 +11,12 @@ use crate::discovery::Discovery;
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
-use crate::grpc_wrapper::raw_query_service::session::{AttachedQuerySession, ImplicitQuerySession};
+use crate::grpc_wrapper::raw_query_service::session::AttachedQuerySession;
 use crate::grpc_wrapper::raw_services::Service;
 
 const DEFAULT_POOL_LIMIT: usize = 50;
 pub(crate) const DEFAULT_SESSION_CREATE_TIMEOUT: Duration = Duration::from_millis(500);
 pub(crate) const DEFAULT_SESSION_DELETE_TIMEOUT: Duration = Duration::from_millis(500);
-
-/// CreateSession / AttachSession / DeleteSession RPC limits for non-pooled attached sessions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct QuerySessionRpcTimeouts {
-    pub create: Duration,
-    pub delete: Duration,
-}
-
-impl Default for QuerySessionRpcTimeouts {
-    fn default() -> Self {
-        Self {
-            create: DEFAULT_SESSION_CREATE_TIMEOUT,
-            delete: DEFAULT_SESSION_DELETE_TIMEOUT,
-        }
-    }
-}
-
-impl From<&QuerySessionPoolSettings> for QuerySessionRpcTimeouts {
-    fn from(settings: &QuerySessionPoolSettings) -> Self {
-        Self {
-            create: settings.session_create_timeout,
-            delete: settings.session_delete_timeout,
-        }
-    }
-}
 
 /// Ensures `create_in_progress` is decremented when the outer future is dropped
 /// (e.g. per-call `with_operation_timeout` cancelling pool acquire + create).
@@ -245,46 +220,9 @@ impl Drop for QuerySessionLease {
     }
 }
 
-/// Pooled implicit session lease (empty session id, no AttachSession).
-pub(crate) struct ImplicitSessionLease {
-    item: Option<ImplicitIdleItem>,
-    pool: Arc<QuerySessionPoolInner>,
-    permit: Option<OwnedSemaphorePermit>,
-}
-
-impl ImplicitSessionLease {
-    pub fn session_id(&self) -> &str {
-        self.item.as_ref().expect("lease item").session.session_id()
-    }
-
-    pub fn begin_use(&mut self) {}
-
-    pub fn end_use(&mut self) {}
-}
-
-impl Drop for ImplicitSessionLease {
-    fn drop(&mut self) {
-        self.end_use();
-        let pool = self.pool.clone();
-        let item = self.item.take();
-        let permit = self.permit.take();
-        if let Some(item) = item {
-            spawn_pool_release(async move {
-                pool.release_implicit_item(item, permit).await;
-            });
-        }
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct QuerySessionPool {
     inner: Arc<QuerySessionPoolInner>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum QuerySessionPoolKind {
-    Explicit,
-    Implicit,
 }
 
 struct ExplicitIdleItem {
@@ -295,21 +233,12 @@ struct ExplicitIdleItem {
     use_count: u64,
 }
 
-struct ImplicitIdleItem {
-    session: ImplicitQuerySession,
-    created: Instant,
-    last_used: Instant,
-    use_count: u64,
-}
-
 struct QuerySessionPoolInner {
-    kind: QuerySessionPoolKind,
     settings: QuerySessionPoolSettings,
     acquire_timeout: Duration,
     connection_manager: GrpcConnectionManager,
     semaphore: Arc<Semaphore>,
     explicit_idle: Mutex<Vec<ExplicitIdleItem>>,
-    implicit_idle: Mutex<Vec<ImplicitIdleItem>>,
     on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync>,
     create_in_progress: AtomicUsize,
     sessions_created: AtomicU64,
@@ -333,13 +262,11 @@ impl QuerySessionPool {
 
         Self {
             inner: Arc::new(QuerySessionPoolInner {
-                kind: QuerySessionPoolKind::Explicit,
                 settings,
                 acquire_timeout: timeouts.operation_timeout,
                 connection_manager,
                 semaphore: Arc::new(Semaphore::new(limit)),
                 explicit_idle: Mutex::new(Vec::new()),
-                implicit_idle: Mutex::new(Vec::new()),
                 on_node_shutdown,
                 create_in_progress: AtomicUsize::new(0),
                 sessions_created: AtomicU64::new(0),
@@ -366,65 +293,11 @@ impl QuerySessionPool {
         Ok(pool)
     }
 
-    pub fn new_implicit(
-        connection_manager: GrpcConnectionManager,
-        timeouts: TimeoutSettings,
-        discovery: Arc<Box<dyn Discovery>>,
-        settings: QuerySessionPoolSettings,
-    ) -> Self {
-        let settings = normalize_pool_settings(settings);
-        let warm_up = settings.warm_up;
-        let limit = settings.limit;
-        let discovery_for_shutdown = discovery.clone();
-        let on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync> =
-            Arc::new(move |uri: Uri| discovery_for_shutdown.pessimization(&uri));
-
-        let inner = Arc::new(QuerySessionPoolInner {
-            kind: QuerySessionPoolKind::Implicit,
-            settings,
-            acquire_timeout: timeouts.operation_timeout,
-            connection_manager,
-            semaphore: Arc::new(Semaphore::new(limit)),
-            explicit_idle: Mutex::new(Vec::new()),
-            implicit_idle: Mutex::new(Vec::new()),
-            on_node_shutdown,
-            create_in_progress: AtomicUsize::new(0),
-            sessions_created: AtomicU64::new(0),
-            #[cfg(test)]
-            bench_mode: false,
-        });
-
-        if warm_up > 0 {
-            let mut idle = inner.implicit_idle.lock().expect("implicit idle lock");
-            for _ in 0..warm_up {
-                let now = Instant::now();
-                idle.push(ImplicitIdleItem {
-                    session: ImplicitQuerySession::new(),
-                    created: now,
-                    last_used: now,
-                    use_count: 0,
-                });
-            }
-        }
-
-        Self { inner }
-    }
-
     pub fn stats(&self) -> QuerySessionPoolStats {
         self.inner.stats()
     }
 
-    pub(crate) fn session_rpc_timeouts(&self) -> QuerySessionRpcTimeouts {
-        QuerySessionRpcTimeouts::from(&self.inner.settings)
-    }
-
     pub async fn acquire_explicit(&self) -> YdbResult<QuerySessionLease> {
-        if self.inner.kind != QuerySessionPoolKind::Explicit {
-            return Err(YdbError::Custom(
-                "explicit session pool is not configured".to_string(),
-            ));
-        }
-
         let permit = self.inner.acquire_permit().await?;
 
         let mut stale_items = Vec::new();
@@ -471,39 +344,6 @@ impl QuerySessionPool {
             use_guard: false,
         })
     }
-
-    pub async fn acquire_implicit(&self) -> YdbResult<ImplicitSessionLease> {
-        if self.inner.kind != QuerySessionPoolKind::Implicit {
-            return Err(YdbError::Custom(
-                "implicit session pool is not configured".to_string(),
-            ));
-        }
-
-        let permit = self.inner.acquire_permit().await?;
-
-        while let Some(item) = self.inner.pop_implicit_idle() {
-            if self.inner.should_close_implicit(&item) {
-                item.session.close();
-                continue;
-            }
-            return Ok(ImplicitSessionLease {
-                item: Some(item),
-                pool: self.inner.clone(),
-                permit: Some(permit),
-            });
-        }
-
-        Ok(ImplicitSessionLease {
-            item: Some(ImplicitIdleItem {
-                session: ImplicitQuerySession::new(),
-                created: Instant::now(),
-                last_used: Instant::now(),
-                use_count: 0,
-            }),
-            pool: self.inner.clone(),
-            permit: Some(permit),
-        })
-    }
 }
 
 impl QuerySessionPoolInner {
@@ -525,14 +365,7 @@ impl QuerySessionPoolInner {
     }
 
     fn stats(&self) -> QuerySessionPoolStats {
-        let idle = match self.kind {
-            QuerySessionPoolKind::Explicit => {
-                self.explicit_idle.lock().expect("explicit idle lock").len()
-            }
-            QuerySessionPoolKind::Implicit => {
-                self.implicit_idle.lock().expect("implicit idle lock").len()
-            }
-        };
+        let idle = self.explicit_idle.lock().expect("explicit idle lock").len();
         let permits_held = self
             .settings
             .limit
@@ -678,22 +511,7 @@ impl QuerySessionPoolInner {
         idle.pop()
     }
 
-    fn pop_implicit_idle(&self) -> Option<ImplicitIdleItem> {
-        let mut idle = self.implicit_idle.lock().expect("implicit idle lock");
-        idle.pop()
-    }
-
     fn should_close_explicit(&self, item: &ExplicitIdleItem) -> bool {
-        session_should_close(
-            &self.settings,
-            item.use_count,
-            item.created,
-            item.last_used,
-            item.session.is_alive(),
-        )
-    }
-
-    fn should_close_implicit(&self, item: &ImplicitIdleItem) -> bool {
         session_should_close(
             &self.settings,
             item.use_count,
@@ -759,34 +577,6 @@ impl QuerySessionPoolInner {
             }
         }
     }
-
-    async fn release_implicit_item(
-        &self,
-        mut item: ImplicitIdleItem,
-        permit: Option<OwnedSemaphorePermit>,
-    ) {
-        item.use_count += 1;
-        item.last_used = Instant::now();
-
-        if self.should_close_implicit(&item) {
-            item.session.close();
-            drop(permit);
-        } else {
-            let overflow = {
-                let mut idle = self.implicit_idle.lock().expect("implicit idle lock");
-                if idle.len() < self.settings.limit {
-                    idle.push(item);
-                    None
-                } else {
-                    Some(item)
-                }
-            };
-            drop(permit);
-            if let Some(item) = overflow {
-                item.session.close();
-            }
-        }
-    }
 }
 
 impl Drop for QuerySessionPoolInner {
@@ -797,22 +587,13 @@ impl Drop for QuerySessionPoolInner {
             .expect("explicit idle lock")
             .drain(..)
             .collect();
-        let implicit: Vec<ImplicitIdleItem> = self
-            .implicit_idle
-            .lock()
-            .expect("implicit idle lock")
-            .drain(..)
-            .collect();
-        if explicit.is_empty() && implicit.is_empty() {
+        if explicit.is_empty() {
             return;
         }
         #[cfg(test)]
         if self.bench_mode {
             for item in explicit {
                 item.session.bench_close();
-            }
-            for item in implicit {
-                item.session.close();
             }
             return;
         }
@@ -835,9 +616,6 @@ impl Drop for QuerySessionPoolInner {
                         item.session.abort_without_delete().await;
                     }
                 }
-            }
-            for item in implicit {
-                item.session.close();
             }
         });
     }
@@ -890,13 +668,11 @@ impl QuerySessionPool {
         );
 
         let inner = Arc::new(QuerySessionPoolInner {
-            kind: QuerySessionPoolKind::Explicit,
             settings,
             acquire_timeout: Duration::ZERO,
             connection_manager,
             semaphore: Arc::new(Semaphore::new(limit)),
             explicit_idle: Mutex::new(Vec::new()),
-            implicit_idle: Mutex::new(Vec::new()),
             on_node_shutdown,
             create_in_progress: AtomicUsize::new(0),
             sessions_created: AtomicU64::new(0),
@@ -943,9 +719,6 @@ mod unit_tests {
             .with_session_delete_timeout(Duration::from_secs(3));
         assert_eq!(settings.session_create_timeout, Duration::from_secs(2));
         assert_eq!(settings.session_delete_timeout, Duration::from_secs(3));
-        let rpc = QuerySessionRpcTimeouts::from(&settings);
-        assert_eq!(rpc.create, Duration::from_secs(2));
-        assert_eq!(rpc.delete, Duration::from_secs(3));
     }
 
     #[test]

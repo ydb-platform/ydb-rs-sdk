@@ -7,7 +7,6 @@ use std::time::Duration;
 use crate::errors::{YdbError, YdbResult};
 use crate::result::{ResultSet, Row};
 use crate::types::Value;
-use crate::QuerySessionMode;
 use crate::QueryTxMode;
 
 use super::exec::{resolve_commit_tx, CallOptions};
@@ -121,24 +120,6 @@ impl<'a, K> CallBuilder<'a, K> {
     /// other non-transactional statements must run on [`QueryClient`], not inside a transaction.
     pub fn implicit_tx(self) -> Self {
         self.with_tx_mode(QueryTxMode::Implicit)
-    }
-
-    /// Override session acquisition for this call (default: implicit session).
-    pub fn session_mode(mut self, mode: QuerySessionMode) -> Self {
-        self.opts.session_mode = Some(mode);
-        self
-    }
-
-    /// Shorthand for [`Self::session_mode`] ([`QuerySessionMode::Implicit`]).
-    pub fn implicit_session(self) -> Self {
-        self.session_mode(QuerySessionMode::Implicit)
-    }
-
-    /// Shorthand for [`Self::session_mode`] ([`QuerySessionMode::Pool`]).
-    ///
-    /// Pool mode is not implemented yet and currently returns a runtime error.
-    pub fn pooled_session(self) -> Self {
-        self.session_mode(QuerySessionMode::Pool)
     }
 }
 
