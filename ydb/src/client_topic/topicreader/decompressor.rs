@@ -9,8 +9,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::client_topic::compression::{
-    CodecRegistry, Executor, OrderedTaskQueue, TaskResultRx, MAX_MESSAGES_PER_CHUNK,
-    OUTPUT_BACKLOG_PER_TASK,
+    CodecRegistry, CompressionDecoder, Executor, OrderedTaskQueue, TaskResultRx,
+    MAX_MESSAGES_PER_CHUNK, OUTPUT_BACKLOG_PER_TASK,
 };
 use crate::client_topic::list_types::Codec;
 use crate::{TopicReaderMessage, YdbError, YdbResult};
@@ -117,6 +117,14 @@ async fn schedule_messages(
             ));
         };
 
+        let decoder: Option<Arc<dyn CompressionDecoder>> = if codec == Codec::RAW {
+            None
+        } else {
+            Some(codec_registry.get_decoder(codec).ok_or_else(|| {
+                YdbError::custom(format!("no decoder found for codec {}", codec.code))
+            })?)
+        };
+
         let chunk_size = (messages.len() / parallelism.get()).clamp(1, MAX_MESSAGES_PER_CHUNK);
         let mut iter = messages.into_iter();
         loop {
@@ -124,9 +132,9 @@ async fn schedule_messages(
             if chunk.is_empty() {
                 break;
             }
-            let registry = codec_registry.clone();
+            let dec = decoder.clone();
             queue
-                .submit(Box::new(move || decompress_batch(chunk, codec, registry)))
+                .submit(Box::new(move || decompress_batch(chunk, dec)))
                 .await;
         }
     }
@@ -168,18 +176,10 @@ async fn forward_messages(
 
 fn decompress_batch(
     mut batch: Vec<TopicReaderMessage>,
-    codec: Codec,
-    registry: Arc<CodecRegistry>,
+    decoder: Option<Arc<dyn CompressionDecoder>>,
 ) -> YdbResult<Vec<TopicReaderMessage>> {
-    if codec == Codec::RAW {
+    let Some(decoder) = decoder else {
         return Ok(batch);
-    }
-
-    let Some(decoder) = registry.get_decoder(codec) else {
-        return Err(YdbError::custom(format!(
-            "no decoder found for codec {}",
-            codec.code
-        )));
     };
 
     for message in batch.iter_mut() {
