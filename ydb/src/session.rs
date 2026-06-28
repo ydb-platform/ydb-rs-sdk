@@ -41,6 +41,22 @@ fn req_number() -> i64 {
 
 type DropSessionCallback = dyn FnOnce(&mut Session) + Send + Sync;
 
+/// If an RPC is cancelled mid-flight (e.g. operation timeout), the server may still be
+/// processing it. Mark the session non-poolable so the next lease gets a fresh session
+/// instead of hitting SessionBusy on reuse (aligned with go-sdk context-error handling).
+struct InFlightTableRpcGuard<'a> {
+    session: &'a mut Session,
+    active: bool,
+}
+
+impl Drop for InFlightTableRpcGuard<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            self.session.discard_from_pool();
+        }
+    }
+}
+
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub(crate) struct Session {
@@ -74,8 +90,12 @@ impl Session {
 
     pub(crate) fn handle_error(&mut self, err: &YdbError) {
         if should_discard_session_from_pool(err) {
-            self.can_pooled = false;
+            self.discard_from_pool();
         }
+    }
+
+    pub(crate) fn discard_from_pool(&mut self) {
+        self.can_pooled = false;
     }
 
     fn handle_raw_result<T>(&mut self, res: RawResult<T>) -> YdbResult<T> {
@@ -88,15 +108,20 @@ impl Session {
 
     pub(crate) async fn commit_transaction(&mut self, tx_id: String) -> YdbResult<()> {
         let mut table = self.get_table_client().await?;
+        let mut in_flight = InFlightTableRpcGuard {
+            session: self,
+            active: true,
+        };
         let res = table
             .commit_transaction(RawCommitTransactionRequest {
-                session_id: self.id.clone(),
+                session_id: in_flight.session.id.clone(),
                 tx_id,
-                operation_params: self.timeouts.operation_params(),
+                operation_params: in_flight.session.timeouts.operation_params(),
                 collect_stats: DEFAULT_COLLECT_STAT_MODE,
             })
             .await;
-        self.handle_raw_result(res)?;
+        in_flight.active = false;
+        in_flight.session.handle_raw_result(res)?;
         Ok(())
     }
 
@@ -168,8 +193,14 @@ impl Session {
             ensure_len_string(serde_json::to_string(&req)?)
         );
 
-        let res = self.get_table_client().await?.execute_data_query(req).await;
-        let res = self.handle_raw_result(res)?;
+        let mut table = self.get_table_client().await?;
+        let mut in_flight = InFlightTableRpcGuard {
+            session: self,
+            active: true,
+        };
+        let res = table.execute_data_query(req).await;
+        in_flight.active = false;
+        let res = in_flight.session.handle_raw_result(res)?;
         trace!(
             "result: {}",
             ensure_len_string(serde_json::to_string(&res)?)
@@ -227,15 +258,19 @@ impl Session {
 
     pub(crate) async fn rollback_transaction(&mut self, tx_id: String) -> YdbResult<()> {
         let mut table = self.get_table_client().await?;
+        let mut in_flight = InFlightTableRpcGuard {
+            session: self,
+            active: true,
+        };
         let res = table
             .rollback_transaction(RawRollbackTransactionRequest {
-                session_id: self.id.clone(),
+                session_id: in_flight.session.id.clone(),
                 tx_id,
-                operation_params: self.timeouts.operation_params(),
+                operation_params: in_flight.session.timeouts.operation_params(),
             })
             .await;
-
-        self.handle_raw_result(res)
+        in_flight.active = false;
+        in_flight.session.handle_raw_result(res)
     }
 
     pub async fn copy_table(

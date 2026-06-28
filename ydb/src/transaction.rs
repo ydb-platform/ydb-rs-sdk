@@ -175,13 +175,18 @@ impl SerializableReadWriteTx {
 impl Drop for SerializableReadWriteTx {
     // rollback if unfinished
     fn drop(&mut self) {
-        if !self.finished {
-            if let (Some(tx_id), Some(mut session)) = (self.id.take(), self.session.take()) {
+        if self.finished {
+            return;
+        }
+        let tx_id = self.id.take();
+        if let Some(mut session) = self.session.take() {
+            session.discard_from_pool();
+            if let Some(tx_id) = tx_id {
                 tokio::spawn(async move {
                     let _ = session.rollback_transaction(tx_id).await;
                 });
-            };
-        };
+            }
+        }
     }
 }
 
