@@ -6,7 +6,7 @@ mod regression_tests;
 
 pub use pool::{SessionPoolSettings, SessionPoolStats};
 
-pub(crate) use pool::{SessionPool, SessionPoolLease};
+pub(crate) use pool::{spawn_pool_release, SessionPool, SessionPoolLease};
 
 pub(crate) use table_pool::TableSessionPool;
 

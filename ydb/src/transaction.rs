@@ -8,7 +8,7 @@ use crate::grpc_wrapper::raw_table_service::transaction_control::{
 use crate::query::Query;
 use crate::result::QueryResult;
 use crate::session::Session;
-use crate::session_pool::TableSessionPool;
+use crate::session_pool::{spawn_pool_release, TableSessionPool};
 use async_trait::async_trait;
 use itertools::Itertools;
 use tracing::trace;
@@ -230,7 +230,7 @@ impl Drop for SerializableReadWriteTx {
         // Rollback best-effort in the background; always discard so a failed async rollback
         // cannot return a session with a server-side tx still attached (SessionBusy).
         session.discard_from_pool();
-        tokio::spawn(async move {
+        spawn_pool_release(async move {
             let _ = session.rollback_transaction(tx_id.unwrap()).await;
         });
     }

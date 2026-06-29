@@ -205,6 +205,13 @@ impl SessionPoolLease {
         }
     }
 
+    /// Invalidate the pooled query session when an RPC error means it must not be reused.
+    pub(crate) fn handle_pool_error(&mut self, err: &YdbError) {
+        if crate::session::should_discard_session_from_pool(err) {
+            self.invalidate_session();
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn bench_invalidate_session(&mut self) {
         self.invalidate_session();

@@ -391,7 +391,7 @@ impl Drop for Session {
 /// Aligned with go-sdk `xerrors.MustDeleteTableOrQuerySession` (broader than the legacy
 /// table pool, which only discarded on `BadSession` / `SessionExpired`). Transient
 /// transport failures now invalidate the session to avoid `SessionBusy` on reuse.
-fn should_discard_session_from_pool(err: &YdbError) -> bool {
+pub(crate) fn should_discard_session_from_pool(err: &YdbError) -> bool {
     match err {
         YdbError::YdbStatusError(ydb_err) => {
             use ydb_grpc::ydb_proto::status_ids::StatusCode;

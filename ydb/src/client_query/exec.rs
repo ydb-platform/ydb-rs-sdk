@@ -488,6 +488,7 @@ pub(crate) async fn transaction_begin_stream(
     if let Err(err) = &result {
         transaction_mark_invalidated_on_query_error(tx, err);
         if let Some(lease) = &mut tx.pooled_lease {
+            lease.handle_pool_error(err);
             lease.end_use();
         }
     }
