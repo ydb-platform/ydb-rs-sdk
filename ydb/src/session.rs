@@ -405,9 +405,11 @@ pub(crate) fn should_discard_session_from_pool(err: &YdbError) -> bool {
         YdbError::Transport(_) | YdbError::TransportDial(_) => true,
         YdbError::TransportGRPCStatus(status) => {
             use tonic::Code;
-            // Intentional parity with go-sdk `xerrors.MustDeleteTableOrQuerySession`:
-            // context/transport failures may leave a query running server-side; discard
-            // the session to avoid SessionBusy on reuse (see InFlightTableRpcGuard).
+            // Intentional parity with go-sdk `xerrors.MustDeleteTableOrQuerySession` on
+            // gRPC transport errors (`IsTransportError`): includes `InvalidArgument`,
+            // `NotFound`, etc. even though they often reflect request-level issues, because
+            // the SDK cannot tell whether the server left a query/tx in flight. YDB operation
+            // status errors use the narrower match above (BadSession / SessionBusy / Expired).
             matches!(
                 status.code(),
                 Code::Cancelled
@@ -458,6 +460,26 @@ mod discard_session_tests {
         )));
         assert!(should_discard_session_from_pool(
             &YdbError::TransportGRPCStatus(Arc::new(Status::new(Code::Unavailable, "node down")))
+        ));
+        assert!(should_discard_session_from_pool(
+            &YdbError::TransportGRPCStatus(Arc::new(Status::new(
+                Code::InvalidArgument,
+                "bad request"
+            )))
+        ));
+    }
+
+    #[test]
+    fn discard_grpc_transport_but_not_ydb_operation_errors() {
+        use tonic::{Code, Status};
+        assert!(!should_discard_session_from_pool(&ydb_status(
+            StatusCode::PreconditionFailed
+        )));
+        assert!(!should_discard_session_from_pool(
+            &YdbError::TransportGRPCStatus(Arc::new(Status::new(
+                Code::ResourceExhausted,
+                "rate limited"
+            )))
         ));
     }
 

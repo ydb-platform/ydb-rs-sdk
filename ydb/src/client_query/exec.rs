@@ -404,6 +404,18 @@ async fn release_tx_session(tx: &mut TransactionExecContext) {
     tx.query_node = None;
 }
 
+async fn release_tx_session_handling_error(
+    tx: &mut TransactionExecContext,
+    err: Option<&YdbError>,
+) {
+    if let Some(err) = err {
+        if let Some(lease) = &mut tx.pooled_lease {
+            lease.handle_pool_error(err);
+        }
+    }
+    release_tx_session(tx).await;
+}
+
 async fn transaction_execute_request(
     tx: &TransactionExecContext,
     yql_text: String,
@@ -540,7 +552,7 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
             .map_err(Into::into)
     })
     .await;
-    release_tx_session(tx).await;
+    release_tx_session_handling_error(tx, result.as_ref().err()).await;
     tx.finished = true;
     // Do not retry commit: a transport timeout may mean the commit succeeded server-side.
     result
@@ -550,24 +562,28 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
     if tx.finished {
         return Ok(());
     }
+    let mut rollback_err: Option<YdbError> = None;
     if tx.tx_id.as_ref().is_some_and(|id| !id.is_empty()) && tx.pooled_lease.is_some() {
         let tx_id = tx.tx_id.take().expect("checked Some");
         if let Ok(session_id) = tx_session_id(tx) {
             if let Ok(mut client) = query_client_from_tx(tx).await {
                 let timeout_duration = tx.timeouts.operation_timeout;
-                let _ = with_operation_timeout(timeout_duration, async {
+                let rollback_result = with_operation_timeout(timeout_duration, async {
                     client
                         .rollback_transaction(session_id, &tx_id)
                         .await
                         .map_err(Into::into)
                 })
                 .await;
+                if let Err(err) = rollback_result {
+                    rollback_err = Some(err);
+                }
             }
         }
     } else {
         tx.tx_id = None;
     }
-    release_tx_session(tx).await;
+    release_tx_session_handling_error(tx, rollback_err.as_ref()).await;
     tx.finished = true;
     Ok(())
 }

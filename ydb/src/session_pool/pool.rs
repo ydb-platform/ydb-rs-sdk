@@ -497,17 +497,15 @@ impl SessionPoolInner {
 
     fn drain_idle_for_node(&self, node_uri: &Uri) -> Vec<ExplicitIdleItem> {
         let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
-        let all: Vec<_> = idle.drain(..).collect();
-        let mut kept = Vec::with_capacity(all.len());
         let mut drained = Vec::new();
-        for item in all {
-            if &item.node_uri == node_uri {
-                drained.push(item);
+        let mut i = 0;
+        while i < idle.len() {
+            if &idle[i].node_uri == node_uri {
+                drained.push(idle.swap_remove(i));
             } else {
-                kept.push(item);
+                i += 1;
             }
         }
-        *idle = kept;
         drained
     }
 
