@@ -132,10 +132,9 @@ async fn create_client_with_short_pool_acquire_timeout(
 #[tokio::test]
 #[ignore] // need YDB access
 async fn driver_session_pool_acquire_times_out_when_exhausted() {
-    let client = create_client_with_short_pool_acquire_timeout(
-        SessionPoolSettings::new().with_limit(1),
-    )
-    .await;
+    let client =
+        create_client_with_short_pool_acquire_timeout(SessionPoolSettings::new().with_limit(1))
+            .await;
 
     let _table_session = client
         .table_client()
@@ -174,11 +173,7 @@ async fn query_and_table_clients_share_pool_under_parallel_load() {
                     .await
                     .map(|_| ())
             } else {
-                client
-                    .table_client()
-                    .create_session()
-                    .await
-                    .map(|_| ())
+                client.table_client().create_session().await.map(|_| ())
             }
         }));
     }
