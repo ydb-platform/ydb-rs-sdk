@@ -13,7 +13,9 @@ use async_trait::async_trait;
 use itertools::Itertools;
 use tracing::trace;
 use ydb_grpc::ydb_proto::table::transaction_settings::TxMode;
-use ydb_grpc::ydb_proto::table::{OnlineModeSettings, SerializableModeSettings, SnapshotModeSettings};
+use ydb_grpc::ydb_proto::table::{
+    OnlineModeSettings, SerializableModeSettings, SnapshotModeSettings,
+};
 
 #[derive(Clone, Debug)]
 pub struct TransactionInfo {
@@ -336,7 +338,9 @@ impl Transaction for SerializableReadWriteTx {
     async fn rollback(&mut self) -> YdbResult<()> {
         match self.state {
             // go-sdk: rollback after commit is a nop
-            TableTxState::Committed | TableTxState::ServerInvalidated | TableTxState::RolledBack => {
+            TableTxState::Committed
+            | TableTxState::ServerInvalidated
+            | TableTxState::RolledBack => {
                 return Ok(());
             }
             TableTxState::Active => {}

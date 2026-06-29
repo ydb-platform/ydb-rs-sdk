@@ -23,9 +23,13 @@ async fn warm_up_fails_when_every_create_fails() {
         QuerySessionPoolSettings::new().with_limit(10),
         3,
     );
-    let err = pool.warm_up_for_tests(3).await.expect_err("all warm-up tasks failed");
+    let err = pool
+        .warm_up_for_tests(3)
+        .await
+        .expect_err("all warm-up tasks failed");
     assert!(
-        err.to_string().contains("bench injected create session failure"),
+        err.to_string()
+            .contains("bench injected create session failure"),
         "unexpected error: {err}"
     );
     assert_eq!(pool.stats().idle, 0);

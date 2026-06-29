@@ -54,9 +54,7 @@ impl From<RawTxMode> for ydb_grpc::ydb_proto::table::transaction_settings::TxMod
             }) => TxMode::OnlineReadOnly(table::OnlineModeSettings {
                 allow_inconsistent_reads,
             }),
-            RawTxMode::SnapshotReadOnly => {
-                TxMode::SnapshotReadOnly(table::SnapshotModeSettings {})
-            }
+            RawTxMode::SnapshotReadOnly => TxMode::SnapshotReadOnly(table::SnapshotModeSettings {}),
             RawTxMode::StaleReadOnly => TxMode::StaleReadOnly(table::StaleModeSettings {}),
         }
     }

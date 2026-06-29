@@ -43,9 +43,7 @@ impl Storage {
             .await
             .map_err(|err| err.to_string())?;
 
-        let table_client = client
-            .table_client()
-            .clone_with_idempotent_operations(true);
+        let table_client = client.table_client().clone_with_idempotent_operations(true);
 
         Ok(Self {
             read_table_client: table_client.clone_with_transaction_options(
