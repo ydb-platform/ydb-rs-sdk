@@ -250,7 +250,7 @@ struct ExplicitIdleItem {
 
 struct SessionPoolInner {
     settings: SessionPoolSettings,
-    acquire_timeout: Duration,
+    acquire_timeout_ms: AtomicU64,
     connection_manager: GrpcConnectionManager,
     semaphore: Arc<Semaphore>,
     explicit_idle: Mutex<Vec<ExplicitIdleItem>>,
@@ -278,7 +278,7 @@ impl SessionPool {
             let pool_weak = weak.clone();
             SessionPoolInner {
                 settings: settings.clone(),
-                acquire_timeout: timeouts.operation_timeout,
+                acquire_timeout_ms: AtomicU64::new(timeouts.operation_timeout.as_millis() as u64),
                 connection_manager: connection_manager.clone(),
                 semaphore: Arc::new(Semaphore::new(limit)),
                 explicit_idle: Mutex::new(Vec::new()),
@@ -330,6 +330,12 @@ impl SessionPool {
         self.inner.stats()
     }
 
+    pub(crate) fn set_acquire_timeout(&self, timeout: Duration) {
+        self.inner
+            .acquire_timeout_ms
+            .store(timeout.as_millis() as u64, Ordering::Relaxed);
+    }
+
     pub async fn acquire_explicit(&self) -> YdbResult<SessionPoolLease> {
         let permit = self.inner.acquire_permit().await?;
 
@@ -343,12 +349,7 @@ impl SessionPool {
                 stale_items.push(item);
                 continue;
             }
-            for stale in stale_items {
-                let inner = self.inner.clone();
-                spawn_pool_release(async move {
-                    inner.close_explicit_item(stale).await;
-                });
-            }
+            SessionPoolInner::spawn_close_stale_items(self.inner.clone(), std::mem::take(&mut stale_items));
             trace!(
                 session_id = item.session.session_id(),
                 "got query session from pool"
@@ -361,12 +362,7 @@ impl SessionPool {
                 use_guard: false,
             });
         }
-        for stale in stale_items {
-            let inner = self.inner.clone();
-            spawn_pool_release(async move {
-                inner.close_explicit_item(stale).await;
-            });
-        }
+        SessionPoolInner::spawn_close_stale_items(self.inner.clone(), stale_items);
 
         let item = self.inner.create_explicit_session().await?;
         trace!(
@@ -384,17 +380,31 @@ impl SessionPool {
 }
 
 impl SessionPoolInner {
+    fn acquire_timeout(&self) -> Duration {
+        Duration::from_millis(self.acquire_timeout_ms.load(Ordering::Relaxed))
+    }
+
+    fn spawn_close_stale_items(inner: Arc<Self>, stale_items: Vec<ExplicitIdleItem>) {
+        for stale in stale_items {
+            let inner = inner.clone();
+            spawn_pool_release(async move {
+                inner.close_explicit_item(stale).await;
+            });
+        }
+    }
+
     async fn acquire_permit(&self) -> YdbResult<OwnedSemaphorePermit> {
+        let acquire_timeout = self.acquire_timeout();
         let acquire = self.semaphore.clone().acquire_owned();
-        let permit = if self.acquire_timeout.is_zero() {
+        let permit = if acquire_timeout.is_zero() {
             acquire.await
         } else {
-            tokio::time::timeout(self.acquire_timeout, acquire)
+            tokio::time::timeout(acquire_timeout, acquire)
                 .await
                 .map_err(|_| {
                     YdbError::Transport(format!(
                         "acquire session from pool timed out after {:?}",
-                        self.acquire_timeout
+                        acquire_timeout
                     ))
                 })?
         };
@@ -451,11 +461,9 @@ impl SessionPoolInner {
         }
 
         if created.is_empty() {
-            if let Some(err) = first_err {
-                inner.drain_and_close_explicit_idle().await;
-                return Err(err);
-            }
-            return Ok(());
+            return Err(first_err.unwrap_or_else(|| {
+                YdbError::Transport("session pool warm-up produced no sessions".to_string())
+            }));
         }
 
         if let Some(err) = &first_err {
@@ -498,16 +506,6 @@ impl SessionPoolInner {
         }
         *idle = kept;
         drained
-    }
-
-    async fn drain_and_close_explicit_idle(&self) {
-        let items: Vec<ExplicitIdleItem> = {
-            let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
-            std::mem::take(&mut *idle)
-        };
-        for item in items {
-            self.close_explicit_item(item).await;
-        }
     }
 
     async fn create_explicit_session(&self) -> YdbResult<ExplicitIdleItem> {
@@ -765,7 +763,7 @@ impl SessionPool {
 
         let inner = Arc::new(SessionPoolInner {
             settings,
-            acquire_timeout: Duration::ZERO,
+            acquire_timeout_ms: AtomicU64::new(0),
             connection_manager,
             semaphore: Arc::new(Semaphore::new(limit)),
             explicit_idle: Mutex::new(Vec::new()),

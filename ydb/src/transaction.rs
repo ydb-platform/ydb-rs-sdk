@@ -227,11 +227,12 @@ impl Drop for SerializableReadWriteTx {
             session.discard_from_pool();
             return;
         }
-        // Rollback best-effort in the background; always discard so a failed async rollback
-        // cannot return a session with a server-side tx still attached (SessionBusy).
-        session.discard_from_pool();
+        // Rollback best-effort in the background; discard only when rollback fails so a
+        // successful rollback can return the session to the pool.
         spawn_pool_release(async move {
-            let _ = session.rollback_transaction(tx_id.unwrap()).await;
+            if session.rollback_transaction(tx_id.unwrap()).await.is_err() {
+                session.discard_from_pool();
+            }
         });
     }
 }

@@ -289,19 +289,27 @@ async fn client_begin_stream_once(
 ) -> YdbResult<ExecuteQueryStream> {
     let timeout_duration = operation_timeout(opts, &ctx.timeouts);
 
-    with_operation_timeout(timeout_duration, async {
-        if opts.implicit_session {
+    if opts.implicit_session {
+        return with_operation_timeout(timeout_duration, async {
             let (mut client, req) =
                 client_implicit_session_request(ctx, text, params, opts, concurrent_result_sets)
                     .await?;
             let stream = client.execute_query(req).await.map_err(YdbError::from)?;
-            return Ok(ExecuteQueryStream::new(stream));
-        }
+            Ok(ExecuteQueryStream::new(stream))
+        })
+        .await;
+    }
 
-        let mut lease = ctx.session_pool.acquire_explicit().await?;
+    let mut pooled_lease: Option<SessionPoolLease> = None;
+    let result: YdbResult<ExecuteQueryStream> = with_operation_timeout(timeout_duration, async {
+        let lease = ctx.session_pool.acquire_explicit().await?;
+        pooled_lease = Some(lease);
+        let lease_ref = pooled_lease
+            .as_mut()
+            .expect("lease set on successful acquire");
         let (mut client, req) = client_pooled_explicit_request(
             ctx,
-            &mut lease,
+            lease_ref,
             text,
             params,
             opts,
@@ -309,9 +317,25 @@ async fn client_begin_stream_once(
         )
         .await?;
         let stream = client.execute_query(req).await.map_err(YdbError::from)?;
-        Ok(ExecuteQueryStream::new(stream).with_session_guard(lease))
+        Ok(ExecuteQueryStream::new(stream))
     })
-    .await
+    .await;
+
+    match result {
+        Ok(mut stream) => {
+            if let Some(lease) = pooled_lease.take() {
+                stream = stream.with_session_guard(lease);
+            }
+            Ok(stream)
+        }
+        Err(err) => {
+            if let Some(lease) = &mut pooled_lease {
+                lease.handle_pool_error(&err);
+                lease.end_use();
+            }
+            Err(err)
+        }
+    }
 }
 
 async fn client_pooled_explicit_request(

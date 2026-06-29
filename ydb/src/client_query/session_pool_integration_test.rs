@@ -1,7 +1,19 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::session_pool::SessionPoolSettings;
 use crate::test_integration_helper::create_client_with_session_pool;
+use crate::Client;
+
+async fn wait_for_idle_sessions(client: &Client, expected_idle: usize) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while client.session_pool_stats().idle < expected_idle {
+        assert!(
+            Instant::now() < deadline,
+            "timeout waiting for session return to pool"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
 
 #[tokio::test]
 #[ignore] // need YDB access
@@ -21,7 +33,7 @@ async fn query_client_reuses_driver_session_pool() {
         .await
         .expect("query");
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_idle_sessions(&client, 1).await;
     let stats = client.session_pool_stats();
     assert_eq!(stats.in_use, 0);
     assert_eq!(stats.idle, 1);
@@ -42,7 +54,7 @@ async fn query_client_returns_session_to_driver_pool_after_stream_drop() {
             .expect("query");
     }
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_idle_sessions(&client, 1).await;
     let stats = client.session_pool_stats();
     assert_eq!(stats.in_use, 0);
     assert_eq!(stats.idle, 1);
@@ -63,7 +75,7 @@ async fn table_and_query_clients_share_driver_session_pool() {
         .await
         .expect("query");
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_idle_sessions(&client, 1).await;
     let stats = client.session_pool_stats();
     assert_eq!(stats.in_use, 0);
     assert_eq!(stats.idle, 1);
@@ -87,7 +99,7 @@ async fn driver_session_pool_stats_reflect_active_and_idle() {
         .await
         .expect("query");
 
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    wait_for_idle_sessions(&client, 1).await;
     let stats = client.session_pool_stats();
     assert_eq!(stats.limit, 2);
     assert_eq!(stats.in_use, 0);
