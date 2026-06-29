@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use itertools::Itertools;
 use tracing::trace;
 use ydb_grpc::ydb_proto::table::transaction_settings::TxMode;
-use ydb_grpc::ydb_proto::table::{OnlineModeSettings, SerializableModeSettings};
+use ydb_grpc::ydb_proto::table::{OnlineModeSettings, SerializableModeSettings, SnapshotModeSettings};
 
 #[derive(Clone, Debug)]
 pub struct TransactionInfo {
@@ -24,6 +24,7 @@ pub struct TransactionInfo {
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Mode {
     OnlineReadonly,
+    SnapshotReadOnly,
     SerializableReadWrite,
 }
 
@@ -31,6 +32,7 @@ impl From<Mode> for TxMode {
     fn from(m: Mode) -> Self {
         match m {
             Mode::OnlineReadonly => TxMode::OnlineReadOnly(OnlineModeSettings::default()),
+            Mode::SnapshotReadOnly => TxMode::SnapshotReadOnly(SnapshotModeSettings::default()),
             Mode::SerializableReadWrite => {
                 TxMode::SerializableReadWrite(SerializableModeSettings::default())
             }
@@ -44,6 +46,7 @@ impl From<Mode> for RawTxMode {
             Mode::OnlineReadonly => Self::OnlineReadOnly(RawOnlineReadonlySettings {
                 allow_inconsistent_reads: false,
             }),
+            Mode::SnapshotReadOnly => Self::SnapshotReadOnly,
             Mode::SerializableReadWrite => Self::SerializableReadWrite,
         }
     }
@@ -138,10 +141,17 @@ pub(crate) struct SerializableReadWriteTx {
 
     id: Option<String>,
     session: Option<Session>,
-    comitted: bool,
-    rollbacked: bool,
-    finished: bool,
+    state: TableTxState,
     timeouts: TimeoutSettings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TableTxState {
+    Active,
+    Committed,
+    RolledBack,
+    /// Server ended the transaction after a definitive operation error on a query.
+    ServerInvalidated,
 }
 
 impl SerializableReadWriteTx {
@@ -152,9 +162,7 @@ impl SerializableReadWriteTx {
 
             id: None,
             session: None,
-            comitted: false,
-            rollbacked: false,
-            finished: false,
+            state: TableTxState::Active,
             timeouts,
         }
     }
@@ -162,6 +170,13 @@ impl SerializableReadWriteTx {
     pub(crate) fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
         self.error_on_truncate_response = error_on_truncate;
         self
+    }
+
+    fn on_query_error(&mut self, err: &YdbError) {
+        if err.invalidates_server_transaction() {
+            self.state = TableTxState::ServerInvalidated;
+            self.id = None;
+        }
     }
 
     // Private method for transaction initialization using "workaround"
@@ -175,7 +190,7 @@ impl SerializableReadWriteTx {
 impl Drop for SerializableReadWriteTx {
     // rollback if unfinished
     fn drop(&mut self) {
-        if self.finished {
+        if self.state != TableTxState::Active {
             return;
         }
         let tx_id = self.id.take();
@@ -199,6 +214,23 @@ impl Drop for SerializableReadWriteTx {
 #[cfg(test)]
 pub(crate) fn unfinished_interactive_tx_drop_discards_session(tx_id: &Option<String>) -> bool {
     tx_id.is_none()
+}
+
+#[cfg(test)]
+mod tx_state_tests {
+    use crate::errors::{YdbError, YdbStatusError};
+    use ydb_grpc::ydb_proto::status_ids::StatusCode;
+
+    #[test]
+    fn operational_query_error_is_detected() {
+        let err = YdbError::YdbStatusError(YdbStatusError {
+            message: "syntax".into(),
+            operation_status: StatusCode::GenericError as i32,
+            issues: vec![],
+        });
+        assert!(err.invalidates_server_transaction());
+        assert!(!YdbError::Transport("timeout".into()).invalidates_server_transaction());
+    }
 }
 
 #[cfg(test)]
@@ -258,7 +290,12 @@ impl Transaction for SerializableReadWriteTx {
         };
         let query_result = session
             .execute_data_query(req, self.error_on_truncate_response)
-            .await?;
+            .await;
+        if let Err(err) = &query_result {
+            self.on_query_error(err);
+            return query_result;
+        }
+        let query_result = query_result?;
         if self.id.is_none() {
             self.id = Some(query_result.tx_id.clone());
         };
@@ -267,58 +304,49 @@ impl Transaction for SerializableReadWriteTx {
     }
 
     async fn commit(&mut self) -> YdbResult<()> {
-        if self.comitted {
-            // commit many times - ok
-            return Ok(());
+        match self.state {
+            TableTxState::Committed | TableTxState::ServerInvalidated => return Ok(()),
+            TableTxState::RolledBack => {
+                return Err(YdbError::Custom(format!(
+                    "commit rolled back transaction: {:?}",
+                    &self.id
+                )));
+            }
+            TableTxState::Active => {}
         }
-
-        if self.finished {
-            return Err(YdbError::Custom(format!(
-                "commit finished non comitted transaction: {:?}",
-                &self.id
-            )));
-        }
-        self.finished = true;
 
         let tx_id = if let Some(id) = &self.id {
-            id
+            id.clone()
         } else {
             // commit non started transaction - ok
-            self.comitted = true;
+            self.state = TableTxState::Committed;
             return Ok(());
         };
 
         if let Some(session) = self.session.as_mut() {
-            session.commit_transaction(tx_id.clone()).await?;
-            self.comitted = true;
+            session.commit_transaction(tx_id).await?;
+            self.state = TableTxState::Committed;
             return Ok(());
-        } else {
-            return Err(YdbError::InternalError(
-                "commit transaction without session (internal error)".into(),
-            ));
         }
+        Err(YdbError::InternalError(
+            "commit transaction without session (internal error)".into(),
+        ))
     }
 
     async fn rollback(&mut self) -> YdbResult<()> {
-        // double rollback is ok
-        if self.rollbacked {
-            return Ok(());
+        match self.state {
+            // go-sdk: rollback after commit is a nop
+            TableTxState::Committed | TableTxState::ServerInvalidated | TableTxState::RolledBack => {
+                return Ok(());
+            }
+            TableTxState::Active => {}
         }
-
-        if self.finished {
-            return Err(YdbError::Custom(format!(
-                "rollback finished non rollbacked transaction: {:?}",
-                &self.id
-            )));
-        }
-        self.finished = true;
 
         let session = if let Some(session) = &mut self.session {
             session
         } else {
             // rollback non started transaction ok
-            self.finished = true;
-            self.rollbacked = true;
+            self.state = TableTxState::RolledBack;
             return Ok(());
         };
 
@@ -326,13 +354,13 @@ impl Transaction for SerializableReadWriteTx {
             id.clone()
         } else {
             // rollback non started transaction - ok
-            self.rollbacked = true;
+            self.state = TableTxState::RolledBack;
             return Ok(());
         };
 
-        self.rollbacked = true;
-
-        return session.rollback_transaction(tx_id).await;
+        session.rollback_transaction(tx_id).await?;
+        self.state = TableTxState::RolledBack;
+        Ok(())
     }
 
     async fn transaction_info(&mut self) -> YdbResult<TransactionInfo> {

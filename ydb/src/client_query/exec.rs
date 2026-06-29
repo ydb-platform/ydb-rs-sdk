@@ -436,6 +436,17 @@ pub(crate) async fn transaction_finish_committed_via_query(tx: &mut TransactionE
     release_tx_session(tx).await;
 }
 
+/// Server ended the transaction after a definitive operation error on a query.
+pub(crate) fn transaction_mark_invalidated_on_query_error(
+    tx: &mut TransactionExecContext,
+    err: &YdbError,
+) {
+    if err.invalidates_server_transaction() {
+        tx.finished = true;
+        tx.tx_id = None;
+    }
+}
+
 pub(crate) async fn transaction_begin_stream(
     tx: &mut TransactionExecContext,
     text: String,
@@ -472,7 +483,8 @@ pub(crate) async fn transaction_begin_stream(
         Ok(stream)
     })
     .await;
-    if result.is_err() {
+    if let Err(err) = &result {
+        transaction_mark_invalidated_on_query_error(tx, err);
         if let Some(lease) = &mut tx.pooled_lease {
             lease.end_use();
         }

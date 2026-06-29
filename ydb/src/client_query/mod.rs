@@ -349,8 +349,8 @@ impl QueryTransaction {
     }
 
     pub async fn rollback(&mut self) -> YdbResult<()> {
-        if self.state != TxState::Active || self.ctx.finished {
-            return Err(YdbError::Custom("transaction already finished".to_string()));
+        if self.ctx.finished || self.state == TxState::RolledBack {
+            return Ok(());
         }
         transaction_rollback(&mut self.ctx).await?;
         self.state = TxState::RolledBack;

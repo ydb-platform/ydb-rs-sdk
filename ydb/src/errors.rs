@@ -242,6 +242,24 @@ impl YdbError {
         YdbError::Custom(s.into())
     }
 
+    /// Definitive YDB operation status on a transactional statement: the server has
+    /// ended the transaction (explicit commit/rollback would return NOT_FOUND).
+    ///
+    /// Transport and ambiguous statuses (`UNDETERMINED`, `UNAVAILABLE`, `OVERLOADED`)
+    /// are excluded — the transaction may still be active on the server.
+    pub(crate) fn invalidates_server_transaction(&self) -> bool {
+        let Self::YdbStatusError(status) = self else {
+            return false;
+        };
+        let Ok(code) = status.operation_status() else {
+            return false;
+        };
+        !matches!(
+            code,
+            StatusCode::Undetermined | StatusCode::Unavailable | StatusCode::Overloaded
+        )
+    }
+
     pub(crate) fn need_retry(&self) -> NeedRetry {
         match self {
             Self::Convert(_) => NeedRetry::False,
@@ -298,6 +316,36 @@ macro_rules! to_custom_ydb_err {
 }
 
 impl std::error::Error for YdbError {}
+
+#[cfg(test)]
+mod invalidate_tx_tests {
+    use super::*;
+    use ydb_grpc::ydb_proto::status_ids::StatusCode;
+
+    fn ydb_status(status: StatusCode) -> YdbError {
+        YdbError::YdbStatusError(YdbStatusError {
+            message: "test".into(),
+            operation_status: status as i32,
+            issues: vec![],
+        })
+    }
+
+    #[test]
+    fn operational_errors_invalidate_server_transaction() {
+        assert!(ydb_status(StatusCode::PreconditionFailed).invalidates_server_transaction());
+        assert!(ydb_status(StatusCode::Aborted).invalidates_server_transaction());
+        assert!(ydb_status(StatusCode::BadSession).invalidates_server_transaction());
+    }
+
+    #[test]
+    fn ambiguous_and_transport_errors_do_not_invalidate() {
+        assert!(!ydb_status(StatusCode::Undetermined).invalidates_server_transaction());
+        assert!(!ydb_status(StatusCode::Unavailable).invalidates_server_transaction());
+        assert!(!ydb_status(StatusCode::Overloaded).invalidates_server_transaction());
+        assert!(!YdbError::Transport("timeout".into()).invalidates_server_transaction());
+        assert!(!YdbError::Custom("x".into()).invalidates_server_transaction());
+    }
+}
 
 to_custom_ydb_err!(
     YdbOrCustomerError,
