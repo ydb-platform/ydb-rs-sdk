@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use slo_framework::kv::{Database, KvWorkload, Params};
 use slo_framework::{test_row_from_row, Framework, RowID, TestRow, Workload};
 use ydb::ClientBuilder;
-use ydb::{QueryClient, SessionPoolSettings, QueryTxMode};
+use ydb::{QueryClient, QueryTxMode, SessionPoolSettings};
 
 pub struct Storage {
     query_client: QueryClient,

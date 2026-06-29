@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use slo_framework::kv::{Database, KvWorkload, Params};
 use slo_framework::{test_row_from_row, Framework, RowID, TestRow, Workload};
 use ydb::{
-    ydb_params, ClientBuilder, Mode, Query, SessionPoolSettings, TableClient,
-    TransactionOptions, YdbOrCustomerError,
+    ydb_params, ClientBuilder, Mode, Query, SessionPoolSettings, TableClient, TransactionOptions,
+    YdbOrCustomerError,
 };
 
 pub struct Storage {

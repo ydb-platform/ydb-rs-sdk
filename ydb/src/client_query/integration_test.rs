@@ -1,4 +1,4 @@
-use super::{SessionPoolSettings, QueryTransactionOptions, QueryTxMode};
+use super::{QueryTransactionOptions, QueryTxMode, SessionPoolSettings};
 use crate::errors::YdbResult;
 use crate::test_integration_helper::{create_client, create_client_with_session_pool};
 use crate::types::Value;
@@ -142,12 +142,9 @@ async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
 #[traced_test]
 #[ignore] // need YDB access
 async fn query_client_pooled_session_select() -> YdbResult<()> {
-    let client = create_client_with_session_pool(
-        SessionPoolSettings::new()
-            .with_limit(4)
-            .with_warm_up(1),
-    )
-    .await?;
+    let client =
+        create_client_with_session_pool(SessionPoolSettings::new().with_limit(4).with_warm_up(1))
+            .await?;
     let mut qc = client.query_client().clone_with_idempotent_operations(true);
 
     let mut row = qc.query_row("SELECT 1 + 1 AS sum").await?;
@@ -160,8 +157,7 @@ async fn query_client_pooled_session_select() -> YdbResult<()> {
 #[traced_test]
 #[ignore] // need YDB access
 async fn query_client_implicit_session_select() -> YdbResult<()> {
-    let client =
-        create_client_with_session_pool(SessionPoolSettings::new().with_limit(1)).await?;
+    let client = create_client_with_session_pool(SessionPoolSettings::new().with_limit(1)).await?;
     let mut qc = client.query_client().clone_with_idempotent_operations(true);
 
     let mut row = qc

@@ -244,11 +244,11 @@ mod tx_state_tests {
     use crate::errors::{YdbError, YdbStatusError};
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
+    use crate::grpc_wrapper::raw_table_service::transaction_control::RawTxMode;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
     use crate::session_pool::{QuerySessionPool, SessionPool, SessionPoolSettings};
     use crate::transaction::Mode;
-    use crate::grpc_wrapper::raw_table_service::transaction_control::RawTxMode;
     use http::Uri;
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
@@ -297,7 +297,10 @@ mod tx_state_tests {
             operation_status: StatusCode::GenericError as i32,
             issues: vec![],
         }));
-        assert_eq!(tx.table_tx_state_for_test(), TableTxState::ServerInvalidated);
+        assert_eq!(
+            tx.table_tx_state_for_test(),
+            TableTxState::ServerInvalidated
+        );
         assert!(tx.id.is_none());
     }
 
