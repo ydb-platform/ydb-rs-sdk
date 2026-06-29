@@ -790,7 +790,7 @@ impl QuerySessionPool {
         settings: QuerySessionPoolSettings,
         create_failures: usize,
     ) -> Self {
-        let mut pool = Self::new_explicit_bench(settings);
+        let pool = Self::new_explicit_bench(settings);
         pool.inner
             .bench_create_failures_remaining
             .store(create_failures, Ordering::SeqCst);
