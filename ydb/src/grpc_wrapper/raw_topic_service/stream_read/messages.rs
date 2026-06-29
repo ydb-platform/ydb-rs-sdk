@@ -65,6 +65,7 @@ pub(crate) enum RawFromServer {
     CommitOffsetResponse(RawCommitOffsetResponse),
     StartPartitionSessionRequest(RawStartPartitionSessionRequest),
     StopPartitionSessionRequest(RawStopPartitionSessionRequest),
+    EndPartitionSession(RawEndPartitionSession),
     UpdateTokenResponse(RawUpdateTokenResponse),
     UnsupportedMessage(String),
 }
@@ -104,6 +105,9 @@ impl TryFrom<stream_read_message::FromServer> for RawFromServer {
             stream_read_message::from_server::ServerMessage::StopPartitionSessionRequest(
                 stop_partition_session_request,
             ) => RawFromServer::StopPartitionSessionRequest(stop_partition_session_request.into()),
+            stream_read_message::from_server::ServerMessage::EndPartitionSession(end) => {
+                RawFromServer::EndPartitionSession(end.into())
+            }
             stream_read_message::from_server::ServerMessage::UpdateTokenResponse(
                 update_token_response,
             ) => RawFromServer::UpdateTokenResponse(update_token_response.into()),
@@ -137,7 +141,7 @@ impl From<RawInitRequest> for stream_read_message::InitRequest {
             consumer: value.consumer,
             reader_name: value.reader_name,
             direct_read: false,
-            auto_partitioning_support: false,
+            auto_partitioning_support: true,
             ..Default::default()
         }
     }
@@ -429,6 +433,20 @@ impl From<stream_read_message::StopPartitionSessionRequest> for RawStopPartition
             partition_session_id: value.partition_session_id,
             graceful: value.graceful,
             committed_offset: value.committed_offset,
+        }
+    }
+}
+
+pub(crate) struct RawEndPartitionSession {
+    pub partition_session_id: i64,
+    pub child_partition_ids: Vec<i64>,
+}
+
+impl From<stream_read_message::EndPartitionSession> for RawEndPartitionSession {
+    fn from(value: stream_read_message::EndPartitionSession) -> Self {
+        Self {
+            partition_session_id: value.partition_session_id,
+            child_partition_ids: value.child_partition_ids,
         }
     }
 }

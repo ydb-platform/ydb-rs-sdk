@@ -128,6 +128,24 @@ impl RuntimeHandle {
         }
     }
 
+    pub(crate) fn register_ending_partition(
+        &self,
+        session_id: i64,
+        child_partition_ids: Vec<i64>,
+    ) -> YdbResult<()> {
+        let mut state = self.lock_state()?;
+        match &mut *state {
+            State::Active(active) => {
+                active
+                    .buffer
+                    .register_ending(session_id, child_partition_ids);
+            }
+            State::Reconnecting => {}
+            State::Failed(err) => return Err(err.clone()),
+        }
+        Ok(())
+    }
+
     pub(crate) fn commit(
         &self,
         commit_marker: TopicReaderCommitMarker,
