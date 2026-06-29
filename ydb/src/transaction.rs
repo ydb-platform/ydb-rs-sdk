@@ -179,14 +179,17 @@ impl Drop for SerializableReadWriteTx {
             return;
         }
         let tx_id = self.id.take();
-        if let Some(mut session) = self.session.take() {
+        let Some(mut session) = self.session.take() else {
+            return;
+        };
+        if tx_id.is_none() {
+            // Query may still be running on the server (timeout/cancel before tx_id).
             session.discard_from_pool();
-            if let Some(tx_id) = tx_id {
-                tokio::spawn(async move {
-                    let _ = session.rollback_transaction(tx_id).await;
-                });
-            }
+            return;
         }
+        tokio::spawn(async move {
+            let _ = session.rollback_transaction(tx_id.unwrap()).await;
+        });
     }
 }
 
