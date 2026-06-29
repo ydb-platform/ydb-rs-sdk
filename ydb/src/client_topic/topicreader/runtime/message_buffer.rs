@@ -1,6 +1,10 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+
+use tracing::warn;
 
 use crate::client_topic::topicreader::messages::TopicReaderMessage;
+
+use super::round_robin::RoundRobin;
 
 pub(super) struct BufferedBatch {
     pub(super) messages: Vec<TopicReaderMessage>,
@@ -10,52 +14,220 @@ pub(super) struct BufferedBatch {
 
 #[derive(Default)]
 pub(super) struct MessageBuffer {
-    messages: VecDeque<TopicReaderMessage>,
+    /// Buffered messages per partition session, in arrival order.
+    queues: HashMap<i64, VecDeque<TopicReaderMessage>>,
+
+    /// Round-robin schedule over session IDs that are ready to be served.
+    /// A session is present here iff its queue is non-empty and it is not blocked.
+    round_robin: RoundRobin,
+
+    /// Maps partition_id → session_id. Updated on every `push_batch` so that
+    /// `drain_ending` can find the session for a child partition when unblocking it.
+    partition_to_session: HashMap<i64, i64>,
+
+    /// Maps parent session_id → child partition_ids registered via `EndPartitionSession`.
+    /// Only populated when the parent still has buffered messages; empty-parent cases
+    /// skip registration entirely because there is nothing to order against.
+    pending_children: HashMap<i64, Vec<i64>>,
+
+    /// Maps child partition_id → number of parent sessions that must fully drain before
+    /// the child may enter the round-robin. Decremented by `drain_ending`; the child
+    /// becomes readable only when the count reaches zero.
+    blocked_partition_ids: HashMap<i64, usize>,
 }
 
 impl MessageBuffer {
     pub(super) fn push_batch(&mut self, messages: Vec<TopicReaderMessage>) {
-        self.messages.extend(messages);
+        let Some(first) = messages.first() else {
+            return;
+        };
+
+        let session_id = first.commit_marker.partition_session_id;
+        let partition_id = first.commit_marker.partition_id;
+
+        self.partition_to_session.insert(partition_id, session_id);
+        self.queues.entry(session_id).or_default().extend(messages);
+
+        if !self.round_robin.contains(session_id)
+            && !self.blocked_partition_ids.contains_key(&partition_id)
+        {
+            self.round_robin.push(session_id);
+        }
     }
 
     pub(super) fn pop_batch(&mut self, cap: usize) -> Option<BufferedBatch> {
-        cut_prefix(&mut self.messages, cap).map(|(messages, bytes_to_release, epoch)| {
-            BufferedBatch {
-                messages,
-                bytes_to_release,
-                epoch,
-            }
+        let sid = self.round_robin.next()?;
+        let queue = self.queues.get_mut(&sid)?;
+
+        let take = cap.min(queue.len());
+        let out: Vec<_> = queue.drain(..take).collect();
+        let epoch = out[0].commit_marker.epoch;
+        let bytes: i64 = out.iter().map(|m| m.bytes_to_release).sum();
+
+        if queue.is_empty() {
+            self.drain_ending(sid);
+        }
+
+        Some(BufferedBatch {
+            messages: out,
+            bytes_to_release: bytes,
+            epoch,
         })
+    }
+
+    fn queue_non_empty(&self, session_id: i64) -> bool {
+        self.queues
+            .get(&session_id)
+            .map(|q| !q.is_empty())
+            .unwrap_or(false)
+    }
+
+    pub(super) fn register_ending(&mut self, parent_sid: i64, child_pids: Vec<i64>) {
+        if !self.queue_non_empty(parent_sid) {
+            return;
+        }
+
+        for &pid in &child_pids {
+            *self.blocked_partition_ids.entry(pid).or_insert(0) += 1;
+        }
+
+        self.pending_children.insert(parent_sid, child_pids);
+    }
+
+    fn drain_ending(&mut self, parent_sid: i64) {
+        self.round_robin.remove(parent_sid);
+        self.queues.remove(&parent_sid);
+
+        let Some(child_pids) = self.pending_children.remove(&parent_sid) else {
+            return;
+        };
+
+        for pid in child_pids {
+            let Some(count) = self.blocked_partition_ids.get_mut(&pid) else {
+                warn!(
+                    parent_sid,
+                    pid, "child partition not in blocked_partition_ids"
+                );
+                continue;
+            };
+
+            *count -= 1;
+            if *count == 0 {
+                self.blocked_partition_ids.remove(&pid);
+                if let Some(&sid) = self.partition_to_session.get(&pid) {
+                    if self.queue_non_empty(sid) && !self.round_robin.contains(sid) {
+                        self.round_robin.push(sid);
+                    }
+                }
+            }
+        }
     }
 }
 
-fn cut_prefix(
-    buffer: &mut VecDeque<TopicReaderMessage>,
-    cap: usize,
-) -> Option<(Vec<TopicReaderMessage>, i64, usize)> {
-    let session_key = buffer.front()?.partition_session_key();
-    let epoch = buffer.front()?.commit_marker.epoch;
-    let mut out = Vec::new();
-    let mut bytes: i64 = 0;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client_topic::topicreader::messages::TopicReaderMessage;
 
-    while out.len() < cap {
-        let next_session_key = buffer.front().map(|m| m.partition_session_key());
-        let Some(next_session_key) = next_session_key else {
-            break;
-        };
-        if next_session_key != session_key {
-            break;
-        }
-        let Some(m) = buffer.pop_front() else {
-            break;
-        };
-        bytes += m.bytes_to_release;
-        out.push(m);
+    fn msg(session_id: i64, partition_id: i64, epoch: usize, bytes: i64) -> TopicReaderMessage {
+        TopicReaderMessage::test_message_full(session_id, partition_id, epoch, bytes)
     }
 
-    if out.is_empty() {
-        None
-    } else {
-        Some((out, bytes, epoch))
+    #[test]
+    fn push_routes_by_session() {
+        let mut buf = MessageBuffer::default();
+        buf.push_batch(vec![msg(1, 10, 0, 0), msg(1, 10, 0, 0)]);
+        buf.push_batch(vec![msg(2, 20, 0, 0)]);
+
+        let b0 = buf.pop_batch(1).unwrap();
+        assert_eq!(b0.messages[0].commit_marker.partition_session_id, 1);
+
+        let b1 = buf.pop_batch(1).unwrap();
+        assert_eq!(b1.messages[0].commit_marker.partition_session_id, 2);
+
+        let b2 = buf.pop_batch(1).unwrap();
+        assert_eq!(b2.messages[0].commit_marker.partition_session_id, 1);
+    }
+
+    #[test]
+    fn merge_child_blocked_until_both_parents_drain() {
+        let mut buf = MessageBuffer::default();
+
+        // Parent 1 (session 1, partition 10): 5 messages.
+        // Parent 2 (session 2, partition 20): 1 message.
+        // Both declare partition 30 as a child.
+        buf.push_batch(vec![
+            msg(1, 10, 0, 0),
+            msg(1, 10, 0, 0),
+            msg(1, 10, 0, 0),
+            msg(1, 10, 0, 0),
+            msg(1, 10, 0, 0),
+        ]);
+        buf.push_batch(vec![msg(2, 20, 0, 0)]);
+        buf.register_ending(1, vec![30]);
+        buf.register_ending(2, vec![30]);
+
+        // Child (session 3, partition 30): 2 messages.
+        buf.push_batch(vec![msg(3, 30, 0, 0), msg(3, 30, 0, 0)]);
+
+        assert!(
+            !buf.round_robin.contains(3),
+            "child must be blocked before either parent drains"
+        );
+
+        // Drain all 6 parent messages two-at-a-time; child must stay blocked throughout.
+        let mut parent_msgs_seen = 0;
+        let mut pops = 0;
+        loop {
+            assert!(
+                !buf.round_robin.contains(3),
+                "child must stay blocked while parents have messages"
+            );
+            let b = buf.pop_batch(2).unwrap();
+            assert_ne!(
+                b.messages[0].commit_marker.partition_session_id, 3,
+                "child must not be served before both parents drain"
+            );
+            assert!(b.messages.len() <= 2, "cap=2 must be respected");
+            parent_msgs_seen += b.messages.len();
+            pops += 1;
+            if parent_msgs_seen == 6 {
+                break;
+            }
+        }
+
+        // ceil(5/2) + ceil(1/2) = 3 + 1 = 4 pops.
+        assert_eq!(pops, 4);
+
+        assert!(
+            buf.round_robin.contains(3),
+            "child must be unblocked after both parents drain"
+        );
+
+        // cap=2 matches child queue length: all 2 messages in one pop.
+        let b = buf.pop_batch(2).unwrap();
+        assert_eq!(b.messages.len(), 2);
+        assert_eq!(b.messages[0].commit_marker.partition_session_id, 3);
+        assert!(
+            buf.pop_batch(2).is_none(),
+            "buffer must be empty after child drains"
+        );
+    }
+
+    #[test]
+    fn bytes_to_release_accumulated() {
+        let mut buf = MessageBuffer::default();
+        buf.push_batch(vec![msg(1, 10, 0, 0), msg(1, 10, 0, 100)]);
+        let b = buf.pop_batch(10).unwrap();
+        assert_eq!(b.bytes_to_release, 100);
+    }
+
+    #[test]
+    fn pop_returns_none_when_all_empty() {
+        let mut buf = MessageBuffer::default();
+        assert!(buf.pop_batch(10).is_none());
+        buf.push_batch(vec![msg(1, 10, 0, 0)]);
+        buf.pop_batch(10);
+        assert!(buf.pop_batch(10).is_none());
     }
 }

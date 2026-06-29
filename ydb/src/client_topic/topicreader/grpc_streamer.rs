@@ -25,7 +25,7 @@ use crate::{
     TopicReaderOptions, YdbError, YdbResult,
 };
 
-use super::messages::MessageBatch;
+use super::messages::ReaderEvent;
 use super::partition_state::PartitionSession;
 use super::reconnector;
 use super::runtime;
@@ -38,7 +38,7 @@ type GrpcStream = AsyncGrpcStreamWrapper<FromClient, FromServer>;
 pub(super) struct GrpcStreamer {
     stream: GrpcStream,
     cancellation: CancellationToken,
-    decompression_input_tx: mpsc::UnboundedSender<MessageBatch>,
+    decompression_input_tx: mpsc::UnboundedSender<ReaderEvent>,
     client_message_rx: mpsc::UnboundedReceiver<RawFromClientOneOf>,
     runtime: runtime::RuntimeHandle,
     reader_id: usize,
@@ -48,7 +48,7 @@ pub(super) struct GrpcStreamer {
 impl GrpcStreamer {
     pub(super) async fn new(
         attempt: &reconnector::ConnectionAttempt,
-        decompression_input_tx: mpsc::UnboundedSender<MessageBatch>,
+        decompression_input_tx: mpsc::UnboundedSender<ReaderEvent>,
         client_message_rx: mpsc::UnboundedReceiver<RawFromClientOneOf>,
         runtime: runtime::RuntimeHandle,
     ) -> YdbResult<Self> {
@@ -123,7 +123,7 @@ async fn grpc_connect(
 async fn receive_loop(
     stream: GrpcStream,
     runtime: runtime::RuntimeHandle,
-    decompression_input_tx: mpsc::UnboundedSender<MessageBatch>,
+    decompression_input_tx: mpsc::UnboundedSender<ReaderEvent>,
     cancellation: CancellationToken,
     reader_id: usize,
     epoch: usize,
@@ -143,7 +143,7 @@ async fn receive_loop(
 async fn receive_messages(
     mut stream: GrpcStream,
     runtime: runtime::RuntimeHandle,
-    decompression_input_tx: mpsc::UnboundedSender<MessageBatch>,
+    decompression_input_tx: mpsc::UnboundedSender<ReaderEvent>,
     reader_id: usize,
     epoch: usize,
 ) -> YdbResult<Infallible> {
@@ -229,6 +229,29 @@ async fn receive_messages(
                 stream.send_nowait(response)?;
             }
 
+            RawFromServer::EndPartitionSession(end) => {
+                debug!(
+                    partition_session_id = end.partition_session_id,
+                    "topic reader received end partition session"
+                );
+                if sessions.remove(&end.partition_session_id).is_none() {
+                    warn!(
+                        partition_session_id = end.partition_session_id,
+                        "topic reader received end for unknown partition session"
+                    );
+                }
+                decompression_input_tx
+                    .send(ReaderEvent::EndPartitionSession {
+                        session_id: end.partition_session_id,
+                        child_partition_ids: end.child_partition_ids,
+                    })
+                    .map_err(|_| {
+                        YdbError::Transport(
+                            "topic reader grpc -> decompressor channel closed".to_string(),
+                        )
+                    })?;
+            }
+
             RawFromServer::UpdateTokenResponse(_) => {
                 debug!("topic reader received update token response");
             }
@@ -243,7 +266,7 @@ async fn receive_messages(
 fn handle_read_response(
     resp: RawReadResponse,
     sessions: &mut HashMap<i64, PartitionSession>,
-    decompression_input_tx: &mpsc::UnboundedSender<MessageBatch>,
+    decompression_input_tx: &mpsc::UnboundedSender<ReaderEvent>,
     reader_id: usize,
     epoch: usize,
 ) -> YdbResult<()> {
@@ -253,8 +276,8 @@ fn handle_read_response(
             Some(s) => s,
             None => {
                 error!(
-                    "read_response for unknown partition_session_id: {}",
-                    partition_session_id
+                    partition_session_id,
+                    "read response for unknown partition session"
                 );
                 continue;
             }
@@ -273,11 +296,13 @@ fn handle_read_response(
                 last.bytes_to_release = batch_bytes;
             }
 
-            let message_batch = MessageBatch { messages, codec };
-
-            decompression_input_tx.send(message_batch).map_err(|_| {
-                YdbError::Transport("topic reader grpc -> decompressor channel closed".to_string())
-            })?;
+            decompression_input_tx
+                .send(ReaderEvent::Messages { messages, codec })
+                .map_err(|_| {
+                    YdbError::Transport(
+                        "topic reader grpc -> decompressor channel closed".to_string(),
+                    )
+                })?;
         }
     }
 

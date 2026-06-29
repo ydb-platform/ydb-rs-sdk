@@ -15,17 +15,17 @@ use crate::client_topic::compression::{
 use crate::client_topic::list_types::Codec;
 use crate::{TopicReaderMessage, YdbError, YdbResult};
 
-use super::messages::MessageBatch;
+use super::messages::{ForwardEvent, ReaderEvent};
 use super::reconnector;
 use super::runtime::RuntimeHandle;
 use super::task_supervisor::wait_child_tasks;
 
-type BatchRx = mpsc::UnboundedReceiver<MessageBatch>;
+type EventRx = mpsc::UnboundedReceiver<ReaderEvent>;
 
 pub(super) struct Decompressor {
     codec_registry: Arc<CodecRegistry>,
     executor: Arc<dyn Executor>,
-    rx: BatchRx,
+    rx: EventRx,
     runtime: RuntimeHandle,
     cancellation: CancellationToken,
 }
@@ -33,7 +33,7 @@ pub(super) struct Decompressor {
 impl Decompressor {
     pub(super) fn new(
         attempt: &reconnector::ConnectionAttempt,
-        rx: BatchRx,
+        rx: EventRx,
         runtime: RuntimeHandle,
     ) -> Self {
         let mut codec_registry = CodecRegistry::new();
@@ -82,8 +82,8 @@ impl Decompressor {
 }
 
 async fn schedule_loop(
-    rx: BatchRx,
-    queue: OrderedTaskQueue<Vec<TopicReaderMessage>>,
+    rx: EventRx,
+    queue: OrderedTaskQueue<ForwardEvent>,
     codec_registry: Arc<CodecRegistry>,
     parallelism: NonZeroUsize,
     cancellation: CancellationToken,
@@ -93,51 +93,72 @@ async fn schedule_loop(
             debug!("decompressor schedule cancelled, stopping");
             Ok(())
         }
-        result = schedule_messages(rx, queue, codec_registry, parallelism) => {
+        result = schedule_events(rx, queue, codec_registry, parallelism) => {
             let Err(e) = result;
             Err(e)
         }
     }
 }
 
-async fn schedule_messages(
-    mut rx: BatchRx,
-    queue: OrderedTaskQueue<Vec<TopicReaderMessage>>,
+async fn schedule_events(
+    mut rx: EventRx,
+    queue: OrderedTaskQueue<ForwardEvent>,
     codec_registry: Arc<CodecRegistry>,
     parallelism: NonZeroUsize,
 ) -> YdbResult<Infallible> {
     loop {
-        let Some(MessageBatch { messages, codec }) = rx.recv().await else {
+        let Some(event) = rx.recv().await else {
             return Err(YdbError::Transport(
                 "decompressor input channel closed".into(),
             ));
         };
 
-        let decoder: Option<Arc<dyn CompressionDecoder>> = if codec == Codec::RAW {
-            None
-        } else {
-            Some(codec_registry.get_decoder(codec).ok_or_else(|| {
-                YdbError::custom(format!("no decoder found for codec {}", codec.code))
-            })?)
-        };
+        match event {
+            ReaderEvent::Messages { messages, codec } => {
+                let decoder: Option<Arc<dyn CompressionDecoder>> = if codec == Codec::RAW {
+                    None
+                } else {
+                    Some(codec_registry.get_decoder(codec).ok_or_else(|| {
+                        YdbError::custom(format!("no decoder found for codec {}", codec.code))
+                    })?)
+                };
 
-        let chunk_size = (messages.len() / parallelism.get()).clamp(1, MAX_MESSAGES_PER_CHUNK);
-        let mut iter = messages.into_iter();
-        loop {
-            let chunk: Vec<TopicReaderMessage> = iter.by_ref().take(chunk_size).collect();
-            if chunk.is_empty() {
-                break;
+                let chunk_size =
+                    (messages.len() / parallelism.get()).clamp(1, MAX_MESSAGES_PER_CHUNK);
+                let mut iter = messages.into_iter();
+                loop {
+                    let chunk: Vec<TopicReaderMessage> = iter.by_ref().take(chunk_size).collect();
+                    if chunk.is_empty() {
+                        break;
+                    }
+                    let dec = decoder.clone();
+                    queue
+                        .submit(Box::new(move || {
+                            decompress_batch(chunk, dec).map(ForwardEvent::Messages)
+                        }))
+                        .await;
+                }
             }
-            let dec = decoder.clone();
-            queue
-                .submit(Box::new(move || decompress_batch(chunk, dec)))
-                .await;
+
+            ReaderEvent::EndPartitionSession {
+                session_id,
+                child_partition_ids,
+            } => {
+                queue
+                    .submit(Box::new(move || {
+                        Ok(ForwardEvent::EndPartitionSession {
+                            session_id,
+                            child_partition_ids,
+                        })
+                    }))
+                    .await;
+            }
         }
     }
 }
 
 async fn forward_loop(
-    results_rx: TaskResultRx<Vec<TopicReaderMessage>>,
+    results_rx: TaskResultRx<ForwardEvent>,
     runtime: RuntimeHandle,
     cancellation: CancellationToken,
 ) -> YdbResult<()> {
@@ -146,15 +167,15 @@ async fn forward_loop(
             debug!("decompressor forward cancelled, stopping");
             Ok(())
         }
-        result = forward_messages(results_rx, runtime) => {
+        result = forward_events(results_rx, runtime) => {
             let Err(e) = result;
             Err(e)
         }
     }
 }
 
-async fn forward_messages(
-    mut results_rx: TaskResultRx<Vec<TopicReaderMessage>>,
+async fn forward_events(
+    mut results_rx: TaskResultRx<ForwardEvent>,
     runtime: RuntimeHandle,
 ) -> YdbResult<Infallible> {
     loop {
@@ -163,10 +184,21 @@ async fn forward_messages(
                 "decompressor results channel closed".into(),
             ));
         };
-        let messages = result_rx
+        let event = result_rx
             .await
             .unwrap_or_else(|_| Err(YdbError::custom("executor decompression task panicked")))?;
-        runtime.push_batch(messages)?;
+
+        match event {
+            ForwardEvent::Messages(messages) => {
+                runtime.push_batch(messages)?;
+            }
+            ForwardEvent::EndPartitionSession {
+                session_id,
+                child_partition_ids,
+            } => {
+                runtime.register_ending_partition(session_id, child_partition_ids)?;
+            }
+        }
     }
 }
 
