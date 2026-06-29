@@ -320,6 +320,14 @@ mod tx_state_tests {
     }
 
     #[tokio::test]
+    async fn commit_after_server_invalidation_fails() {
+        let mut tx = bench_table_tx();
+        tx.set_table_tx_state_for_test(TableTxState::ServerInvalidated);
+        tx.set_tx_id_for_test(Some("tx-1".into()));
+        assert!(tx.commit().await.is_err());
+    }
+
+    #[tokio::test]
     async fn commit_after_rollback_fails() {
         let mut tx = bench_table_tx();
         tx.set_table_tx_state_for_test(TableTxState::RolledBack);
@@ -411,7 +419,13 @@ impl Transaction for SerializableReadWriteTx {
 
     async fn commit(&mut self) -> YdbResult<()> {
         match self.state {
-            TableTxState::Committed | TableTxState::ServerInvalidated => return Ok(()),
+            TableTxState::Committed => return Ok(()),
+            TableTxState::ServerInvalidated => {
+                return Err(YdbError::Custom(format!(
+                    "commit server-invalidated transaction: {:?}",
+                    &self.id
+                )));
+            }
             TableTxState::RolledBack => {
                 return Err(YdbError::Custom(format!(
                     "commit rolled back transaction: {:?}",

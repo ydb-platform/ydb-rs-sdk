@@ -245,8 +245,8 @@ impl YdbError {
     /// Definitive YDB operation status on a transactional statement: the server has
     /// ended the transaction (explicit commit/rollback would return NOT_FOUND).
     ///
-    /// Transport and ambiguous statuses (`UNDETERMINED`, `UNAVAILABLE`, `OVERLOADED`)
-    /// are excluded — the transaction may still be active on the server.
+    /// Transport and ambiguous statuses (`UNDETERMINED`, `UNAVAILABLE`, `OVERLOADED`,
+    /// `SUCCESS`, `UNSPECIFIED`) are excluded — the transaction may still be active.
     pub(crate) fn invalidates_server_transaction(&self) -> bool {
         let Self::YdbStatusError(status) = self else {
             return false;
@@ -254,9 +254,24 @@ impl YdbError {
         let Ok(code) = status.operation_status() else {
             return false;
         };
-        !matches!(
+        matches!(
             code,
-            StatusCode::Undetermined | StatusCode::Unavailable | StatusCode::Overloaded
+            StatusCode::BadRequest
+                | StatusCode::Unauthorized
+                | StatusCode::InternalError
+                | StatusCode::Aborted
+                | StatusCode::SchemeError
+                | StatusCode::GenericError
+                | StatusCode::Timeout
+                | StatusCode::BadSession
+                | StatusCode::PreconditionFailed
+                | StatusCode::AlreadyExists
+                | StatusCode::NotFound
+                | StatusCode::SessionExpired
+                | StatusCode::Cancelled
+                | StatusCode::Unsupported
+                | StatusCode::SessionBusy
+                | StatusCode::ExternalError
         )
     }
 
@@ -328,6 +343,11 @@ mod invalidate_tx_tests {
             operation_status: status as i32,
             issues: vec![],
         })
+    }
+
+    #[test]
+    fn success_does_not_invalidate_server_transaction() {
+        assert!(!ydb_status(StatusCode::Success).invalidates_server_transaction());
     }
 
     #[test]

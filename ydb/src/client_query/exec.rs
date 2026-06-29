@@ -108,17 +108,19 @@ async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQuery
     }
 }
 
-fn tx_mode_to_raw(mode: QueryTxMode) -> RawQueryTxMode {
+fn tx_mode_to_raw(mode: QueryTxMode) -> YdbResult<RawQueryTxMode> {
     match mode {
-        QueryTxMode::Implicit => {
-            unreachable!("Implicit is filtered before tx_mode_to_raw")
-        }
-        QueryTxMode::SerializableReadWrite => RawQueryTxMode::SerializableReadWrite,
-        QueryTxMode::SnapshotReadOnly => RawQueryTxMode::SnapshotReadOnly,
-        QueryTxMode::SnapshotReadWrite => RawQueryTxMode::SnapshotReadWrite,
-        QueryTxMode::StaleReadOnly => RawQueryTxMode::StaleReadOnly,
-        QueryTxMode::OnlineReadOnly => RawQueryTxMode::OnlineReadOnly,
-        QueryTxMode::OnlineReadOnlyInconsistent => RawQueryTxMode::OnlineReadOnlyInconsistent,
+        QueryTxMode::Implicit => Err(YdbError::Custom(
+            "QueryTxMode::Implicit cannot be converted to a raw tx mode; \
+             use server-side inference (no tx_control) instead"
+                .to_string(),
+        )),
+        QueryTxMode::SerializableReadWrite => Ok(RawQueryTxMode::SerializableReadWrite),
+        QueryTxMode::SnapshotReadOnly => Ok(RawQueryTxMode::SnapshotReadOnly),
+        QueryTxMode::SnapshotReadWrite => Ok(RawQueryTxMode::SnapshotReadWrite),
+        QueryTxMode::StaleReadOnly => Ok(RawQueryTxMode::StaleReadOnly),
+        QueryTxMode::OnlineReadOnly => Ok(RawQueryTxMode::OnlineReadOnly),
+        QueryTxMode::OnlineReadOnlyInconsistent => Ok(RawQueryTxMode::OnlineReadOnlyInconsistent),
     }
 }
 
@@ -196,7 +198,7 @@ fn tx_control_for_transaction(
         None => {
             reject_per_call_tx_mode_override(tx, opts)?;
             ensure_interactive_tx_mode(tx.tx_mode)?;
-            begin_tx_control(tx_mode_to_raw(tx.tx_mode), commit_tx)
+            begin_tx_control(tx_mode_to_raw(tx.tx_mode)?, commit_tx)
         }
     }))
 }
@@ -245,15 +247,15 @@ where
 /// Default [`QueryTxMode::Implicit`] omits `tx_control` (server-side inference).
 fn tx_control_for_client(
     opts: &CallOptions,
-) -> Option<ydb_grpc::ydb_proto::query::TransactionControl> {
+) -> YdbResult<Option<ydb_grpc::ydb_proto::query::TransactionControl>> {
     let mode = client_tx_mode(opts);
     if mode == QueryTxMode::Implicit {
-        return None;
+        return Ok(None);
     }
     let commit_tx = opts
         .commit_tx
         .unwrap_or_else(|| default_commit_tx_client(mode));
-    Some(begin_tx_control(tx_mode_to_raw(mode), commit_tx))
+    Ok(Some(begin_tx_control(tx_mode_to_raw(mode)?, commit_tx)))
 }
 
 async fn client_implicit_session_request(
@@ -271,7 +273,7 @@ async fn client_implicit_session_request(
         "",
         text,
         params.clone(),
-        tx_control_for_client(opts),
+        tx_control_for_client(opts)?,
         opts.collect_stats,
     );
     req.concurrent_result_sets = concurrent_result_sets;
@@ -331,7 +333,7 @@ async fn client_pooled_explicit_request(
         lease.session_id(),
         text,
         params.clone(),
-        tx_control_for_client(opts),
+        tx_control_for_client(opts)?,
         opts.collect_stats,
     );
     req.concurrent_result_sets = concurrent_result_sets;
@@ -420,7 +422,7 @@ pub(crate) async fn transaction_ensure_begin(
     let timeout_duration = tx.timeouts.operation_timeout;
     let tx_id = with_operation_timeout(timeout_duration, async {
         client
-            .begin_transaction(&session_id, tx_mode_to_raw(tx.tx_mode))
+            .begin_transaction(&session_id, tx_mode_to_raw(tx.tx_mode)?)
             .await
             .map_err(Into::into)
     })
@@ -638,7 +640,7 @@ pub(super) fn build_client_execute_request_for_test(
         String::new(),
         "SELECT 1".to_string(),
         HashMap::new(),
-        tx_control_for_client(opts),
+        tx_control_for_client(opts).expect("valid test tx_control"),
         opts.collect_stats,
     );
     req.concurrent_result_sets = concurrent_result_sets;

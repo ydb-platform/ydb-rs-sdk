@@ -221,26 +221,18 @@ impl Session {
         query: String,
         collect_full_diagnostics: bool,
     ) -> YdbResult<ExplainResult> {
+        let req = RawExplainDataQueryRequest {
+            session_id: self.id.clone(),
+            yql_text: query,
+            operation_params: self.timeouts.operation_params(),
+            collect_full_diagnostics,
+        };
         trace!(
             "request: {}",
-            ensure_len_string(serde_json::to_string(&RawExplainDataQueryRequest {
-                session_id: self.id.clone(),
-                yql_text: query.clone(),
-                operation_params: self.timeouts.operation_params(),
-                collect_full_diagnostics,
-            })?)
+            ensure_len_string(serde_json::to_string(&req)?)
         );
 
-        let session_id = self.id.clone();
-        let operation_params = self.timeouts.operation_params();
-        let res = in_flight_table_rpc!(self, table, {
-            table.explain_data_query(RawExplainDataQueryRequest {
-                session_id,
-                yql_text: query,
-                operation_params,
-                collect_full_diagnostics,
-            })
-        })?;
+        let res = in_flight_table_rpc!(self, table, table.explain_data_query(req))?;
         trace!(
             "result: {}",
             ensure_len_string(serde_json::to_string(&res)?)
@@ -412,6 +404,9 @@ fn should_discard_session_from_pool(err: &YdbError) -> bool {
         YdbError::Transport(_) | YdbError::TransportDial(_) => true,
         YdbError::TransportGRPCStatus(status) => {
             use tonic::Code;
+            // Intentional parity with go-sdk `xerrors.MustDeleteTableOrQuerySession`:
+            // context/transport failures may leave a query running server-side; discard
+            // the session to avoid SessionBusy on reuse (see InFlightTableRpcGuard).
             matches!(
                 status.code(),
                 Code::Cancelled
