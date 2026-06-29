@@ -228,9 +228,6 @@ impl Drop for SessionPoolLease {
         if self.returned {
             return;
         }
-        if self.use_guard {
-            self.invalidate_session();
-        }
         self.end_use();
         let pool = self.pool.clone();
         let item = self.item.take();

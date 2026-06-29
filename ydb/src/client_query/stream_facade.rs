@@ -7,8 +7,9 @@ use crate::result::ResultSet;
 use crate::types::Value;
 
 use super::exec::{
-    apply_stream_tx_id, resolve_commit_tx, transaction_finish_committed_via_query,
-    transaction_mark_invalidated_on_query_error, CallOptions,
+    apply_stream_tx_id, finish_pooled_query_stream, resolve_commit_tx,
+    transaction_finish_committed_via_query, transaction_mark_invalidated_on_query_error,
+    CallOptions,
 };
 use super::internal::ExecCoreRef;
 
@@ -74,6 +75,7 @@ impl QueryStream<'_> {
     pub async fn close(mut self) -> YdbResult<()> {
         match self.stream.close().await {
             Ok(meta) => {
+                finish_pooled_query_stream(&mut self.stream);
                 if let ExecCoreRef::Transaction(ctx) = &mut self.core {
                     apply_stream_tx_id(ctx, meta.tx_id);
                     if self.commit_tx {
@@ -122,6 +124,7 @@ pub(crate) async fn materialize_query(
         }
         match stream.close().await {
             Ok(meta) => {
+                finish_pooled_query_stream(&mut stream);
                 if let ExecCoreRef::Transaction(ctx) = core {
                     apply_stream_tx_id(ctx, meta.tx_id);
                     if commit_tx {

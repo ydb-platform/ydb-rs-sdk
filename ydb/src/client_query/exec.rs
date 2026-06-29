@@ -20,6 +20,33 @@ use crate::{QueryTransactionOptions, QueryTxMode};
 
 use crate::session_pool::{spawn_pool_release, SessionPool, SessionPoolLease};
 
+/// Tracks in-flight ExecuteQuery RPC on a pooled session held by [`ExecuteQueryStream`].
+struct PooledQuerySessionGuard {
+    lease: SessionPoolLease,
+    rpc_finished: bool,
+}
+
+impl PooledQuerySessionGuard {
+    fn finish_rpc(&mut self) {
+        if !self.rpc_finished {
+            self.lease.end_use();
+            self.rpc_finished = true;
+        }
+    }
+}
+
+impl Drop for PooledQuerySessionGuard {
+    fn drop(&mut self) {
+        if !self.rpc_finished {
+            self.lease.invalidate_session();
+        }
+    }
+}
+
+pub(crate) fn finish_pooled_query_stream(stream: &mut ExecuteQueryStream) {
+    stream.finish_session_guard::<PooledQuerySessionGuard>(|guard| guard.finish_rpc());
+}
+
 const DEFAULT_RETRY_BUDGET: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
 const MAX_RETRY_BACKOFF_MILLISECONDS: u64 = 1_000;
@@ -324,7 +351,10 @@ async fn client_begin_stream_once(
     match result {
         Ok(mut stream) => {
             if let Some(lease) = pooled_lease.take() {
-                stream = stream.with_session_guard(lease);
+                stream = stream.with_session_guard(PooledQuerySessionGuard {
+                    lease,
+                    rpc_finished: false,
+                });
             }
             Ok(stream)
         }
