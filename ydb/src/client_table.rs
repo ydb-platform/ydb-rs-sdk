@@ -2,7 +2,7 @@ use crate::client::TimeoutSettings;
 
 use crate::errors::*;
 use crate::session::Session;
-use crate::session_pool::{QuerySessionPool, SessionPool};
+use crate::session_pool::{SessionPool, TableSessionPool};
 use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 use crate::types::Value;
 
@@ -118,7 +118,7 @@ impl Default for RetryOptions {
 #[derive(Clone)]
 pub struct TableClient {
     error_on_truncate: bool,
-    session_pool: SessionPool,
+    session_pool: TableSessionPool,
     retrier: Arc<Box<dyn Retry>>,
     transaction_options: TransactionOptions,
     idempotent_operation: bool,
@@ -129,11 +129,11 @@ impl TableClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
-        session_pool: QuerySessionPool,
+        session_pool: SessionPool,
     ) -> Self {
         Self {
             error_on_truncate: false,
-            session_pool: SessionPool::from_shared(session_pool, connection_manager, timeouts),
+            session_pool: TableSessionPool::from_shared(session_pool, connection_manager, timeouts),
             retrier: Arc::new(Box::<TimeoutRetrier>::default()),
             transaction_options: TransactionOptions::new(),
             idempotent_operation: false,

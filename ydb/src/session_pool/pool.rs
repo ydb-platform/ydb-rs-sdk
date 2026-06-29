@@ -87,7 +87,7 @@ impl Default for SessionPoolSettings {
     }
 }
 
-/// Snapshot of query session pool counters (aligned with go-sdk `pool.Stats`).
+/// Snapshot of session pool counters (aligned with go-sdk `pool.Stats`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionPoolStats {
     /// Configured maximum concurrent in-flight sessions (`limit`).
@@ -150,15 +150,15 @@ impl SessionPoolSettings {
 }
 
 /// Pooled explicit session lease. Not concurrent-safe: one logical owner at a time.
-pub(crate) struct QuerySessionLease {
+pub(crate) struct SessionPoolLease {
     item: Option<ExplicitIdleItem>,
-    pool: Arc<QuerySessionPoolInner>,
+    pool: Arc<SessionPoolInner>,
     permit: Option<OwnedSemaphorePermit>,
     returned: bool,
     use_guard: bool,
 }
 
-impl QuerySessionLease {
+impl SessionPoolLease {
     pub fn session_id(&self) -> &str {
         self.item.as_ref().expect("lease item").session.session_id()
     }
@@ -211,7 +211,7 @@ impl QuerySessionLease {
     }
 }
 
-impl Drop for QuerySessionLease {
+impl Drop for SessionPoolLease {
     fn drop(&mut self) {
         if self.returned {
             return;
@@ -229,8 +229,8 @@ impl Drop for QuerySessionLease {
 }
 
 #[derive(Clone)]
-pub(crate) struct QuerySessionPool {
-    inner: Arc<QuerySessionPoolInner>,
+pub(crate) struct SessionPool {
+    inner: Arc<SessionPoolInner>,
 }
 
 struct ExplicitIdleItem {
@@ -241,7 +241,7 @@ struct ExplicitIdleItem {
     use_count: u64,
 }
 
-struct QuerySessionPoolInner {
+struct SessionPoolInner {
     settings: SessionPoolSettings,
     acquire_timeout: Duration,
     connection_manager: GrpcConnectionManager,
@@ -257,7 +257,7 @@ struct QuerySessionPoolInner {
     bench_create_failures_remaining: AtomicUsize,
 }
 
-impl QuerySessionPool {
+impl SessionPool {
     pub fn new_explicit_sync(
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
@@ -266,10 +266,10 @@ impl QuerySessionPool {
     ) -> Self {
         let settings = normalize_pool_settings(settings);
         let limit = settings.limit;
-        let inner = Arc::new_cyclic(|weak: &std::sync::Weak<QuerySessionPoolInner>| {
+        let inner = Arc::new_cyclic(|weak: &std::sync::Weak<SessionPoolInner>| {
             let discovery_for_shutdown = discovery.clone();
             let pool_weak = weak.clone();
-            QuerySessionPoolInner {
+            SessionPoolInner {
                 settings: settings.clone(),
                 acquire_timeout: timeouts.operation_timeout,
                 connection_manager: connection_manager.clone(),
@@ -313,7 +313,7 @@ impl QuerySessionPool {
         let pool = Self::new_explicit_sync(connection_manager, timeouts, discovery, settings);
 
         if warm_up > 0 {
-            QuerySessionPoolInner::warm_up_parallel(pool.inner.clone(), warm_up).await?;
+            SessionPoolInner::warm_up_parallel(pool.inner.clone(), warm_up).await?;
         }
 
         Ok(pool)
@@ -323,7 +323,7 @@ impl QuerySessionPool {
         self.inner.stats()
     }
 
-    pub async fn acquire_explicit(&self) -> YdbResult<QuerySessionLease> {
+    pub async fn acquire_explicit(&self) -> YdbResult<SessionPoolLease> {
         let permit = self.inner.acquire_permit().await?;
 
         let mut stale_items = Vec::new();
@@ -346,7 +346,7 @@ impl QuerySessionPool {
                 session_id = item.session.session_id(),
                 "got query session from pool"
             );
-            return Ok(QuerySessionLease {
+            return Ok(SessionPoolLease {
                 item: Some(item),
                 pool: self.inner.clone(),
                 permit: Some(permit),
@@ -366,7 +366,7 @@ impl QuerySessionPool {
             session_id = item.session.session_id(),
             "created query session for pool"
         );
-        Ok(QuerySessionLease {
+        Ok(SessionPoolLease {
             item: Some(item),
             pool: self.inner.clone(),
             permit: Some(permit),
@@ -376,7 +376,7 @@ impl QuerySessionPool {
     }
 }
 
-impl QuerySessionPoolInner {
+impl SessionPoolInner {
     async fn acquire_permit(&self) -> YdbResult<OwnedSemaphorePermit> {
         let acquire = self.semaphore.clone().acquire_owned();
         let permit = if self.acquire_timeout.is_zero() {
@@ -391,7 +391,7 @@ impl QuerySessionPoolInner {
                     ))
                 })?
         };
-        permit.map_err(|_| YdbError::Transport("query session pool closed".to_string()))
+        permit.map_err(|_| YdbError::Transport("session pool closed".to_string()))
     }
 
     fn stats(&self) -> SessionPoolStats {
@@ -666,7 +666,7 @@ impl QuerySessionPoolInner {
     }
 }
 
-impl Drop for QuerySessionPoolInner {
+impl Drop for SessionPoolInner {
     fn drop(&mut self) {
         let explicit: Vec<ExplicitIdleItem> = self
             .explicit_idle
@@ -731,7 +731,7 @@ fn session_should_close(
 }
 
 #[cfg(test)]
-impl QuerySessionPool {
+impl SessionPool {
     /// Explicit pool backed by in-memory stub sessions (no CreateSession / Attach / Delete RPC).
     pub(crate) fn new_explicit_bench(settings: SessionPoolSettings) -> Self {
         use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -754,7 +754,7 @@ impl QuerySessionPool {
             DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
         );
 
-        let inner = Arc::new(QuerySessionPoolInner {
+        let inner = Arc::new(SessionPoolInner {
             settings,
             acquire_timeout: Duration::ZERO,
             connection_manager,
@@ -801,7 +801,7 @@ impl QuerySessionPool {
     }
 
     pub(crate) async fn warm_up_for_tests(&self, count: usize) -> YdbResult<()> {
-        QuerySessionPoolInner::warm_up_parallel(self.inner.clone(), count).await
+        SessionPoolInner::warm_up_parallel(self.inner.clone(), count).await
     }
 }
 

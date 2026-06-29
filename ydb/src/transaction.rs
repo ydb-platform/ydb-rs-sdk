@@ -8,7 +8,7 @@ use crate::grpc_wrapper::raw_table_service::transaction_control::{
 use crate::query::Query;
 use crate::result::QueryResult;
 use crate::session::Session;
-use crate::session_pool::SessionPool;
+use crate::session_pool::TableSessionPool;
 use async_trait::async_trait;
 use itertools::Itertools;
 use tracing::trace;
@@ -71,12 +71,12 @@ pub trait Transaction: Send + Sync {
 pub(crate) struct AutoCommit {
     mode: Mode,
     error_on_truncate_response: bool,
-    session_pool: SessionPool,
+    session_pool: TableSessionPool,
     timeouts: TimeoutSettings,
 }
 
 impl AutoCommit {
-    pub(crate) fn new(session_pool: SessionPool, mode: Mode, timeouts: TimeoutSettings) -> Self {
+    pub(crate) fn new(session_pool: TableSessionPool, mode: Mode, timeouts: TimeoutSettings) -> Self {
         Self {
             mode,
             session_pool,
@@ -139,7 +139,7 @@ impl Transaction for AutoCommit {
 
 pub(crate) struct SerializableReadWriteTx {
     error_on_truncate_response: bool,
-    session_pool: SessionPool,
+    session_pool: TableSessionPool,
 
     id: Option<String>,
     session: Option<Session>,
@@ -157,7 +157,7 @@ pub(crate) enum TableTxState {
 }
 
 impl SerializableReadWriteTx {
-    pub(crate) fn new(session_pool: SessionPool, timeouts: TimeoutSettings) -> Self {
+    pub(crate) fn new(session_pool: TableSessionPool, timeouts: TimeoutSettings) -> Self {
         Self {
             error_on_truncate_response: false,
             session_pool,
@@ -247,14 +247,14 @@ mod tx_state_tests {
     use crate::grpc_wrapper::raw_table_service::transaction_control::RawTxMode;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-    use crate::session_pool::{QuerySessionPool, SessionPool, SessionPoolSettings};
+    use crate::session_pool::{SessionPool, SessionPoolSettings, TableSessionPool};
     use crate::transaction::Mode;
     use http::Uri;
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
     fn bench_table_tx() -> SerializableReadWriteTx {
-        let pool = SessionPool::from_shared(
-            QuerySessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(2)),
+        let pool = TableSessionPool::from_shared(
+            SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(2)),
             GrpcConnectionManager::new(
                 SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
                     Uri::from_static("http://127.0.0.1/bench"),

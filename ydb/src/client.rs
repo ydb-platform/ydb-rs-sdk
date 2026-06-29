@@ -7,7 +7,7 @@ use crate::client_table::TableClient;
 use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::load_balancer::SharedLoadBalancer;
-use crate::session_pool::{default_session_pool_settings, QuerySessionPool};
+use crate::session_pool::{default_session_pool_settings, SessionPool};
 use crate::waiter::Waiter;
 
 pub use crate::session_pool::{SessionPoolSettings, SessionPoolStats};
@@ -29,7 +29,7 @@ pub struct Client {
     timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
     executor: Arc<dyn Executor>,
-    session_pool: QuerySessionPool,
+    session_pool: SessionPool,
 }
 
 impl Client {
@@ -45,7 +45,7 @@ impl Client {
             None => default_executor()?,
         };
 
-        let session_pool = QuerySessionPool::new_explicit_sync(
+        let session_pool = SessionPool::new_explicit_sync(
             connection_manager.clone(),
             TimeoutSettings::default(),
             discovery.clone(),
@@ -71,7 +71,7 @@ impl Client {
     /// [`Self::with_timeouts`] **before** this method if a custom operation timeout should
     /// apply to session pool acquisition.
     pub async fn with_session_pool(self, settings: SessionPoolSettings) -> YdbResult<Self> {
-        let session_pool = QuerySessionPool::new_explicit(
+        let session_pool = SessionPool::new_explicit(
             self.connection_manager.clone(),
             self.timeouts,
             self.discovery.clone(),

@@ -1,11 +1,11 @@
 //! Regression tests for session-pool corner cases found during PR #501 / native-table SLO work.
 
-use super::query_pool::{QuerySessionPool, SessionPoolSettings};
+use super::pool::{SessionPool, SessionPoolSettings};
 use crate::errors::YdbError;
 
 #[tokio::test]
 async fn warm_up_partial_keeps_successful_sessions() {
-    let pool = QuerySessionPool::new_explicit_bench_with_create_failures(
+    let pool = SessionPool::new_explicit_bench_with_create_failures(
         SessionPoolSettings::new().with_limit(10),
         2,
     );
@@ -19,7 +19,7 @@ async fn warm_up_partial_keeps_successful_sessions() {
 
 #[tokio::test]
 async fn warm_up_fails_when_every_create_fails() {
-    let pool = QuerySessionPool::new_explicit_bench_with_create_failures(
+    let pool = SessionPool::new_explicit_bench_with_create_failures(
         SessionPoolSettings::new().with_limit(10),
         3,
     );
@@ -37,7 +37,7 @@ async fn warm_up_fails_when_every_create_fails() {
 
 #[tokio::test]
 async fn acquire_reuses_idle_session() {
-    let pool = QuerySessionPool::new_explicit_bench(
+    let pool = SessionPool::new_explicit_bench(
         SessionPoolSettings::new().with_limit(2).with_warm_up(1),
     );
     let first = pool.acquire_explicit().await.expect("first acquire");
@@ -51,7 +51,7 @@ async fn acquire_reuses_idle_session() {
 
 #[tokio::test]
 async fn acquire_skips_invalidated_idle_session() {
-    let pool = QuerySessionPool::new_explicit_bench(
+    let pool = SessionPool::new_explicit_bench(
         SessionPoolSettings::new().with_limit(2).with_warm_up(0),
     );
     let created_before = pool.stats().sessions_created;
@@ -81,12 +81,12 @@ async fn bad_session_marks_table_session_non_poolable() {
     use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-    use crate::session_pool::SessionPool;
+    use crate::session_pool::TableSessionPool;
     use http::Uri;
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
-    let pool = SessionPool::from_shared(
-        QuerySessionPool::new_explicit_bench(
+    let pool = TableSessionPool::from_shared(
+        SessionPool::new_explicit_bench(
             SessionPoolSettings::new().with_limit(2).with_warm_up(1),
         ),
         GrpcConnectionManager::new(
@@ -113,7 +113,7 @@ async fn bad_session_marks_table_session_non_poolable() {
 
 #[tokio::test]
 async fn item_usage_limit_closes_session_on_return() {
-    let pool = QuerySessionPool::new_explicit_bench(
+    let pool = SessionPool::new_explicit_bench(
         SessionPoolSettings::new()
             .with_limit(2)
             .with_item_usage_limit(1),
@@ -137,7 +137,7 @@ async fn item_usage_limit_closes_session_on_return() {
 
 #[tokio::test]
 async fn warm_up_overflow_respects_pool_limit() {
-    let pool = QuerySessionPool::new_explicit_bench(
+    let pool = SessionPool::new_explicit_bench(
         SessionPoolSettings::new().with_limit(2).with_warm_up(5),
     );
     pool.warm_up_for_tests(5)
@@ -150,7 +150,7 @@ async fn warm_up_overflow_respects_pool_limit() {
 
 #[tokio::test]
 async fn lease_begin_end_use_is_idempotent() {
-    let pool = QuerySessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+    let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
     let mut lease = pool.acquire_explicit().await.expect("acquire");
     lease.begin_use();
     lease.begin_use();

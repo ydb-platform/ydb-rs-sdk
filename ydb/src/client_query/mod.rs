@@ -35,7 +35,7 @@ use crate::errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustom
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::result::Row;
 
-use crate::session_pool::QuerySessionPool;
+use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{
     check_retry_transaction_error, retry_wait, transaction_commit, transaction_ensure_begin,
@@ -158,7 +158,7 @@ impl QueryClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
-        session_pool: QuerySessionPool,
+        session_pool: SessionPool,
     ) -> Self {
         Self {
             ctx: ClientExecContext {
@@ -323,7 +323,7 @@ impl QueryTransaction {
     fn new(
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
-        session_pool: QuerySessionPool,
+        session_pool: SessionPool,
         options: QueryTransactionOptions,
     ) -> Self {
         Self {

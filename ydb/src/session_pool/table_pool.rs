@@ -5,19 +5,19 @@ use crate::errors::YdbResult;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::session::{NodePinnedTableClient, Session};
 
-use super::query_pool::{spawn_pool_release, QuerySessionPool};
+use super::pool::{spawn_pool_release, SessionPool};
 
 /// Table-side adapter over the driver session pool.
 #[derive(Clone)]
-pub(crate) struct SessionPool {
-    pool: QuerySessionPool,
+pub(crate) struct TableSessionPool {
+    pool: SessionPool,
     connection_manager: GrpcConnectionManager,
     timeouts: TimeoutSettings,
 }
 
-impl SessionPool {
+impl TableSessionPool {
     pub(crate) fn from_shared(
-        pool: QuerySessionPool,
+        pool: SessionPool,
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
     ) -> Self {
@@ -60,20 +60,20 @@ impl SessionPool {
 
 #[cfg(test)]
 mod test {
-    use super::SessionPool;
+    use super::TableSessionPool;
     use crate::client::TimeoutSettings;
     use crate::errors::YdbResult;
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-    use crate::session_pool::{QuerySessionPool, SessionPoolSettings};
+    use crate::session_pool::{SessionPool, SessionPoolSettings};
     use http::Uri;
     use std::time::Duration;
     use tokio::sync::oneshot;
 
-    fn bench_pool() -> QuerySessionPool {
-        QuerySessionPool::new_explicit_bench(
+    fn bench_pool() -> SessionPool {
+        SessionPool::new_explicit_bench(
             SessionPoolSettings::new().with_limit(1).with_warm_up(1),
         )
     }
@@ -92,7 +92,7 @@ mod test {
 
     #[tokio::test]
     async fn max_active_session() -> YdbResult<()> {
-        let pool = SessionPool::from_shared(
+        let pool = TableSessionPool::from_shared(
             bench_pool(),
             bench_connection_manager(),
             TimeoutSettings::default(),

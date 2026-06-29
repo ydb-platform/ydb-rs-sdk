@@ -18,7 +18,7 @@ use crate::grpc_wrapper::raw_query_service::transaction_control::{
 use crate::types::Value;
 use crate::{QueryTransactionOptions, QueryTxMode};
 
-use crate::session_pool::{QuerySessionLease, QuerySessionPool};
+use crate::session_pool::{SessionPool, SessionPoolLease};
 
 const DEFAULT_RETRY_BUDGET: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
@@ -45,17 +45,17 @@ pub(crate) struct ClientExecContext {
     pub idempotent_operation: bool,
     /// Total wall-clock budget for automatic retries (same idea as [`crate::TableClient::clone_with_retry_timeout`]).
     pub retry_budget: Duration,
-    pub session_pool: QuerySessionPool,
+    pub session_pool: SessionPool,
 }
 
 pub(crate) struct TransactionExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub timeouts: TimeoutSettings,
     pub tx_mode: QueryTxMode,
-    pub session_pool: QuerySessionPool,
+    pub session_pool: SessionPool,
     /// When set, the first operation calls `BeginTransaction` RPC instead of lazy `BeginTx` in `ExecuteQuery`.
     pub begin: bool,
-    pub pooled_lease: Option<QuerySessionLease>,
+    pub pooled_lease: Option<SessionPoolLease>,
     pub query_node: Option<Uri>,
     pub tx_id: Option<String>,
     pub finished: bool,
@@ -314,7 +314,7 @@ async fn client_begin_stream_once(
 
 async fn client_pooled_explicit_request(
     ctx: &ClientExecContext,
-    lease: &mut QuerySessionLease,
+    lease: &mut SessionPoolLease,
     text: &str,
     params: &HashMap<String, Value>,
     opts: &CallOptions,
@@ -548,7 +548,7 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
 pub(crate) fn transaction_exec_context(
     connection_manager: GrpcConnectionManager,
     timeouts: TimeoutSettings,
-    session_pool: QuerySessionPool,
+    session_pool: SessionPool,
     options: QueryTransactionOptions,
 ) -> TransactionExecContext {
     TransactionExecContext {
@@ -682,7 +682,7 @@ mod unit_tests {
         use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
         use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
         use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-        use crate::session_pool::{QuerySessionPool, SessionPoolSettings};
+        use crate::session_pool::{SessionPool, SessionPoolSettings};
         use http::Uri;
         use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
@@ -697,7 +697,7 @@ mod unit_tests {
                 DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
             ),
             TimeoutSettings::default(),
-            QuerySessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
+            SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
             QueryTransactionOptions::default(),
         );
         ctx.tx_id = Some("tx-1".into());
