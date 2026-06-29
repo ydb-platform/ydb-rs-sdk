@@ -209,9 +209,6 @@ impl Session {
             "result: {}",
             ensure_len_string(serde_json::to_string(&res)?)
         );
-        if error_on_truncated {
-            return Err(YdbError::from_str("result of query was truncated"));
-        }
         QueryResult::from_raw_result(error_on_truncated, res)
     }
 
@@ -263,6 +260,7 @@ impl Session {
                 resp
             }
             Err(err) => {
+                in_flight.active = false;
                 let err = YdbError::from(err);
                 in_flight.session.handle_error(&err);
                 return Err(err);
@@ -388,8 +386,11 @@ impl Drop for Session {
     }
 }
 
-/// Whether a failed RPC means the pooled session must not be reused (aligned with go-sdk
-/// `xerrors.MustDeleteTableOrQuerySession`).
+/// Whether a failed RPC means the pooled session must not be reused.
+///
+/// Aligned with go-sdk `xerrors.MustDeleteTableOrQuerySession` (broader than the legacy
+/// table pool, which only discarded on `BadSession` / `SessionExpired`). Transient
+/// transport failures now invalidate the session to avoid `SessionBusy` on reuse.
 fn should_discard_session_from_pool(err: &YdbError) -> bool {
     match err {
         YdbError::YdbStatusError(ydb_err) => {

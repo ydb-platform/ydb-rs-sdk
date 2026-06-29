@@ -227,8 +227,9 @@ impl Drop for SerializableReadWriteTx {
             session.discard_from_pool();
             return;
         }
-        // Successful read-only interactive txs keep the session poolable; rollback runs
-        // in the background while the lease is still held via `Session` until it completes.
+        // Rollback best-effort in the background; always discard so a failed async rollback
+        // cannot return a session with a server-side tx still attached (SessionBusy).
+        session.discard_from_pool();
         tokio::spawn(async move {
             let _ = session.rollback_transaction(tx_id.unwrap()).await;
         });

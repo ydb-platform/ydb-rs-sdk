@@ -403,6 +403,8 @@ impl SessionPoolInner {
         let create_in_progress = self.create_in_progress.load(Ordering::Acquire);
         // Permits held during post-acquire CreateSession are not live sessions yet (go-sdk
         // tracks Size separately from CreateInProgress). Warm-up creates do not hold permits.
+        // `in_use` may briefly over-count by 1 while a just-acquired permit has not yet
+        // incremented `create_in_progress`.
         let creates_with_permit = create_in_progress.min(permits_held);
         let in_use = permits_held.saturating_sub(creates_with_permit);
         SessionPoolStats {
