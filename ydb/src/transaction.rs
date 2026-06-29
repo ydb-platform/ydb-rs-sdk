@@ -76,7 +76,11 @@ pub(crate) struct AutoCommit {
 }
 
 impl AutoCommit {
-    pub(crate) fn new(session_pool: TableSessionPool, mode: Mode, timeouts: TimeoutSettings) -> Self {
+    pub(crate) fn new(
+        session_pool: TableSessionPool,
+        mode: Mode,
+        timeouts: TimeoutSettings,
+    ) -> Self {
         Self {
             mode,
             session_pool,

@@ -73,9 +73,7 @@ mod test {
     use tokio::sync::oneshot;
 
     fn bench_pool() -> SessionPool {
-        SessionPool::new_explicit_bench(
-            SessionPoolSettings::new().with_limit(1).with_warm_up(1),
-        )
+        SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1).with_warm_up(1))
     }
 
     fn bench_connection_manager() -> GrpcConnectionManager {

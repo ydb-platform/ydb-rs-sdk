@@ -37,9 +37,8 @@ async fn warm_up_fails_when_every_create_fails() {
 
 #[tokio::test]
 async fn acquire_reuses_idle_session() {
-    let pool = SessionPool::new_explicit_bench(
-        SessionPoolSettings::new().with_limit(2).with_warm_up(1),
-    );
+    let pool =
+        SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(2).with_warm_up(1));
     let first = pool.acquire_explicit().await.expect("first acquire");
     let session_id = first.session_id().to_string();
     first.return_to_pool().await;
@@ -51,9 +50,8 @@ async fn acquire_reuses_idle_session() {
 
 #[tokio::test]
 async fn acquire_skips_invalidated_idle_session() {
-    let pool = SessionPool::new_explicit_bench(
-        SessionPoolSettings::new().with_limit(2).with_warm_up(0),
-    );
+    let pool =
+        SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(2).with_warm_up(0));
     let created_before = pool.stats().sessions_created;
 
     let mut lease = pool.acquire_explicit().await.expect("first acquire");
@@ -86,9 +84,7 @@ async fn bad_session_marks_table_session_non_poolable() {
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
     let pool = TableSessionPool::from_shared(
-        SessionPool::new_explicit_bench(
-            SessionPoolSettings::new().with_limit(2).with_warm_up(1),
-        ),
+        SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(2).with_warm_up(1)),
         GrpcConnectionManager::new(
             SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
                 Uri::from_static("http://127.0.0.1/bench"),
@@ -137,9 +133,8 @@ async fn item_usage_limit_closes_session_on_return() {
 
 #[tokio::test]
 async fn warm_up_overflow_respects_pool_limit() {
-    let pool = SessionPool::new_explicit_bench(
-        SessionPoolSettings::new().with_limit(2).with_warm_up(5),
-    );
+    let pool =
+        SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(2).with_warm_up(5));
     pool.warm_up_for_tests(5)
         .await
         .expect("warm-up should succeed");
