@@ -15,7 +15,7 @@ use crate::{YdbError, YdbResult};
 
 use super::decompressor::Decompressor;
 use super::grpc_streamer::GrpcStreamer;
-use super::messages::MessageBatch;
+use super::messages::ReaderEvent;
 use super::reader_options::TopicReaderOptions;
 use super::runtime;
 use super::task_supervisor::{is_retriable, wait_child_tasks};
@@ -217,7 +217,7 @@ impl Reconnector {
         runtime: &runtime::RuntimeHandle,
     ) -> YdbResult<tokio::task::JoinSet<YdbResult<()>>> {
         let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
-        let (decomp_input_tx, decomp_input_rx) = mpsc::unbounded_channel::<MessageBatch>();
+        let (decomp_input_tx, decomp_input_rx) = mpsc::unbounded_channel::<ReaderEvent>();
 
         let grpc =
             GrpcStreamer::new(attempt_ctx, decomp_input_tx, outgoing_rx, runtime.clone()).await?;
