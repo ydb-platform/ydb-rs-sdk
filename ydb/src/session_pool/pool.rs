@@ -349,7 +349,10 @@ impl SessionPool {
                 stale_items.push(item);
                 continue;
             }
-            SessionPoolInner::spawn_close_stale_items(self.inner.clone(), std::mem::take(&mut stale_items));
+            SessionPoolInner::spawn_close_stale_items(
+                self.inner.clone(),
+                std::mem::take(&mut stale_items),
+            );
             trace!(
                 session_id = item.session.session_id(),
                 "got query session from pool"
