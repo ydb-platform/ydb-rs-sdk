@@ -22,7 +22,9 @@ use crate::grpc_wrapper::raw_table_service::commit_transaction::RawCommitTransac
 use crate::grpc_wrapper::raw_table_service::copy_table::{
     RawCopyTableRequest, RawCopyTablesRequest,
 };
-use crate::grpc_wrapper::raw_table_service::create_table::RawCreateTableRequest;
+use crate::grpc_wrapper::raw_table_service::create_table::{
+    RawCreateTableOptions, RawCreateTableRequest,
+};
 use crate::grpc_wrapper::raw_table_service::describe_table::RawDescribeTableRequest;
 use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryRequest;
 use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
@@ -283,6 +285,7 @@ impl Session {
         options: CreateTableOptions,
     ) -> YdbResult<()> {
         let mut table = self.get_table_client().await?;
+        let options = RawCreateTableOptions::try_from(options).map_err(YdbError::from)?;
         let res = table
             .create_table(RawCreateTableRequest {
                 session_id: self.id.clone(),

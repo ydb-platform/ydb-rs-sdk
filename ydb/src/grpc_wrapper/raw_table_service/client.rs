@@ -151,7 +151,7 @@ impl RawTableClient {
     }
 
     pub async fn create_table(&mut self, req: RawCreateTableRequest) -> RawResult<()> {
-        let grpc_req: ydb_grpc::ydb_proto::table::CreateTableRequest = req.try_into()?;
+        let grpc_req: ydb_grpc::ydb_proto::table::CreateTableRequest = req.into();
 
         trace!(
             " RawTableClient.create_table request: {}",

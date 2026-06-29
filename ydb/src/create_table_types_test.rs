@@ -9,7 +9,9 @@ use crate::create_table_types::{
     StoragePool, StorageSettings, TableColumn, TablePartitioningSettings, TablePartitions,
     TableProfile, TtlMode, TtlSettings, UnixEpochUnit, ValueSinceUnixEpochTtl,
 };
-use crate::grpc_wrapper::raw_table_service::create_table::RawCreateTableRequest;
+use crate::grpc_wrapper::raw_table_service::create_table::{
+    RawCreateTableOptions, RawCreateTableRequest,
+};
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::table_service_types::{IndexType, StoreType};
 use crate::Value;
@@ -25,7 +27,7 @@ fn raw_request(options: CreateTableOptions) -> RawCreateTableRequest {
     RawCreateTableRequest {
         session_id: "session".into(),
         path: "db/table".into(),
-        options,
+        options: RawCreateTableOptions::try_from(options).unwrap(),
         operation_params: operation_params(),
     }
 }
@@ -33,7 +35,7 @@ fn raw_request(options: CreateTableOptions) -> RawCreateTableRequest {
 fn proto_from_options(
     options: CreateTableOptions,
 ) -> ydb_grpc::ydb_proto::table::CreateTableRequest {
-    raw_request(options).try_into_proto().unwrap()
+    raw_request(options).into()
 }
 
 fn basic_options() -> CreateTableOptions {
@@ -154,7 +156,7 @@ fn create_table_options_builder_uniform_partitions() {
 #[test]
 fn try_from_raw_create_table_request() {
     let req = raw_request(basic_options());
-    let proto: ydb_grpc::ydb_proto::table::CreateTableRequest = req.try_into().unwrap();
+    let proto: ydb_grpc::ydb_proto::table::CreateTableRequest = req.into();
     assert_eq!(proto.path, "db/table");
 }
 
