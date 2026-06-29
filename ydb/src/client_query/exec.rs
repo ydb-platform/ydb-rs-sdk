@@ -18,7 +18,7 @@ use crate::grpc_wrapper::raw_query_service::transaction_control::{
 use crate::types::Value;
 use crate::{QueryTransactionOptions, QueryTxMode};
 
-use crate::session_pool::{SessionPool, SessionPoolLease};
+use crate::session_pool::{spawn_pool_release, SessionPool, SessionPoolLease};
 
 const DEFAULT_RETRY_BUDGET: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
@@ -585,7 +585,54 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
     }
     release_tx_session_handling_error(tx, rollback_err.as_ref()).await;
     tx.finished = true;
-    Ok(())
+    match rollback_err {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
+/// Best-effort rollback when [`super::QueryTransaction`] is dropped without `commit`/`rollback`.
+pub(crate) fn spawn_query_tx_rollback_on_drop(ctx: &mut TransactionExecContext) {
+    let tx_id = ctx.tx_id.take();
+    let Some(mut lease) = ctx.pooled_lease.take() else {
+        ctx.query_node = None;
+        return;
+    };
+    let connection_manager = ctx.connection_manager.clone();
+    let query_node = ctx.query_node.take();
+
+    if tx_id.as_ref().is_none_or(String::is_empty) {
+        lease.invalidate_session();
+        spawn_pool_release(async move {
+            lease.return_to_pool().await;
+        });
+        return;
+    }
+
+    let tx_id = tx_id.expect("checked Some");
+    spawn_pool_release(async move {
+        let session_id = lease.session_id().to_string();
+        let client_result = if let Some(uri) = query_node {
+            connection_manager
+                .get_auth_service_to_node(RawQueryClient::new, &uri)
+                .await
+        } else {
+            connection_manager
+                .get_auth_service(RawQueryClient::new)
+                .await
+        };
+        let rollback_ok = match client_result {
+            Ok(mut client) => client
+                .rollback_transaction(&session_id, &tx_id)
+                .await
+                .is_ok(),
+            Err(_) => false,
+        };
+        if !rollback_ok {
+            lease.invalidate_session();
+        }
+        lease.return_to_pool().await;
+    });
 }
 
 pub(crate) fn transaction_exec_context(

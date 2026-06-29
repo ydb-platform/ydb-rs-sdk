@@ -58,6 +58,11 @@ where
 pub struct SessionPoolSettings {
     /// Maximum concurrent sessions (pool size limit).
     ///
+    /// Default is **50** (ydb-go-sdk parity). The legacy table-only pool defaulted to **1000**;
+    /// after upgrading, callers that relied on the old default should set
+    /// `SessionPoolSettings::new().with_limit(1000)` explicitly or tune via
+    /// [`crate::Client::with_session_pool`].
+    ///
     /// Normalized to at least 1 when a pool is created (`with_limit` and pool constructors
     /// apply the same rule).
     pub limit: usize,
@@ -222,6 +227,9 @@ impl Drop for SessionPoolLease {
     fn drop(&mut self) {
         if self.returned {
             return;
+        }
+        if self.use_guard {
+            self.invalidate_session();
         }
         self.end_use();
         let pool = self.pool.clone();

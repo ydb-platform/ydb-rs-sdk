@@ -21,7 +21,11 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use tracing::trace;
 
-/// YDB client
+/// YDB client.
+///
+/// The built-in session pool defaults to a limit of **50** concurrent sessions (shared by
+/// table and query clients). The legacy table-only pool used **1000**; use
+/// [`Self::with_session_pool`] with an explicit limit when migrating high-concurrency workloads.
 pub struct Client {
     credentials: DBCredentials,
     load_balancer: SharedLoadBalancer,

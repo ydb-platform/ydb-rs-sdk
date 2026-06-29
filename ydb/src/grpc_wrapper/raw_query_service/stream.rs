@@ -337,6 +337,10 @@ impl ExecuteQueryStream {
         self.pending_part.as_ref().and_then(tx_id_from_part)
     }
 
+    pub(crate) fn in_progress(&self) -> bool {
+        !self.finished
+    }
+
     /// Drop the gRPC stream without draining unread parts (sends RST_STREAM).
     pub fn cancel(&mut self) {
         if let Some(part) = self.pending_part.take() {

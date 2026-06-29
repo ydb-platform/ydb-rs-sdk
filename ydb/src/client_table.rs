@@ -435,7 +435,9 @@ impl TableClient {
             } else {
                 if self.transaction_options.mode != Mode::SerializableReadWrite {
                     return Err(YdbOrCustomerError::YDB(YdbError::Custom(
-                        "only serializable rw transactions allow to interactive mode".into(),
+                        "interactive retry_transaction requires Mode::SerializableReadWrite; \
+                         other modes (e.g. SnapshotReadOnly) are supported with autocommit: true"
+                            .into(),
                     )));
                 }
                 Box::new(self.create_interactive_transaction())

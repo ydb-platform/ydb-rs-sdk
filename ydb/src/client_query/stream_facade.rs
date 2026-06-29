@@ -31,9 +31,13 @@ impl Drop for QueryStream<'_> {
         }
         // Do not mark the transaction finished here: with_commit(true) requires
         // draining the stream and calling close() so the server can commit.
+        let dropped_mid_stream = self.stream.in_progress();
         self.stream.cancel();
         if let ExecCoreRef::Transaction(ctx) = &mut self.core {
             if let Some(lease) = &mut ctx.pooled_lease {
+                if dropped_mid_stream {
+                    lease.invalidate_session();
+                }
                 lease.end_use();
             }
         }

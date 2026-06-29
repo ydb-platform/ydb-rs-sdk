@@ -38,9 +38,9 @@ use crate::result::Row;
 use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{
-    check_retry_transaction_error, retry_wait, transaction_commit, transaction_ensure_begin,
-    transaction_exec_context, transaction_rollback, ClientExecContext, TransactionExecContext,
-    DEFAULT_QUERY_RETRY_BUDGET,
+    check_retry_transaction_error, retry_wait, spawn_query_tx_rollback_on_drop, transaction_commit,
+    transaction_ensure_begin, transaction_exec_context, transaction_rollback, ClientExecContext,
+    TransactionExecContext, DEFAULT_QUERY_RETRY_BUDGET,
 };
 
 /// Row-to-struct mapping (the sqlx `FromRow` analogue).
@@ -377,6 +377,17 @@ impl QueryTransaction {
     #[cfg(test)]
     pub(crate) fn tx_id_for_test(&self) -> Option<&str> {
         self.ctx.tx_id.as_deref()
+    }
+}
+
+impl Drop for QueryTransaction {
+    fn drop(&mut self) {
+        if self.state != TxState::Active || self.ctx.finished {
+            return;
+        }
+        self.state = TxState::RolledBack;
+        self.ctx.finished = true;
+        spawn_query_tx_rollback_on_drop(&mut self.ctx);
     }
 }
 
