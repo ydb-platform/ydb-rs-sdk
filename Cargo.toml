@@ -12,6 +12,12 @@ members = [
 [workspace.package]
 rust-version = "1.85"
 
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+large_enum_variant = "allow"
+
 [workspace.dependencies]
 # Versions of those crates should match, that's why all of them are here.
 prost = "0.14.1"
