@@ -6,7 +6,8 @@ use async_trait::async_trait;
 use slo_framework::kv::{Database, KvWorkload, Params};
 use slo_framework::{test_row_from_row, Framework, RowID, TestRow, Workload};
 use ydb::{
-    ydb_params, ClientBuilder, Query, QuerySessionPoolSettings, TableClient, YdbOrCustomerError,
+    ydb_params, ClientBuilder, Query, QuerySessionPoolSettings, TableClient, TransactionOptions,
+    YdbOrCustomerError,
 };
 
 pub struct Storage {
@@ -42,7 +43,12 @@ impl Storage {
             .map_err(|err| err.to_string())?;
 
         Ok(Self {
-            table_client: client.table_client().clone_with_idempotent_operations(true),
+            table_client: client
+                .table_client()
+                .clone_with_idempotent_operations(true)
+                .clone_with_transaction_options(
+                    TransactionOptions::default().with_autocommit(true),
+                ),
             table_path: params.table_path.clone(),
             read_timeout: params.read_timeout,
             write_timeout: params.write_timeout,

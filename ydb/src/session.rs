@@ -456,6 +456,37 @@ mod discard_session_tests {
             "customer".into()
         )));
     }
+
+    #[test]
+    fn discard_from_pool_clears_can_pooled() {
+        use crate::client::TimeoutSettings;
+        use crate::grpc_connection_manager::GrpcConnectionManager;
+        use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
+        use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+        use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+        use crate::session::NodePinnedTableClient;
+        use http::Uri;
+
+        let mut session = Session::new(
+            "test-session".to_string(),
+            NodePinnedTableClient::new(
+                GrpcConnectionManager::new(
+                    SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
+                        Uri::from_static("http://127.0.0.1/bench"),
+                    ))),
+                    "bench".to_string(),
+                    MultiInterceptor::new(),
+                    None,
+                    DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+                ),
+                Uri::from_static("http://127.0.0.1/bench"),
+            ),
+            TimeoutSettings::default(),
+        );
+        assert!(session.can_pooled);
+        session.discard_from_pool();
+        assert!(!session.can_pooled);
+    }
 }
 
 #[async_trait::async_trait]

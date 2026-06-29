@@ -187,9 +187,30 @@ impl Drop for SerializableReadWriteTx {
             session.discard_from_pool();
             return;
         }
+        // Successful read-only interactive txs keep the session poolable; rollback runs
+        // in the background while the lease is still held via `Session` until it completes.
         tokio::spawn(async move {
             let _ = session.rollback_transaction(tx_id.unwrap()).await;
         });
+    }
+}
+
+/// Whether an unfinished interactive transaction should mark its session non-poolable on drop.
+#[cfg(test)]
+pub(crate) fn unfinished_interactive_tx_drop_discards_session(tx_id: &Option<String>) -> bool {
+    tx_id.is_none()
+}
+
+#[cfg(test)]
+mod drop_policy_tests {
+    use super::unfinished_interactive_tx_drop_discards_session;
+
+    #[test]
+    fn discard_only_when_tx_id_missing() {
+        assert!(unfinished_interactive_tx_drop_discards_session(&None));
+        assert!(!unfinished_interactive_tx_drop_discards_session(&Some(
+            "tx-1".to_string()
+        )));
     }
 }
 

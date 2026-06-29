@@ -1,6 +1,9 @@
 mod query_pool;
 mod table_pool;
 
+#[cfg(test)]
+mod regression_tests;
+
 pub use query_pool::{QuerySessionPoolSettings, QuerySessionPoolStats};
 
 pub(crate) use query_pool::{QuerySessionLease, QuerySessionPool};

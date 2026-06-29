@@ -246,9 +246,11 @@ struct QuerySessionPoolInner {
     on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync>,
     create_in_progress: AtomicUsize,
     sessions_created: AtomicU64,
-    /// Stub create/close paths without RPC (see `session_pool_bench`).
+    /// Stub create/close paths without RPC (see `session_pool_bench` and regression tests).
     #[cfg(test)]
     bench_mode: bool,
+    #[cfg(test)]
+    bench_create_failures_remaining: AtomicUsize,
 }
 
 impl QuerySessionPool {
@@ -288,6 +290,8 @@ impl QuerySessionPool {
                 sessions_created: AtomicU64::new(0),
                 #[cfg(test)]
                 bench_mode: false,
+                #[cfg(test)]
+                bench_create_failures_remaining: AtomicUsize::new(0),
             }
         });
 
@@ -564,6 +568,13 @@ impl QuerySessionPoolInner {
 
     #[cfg(test)]
     async fn create_explicit_session_bench(&self) -> YdbResult<ExplicitIdleItem> {
+        if self.bench_create_failures_remaining.load(Ordering::SeqCst) > 0 {
+            self.bench_create_failures_remaining
+                .fetch_sub(1, Ordering::SeqCst);
+            return Err(YdbError::Transport(
+                "bench injected create session failure".to_string(),
+            ));
+        }
         static BENCH_SESSION_COUNTER: AtomicU64 = AtomicU64::new(0);
         let id = BENCH_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
         let node_uri = Uri::from_static("http://127.0.0.1/bench");
@@ -749,6 +760,7 @@ impl QuerySessionPool {
             create_in_progress: AtomicUsize::new(0),
             sessions_created: AtomicU64::new(0),
             bench_mode: true,
+            bench_create_failures_remaining: AtomicUsize::new(0),
         });
 
         if warm_up > 0 {
@@ -771,6 +783,24 @@ impl QuerySessionPool {
 
         Self { inner }
     }
+
+    /// Bench pool that fails the first `create_failures` explicit session creations (tests only).
+    #[cfg(test)]
+    pub(crate) fn new_explicit_bench_with_create_failures(
+        settings: QuerySessionPoolSettings,
+        create_failures: usize,
+    ) -> Self {
+        let mut pool = Self::new_explicit_bench(settings);
+        pool.inner
+            .bench_create_failures_remaining
+            .store(create_failures, Ordering::SeqCst);
+        pool
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn warm_up_for_tests(&self, count: usize) -> YdbResult<()> {
+        QuerySessionPoolInner::warm_up_parallel(self.inner.clone(), count).await
+    }
 }
 
 #[cfg(test)]
@@ -786,13 +816,23 @@ mod unit_tests {
     }
 
     #[test]
-    fn normalize_pool_settings_enforces_minimum_limit() {
+    fn normalize_pool_settings_clamps_warm_up_to_limit() {
         let settings = normalize_pool_settings(QuerySessionPoolSettings {
             limit: 0,
-            warm_up: 0,
+            warm_up: 100,
             ..QuerySessionPoolSettings::default()
         });
         assert_eq!(settings.limit, 1);
+        assert_eq!(settings.warm_up, 1);
+    }
+
+    #[test]
+    fn default_session_pool_settings_matches_driver() {
+        use crate::session_pool::default_session_pool_settings;
+        assert_eq!(
+            default_session_pool_settings().limit,
+            QuerySessionPoolSettings::default().limit
+        );
     }
 
     #[test]
