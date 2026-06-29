@@ -1,12 +1,12 @@
 //! Regression tests for session-pool corner cases found during PR #501 / native-table SLO work.
 
-use super::query_pool::{QuerySessionPool, QuerySessionPoolSettings};
+use super::query_pool::{QuerySessionPool, SessionPoolSettings};
 use crate::errors::YdbError;
 
 #[tokio::test]
 async fn warm_up_partial_keeps_successful_sessions() {
     let pool = QuerySessionPool::new_explicit_bench_with_create_failures(
-        QuerySessionPoolSettings::new().with_limit(10),
+        SessionPoolSettings::new().with_limit(10),
         2,
     );
     pool.warm_up_for_tests(5)
@@ -20,7 +20,7 @@ async fn warm_up_partial_keeps_successful_sessions() {
 #[tokio::test]
 async fn warm_up_fails_when_every_create_fails() {
     let pool = QuerySessionPool::new_explicit_bench_with_create_failures(
-        QuerySessionPoolSettings::new().with_limit(10),
+        SessionPoolSettings::new().with_limit(10),
         3,
     );
     let err = pool
@@ -38,7 +38,7 @@ async fn warm_up_fails_when_every_create_fails() {
 #[tokio::test]
 async fn acquire_reuses_idle_session() {
     let pool = QuerySessionPool::new_explicit_bench(
-        QuerySessionPoolSettings::new()
+        SessionPoolSettings::new()
             .with_limit(2)
             .with_warm_up(1),
     );
@@ -54,7 +54,7 @@ async fn acquire_reuses_idle_session() {
 #[tokio::test]
 async fn acquire_skips_invalidated_idle_session() {
     let pool = QuerySessionPool::new_explicit_bench(
-        QuerySessionPoolSettings::new()
+        SessionPoolSettings::new()
             .with_limit(2)
             .with_warm_up(0),
     );
@@ -91,7 +91,7 @@ async fn bad_session_marks_table_session_non_poolable() {
 
     let pool = SessionPool::from_shared(
         QuerySessionPool::new_explicit_bench(
-            QuerySessionPoolSettings::new()
+            SessionPoolSettings::new()
                 .with_limit(2)
                 .with_warm_up(1),
         ),
@@ -115,4 +115,54 @@ async fn bad_session_marks_table_session_non_poolable() {
         issues: vec![],
     }));
     assert!(!session.can_pooled);
+}
+
+#[tokio::test]
+async fn item_usage_limit_closes_session_on_return() {
+    let pool = QuerySessionPool::new_explicit_bench(
+        SessionPoolSettings::new()
+            .with_limit(2)
+            .with_item_usage_limit(1),
+    );
+    let created_before = pool.stats().sessions_created;
+
+    let lease = pool.acquire_explicit().await.expect("first acquire");
+    let first_id = lease.session_id().to_string();
+    lease.return_to_pool().await;
+
+    assert_eq!(pool.stats().idle, 0, "session must be closed after one use");
+
+    let lease = pool.acquire_explicit().await.expect("second acquire");
+    assert_ne!(lease.session_id(), first_id);
+    assert!(
+        pool.stats().sessions_created > created_before,
+        "pool should create a replacement session"
+    );
+    lease.return_to_pool().await;
+}
+
+#[tokio::test]
+async fn warm_up_overflow_respects_pool_limit() {
+    let pool = QuerySessionPool::new_explicit_bench(
+        SessionPoolSettings::new()
+            .with_limit(2)
+            .with_warm_up(5),
+    );
+    pool.warm_up_for_tests(5)
+        .await
+        .expect("warm-up should succeed");
+    let stats = pool.stats();
+    assert_eq!(stats.idle, 2, "idle stack must not exceed pool limit");
+    assert_eq!(stats.sessions_created, 5);
+}
+
+#[tokio::test]
+async fn lease_begin_end_use_is_idempotent() {
+    let pool = QuerySessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+    let mut lease = pool.acquire_explicit().await.expect("acquire");
+    lease.begin_use();
+    lease.begin_use();
+    lease.end_use();
+    lease.end_use();
+    lease.return_to_pool().await;
 }

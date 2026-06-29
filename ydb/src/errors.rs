@@ -345,6 +345,16 @@ mod invalidate_tx_tests {
         assert!(!YdbError::Transport("timeout".into()).invalidates_server_transaction());
         assert!(!YdbError::Custom("x".into()).invalidates_server_transaction());
     }
+
+    #[test]
+    fn unknown_status_code_does_not_invalidate() {
+        let err = YdbError::YdbStatusError(YdbStatusError {
+            message: "unknown".into(),
+            operation_status: -1,
+            issues: vec![],
+        });
+        assert!(!err.invalidates_server_transaction());
+    }
 }
 
 to_custom_ydb_err!(

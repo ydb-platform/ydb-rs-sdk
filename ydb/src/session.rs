@@ -57,6 +57,20 @@ impl Drop for InFlightTableRpcGuard<'_> {
     }
 }
 
+/// Await a table RPC under [`InFlightTableRpcGuard`] (discard session on cancel/timeout).
+macro_rules! in_flight_table_rpc {
+    ($session:expr, $table:ident, $rpc:expr) => {{
+        let mut $table = $session.get_table_client().await?;
+        let mut guard = InFlightTableRpcGuard {
+            session: $session,
+            active: true,
+        };
+        let res = $rpc.await;
+        guard.active = false;
+        guard.session.handle_raw_result(res)
+    }};
+}
+
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub(crate) struct Session {
@@ -107,35 +121,29 @@ impl Session {
     }
 
     pub(crate) async fn commit_transaction(&mut self, tx_id: String) -> YdbResult<()> {
-        let mut table = self.get_table_client().await?;
-        let mut in_flight = InFlightTableRpcGuard {
-            session: self,
-            active: true,
-        };
-        let res = table
-            .commit_transaction(RawCommitTransactionRequest {
-                session_id: in_flight.session.id.clone(),
+        let session_id = self.id.clone();
+        let operation_params = self.timeouts.operation_params();
+        in_flight_table_rpc!(self, table, {
+            table.commit_transaction(RawCommitTransactionRequest {
+                session_id,
                 tx_id,
-                operation_params: in_flight.session.timeouts.operation_params(),
+                operation_params,
                 collect_stats: DEFAULT_COLLECT_STAT_MODE,
             })
-            .await;
-        in_flight.active = false;
-        in_flight.session.handle_raw_result(res)?;
+        })?;
         Ok(())
     }
 
     pub(crate) async fn execute_schema_query(&mut self, query: String) -> YdbResult<()> {
-        let res = self
-            .get_table_client()
-            .await?
-            .execute_scheme_query(RawExecuteSchemeQueryRequest {
-                session_id: self.id.clone(),
+        let session_id = self.id.clone();
+        let operation_params = self.timeouts.operation_params();
+        in_flight_table_rpc!(self, table, {
+            table.execute_scheme_query(RawExecuteSchemeQueryRequest {
+                session_id,
                 yql_text: query,
-                operation_params: self.timeouts.operation_params(),
+                operation_params,
             })
-            .await;
-        self.handle_raw_result(res)?;
+        })?;
         Ok(())
     }
 
@@ -154,10 +162,7 @@ impl Session {
             columns,
         };
 
-        let mut table_client = self.get_table_client().await?;
-        let raw_res = table_client.read_rows(req).await;
-
-        let raw_read_rows_response = self.handle_raw_result(raw_res)?;
+        let raw_read_rows_response = in_flight_table_rpc!(self, table, table.read_rows(req))?;
 
         raw_read_rows_response.result_set.try_into()
     }
@@ -174,8 +179,7 @@ impl Session {
             rows: raw_rows.into(),
             operation_params: self.timeouts.operation_params(),
         };
-        let res = self.get_table_client().await?.bulk_upsert(req).await;
-        self.handle_raw_result(res)?;
+        in_flight_table_rpc!(self, table, table.bulk_upsert(req))?;
         Ok(())
     }
 
@@ -217,20 +221,26 @@ impl Session {
         query: String,
         collect_full_diagnostics: bool,
     ) -> YdbResult<ExplainResult> {
-        let req = RawExplainDataQueryRequest {
-            session_id: self.id.clone(),
-            yql_text: query,
-            operation_params: self.timeouts.operation_params(),
-            collect_full_diagnostics,
-        };
-
         trace!(
             "request: {}",
-            ensure_len_string(serde_json::to_string(&req)?)
+            ensure_len_string(serde_json::to_string(&RawExplainDataQueryRequest {
+                session_id: self.id.clone(),
+                yql_text: query.clone(),
+                operation_params: self.timeouts.operation_params(),
+                collect_full_diagnostics,
+            })?)
         );
 
-        let res = self.get_table_client().await?.explain_data_query(req).await;
-        let res = self.handle_raw_result(res)?;
+        let session_id = self.id.clone();
+        let operation_params = self.timeouts.operation_params();
+        let res = in_flight_table_rpc!(self, table, {
+            table.explain_data_query(RawExplainDataQueryRequest {
+                session_id,
+                yql_text: query,
+                operation_params,
+                collect_full_diagnostics,
+            })
+        })?;
         trace!(
             "result: {}",
             ensure_len_string(serde_json::to_string(&res)?)
@@ -250,27 +260,36 @@ impl Session {
             "request: {}",
             crate::trace_helpers::ensure_len_string(serde_json::to_string(&req)?)
         );
-        let mut channel = self.get_channel().await?;
-        let resp = channel.stream_execute_scan_query(req).await?;
+        let mut in_flight = InFlightTableRpcGuard {
+            session: self,
+            active: true,
+        };
+        let mut channel = in_flight.session.get_channel().await?;
+        let resp = match channel.stream_execute_scan_query(req).await {
+            Ok(resp) => {
+                in_flight.active = false;
+                resp
+            }
+            Err(err) => {
+                let err = YdbError::from(err);
+                in_flight.session.handle_error(&err);
+                return Err(err);
+            }
+        };
         let stream = resp.into_inner();
         Ok(StreamResult { results: stream })
     }
 
     pub(crate) async fn rollback_transaction(&mut self, tx_id: String) -> YdbResult<()> {
-        let mut table = self.get_table_client().await?;
-        let mut in_flight = InFlightTableRpcGuard {
-            session: self,
-            active: true,
-        };
-        let res = table
-            .rollback_transaction(RawRollbackTransactionRequest {
-                session_id: in_flight.session.id.clone(),
+        let session_id = self.id.clone();
+        let operation_params = self.timeouts.operation_params();
+        in_flight_table_rpc!(self, table, {
+            table.rollback_transaction(RawRollbackTransactionRequest {
+                session_id,
                 tx_id,
-                operation_params: in_flight.session.timeouts.operation_params(),
+                operation_params,
             })
-            .await;
-        in_flight.active = false;
-        in_flight.session.handle_raw_result(res)
+        })
     }
 
     pub async fn copy_table(
@@ -278,43 +297,42 @@ impl Session {
         source_path: String,
         destination_path: String,
     ) -> YdbResult<()> {
-        let mut table = self.get_table_client().await?;
-        let res = table
-            .copy_table(RawCopyTableRequest {
-                session_id: self.id.clone(),
+        let session_id = self.id.clone();
+        let operation_params = self.timeouts.operation_params();
+        in_flight_table_rpc!(self, table, {
+            table.copy_table(RawCopyTableRequest {
+                session_id,
                 source_path,
                 destination_path,
-                operation_params: self.timeouts.operation_params(),
+                operation_params,
             })
-            .await;
-
-        self.handle_raw_result(res)
+        })?;
+        Ok(())
     }
 
     pub async fn copy_tables(&mut self, tables: Vec<CopyTableItem>) -> YdbResult<()> {
-        let mut table = self.get_table_client().await?;
-        let res = table
-            .copy_tables(RawCopyTablesRequest {
-                operation_params: self.timeouts.operation_params(),
-                session_id: self.id.clone(),
+        let session_id = self.id.clone();
+        let operation_params = self.timeouts.operation_params();
+        in_flight_table_rpc!(self, table, {
+            table.copy_tables(RawCopyTablesRequest {
+                operation_params,
+                session_id,
                 tables: tables.into_iter().map_into().collect(),
             })
-            .await;
-
-        self.handle_raw_result(res)
+        })?;
+        Ok(())
     }
 
     pub async fn describe_table(&mut self, path: String) -> YdbResult<TableDescription> {
-        let mut table = self.get_table_client().await?;
-        let res = table
-            .describe_table(RawDescribeTableRequest {
-                session_id: self.id.clone(),
+        let session_id = self.id.clone();
+        let operation_params = self.timeouts.operation_params();
+        let raw_result = in_flight_table_rpc!(self, table, {
+            table.describe_table(RawDescribeTableRequest {
+                session_id,
                 path: path.clone(),
-                operation_params: self.timeouts.operation_params(),
+                operation_params,
             })
-            .await;
-
-        let raw_result = self.handle_raw_result(res)?;
+        })?;
 
         let columns = raw_result
             .columns

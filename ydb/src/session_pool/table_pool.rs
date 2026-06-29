@@ -67,14 +67,14 @@ mod test {
     use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-    use crate::session_pool::{QuerySessionPool, QuerySessionPoolSettings};
+    use crate::session_pool::{QuerySessionPool, SessionPoolSettings};
     use http::Uri;
     use std::time::Duration;
     use tokio::sync::oneshot;
 
     fn bench_pool() -> QuerySessionPool {
         QuerySessionPool::new_explicit_bench(
-            QuerySessionPoolSettings::new()
+            SessionPoolSettings::new()
                 .with_limit(1)
                 .with_warm_up(1),
         )

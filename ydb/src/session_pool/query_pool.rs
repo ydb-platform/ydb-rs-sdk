@@ -14,7 +14,11 @@ use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::session::AttachedQuerySession;
 use crate::grpc_wrapper::raw_services::Service;
 
-/// Default pool size for [`QuerySessionPoolSettings::default()`] and the driver built-in pool.
+/// Default pool size for [`SessionPoolSettings::default()`] and the driver built-in pool.
+///
+/// Matches ydb-go-sdk `pool.DefaultLimit` (50). The legacy table-only session pool
+/// defaulted to 1000; callers migrating from that capacity should set
+/// `SessionPoolSettings::new().with_limit(1000)` explicitly.
 pub(crate) const DEFAULT_POOL_LIMIT: usize = 50;
 pub(crate) const DEFAULT_SESSION_CREATE_TIMEOUT: Duration = Duration::from_millis(500);
 pub(crate) const DEFAULT_SESSION_DELETE_TIMEOUT: Duration = Duration::from_millis(500);
@@ -29,7 +33,7 @@ impl Drop for CreateInProgressGuard<'_> {
     }
 }
 
-fn normalize_pool_settings(mut settings: QuerySessionPoolSettings) -> QuerySessionPoolSettings {
+fn normalize_pool_settings(mut settings: SessionPoolSettings) -> SessionPoolSettings {
     settings.limit = settings.limit.max(1);
     settings.warm_up = settings.warm_up.min(settings.limit);
     settings
@@ -49,9 +53,9 @@ where
     }
 }
 
-/// Settings for the Query Service session pool (explicit or implicit items).
+/// Settings for the driver session pool (CreateSession + AttachSession).
 #[derive(Clone, Debug)]
-pub struct QuerySessionPoolSettings {
+pub struct SessionPoolSettings {
     /// Maximum concurrent sessions (pool size limit).
     ///
     /// Normalized to at least 1 when a pool is created (`with_limit` and pool constructors
@@ -69,7 +73,7 @@ pub struct QuerySessionPoolSettings {
     pub session_delete_timeout: Duration,
 }
 
-impl Default for QuerySessionPoolSettings {
+impl Default for SessionPoolSettings {
     fn default() -> Self {
         Self {
             limit: DEFAULT_POOL_LIMIT,
@@ -85,7 +89,7 @@ impl Default for QuerySessionPoolSettings {
 
 /// Snapshot of query session pool counters (aligned with go-sdk `pool.Stats`).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct QuerySessionPoolStats {
+pub struct SessionPoolStats {
     /// Configured maximum concurrent in-flight sessions (`limit`).
     pub limit: usize,
     /// Configured warm-up target (`warm_up`).
@@ -102,7 +106,7 @@ pub struct QuerySessionPoolStats {
     pub sessions_created: u64,
 }
 
-impl QuerySessionPoolSettings {
+impl SessionPoolSettings {
     pub fn new() -> Self {
         Self::default()
     }
@@ -238,7 +242,7 @@ struct ExplicitIdleItem {
 }
 
 struct QuerySessionPoolInner {
-    settings: QuerySessionPoolSettings,
+    settings: SessionPoolSettings,
     acquire_timeout: Duration,
     connection_manager: GrpcConnectionManager,
     semaphore: Arc<Semaphore>,
@@ -258,7 +262,7 @@ impl QuerySessionPool {
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
         discovery: Arc<Box<dyn Discovery>>,
-        settings: QuerySessionPoolSettings,
+        settings: SessionPoolSettings,
     ) -> Self {
         let settings = normalize_pool_settings(settings);
         let limit = settings.limit;
@@ -302,7 +306,7 @@ impl QuerySessionPool {
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
         discovery: Arc<Box<dyn Discovery>>,
-        settings: QuerySessionPoolSettings,
+        settings: SessionPoolSettings,
     ) -> YdbResult<Self> {
         let settings = normalize_pool_settings(settings);
         let warm_up = settings.warm_up;
@@ -315,7 +319,7 @@ impl QuerySessionPool {
         Ok(pool)
     }
 
-    pub fn stats(&self) -> QuerySessionPoolStats {
+    pub fn stats(&self) -> SessionPoolStats {
         self.inner.stats()
     }
 
@@ -390,7 +394,7 @@ impl QuerySessionPoolInner {
         permit.map_err(|_| YdbError::Transport("query session pool closed".to_string()))
     }
 
-    fn stats(&self) -> QuerySessionPoolStats {
+    fn stats(&self) -> SessionPoolStats {
         let idle = self.explicit_idle.lock().expect("explicit idle lock").len();
         let permits_held = self
             .settings
@@ -401,7 +405,7 @@ impl QuerySessionPoolInner {
         // tracks Size separately from CreateInProgress). Warm-up creates do not hold permits.
         let creates_with_permit = create_in_progress.min(permits_held);
         let in_use = permits_held.saturating_sub(creates_with_permit);
-        QuerySessionPoolStats {
+        SessionPoolStats {
             limit: self.settings.limit,
             warm_up: self.settings.warm_up,
             size: idle + in_use,
@@ -705,7 +709,7 @@ impl Drop for QuerySessionPoolInner {
 }
 
 fn session_should_close(
-    settings: &QuerySessionPoolSettings,
+    settings: &SessionPoolSettings,
     use_count: u64,
     created: Instant,
     last_used: Instant,
@@ -729,7 +733,7 @@ fn session_should_close(
 #[cfg(test)]
 impl QuerySessionPool {
     /// Explicit pool backed by in-memory stub sessions (no CreateSession / Attach / Delete RPC).
-    pub(crate) fn new_explicit_bench(settings: QuerySessionPoolSettings) -> Self {
+    pub(crate) fn new_explicit_bench(settings: SessionPoolSettings) -> Self {
         use crate::grpc_connection_manager::GrpcConnectionManager;
         use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
         use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
@@ -785,9 +789,8 @@ impl QuerySessionPool {
     }
 
     /// Bench pool that fails the first `create_failures` explicit session creations (tests only).
-    #[cfg(test)]
     pub(crate) fn new_explicit_bench_with_create_failures(
-        settings: QuerySessionPoolSettings,
+        settings: SessionPoolSettings,
         create_failures: usize,
     ) -> Self {
         let pool = Self::new_explicit_bench(settings);
@@ -797,7 +800,6 @@ impl QuerySessionPool {
         pool
     }
 
-    #[cfg(test)]
     pub(crate) async fn warm_up_for_tests(&self, count: usize) -> YdbResult<()> {
         QuerySessionPoolInner::warm_up_parallel(self.inner.clone(), count).await
     }
@@ -809,7 +811,7 @@ mod unit_tests {
 
     #[test]
     fn default_session_pool_timeouts_are_500ms() {
-        let settings = QuerySessionPoolSettings::default();
+        let settings = SessionPoolSettings::default();
         assert_eq!(settings.limit, DEFAULT_POOL_LIMIT);
         assert_eq!(settings.session_create_timeout, Duration::from_millis(500));
         assert_eq!(settings.session_delete_timeout, Duration::from_millis(500));
@@ -817,10 +819,10 @@ mod unit_tests {
 
     #[test]
     fn normalize_pool_settings_clamps_warm_up_to_limit() {
-        let settings = normalize_pool_settings(QuerySessionPoolSettings {
+        let settings = normalize_pool_settings(SessionPoolSettings {
             limit: 0,
             warm_up: 100,
-            ..QuerySessionPoolSettings::default()
+            ..SessionPoolSettings::default()
         });
         assert_eq!(settings.limit, 1);
         assert_eq!(settings.warm_up, 1);
@@ -831,13 +833,13 @@ mod unit_tests {
         use crate::session_pool::default_session_pool_settings;
         assert_eq!(
             default_session_pool_settings().limit,
-            QuerySessionPoolSettings::default().limit
+            SessionPoolSettings::default().limit
         );
     }
 
     #[test]
     fn session_pool_timeout_builders_override_defaults() {
-        let settings = QuerySessionPoolSettings::new()
+        let settings = SessionPoolSettings::new()
             .with_session_create_timeout(Duration::from_secs(2))
             .with_session_delete_timeout(Duration::from_secs(3));
         assert_eq!(settings.session_create_timeout, Duration::from_secs(2));
@@ -846,11 +848,11 @@ mod unit_tests {
 
     #[test]
     fn session_should_close_respects_usage_limit_and_ttl() {
-        let settings = QuerySessionPoolSettings {
+        let settings = SessionPoolSettings {
             item_usage_limit: 3,
             item_usage_ttl: Duration::from_secs(60),
             idle_ttl: Duration::from_secs(30),
-            ..QuerySessionPoolSettings::default()
+            ..SessionPoolSettings::default()
         };
         let created = Instant::now();
         let last_used = Instant::now();

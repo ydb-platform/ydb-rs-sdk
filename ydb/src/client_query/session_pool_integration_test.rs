@@ -1,12 +1,12 @@
 use std::time::Duration;
 
-use crate::session_pool::QuerySessionPoolSettings;
+use crate::session_pool::SessionPoolSettings;
 use crate::test_integration_helper::create_client_with_session_pool;
 
 #[tokio::test]
 #[ignore] // need YDB access
 async fn query_client_reuses_driver_session_pool() {
-    let client = create_client_with_session_pool(QuerySessionPoolSettings::new().with_limit(2))
+    let client = create_client_with_session_pool(SessionPoolSettings::new().with_limit(2))
         .await
         .expect("client");
 
@@ -30,7 +30,7 @@ async fn query_client_reuses_driver_session_pool() {
 #[tokio::test]
 #[ignore] // need YDB access
 async fn query_client_returns_session_to_driver_pool_after_stream_drop() {
-    let client = create_client_with_session_pool(QuerySessionPoolSettings::new().with_limit(2))
+    let client = create_client_with_session_pool(SessionPoolSettings::new().with_limit(2))
         .await
         .expect("client");
 
@@ -51,7 +51,7 @@ async fn query_client_returns_session_to_driver_pool_after_stream_drop() {
 #[tokio::test]
 #[ignore] // need YDB access
 async fn table_and_query_clients_share_driver_session_pool() {
-    let client = create_client_with_session_pool(QuerySessionPoolSettings::new().with_limit(2))
+    let client = create_client_with_session_pool(SessionPoolSettings::new().with_limit(2))
         .await
         .expect("client");
 
@@ -77,7 +77,7 @@ async fn table_and_query_clients_share_driver_session_pool() {
 #[tokio::test]
 #[ignore] // need YDB access
 async fn driver_session_pool_stats_reflect_active_and_idle() {
-    let client = create_client_with_session_pool(QuerySessionPoolSettings::new().with_limit(2))
+    let client = create_client_with_session_pool(SessionPoolSettings::new().with_limit(2))
         .await
         .expect("client");
 

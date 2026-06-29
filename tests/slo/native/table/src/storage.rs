@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use slo_framework::kv::{Database, KvWorkload, Params};
 use slo_framework::{test_row_from_row, Framework, RowID, TestRow, Workload};
 use ydb::{
-    ydb_params, ClientBuilder, Mode, Query, QuerySessionPoolSettings, TableClient,
+    ydb_params, ClientBuilder, Mode, Query, SessionPoolSettings, TableClient,
     TransactionOptions, YdbOrCustomerError,
 };
 
@@ -34,7 +34,7 @@ impl Storage {
         let session_rpc_timeout = params.read_timeout.max(params.write_timeout);
         let client = client
             .with_session_pool(
-                QuerySessionPoolSettings::new()
+                SessionPoolSettings::new()
                     .with_limit(pool_limit)
                     .with_warm_up(pool_limit)
                     .with_session_create_timeout(session_rpc_timeout)

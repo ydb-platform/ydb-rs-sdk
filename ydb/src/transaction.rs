@@ -189,6 +189,25 @@ impl SerializableReadWriteTx {
     }
 }
 
+#[cfg(test)]
+impl SerializableReadWriteTx {
+    pub(crate) fn table_tx_state_for_test(&self) -> TableTxState {
+        self.state
+    }
+
+    pub(crate) fn set_table_tx_state_for_test(&mut self, state: TableTxState) {
+        self.state = state;
+    }
+
+    pub(crate) fn apply_query_error_for_test(&mut self, err: &YdbError) {
+        self.on_query_error(err);
+    }
+
+    pub(crate) fn set_tx_id_for_test(&mut self, id: Option<String>) {
+        self.id = id;
+    }
+}
+
 impl Drop for SerializableReadWriteTx {
     // rollback if unfinished
     fn drop(&mut self) {
@@ -220,8 +239,35 @@ pub(crate) fn unfinished_interactive_tx_drop_discards_session(tx_id: &Option<Str
 
 #[cfg(test)]
 mod tx_state_tests {
+    use super::{SerializableReadWriteTx, TableTxState, Transaction};
+    use crate::client::TimeoutSettings;
     use crate::errors::{YdbError, YdbStatusError};
+    use crate::grpc_connection_manager::GrpcConnectionManager;
+    use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
+    use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+    use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+    use crate::session_pool::{QuerySessionPool, SessionPool, SessionPoolSettings};
+    use crate::transaction::Mode;
+    use crate::grpc_wrapper::raw_table_service::transaction_control::RawTxMode;
+    use http::Uri;
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
+
+    fn bench_table_tx() -> SerializableReadWriteTx {
+        let pool = SessionPool::from_shared(
+            QuerySessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(2)),
+            GrpcConnectionManager::new(
+                SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
+                    Uri::from_static("http://127.0.0.1/bench"),
+                ))),
+                "bench".to_string(),
+                MultiInterceptor::new(),
+                None,
+                DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+            ),
+            TimeoutSettings::default(),
+        );
+        SerializableReadWriteTx::new(pool, TimeoutSettings::default())
+    }
 
     #[test]
     fn operational_query_error_is_detected() {
@@ -232,6 +278,57 @@ mod tx_state_tests {
         });
         assert!(err.invalidates_server_transaction());
         assert!(!YdbError::Transport("timeout".into()).invalidates_server_transaction());
+    }
+
+    #[test]
+    fn snapshot_read_only_maps_to_raw_tx_mode() {
+        assert!(matches!(
+            RawTxMode::from(Mode::SnapshotReadOnly),
+            RawTxMode::SnapshotReadOnly
+        ));
+    }
+
+    #[test]
+    fn operational_query_error_invalidates_table_tx_state() {
+        let mut tx = bench_table_tx();
+        tx.set_tx_id_for_test(Some("tx-1".into()));
+        tx.apply_query_error_for_test(&YdbError::YdbStatusError(YdbStatusError {
+            message: "bad yql".into(),
+            operation_status: StatusCode::GenericError as i32,
+            issues: vec![],
+        }));
+        assert_eq!(tx.table_tx_state_for_test(), TableTxState::ServerInvalidated);
+        assert!(tx.id.is_none());
+    }
+
+    #[tokio::test]
+    async fn rollback_is_nop_after_commit_or_invalidation() {
+        let mut tx = bench_table_tx();
+        tx.set_table_tx_state_for_test(TableTxState::Committed);
+        assert!(tx.rollback().await.is_ok());
+
+        let mut tx = bench_table_tx();
+        tx.set_table_tx_state_for_test(TableTxState::ServerInvalidated);
+        assert!(tx.rollback().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn commit_after_rollback_fails() {
+        let mut tx = bench_table_tx();
+        tx.set_table_tx_state_for_test(TableTxState::RolledBack);
+        assert!(tx.commit().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn commit_and_rollback_nop_without_started_tx() {
+        let mut tx = bench_table_tx();
+        assert!(tx.commit().await.is_ok());
+        assert_eq!(tx.table_tx_state_for_test(), TableTxState::Committed);
+
+        let mut tx = bench_table_tx();
+        assert!(tx.rollback().await.is_ok());
+        assert_eq!(tx.table_tx_state_for_test(), TableTxState::RolledBack);
+        assert!(tx.rollback().await.is_ok(), "double rollback is nop");
     }
 }
 

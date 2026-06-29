@@ -1,7 +1,7 @@
 use crate::client::Client;
 use crate::client::TimeoutSettings;
 use crate::errors::{YdbError, YdbResult};
-use crate::session_pool::QuerySessionPoolSettings;
+use crate::session_pool::SessionPoolSettings;
 use crate::test_helpers::test_custom_ca_client_builder;
 use crate::test_helpers::{test_client_builder, test_with_password_builder};
 use crate::Executor;
@@ -53,7 +53,7 @@ pub(crate) async fn create_client() -> YdbResult<Arc<Client>> {
 
 #[tracing::instrument]
 pub(crate) async fn create_client_with_session_pool(
-    settings: QuerySessionPoolSettings,
+    settings: SessionPoolSettings,
 ) -> YdbResult<Arc<Client>> {
     let client = test_client_builder()
         .with_executor(Arc::new(InplaceExecutor))

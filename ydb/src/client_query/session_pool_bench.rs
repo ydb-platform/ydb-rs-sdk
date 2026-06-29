@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::session_pool::{QuerySessionPool, QuerySessionPoolSettings};
+use crate::session_pool::{QuerySessionPool, SessionPoolSettings};
 
 const BENCH_POOL_LIMIT: usize = 500;
 const BENCH_PREFILL_ITEMS: usize = BENCH_POOL_LIMIT / 3;
@@ -20,7 +20,7 @@ const BENCH_ITERS_PER_GOROUTINE: usize = 10_000;
 
 fn new_bench_pool() -> QuerySessionPool {
     QuerySessionPool::new_explicit_bench(
-        QuerySessionPoolSettings::new()
+        SessionPoolSettings::new()
             .with_limit(BENCH_POOL_LIMIT)
             .with_warm_up(BENCH_PREFILL_ITEMS),
     )

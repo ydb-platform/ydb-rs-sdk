@@ -673,4 +673,45 @@ mod unit_tests {
         assert!(wait2 >= wait1);
         assert!(retry_wait(10, budget, budget).is_none());
     }
+
+    #[tokio::test]
+    async fn transaction_rollback_is_nop_when_finished() {
+        use crate::client::TimeoutSettings;
+        use crate::client_query::QueryTransactionOptions;
+        use crate::grpc_connection_manager::GrpcConnectionManager;
+        use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
+        use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+        use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+        use crate::session_pool::{QuerySessionPool, SessionPoolSettings};
+        use http::Uri;
+        use ydb_grpc::ydb_proto::status_ids::StatusCode;
+
+        let mut ctx = transaction_exec_context(
+            GrpcConnectionManager::new(
+                SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
+                    Uri::from_static("http://127.0.0.1/bench"),
+                ))),
+                "bench".to_string(),
+                MultiInterceptor::new(),
+                None,
+                DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+            ),
+            TimeoutSettings::default(),
+            QuerySessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
+            QueryTransactionOptions::default(),
+        );
+        ctx.tx_id = Some("tx-1".into());
+        ctx.finished = true;
+        transaction_mark_invalidated_on_query_error(
+            &mut ctx,
+            &YdbError::YdbStatusError(crate::errors::YdbStatusError {
+                message: "bad".into(),
+                operation_status: StatusCode::GenericError as i32,
+                issues: vec![],
+            }),
+        );
+        assert!(ctx.finished);
+        assert!(ctx.tx_id.is_none());
+        transaction_rollback(&mut ctx).await.expect("rollback nop");
+    }
 }
