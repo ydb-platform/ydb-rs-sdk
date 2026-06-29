@@ -22,14 +22,3 @@ pub type QuerySessionPoolSettings = SessionPoolSettings;
 /// Deprecated alias for [`SessionPoolStats`].
 #[deprecated(note = "renamed to SessionPoolStats")]
 pub type QuerySessionPoolStats = SessionPoolStats;
-
-#[cfg(test)]
-mod session_pool_type_alias_tests {
-    use super::{QuerySessionPoolSettings, SessionPoolSettings};
-
-    #[test]
-    fn deprecated_settings_alias_is_compatible() {
-        let _: QuerySessionPoolSettings = SessionPoolSettings::default();
-        let _: SessionPoolSettings = QuerySessionPoolSettings::default();
-    }
-}

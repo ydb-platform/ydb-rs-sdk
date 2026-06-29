@@ -1,5 +1,6 @@
-use super::{QueryTransactionOptions, QueryTxMode, SessionPoolSettings};
+use super::{QueryTransactionOptions, QueryTxMode};
 use crate::errors::YdbResult;
+use crate::session_pool::SessionPoolSettings;
 use crate::test_integration_helper::{create_client, create_client_with_session_pool};
 use crate::types::Value;
 use crate::ydb_struct;

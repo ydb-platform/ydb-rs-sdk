@@ -148,7 +148,7 @@ pub(crate) struct SerializableReadWriteTx {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TableTxState {
+pub(crate) enum TableTxState {
     Active,
     Committed,
     RolledBack,
@@ -191,19 +191,19 @@ impl SerializableReadWriteTx {
 
 #[cfg(test)]
 impl SerializableReadWriteTx {
-    pub(crate) fn table_tx_state_for_test(&self) -> TableTxState {
+    fn table_tx_state_for_test(&self) -> TableTxState {
         self.state
     }
 
-    pub(crate) fn set_table_tx_state_for_test(&mut self, state: TableTxState) {
+    fn set_table_tx_state_for_test(&mut self, state: TableTxState) {
         self.state = state;
     }
 
-    pub(crate) fn apply_query_error_for_test(&mut self, err: &YdbError) {
+    fn apply_query_error_for_test(&mut self, err: &YdbError) {
         self.on_query_error(err);
     }
 
-    pub(crate) fn set_tx_id_for_test(&mut self, id: Option<String>) {
+    fn set_tx_id_for_test(&mut self, id: Option<String>) {
         self.id = id;
     }
 }

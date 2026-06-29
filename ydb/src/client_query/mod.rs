@@ -400,7 +400,6 @@ impl QueryExecutor for QueryTransaction {
     }
 }
 
-use crate::session_pool::SessionPoolSettings;
 pub use builders::{
     CallBuilder, ClientOneShot, ExecBuilder, ExecCall, Interactive, OneResultSet, OneRow,
     OptionalRow, OptionalRowBuilder, QueryExecutor, QueryRowBuilder, QueryStreamBuilder,

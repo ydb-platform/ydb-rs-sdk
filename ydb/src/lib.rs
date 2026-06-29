@@ -149,6 +149,8 @@ pub use client_topic::topicwriter::writer_options::{
 };
 // full enum pub types
 pub use client::{Client, SessionPoolSettings, SessionPoolStats, TimeoutSettings};
+#[allow(deprecated)]
+pub use session_pool::{QuerySessionPoolSettings, QuerySessionPoolStats};
 
 // full enum pub types
 pub use client_builder::ClientBuilder;
