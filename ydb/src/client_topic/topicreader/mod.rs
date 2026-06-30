@@ -5,6 +5,6 @@ pub(crate) mod partition_state;
 pub(crate) mod reader;
 pub(crate) mod reader_options;
 mod reconnector;
-mod storage;
+mod runtime;
 mod task_supervisor;
 mod tokenizer;

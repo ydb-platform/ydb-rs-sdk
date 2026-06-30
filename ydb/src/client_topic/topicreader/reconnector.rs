@@ -17,19 +17,19 @@ use super::decompressor::Decompressor;
 use super::grpc_streamer::GrpcStreamer;
 use super::messages::MessageBatch;
 use super::reader_options::TopicReaderOptions;
-use super::storage::SharedStorage;
+use super::runtime;
 use super::task_supervisor::{is_retriable, wait_child_tasks};
 use super::tokenizer::Tokenizer;
 
-pub(super) struct Context {
+pub(super) struct ConnectionAttempt {
     pub(super) manager: GrpcConnectionManager,
     pub(super) options: TopicReaderOptions,
     pub(super) token_cache: TokenCache,
     pub(super) compression_executor: Arc<dyn Executor>,
 
-    pub(super) cancellation: CancellationToken,
+    pub(super) cancellation_token: CancellationToken,
 
-    pub(super) connection_epoch: usize,
+    pub(super) epoch: usize,
     pub(super) reader_id: usize,
 }
 
@@ -45,27 +45,27 @@ pub(super) struct Context {
 ///
 /// Errors bubble up from tasks to the reconnector:
 /// - Retriable: cancel the current connection's tasks, bump the epoch, establish a new connection.
-/// - Non-retriable: write the error into [`SharedStorage`] (so the next
-///   [`pop_batch`](SharedStorage::pop_batch) call returns it) and stop.
+/// - Non-retriable: write the error into [`RuntimeHandle`](runtime::RuntimeHandle) (so the next
+///   [`pop_batch`](runtime::RuntimeHandle::pop_batch) call returns it) and stop.
 ///
 /// Dropping [`TopicReader`](super::reader::TopicReader) cancels the outer token, which makes the loop
 /// return immediately without waiting for in-flight tasks. Cancelling
-/// [`pop_batch`](SharedStorage::pop_batch) mid-flight is always safe: after
+/// [`pop_batch`](runtime::RuntimeHandle::pop_batch) mid-flight is always safe: after
 /// reconnect the server redelivers all messages since the last committed offset.
 pub(super) struct Reconnector {
     manager: GrpcConnectionManager,
     reader_options: TopicReaderOptions,
     token_cache: TokenCache,
     compression_executor: Arc<dyn Executor>,
-    pub(super) shared_storage: SharedStorage,
-    cancellation: CancellationToken,
+    pub(super) runtime: runtime::RuntimeHandle,
+    cancellation_token: CancellationToken,
     reader_id: usize,
 }
 
-pub(super) struct RunningReconnector {
-    pub(super) handle: JoinHandle<YdbResult<()>>,
-    pub(super) shared_storage: SharedStorage,
-    pub(super) cancellation: CancellationToken,
+pub(super) struct ReconnectorTask {
+    pub(super) join_handle: JoinHandle<YdbResult<()>>,
+    pub(super) runtime: runtime::RuntimeHandle,
+    pub(super) cancellation_token: CancellationToken,
 }
 
 impl Reconnector {
@@ -74,46 +74,46 @@ impl Reconnector {
         reader_options: TopicReaderOptions,
         token_cache: TokenCache,
         compression_executor: Arc<dyn Executor>,
-        cancellation: CancellationToken,
+        cancellation_token: CancellationToken,
         reader_id: usize,
     ) -> Self {
-        let shared_storage = SharedStorage::connecting();
+        let runtime = runtime::RuntimeHandle::new();
 
         Self {
             manager,
             reader_options,
             token_cache,
             compression_executor,
-            shared_storage,
-            cancellation,
+            runtime,
+            cancellation_token,
             reader_id,
         }
     }
 
-    pub(super) fn run(self) -> RunningReconnector {
-        let shared_storage = self.shared_storage.clone();
-        let cancellation = self.cancellation.clone();
-        let handle = tokio::spawn(self.run_task());
+    pub(super) fn run(self) -> ReconnectorTask {
+        let runtime = self.runtime.clone();
+        let cancellation_token = self.cancellation_token.clone();
+        let join_handle = tokio::spawn(self.run_task());
 
-        RunningReconnector {
-            handle,
-            shared_storage,
-            cancellation,
+        ReconnectorTask {
+            join_handle,
+            runtime,
+            cancellation_token,
         }
     }
 
     async fn run_task(self) -> YdbResult<()> {
-        let shared_storage = self.shared_storage.clone();
-        let cancellation = self.cancellation.clone();
+        let runtime = self.runtime.clone();
+        let cancellation_token = self.cancellation_token.clone();
 
         tokio::select! {
-            _ = cancellation.cancelled() => {
+            _ = cancellation_token.cancelled() => {
                 Ok(())
             }
 
             err = self.reconnect_loop() => {
                 let Err(err) = err;
-                let _ = shared_storage.fail(&err);
+                let _ = runtime.fail(&err);
                 Err(err)
             }
         }
@@ -125,25 +125,25 @@ impl Reconnector {
             reader_options,
             token_cache,
             compression_executor,
-            shared_storage,
-            cancellation,
+            runtime,
+            cancellation_token,
             reader_id,
         } = self;
 
-        let mut ctx = Context {
+        let mut attempt_ctx = ConnectionAttempt {
             manager,
             options: reader_options,
             token_cache,
             compression_executor,
-            cancellation: cancellation.child_token(),
-            connection_epoch: 0,
+            cancellation_token: cancellation_token.child_token(),
+            epoch: 0,
             reader_id,
         };
 
         loop {
             info!(
-                reader_id = ctx.reader_id,
-                connection_epoch = ctx.connection_epoch,
+                reader_id = attempt_ctx.reader_id,
+                epoch = attempt_ctx.epoch,
                 "topic reader reconnector starting connection"
             );
 
@@ -151,21 +151,21 @@ impl Reconnector {
             let mut attempt = 0;
 
             let tasks = loop {
-                match Self::establish(&ctx, &shared_storage).await {
+                match Self::establish(&attempt_ctx, &runtime).await {
                     Ok(tasks) => break tasks,
 
                     Err(err) if is_retriable(&err) => {
                         warn!(
                             error = %err,
-                            reader_id = ctx.reader_id,
-                            epoch = ctx.connection_epoch,
+                            reader_id = attempt_ctx.reader_id,
+                            epoch = attempt_ctx.epoch,
                             connect_attempt = attempt,
                             "topic reader connection setup failed, will retry"
                         );
 
                         wait_or_fail(
                             err,
-                            ctx.options.retrier.as_ref(),
+                            attempt_ctx.options.retrier.as_ref(),
                             attempt,
                             start_time.elapsed(),
                         )
@@ -182,22 +182,22 @@ impl Reconnector {
 
             info!(
                 connect_attempts = attempt,
-                reader_id = ctx.reader_id,
+                reader_id = attempt_ctx.reader_id,
                 time = ?start_time.elapsed(),
                 "topic reader connected"
             );
 
-            match Self::run_connection(&ctx, tasks).await {
+            match Self::run_connection(&attempt_ctx, tasks).await {
                 Err(err) if is_retriable(&err) => {
                     warn!(
                         error = %err,
-                        reader_id = ctx.reader_id,
-                        epoch = ctx.connection_epoch,
+                        reader_id = attempt_ctx.reader_id,
+                        epoch = attempt_ctx.epoch,
                         "topic reader connection failed, will reconnect"
                     );
-                    shared_storage.begin_connecting(YdbError::Transport(format!(
+                    runtime.enter_reconnecting(YdbError::Transport(format!(
                         "topic reader reconnect, dropping connection epoch {}: {err}",
-                        ctx.connection_epoch
+                        attempt_ctx.epoch
                     )))?;
                 }
 
@@ -207,32 +207,31 @@ impl Reconnector {
                 }
             }
 
-            ctx.cancellation = cancellation.child_token();
-            ctx.connection_epoch += 1;
+            attempt_ctx.cancellation_token = cancellation_token.child_token();
+            attempt_ctx.epoch += 1;
         }
     }
 
     async fn establish(
-        ctx: &Context,
-        shared_storage: &SharedStorage,
+        attempt_ctx: &ConnectionAttempt,
+        runtime: &runtime::RuntimeHandle,
     ) -> YdbResult<tokio::task::JoinSet<YdbResult<()>>> {
         let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
         let (decomp_input_tx, decomp_input_rx) = mpsc::unbounded_channel::<MessageBatch>();
 
         let grpc =
-            GrpcStreamer::new(ctx, decomp_input_tx, outgoing_rx, shared_storage.clone()).await?;
+            GrpcStreamer::new(attempt_ctx, decomp_input_tx, outgoing_rx, runtime.clone()).await?;
 
-        shared_storage.recreate(
-            outgoing_tx.clone(),
-            ctx.connection_epoch,
+        runtime.install_connection(
+            runtime::Connection::new(outgoing_tx.clone(), attempt_ctx.epoch),
             YdbError::Transport(format!(
                 "topic reader switching to connection epoch {}",
-                ctx.connection_epoch
+                attempt_ctx.epoch
             )),
         )?;
 
-        let decompressor = Decompressor::new(ctx, decomp_input_rx, shared_storage.clone());
-        let tokenizer = Tokenizer::new(ctx, outgoing_tx);
+        let decompressor = Decompressor::new(attempt_ctx, decomp_input_rx, runtime.clone());
+        let tokenizer = Tokenizer::new(attempt_ctx, outgoing_tx);
 
         let mut tasks: JoinSet<YdbResult<()>> = JoinSet::new();
         tasks.spawn(grpc.run());
@@ -242,8 +241,17 @@ impl Reconnector {
         Ok(tasks)
     }
 
-    async fn run_connection(ctx: &Context, tasks: JoinSet<YdbResult<()>>) -> YdbResult<Infallible> {
-        match wait_child_tasks(&ctx.cancellation, tasks, "topic reader connection").await {
+    async fn run_connection(
+        attempt_ctx: &ConnectionAttempt,
+        tasks: JoinSet<YdbResult<()>>,
+    ) -> YdbResult<Infallible> {
+        match wait_child_tasks(
+            &attempt_ctx.cancellation_token,
+            tasks,
+            "topic reader connection",
+        )
+        .await
+        {
             Ok(()) => Err(YdbError::custom("topic reader connection cancelled")),
             Err(err) => Err(err),
         }

@@ -24,14 +24,14 @@ use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::transaction::{Transaction, TransactionInfo};
 use crate::{YdbError, YdbResult};
 
-use super::reconnector::{Reconnector, RunningReconnector};
-use super::storage::SharedStorage;
+use super::reconnector::{Reconnector, ReconnectorTask};
+use super::runtime::RuntimeHandle;
 
 pub struct TopicReader {
     manager: GrpcConnectionManager,
     options: TopicReaderOptions,
     reconnect_handle: JoinHandle<YdbResult<()>>,
-    shared_storage: SharedStorage,
+    runtime: RuntimeHandle,
     cancellation: CancellationToken,
 }
 
@@ -49,10 +49,10 @@ impl TopicReader {
         compression_executor: Arc<dyn Executor>,
     ) -> YdbResult<Self> {
         let cancellation = CancellationToken::new();
-        let RunningReconnector {
-            handle,
-            shared_storage,
-            cancellation,
+        let ReconnectorTask {
+            join_handle,
+            runtime,
+            cancellation_token,
         } = Reconnector::new(
             manager.clone(),
             options.clone(),
@@ -66,14 +66,14 @@ impl TopicReader {
         Ok(Self {
             manager,
             options,
-            reconnect_handle: handle,
-            shared_storage,
-            cancellation,
+            reconnect_handle: join_handle,
+            runtime,
+            cancellation: cancellation_token,
         })
     }
 
     pub async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
-        self.shared_storage.pop_batch(self.options.batch_size).await
+        self.runtime.pop_batch(self.options.batch_size).await
     }
 
     /// WARN: DO NOT USE IN PRODUCTION
@@ -102,7 +102,7 @@ impl TopicReader {
     ///
     /// Returns an error if the commit message could not be queued.
     pub fn commit(&mut self, commit_marker: TopicReaderCommitMarker) -> YdbResult<()> {
-        self.shared_storage.commit(commit_marker).map(|_| ())
+        self.runtime.commit(commit_marker).map(|_| ())
     }
 
     /// Sends a commit for the given [`TopicReaderCommitMarker`] and returns a
@@ -120,7 +120,7 @@ impl TopicReader {
         &mut self,
         commit_marker: TopicReaderCommitMarker,
     ) -> impl Future<Output = YdbResult<()>> {
-        let ack = self.shared_storage.commit(commit_marker);
+        let ack = self.runtime.commit(commit_marker);
 
         async {
             let ack = ack?;

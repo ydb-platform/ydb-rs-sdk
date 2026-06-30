@@ -28,7 +28,7 @@ use crate::{
 use super::messages::MessageBatch;
 use super::partition_state::PartitionSession;
 use super::reconnector;
-use super::storage::SharedStorage;
+use super::runtime;
 use super::task_supervisor::wait_child_tasks;
 
 const READER_BUFFER_SIZE: i64 = 1024 * 1024;
@@ -40,26 +40,26 @@ pub(super) struct GrpcStreamer {
     cancellation: CancellationToken,
     decompression_input_tx: mpsc::UnboundedSender<MessageBatch>,
     client_message_rx: mpsc::UnboundedReceiver<RawFromClientOneOf>,
-    shared_storage: SharedStorage,
-    connection_epoch: usize,
+    runtime: runtime::RuntimeHandle,
+    epoch: usize,
 }
 
 impl GrpcStreamer {
     pub(super) async fn new(
-        ctx: &reconnector::Context,
+        attempt: &reconnector::ConnectionAttempt,
         decompression_input_tx: mpsc::UnboundedSender<MessageBatch>,
         client_message_rx: mpsc::UnboundedReceiver<RawFromClientOneOf>,
-        shared_storage: SharedStorage,
+        runtime: runtime::RuntimeHandle,
     ) -> YdbResult<Self> {
-        let stream = grpc_connect(&ctx.manager, &ctx.options).await?;
+        let stream = grpc_connect(&attempt.manager, &attempt.options).await?;
 
         Ok(Self {
             stream,
-            cancellation: ctx.cancellation.clone(),
+            cancellation: attempt.cancellation_token.clone(),
             decompression_input_tx,
             client_message_rx,
-            shared_storage,
-            connection_epoch: ctx.connection_epoch,
+            runtime,
+            epoch: attempt.epoch,
         })
     }
 
@@ -69,8 +69,8 @@ impl GrpcStreamer {
             cancellation,
             decompression_input_tx,
             client_message_rx,
-            shared_storage,
-            connection_epoch,
+            runtime,
+            epoch,
         } = self;
 
         let client_message_tx = stream.clone_sender();
@@ -80,10 +80,10 @@ impl GrpcStreamer {
 
         tasks.spawn(receive_loop(
             stream,
-            shared_storage,
+            runtime,
             decompression_input_tx,
             stream_cancellation.clone(),
-            connection_epoch,
+            epoch,
         ));
 
         tasks.spawn(send_loop(
@@ -118,17 +118,17 @@ async fn grpc_connect(
 
 async fn receive_loop(
     stream: GrpcStream,
-    shared_storage: SharedStorage,
+    runtime: runtime::RuntimeHandle,
     decompression_input_tx: mpsc::UnboundedSender<MessageBatch>,
     cancellation: CancellationToken,
-    connection_epoch: usize,
+    epoch: usize,
 ) -> YdbResult<()> {
     select! {
         _ = cancellation.cancelled() => {
             debug!("topic reader grpc receive loop cancelled, stopping");
             Ok(())
         }
-        result = receive_messages(stream, shared_storage, decompression_input_tx, connection_epoch) => {
+        result = receive_messages(stream, runtime, decompression_input_tx, epoch) => {
             let Err(err) = result;
             Err(err)
         }
@@ -137,9 +137,9 @@ async fn receive_loop(
 
 async fn receive_messages(
     mut stream: GrpcStream,
-    shared_storage: SharedStorage,
+    runtime: runtime::RuntimeHandle,
     decompression_input_tx: mpsc::UnboundedSender<MessageBatch>,
-    connection_epoch: usize,
+    epoch: usize,
 ) -> YdbResult<Infallible> {
     let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
 
@@ -148,12 +148,7 @@ async fn receive_messages(
 
         match message {
             RawFromServer::ReadResponse(resp) => {
-                handle_read_response(
-                    resp,
-                    &mut sessions,
-                    &decompression_input_tx,
-                    connection_epoch,
-                )?;
+                handle_read_response(resp, &mut sessions, &decompression_input_tx, epoch)?;
             }
 
             RawFromServer::InitResponse(_) => {
@@ -166,7 +161,7 @@ async fn receive_messages(
                     .into_iter()
                     .map(|offset| (offset.partition_session_id, offset.committed_offset));
 
-                shared_storage.ack_commits(committed_iter)?;
+                runtime.ack_commits(committed_iter)?;
             }
 
             RawFromServer::StartPartitionSessionRequest(req) => {
@@ -200,7 +195,7 @@ async fn receive_messages(
                     // TODO: For graceful stops, delay response until buffered messages
                     // from this partition are processed and commits up to
                     // committed_offset are acknowledged.
-                    shared_storage.stop_partition(
+                    runtime.stop_partition(
                         partition_session_id,
                         Some(committed_offset),
                         &YdbError::custom(format!(

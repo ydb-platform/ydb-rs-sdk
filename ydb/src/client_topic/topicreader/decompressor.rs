@@ -17,7 +17,7 @@ use crate::{TopicReaderMessage, YdbError, YdbResult};
 
 use super::messages::MessageBatch;
 use super::reconnector;
-use super::storage::SharedStorage;
+use super::runtime::RuntimeHandle;
 use super::task_supervisor::wait_child_tasks;
 
 type BatchRx = mpsc::UnboundedReceiver<MessageBatch>;
@@ -26,27 +26,27 @@ pub(super) struct Decompressor {
     codec_registry: Arc<CodecRegistry>,
     executor: Arc<dyn Executor>,
     rx: BatchRx,
-    shared_storage: SharedStorage,
+    runtime: RuntimeHandle,
     cancellation: CancellationToken,
 }
 
 impl Decompressor {
     pub(super) fn new(
-        ctx: &reconnector::Context,
+        attempt: &reconnector::ConnectionAttempt,
         rx: BatchRx,
-        shared_storage: SharedStorage,
+        runtime: RuntimeHandle,
     ) -> Self {
         let mut codec_registry = CodecRegistry::new();
-        for dec in &ctx.options.extra_decoders {
+        for dec in &attempt.options.extra_decoders {
             codec_registry.register_decoder(dec.clone());
         }
 
         Self {
             codec_registry: Arc::new(codec_registry),
-            executor: ctx.compression_executor.clone(),
+            executor: attempt.compression_executor.clone(),
             rx,
-            shared_storage,
-            cancellation: ctx.cancellation.clone(),
+            runtime,
+            cancellation: attempt.cancellation_token.clone(),
         }
     }
 
@@ -55,7 +55,7 @@ impl Decompressor {
             codec_registry,
             executor,
             rx,
-            shared_storage,
+            runtime,
             cancellation,
         } = self;
 
@@ -71,11 +71,7 @@ impl Decompressor {
             parallelism,
             decompressor_cancellation.clone(),
         );
-        let forward = forward_loop(
-            results_rx,
-            shared_storage,
-            decompressor_cancellation.clone(),
-        );
+        let forward = forward_loop(results_rx, runtime, decompressor_cancellation.clone());
 
         let mut tasks: JoinSet<YdbResult<()>> = JoinSet::new();
         tasks.spawn(schedule);
@@ -142,7 +138,7 @@ async fn schedule_messages(
 
 async fn forward_loop(
     results_rx: TaskResultRx<Vec<TopicReaderMessage>>,
-    shared_storage: SharedStorage,
+    runtime: RuntimeHandle,
     cancellation: CancellationToken,
 ) -> YdbResult<()> {
     select! {
@@ -150,7 +146,7 @@ async fn forward_loop(
             debug!("decompressor forward cancelled, stopping");
             Ok(())
         }
-        result = forward_messages(results_rx, shared_storage) => {
+        result = forward_messages(results_rx, runtime) => {
             let Err(e) = result;
             Err(e)
         }
@@ -159,7 +155,7 @@ async fn forward_loop(
 
 async fn forward_messages(
     mut results_rx: TaskResultRx<Vec<TopicReaderMessage>>,
-    shared_storage: SharedStorage,
+    runtime: RuntimeHandle,
 ) -> YdbResult<Infallible> {
     loop {
         let Some(result_rx) = results_rx.recv().await else {
@@ -170,7 +166,7 @@ async fn forward_messages(
         let messages = result_rx
             .await
             .unwrap_or_else(|_| Err(YdbError::custom("executor decompression task panicked")))?;
-        shared_storage.push_batch(messages)?;
+        runtime.push_batch(messages)?;
     }
 }
 

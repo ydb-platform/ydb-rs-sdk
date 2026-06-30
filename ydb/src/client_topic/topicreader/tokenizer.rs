@@ -25,13 +25,13 @@ pub(super) struct Tokenizer {
 
 impl Tokenizer {
     pub(super) fn new(
-        ctx: &reconnector::Context,
+        attempt: &reconnector::ConnectionAttempt,
         outgoing_tx: mpsc::UnboundedSender<RawFromClientOneOf>,
     ) -> Self {
         Self {
-            token_cache: ctx.token_cache.clone(),
+            token_cache: attempt.token_cache.clone(),
             outgoing_tx,
-            cancellation: ctx.cancellation.clone(),
+            cancellation: attempt.cancellation_token.clone(),
         }
     }
 
