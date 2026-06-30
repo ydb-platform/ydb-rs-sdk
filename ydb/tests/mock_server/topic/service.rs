@@ -53,14 +53,10 @@ impl MockTopicService {
         while let Some(msg) = rx.recv().await {
             match msg {
                 TopicReply::StreamRead { stream_id, msg } => {
-                    topic_sender
-                        .send_to(stream_id, msg)
-                        .expect("mock topic read stream failed to send reply");
+                    let _ = topic_sender.send_to(stream_id, msg);
                 }
                 TopicReply::StreamWrite { stream_id, msg } => {
-                    write_sender
-                        .send_to(stream_id, msg)
-                        .expect("mock topic write stream failed to send reply");
+                    let _ = write_sender.send_to(stream_id, msg);
                 }
                 _ => {
                     unimplemented!()

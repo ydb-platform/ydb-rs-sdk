@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use ydb_grpc::ydb_proto::topic::{stream_read_message, stream_write_message};
 
 pub enum StreamCommand<T> {
@@ -16,6 +16,7 @@ pub type WriteStreamCommand = StreamCommand<stream_write_message::FromServer>;
 #[derive(Clone)]
 pub struct StreamSender<T> {
     streams: Arc<Mutex<BTreeMap<u64, mpsc::UnboundedSender<StreamCommand<T>>>>>,
+    latest_stream_id_tx: watch::Sender<Option<u64>>,
 }
 
 pub type ReadStreamSender = StreamSender<stream_read_message::FromServer>;
@@ -23,8 +24,10 @@ pub type WriteStreamSender = StreamSender<stream_write_message::FromServer>;
 
 impl<T> Default for StreamSender<T> {
     fn default() -> Self {
+        let (latest_stream_id_tx, _) = watch::channel(None);
         Self {
             streams: Arc::new(Mutex::new(BTreeMap::new())),
+            latest_stream_id_tx,
         }
     }
 }
@@ -64,14 +67,17 @@ impl<T> StreamSender<T> {
             .lock()
             .expect("stream sender mutex poisoned")
             .insert(stream_id, tx);
+        let _ = self.latest_stream_id_tx.send(Some(stream_id));
         rx
     }
 
     pub(crate) fn unregister_stream(&self, stream_id: u64) {
-        self.streams
-            .lock()
-            .expect("stream sender mutex poisoned")
-            .remove(&stream_id);
+        let latest_stream_id = {
+            let mut streams = self.streams.lock().expect("stream sender mutex poisoned");
+            streams.remove(&stream_id);
+            streams.keys().next_back().copied()
+        };
+        let _ = self.latest_stream_id_tx.send(latest_stream_id);
     }
 
     pub fn send_to(&self, stream_id: u64, msg: T) -> Result<(), StreamSenderError> {
@@ -93,6 +99,10 @@ impl<T> StreamSender<T> {
             .keys()
             .next_back()
             .copied()
+    }
+
+    pub fn subscribe_latest_stream_id(&self) -> watch::Receiver<Option<u64>> {
+        self.latest_stream_id_tx.subscribe()
     }
 
     fn dispatch(&self, stream_id: u64, cmd: StreamCommand<T>) -> Result<(), StreamSenderError> {
