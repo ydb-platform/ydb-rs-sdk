@@ -50,9 +50,7 @@ impl From<Mode> for TxMode {
                 allow_inconsistent_reads: true,
             }),
             Mode::SnapshotReadOnly => TxMode::SnapshotReadOnly(SnapshotModeSettings::default()),
-            Mode::SnapshotReadWrite => {
-                TxMode::SnapshotReadWrite(SnapshotRwModeSettings::default())
-            }
+            Mode::SnapshotReadWrite => TxMode::SnapshotReadWrite(SnapshotRwModeSettings::default()),
             Mode::StaleReadOnly => TxMode::StaleReadOnly(StaleModeSettings::default()),
             Mode::SerializableReadWrite => {
                 TxMode::SerializableReadWrite(SerializableModeSettings::default())
@@ -150,9 +148,7 @@ impl Transaction for AutoCommit {
         };
 
         let mut session = self.session_pool.session().await?;
-        return session
-            .execute_data_query(req, self.ignore_truncated)
-            .await;
+        return session.execute_data_query(req, self.ignore_truncated).await;
     }
 
     async fn commit(&mut self) -> YdbResult<()> {
@@ -458,9 +454,7 @@ impl Transaction for SerializableReadWriteTx {
             keep_in_cache: false,
             collect_stats: RawQueryStatMode::None,
         };
-        let query_result = session
-            .execute_data_query(req, self.ignore_truncated)
-            .await;
+        let query_result = session.execute_data_query(req, self.ignore_truncated).await;
         if let Err(err) = &query_result {
             self.on_query_error(err);
             return query_result;

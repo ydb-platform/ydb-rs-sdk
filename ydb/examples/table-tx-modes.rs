@@ -21,7 +21,9 @@ async fn main() -> YdbResult<()> {
         ("OnlineInconsistentRO", Mode::OnlineReadonlyInconsistent),
     ] {
         let client = table_client.clone_with_transaction_options(
-            TransactionOptions::new().with_mode(mode).with_autocommit(true),
+            TransactionOptions::new()
+                .with_mode(mode)
+                .with_autocommit(true),
         );
         match client
             .retry_transaction(|mut t| async move {

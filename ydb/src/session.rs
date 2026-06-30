@@ -3,9 +3,8 @@ use crate::client_table::TableServiceClientType;
 use crate::errors::{YdbError, YdbResult};
 use crate::query::Query;
 use crate::result::{QueryResult, StreamReadTableResult, StreamResult};
-use crate::table_requests::{PreparedDataQuery, ReadTableOptions};
+use crate::table_requests::ReadTableOptions;
 use derivative::Derivative;
-use itertools::Itertools;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use http::Uri;
@@ -17,17 +16,9 @@ use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_table_service::commit_transaction::RawCommitTransactionRequest;
 use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryRequest;
-use crate::grpc_wrapper::raw_table_service::query_stats::RawQueryStatMode;
-use crate::grpc_wrapper::raw_table_service::transaction_control::{
-    RawTransactionControl, RawTxSelector, RawTxSettings,
-};
-use crate::grpc_wrapper::raw_table_service::prepare_data_query::{
-    RawPrepareDataQueryRequest, RawPrepareDataQueryResult,
-};
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::grpc_wrapper::raw_table_service::stream_read_table::RawStreamReadTableRequest;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-use crate::transaction::Mode;
 use crate::trace_helpers::ensure_len_string;
 use tracing::{debug, trace};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
@@ -231,23 +222,6 @@ impl Session {
         })
     }
 
-    pub async fn prepare_data_query(
-        &mut self,
-        yql_text: String,
-    ) -> YdbResult<PreparedDataQuery> {
-        let req = RawPrepareDataQueryRequest {
-            session_id: self.id.clone(),
-            yql_text: yql_text.clone(),
-            operation_params: self.timeouts.operation_params(),
-        };
-        let raw: RawPrepareDataQueryResult =
-            in_flight_table_rpc!(self, table, table.prepare_data_query(req))?;
-        Ok(PreparedDataQuery {
-            query_id: raw.query_id,
-            yql_text,
-        })
-    }
-
     pub async fn stream_read_table(
         &mut self,
         path: String,
@@ -279,50 +253,6 @@ impl Session {
         in_flight.active = false;
         let stream = in_flight.session.handle_raw_result(stream)?;
         Ok(StreamReadTableResult { parts: stream })
-    }
-
-    /// Execute a prepared data query (go-sdk: `Statement.Execute`).
-    pub async fn execute_prepared_query(
-        &mut self,
-        prepared: &PreparedDataQuery,
-        query: Query,
-        mode: Mode,
-    ) -> YdbResult<QueryResult> {
-        let params = query
-            .parameters
-            .into_iter()
-            .map(|(k, v)| v.try_into().map(|converted| (k, converted)))
-            .try_collect()?;
-        let req = RawExecuteDataQueryRequest {
-            session_id: String::new(),
-            tx_control: RawTransactionControl {
-                commit_tx: true,
-                tx_selector: RawTxSelector::Begin(RawTxSettings {
-                    mode: mode.into(),
-                }),
-            },
-            yql_text: String::new(),
-            query_id: None,
-            operation_params: self.timeouts.operation_params(),
-            params,
-            keep_in_cache: query.keep_in_cache,
-            collect_stats: RawQueryStatMode::None,
-        };
-        self.execute_prepared_data_query(prepared, req, false).await
-    }
-
-    pub(crate) async fn execute_prepared_data_query(
-        &mut self,
-        prepared: &PreparedDataQuery,
-        req: RawExecuteDataQueryRequest,
-        ignore_truncated: bool,
-    ) -> YdbResult<QueryResult> {
-        let mut req = req;
-        req.session_id.clone_from(&self.id);
-        req.query_id = Some(prepared.query_id.clone());
-        req.yql_text.clear();
-        req.operation_params = self.timeouts.operation_params();
-        self.execute_data_query(req, ignore_truncated).await
     }
 
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {

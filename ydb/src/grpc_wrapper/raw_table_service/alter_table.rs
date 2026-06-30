@@ -30,7 +30,11 @@ impl From<RawAlterTableRequest> for AlterTableRequest {
             path: value.path,
             add_columns: value.add_columns.into_iter().map(to_column_meta).collect(),
             drop_columns: value.drop_columns,
-            alter_columns: value.alter_columns.into_iter().map(to_column_meta).collect(),
+            alter_columns: value
+                .alter_columns
+                .into_iter()
+                .map(to_column_meta)
+                .collect(),
             alter_attributes: value.alter_attributes,
             operation_params: Some(value.operation_params.into()),
             ..Default::default()

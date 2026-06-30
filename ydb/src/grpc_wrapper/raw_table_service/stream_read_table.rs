@@ -29,9 +29,9 @@ impl RawReadTableKeyRange {
         match self.from {
             RawReadTableKeyBound::Unset => {}
             RawReadTableKeyBound::Greater(v) => {
-                key_range.from_bound = Some(ydb_grpc::ydb_proto::table::key_range::FromBound::Greater(
-                    v.into(),
-                ));
+                key_range.from_bound = Some(
+                    ydb_grpc::ydb_proto::table::key_range::FromBound::Greater(v.into()),
+                );
             }
             RawReadTableKeyBound::GreaterOrEqual(v) => {
                 key_range.from_bound = Some(
@@ -48,9 +48,9 @@ impl RawReadTableKeyRange {
                 ));
             }
             RawReadTableKeyBound::LessOrEqual(v) => {
-                key_range.to_bound = Some(ydb_grpc::ydb_proto::table::key_range::ToBound::LessOrEqual(
-                    v.into(),
-                ));
+                key_range.to_bound = Some(
+                    ydb_grpc::ydb_proto::table::key_range::ToBound::LessOrEqual(v.into()),
+                );
             }
             RawReadTableKeyBound::Greater(_) | RawReadTableKeyBound::GreaterOrEqual(_) => {}
         }

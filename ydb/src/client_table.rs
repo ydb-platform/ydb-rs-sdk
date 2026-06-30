@@ -9,13 +9,6 @@ use crate::types::Value;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
-use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
-use crate::retry::{NoRetrier, Retry, RetryParams, TimeoutRetrier};
-use crate::table_service_types::{CopyTableItem, TableDescription};
-use crate::table_requests::{
-    AlterTableRequest, CreateTableRequest, DropTableRequest, ReadRowsRequest,
-    TableOptionsDescription,
-};
 use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertRequest;
 use crate::grpc_wrapper::raw_table_service::client::RawTableClient;
 use crate::grpc_wrapper::raw_table_service::copy_table::{
@@ -31,7 +24,14 @@ use crate::grpc_wrapper::raw_table_service::drop_table::RawDropTableRequest;
 use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
 use crate::grpc_wrapper::raw_table_service::explain_data_query::RawExplainDataQueryRequest;
 use crate::grpc_wrapper::raw_table_service::read_rows::RawReadRowsRequest;
+use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
+use crate::retry::{NoRetrier, Retry, RetryParams, TimeoutRetrier};
 use crate::session::CreateTableClient;
+use crate::table_requests::{
+    AlterTableRequest, CreateTableRequest, DropTableRequest, ReadRowsRequest,
+    TableOptionsDescription,
+};
+use crate::table_service_types::{CopyTableItem, TableDescription};
 use crate::types_converters::try_vec_to_list_of_structs;
 use itertools::Itertools;
 use std::future::Future;
@@ -340,10 +340,8 @@ impl TableClient {
 
         let raw = request.clone().into_raw(String::new())?;
         let ignore_truncated = self.ignore_truncated;
-        self.retry_idempotent(|| async {
-            self.read_rows_once(raw.clone(), ignore_truncated).await
-        })
-        .await
+        self.retry_idempotent(|| async { self.read_rows_once(raw.clone(), ignore_truncated).await })
+            .await
     }
 
     /// From table with given path `table_path` request rows by primary keys `keys`, which must be
@@ -510,7 +508,7 @@ impl TableClient {
     /// completes, the session is returned to the pool, or discarded if it was invalidated
     /// (`BadSession`, transport error, etc.).
     ///
-    /// Use this for session-bound RPCs: [`Session::prepare_data_query`], [`Session::stream_read_table`],
+    /// Use this for session-bound RPCs: [`Session::stream_read_table`],
     /// [`Session::execute_scan_query`], and related methods.
     ///
     /// # Example
@@ -735,8 +733,7 @@ impl TableClient {
                         .await
                 })
                 .await?;
-            table_description_from_raw(raw)
-                .map_err(|e| YdbError::custom(e.error))
+            table_description_from_raw(raw).map_err(|e| YdbError::custom(e.error))
         })
         .await
     }

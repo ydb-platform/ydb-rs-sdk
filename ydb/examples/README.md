@@ -9,7 +9,6 @@ All examples (but listed below) need local ydb started with docker-compose up wi
 |---------|-------|-----|
 | `basic-read-rows`, `basic-bulk-upsert` | `TableClient` | sessionless `ReadRows` / `BulkUpsert` |
 | `explain-query-example` | `TableClient` | `ExplainDataQuery`, scheme queries |
-| `table-session-prepare` | `Session` via [`TableClient::retry`] | `PrepareDataQuery` + prepared execute |
 | `table-session-stream-read` | `Session` via [`TableClient::retry`] | `StreamReadTable` |
 | `table-session-scan-query` | `Session` via [`TableClient::retry`] | `StreamExecuteScanQuery` |
 | `table-tx-modes` | `TableClient` + `Transaction` | autocommit `ExecuteDataQuery` per `Mode` |

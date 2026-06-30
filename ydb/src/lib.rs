@@ -85,8 +85,8 @@ mod test_helpers;
 #[cfg(test)]
 pub(crate) mod coordination_test;
 pub(crate) mod dicovery_pessimization_interceptor;
-mod table_service_types;
 mod table_requests;
+mod table_service_types;
 #[cfg(test)]
 mod test_integration_helper;
 #[cfg(test)]
@@ -192,8 +192,8 @@ pub use result::{
 };
 pub use table_requests::{
     AlterTableRequest, CreateTableRequest, DropTableRequest, NamedPolicyDescription,
-    PreparedDataQuery, ReadRowsRequest, ReadTableKeyBound, ReadTableKeyRange, ReadTableOptions,
-    TableColumn, TableOptionsDescription,
+    ReadRowsRequest, ReadTableKeyBound, ReadTableKeyRange, ReadTableOptions, TableColumn,
+    TableOptionsDescription,
 };
 // full enum pub types
 pub use transaction::{Mode, Transaction, TransactionInfo};

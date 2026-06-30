@@ -14,22 +14,19 @@ use crate::grpc_wrapper::raw_table_service::create_session::{
     RawCreateSessionRequest, RawCreateSessionResult,
 };
 use crate::grpc_wrapper::raw_table_service::create_table::RawCreateTableRequest;
-use crate::grpc_wrapper::raw_table_service::drop_table::RawDropTableRequest;
 use crate::grpc_wrapper::raw_table_service::describe_table::{
     RawDescribeTableRequest, RawDescribeTableResult,
 };
 use crate::grpc_wrapper::raw_table_service::describe_table_options::{
     RawDescribeTableOptionsRequest, RawDescribeTableOptionsResult,
 };
+use crate::grpc_wrapper::raw_table_service::drop_table::RawDropTableRequest;
 use crate::grpc_wrapper::raw_table_service::execute_data_query::{
     RawExecuteDataQueryRequest, RawExecuteDataQueryResult,
 };
 use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
 use crate::grpc_wrapper::raw_table_service::explain_data_query::{
     RawExplainDataQueryRequest, RawExplainDataQueryResult,
-};
-use crate::grpc_wrapper::raw_table_service::prepare_data_query::{
-    RawPrepareDataQueryRequest, RawPrepareDataQueryResult,
 };
 use crate::grpc_wrapper::raw_table_service::read_rows::{RawReadRowsRequest, RawReadRowsResponse};
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
@@ -186,17 +183,6 @@ impl RawTableClient {
         request_without_result!(
             self.service.alter_table,
             req => ydb_grpc::ydb_proto::table::AlterTableRequest
-        );
-    }
-
-    pub async fn prepare_data_query(
-        &mut self,
-        req: RawPrepareDataQueryRequest,
-    ) -> RawResult<RawPrepareDataQueryResult> {
-        request_with_result!(
-            self.service.prepare_data_query,
-            req => ydb_grpc::ydb_proto::table::PrepareDataQueryRequest,
-            ydb_grpc::ydb_proto::table::PrepareQueryResult => RawPrepareDataQueryResult
         );
     }
 

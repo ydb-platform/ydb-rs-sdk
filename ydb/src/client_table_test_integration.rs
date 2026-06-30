@@ -491,9 +491,7 @@ async fn read_rows() -> YdbResult<()> {
         })
         .collect_vec();
 
-    table_client
-        .retry_bulk_upsert(TABLE_PATH, rows)
-        .await?;
+    table_client.retry_bulk_upsert(TABLE_PATH, rows).await?;
 
     // Empty
     let empty = table_client.retry_read_rows(TABLE_PATH, vec![], None).await;
@@ -1386,42 +1384,6 @@ async fn stream_read_table_rpc() -> YdbResult<()> {
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
-async fn prepare_data_query_rpc() -> YdbResult<()> {
-    let client = create_client().await?;
-    let table_client = client.table_client();
-
-    table_client
-        .retry(|mut session| async move {
-            let prepared = session
-                .prepare_data_query("DECLARE $v AS Int32; SELECT $v + $v AS res".to_string())
-                .await?;
-            let result = session
-                .execute_prepared_query(
-                    &prepared,
-                    Query::new("").with_params(ydb_params!("$v" => 21_i32)),
-                    Mode::OnlineReadonly,
-                )
-                .await?;
-
-            assert_eq!(
-                Value::Int32(42),
-                result
-                    .into_only_result()?
-                    .rows()
-                    .next()
-                    .unwrap()
-                    .remove_field_by_name("res")?
-            );
-            Ok(())
-        })
-        .await?;
-
-    Ok(())
-}
-
-#[tokio::test]
-#[traced_test]
-#[ignore] // need YDB access
 async fn describe_table_options_rpc() -> YdbResult<()> {
     let client = create_client().await?;
     let options = client.table_client().retry_describe_table_options().await?;
@@ -1527,48 +1489,6 @@ async fn table_attributes_rpc() -> YdbResult<()> {
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
-async fn prepare_data_query_on_session_rpc() -> YdbResult<()> {
-    let client = create_client().await?;
-    let table_client = client.table_client();
-
-    table_client
-        .retry(|mut session| async move {
-            let prepared = session
-                .prepare_data_query("DECLARE $v AS Int32; SELECT $v * 2 AS res".to_string())
-                .await?;
-            assert!(!prepared.query_id().is_empty());
-            assert_eq!(
-                prepared.text(),
-                "DECLARE $v AS Int32; SELECT $v * 2 AS res"
-            );
-
-            let result = session
-                .execute_prepared_query(
-                    &prepared,
-                    Query::new("").with_params(ydb_params!("$v" => 11_i32)),
-                    Mode::OnlineReadonly,
-                )
-                .await?;
-
-            assert_eq!(
-                Value::Int32(22),
-                result
-                    .into_only_result()?
-                    .rows()
-                    .next()
-                    .unwrap()
-                    .remove_field_by_name("res")?
-            );
-            Ok(())
-        })
-        .await?;
-
-    Ok(())
-}
-
-#[tokio::test]
-#[traced_test]
-#[ignore] // need YDB access
 async fn stream_read_table_options_rpc() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
@@ -1600,9 +1520,7 @@ async fn stream_read_table_options_rpc() -> YdbResult<()> {
                 let mut stream = session
                     .stream_read_table(
                         table_path.clone(),
-                        ReadTableOptions::new()
-                            .with_column("id")
-                            .with_ordered(true),
+                        ReadTableOptions::new().with_column("id").with_ordered(true),
                     )
                     .await?;
                 let mut ids = Vec::new();
@@ -1685,9 +1603,7 @@ async fn truncated_result_on_data_query_rpc() -> YdbResult<()> {
     let truncate_err = table_client
         .retry_transaction(|mut t| {
             let select_query = Arc::clone(&select_query);
-            async move {
-                Ok(t.query(Query::new((*select_query).clone())).await?)
-            }
+            async move { Ok(t.query(Query::new((*select_query).clone())).await?) }
         })
         .await;
     match truncate_err {
@@ -1700,9 +1616,7 @@ async fn truncated_result_on_data_query_rpc() -> YdbResult<()> {
         .with_ignore_truncated(true)
         .retry_transaction(|mut t| {
             let select_query = Arc::clone(&select_query);
-            async move {
-                Ok(t.query(Query::new((*select_query).clone())).await?)
-            }
+            async move { Ok(t.query(Query::new((*select_query).clone())).await?) }
         })
         .await?;
     let result_set = result.into_only_result()?;
@@ -1742,9 +1656,7 @@ async fn truncated_result_on_read_rows_rpc() -> YdbResult<()> {
         .retry_bulk_upsert(table_path.clone(), rows)
         .await?;
 
-    let keys: Vec<Value> = (0_i64..1001)
-        .map(|id| ydb_struct!("id" => id))
-        .collect();
+    let keys: Vec<Value> = (0_i64..1001).map(|id| ydb_struct!("id" => id)).collect();
 
     let err = table_client
         .retry_read_rows(table_path.clone(), keys.clone(), None)
@@ -1905,12 +1817,14 @@ async fn table_tx_modes_autocommit_rpc() -> YdbResult<()> {
         Mode::OnlineReadonlyInconsistent,
     ] {
         let client = table_client.clone_with_transaction_options(
-            TransactionOptions::new().with_mode(mode).with_autocommit(true),
+            TransactionOptions::new()
+                .with_mode(mode)
+                .with_autocommit(true),
         );
         let result = client
-            .retry_transaction(|mut t| async move {
-                Ok(t.query(Query::new("SELECT 42 AS v")).await?)
-            })
+            .retry_transaction(
+                |mut t| async move { Ok(t.query(Query::new("SELECT 42 AS v")).await?) },
+            )
             .await;
 
         match result {

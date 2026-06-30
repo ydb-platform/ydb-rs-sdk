@@ -1,9 +1,7 @@
 use crate::grpc_wrapper::raw_errors::RawError;
 use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-use crate::table_service_types::{
-    ColumnDescription, TableDescription, UnknownTypeDescription,
-};
+use crate::table_service_types::{ColumnDescription, TableDescription, UnknownTypeDescription};
 
 pub(crate) struct RawDescribeTableRequest {
     pub session_id: String,

@@ -73,7 +73,8 @@ impl CreateTableRequest {
         self,
         session_id: String,
         operation_params: crate::grpc_wrapper::raw_ydb_operation::RawOperationParams,
-    ) -> YdbResult<crate::grpc_wrapper::raw_table_service::create_table::RawCreateTableRequest> {
+    ) -> YdbResult<crate::grpc_wrapper::raw_table_service::create_table::RawCreateTableRequest>
+    {
         let columns = self
             .columns
             .into_iter()
@@ -96,7 +97,10 @@ impl CreateTableRequest {
         self
     }
 
-    pub fn with_primary_key(mut self, columns: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn with_primary_key(
+        mut self,
+        columns: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
         self.primary_key = columns.into_iter().map(Into::into).collect();
         self
     }
@@ -195,15 +199,17 @@ impl AlterTableRequest {
             .into_iter()
             .map(|column| column.into_raw())
             .collect::<YdbResult<Vec<_>>>()?;
-        Ok(crate::grpc_wrapper::raw_table_service::alter_table::RawAlterTableRequest {
-            session_id,
-            path: self.path,
-            add_columns,
-            drop_columns: self.drop_columns,
-            alter_columns,
-            alter_attributes: self.alter_attributes,
-            operation_params,
-        })
+        Ok(
+            crate::grpc_wrapper::raw_table_service::alter_table::RawAlterTableRequest {
+                session_id,
+                path: self.path,
+                add_columns,
+                drop_columns: self.drop_columns,
+                alter_columns,
+                alter_attributes: self.alter_attributes,
+                operation_params,
+            },
+        )
     }
 
     pub fn add_column(mut self, column: TableColumn) -> Self {
@@ -340,23 +346,6 @@ impl ReadTableOptions {
     pub fn with_key_range(mut self, range: ReadTableKeyRange) -> Self {
         self.key_range = Some(range);
         self
-    }
-}
-
-/// Prepared data query (go-sdk: `table.Statement`).
-#[derive(Clone, Debug)]
-pub struct PreparedDataQuery {
-    pub(crate) query_id: String,
-    pub(crate) yql_text: String,
-}
-
-impl PreparedDataQuery {
-    pub fn query_id(&self) -> &str {
-        &self.query_id
-    }
-
-    pub fn text(&self) -> &str {
-        &self.yql_text
     }
 }
 
