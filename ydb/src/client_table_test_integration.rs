@@ -15,7 +15,8 @@ use crate::client_table::RetryOptions;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::query::Query;
 use crate::table_requests::{
-    CreateTableRequest, DropTableRequest, ReadTableOptions, TableColumn,
+    AlterTableRequest, CreateTableRequest, DropTableRequest, ReadTableKeyBound,
+    ReadTableKeyRange, ReadTableOptions, TableColumn,
 };
 use crate::table_service_types::{CopyTableItem, IndexType, StoreType};
 use crate::test_integration_helper::create_client;
@@ -1442,5 +1443,354 @@ async fn describe_table_options_rpc() -> YdbResult<()> {
     trace!("describe_table_options: {:?}", options);
     // Presets may be empty on minimal clusters; the RPC itself must succeed.
     let _ = options.table_profile_presets;
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn alter_table_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_name = format!("alter_rpc_{rand_str}");
+    let database_path = client.database();
+    let table_path = format!("{database_path}/{table_name}");
+
+    table_client
+        .retry_create_table(
+            CreateTableRequest::new(table_path.clone())
+                .with_column(TableColumn::new("id", Value::Int64(0)))
+                .with_column(TableColumn::new("val", Value::Int64(0)))
+                .with_primary_key(["id"]),
+        )
+        .await?;
+
+    table_client
+        .retry_alter_table(
+            AlterTableRequest::new(table_path.clone())
+                .add_column(TableColumn::new("extra", Value::Text(String::new()))),
+        )
+        .await?;
+
+    let desc = table_client.describe_table(table_path.clone()).await?;
+    assert_eq!(desc.columns.len(), 3);
+    assert!(desc.columns.iter().any(|c| c.name == "extra"));
+
+    table_client
+        .retry_alter_table(AlterTableRequest::new(table_path.clone()).drop_column("val"))
+        .await?;
+
+    let desc = table_client.describe_table(table_path.clone()).await?;
+    assert_eq!(desc.columns.len(), 2);
+    assert!(!desc.columns.iter().any(|c| c.name == "val"));
+
+    table_client
+        .retry_drop_table(DropTableRequest::new(table_path))
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn table_attributes_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_name = format!("attrs_rpc_{rand_str}");
+    let database_path = client.database();
+    let table_path = format!("{database_path}/{table_name}");
+
+    table_client
+        .retry_create_table(
+            CreateTableRequest::new(table_path.clone())
+                .with_column(TableColumn::new("id", Value::Int64(0)))
+                .with_primary_key(["id"])
+                .with_attribute("owner", "integration-test"),
+        )
+        .await?;
+
+    let desc = table_client.describe_table(table_path.clone()).await?;
+    assert_eq!(
+        desc.attributes.get("owner").map(String::as_str),
+        Some("integration-test")
+    );
+
+    table_client
+        .retry_alter_table(
+            AlterTableRequest::new(table_path.clone()).alter_attribute("owner", "updated"),
+        )
+        .await?;
+
+    let desc = table_client.describe_table(table_path.clone()).await?;
+    assert_eq!(
+        desc.attributes.get("owner").map(String::as_str),
+        Some("updated")
+    );
+
+    table_client
+        .retry_drop_table(DropTableRequest::new(table_path))
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn prepare_data_query_on_session_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+
+    let prepared = table_client
+        .retry_prepare_data_query("SELECT $v * 2 AS res")
+        .await?;
+    assert!(!prepared.query_id().is_empty());
+    assert_eq!(prepared.text(), "SELECT $v * 2 AS res");
+
+    let result = table_client
+        .retry_with_session(RetryOptions::new(), |session| async move {
+            let mut session = session;
+            let prepared = session
+                .prepare_data_query("SELECT $v * 2 AS res".to_string())
+                .await?;
+            let result = session
+                .execute_prepared_query(
+                    &prepared,
+                    Query::new("").with_params(ydb_params!("$v" => 11_i32)),
+                    Mode::OnlineReadonly,
+                )
+                .await?;
+            Ok(result)
+        })
+        .await?;
+
+    assert_eq!(
+        Value::Int32(22),
+        result
+            .into_only_result()?
+            .rows()
+            .next()
+            .unwrap()
+            .remove_field_by_name("res")?
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn stream_read_table_options_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_name = format!("stream_opts_{rand_str}");
+    let table_path = format!("/local/{table_name}");
+
+    table_client
+        .retry_create_table(
+            CreateTableRequest::new(table_path.clone())
+                .with_column(TableColumn::new("id", Value::Int64(0)))
+                .with_column(TableColumn::new("val", Value::Int64(0)))
+                .with_primary_key(["id"]),
+        )
+        .await?;
+
+    let rows: Vec<Value> = (1_i64..=5)
+        .map(|id| ydb_struct!("id" => id, "val" => id * 10))
+        .collect();
+    table_client
+        .retry_execute_bulk_upsert(table_path.clone(), rows)
+        .await?;
+
+    // Column projection
+    let mut stream = table_client
+        .retry_stream_read_table(
+            table_path.clone(),
+            ReadTableOptions::new()
+                .with_column("id")
+                .with_ordered(true),
+        )
+        .await?;
+    let mut ids = Vec::new();
+    while let Some(result_set) = stream.next_result_set().await? {
+        for mut row in result_set.rows() {
+            match row.remove_field_by_name("id")? {
+                Value::Int64(id) => ids.push(id),
+                other => panic!("unexpected id type: {other:?}"),
+            }
+            assert!(row.remove_field_by_name("val").is_err());
+        }
+    }
+    assert_eq!(ids, vec![1_i64, 2, 3, 4, 5]);
+
+    // Key range [2, 4]
+    let key_range = ReadTableKeyRange::new()
+        .with_from(ReadTableKeyBound::GreaterOrEqual(Value::Int64(2)))
+        .with_to(ReadTableKeyBound::LessOrEqual(Value::Int64(4)));
+    let mut stream = table_client
+        .retry_stream_read_table(
+            table_path.clone(),
+            ReadTableOptions::new()
+                .with_key_range(key_range)
+                .with_ordered(true),
+        )
+        .await?;
+    let mut ranged_ids = Vec::new();
+    while let Some(result_set) = stream.next_result_set().await? {
+        for mut row in result_set.rows() {
+            match row.remove_field_by_name("id")? {
+                Value::Int64(id) => ranged_ids.push(id),
+                other => panic!("unexpected id type: {other:?}"),
+            }
+        }
+    }
+    assert_eq!(ranged_ids, vec![2_i64, 3, 4]);
+
+    // Row limit with truncated flag (no error by default)
+    let mut stream = table_client
+        .retry_stream_read_table(
+            table_path.clone(),
+            ReadTableOptions::new().with_row_limit(2).with_ordered(true),
+        )
+        .await?;
+    let mut limited_count = 0;
+    let mut saw_truncated = false;
+    while let Some(result_set) = stream.next_result_set().await? {
+        if result_set.is_truncated() {
+            saw_truncated = true;
+        }
+        limited_count += result_set.rows().count();
+    }
+    assert!(saw_truncated);
+    assert_eq!(limited_count, 5);
+
+    table_client
+        .retry_drop_table(DropTableRequest::new(table_path))
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn truncated_result_on_data_query_rpc() -> YdbResult<()> {
+    const ROWS: i64 = 1001;
+
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_name = format!("truncate_{rand_str}");
+    let table_path = format!("/local/{table_name}");
+    let select_query = Arc::new(format!("SELECT * FROM {table_name}"));
+
+    table_client
+        .retry_create_table(
+            CreateTableRequest::new(table_path.clone())
+                .with_column(TableColumn::new("id", Value::Int64(0)))
+                .with_column(TableColumn::new("val", Value::Text(String::new())))
+                .with_primary_key(["id"]),
+        )
+        .await?;
+
+    let rows: Vec<Value> = (0..ROWS)
+        .map(|id| {
+            ydb_struct!(
+                "id" => id,
+                "val" => Value::Text(id.to_string()),
+            )
+        })
+        .collect();
+    table_client
+        .retry_execute_bulk_upsert(table_path.clone(), rows)
+        .await?;
+
+    let strict_client = table_client.clone().with_error_on_truncate(true);
+    let truncate_err = strict_client
+        .retry_transaction(|mut t| {
+            let select_query = Arc::clone(&select_query);
+            async move {
+                Ok(t.query(Query::new((*select_query).clone())).await?)
+            }
+        })
+        .await;
+    match truncate_err {
+        Err(YdbOrCustomerError::YDB(YdbError::TruncatedResult { .. })) => {}
+        other => panic!("expected TruncatedResult, got {other:?}"),
+    }
+
+    let result = table_client
+        .clone()
+        .with_error_on_truncate(false)
+        .retry_transaction(|mut t| {
+            let select_query = Arc::clone(&select_query);
+            async move {
+                Ok(t.query(Query::new((*select_query).clone())).await?)
+            }
+        })
+        .await?;
+    let result_set = result.into_only_result()?;
+    assert!(result_set.is_truncated());
+    assert_eq!(result_set.rows().count(), 1000);
+
+    table_client
+        .retry_drop_table(DropTableRequest::new(table_path))
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn truncated_result_on_read_rows_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_name = format!("read_rows_trunc_{rand_str}");
+    let table_path = format!("/local/{table_name}");
+
+    table_client
+        .retry_create_table(
+            CreateTableRequest::new(table_path.clone())
+                .with_column(TableColumn::new("id", Value::Int64(0)))
+                .with_column(TableColumn::new("val", Value::Int64(0)))
+                .with_primary_key(["id"]),
+        )
+        .await?;
+
+    let rows: Vec<Value> = (0..1001)
+        .map(|id| ydb_struct!("id" => id, "val" => id))
+        .collect();
+    table_client
+        .retry_execute_bulk_upsert(table_path.clone(), rows)
+        .await?;
+
+    let keys: Vec<Value> = (0..1001)
+        .map(|id| ydb_struct!("id" => id))
+        .collect();
+
+    let strict_client = table_client.clone().with_error_on_truncate(true);
+    let err = strict_client
+        .retry_read_rows(table_path.clone(), keys.clone(), None)
+        .await;
+    assert!(matches!(err, Err(YdbError::TruncatedResult { .. })));
+
+    let result_set = table_client
+        .clone()
+        .with_error_on_truncate(false)
+        .retry_read_rows(table_path.clone(), keys, None)
+        .await?;
+    assert!(result_set.is_truncated());
+    assert_eq!(result_set.rows().count(), 1000);
+
+    table_client
+        .retry_drop_table(DropTableRequest::new(table_path))
+        .await?;
+
     Ok(())
 }
