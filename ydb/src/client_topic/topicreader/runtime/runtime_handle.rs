@@ -76,10 +76,7 @@ impl RuntimeHandle {
         }
     }
 
-    pub(crate) fn push_batch(
-        &self,
-        messages: Vec<TopicReaderMessage>,
-    ) -> YdbResult<()> {
+    pub(crate) fn push_batch(&self, messages: Vec<TopicReaderMessage>) -> YdbResult<()> {
         let pushed = {
             let mut state = self.lock_state()?;
             match &mut *state {
@@ -99,10 +96,7 @@ impl RuntimeHandle {
         Ok(())
     }
 
-    pub(crate) async fn pop_batch(
-        &self,
-        cap: usize,
-    ) -> YdbResult<TopicReaderBatch> {
+    pub(crate) async fn pop_batch(&self, cap: usize) -> YdbResult<TopicReaderBatch> {
         if cap == 0 {
             return Err(YdbError::Custom(
                 "topic reader pop_batch called with cap=0".into(),
@@ -182,11 +176,7 @@ impl RuntimeHandle {
         }
     }
 
-    pub(crate) fn request_bytes(
-        &self,
-        bytes_to_release: i64,
-        epoch: usize,
-    ) -> YdbResult<()> {
+    pub(crate) fn request_bytes(&self, bytes_to_release: i64, epoch: usize) -> YdbResult<()> {
         let state = self.lock_state()?;
         match &*state {
             State::Active(active) => {
@@ -240,10 +230,7 @@ impl RuntimeHandle {
         Ok(())
     }
 
-    pub(crate) fn enter_reconnecting(
-        &self,
-        err: YdbError,
-    ) -> YdbResult<()> {
+    pub(crate) fn enter_reconnecting(&self, err: YdbError) -> YdbResult<()> {
         let mut pending_commits = PendingCommits::default();
         {
             let mut state = self.lock_state()?;
@@ -347,10 +334,7 @@ mod tests {
 
         let (new_tx, mut new_rx) = mpsc::unbounded_channel();
         runtime
-            .install_connection(
-                Connection::new(new_tx, 1),
-                YdbError::custom("reconnect"),
-            )
+            .install_connection(Connection::new(new_tx, 1), YdbError::custom("reconnect"))
             .expect("install_connection should succeed");
 
         runtime
