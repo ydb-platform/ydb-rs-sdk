@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 use std::convert::Infallible;
 
 use tokio::select;
@@ -167,7 +167,21 @@ async fn receive_messages(
             RawFromServer::StartPartitionSessionRequest(req) => {
                 let partition_session = PartitionSession::from(req);
                 let partition_session_id = partition_session.partition_session_id;
-                sessions.insert(partition_session_id, partition_session);
+                let partition_id = partition_session.partition_id;
+
+                match sessions.entry(partition_session_id) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(partition_session);
+                        runtime.register_starting_partition(partition_session_id, partition_id)?;
+                    }
+                    Entry::Occupied(mut entry) => {
+                        warn!(
+                            partition_session_id,
+                            "topic reader received duplicate start partition session request"
+                        );
+                        entry.insert(partition_session);
+                    }
+                }
 
                 let response = RawFromClientOneOf::StartPartitionSessionResponse(
                     RawStartPartitionSessionResponse {
@@ -191,7 +205,7 @@ async fn receive_messages(
                     "topic reader received stop partition session request"
                 );
 
-                if sessions.remove(&partition_session_id).is_some() {
+                if let Some(partition_session) = sessions.remove(&partition_session_id) {
                     // TODO: For graceful stops, delay response until buffered messages
                     // from this partition are processed and commits up to
                     // committed_offset are acknowledged.
@@ -201,6 +215,10 @@ async fn receive_messages(
                         &YdbError::custom(format!(
                             "partition session {partition_session_id} stopped by server"
                         )),
+                    )?;
+                    runtime.register_stopping_partition(
+                        partition_session_id,
+                        partition_session.partition_id,
                     )?;
                 } else {
                     warn!(
@@ -222,22 +240,23 @@ async fn receive_messages(
                     partition_session_id = end.partition_session_id,
                     "topic reader received end partition session"
                 );
-                if sessions.remove(&end.partition_session_id).is_none() {
+                if sessions.contains_key(&end.partition_session_id) {
+                    decompression_input_tx
+                        .send(ReaderEvent::EndPartitionSession {
+                            session_id: end.partition_session_id,
+                            child_partition_ids: end.child_partition_ids,
+                        })
+                        .map_err(|_| {
+                            YdbError::Transport(
+                                "topic reader grpc -> decompressor channel closed".to_string(),
+                            )
+                        })?;
+                } else {
                     warn!(
                         partition_session_id = end.partition_session_id,
                         "topic reader received end for unknown partition session"
                     );
                 }
-                decompression_input_tx
-                    .send(ReaderEvent::EndPartitionSession {
-                        session_id: end.partition_session_id,
-                        child_partition_ids: end.child_partition_ids,
-                    })
-                    .map_err(|_| {
-                        YdbError::Transport(
-                            "topic reader grpc -> decompressor channel closed".to_string(),
-                        )
-                    })?;
             }
 
             RawFromServer::UpdateTokenResponse(_) => {

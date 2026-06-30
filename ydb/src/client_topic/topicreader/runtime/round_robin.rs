@@ -5,18 +5,27 @@ pub(super) struct RoundRobin {
 }
 
 impl RoundRobin {
+    pub(super) fn len(&self) -> usize {
+        self.active.len()
+    }
+
     pub(super) fn push(&mut self, psid: i64) {
-        if !self.contains(psid) {
-            self.active.push(psid);
-        }
+        self.active.push(psid);
     }
 
     pub(super) fn next(&mut self) -> Option<i64> {
         if self.active.is_empty() {
             return None;
         }
+
         let id = self.active[self.cursor];
-        self.cursor = (self.cursor + 1) % self.active.len();
+
+        self.cursor += 1;
+
+        if self.cursor == self.active.len() {
+            self.cursor = 0;
+        }
+
         Some(id)
     }
 
@@ -30,6 +39,7 @@ impl RoundRobin {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn contains(&self, psid: i64) -> bool {
         self.active.contains(&psid)
     }
@@ -42,10 +52,6 @@ impl RoundRobin {
             self.push(psid);
         }
     }
-
-    pub(super) fn len(&self) -> usize {
-        self.active.len()
-    }
 }
 
 #[cfg(test)]
@@ -53,11 +59,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn push_is_idempotent() {
+    fn push_appends_entries() {
         let mut rr = RoundRobin::default();
         rr.push(1);
         rr.push(1);
-        assert_eq!(rr.len(), 1);
+        assert_eq!(rr.len(), 2);
+        assert_eq!(rr.next(), Some(1));
+        assert_eq!(rr.next(), Some(1));
     }
 
     #[test]
@@ -109,9 +117,9 @@ mod tests {
     }
 
     #[test]
-    fn extend_idempotent() {
+    fn extend_appends_entries() {
         let mut rr = RoundRobin::default();
         rr.extend([1, 2, 1, 3, 2]);
-        assert_eq!(rr.len(), 3);
+        assert_eq!(rr.len(), 5);
     }
 }
