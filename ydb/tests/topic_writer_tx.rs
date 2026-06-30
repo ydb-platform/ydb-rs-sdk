@@ -2,9 +2,6 @@ mod mock_server;
 
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::sync::watch;
-use tokio::time::timeout;
 use ydb::{
     Client, ClientBuilder, Query, QueryResult, TopicWriterMessage, TopicWriterMessageBuilder,
     TopicWriterTxOptionsBuilder, Transaction, TransactionInfo, YdbResult,
@@ -64,28 +61,6 @@ type CapturedTxIdentity = Arc<Mutex<Option<TransactionIdentity>>>;
 type CapturedInitRequest = Arc<Mutex<Option<InitRequest>>>;
 type CapturedTxVec = Arc<Mutex<Vec<TransactionIdentity>>>;
 type CapturedStreamId = Arc<Mutex<Option<u64>>>;
-
-async fn wait_for_stream_after(
-    mut latest_stream_id: watch::Receiver<Option<u64>>,
-    old_stream_id: u64,
-) -> u64 {
-    timeout(Duration::from_secs(1), async move {
-        loop {
-            if let Some(stream_id) = *latest_stream_id.borrow_and_update() {
-                if stream_id != old_stream_id {
-                    return stream_id;
-                }
-            }
-
-            latest_stream_id
-                .changed()
-                .await
-                .expect("mock stream watcher closed");
-        }
-    })
-    .await
-    .expect("mock server did not observe reconnected stream")
-}
 
 enum AckMode {
     WrittenInTx,
