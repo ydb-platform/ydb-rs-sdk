@@ -21,7 +21,7 @@ pub struct QueryResult {
 
 impl QueryResult {
     pub(crate) fn from_raw_result(
-        error_on_truncate: bool,
+        ignore_truncated: bool,
         raw_res: RawExecuteDataQueryResult,
     ) -> YdbResult<Self> {
         trace!(
@@ -30,7 +30,7 @@ impl QueryResult {
         );
         let mut results = Vec::with_capacity(raw_res.result_sets.len());
         for current_set in raw_res.result_sets.into_iter() {
-            if error_on_truncate && current_set.truncated {
+            if !ignore_truncated && current_set.truncated {
                 return Err(YdbError::TruncatedResult {
                     result_set_index: results.len(),
                 });

@@ -107,7 +107,7 @@ pub enum YdbError {
     /// Error from operation status
     YdbStatusError(YdbStatusError),
 
-    /// Result set row limit was reached (see [`crate::TableClient::with_error_on_truncate`]).
+    /// Result set row limit was reached (see [`crate::TableClient::with_ignore_truncated`]).
     TruncatedResult {
         result_set_index: usize,
     },

@@ -70,7 +70,7 @@ pub trait Transaction: Send + Sync {
 
 pub(crate) struct AutoCommit {
     mode: Mode,
-    error_on_truncate_response: bool,
+    ignore_truncated: bool,
     session_pool: TableSessionPool,
     timeouts: TimeoutSettings,
 }
@@ -84,13 +84,13 @@ impl AutoCommit {
         Self {
             mode,
             session_pool,
-            error_on_truncate_response: false,
+            ignore_truncated: false,
             timeouts,
         }
     }
 
-    pub(crate) fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
-        self.error_on_truncate_response = error_on_truncate;
+    pub(crate) fn with_ignore_truncated(mut self, ignore_truncated: bool) -> Self {
+        self.ignore_truncated = ignore_truncated;
         self
     }
 }
@@ -127,7 +127,7 @@ impl Transaction for AutoCommit {
 
         let mut session = self.session_pool.session().await?;
         return session
-            .execute_data_query(req, self.error_on_truncate_response)
+            .execute_data_query(req, self.ignore_truncated)
             .await;
     }
 
@@ -143,7 +143,7 @@ impl Transaction for AutoCommit {
 }
 
 pub(crate) struct SerializableReadWriteTx {
-    error_on_truncate_response: bool,
+    ignore_truncated: bool,
     session_pool: TableSessionPool,
 
     id: Option<String>,
@@ -164,7 +164,7 @@ pub(crate) enum TableTxState {
 impl SerializableReadWriteTx {
     pub(crate) fn new(session_pool: TableSessionPool, timeouts: TimeoutSettings) -> Self {
         Self {
-            error_on_truncate_response: false,
+            ignore_truncated: false,
             session_pool,
 
             id: None,
@@ -174,8 +174,8 @@ impl SerializableReadWriteTx {
         }
     }
 
-    pub(crate) fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
-        self.error_on_truncate_response = error_on_truncate;
+    pub(crate) fn with_ignore_truncated(mut self, ignore_truncated: bool) -> Self {
+        self.ignore_truncated = ignore_truncated;
         self
     }
 
@@ -407,7 +407,7 @@ impl Transaction for SerializableReadWriteTx {
             collect_stats: RawQueryStatMode::None,
         };
         let query_result = session
-            .execute_data_query(req, self.error_on_truncate_response)
+            .execute_data_query(req, self.ignore_truncated)
             .await;
         if let Err(err) = &query_result {
             self.on_query_error(err);

@@ -125,7 +125,7 @@ impl Default for RetryOptions {
 /// See [TableClient::retry_transaction] for examples.
 #[derive(Clone)]
 pub struct TableClient {
-    error_on_truncate: bool,
+    ignore_truncated: bool,
     session_pool: TableSessionPool,
     retrier: Arc<Box<dyn Retry>>,
     transaction_options: TransactionOptions,
@@ -140,7 +140,7 @@ impl TableClient {
         session_pool: SessionPool,
     ) -> Self {
         Self {
-            error_on_truncate: false,
+            ignore_truncated: false,
             session_pool: TableSessionPool::from_shared(session_pool, connection_manager, timeouts),
             retrier: Arc::new(Box::<TimeoutRetrier>::default()),
             transaction_options: TransactionOptions::new(),
@@ -193,12 +193,12 @@ impl TableClient {
 
     pub(crate) fn create_autocommit_transaction(&self, mode: Mode) -> impl Transaction {
         AutoCommit::new(self.session_pool.clone(), mode, self.timeouts)
-            .with_error_on_truncate(self.error_on_truncate)
+            .with_ignore_truncated(self.ignore_truncated)
     }
 
     pub(crate) fn create_interactive_transaction(&self) -> impl Transaction {
         SerializableReadWriteTx::new(self.session_pool.clone(), self.timeouts)
-            .with_error_on_truncate(self.error_on_truncate)
+            .with_ignore_truncated(self.ignore_truncated)
     }
 
     #[allow(dead_code)]
@@ -236,12 +236,12 @@ impl TableClient {
     async fn read_rows_once(
         &self,
         request: RawReadRowsRequest,
-        error_on_truncate: bool,
+        ignore_truncated: bool,
     ) -> YdbResult<crate::ResultSet> {
         let mut client = self.sessionless_table_client().await?;
         let raw_response = client.read_rows(request).await.map_err(YdbError::from)?;
         let result_set: crate::ResultSet = raw_response.result_set.try_into()?;
-        if error_on_truncate && result_set.is_truncated() {
+        if !ignore_truncated && result_set.is_truncated() {
             return Err(YdbError::TruncatedResult {
                 result_set_index: 0,
             });
@@ -326,9 +326,9 @@ impl TableClient {
         }
 
         let raw = request.clone().into_raw(String::new())?;
-        let error_on_truncate = self.error_on_truncate;
+        let ignore_truncated = self.ignore_truncated;
         self.retry_idempotent(|| async {
-            self.read_rows_once(raw.clone(), error_on_truncate).await
+            self.read_rows_once(raw.clone(), ignore_truncated).await
         })
         .await
     }
@@ -588,8 +588,11 @@ impl TableClient {
         }
     }
 
-    pub fn with_error_on_truncate(mut self, error_on_truncate: bool) -> Self {
-        self.error_on_truncate = error_on_truncate;
+    /// Do not return [`YdbError::TruncatedResult`] when a result set is truncated (go-sdk: `WithIgnoreTruncated`).
+    ///
+    /// By default truncated result sets produce an error.
+    pub fn with_ignore_truncated(mut self, ignore_truncated: bool) -> Self {
+        self.ignore_truncated = ignore_truncated;
         self
     }
 

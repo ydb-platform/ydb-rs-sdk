@@ -7,7 +7,6 @@ use crate::table_requests::{
     AlterTableRequest, CreateTableRequest, DropTableRequest, PreparedDataQuery, ReadRowsRequest,
     ReadTableOptions, TableOptionsDescription,
 };
-use crate::types::Value;
 use derivative::Derivative;
 use itertools::Itertools;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -19,7 +18,6 @@ use crate::grpc_wrapper::raw_table_service::client::{CollectStatsMode, RawTableC
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
 use crate::grpc_wrapper::raw_errors::RawResult;
-use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertRequest;
 use crate::grpc_wrapper::raw_table_service::commit_transaction::RawCommitTransactionRequest;
 use crate::grpc_wrapper::raw_table_service::copy_table::{
     RawCopyTableRequest, RawCopyTablesRequest,
@@ -164,23 +162,11 @@ impl Session {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub async fn bulk_upsert(
-        &mut self,
-        table_path: impl Into<String>,
-        rows: Vec<Value>,
-    ) -> YdbResult<()> {
-        let Some(value) = crate::types_converters::try_vec_to_list_of_structs(rows)? else {
-            return Ok(());
-        };
-        self.execute_bulk_upsert(table_path.into(), value).await
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    /// Read rows by primary key (go-sdk: `Session.ReadRows`).
+    /// Read rows by primary key with an explicit session (go-sdk: deprecated `Session.ReadRows`).
     pub async fn read_rows(
         &mut self,
         request: ReadRowsRequest,
-        error_on_truncate: bool,
+        ignore_truncated: bool,
     ) -> YdbResult<crate::ResultSet> {
         if request.keys.is_empty() {
             return Ok(crate::ResultSet::default());
@@ -188,7 +174,7 @@ impl Session {
         let req = request.into_raw(self.id.clone())?;
         let raw_read_rows_response = in_flight_table_rpc!(self, table, table.read_rows(req))?;
         let result_set: crate::ResultSet = raw_read_rows_response.result_set.try_into()?;
-        if error_on_truncate && result_set.is_truncated() {
+        if !ignore_truncated && result_set.is_truncated() {
             return Err(YdbError::TruncatedResult {
                 result_set_index: 0,
             });
@@ -196,27 +182,11 @@ impl Session {
         Ok(result_set)
     }
 
-    pub(crate) async fn execute_bulk_upsert(
-        &mut self,
-        table_path: String,
-        rows: Value,
-    ) -> YdbResult<()> {
-        let raw_rows: crate::grpc_wrapper::raw_table_service::value::RawTypedValue =
-            rows.try_into()?;
-        let req = RawBulkUpsertRequest {
-            table: table_path,
-            rows: raw_rows.into(),
-            operation_params: self.timeouts.operation_params(),
-        };
-        in_flight_table_rpc!(self, table, table.bulk_upsert(req))?;
-        Ok(())
-    }
-
     #[tracing::instrument(skip(self, req), fields(req_number=req_number()))]
     pub(crate) async fn execute_data_query(
         &mut self,
         mut req: RawExecuteDataQueryRequest,
-        error_on_truncated: bool,
+        ignore_truncated: bool,
     ) -> YdbResult<QueryResult> {
         req.session_id.clone_from(&self.id);
         req.operation_params = self.timeouts.operation_params();
@@ -238,7 +208,7 @@ impl Session {
             "result: {}",
             ensure_len_string(serde_json::to_string(&res)?)
         );
-        QueryResult::from_raw_result(error_on_truncated, res)
+        QueryResult::from_raw_result(ignore_truncated, res)
     }
 
     #[tracing::instrument(skip(self, query), fields(req_number=req_number()))]
@@ -497,14 +467,14 @@ impl Session {
         &mut self,
         prepared: &PreparedDataQuery,
         req: RawExecuteDataQueryRequest,
-        error_on_truncate: bool,
+        ignore_truncated: bool,
     ) -> YdbResult<QueryResult> {
         let mut req = req;
         req.session_id.clone_from(&self.id);
         req.query_id = Some(prepared.query_id.clone());
         req.yql_text.clear();
         req.operation_params = self.timeouts.operation_params();
-        self.execute_data_query(req, error_on_truncate).await
+        self.execute_data_query(req, ignore_truncated).await
     }
 
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {

@@ -1405,14 +1405,14 @@ async fn read_rows_on_session_rpc() -> YdbResult<()> {
         )
         .await?;
 
-    let mut session = table_client.create_session().await?;
-    session
-        .bulk_upsert(
+    table_client
+        .retry_bulk_upsert(
             table_path.clone(),
             vec![ydb_struct!("id" => 42_i64, "val" => 7_i64)],
         )
         .await?;
 
+    let mut session = table_client.create_session().await?;
     let result = session
         .read_rows(
             ReadRowsRequest::new(table_path.clone())
@@ -1805,8 +1805,7 @@ async fn truncated_result_on_data_query_rpc() -> YdbResult<()> {
         .retry_bulk_upsert(table_path.clone(), rows)
         .await?;
 
-    let strict_client = table_client.clone().with_error_on_truncate(true);
-    let truncate_err = strict_client
+    let truncate_err = table_client
         .retry_transaction(|mut t| {
             let select_query = Arc::clone(&select_query);
             async move {
@@ -1821,7 +1820,7 @@ async fn truncated_result_on_data_query_rpc() -> YdbResult<()> {
 
     let result = table_client
         .clone()
-        .with_error_on_truncate(false)
+        .with_ignore_truncated(true)
         .retry_transaction(|mut t| {
             let select_query = Arc::clone(&select_query);
             async move {
@@ -1870,15 +1869,14 @@ async fn truncated_result_on_read_rows_rpc() -> YdbResult<()> {
         .map(|id| ydb_struct!("id" => id))
         .collect();
 
-    let strict_client = table_client.clone().with_error_on_truncate(true);
-    let err = strict_client
+    let err = table_client
         .retry_read_rows(table_path.clone(), keys.clone(), None)
         .await;
     assert!(matches!(err, Err(YdbError::TruncatedResult { .. })));
 
     let result_set = table_client
         .clone()
-        .with_error_on_truncate(false)
+        .with_ignore_truncated(true)
         .retry_read_rows(table_path.clone(), keys, None)
         .await?;
     assert!(result_set.is_truncated());
