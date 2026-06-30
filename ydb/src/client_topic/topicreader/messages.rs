@@ -156,11 +156,6 @@ impl TopicReaderMessage {
     }
 
     #[cfg(test)]
-    pub(crate) fn test_message(epoch: usize, bytes_to_release: i64) -> Self {
-        Self::test_message_full(1, 1, epoch, bytes_to_release)
-    }
-
-    #[cfg(test)]
     pub(crate) fn test_message_full(
         partition_session_id: i64,
         partition_id: i64,
