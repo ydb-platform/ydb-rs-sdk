@@ -149,14 +149,20 @@ impl RuntimeHandle {
         session_id: PartitionSessionId,
         partition_id: PartitionId,
     ) -> YdbResult<()> {
-        let mut state = self.lock_state()?;
+        let stop_result = {
+            let mut state = self.lock_state()?;
 
-        match &mut *state {
-            State::Active(active) => {
-                active.buffer.register_stopping(session_id, partition_id)?;
+            match &mut *state {
+                State::Active(active) => {
+                    active.buffer.register_stopping(session_id, partition_id)?
+                }
+                State::Reconnecting => false,
+                State::Failed(err) => return Err(err.clone()),
             }
-            State::Reconnecting => {}
-            State::Failed(err) => return Err(err.clone()),
+        };
+
+        if stop_result {
+            self.inner.messages_available.notify_one();
         }
 
         Ok(())
@@ -541,6 +547,48 @@ mod tests {
 
         let batch = runtime.pop_batch(10).await.expect("pop should succeed");
         assert_eq!(batch.messages.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn stopping_parent_notifies_waiting_reader_when_child_unblocks() -> YdbResult<()> {
+        use std::time::Duration;
+
+        use crate::client_topic::topicreader::messages::TopicReaderMessage;
+
+        let (outgoing_tx, _outgoing_rx) = mpsc::unbounded_channel();
+        let runtime = RuntimeHandle::with_connection(Connection::new(outgoing_tx, 1));
+
+        runtime.register_starting_partition(psid(1), pid(10))?;
+        runtime.push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 1, 0)])?;
+        runtime.register_ending_partition(psid(1), vec![pid(20)])?;
+        runtime.register_starting_partition(psid(2), pid(20))?;
+        runtime.push_batch(vec![TopicReaderMessage::test_message_full(2, 20, 1, 0)])?;
+
+        let parent = runtime.pop_batch(10).await?;
+        assert_eq!(
+            parent.messages[0].get_commit_marker().partition_session_id,
+            psid(1)
+        );
+
+        let waiting_runtime = runtime.clone();
+        let waiting_pop = tokio::spawn(async move { waiting_runtime.pop_batch(10).await });
+        tokio::task::yield_now().await;
+
+        // The child message is already buffered, so no push_batch notification will happen.
+        // Parent stop must notify the waiter when it unblocks the child.
+        runtime.register_stopping_partition(psid(1), pid(10))?;
+
+        let child = tokio::time::timeout(Duration::from_millis(100), waiting_pop)
+            .await
+            .expect("child pop should be notified after parent stop")
+            .expect("child pop task should not panic")
+            .expect("child pop should succeed");
+
+        assert_eq!(
+            child.messages[0].get_commit_marker().partition_session_id,
+            psid(2)
+        );
+        Ok(())
     }
 
     fn runtime_with_epoch(

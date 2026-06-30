@@ -106,6 +106,13 @@ impl MessageBuffer {
         Ok(!queue.is_empty())
     }
 
+    fn queue_has_messages(&self, session_id: PartitionSessionId) -> bool {
+        self.queues
+            .get(&session_id)
+            .map(|queue| !queue.is_empty())
+            .unwrap_or(false)
+    }
+
     pub(super) fn register_starting(
         &mut self,
         psid: PartitionSessionId,
@@ -133,11 +140,17 @@ impl MessageBuffer {
         Ok(())
     }
 
+    /// Registers a partition session stop.
+    ///
+    /// Returns `Ok(true)` when this stop unblocked a child session that already
+    /// has buffered messages, so `pop_batch` waiters must be notified.
     pub(super) fn register_stopping(
         &mut self,
         psid: PartitionSessionId,
         pid: PartitionId,
-    ) -> YdbResult<()> {
+    ) -> YdbResult<bool> {
+        let mut messages_became_available = false;
+
         self.round_robin.remove(psid);
         if self.queues.remove(&psid).is_none() {
             return Err(YdbError::custom(format!(
@@ -160,7 +173,7 @@ impl MessageBuffer {
         }
 
         let Some(child_pids) = self.pending_children.remove(&psid) else {
-            return Ok(());
+            return Ok(false);
         };
 
         for pid in child_pids {
@@ -178,11 +191,12 @@ impl MessageBuffer {
                     continue;
                 };
 
+                messages_became_available |= self.queue_has_messages(psid);
                 self.round_robin.push(psid);
             }
         }
 
-        Ok(())
+        Ok(messages_became_available)
     }
 
     pub(super) fn register_ending(
