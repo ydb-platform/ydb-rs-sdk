@@ -12,8 +12,12 @@ use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::retry::{NoRetrier, Retry, RetryParams, TimeoutRetrier};
 use crate::table_service_types::{CopyTableItem, TableDescription};
+use crate::table_requests::{
+    AlterTableRequest, CreateTableRequest, DropTableRequest, PreparedDataQuery, ReadTableOptions,
+    TableOptionsDescription,
+};
 use crate::types_converters::try_vec_to_list_of_structs;
-use crate::{Query, StreamResult};
+use crate::{Query, QueryResult, StreamReadTableResult, StreamResult};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -299,7 +303,12 @@ impl TableClient {
         self.retry(|| async {
             let mut session = self.create_session().await?;
             session
-                .read_rows(table_path.clone(), keys.clone(), columns.clone())
+                .read_rows(
+                    table_path.clone(),
+                    keys.clone(),
+                    columns.clone(),
+                    self.error_on_truncate,
+                )
                 .await
         })
         .await
@@ -572,5 +581,88 @@ impl TableClient {
         })
         .await
         .map_err(YdbOrCustomerError::to_ydb_error)
+    }
+
+    /// Create a table via `CreateTable` RPC (go-sdk: `Session.CreateTable`).
+    pub async fn retry_create_table(&self, request: CreateTableRequest) -> YdbResult<()> {
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            session.create_table(request.clone()).await
+        })
+        .await
+    }
+
+    /// Drop a table via `DropTable` RPC.
+    pub async fn retry_drop_table(&self, request: DropTableRequest) -> YdbResult<()> {
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            session.drop_table(request.clone()).await
+        })
+        .await
+    }
+
+    /// Alter a table via `AlterTable` RPC (columns, attributes, etc.).
+    pub async fn retry_alter_table(&self, request: AlterTableRequest) -> YdbResult<()> {
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            session.alter_table(request.clone()).await
+        })
+        .await
+    }
+
+    /// Prepare a data query for repeated execution (go-sdk: `Session.Prepare`).
+    pub async fn retry_prepare_data_query(
+        &self,
+        yql_text: impl Into<String>,
+    ) -> YdbResult<PreparedDataQuery> {
+        let yql_text = yql_text.into();
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            session.prepare_data_query(yql_text.clone()).await
+        })
+        .await
+    }
+
+    /// Describe cluster-wide table option presets (go-sdk: `Session.DescribeTableOptions`).
+    pub async fn retry_describe_table_options(&self) -> YdbResult<TableOptionsDescription> {
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            session.describe_table_options().await
+        })
+        .await
+    }
+
+    /// Stream-read a table without SQL (go-sdk: `Session.StreamReadTable`).
+    pub async fn retry_stream_read_table(
+        &self,
+        path: impl Into<String>,
+        options: ReadTableOptions,
+    ) -> YdbResult<StreamReadTableResult> {
+        let path = path.into();
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            session
+                .stream_read_table(path.clone(), options.clone())
+                .await
+        })
+        .await
+    }
+
+    /// Prepare and execute a data query on the same session (go-sdk: `Prepare` + `Statement.Execute`).
+    pub async fn retry_execute_prepared_query(
+        &self,
+        yql_text: impl Into<String>,
+        query: Query,
+        mode: Mode,
+    ) -> YdbResult<QueryResult> {
+        let yql_text = yql_text.into();
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            let prepared = session.prepare_data_query(yql_text.clone()).await?;
+            session
+                .execute_prepared_query(&prepared, query.clone(), mode)
+                .await
+        })
+        .await
     }
 }

@@ -34,6 +34,8 @@ pub struct TableDescription {
     pub indexes: Vec<IndexDescription>,
     /// YDB table storage type (Row/Column)
     pub store_type: StoreType,
+    /// User-defined table attributes (key/value, up to 10 KB total).
+    pub attributes: std::collections::HashMap<String, String>,
 }
 
 /// Error description of an unknown/unsupported column type

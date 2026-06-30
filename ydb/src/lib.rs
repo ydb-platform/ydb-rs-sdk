@@ -86,6 +86,7 @@ mod test_helpers;
 pub(crate) mod coordination_test;
 pub(crate) mod dicovery_pessimization_interceptor;
 mod table_service_types;
+mod table_requests;
 #[cfg(test)]
 mod test_integration_helper;
 #[cfg(test)]
@@ -184,7 +185,15 @@ pub use discovery::{Discovery, DiscoveryState, StaticDiscovery};
 // full enum pub types
 pub use query::Query;
 // full enum pub types
-pub use result::{ExplainResult, QueryResult, ResultSet, ResultSetRowsIter, Row, StreamResult};
+pub use result::{
+    ExplainResult, QueryResult, ResultSet, ResultSetRowsIter, Row, StreamReadTableResult,
+    StreamResult,
+};
+pub use table_requests::{
+    AlterTableRequest, CreateTableRequest, DropTableRequest, NamedPolicyDescription,
+    PreparedDataQuery, ReadTableKeyBound, ReadTableKeyRange, ReadTableOptions, TableColumn,
+    TableOptionsDescription,
+};
 // full enum pub types
 pub use transaction::{Mode, Transaction, TransactionInfo};
 // full enum pub types

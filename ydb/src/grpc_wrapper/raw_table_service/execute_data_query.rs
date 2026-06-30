@@ -11,6 +11,7 @@ pub(crate) struct RawExecuteDataQueryRequest {
     pub session_id: String,
     pub tx_control: RawTransactionControl,
     pub yql_text: String,
+    pub query_id: Option<String>,
     pub operation_params: RawOperationParams,
     pub params: HashMap<String, RawTypedValue>,
     pub keep_in_cache: bool,
@@ -19,13 +20,16 @@ pub(crate) struct RawExecuteDataQueryRequest {
 
 impl From<RawExecuteDataQueryRequest> for ydb_grpc::ydb_proto::table::ExecuteDataQueryRequest {
     fn from(v: RawExecuteDataQueryRequest) -> Self {
+        let query_body = if let Some(query_id) = v.query_id {
+            ydb_grpc::ydb_proto::table::query::Query::Id(query_id)
+        } else {
+            ydb_grpc::ydb_proto::table::query::Query::YqlText(v.yql_text)
+        };
         Self {
             session_id: v.session_id,
             tx_control: Some(v.tx_control.into()),
             query: Some(ydb_grpc::ydb_proto::table::Query {
-                query: Some(ydb_grpc::ydb_proto::table::query::Query::YqlText(
-                    v.yql_text,
-                )),
+                query: Some(query_body),
             }),
             parameters: v.params.into_iter().map(|(k, v)| (k, v.into())).collect(),
             query_cache_policy: Some(ydb_grpc::ydb_proto::table::QueryCachePolicy {

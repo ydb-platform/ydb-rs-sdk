@@ -29,6 +29,7 @@ pub(crate) struct RawDescribeTableResult {
     pub primary_key: Vec<String>,
     pub indexes: Vec<RawIndexDescription>,
     pub store_type: RawStoreType,
+    pub attributes: std::collections::HashMap<String, String>,
 }
 
 impl TryFrom<ydb_grpc::ydb_proto::table::DescribeTableResult> for RawDescribeTableResult {
@@ -54,6 +55,7 @@ impl TryFrom<ydb_grpc::ydb_proto::table::DescribeTableResult> for RawDescribeTab
             primary_key: value.primary_key,
             indexes,
             store_type: value.store_type.try_into()?,
+            attributes: value.attributes,
         })
     }
 }

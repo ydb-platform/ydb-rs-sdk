@@ -111,6 +111,7 @@ impl Transaction for AutoCommit {
                 }),
             },
             yql_text: query.text,
+            query_id: None,
             operation_params: self.timeouts.operation_params(),
             params: query
                 .parameters
@@ -391,6 +392,7 @@ impl Transaction for SerializableReadWriteTx {
                 tx_selector,
             },
             yql_text: query.text,
+            query_id: None,
 
             operation_params: self.timeouts.operation_params(),
             params: query

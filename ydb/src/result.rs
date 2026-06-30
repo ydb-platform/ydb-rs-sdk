@@ -31,11 +31,9 @@ impl QueryResult {
         let mut results = Vec::with_capacity(raw_res.result_sets.len());
         for current_set in raw_res.result_sets.into_iter() {
             if error_on_truncate && current_set.truncated {
-                return Err(
-                    format!("got truncated result. result set index: {}", results.len())
-                        .as_str()
-                        .into(),
-                );
+                return Err(YdbError::TruncatedResult {
+                    result_set_index: results.len(),
+                });
             }
             let result_set = ResultSet::try_from(current_set)?;
 
@@ -100,7 +98,7 @@ impl ResultSet {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn truncated(&self) -> bool {
+    pub fn is_truncated(&self) -> bool {
         self.raw_result_set.truncated
     }
 }
@@ -185,6 +183,35 @@ impl Iterator for ResultSetRowsIter {
 
 pub struct StreamResult {
     pub(crate) results: tonic::codec::Streaming<ExecuteScanQueryPartialResponse>,
+}
+
+/// Streaming table read (`StreamReadTable` RPC, go-sdk: `Session.StreamReadTable`).
+pub struct StreamReadTableResult {
+    pub(crate) parts: tonic::codec::Streaming<ydb_grpc::ydb_proto::table::ReadTableResponse>,
+}
+
+impl StreamReadTableResult {
+    pub async fn next_result_set(&mut self) -> YdbResult<Option<ResultSet>> {
+        let Some(part) = self.parts.message().await? else {
+            return Ok(None);
+        };
+        let raw_part =
+            crate::grpc_wrapper::raw_table_service::stream_read_table::RawReadTableResponsePart::try_from(
+                part,
+            )
+            .map_err(YdbError::from)?;
+        if raw_part.status != StatusCode::Success {
+            return Err(YdbError::YdbStatusError(YdbStatusError {
+                message: format!("{:?}", raw_part.issues),
+                operation_status: raw_part.status.into(),
+                issues: raw_part.issues,
+            }));
+        }
+        let Some(raw_set) = raw_part.result_set else {
+            return Ok(None);
+        };
+        Ok(Some(ResultSet::try_from(raw_set)?))
+    }
 }
 
 impl StreamResult {

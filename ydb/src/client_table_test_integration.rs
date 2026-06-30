@@ -14,6 +14,9 @@ use tracing_test::traced_test;
 use crate::client_table::RetryOptions;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::query::Query;
+use crate::table_requests::{
+    CreateTableRequest, DropTableRequest, ReadTableOptions, TableColumn,
+};
 use crate::table_service_types::{CopyTableItem, IndexType, StoreType};
 use crate::test_integration_helper::create_client;
 use crate::transaction::Mode;
@@ -1329,5 +1332,115 @@ async fn grpc_max_message_size_limit_exceeded() -> YdbResult<()> {
         .execute_schema_query(format!("DROP TABLE {TABLE}"))
         .await;
 
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn create_drop_table_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_name = format!("rpc_table_{rand_str}");
+    let database_path = client.database();
+    let table_path = format!("{database_path}/{table_name}");
+
+    let request = CreateTableRequest::new(table_path.clone())
+        .with_column(TableColumn::new("id", Value::Int64(0)))
+        .with_column(TableColumn::new("val", Value::Text(String::new())))
+        .with_primary_key(["id"]);
+    table_client.retry_create_table(request).await?;
+
+    let desc = table_client.describe_table(table_path.clone()).await?;
+    assert_eq!(desc.columns.len(), 2);
+    assert_eq!(desc.primary_key, vec!["id"]);
+
+    table_client
+        .retry_drop_table(DropTableRequest::new(table_path))
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn stream_read_table_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_name = format!("stream_read_{rand_str}");
+    let table_path = format!("/local/{table_name}");
+
+    table_client
+        .retry_execute_scheme_query(format!(
+            "CREATE TABLE {table_name} (id Int64 NOT NULL, val Int64, PRIMARY KEY (id))"
+        ))
+        .await?;
+
+    table_client
+        .retry_execute_bulk_upsert(
+            table_path.clone(),
+            vec![
+                ydb_struct!("id" => 1_i64, "val" => 10_i64),
+                ydb_struct!("id" => 2_i64, "val" => 20_i64),
+            ],
+        )
+        .await?;
+
+    let mut stream = table_client
+        .retry_stream_read_table(table_path, ReadTableOptions::default())
+        .await?;
+    let mut row_count = 0;
+    while let Some(result_set) = stream.next_result_set().await? {
+        row_count += result_set.rows().count();
+    }
+    assert_eq!(row_count, 2);
+
+    table_client
+        .retry_execute_scheme_query(format!("DROP TABLE {table_name}"))
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn prepare_data_query_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+
+    let result = table_client
+        .retry_execute_prepared_query(
+            "SELECT $v + $v AS res",
+            Query::new("").with_params(ydb_params!("$v" => 21_i32)),
+            Mode::OnlineReadonly,
+        )
+        .await?;
+
+    assert_eq!(
+        Value::Int32(42),
+        result
+            .into_only_result()?
+            .rows()
+            .next()
+            .unwrap()
+            .remove_field_by_name("res")?
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn describe_table_options_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let options = client.table_client().retry_describe_table_options().await?;
+    trace!("describe_table_options: {:?}", options);
+    // Presets may be empty on minimal clusters; the RPC itself must succeed.
+    let _ = options.table_profile_presets;
     Ok(())
 }

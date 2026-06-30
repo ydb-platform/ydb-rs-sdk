@@ -2,6 +2,7 @@ use crate::client::TimeoutSettings;
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
+use crate::grpc_wrapper::raw_table_service::alter_table::RawAlterTableRequest;
 use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertRequest;
 use crate::grpc_wrapper::raw_table_service::commit_transaction::{
     RawCommitTransactionRequest, RawCommitTransactionResult,
@@ -12,8 +13,13 @@ use crate::grpc_wrapper::raw_table_service::copy_table::{
 use crate::grpc_wrapper::raw_table_service::create_session::{
     RawCreateSessionRequest, RawCreateSessionResult,
 };
+use crate::grpc_wrapper::raw_table_service::create_table::RawCreateTableRequest;
+use crate::grpc_wrapper::raw_table_service::drop_table::RawDropTableRequest;
 use crate::grpc_wrapper::raw_table_service::describe_table::{
     RawDescribeTableRequest, RawDescribeTableResult,
+};
+use crate::grpc_wrapper::raw_table_service::describe_table_options::{
+    RawDescribeTableOptionsRequest, RawDescribeTableOptionsResult,
 };
 use crate::grpc_wrapper::raw_table_service::execute_data_query::{
     RawExecuteDataQueryRequest, RawExecuteDataQueryResult,
@@ -23,8 +29,12 @@ use crate::grpc_wrapper::raw_table_service::explain_data_query::{
     RawExplainDataQueryRequest, RawExplainDataQueryResult,
 };
 use crate::grpc_wrapper::raw_table_service::keepalive::{RawKeepAliveRequest, RawKeepAliveResult};
+use crate::grpc_wrapper::raw_table_service::prepare_data_query::{
+    RawPrepareDataQueryRequest, RawPrepareDataQueryResult,
+};
 use crate::grpc_wrapper::raw_table_service::read_rows::{RawReadRowsRequest, RawReadRowsResponse};
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
+use crate::grpc_wrapper::raw_table_service::stream_read_table::RawStreamReadTableRequest;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use tracing::trace;
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
@@ -165,6 +175,63 @@ impl RawTableClient {
             req => ydb_grpc::ydb_proto::table::DescribeTableRequest,
             ydb_grpc::ydb_proto::table::DescribeTableResult => RawDescribeTableResult
         );
+    }
+
+    pub async fn create_table(&mut self, req: RawCreateTableRequest) -> RawResult<()> {
+        request_without_result!(
+            self.service.create_table,
+            req => ydb_grpc::ydb_proto::table::CreateTableRequest
+        );
+    }
+
+    pub async fn drop_table(&mut self, req: RawDropTableRequest) -> RawResult<()> {
+        request_without_result!(
+            self.service.drop_table,
+            req => ydb_grpc::ydb_proto::table::DropTableRequest
+        );
+    }
+
+    pub async fn alter_table(&mut self, req: RawAlterTableRequest) -> RawResult<()> {
+        request_without_result!(
+            self.service.alter_table,
+            req => ydb_grpc::ydb_proto::table::AlterTableRequest
+        );
+    }
+
+    pub async fn prepare_data_query(
+        &mut self,
+        req: RawPrepareDataQueryRequest,
+    ) -> RawResult<RawPrepareDataQueryResult> {
+        request_with_result!(
+            self.service.prepare_data_query,
+            req => ydb_grpc::ydb_proto::table::PrepareDataQueryRequest,
+            ydb_grpc::ydb_proto::table::PrepareQueryResult => RawPrepareDataQueryResult
+        );
+    }
+
+    pub async fn describe_table_options(
+        &mut self,
+        req: RawDescribeTableOptionsRequest,
+    ) -> RawResult<RawDescribeTableOptionsResult> {
+        request_with_result!(
+            self.service.describe_table_options,
+            req => ydb_grpc::ydb_proto::table::DescribeTableOptionsRequest,
+            ydb_grpc::ydb_proto::table::DescribeTableOptionsResult => RawDescribeTableOptionsResult
+        );
+    }
+
+    pub async fn stream_read_table(
+        &mut self,
+        req: RawStreamReadTableRequest,
+    ) -> RawResult<tonic::Streaming<ydb_grpc::ydb_proto::table::ReadTableResponse>> {
+        let grpc_req = ydb_grpc::ydb_proto::table::ReadTableRequest::from(req);
+        trace!(
+            "stream_read_table request: {}",
+            crate::trace_helpers::ensure_len_string(
+                serde_json::to_string(&grpc_req).unwrap_or_else(|_| "bad json".into())
+            )
+        );
+        Ok(self.service.stream_read_table(grpc_req).await?.into_inner())
     }
 }
 

@@ -3,7 +3,11 @@ use crate::client_table::TableServiceClientType;
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_wrapper::raw_table_service::read_rows::RawReadRowsRequest;
 use crate::query::Query;
-use crate::result::{ExplainResult, QueryResult, StreamResult};
+use crate::result::{ExplainResult, QueryResult, StreamReadTableResult, StreamResult};
+use crate::table_requests::{
+    AlterTableRequest, CreateTableRequest, DropTableRequest, PreparedDataQuery, ReadTableOptions,
+    TableOptionsDescription,
+};
 use crate::types::Value;
 use derivative::Derivative;
 use itertools::Itertools;
@@ -22,11 +26,24 @@ use crate::grpc_wrapper::raw_table_service::copy_table::{
     RawCopyTableRequest, RawCopyTablesRequest,
 };
 use crate::grpc_wrapper::raw_table_service::describe_table::RawDescribeTableRequest;
+use crate::grpc_wrapper::raw_table_service::describe_table_options::{
+    RawDescribeTableOptionsRequest, RawDescribeTableOptionsResult,
+};
+use crate::grpc_wrapper::raw_table_service::drop_table::RawDropTableRequest;
 use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryRequest;
+use crate::grpc_wrapper::raw_table_service::query_stats::RawQueryStatMode;
+use crate::grpc_wrapper::raw_table_service::transaction_control::{
+    RawTransactionControl, RawTxSelector, RawTxSettings,
+};
 use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
 use crate::grpc_wrapper::raw_table_service::explain_data_query::RawExplainDataQueryRequest;
+use crate::grpc_wrapper::raw_table_service::prepare_data_query::{
+    RawPrepareDataQueryRequest, RawPrepareDataQueryResult,
+};
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
+use crate::grpc_wrapper::raw_table_service::stream_read_table::RawStreamReadTableRequest;
 use crate::table_service_types::{ColumnDescription, CopyTableItem, TableDescription};
+use crate::transaction::Mode;
 use crate::trace_helpers::ensure_len_string;
 use tracing::{debug, trace};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
@@ -152,6 +169,7 @@ impl Session {
         table_path: String,
         keys: Value,
         columns: Vec<String>,
+        error_on_truncate: bool,
     ) -> YdbResult<crate::ResultSet> {
         debug_assert!(matches!(keys, Value::List(_)));
 
@@ -164,7 +182,13 @@ impl Session {
 
         let raw_read_rows_response = in_flight_table_rpc!(self, table, table.read_rows(req))?;
 
-        raw_read_rows_response.result_set.try_into()
+        let result_set: crate::ResultSet = raw_read_rows_response.result_set.try_into()?;
+        if error_on_truncate && result_set.is_truncated() {
+            return Err(YdbError::TruncatedResult {
+                result_set_index: 0,
+            });
+        }
+        Ok(result_set)
     }
 
     pub(crate) async fn execute_bulk_upsert(
@@ -349,7 +373,133 @@ impl Session {
             primary_key: raw_result.primary_key,
             indexes,
             store_type: raw_result.store_type.into(),
+            attributes: raw_result.attributes,
         })
+    }
+
+    pub async fn create_table(&mut self, request: CreateTableRequest) -> YdbResult<()> {
+        let raw = request.into_raw(self.id.clone(), self.timeouts.operation_params())?;
+        in_flight_table_rpc!(self, table, table.create_table(raw))?;
+        Ok(())
+    }
+
+    pub async fn drop_table(&mut self, request: DropTableRequest) -> YdbResult<()> {
+        let req = RawDropTableRequest {
+            session_id: self.id.clone(),
+            path: request.path,
+            operation_params: self.timeouts.operation_params(),
+        };
+        in_flight_table_rpc!(self, table, table.drop_table(req))?;
+        Ok(())
+    }
+
+    pub async fn alter_table(&mut self, request: AlterTableRequest) -> YdbResult<()> {
+        let raw = request.into_raw(self.id.clone(), self.timeouts.operation_params())?;
+        in_flight_table_rpc!(self, table, table.alter_table(raw))?;
+        Ok(())
+    }
+
+    pub async fn prepare_data_query(
+        &mut self,
+        yql_text: String,
+    ) -> YdbResult<PreparedDataQuery> {
+        let req = RawPrepareDataQueryRequest {
+            session_id: self.id.clone(),
+            yql_text: yql_text.clone(),
+            operation_params: self.timeouts.operation_params(),
+        };
+        let raw: RawPrepareDataQueryResult =
+            in_flight_table_rpc!(self, table, table.prepare_data_query(req))?;
+        Ok(PreparedDataQuery {
+            query_id: raw.query_id,
+            yql_text,
+        })
+    }
+
+    pub async fn describe_table_options(&mut self) -> YdbResult<TableOptionsDescription> {
+        let req = RawDescribeTableOptionsRequest {
+            operation_params: self.timeouts.operation_params(),
+        };
+        let raw: RawDescribeTableOptionsResult =
+            in_flight_table_rpc!(self, table, table.describe_table_options(req))?;
+        Ok(raw.into())
+    }
+
+    pub async fn stream_read_table(
+        &mut self,
+        path: String,
+        options: ReadTableOptions,
+    ) -> YdbResult<StreamReadTableResult> {
+        let key_range = options
+            .key_range
+            .map(|range| range.into_raw())
+            .transpose()?;
+        let req = RawStreamReadTableRequest {
+            session_id: self.id.clone(),
+            path,
+            key_range,
+            columns: options.columns,
+            ordered: options.ordered,
+            row_limit: options.row_limit,
+        };
+        let mut in_flight = InFlightTableRpcGuard {
+            session: self,
+            active: true,
+        };
+        let stream = match in_flight.session.get_table_client().await {
+            Ok(mut client) => client.stream_read_table(req).await,
+            Err(err) => {
+                in_flight.active = false;
+                return Err(err);
+            }
+        };
+        in_flight.active = false;
+        let stream = in_flight.session.handle_raw_result(stream)?;
+        Ok(StreamReadTableResult { parts: stream })
+    }
+
+    /// Execute a prepared data query (go-sdk: `Statement.Execute`).
+    pub async fn execute_prepared_query(
+        &mut self,
+        prepared: &PreparedDataQuery,
+        query: Query,
+        mode: Mode,
+    ) -> YdbResult<QueryResult> {
+        let params = query
+            .parameters
+            .into_iter()
+            .map(|(k, v)| v.try_into().map(|converted| (k, converted)))
+            .try_collect()?;
+        let req = RawExecuteDataQueryRequest {
+            session_id: String::new(),
+            tx_control: RawTransactionControl {
+                commit_tx: true,
+                tx_selector: RawTxSelector::Begin(RawTxSettings {
+                    mode: mode.into(),
+                }),
+            },
+            yql_text: String::new(),
+            query_id: None,
+            operation_params: self.timeouts.operation_params(),
+            params,
+            keep_in_cache: query.keep_in_cache,
+            collect_stats: RawQueryStatMode::None,
+        };
+        self.execute_prepared_data_query(prepared, req, false).await
+    }
+
+    pub(crate) async fn execute_prepared_data_query(
+        &mut self,
+        prepared: &PreparedDataQuery,
+        req: RawExecuteDataQueryRequest,
+        error_on_truncate: bool,
+    ) -> YdbResult<QueryResult> {
+        let mut req = req;
+        req.session_id.clone_from(&self.id);
+        req.query_id = Some(prepared.query_id.clone());
+        req.yql_text.clear();
+        req.operation_params = self.timeouts.operation_params();
+        self.execute_data_query(req, error_on_truncate).await
     }
 
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {
