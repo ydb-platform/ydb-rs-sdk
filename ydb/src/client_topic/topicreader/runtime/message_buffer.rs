@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
+use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
 use crate::client_topic::topicreader::messages::TopicReaderMessage;
 use crate::{YdbError, YdbResult};
 
@@ -14,7 +15,7 @@ pub(super) struct BufferedBatch {
 #[derive(Default)]
 pub(super) struct MessageBuffer {
     /// Buffered messages per partition session, in arrival order.
-    queues: HashMap<i64, VecDeque<TopicReaderMessage>>,
+    queues: HashMap<PartitionSessionId, VecDeque<TopicReaderMessage>>,
 
     /// Round-robin schedule over active partition session IDs that are not blocked.
     /// The queue may be empty because sessions enter the schedule on Start.
@@ -22,17 +23,17 @@ pub(super) struct MessageBuffer {
 
     /// Maps partition_id → session_id. Updated on Start and read responses so that
     /// Stop can find the session for a child partition when unblocking it.
-    partition_to_session: HashMap<i64, i64>,
+    partition_to_session: HashMap<PartitionId, PartitionSessionId>,
 
     /// Maps parent session_id → child partition_ids registered via `EndPartitionSession`.
     /// Only populated when the parent still has buffered messages; empty-parent cases
     /// skip registration entirely because there is nothing to order against.
-    pending_children: HashMap<i64, Vec<i64>>,
+    pending_children: HashMap<PartitionSessionId, Vec<PartitionId>>,
 
     /// Maps child partition_id → number of parent sessions that must stop before
     /// the child may enter the round-robin. Decremented on Stop; the child becomes
     /// readable only when the count reaches zero.
-    blocked_partition_ids: HashMap<i64, usize>,
+    blocked_partition_ids: HashMap<PartitionId, usize>,
 }
 
 impl MessageBuffer {
@@ -95,7 +96,7 @@ impl MessageBuffer {
         Ok(None)
     }
 
-    fn queue_non_empty(&self, session_id: i64) -> YdbResult<bool> {
+    fn queue_non_empty(&self, session_id: PartitionSessionId) -> YdbResult<bool> {
         let Some(queue) = self.queues.get(&session_id) else {
             return Err(YdbError::custom(format!(
                 "topic reader end partition session for unknown partition session {session_id}"
@@ -105,7 +106,11 @@ impl MessageBuffer {
         Ok(!queue.is_empty())
     }
 
-    pub(super) fn register_starting(&mut self, psid: i64, pid: i64) -> YdbResult<()> {
+    pub(super) fn register_starting(
+        &mut self,
+        psid: PartitionSessionId,
+        pid: PartitionId,
+    ) -> YdbResult<()> {
         if self.queues.contains_key(&psid) {
             return Err(YdbError::custom(format!(
                 "topic reader duplicate start partition session {psid}"
@@ -128,7 +133,11 @@ impl MessageBuffer {
         Ok(())
     }
 
-    pub(super) fn register_stopping(&mut self, psid: i64, pid: i64) -> YdbResult<()> {
+    pub(super) fn register_stopping(
+        &mut self,
+        psid: PartitionSessionId,
+        pid: PartitionId,
+    ) -> YdbResult<()> {
         self.round_robin.remove(psid);
         if self.queues.remove(&psid).is_none() {
             return Err(YdbError::custom(format!(
@@ -176,7 +185,11 @@ impl MessageBuffer {
         Ok(())
     }
 
-    pub(super) fn register_ending(&mut self, parent_sid: i64, child_pids: Vec<i64>) -> YdbResult<()> {
+    pub(super) fn register_ending(
+        &mut self,
+        parent_sid: PartitionSessionId,
+        child_pids: Vec<PartitionId>,
+    ) -> YdbResult<()> {
         if !self.queue_non_empty(parent_sid)? {
             return Ok(());
         }
@@ -201,6 +214,14 @@ mod tests {
     use super::*;
     use crate::client_topic::topicreader::messages::TopicReaderMessage;
 
+    fn psid(value: i64) -> PartitionSessionId {
+        PartitionSessionId::from_raw(value)
+    }
+
+    fn pid(value: i64) -> PartitionId {
+        PartitionId::from_raw(value)
+    }
+
     fn msg(session_id: i64, partition_id: i64, epoch: usize, bytes: i64) -> TopicReaderMessage {
         TopicReaderMessage::test_message_full(session_id, partition_id, epoch, bytes)
     }
@@ -208,20 +229,20 @@ mod tests {
     #[test]
     fn push_routes_by_session() {
         let mut buf = MessageBuffer::default();
-        buf.register_starting(1, 10).unwrap();
-        buf.register_starting(2, 20).unwrap();
+        buf.register_starting(psid(1), pid(10)).unwrap();
+        buf.register_starting(psid(2), pid(20)).unwrap();
         buf.push_batch(vec![msg(1, 10, 0, 0), msg(1, 10, 0, 0)])
             .unwrap();
         buf.push_batch(vec![msg(2, 20, 0, 0)]).unwrap();
 
         let b0 = buf.pop_batch(1).unwrap().unwrap();
-        assert_eq!(b0.messages[0].commit_marker.partition_session_id, 1);
+        assert_eq!(b0.messages[0].commit_marker.partition_session_id, psid(1));
 
         let b1 = buf.pop_batch(1).unwrap().unwrap();
-        assert_eq!(b1.messages[0].commit_marker.partition_session_id, 2);
+        assert_eq!(b1.messages[0].commit_marker.partition_session_id, psid(2));
 
         let b2 = buf.pop_batch(1).unwrap().unwrap();
-        assert_eq!(b2.messages[0].commit_marker.partition_session_id, 1);
+        assert_eq!(b2.messages[0].commit_marker.partition_session_id, psid(1));
     }
 
     #[test]
@@ -231,8 +252,8 @@ mod tests {
         // Parent 1 (session 1, partition 10): 5 messages.
         // Parent 2 (session 2, partition 20): 1 message.
         // Both declare partition 30 as a child.
-        buf.register_starting(1, 10).unwrap();
-        buf.register_starting(2, 20).unwrap();
+        buf.register_starting(psid(1), pid(10)).unwrap();
+        buf.register_starting(psid(2), pid(20)).unwrap();
         buf.push_batch(vec![
             msg(1, 10, 0, 0),
             msg(1, 10, 0, 0),
@@ -242,16 +263,16 @@ mod tests {
         ])
         .unwrap();
         buf.push_batch(vec![msg(2, 20, 0, 0)]).unwrap();
-        buf.register_ending(1, vec![30]).unwrap();
-        buf.register_ending(2, vec![30]).unwrap();
+        buf.register_ending(psid(1), vec![pid(30)]).unwrap();
+        buf.register_ending(psid(2), vec![pid(30)]).unwrap();
 
         // Child (session 3, partition 30): 2 messages.
-        buf.register_starting(3, 30).unwrap();
+        buf.register_starting(psid(3), pid(30)).unwrap();
         buf.push_batch(vec![msg(3, 30, 0, 0), msg(3, 30, 0, 0)])
             .unwrap();
 
         assert!(
-            !buf.round_robin.contains(3),
+            !buf.round_robin.contains(psid(3)),
             "child must be blocked before either parent drains"
         );
 
@@ -260,12 +281,13 @@ mod tests {
         let mut pops = 0;
         loop {
             assert!(
-                !buf.round_robin.contains(3),
+                !buf.round_robin.contains(psid(3)),
                 "child must stay blocked while parents have messages"
             );
             let b = buf.pop_batch(2).unwrap().unwrap();
             assert_ne!(
-                b.messages[0].commit_marker.partition_session_id, 3,
+                b.messages[0].commit_marker.partition_session_id,
+                psid(3),
                 "child must not be served before both parents drain"
             );
             assert!(b.messages.len() <= 2, "cap=2 must be respected");
@@ -280,22 +302,25 @@ mod tests {
         assert_eq!(pops, 4);
 
         assert!(
-            !buf.round_robin.contains(3),
+            !buf.round_robin.contains(psid(3)),
             "child must stay blocked after parents drain but before they stop"
         );
 
-        buf.register_stopping(1, 10).unwrap();
+        buf.register_stopping(psid(1), pid(10)).unwrap();
         assert!(
-            !buf.round_robin.contains(3),
+            !buf.round_robin.contains(psid(3)),
             "child must stay blocked until every parent stops"
         );
-        buf.register_stopping(2, 20).unwrap();
-        assert!(buf.round_robin.contains(3), "child must unblock after stop");
+        buf.register_stopping(psid(2), pid(20)).unwrap();
+        assert!(
+            buf.round_robin.contains(psid(3)),
+            "child must unblock after stop"
+        );
 
         // cap=2 matches child queue length: all 2 messages in one pop.
         let b = buf.pop_batch(2).unwrap().unwrap();
         assert_eq!(b.messages.len(), 2);
-        assert_eq!(b.messages[0].commit_marker.partition_session_id, 3);
+        assert_eq!(b.messages[0].commit_marker.partition_session_id, psid(3));
         assert!(
             buf.pop_batch(2).unwrap().is_none(),
             "buffer must be empty after child drains"
@@ -305,7 +330,7 @@ mod tests {
     #[test]
     fn bytes_to_release_accumulated() {
         let mut buf = MessageBuffer::default();
-        buf.register_starting(1, 10).unwrap();
+        buf.register_starting(psid(1), pid(10)).unwrap();
         buf.push_batch(vec![msg(1, 10, 0, 0), msg(1, 10, 0, 100)])
             .unwrap();
         let b = buf.pop_batch(10).unwrap().unwrap();
@@ -316,7 +341,7 @@ mod tests {
     fn pop_returns_none_when_all_empty() {
         let mut buf = MessageBuffer::default();
         assert!(buf.pop_batch(10).unwrap().is_none());
-        buf.register_starting(1, 10).unwrap();
+        buf.register_starting(psid(1), pid(10)).unwrap();
         buf.push_batch(vec![msg(1, 10, 0, 0)]).unwrap();
         buf.pop_batch(10).unwrap();
         assert!(buf.pop_batch(10).unwrap().is_none());
@@ -325,27 +350,27 @@ mod tests {
     #[test]
     fn pop_skips_started_sessions_without_messages() {
         let mut buf = MessageBuffer::default();
-        buf.register_starting(1, 10).unwrap();
-        buf.register_starting(2, 20).unwrap();
+        buf.register_starting(psid(1), pid(10)).unwrap();
+        buf.register_starting(psid(2), pid(20)).unwrap();
         buf.push_batch(vec![msg(2, 20, 0, 0)]).unwrap();
 
         let b = buf.pop_batch(10).unwrap().unwrap();
-        assert_eq!(b.messages[0].commit_marker.partition_session_id, 2);
+        assert_eq!(b.messages[0].commit_marker.partition_session_id, psid(2));
     }
 
     #[test]
     fn stopped_child_is_not_unblocked_later() {
         let mut buf = MessageBuffer::default();
-        buf.register_starting(1, 10).unwrap();
+        buf.register_starting(psid(1), pid(10)).unwrap();
         buf.push_batch(vec![msg(1, 10, 0, 0)]).unwrap();
 
-        buf.register_ending(1, vec![20]).unwrap();
-        buf.register_starting(2, 20).unwrap();
+        buf.register_ending(psid(1), vec![pid(20)]).unwrap();
+        buf.register_starting(psid(2), pid(20)).unwrap();
         buf.push_batch(vec![msg(2, 20, 0, 0)]).unwrap();
-        buf.register_stopping(2, 20).unwrap();
-        buf.register_stopping(1, 10).unwrap();
+        buf.register_stopping(psid(2), pid(20)).unwrap();
+        buf.register_stopping(psid(1), pid(10)).unwrap();
 
-        assert!(!buf.round_robin.contains(2));
+        assert!(!buf.round_robin.contains(psid(2)));
     }
 
     #[test]

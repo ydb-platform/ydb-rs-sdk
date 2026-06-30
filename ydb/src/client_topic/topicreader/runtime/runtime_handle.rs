@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::sync::Notify;
 
+use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
 use crate::client_topic::topicreader::messages::{TopicReaderBatch, TopicReaderMessage};
 use crate::client_topic::topicreader::reader::TopicReaderCommitMarker;
 use crate::grpc_wrapper::raw_topic_service::common::partition::RawOffsetsRange;
@@ -12,7 +13,7 @@ use crate::{YdbError, YdbResult};
 
 use super::connection::Connection;
 use super::message_buffer::{BufferedBatch, MessageBuffer};
-use super::pending_commits::{CommitAckReceiver, PartitionSessionId, PendingCommits};
+use super::pending_commits::{CommitAckReceiver, PendingCommits};
 
 const RUNTIME_HANDLE_POISONED: &str = "topic reader runtime handle mutex poisoned";
 
@@ -127,8 +128,8 @@ impl RuntimeHandle {
 
     pub(crate) fn register_starting_partition(
         &self,
-        session_id: i64,
-        partition_id: i64,
+        session_id: PartitionSessionId,
+        partition_id: PartitionId,
     ) -> YdbResult<()> {
         let mut state = self.lock_state()?;
 
@@ -145,8 +146,8 @@ impl RuntimeHandle {
 
     pub(crate) fn register_stopping_partition(
         &self,
-        session_id: i64,
-        partition_id: i64,
+        session_id: PartitionSessionId,
+        partition_id: PartitionId,
     ) -> YdbResult<()> {
         let mut state = self.lock_state()?;
 
@@ -163,8 +164,8 @@ impl RuntimeHandle {
 
     pub(crate) fn register_ending_partition(
         &self,
-        session_id: i64,
-        child_partition_ids: Vec<i64>,
+        session_id: PartitionSessionId,
+        child_partition_ids: Vec<PartitionId>,
     ) -> YdbResult<()> {
         let mut state = self.lock_state()?;
 
@@ -203,7 +204,7 @@ impl RuntimeHandle {
                 let commit_message =
                     RawFromClientOneOf::CommitOffsetRequest(RawCommitOffsetRequest {
                         commit_offsets: vec![PartitionCommitOffset {
-                            partition_session_id: commit_marker.partition_session_id,
+                            partition_session_id: commit_marker.partition_session_id.as_raw(),
                             offsets: vec![RawOffsetsRange {
                                 start: commit_marker.start_offset,
                                 end: commit_marker.end_offset,
@@ -352,6 +353,14 @@ mod tests {
     use super::*;
     use crate::grpc_wrapper::raw_topic_service::stream_read::messages::RawReadRequest;
 
+    fn psid(value: i64) -> PartitionSessionId {
+        PartitionSessionId::from_raw(value)
+    }
+
+    fn pid(value: i64) -> PartitionId {
+        PartitionId::from_raw(value)
+    }
+
     #[test]
     fn commit_rejects_stale_epoch() {
         let (runtime, _outgoing_rx) = runtime_with_epoch(1);
@@ -440,7 +449,7 @@ mod tests {
         let (runtime, _outgoing_rx) = runtime_with_epoch(0);
 
         runtime
-            .register_starting_partition(1, 10)
+            .register_starting_partition(psid(1), pid(10))
             .expect("start should succeed");
         runtime
             .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 0, 10)])
@@ -457,7 +466,7 @@ mod tests {
             )
             .expect("install_connection should install next connection");
         runtime
-            .register_starting_partition(1, 10)
+            .register_starting_partition(psid(1), pid(10))
             .expect("start should succeed");
         runtime
             .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 1, 20)])
@@ -499,7 +508,7 @@ mod tests {
         let runtime = RuntimeHandle::with_connection(Connection::new(outgoing_tx, 1));
 
         runtime
-            .register_starting_partition(1, 10)
+            .register_starting_partition(psid(1), pid(10))
             .expect("start should succeed");
         runtime
             .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 1, 15)])
@@ -524,7 +533,7 @@ mod tests {
         drop(outgoing_rx);
 
         runtime
-            .register_starting_partition(1, 10)
+            .register_starting_partition(psid(1), pid(10))
             .expect("start should succeed");
         runtime
             .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 1, 15)])
@@ -546,8 +555,8 @@ mod tests {
 
     fn commit_marker(epoch: usize) -> TopicReaderCommitMarker {
         TopicReaderCommitMarker {
-            partition_session_id: 10,
-            partition_id: 20,
+            partition_session_id: psid(10),
+            partition_id: pid(20),
             start_offset: 30,
             end_offset: 40,
             topic: "test-topic".to_string(),

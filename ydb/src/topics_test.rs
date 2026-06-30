@@ -975,7 +975,7 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
 
         // Validate commit marker partition_id matches message partition_id
         assert_eq!(
-            commit_marker.partition_id,
+            commit_marker.partition_id.as_raw(),
             received_msg.get_partition_id(),
             "Message {} commit marker partition_id should match message partition_id. marker: {}, message: {}",
             i + 1, commit_marker.partition_id, received_msg.get_partition_id()

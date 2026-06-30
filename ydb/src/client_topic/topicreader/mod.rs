@@ -1,5 +1,6 @@
 mod decompressor;
 mod grpc_streamer;
+mod ids;
 pub(crate) mod messages;
 pub(crate) mod partition_state;
 pub(crate) mod reader;

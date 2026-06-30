@@ -10,6 +10,7 @@ use ydb_grpc::ydb_proto::topic::stream_read_message::{FromClient, FromServer};
 
 use crate::TopicReaderBatch;
 use crate::{
+    client_topic::topicreader::ids::{PartitionId, PartitionSessionId},
     grpc_connection_manager::GrpcConnectionManager,
     grpc_wrapper::{
         grpc_stream_wrapper::AsyncGrpcStreamWrapper,
@@ -141,7 +142,7 @@ async fn receive_messages(
     decompression_input_tx: mpsc::UnboundedSender<ReaderEvent>,
     epoch: usize,
 ) -> YdbResult<Infallible> {
-    let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
+    let mut sessions: HashMap<PartitionSessionId, PartitionSession> = HashMap::new();
 
     loop {
         let message = stream.receive::<RawFromServer>().await?;
@@ -156,10 +157,12 @@ async fn receive_messages(
             }
 
             RawFromServer::CommitOffsetResponse(resp) => {
-                let committed_iter = resp
-                    .partitions_committed_offsets
-                    .into_iter()
-                    .map(|offset| (offset.partition_session_id, offset.committed_offset));
+                let committed_iter = resp.partitions_committed_offsets.into_iter().map(|offset| {
+                    (
+                        PartitionSessionId::from_raw(offset.partition_session_id),
+                        offset.committed_offset,
+                    )
+                });
 
                 runtime.ack_commits(committed_iter)?;
             }
@@ -183,7 +186,7 @@ async fn receive_messages(
 
                 let response = RawFromClientOneOf::StartPartitionSessionResponse(
                     RawStartPartitionSessionResponse {
-                        partition_session_id,
+                        partition_session_id: partition_session_id.as_raw(),
                     },
                 );
                 stream.send_nowait(response)?;
@@ -195,9 +198,10 @@ async fn receive_messages(
                     graceful,
                     committed_offset,
                 } = req;
+                let partition_session_id = PartitionSessionId::from_raw(partition_session_id);
 
                 debug!(
-                    partition_session_id,
+                    %partition_session_id,
                     graceful,
                     committed_offset,
                     "topic reader received stop partition session request"
@@ -226,22 +230,27 @@ async fn receive_messages(
 
                 let response = RawFromClientOneOf::StopPartitionSessionResponse(
                     RawStopPartitionSessionResponse {
-                        partition_session_id,
+                        partition_session_id: partition_session_id.as_raw(),
                     },
                 );
                 stream.send_nowait(response)?;
             }
 
             RawFromServer::EndPartitionSession(end) => {
+                let partition_session_id = PartitionSessionId::from_raw(end.partition_session_id);
                 debug!(
-                    partition_session_id = end.partition_session_id,
+                    %partition_session_id,
                     "topic reader received end partition session"
                 );
-                if sessions.contains_key(&end.partition_session_id) {
+                if sessions.contains_key(&partition_session_id) {
                     decompression_input_tx
                         .send(ReaderEvent::EndPartitionSession {
-                            session_id: end.partition_session_id,
-                            child_partition_ids: end.child_partition_ids,
+                            session_id: partition_session_id,
+                            child_partition_ids: end
+                                .child_partition_ids
+                                .into_iter()
+                                .map(PartitionId::from_raw)
+                                .collect(),
                         })
                         .map_err(|_| {
                             YdbError::Transport(
@@ -251,7 +260,7 @@ async fn receive_messages(
                 } else {
                     return Err(YdbError::custom(format!(
                         "topic reader received end for unknown partition session {}",
-                        end.partition_session_id
+                        partition_session_id
                     )));
                 }
             }
@@ -269,12 +278,13 @@ async fn receive_messages(
 
 fn handle_read_response(
     resp: RawReadResponse,
-    sessions: &mut HashMap<i64, PartitionSession>,
+    sessions: &mut HashMap<PartitionSessionId, PartitionSession>,
     decompression_input_tx: &mpsc::UnboundedSender<ReaderEvent>,
     epoch: usize,
 ) -> YdbResult<()> {
     for partition_data in resp.partition_data {
         let partition_session_id = partition_data.partition_session_id;
+        let partition_session_id = PartitionSessionId::from_raw(partition_session_id);
         let session = match sessions.get_mut(&partition_session_id) {
             Some(s) => s,
             None => {

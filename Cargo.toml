@@ -16,6 +16,7 @@ rust-version = "1.85"
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]
+dbg_macro = "warn"
 large_enum_variant = "allow"
 
 [workspace.dependencies]
