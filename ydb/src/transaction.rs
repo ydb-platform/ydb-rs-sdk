@@ -14,7 +14,8 @@ use itertools::Itertools;
 use tracing::trace;
 use ydb_grpc::ydb_proto::table::transaction_settings::TxMode;
 use ydb_grpc::ydb_proto::table::{
-    OnlineModeSettings, SerializableModeSettings, SnapshotModeSettings,
+    OnlineModeSettings, SerializableModeSettings, SnapshotModeSettings, SnapshotRwModeSettings,
+    StaleModeSettings,
 };
 
 #[derive(Clone, Debug)]
@@ -23,18 +24,36 @@ pub struct TransactionInfo {
     pub(crate) session_id: String,
 }
 
+/// Table Service transaction isolation mode.
+///
+/// Mirrors [`QueryTxMode`](crate::QueryTxMode) for the modes available on interactive table
+/// transactions (`retry_transaction`, `TableTransaction`).
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Mode {
+    /// Online read-only with `allow_inconsistent_reads: false` (consistent reads).
     OnlineReadonly,
+    /// Online read-only with `allow_inconsistent_reads: true` (inconsistent reads).
+    OnlineReadonlyInconsistent,
     SnapshotReadOnly,
+    SnapshotReadWrite,
+    StaleReadOnly,
     SerializableReadWrite,
 }
 
 impl From<Mode> for TxMode {
     fn from(m: Mode) -> Self {
         match m {
-            Mode::OnlineReadonly => TxMode::OnlineReadOnly(OnlineModeSettings::default()),
+            Mode::OnlineReadonly => TxMode::OnlineReadOnly(OnlineModeSettings {
+                allow_inconsistent_reads: false,
+            }),
+            Mode::OnlineReadonlyInconsistent => TxMode::OnlineReadOnly(OnlineModeSettings {
+                allow_inconsistent_reads: true,
+            }),
             Mode::SnapshotReadOnly => TxMode::SnapshotReadOnly(SnapshotModeSettings::default()),
+            Mode::SnapshotReadWrite => {
+                TxMode::SnapshotReadWrite(SnapshotRwModeSettings::default())
+            }
+            Mode::StaleReadOnly => TxMode::StaleReadOnly(StaleModeSettings::default()),
             Mode::SerializableReadWrite => {
                 TxMode::SerializableReadWrite(SerializableModeSettings::default())
             }
@@ -48,7 +67,12 @@ impl From<Mode> for RawTxMode {
             Mode::OnlineReadonly => Self::OnlineReadOnly(RawOnlineReadonlySettings {
                 allow_inconsistent_reads: false,
             }),
+            Mode::OnlineReadonlyInconsistent => Self::OnlineReadOnly(RawOnlineReadonlySettings {
+                allow_inconsistent_reads: true,
+            }),
             Mode::SnapshotReadOnly => Self::SnapshotReadOnly,
+            Mode::SnapshotReadWrite => Self::SnapshotReadWrite,
+            Mode::StaleReadOnly => Self::StaleReadOnly,
             Mode::SerializableReadWrite => Self::SerializableReadWrite,
         }
     }
@@ -251,7 +275,9 @@ mod tx_state_tests {
     use crate::errors::{YdbError, YdbStatusError};
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
-    use crate::grpc_wrapper::raw_table_service::transaction_control::RawTxMode;
+    use crate::grpc_wrapper::raw_table_service::transaction_control::{
+        RawOnlineReadonlySettings, RawTxMode,
+    };
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
     use crate::session_pool::{SessionPool, SessionPoolSettings, TableSessionPool};
@@ -292,6 +318,32 @@ mod tx_state_tests {
         assert!(matches!(
             RawTxMode::from(Mode::SnapshotReadOnly),
             RawTxMode::SnapshotReadOnly
+        ));
+    }
+
+    #[test]
+    fn snapshot_read_write_maps_to_raw_tx_mode() {
+        assert!(matches!(
+            RawTxMode::from(Mode::SnapshotReadWrite),
+            RawTxMode::SnapshotReadWrite
+        ));
+    }
+
+    #[test]
+    fn stale_read_only_maps_to_raw_tx_mode() {
+        assert!(matches!(
+            RawTxMode::from(Mode::StaleReadOnly),
+            RawTxMode::StaleReadOnly
+        ));
+    }
+
+    #[test]
+    fn online_readonly_inconsistent_maps_to_raw_tx_mode() {
+        assert!(matches!(
+            RawTxMode::from(Mode::OnlineReadonlyInconsistent),
+            RawTxMode::OnlineReadOnly(RawOnlineReadonlySettings {
+                allow_inconsistent_reads: true,
+            })
         ));
     }
 

@@ -2,11 +2,8 @@ use crate::client::TimeoutSettings;
 use crate::client_table::TableServiceClientType;
 use crate::errors::{YdbError, YdbResult};
 use crate::query::Query;
-use crate::result::{ExplainResult, QueryResult, StreamReadTableResult, StreamResult};
-use crate::table_requests::{
-    AlterTableRequest, CreateTableRequest, DropTableRequest, PreparedDataQuery, ReadRowsRequest,
-    ReadTableOptions, TableOptionsDescription,
-};
+use crate::result::{QueryResult, StreamReadTableResult, StreamResult};
+use crate::table_requests::{PreparedDataQuery, ReadTableOptions};
 use derivative::Derivative;
 use itertools::Itertools;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -19,27 +16,17 @@ use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_table_service::commit_transaction::RawCommitTransactionRequest;
-use crate::grpc_wrapper::raw_table_service::copy_table::{
-    RawCopyTableRequest, RawCopyTablesRequest,
-};
-use crate::grpc_wrapper::raw_table_service::describe_table::RawDescribeTableRequest;
-use crate::grpc_wrapper::raw_table_service::describe_table_options::{
-    RawDescribeTableOptionsRequest, RawDescribeTableOptionsResult,
-};
-use crate::grpc_wrapper::raw_table_service::drop_table::RawDropTableRequest;
 use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryRequest;
 use crate::grpc_wrapper::raw_table_service::query_stats::RawQueryStatMode;
 use crate::grpc_wrapper::raw_table_service::transaction_control::{
     RawTransactionControl, RawTxSelector, RawTxSettings,
 };
-use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
-use crate::grpc_wrapper::raw_table_service::explain_data_query::RawExplainDataQueryRequest;
 use crate::grpc_wrapper::raw_table_service::prepare_data_query::{
     RawPrepareDataQueryRequest, RawPrepareDataQueryResult,
 };
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::grpc_wrapper::raw_table_service::stream_read_table::RawStreamReadTableRequest;
-use crate::table_service_types::{ColumnDescription, CopyTableItem, TableDescription};
+use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::transaction::Mode;
 use crate::trace_helpers::ensure_len_string;
 use tracing::{debug, trace};
@@ -87,7 +74,7 @@ macro_rules! in_flight_table_rpc {
 
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub(crate) struct Session {
+pub struct Session {
     pub(crate) id: String,
 
     pub(crate) can_pooled: bool,
@@ -134,6 +121,25 @@ impl Session {
         res
     }
 
+    pub(crate) fn operation_params(&self) -> RawOperationParams {
+        self.timeouts.operation_params()
+    }
+
+    /// Run a table RPC under [`InFlightTableRpcGuard`] (discard session on cancel/timeout).
+    pub(crate) async fn in_flight_rpc<T>(
+        &mut self,
+        rpc: impl AsyncFnOnce(&mut RawTableClient) -> RawResult<T>,
+    ) -> YdbResult<T> {
+        let mut table = self.get_table_client().await?;
+        let mut guard = InFlightTableRpcGuard {
+            session: self,
+            active: true,
+        };
+        let res = rpc(&mut table).await;
+        guard.active = false;
+        guard.session.handle_raw_result(res)
+    }
+
     pub(crate) async fn commit_transaction(&mut self, tx_id: String) -> YdbResult<()> {
         let session_id = self.id.clone();
         let operation_params = self.timeouts.operation_params();
@@ -146,40 +152,6 @@ impl Session {
             })
         })?;
         Ok(())
-    }
-
-    pub(crate) async fn execute_schema_query(&mut self, query: String) -> YdbResult<()> {
-        let session_id = self.id.clone();
-        let operation_params = self.timeouts.operation_params();
-        in_flight_table_rpc!(self, table, {
-            table.execute_scheme_query(RawExecuteSchemeQueryRequest {
-                session_id,
-                yql_text: query,
-                operation_params,
-            })
-        })?;
-        Ok(())
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    /// Read rows by primary key with an explicit session (go-sdk: deprecated `Session.ReadRows`).
-    pub async fn read_rows(
-        &mut self,
-        request: ReadRowsRequest,
-        ignore_truncated: bool,
-    ) -> YdbResult<crate::ResultSet> {
-        if request.keys.is_empty() {
-            return Ok(crate::ResultSet::default());
-        }
-        let req = request.into_raw(self.id.clone())?;
-        let raw_read_rows_response = in_flight_table_rpc!(self, table, table.read_rows(req))?;
-        let result_set: crate::ResultSet = raw_read_rows_response.result_set.try_into()?;
-        if !ignore_truncated && result_set.is_truncated() {
-            return Err(YdbError::TruncatedResult {
-                result_set_index: 0,
-            });
-        }
-        Ok(result_set)
     }
 
     #[tracing::instrument(skip(self, req), fields(req_number=req_number()))]
@@ -209,31 +181,6 @@ impl Session {
             ensure_len_string(serde_json::to_string(&res)?)
         );
         QueryResult::from_raw_result(ignore_truncated, res)
-    }
-
-    #[tracing::instrument(skip(self, query), fields(req_number=req_number()))]
-    pub(crate) async fn explain_data_query(
-        &mut self,
-        query: String,
-        collect_full_diagnostics: bool,
-    ) -> YdbResult<ExplainResult> {
-        let req = RawExplainDataQueryRequest {
-            session_id: self.id.clone(),
-            yql_text: query,
-            operation_params: self.timeouts.operation_params(),
-            collect_full_diagnostics,
-        };
-        trace!(
-            "request: {}",
-            ensure_len_string(serde_json::to_string(&req)?)
-        );
-
-        let res = in_flight_table_rpc!(self, table, table.explain_data_query(req))?;
-        trace!(
-            "result: {}",
-            ensure_len_string(serde_json::to_string(&res)?)
-        );
-        Ok(res.into())
     }
 
     #[tracing::instrument(skip(self, query), fields(req_number=req_number()))]
@@ -281,99 +228,6 @@ impl Session {
         })
     }
 
-    pub async fn copy_table(
-        &mut self,
-        source_path: String,
-        destination_path: String,
-    ) -> YdbResult<()> {
-        let session_id = self.id.clone();
-        let operation_params = self.timeouts.operation_params();
-        in_flight_table_rpc!(self, table, {
-            table.copy_table(RawCopyTableRequest {
-                session_id,
-                source_path,
-                destination_path,
-                operation_params,
-            })
-        })?;
-        Ok(())
-    }
-
-    pub async fn copy_tables(&mut self, tables: Vec<CopyTableItem>) -> YdbResult<()> {
-        let session_id = self.id.clone();
-        let operation_params = self.timeouts.operation_params();
-        in_flight_table_rpc!(self, table, {
-            table.copy_tables(RawCopyTablesRequest {
-                operation_params,
-                session_id,
-                tables: tables.into_iter().map_into().collect(),
-            })
-        })?;
-        Ok(())
-    }
-
-    pub async fn describe_table(&mut self, path: String) -> YdbResult<TableDescription> {
-        let session_id = self.id.clone();
-        let operation_params = self.timeouts.operation_params();
-        let raw_result = in_flight_table_rpc!(self, table, {
-            table.describe_table(RawDescribeTableRequest {
-                session_id,
-                path: path.clone(),
-                operation_params,
-            })
-        })?;
-
-        let columns = raw_result
-            .columns
-            .into_iter()
-            .map(|raw_col| ColumnDescription {
-                name: raw_col.name,
-                type_value: raw_col.column_type.into_value_example().map_err(|e| {
-                    crate::table_service_types::UnknownTypeDescription {
-                        error: e.to_string(),
-                    }
-                }),
-                family: raw_col.family,
-            })
-            .collect();
-
-        let indexes = raw_result
-            .indexes
-            .into_iter()
-            .map(|idx| idx.into())
-            .collect();
-
-        Ok(TableDescription {
-            columns,
-            primary_key: raw_result.primary_key,
-            indexes,
-            store_type: raw_result.store_type.into(),
-            attributes: raw_result.attributes,
-        })
-    }
-
-    pub async fn create_table(&mut self, request: CreateTableRequest) -> YdbResult<()> {
-        let raw = request.into_raw(self.id.clone(), self.timeouts.operation_params())?;
-        in_flight_table_rpc!(self, table, table.create_table(raw))?;
-        Ok(())
-    }
-
-    pub async fn drop_table(&mut self, request: DropTableRequest) -> YdbResult<()> {
-        let req = RawDropTableRequest {
-            session_id: self.id.clone(),
-            path: request.path,
-            operation_params: self.timeouts.operation_params(),
-        };
-        in_flight_table_rpc!(self, table, table.drop_table(req))?;
-        Ok(())
-    }
-
-    pub async fn alter_table(&mut self, request: AlterTableRequest) -> YdbResult<()> {
-        let raw = request.into_raw(self.id.clone(), self.timeouts.operation_params())?;
-        in_flight_table_rpc!(self, table, table.alter_table(raw))?;
-        Ok(())
-    }
-
     pub async fn prepare_data_query(
         &mut self,
         yql_text: String,
@@ -389,15 +243,6 @@ impl Session {
             query_id: raw.query_id,
             yql_text,
         })
-    }
-
-    pub async fn describe_table_options(&mut self) -> YdbResult<TableOptionsDescription> {
-        let req = RawDescribeTableOptionsRequest {
-            operation_params: self.timeouts.operation_params(),
-        };
-        let raw: RawDescribeTableOptionsResult =
-            in_flight_table_rpc!(self, table, table.describe_table_options(req))?;
-        Ok(raw.into())
     }
 
     pub async fn stream_read_table(

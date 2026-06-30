@@ -1,6 +1,9 @@
 use crate::grpc_wrapper::raw_errors::RawError;
 use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
+use crate::table_service_types::{
+    ColumnDescription, TableDescription, UnknownTypeDescription,
+};
 
 pub(crate) struct RawDescribeTableRequest {
     pub session_id: String,
@@ -173,4 +176,36 @@ impl TryFrom<i32> for RawStoreType {
             StoreType::Column => RawStoreType::Column,
         })
     }
+}
+
+pub(crate) fn table_description_from_raw(
+    raw_result: RawDescribeTableResult,
+) -> Result<TableDescription, UnknownTypeDescription> {
+    let columns = raw_result
+        .columns
+        .into_iter()
+        .map(|raw_col| ColumnDescription {
+            name: raw_col.name,
+            type_value: raw_col.column_type.into_value_example().map_err(|e| {
+                UnknownTypeDescription {
+                    error: e.to_string(),
+                }
+            }),
+            family: raw_col.family,
+        })
+        .collect();
+
+    let indexes = raw_result
+        .indexes
+        .into_iter()
+        .map(|idx| idx.into())
+        .collect();
+
+    Ok(TableDescription {
+        columns,
+        primary_key: raw_result.primary_key,
+        indexes,
+        store_type: raw_result.store_type.into(),
+        attributes: raw_result.attributes,
+    })
 }

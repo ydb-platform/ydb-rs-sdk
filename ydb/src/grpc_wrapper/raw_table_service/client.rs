@@ -28,7 +28,6 @@ use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSche
 use crate::grpc_wrapper::raw_table_service::explain_data_query::{
     RawExplainDataQueryRequest, RawExplainDataQueryResult,
 };
-use crate::grpc_wrapper::raw_table_service::keepalive::{RawKeepAliveRequest, RawKeepAliveResult};
 use crate::grpc_wrapper::raw_table_service::prepare_data_query::{
     RawPrepareDataQueryRequest, RawPrepareDataQueryResult,
 };
@@ -124,14 +123,6 @@ impl RawTableClient {
             self.service.read_rows,
             req => ydb_grpc::ydb_proto::table::ReadRowsRequest,
             ydb_grpc::ydb_proto::table::ReadRowsResponse => RawReadRowsResponse
-        );
-    }
-
-    pub async fn keep_alive(&mut self, req: RawKeepAliveRequest) -> RawResult<RawKeepAliveResult> {
-        request_with_result!(
-            self.service.keep_alive,
-            req => ydb_grpc::ydb_proto::table::KeepAliveRequest,
-            ydb_grpc::ydb_proto::table::KeepAliveResult => RawKeepAliveResult
         );
     }
 
@@ -238,30 +229,6 @@ impl RawTableClient {
 impl GrpcServiceForDiscovery for RawTableClient {
     fn get_grpc_discovery_service() -> Service {
         Service::Table
-    }
-}
-
-#[derive(Debug)]
-pub(crate) enum SessionStatus {
-    Unspecified,
-    Ready,
-    Busy,
-    Unknown(i32),
-}
-
-impl From<i32> for SessionStatus {
-    fn from(value: i32) -> Self {
-        use ydb_grpc::ydb_proto::table::keep_alive_result;
-
-        let Ok(session_status) = keep_alive_result::SessionStatus::try_from(value) else {
-            return SessionStatus::Unknown(value);
-        };
-
-        match session_status {
-            keep_alive_result::SessionStatus::Ready => SessionStatus::Ready,
-            keep_alive_result::SessionStatus::Busy => SessionStatus::Busy,
-            keep_alive_result::SessionStatus::Unspecified => SessionStatus::Unspecified,
-        }
     }
 }
 

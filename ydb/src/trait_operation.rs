@@ -15,7 +15,7 @@ use ydb_grpc::ydb_proto::table::{
     CopyTablesResponse, CreateSessionResponse, CreateTableResponse, DeleteSessionResponse,
     DescribeTableOptionsResponse, DescribeTableResponse, DropTableResponse,
     ExecuteDataQueryResponse, ExecuteSchemeQueryResponse, ExplainDataQueryResponse,
-    KeepAliveResponse, PrepareDataQueryResponse, ReadRowsResponse, ReadTableResponse,
+    PrepareDataQueryResponse, ReadRowsResponse, ReadTableResponse,
     RollbackTransactionResponse,
 };
 use ydb_grpc::ydb_proto::topic::{
@@ -112,7 +112,6 @@ operation_impl_for!(DeleteSessionResponse);
 operation_impl_for!(ExecuteDataQueryResponse);
 operation_impl_for!(ExecuteSchemeQueryResponse);
 operation_impl_for!(ExplainDataQueryResponse);
-operation_impl_for!(KeepAliveResponse);
 operation_impl_for!(ListEndpointsResponse);
 operation_impl_for!(RollbackTransactionResponse);
 operation_impl_for!(WhoAmIResponse);

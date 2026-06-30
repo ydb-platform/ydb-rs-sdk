@@ -308,7 +308,7 @@ impl ReadTableKeyRange {
     }
 }
 
-/// Options for [`TableClient::retry_stream_read_table`] (go-sdk: `ReadTableOption`).
+/// Options for [`Session::stream_read_table`] (go-sdk: `ReadTableOption`).
 #[derive(Clone, Debug, Default)]
 pub struct ReadTableOptions {
     pub columns: Vec<String>,

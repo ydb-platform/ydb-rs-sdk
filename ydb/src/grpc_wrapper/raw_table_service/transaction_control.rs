@@ -38,6 +38,7 @@ pub(crate) enum RawTxMode {
     SerializableReadWrite,
     OnlineReadOnly(RawOnlineReadonlySettings),
     SnapshotReadOnly,
+    SnapshotReadWrite,
     StaleReadOnly,
 }
 
@@ -55,6 +56,9 @@ impl From<RawTxMode> for ydb_grpc::ydb_proto::table::transaction_settings::TxMod
                 allow_inconsistent_reads,
             }),
             RawTxMode::SnapshotReadOnly => TxMode::SnapshotReadOnly(table::SnapshotModeSettings {}),
+            RawTxMode::SnapshotReadWrite => {
+                TxMode::SnapshotReadWrite(table::SnapshotRwModeSettings {})
+            }
             RawTxMode::StaleReadOnly => TxMode::StaleReadOnly(table::StaleModeSettings {}),
         }
     }

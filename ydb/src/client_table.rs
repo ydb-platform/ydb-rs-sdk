@@ -13,15 +13,27 @@ use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::retry::{NoRetrier, Retry, RetryParams, TimeoutRetrier};
 use crate::table_service_types::{CopyTableItem, TableDescription};
 use crate::table_requests::{
-    AlterTableRequest, CreateTableRequest, DropTableRequest, PreparedDataQuery, ReadRowsRequest,
-    ReadTableOptions, TableOptionsDescription,
+    AlterTableRequest, CreateTableRequest, DropTableRequest, ReadRowsRequest,
+    TableOptionsDescription,
 };
 use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertRequest;
 use crate::grpc_wrapper::raw_table_service::client::RawTableClient;
+use crate::grpc_wrapper::raw_table_service::copy_table::{
+    RawCopyTableRequest, RawCopyTablesRequest,
+};
+use crate::grpc_wrapper::raw_table_service::describe_table::{
+    table_description_from_raw, RawDescribeTableRequest,
+};
+use crate::grpc_wrapper::raw_table_service::describe_table_options::{
+    RawDescribeTableOptionsRequest, RawDescribeTableOptionsResult,
+};
+use crate::grpc_wrapper::raw_table_service::drop_table::RawDropTableRequest;
+use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
+use crate::grpc_wrapper::raw_table_service::explain_data_query::RawExplainDataQueryRequest;
 use crate::grpc_wrapper::raw_table_service::read_rows::RawReadRowsRequest;
 use crate::session::CreateTableClient;
 use crate::types_converters::try_vec_to_list_of_structs;
-use crate::{Query, QueryResult, StreamReadTableResult, StreamResult};
+use itertools::Itertools;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -201,8 +213,8 @@ impl TableClient {
             .with_ignore_truncated(self.ignore_truncated)
     }
 
-    #[allow(dead_code)]
-    pub(crate) async fn create_session(&self) -> YdbResult<Session> {
+    /// Acquire a table session from the driver pool (for session-only RPCs: prepare, streams, etc.).
+    pub async fn create_session(&self) -> YdbResult<Session> {
         Ok(self
             .session_pool
             .session()
@@ -293,22 +305,24 @@ impl TableClient {
         }
     }
 
-    /// Execute scan query. The method will auto-retry errors while start query execution,
-    /// but no retries after server start streaming result.
-    pub async fn retry_execute_scan_query(&self, query: Query) -> YdbResult<StreamResult> {
-        self.retry(|| async {
-            let mut session = self.create_session().await?;
-            session.execute_scan_query(query.clone()).await
-        })
-        .await
-    }
-
     /// Execute scheme query with retry policy
     pub async fn retry_execute_scheme_query<T: Into<String>>(&self, query: T) -> YdbResult<()> {
         let query = query.into();
         self.retry(|| async {
             let mut session = self.create_session().await?;
-            session.execute_schema_query(query.clone()).await
+            let session_id = session.id.clone();
+            let operation_params = session.operation_params();
+            session
+                .in_flight_rpc(async |table| {
+                    table
+                        .execute_scheme_query(RawExecuteSchemeQueryRequest {
+                            session_id,
+                            yql_text: query.clone(),
+                            operation_params,
+                        })
+                        .await
+                })
+                .await
         })
         .await
     }
@@ -408,9 +422,16 @@ impl TableClient {
         let query = query.into();
         self.retry(|| async {
             let mut session = self.create_session().await?;
-            session
-                .explain_data_query(query.clone(), collect_full_diagnostics)
-                .await
+            let req = RawExplainDataQueryRequest {
+                session_id: session.id.clone(),
+                yql_text: query.clone(),
+                operation_params: session.operation_params(),
+                collect_full_diagnostics,
+            };
+            let res = session
+                .in_flight_rpc(async |table| table.explain_data_query(req).await)
+                .await?;
+            Ok(res.into())
         })
         .await
     }
@@ -611,44 +632,78 @@ impl TableClient {
     }
 
     pub async fn copy_table(&self, source_path: String, destination_path: String) -> YdbResult<()> {
-        self.retry_with_session(RetryOptions::new(), |session| async {
-            let mut session = session; // force borrow for lifetime of t inside closure
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            let session_id = session.id.clone();
+            let operation_params = session.operation_params();
             session
-                .copy_table(source_path.clone(), destination_path.clone())
-                .await?;
-
-            Ok(())
+                .in_flight_rpc(async |table| {
+                    table
+                        .copy_table(RawCopyTableRequest {
+                            session_id,
+                            source_path: source_path.clone(),
+                            destination_path: destination_path.clone(),
+                            operation_params,
+                        })
+                        .await
+                })
+                .await
         })
         .await
-        .map_err(YdbOrCustomerError::to_ydb_error)
     }
 
     pub async fn copy_tables(&self, tables: Vec<CopyTableItem>) -> YdbResult<()> {
-        self.retry_with_session(RetryOptions::new(), |session| async {
-            let mut session = session; // force borrow for lifetime of t inside closure
-            session.copy_tables(tables.to_vec()).await?;
-
-            Ok(())
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            let session_id = session.id.clone();
+            let operation_params = session.operation_params();
+            session
+                .in_flight_rpc(async |table| {
+                    table
+                        .copy_tables(RawCopyTablesRequest {
+                            operation_params,
+                            session_id,
+                            tables: tables.clone().into_iter().map_into().collect(),
+                        })
+                        .await
+                })
+                .await
         })
         .await
-        .map_err(YdbOrCustomerError::to_ydb_error)
     }
 
     pub async fn describe_table(&self, path: String) -> YdbResult<TableDescription> {
-        self.retry_with_session(RetryOptions::new(), |session| async {
-            let mut session = session;
-            let result = session.describe_table(path.clone()).await?;
-            Ok(result)
+        self.retry(|| async {
+            let mut session = self.create_session().await?;
+            let session_id = session.id.clone();
+            let operation_params = session.operation_params();
+            let raw = session
+                .in_flight_rpc(async |table| {
+                    table
+                        .describe_table(RawDescribeTableRequest {
+                            session_id,
+                            path: path.clone(),
+                            operation_params,
+                        })
+                        .await
+                })
+                .await?;
+            table_description_from_raw(raw)
+                .map_err(|e| YdbError::custom(e.error))
         })
         .await
-        .map_err(YdbOrCustomerError::to_ydb_error)
     }
 
-    /// Create a table via `CreateTable` RPC (go-sdk: `Session.CreateTable`).
+    /// Create a table via `CreateTable` RPC.
     pub async fn retry_create_table(&self, request: CreateTableRequest) -> YdbResult<()> {
         self.retry(|| async {
             let mut session = self.create_session().await?;
-            session.create_table(request.clone()).await
+            let raw = request
+                .clone()
+                .into_raw(session.id.clone(), session.operation_params())?;
+            session
+                .in_flight_rpc(async |table| table.create_table(raw).await)
+                .await
         })
         .await
     }
@@ -657,7 +712,14 @@ impl TableClient {
     pub async fn retry_drop_table(&self, request: DropTableRequest) -> YdbResult<()> {
         self.retry(|| async {
             let mut session = self.create_session().await?;
-            session.drop_table(request.clone()).await
+            let req = RawDropTableRequest {
+                session_id: session.id.clone(),
+                path: request.path.clone(),
+                operation_params: session.operation_params(),
+            };
+            session
+                .in_flight_rpc(async |table| table.drop_table(req).await)
+                .await
         })
         .await
     }
@@ -666,63 +728,27 @@ impl TableClient {
     pub async fn retry_alter_table(&self, request: AlterTableRequest) -> YdbResult<()> {
         self.retry(|| async {
             let mut session = self.create_session().await?;
-            session.alter_table(request.clone()).await
+            let raw = request
+                .clone()
+                .into_raw(session.id.clone(), session.operation_params())?;
+            session
+                .in_flight_rpc(async |table| table.alter_table(raw).await)
+                .await
         })
         .await
     }
 
-    /// Prepare a data query for repeated execution (go-sdk: `Session.Prepare`).
-    pub async fn retry_prepare_data_query(
-        &self,
-        yql_text: impl Into<String>,
-    ) -> YdbResult<PreparedDataQuery> {
-        let yql_text = yql_text.into();
-        self.retry(|| async {
-            let mut session = self.create_session().await?;
-            session.prepare_data_query(yql_text.clone()).await
-        })
-        .await
-    }
-
-    /// Describe cluster-wide table option presets (go-sdk: `Session.DescribeTableOptions`).
+    /// Describe cluster-wide table option presets.
     pub async fn retry_describe_table_options(&self) -> YdbResult<TableOptionsDescription> {
         self.retry(|| async {
             let mut session = self.create_session().await?;
-            session.describe_table_options().await
-        })
-        .await
-    }
-
-    /// Stream-read a table without SQL (go-sdk: `Session.StreamReadTable`).
-    pub async fn retry_stream_read_table(
-        &self,
-        path: impl Into<String>,
-        options: ReadTableOptions,
-    ) -> YdbResult<StreamReadTableResult> {
-        let path = path.into();
-        self.retry(|| async {
-            let mut session = self.create_session().await?;
-            session
-                .stream_read_table(path.clone(), options.clone())
-                .await
-        })
-        .await
-    }
-
-    /// Prepare and execute a data query on the same session (go-sdk: `Prepare` + `Statement.Execute`).
-    pub async fn retry_execute_prepared_query(
-        &self,
-        yql_text: impl Into<String>,
-        query: Query,
-        mode: Mode,
-    ) -> YdbResult<QueryResult> {
-        let yql_text = yql_text.into();
-        self.retry(|| async {
-            let mut session = self.create_session().await?;
-            let prepared = session.prepare_data_query(yql_text.clone()).await?;
-            session
-                .execute_prepared_query(&prepared, query.clone(), mode)
-                .await
+            let req = RawDescribeTableOptionsRequest {
+                operation_params: session.operation_params(),
+            };
+            let raw: RawDescribeTableOptionsResult = session
+                .in_flight_rpc(async |table| table.describe_table_options(req).await)
+                .await?;
+            Ok(raw.into())
         })
         .await
     }

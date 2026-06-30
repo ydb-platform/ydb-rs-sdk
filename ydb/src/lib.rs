@@ -165,6 +165,7 @@ pub use client_query::{
 
 // full enum pub types
 pub use client_table::{RetryOptions, TableClient, TransactionOptions};
+pub use session::Session;
 
 // full enum pub types
 pub use table_service_types::{

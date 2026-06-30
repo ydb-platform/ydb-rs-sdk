@@ -11,7 +11,7 @@ use tonic::{Code, Status};
 use tracing::trace;
 use tracing_test::traced_test;
 
-use crate::client_table::RetryOptions;
+use crate::client_table::TransactionOptions;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::query::Query;
 use crate::table_requests::{
@@ -210,9 +210,7 @@ async fn interactive_transaction() -> YdbResult<()> {
 
     client
         .table_client()
-        .create_session()
-        .await?
-        .execute_schema_query(
+        .retry_execute_scheme_query(
             "CREATE TABLE test_values (id Int64, vInt64 Int64, PRIMARY KEY (id))".to_string(),
         )
         .await?;
@@ -269,9 +267,7 @@ async fn interactive_transaction() -> YdbResult<()> {
 
     client
         .table_client()
-        .create_session()
-        .await?
-        .execute_schema_query("DROP TABLE test_values".to_string())
+        .retry_execute_scheme_query("DROP TABLE test_values".to_string())
         .await?;
 
     Ok(())
@@ -289,18 +285,10 @@ async fn copy_table() -> YdbResult<()> {
     let copy_table_name = format!("copy_{table_name}");
 
     table_client
-        .retry_with_session(RetryOptions::new(), |session| async {
-            let mut session = session; // force borrow for lifetime of t inside closure
-            session
-                .execute_schema_query(format!(
-                    "CREATE TABLE {table_name} (id Int64, vInt64 Int64, PRIMARY KEY (id))"
-                ))
-                .await?;
-
-            Ok(())
-        })
-        .await
-        .unwrap();
+        .retry_execute_scheme_query(format!(
+            "CREATE TABLE {table_name} (id Int64, vInt64 Int64, PRIMARY KEY (id))"
+        ))
+        .await?;
 
     let mut transaction = table_client.create_autocommit_transaction(Mode::SerializableReadWrite);
 
@@ -338,16 +326,8 @@ async fn copy_table() -> YdbResult<()> {
 
     for &target in [&table_name, &copy_table_name].iter() {
         table_client
-            .retry_with_session(RetryOptions::new(), |session| async {
-                let mut session = session; // force borrow for lifetime of t inside closure
-                session
-                    .execute_schema_query(format!("DROP TABLE {target}"))
-                    .await?;
-
-                Ok(())
-            })
-            .await
-            .unwrap();
+            .retry_execute_scheme_query(format!("DROP TABLE {target}"))
+            .await?;
     }
 
     Ok(())
@@ -365,18 +345,10 @@ async fn copy_tables() -> YdbResult<()> {
     let copy_table_name = format!("copy_{table_name}");
 
     table_client
-        .retry_with_session(RetryOptions::new(), |session| async {
-            let mut session = session; // force borrow for lifetime of t inside closure
-            session
-                .execute_schema_query(format!(
-                    "CREATE TABLE {table_name} (id Int64, vInt64 Int64, PRIMARY KEY (id))"
-                ))
-                .await?;
-
-            Ok(())
-        })
-        .await
-        .unwrap();
+        .retry_execute_scheme_query(format!(
+            "CREATE TABLE {table_name} (id Int64, vInt64 Int64, PRIMARY KEY (id))"
+        ))
+        .await?;
 
     let mut transaction = table_client.create_autocommit_transaction(Mode::SerializableReadWrite);
 
@@ -415,16 +387,8 @@ async fn copy_tables() -> YdbResult<()> {
 
     for &target in [&table_name, &copy_table_name].iter() {
         table_client
-            .retry_with_session(RetryOptions::new(), |session| async {
-                let mut session = session; // force borrow for lifetime of t inside closure
-                session
-                    .execute_schema_query(format!("DROP TABLE {target}"))
-                    .await?;
-
-                Ok(())
-            })
-            .await
-            .unwrap();
+            .retry_execute_scheme_query(format!("DROP TABLE {target}"))
+            .await?;
     }
 
     Ok(())
@@ -485,30 +449,14 @@ async fn scheme_query() -> YdbResult<()> {
     let table_name = format!("test_table_{}", time_now.as_millis());
 
     table_client
-        .retry_with_session(RetryOptions::new(), |session| async {
-            let mut session = session; // force borrow for lifetime of t inside closure
-            session
-                .execute_schema_query(format!(
-                    "CREATE TABLE {table_name} (id String, PRIMARY KEY (id))"
-                ))
-                .await?;
-
-            Ok(())
-        })
-        .await
-        .unwrap();
+        .retry_execute_scheme_query(format!(
+            "CREATE TABLE {table_name} (id String, PRIMARY KEY (id))"
+        ))
+        .await?;
 
     table_client
-        .retry_with_session(RetryOptions::new(), |session| async {
-            let mut session = session; // force borrow for lifetime of t inside closure
-            session
-                .execute_schema_query(format!("DROP TABLE {table_name}"))
-                .await?;
-
-            Ok(())
-        })
-        .await
-        .unwrap();
+        .retry_execute_scheme_query(format!("DROP TABLE {table_name}"))
+        .await?;
 
     Ok(())
 }
@@ -524,17 +472,10 @@ async fn read_rows() -> YdbResult<()> {
     let table_client = client.table_client();
 
     table_client
-        .retry_with_session(RetryOptions::new(), |mut session| async move {
-            session
-                .execute_schema_query(format!(
-                    "CREATE TABLE {TABLE_NAME} (id Int64 NOT NULL, first Int64 NOT NULL, second Int64 NOT NULL, PRIMARY KEY (id))"
-                ))
-                .await?;
-
-            Ok(())
-        })
-        .await
-        .unwrap();
+        .retry_execute_scheme_query(format!(
+            "CREATE TABLE {TABLE_NAME} (id Int64 NOT NULL, first Int64 NOT NULL, second Int64 NOT NULL, PRIMARY KEY (id))"
+        ))
+        .await?;
 
     let values: [(i64, i64); 4] = [(0, 0), (0, 1), (1, 0), (1, 1)];
     let ydb_values = values.map(|pair| (Value::Int64(pair.0), Value::Int64(pair.1)));
@@ -629,15 +570,8 @@ async fn read_rows() -> YdbResult<()> {
 
     // Clear table
     table_client
-        .retry_with_session(RetryOptions::new(), |mut session| async move {
-            session
-                .execute_schema_query(format!("DROP TABLE {TABLE_NAME}"))
-                .await?;
-
-            Ok(())
-        })
-        .await
-        .unwrap();
+        .retry_execute_scheme_query(format!("DROP TABLE {TABLE_NAME}"))
+        .await?;
 
     Ok(())
 }
@@ -920,13 +854,13 @@ async fn stream_query() -> YdbResult<()> {
     let client = create_client().await?.table_client();
     let mut session = client.create_session().await?;
 
-    let _ = session
-        .execute_schema_query("DROP TABLE stream_query".to_string())
+    let _ = client
+        .retry_execute_scheme_query("DROP TABLE stream_query".to_string())
         .await;
 
-    session
-        .execute_schema_query(
-            "CREATE TABLE stream_query (id Int64, val Bytes, PRIMARY KEY (val))".into(),
+    client
+        .retry_execute_scheme_query(
+            "CREATE TABLE stream_query (id Int64, val Bytes, PRIMARY KEY (val))".to_string(),
         )
         .await?;
 
@@ -1110,16 +1044,8 @@ async fn bulk_upsert() -> YdbResult<()> {
     assert_eq!(vec![3, 6], read_rows_id);
 
     table_client
-        .retry_with_session(RetryOptions::new(), |session| async {
-            let mut session = session; // force borrow for lifetime of t inside closure
-            session
-                .execute_schema_query(format!("DROP TABLE {table_name}"))
-                .await?;
-
-            Ok(())
-        })
-        .await
-        .unwrap();
+        .retry_execute_scheme_query(format!("DROP TABLE {table_name}"))
+        .await?;
 
     Ok(())
 }
@@ -1133,14 +1059,11 @@ async fn describe_table() -> YdbResult<()> {
     let table_name = "temp_describe_test";
 
     table_client
-        .retry_with_session(RetryOptions::new(), |session| async {
-            let mut session = session;
-            session
-                .execute_schema_query(format!("DROP TABLE IF EXISTS {table_name}"))
-                .await?;
-            session
-                .execute_schema_query(format!(
-                    "
+        .retry_execute_scheme_query(format!("DROP TABLE IF EXISTS {table_name}"))
+        .await?;
+    table_client
+        .retry_execute_scheme_query(format!(
+            "
                 CREATE TABLE {table_name} (
                     id Utf8 NOT NULL,
                     id_hash Uint32 NOT NULL,
@@ -1156,10 +1079,7 @@ async fn describe_table() -> YdbResult<()> {
                     INDEX idx_host GLOBAL ON (host)
                 );
             "
-                ))
-                .await?;
-            Ok(())
-        })
+        ))
         .await?;
 
     let database_path = client.database();
@@ -1206,13 +1126,7 @@ async fn describe_table() -> YdbResult<()> {
     }
 
     table_client
-        .retry_with_session(RetryOptions::new(), |session| async {
-            let mut session = session;
-            session
-                .execute_schema_query(format!("DROP TABLE {table_name}"))
-                .await?;
-            Ok(())
-        })
+        .retry_execute_scheme_query(format!("DROP TABLE {table_name}"))
         .await?;
 
     Ok(())
@@ -1234,14 +1148,10 @@ async fn grpc_max_message_size_limit_exceeded() -> YdbResult<()> {
     setup_client.wait().await?;
     let setup_table_client = setup_client.table_client();
     let _ = setup_table_client
-        .create_session()
-        .await?
-        .execute_schema_query(format!("DROP TABLE {TABLE}"))
+        .retry_execute_scheme_query(format!("DROP TABLE {TABLE}"))
         .await;
     setup_table_client
-        .create_session()
-        .await?
-        .execute_schema_query(format!(
+        .retry_execute_scheme_query(format!(
             "CREATE TABLE {TABLE} (id Int64, val Bytes, PRIMARY KEY (id))"
         ))
         .await?;
@@ -1328,9 +1238,7 @@ async fn grpc_max_message_size_limit_exceeded() -> YdbResult<()> {
     }
 
     let _ = setup_table_client
-        .create_session()
-        .await?
-        .execute_schema_query(format!("DROP TABLE {TABLE}"))
+        .retry_execute_scheme_query(format!("DROP TABLE {TABLE}"))
         .await;
 
     Ok(())
@@ -1378,52 +1286,6 @@ async fn bulk_upsert_rpc() -> YdbResult<()> {
     }
     assert!(vals.contains(&Value::Text("one".into())));
     assert!(vals.contains(&Value::Text("two".into())));
-
-    table_client
-        .retry_drop_table(DropTableRequest::new(table_path))
-        .await?;
-
-    Ok(())
-}
-
-#[tokio::test]
-#[traced_test]
-#[ignore] // need YDB access
-async fn read_rows_on_session_rpc() -> YdbResult<()> {
-    let client = create_client().await?;
-    let table_client = client.table_client();
-    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-    let table_name = format!("session_read_{rand_str}");
-    let table_path = format!("/local/{table_name}");
-
-    table_client
-        .retry_create_table(
-            CreateTableRequest::new(table_path.clone())
-                .with_column(TableColumn::new("id", Value::Int64(0)))
-                .with_column(TableColumn::new("val", Value::Int64(0)))
-                .with_primary_key(["id"]),
-        )
-        .await?;
-
-    table_client
-        .retry_bulk_upsert(
-            table_path.clone(),
-            vec![ydb_struct!("id" => 42_i64, "val" => 7_i64)],
-        )
-        .await?;
-
-    let mut session = table_client.create_session().await?;
-    let result = session
-        .read_rows(
-            ReadRowsRequest::new(table_path.clone())
-                .with_keys(vec![ydb_struct!("id" => 42_i64)])
-                .with_column("val"),
-            false,
-        )
-        .await?;
-
-    let mut row = result.rows().next().unwrap();
-    assert_eq!(row.remove_field_by_name("val")?, Value::Int64(7));
 
     table_client
         .retry_drop_table(DropTableRequest::new(table_path))
@@ -1486,8 +1348,9 @@ async fn stream_read_table_rpc() -> YdbResult<()> {
         )
         .await?;
 
-    let mut stream = table_client
-        .retry_stream_read_table(table_path, ReadTableOptions::default())
+    let mut session = table_client.create_session().await?;
+    let mut stream = session
+        .stream_read_table(table_path, ReadTableOptions::default())
         .await?;
     let mut row_count = 0;
     while let Some(result_set) = stream.next_result_set().await? {
@@ -1509,9 +1372,13 @@ async fn prepare_data_query_rpc() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
 
-    let result = table_client
-        .retry_execute_prepared_query(
-            "SELECT $v + $v AS res",
+    let mut session = table_client.create_session().await?;
+    let prepared = session
+        .prepare_data_query("SELECT $v + $v AS res".to_string())
+        .await?;
+    let result = session
+        .execute_prepared_query(
+            &prepared,
             Query::new("").with_params(ydb_params!("$v" => 21_i32)),
             Mode::OnlineReadonly,
         )
@@ -1640,27 +1507,19 @@ async fn prepare_data_query_on_session_rpc() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
 
-    let prepared = table_client
-        .retry_prepare_data_query("SELECT $v * 2 AS res")
+    let mut session = table_client.create_session().await?;
+    let prepared = session
+        .prepare_data_query("SELECT $v * 2 AS res".to_string())
         .await?;
     assert!(!prepared.query_id().is_empty());
     assert_eq!(prepared.text(), "SELECT $v * 2 AS res");
 
-    let result = table_client
-        .retry_with_session(RetryOptions::new(), |session| async move {
-            let mut session = session;
-            let prepared = session
-                .prepare_data_query("SELECT $v * 2 AS res".to_string())
-                .await?;
-            let result = session
-                .execute_prepared_query(
-                    &prepared,
-                    Query::new("").with_params(ydb_params!("$v" => 11_i32)),
-                    Mode::OnlineReadonly,
-                )
-                .await?;
-            Ok(result)
-        })
+    let result = session
+        .execute_prepared_query(
+            &prepared,
+            Query::new("").with_params(ydb_params!("$v" => 11_i32)),
+            Mode::OnlineReadonly,
+        )
         .await?;
 
     assert_eq!(
@@ -1703,8 +1562,9 @@ async fn stream_read_table_options_rpc() -> YdbResult<()> {
         .await?;
 
     // Column projection
-    let mut stream = table_client
-        .retry_stream_read_table(
+    let mut session = table_client.create_session().await?;
+    let mut stream = session
+        .stream_read_table(
             table_path.clone(),
             ReadTableOptions::new()
                 .with_column("id")
@@ -1727,8 +1587,9 @@ async fn stream_read_table_options_rpc() -> YdbResult<()> {
     let key_range = ReadTableKeyRange::new()
         .with_from(ReadTableKeyBound::GreaterOrEqual(Value::Int64(2)))
         .with_to(ReadTableKeyBound::LessOrEqual(Value::Int64(4)));
-    let mut stream = table_client
-        .retry_stream_read_table(
+    let mut session = table_client.create_session().await?;
+    let mut stream = session
+        .stream_read_table(
             table_path.clone(),
             ReadTableOptions::new()
                 .with_key_range(key_range)
@@ -1747,8 +1608,9 @@ async fn stream_read_table_options_rpc() -> YdbResult<()> {
     assert_eq!(ranged_ids, vec![2_i64, 3, 4]);
 
     // Row limit with truncated flag (no error by default)
-    let mut stream = table_client
-        .retry_stream_read_table(
+    let mut session = table_client.create_session().await?;
+    let mut stream = session
+        .stream_read_table(
             table_path.clone(),
             ReadTableOptions::new().with_row_limit(2).with_ordered(true),
         )
@@ -1885,6 +1747,97 @@ async fn truncated_result_on_read_rows_rpc() -> YdbResult<()> {
     table_client
         .retry_drop_table(DropTableRequest::new(table_path))
         .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn execute_scan_query_on_session_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_name = format!("scan_rpc_{rand_str}");
+    let table_path = format!("/local/{table_name}");
+
+    table_client
+        .retry_execute_scheme_query(format!(
+            "CREATE TABLE {table_name} (id Int64 NOT NULL, val Int64, PRIMARY KEY (id))"
+        ))
+        .await?;
+
+    table_client
+        .retry_bulk_upsert(
+            table_path,
+            vec![
+                ydb_struct!("id" => 1_i64, "val" => 10_i64),
+                ydb_struct!("id" => 2_i64, "val" => 20_i64),
+            ],
+        )
+        .await?;
+
+    let mut session = table_client.create_session().await?;
+    let mut stream = session
+        .execute_scan_query(Query::new(format!(
+            "SELECT id FROM {table_name} ORDER BY id"
+        )))
+        .await?;
+
+    let mut ids = Vec::new();
+    while let Some(result_set) = stream.next().await? {
+        for mut row in result_set.rows() {
+            let id: i64 = row.remove_field_by_name("id")?.try_into()?;
+            ids.push(id);
+        }
+    }
+    assert_eq!(ids, vec![1_i64, 2_i64]);
+
+    table_client
+        .retry_execute_scheme_query(format!("DROP TABLE {table_name}"))
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn table_tx_modes_autocommit_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+
+    for mode in [
+        Mode::SerializableReadWrite,
+        Mode::SnapshotReadOnly,
+        Mode::SnapshotReadWrite,
+        Mode::StaleReadOnly,
+        Mode::OnlineReadonly,
+        Mode::OnlineReadonlyInconsistent,
+    ] {
+        let client = table_client.clone_with_transaction_options(
+            TransactionOptions::new().with_mode(mode).with_autocommit(true),
+        );
+        let result = client
+            .retry_transaction(|mut t| async move {
+                Ok(t.query(Query::new("SELECT 42 AS v")).await?)
+            })
+            .await;
+
+        match result {
+            Ok(query_result) => {
+                let mut row = query_result.into_only_result()?.rows().next().unwrap();
+                assert_eq!(row.remove_field_by_name("v")?, Value::Int64(42));
+            }
+            Err(YdbOrCustomerError::YDB(err))
+                if matches!(mode, Mode::SnapshotReadWrite)
+                    && err.to_string().contains("Snapshot Isolation") =>
+            {
+                eprintln!("SnapshotReadWrite not supported on this YDB cluster, skipping");
+            }
+            Err(err) => return Err(err.to_ydb_error()),
+        }
+    }
 
     Ok(())
 }
