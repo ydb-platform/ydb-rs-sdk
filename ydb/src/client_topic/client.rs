@@ -11,6 +11,7 @@ use crate::client_topic::topicwriter::writer::TopicWriter;
 use crate::client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
 };
+use crate::client_topic::topicwriter::writer_tx::TopicWriterTx;
 use crate::errors;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::alter_topic::RawAlterTopicRequest;
@@ -18,6 +19,7 @@ use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsumerRequest;
 use crate::grpc_wrapper::raw_topic_service::describe_topic::RawDescribeTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::drop_topic::RawDropTopicRequest;
+use crate::Transaction;
 use crate::YdbError::InternalError;
 use crate::{grpc_wrapper, YdbResult};
 use derive_builder::{Builder, UninitializedFieldError};
@@ -252,10 +254,35 @@ impl TopicClient {
         .await
     }
 
-    pub async fn create_writer(&mut self, path: String) -> YdbResult<TopicWriter> {
+    pub async fn create_writer_tx<'a>(
+        &mut self,
+        topic_path: impl Into<String>,
+        tx: &'a mut dyn Transaction,
+    ) -> YdbResult<TopicWriterTx<'a>> {
+        let options = TopicWriterOptionsBuilder::default()
+            .topic_path(topic_path.into())
+            .build()?;
+        self.create_writer_tx_with_params(options, tx).await
+    }
+
+    pub async fn create_writer_tx_with_params<'a>(
+        &mut self,
+        writer_options: TopicWriterOptions,
+        tx: &'a mut dyn Transaction,
+    ) -> YdbResult<TopicWriterTx<'a>> {
+        TopicWriterTx::new(
+            writer_options,
+            self.connection_manager.clone(),
+            self.executor.clone(),
+            tx,
+        )
+        .await
+    }
+
+    pub async fn create_writer(&mut self, path: impl Into<String>) -> YdbResult<TopicWriter> {
         TopicWriter::new(
             TopicWriterOptionsBuilder::default()
-                .topic_path(path)
+                .topic_path(path.into())
                 .build()
                 .unwrap(),
             self.connection_manager.clone(),
