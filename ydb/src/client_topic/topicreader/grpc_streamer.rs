@@ -5,7 +5,7 @@ use tokio::select;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, warn};
+use tracing::debug;
 use ydb_grpc::ydb_proto::topic::stream_read_message::{FromClient, FromServer};
 
 use crate::TopicReaderBatch;
@@ -186,12 +186,10 @@ async fn receive_messages(
                         entry.insert(partition_session);
                         runtime.register_starting_partition(partition_session_id, partition_id)?;
                     }
-                    Entry::Occupied(mut entry) => {
-                        warn!(
-                            partition_session_id,
-                            "topic reader received duplicate start partition session request"
-                        );
-                        entry.insert(partition_session);
+                    Entry::Occupied(_) => {
+                        return Err(YdbError::custom(format!(
+                            "topic reader received duplicate start partition session request for partition session {partition_session_id}"
+                        )));
                     }
                 }
 
@@ -233,10 +231,9 @@ async fn receive_messages(
                         partition_session.partition_id,
                     )?;
                 } else {
-                    warn!(
-                        partition_session_id,
-                        "topic reader received stop for unknown partition session"
-                    );
+                    return Err(YdbError::custom(format!(
+                        "topic reader received stop for unknown partition session {partition_session_id}"
+                    )));
                 }
 
                 let response = RawFromClientOneOf::StopPartitionSessionResponse(
@@ -264,10 +261,10 @@ async fn receive_messages(
                             )
                         })?;
                 } else {
-                    warn!(
-                        partition_session_id = end.partition_session_id,
-                        "topic reader received end for unknown partition session"
-                    );
+                    return Err(YdbError::custom(format!(
+                        "topic reader received end for unknown partition session {}",
+                        end.partition_session_id
+                    )));
                 }
             }
 
@@ -294,11 +291,9 @@ fn handle_read_response(
         let session = match sessions.get_mut(&partition_session_id) {
             Some(s) => s,
             None => {
-                error!(
-                    partition_session_id,
-                    "read response for unknown partition session"
-                );
-                continue;
+                return Err(YdbError::custom(format!(
+                    "topic reader received read response for unknown partition session {partition_session_id}"
+                )));
             }
         };
 
