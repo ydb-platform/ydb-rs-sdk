@@ -357,7 +357,7 @@ mod tests {
         let (storage, _outgoing_rx) = storage_with_epoch(0);
 
         storage
-            .push_batch(vec![TopicReaderMessage::test_message(0, 10)])
+            .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 0, 10)])
             .expect("push should succeed");
         storage
             .begin_connecting(YdbError::Transport("test reconnect".to_string()))
@@ -368,7 +368,7 @@ mod tests {
             .recreate(next_outgoing_tx, 1, YdbError::custom("next connection"))
             .expect("recreate should install next connection");
         storage
-            .push_batch(vec![TopicReaderMessage::test_message(1, 20)])
+            .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 1, 20)])
             .expect("push should succeed");
 
         let batch = storage.pop_batch(10).await.expect("pop should succeed");
@@ -407,7 +407,7 @@ mod tests {
         let storage = SharedStorage::with_connection(outgoing_tx, 1);
 
         storage
-            .push_batch(vec![TopicReaderMessage::test_message(1, 15)])
+            .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 1, 15)])
             .expect("push should succeed");
 
         storage.pop_batch(10).await.expect("pop should succeed");
@@ -429,7 +429,7 @@ mod tests {
         drop(outgoing_rx);
 
         storage
-            .push_batch(vec![TopicReaderMessage::test_message(1, 15)])
+            .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 1, 15)])
             .expect("push should succeed");
 
         let batch = storage.pop_batch(10).await.expect("pop should succeed");

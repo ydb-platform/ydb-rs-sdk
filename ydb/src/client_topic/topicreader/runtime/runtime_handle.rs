@@ -31,11 +31,11 @@ impl Active {
         }
     }
 
-    fn push_batch(&mut self, messages: Vec<TopicReaderMessage>) {
-        self.buffer.push_batch(messages);
+    fn push_batch(&mut self, messages: Vec<TopicReaderMessage>) -> YdbResult<bool> {
+        self.buffer.push_batch(messages)
     }
 
-    fn pop_batch(&mut self, cap: usize) -> Option<BufferedBatch> {
+    fn pop_batch(&mut self, cap: usize) -> YdbResult<Option<BufferedBatch>> {
         self.buffer.pop_batch(cap)
     }
 }
@@ -81,10 +81,7 @@ impl RuntimeHandle {
             let mut state = self.lock_state()?;
             match &mut *state {
                 State::Reconnecting => false,
-                State::Active(active) => {
-                    active.push_batch(messages);
-                    true
-                }
+                State::Active(active) => active.push_batch(messages)?,
                 State::Failed(err) => return Err(err.clone()),
             }
         };
@@ -114,7 +111,7 @@ impl RuntimeHandle {
                 let mut guard = self.lock_state()?;
                 match &mut *guard {
                     State::Reconnecting => None,
-                    State::Active(active) => active.pop_batch(cap),
+                    State::Active(active) => active.pop_batch(cap)?,
                     State::Failed(err) => return Err(err.clone()),
                 }
             };
@@ -137,7 +134,7 @@ impl RuntimeHandle {
 
         match &mut *state {
             State::Active(active) => {
-                active.buffer.register_starting(session_id, partition_id);
+                active.buffer.register_starting(session_id, partition_id)?;
             }
             State::Reconnecting => {}
             State::Failed(err) => return Err(err.clone()),
@@ -155,7 +152,7 @@ impl RuntimeHandle {
 
         match &mut *state {
             State::Active(active) => {
-                active.buffer.register_stopping(session_id, partition_id);
+                active.buffer.register_stopping(session_id, partition_id)?;
             }
             State::Reconnecting => {}
             State::Failed(err) => return Err(err.clone()),
@@ -175,7 +172,7 @@ impl RuntimeHandle {
             State::Active(active) => {
                 active
                     .buffer
-                    .register_ending(session_id, child_partition_ids);
+                    .register_ending(session_id, child_partition_ids)?;
             }
             State::Reconnecting => {}
             State::Failed(err) => return Err(err.clone()),
@@ -443,7 +440,10 @@ mod tests {
         let (runtime, _outgoing_rx) = runtime_with_epoch(0);
 
         runtime
-            .push_batch(vec![TopicReaderMessage::test_message(0, 10)])
+            .register_starting_partition(1, 10)
+            .expect("start should succeed");
+        runtime
+            .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 0, 10)])
             .expect("push should succeed");
         runtime
             .enter_reconnecting(YdbError::Transport("test reconnect".to_string()))
@@ -457,7 +457,10 @@ mod tests {
             )
             .expect("install_connection should install next connection");
         runtime
-            .push_batch(vec![TopicReaderMessage::test_message(1, 20)])
+            .register_starting_partition(1, 10)
+            .expect("start should succeed");
+        runtime
+            .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 1, 20)])
             .expect("push should succeed");
 
         let batch = runtime.pop_batch(10).await.expect("pop should succeed");
@@ -496,7 +499,10 @@ mod tests {
         let runtime = RuntimeHandle::with_connection(Connection::new(outgoing_tx, 1));
 
         runtime
-            .push_batch(vec![TopicReaderMessage::test_message(1, 15)])
+            .register_starting_partition(1, 10)
+            .expect("start should succeed");
+        runtime
+            .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 1, 15)])
             .expect("push should succeed");
 
         runtime.pop_batch(10).await.expect("pop should succeed");
@@ -518,7 +524,10 @@ mod tests {
         drop(outgoing_rx);
 
         runtime
-            .push_batch(vec![TopicReaderMessage::test_message(1, 15)])
+            .register_starting_partition(1, 10)
+            .expect("start should succeed");
+        runtime
+            .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 1, 15)])
             .expect("push should succeed");
 
         let batch = runtime.pop_batch(10).await.expect("pop should succeed");
