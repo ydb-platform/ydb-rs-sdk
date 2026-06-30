@@ -1,5 +1,5 @@
 use super::handler::{TopicIncoming, TopicRx};
-use super::sender::{StreamReadCommand, StreamWriteCommand, TopicSender, WriteStreamSender};
+use super::sender::{ReadStreamCommand, ReadStreamSender, WriteStreamCommand, WriteStreamSender};
 use super::TopicReply;
 use crate::mock_server::handler::{FromServiceToServerTx, Incoming};
 use futures_util::{stream, Stream, StreamExt};
@@ -22,14 +22,14 @@ type WriteStream = Pin<
 
 pub struct MockTopicService {
     to_server: FromServiceToServerTx,
-    topic_sender: TopicSender,
+    topic_sender: ReadStreamSender,
     pub(crate) write_sender: WriteStreamSender,
     next_stream_id: AtomicU64,
 }
 
 impl MockTopicService {
     pub fn new(to_server: FromServiceToServerTx, rx: TopicRx) -> Self {
-        let topic_sender = TopicSender::new();
+        let topic_sender = ReadStreamSender::new();
         let write_sender = WriteStreamSender::new();
         tokio::spawn(Self::handle_messages(
             topic_sender.clone(),
@@ -46,17 +46,21 @@ impl MockTopicService {
     }
 
     async fn handle_messages(
-        topic_sender: TopicSender,
+        topic_sender: ReadStreamSender,
         write_sender: WriteStreamSender,
         mut rx: TopicRx,
     ) {
         while let Some(msg) = rx.recv().await {
             match msg {
                 TopicReply::StreamRead { stream_id, msg } => {
-                    topic_sender.send_to(stream_id, msg);
+                    topic_sender
+                        .send_to(stream_id, msg)
+                        .expect("mock topic read stream failed to send reply");
                 }
                 TopicReply::StreamWrite { stream_id, msg } => {
-                    write_sender.send_to(stream_id, msg);
+                    write_sender
+                        .send_to(stream_id, msg)
+                        .expect("mock topic write stream failed to send reply");
                 }
                 _ => {
                     unimplemented!()
@@ -93,16 +97,16 @@ impl TopicService for MockTopicService {
                 }));
             }
 
-            write_sender.close(stream_id);
+            let _ = write_sender.close(stream_id);
             write_sender.unregister_stream(stream_id);
         });
 
         let responses = UnboundedReceiverStream::new(rx);
         let responses = stream::unfold(responses, |mut responses| async move {
             match responses.next().await {
-                Some(StreamWriteCommand::Reply(payload)) => Some((Ok(payload), responses)),
-                Some(StreamWriteCommand::Fail(status)) => Some((Err(status), responses)),
-                Some(StreamWriteCommand::Close) | None => None,
+                Some(WriteStreamCommand::Reply(payload)) => Some((Ok(payload), responses)),
+                Some(WriteStreamCommand::Fail(status)) => Some((Err(status), responses)),
+                Some(WriteStreamCommand::Close) | None => None,
             }
         });
 
@@ -131,16 +135,16 @@ impl TopicService for MockTopicService {
                 }));
             }
 
-            sender.close(stream_id);
+            let _ = sender.close(stream_id);
             sender.unregister_stream(stream_id);
         });
 
         let responses = UnboundedReceiverStream::new(rx);
         let responses = stream::unfold(responses, |mut responses| async move {
             match responses.next().await {
-                Some(StreamReadCommand::Reply(payload)) => Some((Ok(payload), responses)),
-                Some(StreamReadCommand::Fail(status)) => Some((Err(status), responses)),
-                Some(StreamReadCommand::Close) | None => None,
+                Some(ReadStreamCommand::Reply(payload)) => Some((Ok(payload), responses)),
+                Some(ReadStreamCommand::Fail(status)) => Some((Err(status), responses)),
+                Some(ReadStreamCommand::Close) | None => None,
             }
         });
 
