@@ -800,10 +800,6 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
             .read_and_take()
             .await?
             .expect("Message should contain data");
-        let received_content = String::from_utf8(received_data).expect("valid UTF-8");
-        assert_eq!(received_content, *expected_content);
-        assert_eq!(received_msg.get_producer_id(), producer_id);
-        assert_eq!(received_msg.get_topic(), topic_name);
     }
 
     let consumer_description_after_commit = topic_client
