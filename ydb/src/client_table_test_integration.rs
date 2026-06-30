@@ -550,7 +550,7 @@ async fn read_rows() -> YdbResult<()> {
         .collect_vec();
 
     table_client
-        .retry_execute_bulk_upsert(TABLE_PATH.into(), rows)
+        .retry_bulk_upsert(TABLE_PATH, rows)
         .await?;
 
     // Empty
@@ -1081,7 +1081,7 @@ async fn bulk_upsert() -> YdbResult<()> {
     ];
 
     table_client
-        .retry_execute_bulk_upsert(format!("/local/{table_name}"), rows)
+        .retry_bulk_upsert(format!("/local/{table_name}"), rows)
         .await?;
 
     let read = table_client
@@ -1477,7 +1477,7 @@ async fn stream_read_table_rpc() -> YdbResult<()> {
         .await?;
 
     table_client
-        .retry_execute_bulk_upsert(
+        .retry_bulk_upsert(
             table_path.clone(),
             vec![
                 ydb_struct!("id" => 1_i64, "val" => 10_i64),
@@ -1699,7 +1699,7 @@ async fn stream_read_table_options_rpc() -> YdbResult<()> {
         .map(|id| ydb_struct!("id" => id, "val" => id * 10))
         .collect();
     table_client
-        .retry_execute_bulk_upsert(table_path.clone(), rows)
+        .retry_bulk_upsert(table_path.clone(), rows)
         .await?;
 
     // Column projection
@@ -1802,7 +1802,7 @@ async fn truncated_result_on_data_query_rpc() -> YdbResult<()> {
         })
         .collect();
     table_client
-        .retry_execute_bulk_upsert(table_path.clone(), rows)
+        .retry_bulk_upsert(table_path.clone(), rows)
         .await?;
 
     let strict_client = table_client.clone().with_error_on_truncate(true);
@@ -1863,7 +1863,7 @@ async fn truncated_result_on_read_rows_rpc() -> YdbResult<()> {
         .map(|id| ydb_struct!("id" => id, "val" => id))
         .collect();
     table_client
-        .retry_execute_bulk_upsert(table_path.clone(), rows)
+        .retry_bulk_upsert(table_path.clone(), rows)
         .await?;
 
     let keys: Vec<Value> = (0..1001)

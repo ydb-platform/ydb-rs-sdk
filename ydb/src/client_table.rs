@@ -416,8 +416,6 @@ impl TableClient {
     }
 
     /// Bulk upsert rows without opening a session (go-sdk: `table.Client.BulkUpsert`).
-    ///
-    /// Alias: [`Self::retry_execute_bulk_upsert`].
     pub async fn retry_bulk_upsert(
         &self,
         table_path: impl Into<String>,
@@ -432,15 +430,6 @@ impl TableClient {
                 .await
         })
         .await
-    }
-
-    /// Alias for [`Self::retry_bulk_upsert`].
-    pub async fn retry_execute_bulk_upsert(
-        &self,
-        table_path: String,
-        rows: Vec<Value>,
-    ) -> YdbResult<()> {
-        self.retry_bulk_upsert(table_path, rows).await
     }
 
     /// Retry callback in transaction
