@@ -1,5 +1,6 @@
 use super::compression::Executor;
 use super::list_types::{Codec, TopicDescription};
+use super::topicwriter::writer_tx_options::{TopicWriterTxOptions, TopicWriterTxOptionsBuilder};
 use crate::client::TimeoutSettings;
 use crate::client_common::TokenCache;
 use crate::client_topic::list_types::{AlterConsumer, Consumer, MeteringMode};
@@ -259,7 +260,7 @@ impl TopicClient {
         topic_path: impl Into<String>,
         tx: &'a mut dyn Transaction,
     ) -> YdbResult<TopicWriterTx<'a>> {
-        let options = TopicWriterOptionsBuilder::default()
+        let options = TopicWriterTxOptionsBuilder::default()
             .topic_path(topic_path.into())
             .build()?;
         self.create_writer_tx_with_params(options, tx).await
@@ -267,11 +268,11 @@ impl TopicClient {
 
     pub async fn create_writer_tx_with_params<'a>(
         &mut self,
-        writer_options: TopicWriterOptions,
+        writer_tx_options: TopicWriterTxOptions,
         tx: &'a mut dyn Transaction,
     ) -> YdbResult<TopicWriterTx<'a>> {
         TopicWriterTx::new(
-            writer_options,
+            writer_tx_options,
             self.connection_manager.clone(),
             self.executor.clone(),
             tx,

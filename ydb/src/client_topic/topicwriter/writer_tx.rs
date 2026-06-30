@@ -9,9 +9,10 @@ use crate::client_topic::topicwriter::message_write_status::{
     MessageSkipReason, MessageWriteStatus,
 };
 use crate::client_topic::topicwriter::writer::TopicWriter;
-use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::{Transaction, YdbError, YdbResult};
+
+use super::writer_tx_options::TopicWriterTxOptions;
 
 /// A topic writer bound to an active YDB transaction.
 ///
@@ -26,7 +27,7 @@ pub struct TopicWriterTx<'a> {
 
 impl<'a> TopicWriterTx<'a> {
     pub(crate) async fn new(
-        options: TopicWriterOptions,
+        options: TopicWriterTxOptions,
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
         tx: &'a mut dyn Transaction,
@@ -37,6 +38,10 @@ impl<'a> TopicWriterTx<'a> {
             id: info.transaction_id.clone(),
             session: info.session_id.clone(),
         };
+
+        // All validation and configuration, specific for `TopicWriterTx` should be done in
+        // options construction and conversion.
+        let options = options.try_into()?;
 
         let inner =
             TopicWriter::with_tx_identity(options, connection_manager, executor, tx_identity)

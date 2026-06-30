@@ -6,11 +6,10 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tokio::time::timeout;
 use ydb::{
-    Client, ClientBuilder, PartitioningStrategy, Query, QueryResult, TopicWriterMessage,
-    TopicWriterMessageBuilder, TopicWriterOptionsBuilder, Transaction, TransactionInfo, YdbResult,
+    Client, ClientBuilder, Query, QueryResult, TopicWriterMessage, TopicWriterMessageBuilder,
+    TopicWriterTxOptionsBuilder, Transaction, TransactionInfo, YdbResult,
 };
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage as WriteFromClient;
-use ydb_grpc::ydb_proto::topic::stream_write_message::init_request::Partitioning as GrpcPartitioning;
 use ydb_grpc::ydb_proto::topic::stream_write_message::InitRequest;
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
@@ -278,17 +277,12 @@ async fn regular_writer_sends_no_tx_identity() -> YdbResult<()> {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn tx_writer_options_propagated_to_init_request() -> YdbResult<()> {
-    const PRODUCER: &str = "my-producer";
-    const PARTITION: i64 = 3;
-
     let (handler, _, captured_init) = AutoReplyHandler::new(AckMode::WrittenInTx);
     let (server, _reply_tx) = MockServer::start(handler).await;
     let mut tx = MockTransaction::new(TX_ID, SESSION_ID);
 
-    let options = TopicWriterOptionsBuilder::default()
+    let options = TopicWriterTxOptionsBuilder::default()
         .topic_path(TOPIC_PATH.to_string())
-        .producer_id(PRODUCER.to_string())
-        .partitioning(PartitioningStrategy::PartitionId(PARTITION))
         .build()?;
 
     let client = make_client(&server)?;
@@ -302,10 +296,10 @@ async fn tx_writer_options_propagated_to_init_request() -> YdbResult<()> {
 
     let init = captured_init.lock().unwrap().clone();
     let init = init.expect("InitRequest must be captured");
-    assert_eq!(init.producer_id, PRODUCER);
+    assert_eq!(init.path, TOPIC_PATH);
     assert_eq!(
-        init.partitioning,
-        Some(GrpcPartitioning::PartitionId(PARTITION))
+        init.producer_id, "",
+        "tx writer must always use empty producer_id"
     );
 
     Ok(())
@@ -381,7 +375,7 @@ async fn write_skipped_already_written_treated_as_success() -> YdbResult<()> {
 
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn write_returns_error_when_stream_fails() -> YdbResult<()> {
+async fn write_errors_in_retriable_err() -> YdbResult<()> {
     let (handler, _, captured_stream_id) = ReconnectHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
     let mut tx = MockTransaction::new(TX_ID, SESSION_ID);
@@ -393,47 +387,13 @@ async fn write_returns_error_when_stream_fails() -> YdbResult<()> {
         .expect("stream_id must be set after writer init");
     server
         .write_sender()
-        .fail(stream_id, tonic::Status::invalid_argument("stream failed"))
+        .close(stream_id)
         .expect("mock server failed to fail write stream");
 
     let result = writer.write(test_message()).await;
     assert!(result.is_err(), "expected error after stream failure");
 
     let _ = writer.stop().await;
-
-    Ok(())
-}
-
-#[tokio::test]
-#[tracing_test::traced_test]
-async fn tx_identity_present_after_stream_reconnect() -> YdbResult<()> {
-    let (handler, captured_txs, captured_stream_id) = ReconnectHandler::new();
-    let (server, _reply_tx) = MockServer::start(handler).await;
-    let mut tx = MockTransaction::new(TX_ID, SESSION_ID);
-    let mut writer = make_writer_tx(&server, &mut tx).await?;
-
-    writer.write(test_message()).await?;
-
-    let stream_id = captured_stream_id
-        .lock()
-        .unwrap()
-        .expect("stream_id must be set after first write");
-    let write_sender = server.write_sender();
-    let latest_stream_id = write_sender.subscribe_latest_stream_id();
-    write_sender
-        .close(stream_id)
-        .expect("mock server failed to close write stream");
-    wait_for_stream_after(latest_stream_id, stream_id).await;
-
-    writer.write(test_message()).await?;
-    writer.stop().await?;
-
-    let txs = captured_txs.lock().unwrap().clone();
-    assert_eq!(txs.len(), 2, "expected tx identity on both streams");
-    for identity in &txs {
-        assert_eq!(identity.id, TX_ID);
-        assert_eq!(identity.session, SESSION_ID);
-    }
 
     Ok(())
 }

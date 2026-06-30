@@ -150,6 +150,9 @@ pub use client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
 };
 pub use client_topic::topicwriter::writer_tx::TopicWriterTx;
+pub use client_topic::topicwriter::writer_tx_options::{
+    TopicWriterTxOptions, TopicWriterTxOptionsBuilder,
+};
 // full enum pub types
 pub use client::{Client, TimeoutSettings};
 
