@@ -3,7 +3,9 @@ use super::{
         FromHandlerToService, FromServerToServiceRx, FromServiceToServerRx, Handler, Incoming,
         Reply,
     },
-    topic::{default::TopicDefaultHandler, handler::TopicTx, MockTopicService},
+    topic::{
+        default::TopicDefaultHandler, handler::TopicTx, sender::WriteStreamSender, MockTopicService,
+    },
 };
 use futures_util::stream;
 use std::net::SocketAddr;
@@ -57,6 +59,7 @@ pub struct MockServer {
     addr: SocketAddr,
     shutdown: CancellationToken,
     _tonic_services: tokio::task::JoinHandle<()>,
+    write_sender: WriteStreamSender,
 }
 
 impl MockServer {
@@ -82,6 +85,7 @@ impl MockServer {
         let (topic_tx, topic_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let topic_service = MockTopicService::new(from_service_to_server_tx, topic_rx);
+        let write_sender = topic_service.write_sender.clone();
 
         let tcp_streams = stream::unfold(listener, |listener| async {
             Some((listener.accept().await.map(|(stream, _)| stream), listener))
@@ -119,6 +123,7 @@ impl MockServer {
             addr,
             shutdown,
             _tonic_services: tonic_services,
+            write_sender,
         };
 
         (server, from_server_to_service_tx)
@@ -146,6 +151,10 @@ impl MockServer {
 
     pub fn endpoint(&self) -> &str {
         &self.endpoint
+    }
+
+    pub fn write_sender(&self) -> WriteStreamSender {
+        self.write_sender.clone()
     }
 
     pub(crate) fn addr(&self) -> SocketAddr {
