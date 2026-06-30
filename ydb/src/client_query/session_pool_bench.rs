@@ -4,29 +4,29 @@
 //!
 //! Run (release mode recommended):
 //! ```text
-//! cargo test -p ydb query_session_pool_bench --release -- --ignored --nocapture
+//! cargo test -p ydb session_pool_bench --release -- --ignored --nocapture
 //! ```
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use super::{QuerySessionPool, QuerySessionPoolSettings};
+use crate::session_pool::{SessionPool, SessionPoolSettings};
 
 const BENCH_POOL_LIMIT: usize = 500;
 const BENCH_PREFILL_ITEMS: usize = BENCH_POOL_LIMIT / 3;
 const BENCH_DELETE_PROBABILITY: u64 = 20;
 const BENCH_ITERS_PER_GOROUTINE: usize = 10_000;
 
-fn new_bench_pool() -> QuerySessionPool {
-    QuerySessionPool::new_explicit_bench(
-        QuerySessionPoolSettings::new()
+fn new_bench_pool() -> SessionPool {
+    SessionPool::new_explicit_bench(
+        SessionPoolSettings::new()
             .with_limit(BENCH_POOL_LIMIT)
             .with_warm_up(BENCH_PREFILL_ITEMS),
     )
 }
 
-async fn bench_pool_once(pool: &QuerySessionPool, ops: &AtomicU64) {
+async fn bench_pool_once(pool: &SessionPool, ops: &AtomicU64) {
     let force_delete = ops.fetch_add(1, Ordering::Relaxed) % BENCH_DELETE_PROBABILITY == 0;
     let mut lease = pool
         .acquire_explicit()
@@ -69,7 +69,7 @@ async fn benchmark_pool_with_concurrency(goroutines: usize) {
             bench_pool_once(&pool, &ops).await;
             samples.push(start.elapsed());
         }
-        report_bench_latency("query_session_pool_bench concurrency=1", &mut samples);
+        report_bench_latency("session_pool_bench concurrency=1", &mut samples);
         return;
     }
 
@@ -101,7 +101,7 @@ async fn benchmark_pool_with_concurrency(goroutines: usize) {
         merged.extend(handle.await.expect("bench worker"));
     }
     report_bench_latency(
-        &format!("query_session_pool_bench concurrency={goroutines}"),
+        &format!("session_pool_bench concurrency={goroutines}"),
         &mut merged,
     );
 }
@@ -109,12 +109,12 @@ async fn benchmark_pool_with_concurrency(goroutines: usize) {
 /// Acquire/release explicit session pool under load; RPC excluded via bench stub sessions.
 ///
 /// benchmark name (release, Apple Silicon)   mean        p50         p99
-/// query_session_pool_bench concurrency=1    ~165ns      ~166ns      ~250ns
-/// query_session_pool_bench concurrency=500  ~8µs        ~875ns      ~76µs
-/// query_session_pool_bench concurrency=1000 ~7.6µs      ~834ns      ~69µs
+/// session_pool_bench concurrency=1    ~165ns      ~166ns      ~250ns
+/// session_pool_bench concurrency=500  ~8µs        ~875ns      ~76µs
+/// session_pool_bench concurrency=1000 ~7.6µs      ~834ns      ~69µs
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "manual pool microbenchmark; run with --release --ignored --nocapture"]
-async fn query_session_pool_bench() {
+async fn session_pool_bench() {
     for goroutines in [1_usize, 250, 490, 500, 510, 1000] {
         benchmark_pool_with_concurrency(goroutines).await;
     }

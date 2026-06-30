@@ -148,18 +148,18 @@ pub use client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
 };
 // full enum pub types
-pub use client::{Client, TimeoutSettings};
+pub use client::{Client, SessionPoolSettings, SessionPoolStats, TimeoutSettings};
 
 // full enum pub types
 pub use client_builder::ClientBuilder;
 
 // full enum pub types
 pub use client_query::{
-    CallBuilder, ExecBuilder, ExecCall, ExecuteScriptBuilder, ExecuteScriptOperation,
-    FetchScriptResult, FetchScriptResultsBuilder, FromYdbRow, OneResultSet, OneRow, OptionalRow,
-    OptionalRowBuilder, QueryClient, QueryExecutor, QueryRowBuilder, QuerySessionMode,
-    QuerySessionPoolSettings, QuerySessionPoolStats, QueryStats, QueryStream, QueryStreamBuilder,
-    QueryTransaction, QueryTransactionOptions, QueryTxMode, ResultSetBuilder, Streamed,
+    CallBuilder, ClientOneShot, ExecBuilder, ExecCall, ExecuteScriptBuilder,
+    ExecuteScriptOperation, FetchScriptResult, FetchScriptResultsBuilder, FromYdbRow, Interactive,
+    OneResultSet, OneRow, OptionalRow, OptionalRowBuilder, QueryClient, QueryExecutor,
+    QueryRowBuilder, QueryStats, QueryStream, QueryStreamBuilder, QueryTransaction,
+    QueryTransactionOptions, QueryTxMode, ResultSetBuilder, Streamed,
 };
 
 // full enum pub types
