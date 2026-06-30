@@ -358,7 +358,8 @@ impl CoordinationSession {
                         .get_response(semaphore_released)
                         .await?;
                 }
-                _ => todo!(),
+
+                _ => return Err(YdbError::custom("unimplemented")),
             },
             Err(some_err) => {
                 return Err(YdbError::from(some_err));
