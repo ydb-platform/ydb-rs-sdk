@@ -7,9 +7,9 @@ pub mod queue;
 pub mod reception_queue;
 pub mod reconnector;
 pub mod stream_writer;
-#[cfg(test)]
-pub mod test_helpers;
 pub mod writer;
 pub mod writer_options;
 pub mod writer_tx;
 
+#[cfg(test)]
+pub mod test_helpers;

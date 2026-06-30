@@ -21,6 +21,16 @@ pub struct TransactionInfo {
     pub(crate) session_id: String,
 }
 
+impl TransactionInfo {
+    /// Creates a `TransactionInfo` from a transaction id and session id.
+    pub fn new(transaction_id: impl Into<String>, session_id: impl Into<String>) -> Self {
+        Self {
+            transaction_id: transaction_id.into(),
+            session_id: session_id.into(),
+        }
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum Mode {
     OnlineReadonly,
