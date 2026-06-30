@@ -28,6 +28,10 @@ impl TableSessionPool {
         }
     }
 
+    pub(crate) fn connection_manager(&self) -> &GrpcConnectionManager {
+        &self.connection_manager
+    }
+
     pub(crate) async fn session(&self) -> YdbResult<Session> {
         let mut lease = self.pool.acquire_explicit().await?;
         lease.ensure_alive()?;

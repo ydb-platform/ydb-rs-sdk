@@ -191,8 +191,8 @@ pub use result::{
 };
 pub use table_requests::{
     AlterTableRequest, CreateTableRequest, DropTableRequest, NamedPolicyDescription,
-    PreparedDataQuery, ReadTableKeyBound, ReadTableKeyRange, ReadTableOptions, TableColumn,
-    TableOptionsDescription,
+    PreparedDataQuery, ReadRowsRequest, ReadTableKeyBound, ReadTableKeyRange, ReadTableOptions,
+    TableColumn, TableOptionsDescription,
 };
 // full enum pub types
 pub use transaction::{Mode, Transaction, TransactionInfo};

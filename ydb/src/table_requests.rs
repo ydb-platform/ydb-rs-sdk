@@ -119,6 +119,49 @@ impl DropTableRequest {
     }
 }
 
+/// ReadRows RPC request (go-sdk: `table.Client.ReadRows` + `options.ReadRowsOption`).
+#[derive(Clone, Debug, Default)]
+pub struct ReadRowsRequest {
+    pub path: String,
+    pub keys: Vec<Value>,
+    pub columns: Vec<String>,
+}
+
+impl ReadRowsRequest {
+    pub fn new(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            ..Default::default()
+        }
+    }
+
+    pub fn with_keys(mut self, keys: Vec<Value>) -> Self {
+        self.keys = keys;
+        self
+    }
+
+    pub fn with_column(mut self, name: impl Into<String>) -> Self {
+        self.columns.push(name.into());
+        self
+    }
+
+    pub(crate) fn into_raw(
+        self,
+        session_id: String,
+    ) -> YdbResult<crate::grpc_wrapper::raw_table_service::read_rows::RawReadRowsRequest> {
+        let keys = crate::types_converters::try_vec_to_list_of_structs(self.keys)?
+            .ok_or_else(|| YdbError::Custom("read rows keys must be a list of structs".into()))?;
+        Ok(
+            crate::grpc_wrapper::raw_table_service::read_rows::RawReadRowsRequest {
+                session_id,
+                path: self.path,
+                keys: keys.try_into().map_err(YdbError::from)?,
+                columns: self.columns,
+            },
+        )
+    }
+}
+
 /// AlterTable RPC request.
 #[derive(Clone, Debug, Default)]
 pub struct AlterTableRequest {

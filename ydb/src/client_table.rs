@@ -13,9 +13,13 @@ use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::retry::{NoRetrier, Retry, RetryParams, TimeoutRetrier};
 use crate::table_service_types::{CopyTableItem, TableDescription};
 use crate::table_requests::{
-    AlterTableRequest, CreateTableRequest, DropTableRequest, PreparedDataQuery, ReadTableOptions,
-    TableOptionsDescription,
+    AlterTableRequest, CreateTableRequest, DropTableRequest, PreparedDataQuery, ReadRowsRequest,
+    ReadTableOptions, TableOptionsDescription,
 };
+use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertRequest;
+use crate::grpc_wrapper::raw_table_service::client::RawTableClient;
+use crate::grpc_wrapper::raw_table_service::read_rows::RawReadRowsRequest;
+use crate::session::CreateTableClient;
 use crate::types_converters::try_vec_to_list_of_structs;
 use crate::{Query, QueryResult, StreamReadTableResult, StreamResult};
 use std::future::Future;
@@ -206,6 +210,57 @@ impl TableClient {
             .with_timeouts(self.timeouts))
     }
 
+    async fn sessionless_table_client(&self) -> YdbResult<RawTableClient> {
+        CreateTableClient::create_table_client(
+            self.session_pool.connection_manager(),
+            self.timeouts,
+        )
+        .await
+    }
+
+    async fn bulk_upsert_once(&self, table_path: String, rows: Value) -> YdbResult<()> {
+        let raw_rows: crate::grpc_wrapper::raw_table_service::value::RawTypedValue =
+            rows.try_into().map_err(YdbError::from)?;
+        let mut client = self.sessionless_table_client().await?;
+        client
+            .bulk_upsert(RawBulkUpsertRequest {
+                table: table_path,
+                rows: raw_rows.into(),
+                operation_params: self.timeouts.operation_params(),
+            })
+            .await
+            .map_err(YdbError::from)?;
+        Ok(())
+    }
+
+    async fn read_rows_once(
+        &self,
+        request: RawReadRowsRequest,
+        error_on_truncate: bool,
+    ) -> YdbResult<crate::ResultSet> {
+        let mut client = self.sessionless_table_client().await?;
+        let raw_response = client.read_rows(request).await.map_err(YdbError::from)?;
+        let result_set: crate::ResultSet = raw_response.result_set.try_into()?;
+        if error_on_truncate && result_set.is_truncated() {
+            return Err(YdbError::TruncatedResult {
+                result_set_index: 0,
+            });
+        }
+        Ok(result_set)
+    }
+
+    async fn retry_idempotent<CallbackFuture, CallbackResult>(
+        &self,
+        callback: impl Fn() -> CallbackFuture,
+    ) -> YdbResult<CallbackResult>
+    where
+        CallbackFuture: Future<Output = YdbResult<CallbackResult>>,
+    {
+        self.clone_with_idempotent_operations(true)
+            .retry(callback)
+            .await
+    }
+
     async fn retry<CallbackFuture, CallbackResult>(
         &self,
         callback: impl Fn() -> CallbackFuture,
@@ -258,6 +313,26 @@ impl TableClient {
         .await
     }
 
+    /// Read rows by primary key without opening a session (go-sdk: `table.Client.ReadRows`).
+    ///
+    /// `request.keys` must be a list of [`Value::Struct`] primary-key values.
+    /// Returns an empty result set when `keys` is empty.
+    pub async fn retry_read_rows_request(
+        &self,
+        request: ReadRowsRequest,
+    ) -> YdbResult<crate::ResultSet> {
+        if request.keys.is_empty() {
+            return Ok(crate::ResultSet::default());
+        }
+
+        let raw = request.clone().into_raw(String::new())?;
+        let error_on_truncate = self.error_on_truncate;
+        self.retry_idempotent(|| async {
+            self.read_rows_once(raw.clone(), error_on_truncate).await
+        })
+        .await
+    }
+
     /// From table with given path `table_path` request rows by primary keys `keys`, which must be
     /// vector of [`Value::Struct`]. If any key does not meet requirement, error will be returned.
     ///
@@ -292,26 +367,11 @@ impl TableClient {
         keys: Vec<Value>,
         columns: Option<Vec<String>>,
     ) -> YdbResult<crate::ResultSet> {
-        let Some(keys) = try_vec_to_list_of_structs(keys)? else {
-            return Ok(crate::ResultSet::default());
-        };
-
-        let table_path: String = table_path.into();
-
-        let columns = columns.unwrap_or_default();
-
-        self.retry(|| async {
-            let mut session = self.create_session().await?;
-            session
-                .read_rows(
-                    table_path.clone(),
-                    keys.clone(),
-                    columns.clone(),
-                    self.error_on_truncate,
-                )
-                .await
-        })
-        .await
+        let mut request = ReadRowsRequest::new(table_path).with_keys(keys);
+        if let Some(columns) = columns {
+            request.columns = columns;
+        }
+        self.retry_read_rows_request(request).await
     }
 
     /// Execute explain data query with retry policy
@@ -355,23 +415,32 @@ impl TableClient {
         .await
     }
 
-    /// Execute bulk upsert with retry policy
-    pub async fn retry_execute_bulk_upsert(
+    /// Bulk upsert rows without opening a session (go-sdk: `table.Client.BulkUpsert`).
+    ///
+    /// Alias: [`Self::retry_execute_bulk_upsert`].
+    pub async fn retry_bulk_upsert(
         &self,
-        table_path: String,
+        table_path: impl Into<String>,
         rows: Vec<Value>,
     ) -> YdbResult<()> {
         let Some(value) = try_vec_to_list_of_structs(rows)? else {
             return Ok(());
         };
-
-        self.retry(|| async {
-            let mut session = self.create_session().await?;
-            session
-                .execute_bulk_upsert(table_path.clone(), value.clone())
+        let table_path = table_path.into();
+        self.retry_idempotent(|| async {
+            self.bulk_upsert_once(table_path.clone(), value.clone())
                 .await
         })
         .await
+    }
+
+    /// Alias for [`Self::retry_bulk_upsert`].
+    pub async fn retry_execute_bulk_upsert(
+        &self,
+        table_path: String,
+        rows: Vec<Value>,
+    ) -> YdbResult<()> {
+        self.retry_bulk_upsert(table_path, rows).await
     }
 
     /// Retry callback in transaction

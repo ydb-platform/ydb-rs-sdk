@@ -1,12 +1,11 @@
 use crate::client::TimeoutSettings;
 use crate::client_table::TableServiceClientType;
 use crate::errors::{YdbError, YdbResult};
-use crate::grpc_wrapper::raw_table_service::read_rows::RawReadRowsRequest;
 use crate::query::Query;
 use crate::result::{ExplainResult, QueryResult, StreamReadTableResult, StreamResult};
 use crate::table_requests::{
-    AlterTableRequest, CreateTableRequest, DropTableRequest, PreparedDataQuery, ReadTableOptions,
-    TableOptionsDescription,
+    AlterTableRequest, CreateTableRequest, DropTableRequest, PreparedDataQuery, ReadRowsRequest,
+    ReadTableOptions, TableOptionsDescription,
 };
 use crate::types::Value;
 use derivative::Derivative;
@@ -164,24 +163,30 @@ impl Session {
         Ok(())
     }
 
-    pub(crate) async fn read_rows(
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub async fn bulk_upsert(
         &mut self,
-        table_path: String,
-        keys: Value,
-        columns: Vec<String>,
+        table_path: impl Into<String>,
+        rows: Vec<Value>,
+    ) -> YdbResult<()> {
+        let Some(value) = crate::types_converters::try_vec_to_list_of_structs(rows)? else {
+            return Ok(());
+        };
+        self.execute_bulk_upsert(table_path.into(), value).await
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    /// Read rows by primary key (go-sdk: `Session.ReadRows`).
+    pub async fn read_rows(
+        &mut self,
+        request: ReadRowsRequest,
         error_on_truncate: bool,
     ) -> YdbResult<crate::ResultSet> {
-        debug_assert!(matches!(keys, Value::List(_)));
-
-        let req = RawReadRowsRequest {
-            session_id: self.id.clone(),
-            path: table_path,
-            keys: keys.try_into()?,
-            columns,
-        };
-
+        if request.keys.is_empty() {
+            return Ok(crate::ResultSet::default());
+        }
+        let req = request.into_raw(self.id.clone())?;
         let raw_read_rows_response = in_flight_table_rpc!(self, table, table.read_rows(req))?;
-
         let result_set: crate::ResultSet = raw_read_rows_response.result_set.try_into()?;
         if error_on_truncate && result_set.is_truncated() {
             return Err(YdbError::TruncatedResult {

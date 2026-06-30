@@ -40,7 +40,7 @@ async fn main() -> YdbResult<()> {
     ];
 
     table_client
-        .retry_execute_bulk_upsert(format!("/local/{table_name}").to_string(), rows)
+        .retry_bulk_upsert(format!("/local/{table_name}"), rows)
         .await?;
 
     let read = table_client

@@ -15,7 +15,7 @@ use crate::client_table::RetryOptions;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::query::Query;
 use crate::table_requests::{
-    AlterTableRequest, CreateTableRequest, DropTableRequest, ReadTableKeyBound,
+    AlterTableRequest, CreateTableRequest, DropTableRequest, ReadRowsRequest, ReadTableKeyBound,
     ReadTableKeyRange, ReadTableOptions, TableColumn,
 };
 use crate::table_service_types::{CopyTableItem, IndexType, StoreType};
@@ -1332,6 +1332,102 @@ async fn grpc_max_message_size_limit_exceeded() -> YdbResult<()> {
         .await?
         .execute_schema_query(format!("DROP TABLE {TABLE}"))
         .await;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn bulk_upsert_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_name = format!("bulk_rpc_{rand_str}");
+    let table_path = format!("/local/{table_name}");
+
+    table_client
+        .retry_create_table(
+            CreateTableRequest::new(table_path.clone())
+                .with_column(TableColumn::new("id", Value::Int64(0)))
+                .with_column(TableColumn::new("val", Value::Text(String::new())))
+                .with_primary_key(["id"]),
+        )
+        .await?;
+
+    table_client
+        .retry_bulk_upsert(
+            table_path.clone(),
+            vec![
+                ydb_struct!("id" => 1_i64, "val" => Value::Text("one".into())),
+                ydb_struct!("id" => 2_i64, "val" => Value::Text("two".into())),
+            ],
+        )
+        .await?;
+
+    let result = table_client
+        .retry_read_rows_request(
+            ReadRowsRequest::new(table_path.clone())
+                .with_keys(vec![ydb_struct!("id" => 1_i64), ydb_struct!("id" => 2_i64)]),
+        )
+        .await?;
+
+    let mut vals = Vec::new();
+    for mut row in result.rows() {
+        vals.push(row.remove_field_by_name("val")?);
+    }
+    assert!(vals.contains(&Value::Text("one".into())));
+    assert!(vals.contains(&Value::Text("two".into())));
+
+    table_client
+        .retry_drop_table(DropTableRequest::new(table_path))
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn read_rows_on_session_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_name = format!("session_read_{rand_str}");
+    let table_path = format!("/local/{table_name}");
+
+    table_client
+        .retry_create_table(
+            CreateTableRequest::new(table_path.clone())
+                .with_column(TableColumn::new("id", Value::Int64(0)))
+                .with_column(TableColumn::new("val", Value::Int64(0)))
+                .with_primary_key(["id"]),
+        )
+        .await?;
+
+    let mut session = table_client.create_session().await?;
+    session
+        .bulk_upsert(
+            table_path.clone(),
+            vec![ydb_struct!("id" => 42_i64, "val" => 7_i64)],
+        )
+        .await?;
+
+    let result = session
+        .read_rows(
+            ReadRowsRequest::new(table_path.clone())
+                .with_keys(vec![ydb_struct!("id" => 42_i64)])
+                .with_column("val"),
+            false,
+        )
+        .await?;
+
+    let mut row = result.rows().next().unwrap();
+    assert_eq!(row.remove_field_by_name("val")?, Value::Int64(7));
+
+    table_client
+        .retry_drop_table(DropTableRequest::new(table_path))
+        .await?;
 
     Ok(())
 }
