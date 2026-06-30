@@ -128,12 +128,49 @@ impl RuntimeHandle {
         }
     }
 
+    pub(crate) fn register_starting_partition(
+        &self,
+        session_id: i64,
+        partition_id: i64,
+    ) -> YdbResult<()> {
+        let mut state = self.lock_state()?;
+
+        match &mut *state {
+            State::Active(active) => {
+                active.buffer.register_starting(session_id, partition_id);
+            }
+            State::Reconnecting => {}
+            State::Failed(err) => return Err(err.clone()),
+        }
+
+        Ok(())
+    }
+
+    pub(crate) fn register_stopping_partition(
+        &self,
+        session_id: i64,
+        partition_id: i64,
+    ) -> YdbResult<()> {
+        let mut state = self.lock_state()?;
+
+        match &mut *state {
+            State::Active(active) => {
+                active.buffer.register_stopping(session_id, partition_id);
+            }
+            State::Reconnecting => {}
+            State::Failed(err) => return Err(err.clone()),
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn register_ending_partition(
         &self,
         session_id: i64,
         child_partition_ids: Vec<i64>,
     ) -> YdbResult<()> {
         let mut state = self.lock_state()?;
+
         match &mut *state {
             State::Active(active) => {
                 active
@@ -143,6 +180,7 @@ impl RuntimeHandle {
             State::Reconnecting => {}
             State::Failed(err) => return Err(err.clone()),
         }
+
         Ok(())
     }
 
