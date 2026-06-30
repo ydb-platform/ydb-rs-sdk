@@ -232,7 +232,7 @@ pub(crate) fn split_to_parts(v: u128) -> (u64, u64) {
 }
 
 pub(crate) fn merge_parts(high: u64, low: u64) -> u128 {
-    (high as u128) << 64 | (low as u128)
+    ((high as u128) << 64) | (low as u128)
 }
 
 impl TryFrom<RawTypedValue> for Value {
