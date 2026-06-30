@@ -1,4 +1,4 @@
-//! Table Service: prepare and execute a data query on a [`Session`] (session-only API).
+//! Table Service: prepare and execute a data query on a pooled session (go-sdk: `Client.Do`).
 
 use std::time::Duration;
 
@@ -18,23 +18,27 @@ async fn main() -> YdbResult<()> {
 
     let table_client = client.table_client();
 
-    let mut session = table_client.create_session().await?;
-    let prepared = session
-        .prepare_data_query("SELECT $v + $v AS res".to_string())
-        .await?;
+    table_client
+        .retry(|mut session| async move {
+            let prepared = session
+                .prepare_data_query("SELECT $v + $v AS res".to_string())
+                .await?;
 
-    let result = session
-        .execute_prepared_query(
-            &prepared,
-            Query::new("").with_params(ydb_params!("$v" => 21_i32)),
-            Mode::OnlineReadonly,
-        )
-        .await?;
+            let result = session
+                .execute_prepared_query(
+                    &prepared,
+                    Query::new("").with_params(ydb_params!("$v" => 21_i32)),
+                    Mode::OnlineReadonly,
+                )
+                .await?;
 
-    let mut row = result.into_only_result()?.rows().next().unwrap();
-    let res: i32 = row.remove_field_by_name("res")?.try_into()?;
-    println!("prepared query result: {res}");
-    assert_eq!(res, 42);
+            let mut row = result.into_only_result()?.rows().next().unwrap();
+            let res: i32 = row.remove_field_by_name("res")?.try_into()?;
+            println!("prepared query result: {res}");
+            assert_eq!(res, 42);
+            Ok(())
+        })
+        .await?;
 
     Ok(())
 }

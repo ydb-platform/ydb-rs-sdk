@@ -74,6 +74,9 @@ macro_rules! in_flight_table_rpc {
 
 #[derive(Derivative)]
 #[derivative(Debug)]
+/// Pooled table session (go-sdk: `table.Session`).
+///
+/// Not constructed by user code directly — obtain from [`TableClient::retry`] (go-sdk: `Client.Do`).
 pub struct Session {
     pub(crate) id: String,
 

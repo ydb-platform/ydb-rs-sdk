@@ -28,14 +28,15 @@ use crate::{ydb_params, ydb_struct, Bytes, TableClient};
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
-async fn create_session() -> YdbResult<()> {
-    let res = create_client()
+async fn retry_leases_pooled_session() -> YdbResult<()> {
+    create_client()
         .await?
         .table_client()
-        .create_session()
-        .await?;
-    trace!("session: {:?}", res);
-    Ok(())
+        .retry(|session| async move {
+            trace!("session: {}", session.id);
+            Ok(())
+        })
+        .await
 }
 
 #[tokio::test]
@@ -852,7 +853,6 @@ SELECT NULL
 #[ignore] // need YDB access
 async fn stream_query() -> YdbResult<()> {
     let client = create_client().await?.table_client();
-    let mut session = client.create_session().await?;
 
     let _ = client
         .retry_execute_scheme_query("DROP TABLE stream_query".to_string())
@@ -939,47 +939,58 @@ FROM
     }
     let expected_item_count = last_item_value;
 
-    let mut expected_id: i64 = 1;
     let query = Query::new("SELECT * FROM stream_query ORDER BY id".to_string());
-    let mut res = session.execute_scan_query(query).await?;
-    let mut sum: i64 = 0;
-    let mut item_count = 0;
-    let mut result_set_count = 0;
-    while let Some(result_set) = res.next().await? {
-        result_set_count += 1;
+    client
+        .retry(|mut session| {
+            let query = query.clone();
+            async move {
+                let mut expected_id: i64 = 1;
+                let mut res = session.execute_scan_query(query).await?;
+                let mut sum: i64 = 0;
+                let mut item_count = 0;
+                let mut result_set_count = 0;
+                while let Some(result_set) = res.next().await? {
+                    result_set_count += 1;
 
-        for mut row in result_set.into_iter() {
-            item_count += 1;
-            match row.remove_field_by_name("id")? {
-                Value::Optional(boxed_id) => match boxed_id.value.unwrap() {
-                    Value::Int64(id) => {
-                        assert_eq!(id, expected_id);
-                        sum += id
+                    for mut row in result_set.into_iter() {
+                        item_count += 1;
+                        match row.remove_field_by_name("id")? {
+                            Value::Optional(boxed_id) => match boxed_id.value.unwrap() {
+                                Value::Int64(id) => {
+                                    assert_eq!(id, expected_id);
+                                    sum += id
+                                }
+                                id => panic!("unexpected ydb boxed_id type: {id:?}"),
+                            },
+                            id => panic!("unexpected ydb id type: {id:?}"),
+                        };
+
+                        match row.remove_field_by_name("val")? {
+                            Value::Optional(boxed_val) => match boxed_val.value.unwrap() {
+                                Value::Bytes(content) => {
+                                    assert_eq!(
+                                        gen_value_by_id(expected_id),
+                                        Vec::<u8>::from(content)
+                                    )
+                                }
+                                val => panic!("unexpected ydb id type: {val:?}"),
+                            },
+                            val => panic!("unexpected ydb boxed_id type: {val:?}"),
+                        };
+
+                        expected_id += 1;
                     }
-                    id => panic!("unexpected ydb boxed_id type: {id:?}"),
-                },
-                id => panic!("unexpected ydb id type: {id:?}"),
-            };
+                }
 
-            match row.remove_field_by_name("val")? {
-                Value::Optional(boxed_val) => match boxed_val.value.unwrap() {
-                    Value::Bytes(content) => {
-                        assert_eq!(gen_value_by_id(expected_id), Vec::<u8>::from(content))
-                    }
-                    val => panic!("unexpected ydb id type: {val:?}"),
-                },
-                val => panic!("unexpected ydb boxed_id type: {val:?}"),
-            };
+                assert_eq!(expected_item_count, item_count);
+                assert_eq!(expected_sum, sum);
 
-            expected_id += 1;
-        }
-    }
-
-    assert_eq!(expected_item_count, item_count);
-    assert_eq!(expected_sum, sum);
-
-    // TODO: need improove for non flap in tests for will strong more then 1
-    assert!(result_set_count > 1); // ensure get multiply results
+                // TODO: need improove for non flap in tests for will strong more then 1
+                assert!(result_set_count > 1); // ensure get multiply results
+                Ok(())
+            }
+        })
+        .await?;
     Ok(())
 }
 
@@ -1348,14 +1359,21 @@ async fn stream_read_table_rpc() -> YdbResult<()> {
         )
         .await?;
 
-    let mut session = table_client.create_session().await?;
-    let mut stream = session
-        .stream_read_table(table_path, ReadTableOptions::default())
+    let row_count = table_client
+        .retry(|mut session| {
+            let table_path = table_path.clone();
+            async move {
+                let mut stream = session
+                    .stream_read_table(table_path, ReadTableOptions::default())
+                    .await?;
+                let mut row_count = 0;
+                while let Some(result_set) = stream.next_result_set().await? {
+                    row_count += result_set.rows().count();
+                }
+                Ok(row_count)
+            }
+        })
         .await?;
-    let mut row_count = 0;
-    while let Some(result_set) = stream.next_result_set().await? {
-        row_count += result_set.rows().count();
-    }
     assert_eq!(row_count, 2);
 
     table_client
@@ -1372,27 +1390,31 @@ async fn prepare_data_query_rpc() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
 
-    let mut session = table_client.create_session().await?;
-    let prepared = session
-        .prepare_data_query("SELECT $v + $v AS res".to_string())
-        .await?;
-    let result = session
-        .execute_prepared_query(
-            &prepared,
-            Query::new("").with_params(ydb_params!("$v" => 21_i32)),
-            Mode::OnlineReadonly,
-        )
-        .await?;
+    table_client
+        .retry(|mut session| async move {
+            let prepared = session
+                .prepare_data_query("SELECT $v + $v AS res".to_string())
+                .await?;
+            let result = session
+                .execute_prepared_query(
+                    &prepared,
+                    Query::new("").with_params(ydb_params!("$v" => 21_i32)),
+                    Mode::OnlineReadonly,
+                )
+                .await?;
 
-    assert_eq!(
-        Value::Int32(42),
-        result
-            .into_only_result()?
-            .rows()
-            .next()
-            .unwrap()
-            .remove_field_by_name("res")?
-    );
+            assert_eq!(
+                Value::Int32(42),
+                result
+                    .into_only_result()?
+                    .rows()
+                    .next()
+                    .unwrap()
+                    .remove_field_by_name("res")?
+            );
+            Ok(())
+        })
+        .await?;
 
     Ok(())
 }
@@ -1507,30 +1529,34 @@ async fn prepare_data_query_on_session_rpc() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
 
-    let mut session = table_client.create_session().await?;
-    let prepared = session
-        .prepare_data_query("SELECT $v * 2 AS res".to_string())
-        .await?;
-    assert!(!prepared.query_id().is_empty());
-    assert_eq!(prepared.text(), "SELECT $v * 2 AS res");
+    table_client
+        .retry(|mut session| async move {
+            let prepared = session
+                .prepare_data_query("SELECT $v * 2 AS res".to_string())
+                .await?;
+            assert!(!prepared.query_id().is_empty());
+            assert_eq!(prepared.text(), "SELECT $v * 2 AS res");
 
-    let result = session
-        .execute_prepared_query(
-            &prepared,
-            Query::new("").with_params(ydb_params!("$v" => 11_i32)),
-            Mode::OnlineReadonly,
-        )
-        .await?;
+            let result = session
+                .execute_prepared_query(
+                    &prepared,
+                    Query::new("").with_params(ydb_params!("$v" => 11_i32)),
+                    Mode::OnlineReadonly,
+                )
+                .await?;
 
-    assert_eq!(
-        Value::Int32(22),
-        result
-            .into_only_result()?
-            .rows()
-            .next()
-            .unwrap()
-            .remove_field_by_name("res")?
-    );
+            assert_eq!(
+                Value::Int32(22),
+                result
+                    .into_only_result()?
+                    .rows()
+                    .next()
+                    .unwrap()
+                    .remove_field_by_name("res")?
+            );
+            Ok(())
+        })
+        .await?;
 
     Ok(())
 }
@@ -1561,70 +1587,75 @@ async fn stream_read_table_options_rpc() -> YdbResult<()> {
         .retry_bulk_upsert(table_path.clone(), rows)
         .await?;
 
-    // Column projection
-    let mut session = table_client.create_session().await?;
-    let mut stream = session
-        .stream_read_table(
-            table_path.clone(),
-            ReadTableOptions::new()
-                .with_column("id")
-                .with_ordered(true),
-        )
-        .await?;
-    let mut ids = Vec::new();
-    while let Some(result_set) = stream.next_result_set().await? {
-        for mut row in result_set.rows() {
-            match row.remove_field_by_name("id")? {
-                Value::Int64(id) => ids.push(id),
-                other => panic!("unexpected id type: {other:?}"),
-            }
-            assert!(row.remove_field_by_name("val").is_err());
-        }
-    }
-    assert_eq!(ids, vec![1_i64, 2, 3, 4, 5]);
+    table_client
+        .retry(|mut session| {
+            let table_path = table_path.clone();
+            async move {
+                // Column projection
+                let mut stream = session
+                    .stream_read_table(
+                        table_path.clone(),
+                        ReadTableOptions::new()
+                            .with_column("id")
+                            .with_ordered(true),
+                    )
+                    .await?;
+                let mut ids = Vec::new();
+                while let Some(result_set) = stream.next_result_set().await? {
+                    for mut row in result_set.rows() {
+                        match row.remove_field_by_name("id")? {
+                            Value::Int64(id) => ids.push(id),
+                            other => panic!("unexpected id type: {other:?}"),
+                        }
+                        assert!(row.remove_field_by_name("val").is_err());
+                    }
+                }
+                assert_eq!(ids, vec![1_i64, 2, 3, 4, 5]);
 
-    // Key range [2, 4]
-    let key_range = ReadTableKeyRange::new()
-        .with_from(ReadTableKeyBound::GreaterOrEqual(Value::Int64(2)))
-        .with_to(ReadTableKeyBound::LessOrEqual(Value::Int64(4)));
-    let mut session = table_client.create_session().await?;
-    let mut stream = session
-        .stream_read_table(
-            table_path.clone(),
-            ReadTableOptions::new()
-                .with_key_range(key_range)
-                .with_ordered(true),
-        )
-        .await?;
-    let mut ranged_ids = Vec::new();
-    while let Some(result_set) = stream.next_result_set().await? {
-        for mut row in result_set.rows() {
-            match row.remove_field_by_name("id")? {
-                Value::Int64(id) => ranged_ids.push(id),
-                other => panic!("unexpected id type: {other:?}"),
-            }
-        }
-    }
-    assert_eq!(ranged_ids, vec![2_i64, 3, 4]);
+                // Key range [2, 4]
+                let key_range = ReadTableKeyRange::new()
+                    .with_from(ReadTableKeyBound::GreaterOrEqual(Value::Int64(2)))
+                    .with_to(ReadTableKeyBound::LessOrEqual(Value::Int64(4)));
+                let mut stream = session
+                    .stream_read_table(
+                        table_path.clone(),
+                        ReadTableOptions::new()
+                            .with_key_range(key_range)
+                            .with_ordered(true),
+                    )
+                    .await?;
+                let mut ranged_ids = Vec::new();
+                while let Some(result_set) = stream.next_result_set().await? {
+                    for mut row in result_set.rows() {
+                        match row.remove_field_by_name("id")? {
+                            Value::Int64(id) => ranged_ids.push(id),
+                            other => panic!("unexpected id type: {other:?}"),
+                        }
+                    }
+                }
+                assert_eq!(ranged_ids, vec![2_i64, 3, 4]);
 
-    // Row limit with truncated flag (no error by default)
-    let mut session = table_client.create_session().await?;
-    let mut stream = session
-        .stream_read_table(
-            table_path.clone(),
-            ReadTableOptions::new().with_row_limit(2).with_ordered(true),
-        )
+                // Row limit with truncated flag (no error by default)
+                let mut stream = session
+                    .stream_read_table(
+                        table_path.clone(),
+                        ReadTableOptions::new().with_row_limit(2).with_ordered(true),
+                    )
+                    .await?;
+                let mut limited_count = 0;
+                let mut saw_truncated = false;
+                while let Some(result_set) = stream.next_result_set().await? {
+                    if result_set.is_truncated() {
+                        saw_truncated = true;
+                    }
+                    limited_count += result_set.rows().count();
+                }
+                assert!(saw_truncated);
+                assert_eq!(limited_count, 5);
+                Ok(())
+            }
+        })
         .await?;
-    let mut limited_count = 0;
-    let mut saw_truncated = false;
-    while let Some(result_set) = stream.next_result_set().await? {
-        if result_set.is_truncated() {
-            saw_truncated = true;
-        }
-        limited_count += result_set.rows().count();
-    }
-    assert!(saw_truncated);
-    assert_eq!(limited_count, 5);
 
     table_client
         .retry_drop_table(DropTableRequest::new(table_path))
@@ -1777,20 +1808,27 @@ async fn execute_scan_query_on_session_rpc() -> YdbResult<()> {
         )
         .await?;
 
-    let mut session = table_client.create_session().await?;
-    let mut stream = session
-        .execute_scan_query(Query::new(format!(
-            "SELECT id FROM {table_name} ORDER BY id"
-        )))
-        .await?;
+    let ids = table_client
+        .retry(|mut session| {
+            let table_name = table_name.clone();
+            async move {
+                let mut stream = session
+                    .execute_scan_query(Query::new(format!(
+                        "SELECT id FROM {table_name} ORDER BY id"
+                    )))
+                    .await?;
 
-    let mut ids = Vec::new();
-    while let Some(result_set) = stream.next().await? {
-        for mut row in result_set.rows() {
-            let id: i64 = row.remove_field_by_name("id")?.try_into()?;
-            ids.push(id);
-        }
-    }
+                let mut ids = Vec::new();
+                while let Some(result_set) = stream.next().await? {
+                    for mut row in result_set.rows() {
+                        let id: i64 = row.remove_field_by_name("id")?.try_into()?;
+                        ids.push(id);
+                    }
+                }
+                Ok(ids)
+            }
+        })
+        .await?;
     assert_eq!(ids, vec![1_i64, 2_i64]);
 
     table_client

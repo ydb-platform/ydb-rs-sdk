@@ -1,11 +1,9 @@
-//! Table Service: stream-read a table via [`Session`] (session-only API).
+//! Table Service: stream-read a table via a pooled session (go-sdk: `Client.Do`).
 
 use std::time::Duration;
 
 use tokio::time::timeout;
-use ydb::{
-    ydb_struct, ClientBuilder, ReadTableOptions, YdbError, YdbResult,
-};
+use ydb::{ydb_struct, ClientBuilder, ReadTableOptions, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -42,16 +40,23 @@ async fn main() -> YdbResult<()> {
         )
         .await?;
 
-    let mut session = table_client.create_session().await?;
-    let mut stream = session
-        .stream_read_table(table_path, ReadTableOptions::default())
-        .await?;
+    table_client
+        .retry(|mut session| {
+            let table_path = table_path.clone();
+            async move {
+                let mut stream = session
+                    .stream_read_table(table_path, ReadTableOptions::default())
+                    .await?;
 
-    let mut row_count = 0usize;
-    while let Some(result_set) = stream.next_result_set().await? {
-        row_count += result_set.rows().count();
-    }
-    println!("stream_read_table rows: {row_count}");
+                let mut row_count = 0usize;
+                while let Some(result_set) = stream.next_result_set().await? {
+                    row_count += result_set.rows().count();
+                }
+                println!("stream_read_table rows: {row_count}");
+                Ok(())
+            }
+        })
+        .await?;
 
     table_client
         .retry_execute_scheme_query(format!("DROP TABLE {table_name}"))

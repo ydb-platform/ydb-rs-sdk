@@ -7,8 +7,8 @@
 
 | Слой | Роль |
 |------|------|
-| **`TableClient`** | Retry, sessionless RPC, DDL, describe, copy, explain/scheme, read rows, bulk upsert, autocommit, `retry_transaction`. **Без** prepare/prepared execute и stream RPC — они только на сессии. |
-| **`Session`** | Узкий «исполнитель» на привязанной к ноде сессии: prepare / execute data query (в т.ч. prepared), стримы, lazy begin tx внутри retrier. |
+| **`TableClient`** | Retry, sessionless RPC, DDL, describe, copy, explain/scheme, read rows, bulk upsert, `retry` (go-sdk `Do`), `retry_transaction`. Session-only RPC — через `retry`, не напрямую. |
+| **`Session`** | Callback-аргумент [`TableClient::retry`]: prepare / execute data query, стримы. Не создаётся пользователем. |
 | **`Transaction`** (на сессии) | Жизненный цикл интерактивной транзакции: commit / rollback. Запросы идут через сессию (`ExecuteDataQuery`). |
 
 **`BeginTransaction`:** явного RPC в публичном API нет — только lazy `BeginTx` в `ExecuteDataQuery`, orchestration в retrier (autocommit / `retry_transaction` на клиенте).
@@ -62,11 +62,11 @@
 | Copy | `copy_table`, `copy_tables` |
 | Describe | `describe_table`, `retry_describe_table_options`, `retry_describe_external_*`, `retry_describe_system_view` (часть — цель) |
 | Explain / scheme | `retry_explain_data_query`, `retry_execute_scheme_query` |
-| Retry orchestration | `retry_transaction`, autocommit (`create_autocommit_transaction` + one-shot `ExecuteDataQuery`) |
+| Retry orchestration | `retry` (session Do), `retry_transaction`, autocommit |
 
 **Не должно быть на клиенте:** `retry_prepare_data_query`, `retry_execute_prepared_query`, `retry_stream_read_table`, `retry_execute_scan_query`.
 
-### `Session` — только
+### `Session` — только (внутри `TableClient::retry`)
 
 | Метод | RPC |
 |-------|-----|
@@ -76,7 +76,7 @@
 | `stream_read_table` | StreamReadTable |
 | `execute_scan_query` | StreamExecuteScanQuery |
 
-`BeginTransaction` — не отдельный метод; lazy begin внутри retrier при первом `ExecuteDataQuery`.
+Доступ к сессии — **только** через [`TableClient::retry`](ydb/src/client_table.rs) (go-sdk: `table.Client.Do`). При выходе из callback сессия возвращается в пул или удаляется, если инвалидирована.
 
 ### `Transaction` (интерактивная, на сессии)
 
@@ -110,8 +110,12 @@
 
 ### Добавлено
 
-- `TableClient::create_session()` — публичный, для session-only RPC
-- `Session` — экспортирован из crate root
+- `TableClient::retry` — go-sdk `Client.Do`: lease session → callback → return/discard
+- `Session` — экспортирован (тип callback-аргумента; не конструируется пользователем)
+
+### Нет публичного `create_session`
+
+Как в go-sdk: `CreateSession` deprecated/ internal. Пользователь вызывает `table_client.retry(|session| async move { ... })`.
 
 ---
 

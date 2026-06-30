@@ -1,4 +1,4 @@
-//! Table Service: streaming scan query via [`Session`] (session-only API).
+//! Table Service: streaming scan query via a pooled session (go-sdk: `Client.Do`).
 
 use std::time::Duration;
 
@@ -40,21 +40,28 @@ async fn main() -> YdbResult<()> {
         )
         .await?;
 
-    let mut session = table_client.create_session().await?;
-    let mut stream = session
-        .execute_scan_query(Query::new(format!(
-            "SELECT id, val FROM {table_name} ORDER BY id"
-        )))
-        .await?;
+    table_client
+        .retry(|mut session| {
+            let table_name = table_name.to_string();
+            async move {
+                let mut stream = session
+                    .execute_scan_query(Query::new(format!(
+                        "SELECT id, val FROM {table_name} ORDER BY id"
+                    )))
+                    .await?;
 
-    let mut ids = Vec::new();
-    while let Some(result_set) = stream.next().await? {
-        for mut row in result_set.rows() {
-            let id: i64 = row.remove_field_by_name("id")?.try_into()?;
-            ids.push(id);
-        }
-    }
-    println!("scan query ids: {ids:?}");
+                let mut ids = Vec::new();
+                while let Some(result_set) = stream.next().await? {
+                    for mut row in result_set.rows() {
+                        let id: i64 = row.remove_field_by_name("id")?.try_into()?;
+                        ids.push(id);
+                    }
+                }
+                println!("scan query ids: {ids:?}");
+                Ok(())
+            }
+        })
+        .await?;
 
     table_client
         .retry_execute_scheme_query(format!("DROP TABLE {table_name}"))

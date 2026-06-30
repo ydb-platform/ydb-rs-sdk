@@ -213,8 +213,7 @@ impl TableClient {
             .with_ignore_truncated(self.ignore_truncated)
     }
 
-    /// Acquire a table session from the driver pool (for session-only RPCs: prepare, streams, etc.).
-    pub async fn create_session(&self) -> YdbResult<Session> {
+    pub(crate) async fn create_session(&self) -> YdbResult<Session> {
         Ok(self
             .session_pool
             .session()
@@ -269,11 +268,11 @@ impl TableClient {
         CallbackFuture: Future<Output = YdbResult<CallbackResult>>,
     {
         self.clone_with_idempotent_operations(true)
-            .retry(callback)
+            .retry_operation(callback)
             .await
     }
 
-    async fn retry<CallbackFuture, CallbackResult>(
+    async fn retry_operation<CallbackFuture, CallbackResult>(
         &self,
         callback: impl Fn() -> CallbackFuture,
     ) -> YdbResult<CallbackResult>
@@ -308,7 +307,7 @@ impl TableClient {
     /// Execute scheme query with retry policy
     pub async fn retry_execute_scheme_query<T: Into<String>>(&self, query: T) -> YdbResult<()> {
         let query = query.into();
-        self.retry(|| async {
+        self.retry_operation(|| async {
             let mut session = self.create_session().await?;
             let session_id = session.id.clone();
             let operation_params = session.operation_params();
@@ -420,7 +419,7 @@ impl TableClient {
         collect_full_diagnostics: bool,
     ) -> YdbResult<crate::result::ExplainResult> {
         let query = query.into();
-        self.retry(|| async {
+        self.retry_operation(|| async {
             let mut session = self.create_session().await?;
             let req = RawExplainDataQueryRequest {
                 session_id: session.id.clone(),
@@ -505,6 +504,46 @@ impl TableClient {
     /// #   return Ok(());
     /// # }
     /// ```
+    /// Run an operation on a pooled table session with retry (go-sdk: `table.Client.Do`).
+    ///
+    /// A session is leased from the driver pool and passed to `callback`. When the returned future
+    /// completes, the session is returned to the pool, or discarded if it was invalidated
+    /// (`BadSession`, transport error, etc.).
+    ///
+    /// Use this for session-bound RPCs: [`Session::prepare_data_query`], [`Session::stream_read_table`],
+    /// [`Session::execute_scan_query`], and related methods.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use ydb::{ClientBuilder, ReadTableOptions, YdbResult};
+    /// # async fn example() -> YdbResult<()> {
+    /// # let table_client = ClientBuilder::new_from_connection_string("")?.client()?.table_client();
+    /// table_client
+    ///     .retry(|mut session| async move {
+    ///         session
+    ///             .stream_read_table("/local/my_table".into(), ReadTableOptions::default())
+    ///             .await?;
+    ///         Ok(())
+    ///     })
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn retry<CallbackFuture, CallbackResult>(
+        &self,
+        callback: impl Fn(Session) -> CallbackFuture,
+    ) -> YdbResult<CallbackResult>
+    where
+        CallbackFuture: Future<Output = YdbResult<CallbackResult>>,
+    {
+        self.retry_with_session(
+            RetryOptions::new().with_idempotent(self.idempotent_operation),
+            callback,
+        )
+        .await
+    }
+
     #[instrument(level = "trace", skip_all, err)]
     pub async fn retry_transaction<CallbackFuture, CallbackResult>(
         &self,
@@ -569,14 +608,13 @@ impl TableClient {
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) async fn retry_with_session<CallbackFuture, CallbackResult>(
         &self,
         opts: RetryOptions,
         callback: impl Fn(Session) -> CallbackFuture,
-    ) -> YdbResultWithCustomerErr<CallbackResult>
+    ) -> YdbResult<CallbackResult>
     where
-        CallbackFuture: Future<Output = YdbResultWithCustomerErr<CallbackResult>>,
+        CallbackFuture: Future<Output = YdbResult<CallbackResult>>,
     {
         let retrier = opts.retrier.unwrap_or_else(|| self.retrier.clone());
         let mut attempts: usize = 0;
@@ -591,7 +629,7 @@ impl TableClient {
                 return res;
             };
 
-            if !Self::check_retry_error(opts.idempotent_operation, &err) {
+            if !Self::check_retry_ydb_error(opts.idempotent_operation, &err) {
                 return Err(err);
             }
 
@@ -618,6 +656,15 @@ impl TableClient {
     }
 
     #[instrument(level = "trace", ret)]
+    fn check_retry_ydb_error(is_idempotent_operation: bool, err: &YdbError) -> bool {
+        match err.need_retry() {
+            NeedRetry::True => true,
+            NeedRetry::IdempotentOnly => is_idempotent_operation,
+            NeedRetry::False => false,
+        }
+    }
+
+    #[instrument(level = "trace", ret)]
     fn check_retry_error(is_idempotent_operation: bool, err: &YdbOrCustomerError) -> bool {
         let ydb_err = match &err {
             YdbOrCustomerError::Customer(_) => return false,
@@ -632,7 +679,7 @@ impl TableClient {
     }
 
     pub async fn copy_table(&self, source_path: String, destination_path: String) -> YdbResult<()> {
-        self.retry(|| async {
+        self.retry_operation(|| async {
             let mut session = self.create_session().await?;
             let session_id = session.id.clone();
             let operation_params = session.operation_params();
@@ -653,7 +700,7 @@ impl TableClient {
     }
 
     pub async fn copy_tables(&self, tables: Vec<CopyTableItem>) -> YdbResult<()> {
-        self.retry(|| async {
+        self.retry_operation(|| async {
             let mut session = self.create_session().await?;
             let session_id = session.id.clone();
             let operation_params = session.operation_params();
@@ -673,7 +720,7 @@ impl TableClient {
     }
 
     pub async fn describe_table(&self, path: String) -> YdbResult<TableDescription> {
-        self.retry(|| async {
+        self.retry_operation(|| async {
             let mut session = self.create_session().await?;
             let session_id = session.id.clone();
             let operation_params = session.operation_params();
@@ -696,7 +743,7 @@ impl TableClient {
 
     /// Create a table via `CreateTable` RPC.
     pub async fn retry_create_table(&self, request: CreateTableRequest) -> YdbResult<()> {
-        self.retry(|| async {
+        self.retry_operation(|| async {
             let mut session = self.create_session().await?;
             let raw = request
                 .clone()
@@ -710,7 +757,7 @@ impl TableClient {
 
     /// Drop a table via `DropTable` RPC.
     pub async fn retry_drop_table(&self, request: DropTableRequest) -> YdbResult<()> {
-        self.retry(|| async {
+        self.retry_operation(|| async {
             let mut session = self.create_session().await?;
             let req = RawDropTableRequest {
                 session_id: session.id.clone(),
@@ -726,7 +773,7 @@ impl TableClient {
 
     /// Alter a table via `AlterTable` RPC (columns, attributes, etc.).
     pub async fn retry_alter_table(&self, request: AlterTableRequest) -> YdbResult<()> {
-        self.retry(|| async {
+        self.retry_operation(|| async {
             let mut session = self.create_session().await?;
             let raw = request
                 .clone()
@@ -740,7 +787,7 @@ impl TableClient {
 
     /// Describe cluster-wide table option presets.
     pub async fn retry_describe_table_options(&self) -> YdbResult<TableOptionsDescription> {
-        self.retry(|| async {
+        self.retry_operation(|| async {
             let mut session = self.create_session().await?;
             let req = RawDescribeTableOptionsRequest {
                 operation_params: session.operation_params(),

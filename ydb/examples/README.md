@@ -9,12 +9,12 @@ All examples (but listed below) need local ydb started with docker-compose up wi
 |---------|-------|-----|
 | `basic-read-rows`, `basic-bulk-upsert` | `TableClient` | sessionless `ReadRows` / `BulkUpsert` |
 | `explain-query-example` | `TableClient` | `ExplainDataQuery`, scheme queries |
-| `table-session-prepare` | `Session` | `PrepareDataQuery` + prepared execute |
-| `table-session-stream-read` | `Session` | `StreamReadTable` |
-| `table-session-scan-query` | `Session` | `StreamExecuteScanQuery` |
+| `table-session-prepare` | `Session` via [`TableClient::retry`] | `PrepareDataQuery` + prepared execute |
+| `table-session-stream-read` | `Session` via [`TableClient::retry`] | `StreamReadTable` |
+| `table-session-scan-query` | `Session` via [`TableClient::retry`] | `StreamExecuteScanQuery` |
 | `table-tx-modes` | `TableClient` + `Transaction` | autocommit `ExecuteDataQuery` per `Mode` |
 
-Acquire a session for session-only APIs: `table_client.create_session().await?`.
+Session-only RPCs use [`TableClient::retry`](TableClient::retry) (go-sdk: `table.Client.Do`): a session is leased from the pool for the callback and returned (or discarded) when the future completes.
 
 ## Additional dependencies for some examples
 ### auth-yc-cmdline
