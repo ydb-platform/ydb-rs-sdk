@@ -10,6 +10,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::InitRequest;
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply};
+use crate::mock_server::query::QueryIncoming;
 use crate::mock_server::server::MockServer;
 use crate::mock_server::topic::{builders, TopicIncoming};
 
@@ -375,6 +376,128 @@ async fn write_errors_in_retriable_err() -> YdbResult<()> {
             Ok(())
         })
         .await?;
+
+    Ok(())
+}
+
+#[derive(Default)]
+struct CommitFailureState {
+    begin_count: usize,
+    commit_requests: Vec<(String, String)>,
+    rollback_count: usize,
+    write_txs: Vec<TransactionIdentity>,
+}
+
+type SharedCommitFailureState = Arc<Mutex<CommitFailureState>>;
+
+struct CommitFailsHandler {
+    replies: ReplySink,
+    state: SharedCommitFailureState,
+}
+
+impl CommitFailsHandler {
+    fn new() -> (Self, SharedCommitFailureState) {
+        let state = Arc::new(Mutex::new(CommitFailureState::default()));
+        let handler = Self {
+            replies: ReplySink::default(),
+            state: state.clone(),
+        };
+        (handler, state)
+    }
+}
+
+impl Handler for CommitFailsHandler {
+    fn set_channel(&mut self, tx: FromHandlerToService) {
+        self.replies.set_channel(tx);
+    }
+
+    fn handle(&self, incoming: Incoming) -> Option<Incoming> {
+        match &incoming {
+            Incoming::Query(QueryIncoming::BeginTransaction(_, _)) => {
+                self.state.lock().unwrap().begin_count += 1;
+            }
+            Incoming::Query(QueryIncoming::RollbackTransaction(_, _)) => {
+                self.state.lock().unwrap().rollback_count += 1;
+            }
+            Incoming::Topic(TopicIncoming::StreamWrite { stream_id, msg }) => {
+                let stream_id = *stream_id;
+                match msg {
+                    WriteFromClient::InitRequest(_) => {
+                        self.replies
+                            .send(Reply::Topic(builders::write_init_response(
+                                stream_id,
+                                WRITE_SESSION_ID,
+                                PARTITION_ID,
+                            )));
+                    }
+                    WriteFromClient::WriteRequest(req) => {
+                        if let Some(tx) = req.tx.clone() {
+                            self.state.lock().unwrap().write_txs.push(tx);
+                        }
+                        let seq_no = req.messages.first().map(|m| m.seq_no).unwrap_or(1);
+                        self.replies
+                            .send(Reply::Topic(builders::write_ack_written_in_tx(
+                                stream_id, seq_no,
+                            )));
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+
+        match incoming {
+            Incoming::Query(QueryIncoming::CommitTransaction(req, reply_tx)) => {
+                self.state
+                    .lock()
+                    .unwrap()
+                    .commit_requests
+                    .push((req.session_id, req.tx_id));
+                let _ = reply_tx.send(Err(tonic::Status::unavailable(
+                    "mock commit transaction failed",
+                )));
+                None
+            }
+            incoming => Some(incoming),
+        }
+    }
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn commit_failure_after_successful_write_is_not_retried() -> YdbResult<()> {
+    let (handler, state) = CommitFailsHandler::new();
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server)?;
+
+    let result = client
+        .query_client()
+        .retry_transaction(async |tx| {
+            let mut writer = client
+                .topic_client()
+                .create_writer_tx(TOPIC_PATH.to_string(), tx)
+                .await?;
+            writer.write(test_message()).await?;
+            writer.stop().await?;
+            Ok(())
+        })
+        .await;
+
+    assert!(result.is_err(), "commit failure must be returned");
+
+    let state = state.lock().unwrap();
+    assert_eq!(state.begin_count, 1, "commit failure must not retry tx");
+    assert_eq!(
+        state.commit_requests,
+        vec![(SESSION_ID.to_string(), TX_ID.to_string())]
+    );
+    assert_eq!(
+        state.rollback_count, 0,
+        "commit failure outcome is ambiguous and must not be rolled back"
+    );
+    assert_eq!(state.write_txs.len(), 1);
+    assert_eq!(state.write_txs[0].id, TX_ID);
+    assert_eq!(state.write_txs[0].session, SESSION_ID);
 
     Ok(())
 }

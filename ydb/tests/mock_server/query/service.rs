@@ -1,7 +1,9 @@
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures_util::{stream, Stream, StreamExt};
-use tokio_stream::iter;
+use tokio::sync::oneshot;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 use ydb_grpc::ydb_proto::operations::Operation;
 use ydb_grpc::ydb_proto::query::v1::query_service_server::QueryService;
 use ydb_grpc::ydb_proto::query::{
@@ -10,12 +12,13 @@ use ydb_grpc::ydb_proto::query::{
     CreateSessionResponse, DeleteSessionRequest, DeleteSessionResponse, ExecuteQueryRequest,
     ExecuteQueryResponsePart, ExecuteScriptRequest, FetchScriptResultsRequest,
     FetchScriptResultsResponse, RollbackTransactionRequest, RollbackTransactionResponse,
-    SessionState, TransactionMeta,
+    SessionState,
 };
-use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
-pub const QUERY_SESSION_ID: &str = "session-id-xyz";
-pub const QUERY_TX_ID: &str = "tx-id-abc";
+use crate::mock_server::handler::{FromServiceToServerTx, Incoming};
+use crate::mock_server::topic::sender::{StreamCommand, StreamSender};
+
+use super::handler::{QueryIncoming, QueryReply, QueryRx};
 
 type AttachSessionStream =
     Pin<Box<dyn Stream<Item = Result<SessionState, tonic::Status>> + Send + 'static>>;
@@ -23,8 +26,71 @@ type AttachSessionStream =
 type ExecuteQueryStream =
     Pin<Box<dyn Stream<Item = Result<ExecuteQueryResponsePart, tonic::Status>> + Send + 'static>>;
 
-#[derive(Default)]
-pub struct MockQueryService;
+pub struct MockQueryService {
+    to_server: FromServiceToServerTx,
+    next_stream_id: AtomicU64,
+    pub(crate) attach_sender: StreamSender<SessionState>,
+    pub(crate) execute_query_sender: StreamSender<ExecuteQueryResponsePart>,
+}
+
+impl MockQueryService {
+    pub fn new(to_server: FromServiceToServerTx, rx: QueryRx) -> Self {
+        let attach_sender = StreamSender::new();
+        let execute_query_sender = StreamSender::new();
+        tokio::spawn(Self::handle_messages(
+            attach_sender.clone(),
+            execute_query_sender.clone(),
+            rx,
+        ));
+        Self {
+            to_server,
+            next_stream_id: AtomicU64::new(0),
+            attach_sender,
+            execute_query_sender,
+        }
+    }
+
+    async fn handle_messages(
+        attach_sender: StreamSender<SessionState>,
+        execute_query_sender: StreamSender<ExecuteQueryResponsePart>,
+        mut rx: QueryRx,
+    ) {
+        while let Some(msg) = rx.recv().await {
+            match msg {
+                QueryReply::AttachSession { stream_id, state } => {
+                    let _ = attach_sender.send_to(stream_id, state);
+                }
+                QueryReply::AttachSessionFail { stream_id, status } => {
+                    let _ = attach_sender.fail(stream_id, status);
+                }
+                QueryReply::AttachSessionClose { stream_id } => {
+                    let _ = attach_sender.close(stream_id);
+                }
+                QueryReply::ExecuteQuery { stream_id, part } => {
+                    let _ = execute_query_sender.send_to(stream_id, part);
+                }
+                QueryReply::ExecuteQueryFail { stream_id, status } => {
+                    let _ = execute_query_sender.fail(stream_id, status);
+                }
+                QueryReply::ExecuteQueryClose { stream_id } => {
+                    let _ = execute_query_sender.close(stream_id);
+                }
+            }
+        }
+    }
+
+    fn send_unary<T: Send + 'static>(
+        &self,
+        incoming: QueryIncoming,
+        rx: oneshot::Receiver<Result<tonic::Response<T>, tonic::Status>>,
+    ) -> impl std::future::Future<Output = Result<tonic::Response<T>, tonic::Status>> {
+        let _ = self.to_server.send(Incoming::Query(incoming));
+        async move {
+            rx.await
+                .unwrap_or_else(|_| Err(tonic::Status::internal("mock handler dropped oneshot")))
+        }
+    }
+}
 
 #[tonic::async_trait]
 impl QueryService for MockQueryService {
@@ -33,79 +99,128 @@ impl QueryService for MockQueryService {
 
     async fn create_session(
         &self,
-        _request: tonic::Request<CreateSessionRequest>,
+        request: tonic::Request<CreateSessionRequest>,
     ) -> Result<tonic::Response<CreateSessionResponse>, tonic::Status> {
-        Ok(tonic::Response::new(CreateSessionResponse {
-            status: StatusCode::Success as i32,
-            issues: Vec::new(),
-            session_id: QUERY_SESSION_ID.to_string(),
-            node_id: 0,
-        }))
+        let (tx, rx) = oneshot::channel();
+        self.send_unary(QueryIncoming::CreateSession(request.into_inner(), tx), rx)
+            .await
     }
 
     async fn delete_session(
         &self,
-        _request: tonic::Request<DeleteSessionRequest>,
+        request: tonic::Request<DeleteSessionRequest>,
     ) -> Result<tonic::Response<DeleteSessionResponse>, tonic::Status> {
-        Ok(tonic::Response::new(DeleteSessionResponse {
-            status: StatusCode::Success as i32,
-            issues: Vec::new(),
-        }))
+        let (tx, rx) = oneshot::channel();
+        self.send_unary(QueryIncoming::DeleteSession(request.into_inner(), tx), rx)
+            .await
     }
 
     async fn attach_session(
         &self,
-        _request: tonic::Request<AttachSessionRequest>,
+        request: tonic::Request<AttachSessionRequest>,
     ) -> Result<tonic::Response<Self::AttachSessionStream>, tonic::Status> {
-        let states = stream::once(async {
-            Ok(SessionState {
-                status: StatusCode::Success as i32,
-                issues: Vec::new(),
-                session_hint: None,
-            })
-        })
-        .chain(stream::pending());
-        Ok(tonic::Response::new(Box::pin(states)))
+        let stream_id = self.next_stream_id.fetch_add(1, Ordering::Relaxed);
+        let rx = self.attach_sender.register_stream(stream_id);
+        let sender = self.attach_sender.clone();
+        let _ = self
+            .to_server
+            .send(Incoming::Query(QueryIncoming::AttachSession(
+                request.into_inner(),
+                stream_id,
+            )));
+
+        let responses = UnboundedReceiverStream::new(rx);
+        let responses = stream::unfold(
+            (responses, sender, stream_id),
+            |(mut responses, sender, stream_id)| async move {
+                match responses.next().await {
+                    Some(StreamCommand::Reply(state)) => {
+                        Some((Ok(state), (responses, sender, stream_id)))
+                    }
+                    Some(StreamCommand::Fail(status)) => {
+                        sender.unregister_stream(stream_id);
+                        Some((Err(status), (responses, sender, stream_id)))
+                    }
+                    Some(StreamCommand::Close) | None => {
+                        sender.unregister_stream(stream_id);
+                        None
+                    }
+                }
+            },
+        );
+        Ok(tonic::Response::new(Box::pin(responses)))
     }
 
     async fn begin_transaction(
         &self,
-        _request: tonic::Request<BeginTransactionRequest>,
+        request: tonic::Request<BeginTransactionRequest>,
     ) -> Result<tonic::Response<BeginTransactionResponse>, tonic::Status> {
-        Ok(tonic::Response::new(BeginTransactionResponse {
-            status: StatusCode::Success as i32,
-            issues: Vec::new(),
-            tx_meta: Some(TransactionMeta {
-                id: QUERY_TX_ID.to_string(),
-            }),
-        }))
+        let (tx, rx) = oneshot::channel();
+        self.send_unary(
+            QueryIncoming::BeginTransaction(request.into_inner(), tx),
+            rx,
+        )
+        .await
     }
 
     async fn commit_transaction(
         &self,
-        _request: tonic::Request<CommitTransactionRequest>,
+        request: tonic::Request<CommitTransactionRequest>,
     ) -> Result<tonic::Response<CommitTransactionResponse>, tonic::Status> {
-        Ok(tonic::Response::new(CommitTransactionResponse {
-            status: StatusCode::Success as i32,
-            issues: Vec::new(),
-        }))
+        let (tx, rx) = oneshot::channel();
+        self.send_unary(
+            QueryIncoming::CommitTransaction(request.into_inner(), tx),
+            rx,
+        )
+        .await
     }
 
     async fn rollback_transaction(
         &self,
-        _request: tonic::Request<RollbackTransactionRequest>,
+        request: tonic::Request<RollbackTransactionRequest>,
     ) -> Result<tonic::Response<RollbackTransactionResponse>, tonic::Status> {
-        Ok(tonic::Response::new(RollbackTransactionResponse {
-            status: StatusCode::Success as i32,
-            issues: Vec::new(),
-        }))
+        let (tx, rx) = oneshot::channel();
+        self.send_unary(
+            QueryIncoming::RollbackTransaction(request.into_inner(), tx),
+            rx,
+        )
+        .await
     }
 
     async fn execute_query(
         &self,
-        _request: tonic::Request<ExecuteQueryRequest>,
+        request: tonic::Request<ExecuteQueryRequest>,
     ) -> Result<tonic::Response<Self::ExecuteQueryStream>, tonic::Status> {
-        Ok(tonic::Response::new(Box::pin(iter([]))))
+        let stream_id = self.next_stream_id.fetch_add(1, Ordering::Relaxed);
+        let rx = self.execute_query_sender.register_stream(stream_id);
+        let sender = self.execute_query_sender.clone();
+        let _ = self
+            .to_server
+            .send(Incoming::Query(QueryIncoming::ExecuteQuery(
+                request.into_inner(),
+                stream_id,
+            )));
+
+        let responses = UnboundedReceiverStream::new(rx);
+        let responses = stream::unfold(
+            (responses, sender, stream_id),
+            |(mut responses, sender, stream_id)| async move {
+                match responses.next().await {
+                    Some(StreamCommand::Reply(part)) => {
+                        Some((Ok(part), (responses, sender, stream_id)))
+                    }
+                    Some(StreamCommand::Fail(status)) => {
+                        sender.unregister_stream(stream_id);
+                        Some((Err(status), (responses, sender, stream_id)))
+                    }
+                    Some(StreamCommand::Close) | None => {
+                        sender.unregister_stream(stream_id);
+                        None
+                    }
+                }
+            },
+        );
+        Ok(tonic::Response::new(Box::pin(responses)))
     }
 
     async fn execute_script(

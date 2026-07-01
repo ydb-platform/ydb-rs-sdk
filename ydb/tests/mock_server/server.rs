@@ -3,7 +3,7 @@ use super::{
         FromHandlerToService, FromServerToServiceRx, FromServiceToServerRx, Handler, Incoming,
         Reply,
     },
-    query::MockQueryService,
+    query::{MockQueryService, QueryDefaultHandler, QueryReply, QueryTx},
     topic::{
         default::TopicDefaultHandler, handler::TopicTx, sender::WriteStreamSender, MockTopicService,
     },
@@ -14,10 +14,14 @@ use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
 use ydb_grpc::ydb_proto::query::v1::query_service_server::QueryServiceServer;
+use ydb_grpc::ydb_proto::query::{ExecuteQueryResponsePart, SessionState};
 use ydb_grpc::ydb_proto::topic::v1::topic_service_server::TopicServiceServer;
+
+use super::topic::sender::StreamSender;
 
 struct ForwardChannels {
     topic_tx: TopicTx,
+    query_tx: QueryTx,
 }
 
 impl ForwardChannels {
@@ -26,6 +30,9 @@ impl ForwardChannels {
             Reply::Topic(reply) => {
                 let _ = self.topic_tx.send(reply);
             }
+            Reply::Query(reply) => {
+                let _ = self.query_tx.send(reply);
+            }
             Reply::Scheme(_) => unimplemented!(),
         }
     }
@@ -33,12 +40,14 @@ impl ForwardChannels {
 
 struct DefaultHandler {
     topic: TopicDefaultHandler,
+    query: QueryDefaultHandler,
 }
 
 impl DefaultHandler {
     fn with_tx(tx: FromHandlerToService) -> Self {
         Self {
             topic: TopicDefaultHandler::with_tx(tx.clone()),
+            query: QueryDefaultHandler::with_tx(tx),
         }
     }
 }
@@ -51,6 +60,7 @@ impl Handler for DefaultHandler {
     fn handle(&self, incoming: Incoming) -> Option<Incoming> {
         match incoming {
             Incoming::Topic(_) => self.topic.handle(incoming),
+            Incoming::Query(_) => self.query.handle(incoming),
             Incoming::Scheme(_) => todo!(),
         }
     }
@@ -62,6 +72,8 @@ pub struct MockServer {
     shutdown: CancellationToken,
     _tonic_services: tokio::task::JoinHandle<()>,
     write_sender: WriteStreamSender,
+    query_session_sender: StreamSender<SessionState>,
+    query_execute_sender: StreamSender<ExecuteQueryResponsePart>,
 }
 
 impl MockServer {
@@ -85,10 +97,13 @@ impl MockServer {
         let (from_server_to_service_tx, from_server_to_service_rx) =
             tokio::sync::mpsc::unbounded_channel();
         let (topic_tx, topic_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (query_tx, query_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        let topic_service = MockTopicService::new(from_service_to_server_tx, topic_rx);
-        let query_service = MockQueryService;
+        let topic_service = MockTopicService::new(from_service_to_server_tx.clone(), topic_rx);
+        let query_service = MockQueryService::new(from_service_to_server_tx.clone(), query_rx);
         let write_sender = topic_service.write_sender.clone();
+        let query_session_sender = query_service.attach_sender.clone();
+        let query_execute_sender = query_service.execute_query_sender.clone();
 
         let tcp_streams = stream::unfold(listener, |listener| async {
             Some((listener.accept().await.map(|(stream, _)| stream), listener))
@@ -118,7 +133,7 @@ impl MockServer {
         ));
 
         tokio::spawn(Self::forwarding_loop(
-            ForwardChannels { topic_tx },
+            ForwardChannels { topic_tx, query_tx },
             from_server_to_service_rx,
         ));
 
@@ -128,6 +143,8 @@ impl MockServer {
             shutdown,
             _tonic_services: tonic_services,
             write_sender,
+            query_session_sender,
+            query_execute_sender,
         };
 
         (server, from_server_to_service_tx)
@@ -159,6 +176,14 @@ impl MockServer {
 
     pub fn write_sender(&self) -> WriteStreamSender {
         self.write_sender.clone()
+    }
+
+    pub fn query_session_sender(&self) -> StreamSender<SessionState> {
+        self.query_session_sender.clone()
+    }
+
+    pub fn query_execute_sender(&self) -> StreamSender<ExecuteQueryResponsePart> {
+        self.query_execute_sender.clone()
     }
 
     pub(crate) fn addr(&self) -> SocketAddr {

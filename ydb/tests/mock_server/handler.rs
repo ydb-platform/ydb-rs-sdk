@@ -1,4 +1,5 @@
 use super::{
+    query::{QueryIncoming, QueryReply},
     scheme::{SchemeIncoming, SchemeReply},
     topic::{TopicIncoming, TopicReply},
 };
@@ -16,12 +17,15 @@ pub type FromHandlerToService = FromServerToServiceTx;
 pub enum Incoming {
     Topic(TopicIncoming),
     Scheme(SchemeIncoming),
+    Query(QueryIncoming),
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Reply {
     Topic(TopicReply),
     Scheme(SchemeReply),
+    Query(QueryReply),
 }
 
 pub trait Handler: Send + 'static {
