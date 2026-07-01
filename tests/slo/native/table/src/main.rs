@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 mod storage;
 
 use slo_framework::run;

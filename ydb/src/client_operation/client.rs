@@ -77,8 +77,8 @@ impl OperationClient {
 
     #[instrument(
         name = "ydb.OperationClient.ListOperations", 
-        skip_all, 
-        fields(ydb.operation.request = ?request), 
+        skip_all,
+        fields(ydb.operation.request = ?request),
         err
     )]
     pub async fn list_operations(
@@ -154,11 +154,7 @@ impl OperationClient {
             .await
     }
 
-    #[instrument(
-        name = "ydb.OperationClient.WithRpcTimeout",
-        skip_all,
-        err
-    )]
+    #[instrument(name = "ydb.OperationClient.WithRpcTimeout", skip_all, err)]
     async fn with_rpc_timeout<T, F, Fut>(&self, operation: F) -> Result<T, RawError>
     where
         F: FnOnce() -> Fut,
@@ -173,7 +169,7 @@ impl OperationClient {
         }
     }
 
-     #[instrument(
+    #[instrument(
         name = "ydb.OperationClient.Retry",
         skip_all,
         fields(ydb.operation.attempt = tracing::field::Empty),

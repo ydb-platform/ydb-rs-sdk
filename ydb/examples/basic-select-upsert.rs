@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 use std::time::Duration;
 use tokio::time::timeout;
 use ydb::{ydb_params, ClientBuilder, Query, Row, YdbError, YdbResult};

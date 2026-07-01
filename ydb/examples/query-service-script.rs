@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! Query Service script execution — start a long-running operation, poll until
 //! ready, then paginate results with `FetchScriptResults`.
 

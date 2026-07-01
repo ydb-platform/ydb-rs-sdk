@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! Query Service transaction isolation modes (ImplicitTx and explicit BeginTx modes).
 
 use ydb::{

@@ -1,5 +1,5 @@
+#![recursion_limit = "256"]
 //! Query Service examples — implicit sessions (default), awaitable builders.
-
 use std::time::Duration;
 
 use ydb::{ydb_params, ClientBuilder, FromYdbRow, Row, YdbResult};
