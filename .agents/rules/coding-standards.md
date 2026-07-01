@@ -19,6 +19,7 @@ When two pull in opposite directions, the higher one wins.
 - Comments, doc comments, error messages, and logs: **English**.
 - Match naming and formatting in the touched module; do not reformat unrelated code.
 - Run `cargo fmt` on changed files before handoff.
+- **Before handoff:** run `cargo fmt --check` and CI clippy (`cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings`); fix all warnings.
 - No commented-out code and no debug `println!`/`dbg!` in committed code (including `examples/`).
 
 ## Rust edition / version

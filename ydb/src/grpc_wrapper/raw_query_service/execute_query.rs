@@ -20,6 +20,7 @@ pub(crate) struct RawExecuteQueryRequest {
     pub parameters: HashMap<String, Value>,
     pub tx_control: Option<ydb_grpc::ydb_proto::query::TransactionControl>,
     pub collect_stats: bool,
+    pub concurrent_result_sets: bool,
 }
 
 impl RawExecuteQueryRequest {
@@ -36,6 +37,7 @@ impl RawExecuteQueryRequest {
             parameters,
             tx_control,
             collect_stats,
+            concurrent_result_sets: false,
         }
     }
 
@@ -60,7 +62,7 @@ impl RawExecuteQueryRequest {
             } else {
                 StatsMode::None as i32
             },
-            concurrent_result_sets: false,
+            concurrent_result_sets: self.concurrent_result_sets,
             response_part_limit_bytes: 0,
             pool_id: String::new(),
             stats_period_ms: 0,

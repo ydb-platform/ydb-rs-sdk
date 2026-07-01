@@ -20,16 +20,15 @@ impl ExecCoreRef<'_> {
         text: String,
         params: HashMap<String, Value>,
         opts: CallOptions,
+        concurrent_result_sets: bool,
     ) -> YdbResult<ExecuteQueryStream> {
         match self {
-            ExecCoreRef::Client(ctx) => client_begin_stream(ctx, text, params, opts).await,
+            ExecCoreRef::Client(ctx) => {
+                client_begin_stream(ctx, text, params, opts, concurrent_result_sets).await
+            }
             ExecCoreRef::Transaction(ctx) => {
-                transaction_begin_stream(ctx, text, params, opts).await
+                transaction_begin_stream(ctx, text, params, opts, concurrent_result_sets).await
             }
         }
     }
-}
-
-pub(crate) trait HasCore {
-    fn core_mut(&mut self) -> ExecCoreRef<'_>;
 }
