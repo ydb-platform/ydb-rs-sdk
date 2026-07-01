@@ -20,9 +20,9 @@ use crate::grpc_wrapper::raw_query_service::transaction_control::{
 use crate::grpc_wrapper::raw_services::Service;
 use crate::traces::helpers::ensure_len_string;
 use crate::traces::span_names::{
-    BEGIN_TRANSACTION, COMMIT, QUERY_CLIENT_BEGIN_STREAM, QUERY_CLIENT_BEGIN_STREAM_ONCE,
-    QUERY_CLIENT_ENSURE_TX_SESSION, QUERY_CLIENT_RELEASE_TX_SESSION, ROLLBACK, RUN_WITH_RETRY, TRY,
-    TRY_ATTEMPT, YDB,
+    BEGIN_TRANSACTION, COMMIT, EXECUTE_QUERY, QUERY_CLIENT_BEGIN_STREAM,
+    QUERY_CLIENT_BEGIN_STREAM_ONCE, QUERY_CLIENT_ENSURE_TX_SESSION,
+    QUERY_CLIENT_RELEASE_TX_SESSION, ROLLBACK, RUN_WITH_RETRY, TRY, TRY_ATTEMPT, YDB,
 };
 use crate::types::Value;
 use crate::{QueryTransactionOptions, QueryTxMode};
@@ -137,7 +137,7 @@ where
     skip_all,
     fields(
         db.system.name = YDB,
-        ydb.idempotent = idempotent,
+        ydb.Query.idempotent = idempotent,
     ),
     err
 )]
@@ -355,7 +355,6 @@ async fn client_implicit_session_request(
     skip_all,
     fields(
         db.system.name = YDB,
-        ydb.Query.text = %ensure_len_string(text),
     ),
     err
 )]
@@ -451,6 +450,9 @@ async fn client_pooled_explicit_request(
     skip_all,
     fields(
         db.system.name = YDB,
+        ydb.Query.text = %ensure_len_string(&text),
+        ydb.Query.params = ?params,
+        ydb.Query.opts = ?opts
     ),
     err
 )]
@@ -521,6 +523,16 @@ async fn release_tx_session_handling_error(
     release_tx_session(tx).await;
 }
 
+#[instrument(
+    name = EXECUTE_QUERY,
+    skip_all,
+    fields(
+        db.system.name = YDB,
+        ydb.Query.text = %ensure_len_string(&yql_text),
+        ydb.Query.params = ?parameters,
+        ydb.Query.opts = ?opts
+    )
+)]
 async fn transaction_execute_request(
     tx: &TransactionExecContext,
     yql_text: String,

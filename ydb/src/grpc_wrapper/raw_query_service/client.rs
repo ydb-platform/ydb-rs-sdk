@@ -14,7 +14,7 @@ use crate::grpc_wrapper::raw_query_service::transaction_control::{
 };
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
-use crate::traces::span_names::{EXECUTE_QUERY, YDB};
+use crate::traces::span_names::YDB;
 use tracing::instrument;
 use ydb_grpc::ydb_proto::query::v1::query_service_client::QueryServiceClient;
 use ydb_grpc::ydb_proto::query::{
@@ -57,7 +57,7 @@ impl RawQueryClient {
         }
     }
 
-    #[instrument(name = EXECUTE_QUERY, skip_all, fields(db.system.name = YDB, ydb.session.id = %req.session_id), err)]
+    #[instrument(name = "ydb.grpc.ExecuteQuery", skip_all, fields(db.system.name = YDB, ydb.session.id = %req.session_id), err)]
     pub async fn execute_query(
         &mut self,
         req: RawExecuteQueryRequest,
