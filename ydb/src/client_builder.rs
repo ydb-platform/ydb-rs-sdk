@@ -276,7 +276,7 @@ impl ClientBuilder {
             interceptor.clone(),
             self.cert_path.clone(),
             self.grpc_max_message_size,
-        );
+        )?;
 
         let discovery: Box<dyn Discovery> = match self.discovery {
             Some(discovery_box) => discovery_box,
@@ -303,7 +303,7 @@ impl ClientBuilder {
             interceptor,
             self.cert_path,
             self.grpc_max_message_size,
-        );
+        )?;
 
         Client::new(
             db_cred,

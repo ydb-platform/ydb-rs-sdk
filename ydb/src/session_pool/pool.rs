@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use http::Uri;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tracing::{trace, warn};
+use tracing::{instrument, trace, warn};
 
 use crate::client::TimeoutSettings;
 use crate::discovery::Discovery;

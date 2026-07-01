@@ -1,4 +1,5 @@
 use crate::grpc_wrapper::raw_table_service::copy_table::RawCopyTableItem;
+use std::fmt;
 
 #[derive(Clone)]
 pub struct CopyTableItem {
@@ -21,6 +22,16 @@ impl CopyTableItem {
 impl From<CopyTableItem> for RawCopyTableItem {
     fn from(value: CopyTableItem) -> Self {
         value.inner
+    }
+}
+
+impl fmt::Display for CopyTableItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "source_path = {}, destination_path = {}, omit_indexes = {}",
+            self.inner.source_path, self.inner.destination_path, self.inner.omit_indexes
+        )
     }
 }
 

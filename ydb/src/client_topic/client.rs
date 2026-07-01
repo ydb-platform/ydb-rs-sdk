@@ -24,6 +24,7 @@ use derive_builder::{Builder, UninitializedFieldError};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::instrument;
 
 #[derive(Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]
@@ -141,6 +142,15 @@ impl TopicClient {
         }
     }
 
+    #[instrument(
+        name = "ydb.TopicClient.CreateTopic",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.topic.path = %path,
+        ),
+        err
+    )]
     pub async fn create_topic(
         &mut self,
         path: String,
@@ -154,6 +164,15 @@ impl TopicClient {
         Ok(())
     }
 
+    #[instrument(
+        name = "ydb.TopicClient.AlterTopic",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.topic.path = %path,
+        ),
+        err
+    )]
     pub async fn alter_topic(&mut self, path: String, options: AlterTopicOptions) -> YdbResult<()> {
         let req = RawAlterTopicRequest::new(path, self.timeouts.operation_params(), options);
 
@@ -163,6 +182,16 @@ impl TopicClient {
         Ok(())
     }
 
+    #[instrument(
+        name = "ydb.TopicClient.DescribeConsumer",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.topic.path = %path,
+            ydb.consumer.name = %consumer,
+        ),
+        err
+    )]
     pub async fn describe_consumer(
         &mut self,
         path: String,
@@ -183,6 +212,15 @@ impl TopicClient {
         Ok(description)
     }
 
+    #[instrument(
+        name = "ydb.TopicClient.DescribeTopic",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.topic.path = %path,
+        ),
+        err
+    )]
     pub async fn describe_topic(
         &mut self,
         path: String,
@@ -197,6 +235,15 @@ impl TopicClient {
         Ok(description)
     }
 
+    #[instrument(
+        name = "ydb.TopicClient.DropTopic",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.topic.path = %path,
+        ),
+        err
+    )]
     pub async fn drop_topic(&mut self, path: String) -> YdbResult<()> {
         let req = RawDropTopicRequest {
             operation_params: self.timeouts.operation_params(),
@@ -209,6 +256,16 @@ impl TopicClient {
         Ok(())
     }
 
+    #[instrument(
+        name = "ydb.TopicClient.CreateReader",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.topic.path = tracing::field::Empty,
+            ydb.consumer.name = %consumer,
+        ),
+        err
+    )]
     pub async fn create_reader(
         &mut self,
         consumer: impl Into<String>,
@@ -227,6 +284,16 @@ impl TopicClient {
         .await
     }
 
+    #[instrument(
+        name = "ydb.TopicClient.CreateReader",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.topic.path = tracing::field::Empty,
+            ydb.consumer.name = %options.consumer,
+        ),
+        err
+    )]
     pub async fn create_reader_with_params(
         &mut self,
         options: TopicReaderOptions,
@@ -240,6 +307,16 @@ impl TopicClient {
         .await
     }
 
+    #[instrument(
+        name = "ydb.TopicClient.CreateWriterWithParams",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.topic.path = %writer_options.topic_path,
+            ydb.producer.name = ?writer_options.producer_id
+        ),
+        err
+    )]
     pub async fn create_writer_with_params(
         &mut self,
         writer_options: TopicWriterOptions,
@@ -252,6 +329,15 @@ impl TopicClient {
         .await
     }
 
+    #[instrument(
+        name = "ydb.TopicClient.CreateWriter",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.topic.path = %path,
+        ),
+        err
+    )]
     pub async fn create_writer(&mut self, path: String) -> YdbResult<TopicWriter> {
         TopicWriter::new(
             TopicWriterOptionsBuilder::default()

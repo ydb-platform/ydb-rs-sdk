@@ -6,6 +6,7 @@ use crate::grpc_wrapper::raw_coordination_service::create_node::RawCreateNodeReq
 use crate::grpc_wrapper::raw_coordination_service::describe_node::RawDescribeNodeRequest;
 use crate::grpc_wrapper::raw_coordination_service::drop_node::RawDropNodeRequest;
 use crate::{grpc_wrapper, CoordinationSession, SessionOptions, YdbResult};
+use tracing::instrument;
 
 use super::list_types::{NodeConfig, NodeDescription};
 
@@ -30,6 +31,16 @@ impl CoordinationClient {
         }
     }
 
+    #[instrument(
+        name = "ydb.CoordinationClient.CreateSession",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.coordination.path = %path,
+            ydb.coordination.options = ?options,
+        ),
+        err
+    )]
     pub async fn create_session(
         &mut self,
         path: String,
@@ -41,6 +52,16 @@ impl CoordinationClient {
         CoordinationSession::new(path, seq_no, options, self.connection_manager.clone()).await
     }
 
+    #[instrument(
+        name = "ydb.CoordinationClient.CreateNode",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.coordination.path = %path,
+            ydb.coordination.config = ?config,
+        ),
+        err
+    )]
     pub async fn create_node(&mut self, path: String, config: NodeConfig) -> YdbResult<()> {
         let req = RawCreateNodeRequest {
             config: RawCoordinationNodeConfig::from(config),
@@ -54,6 +75,16 @@ impl CoordinationClient {
         Ok(())
     }
 
+    #[instrument(
+        name = "ydb.CoordinationClient.AlterNode",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.coordination.path = %path,
+            ydb.coordination.config = ?config,
+        ),
+        err
+    )]
     pub async fn alter_node(&mut self, path: String, config: NodeConfig) -> YdbResult<()> {
         let req = RawAlterNodeRequest {
             config: RawCoordinationNodeConfig::from(config),
@@ -67,6 +98,16 @@ impl CoordinationClient {
         Ok(())
     }
 
+    #[instrument(
+        name = "ydb.CoordinationClient.DescribeNode",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.coordination.path = %path,
+        ),
+        err,
+        ret
+    )]
     pub async fn describe_node(&mut self, path: String) -> YdbResult<NodeDescription> {
         let req = RawDescribeNodeRequest {
             operation_params: self.timeouts.operation_params(),
@@ -80,6 +121,15 @@ impl CoordinationClient {
         Ok(description)
     }
 
+    #[instrument(
+        name = "ydb.CoordinationClient.DropNode",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.coordination.path = %path,
+        ),
+        err
+    )]
     pub async fn drop_node(&mut self, path: String) -> YdbResult<()> {
         let req = RawDropNodeRequest {
             operation_params: self.timeouts.operation_params(),

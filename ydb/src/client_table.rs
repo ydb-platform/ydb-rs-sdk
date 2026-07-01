@@ -7,13 +7,14 @@ use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction}
 use crate::types::Value;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
-
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::retry::{NoRetrier, Retry, RetryParams, TimeoutRetrier};
 use crate::table_service_types::{CopyTableItem, TableDescription};
+use crate::traces::helpers::ensure_len_string;
 use crate::types_converters::try_vec_to_list_of_structs;
 use crate::{Query, StreamResult};
+use itertools::Itertools;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -236,6 +237,15 @@ impl TableClient {
 
     /// Execute scan query. The method will auto-retry errors while start query execution,
     /// but no retries after server start streaming result.
+    #[instrument(
+        name = "ydb.TableClient.RetryExecuteScanQuery",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.query.text = ensure_len_string(&query.text).as_ref(),
+        ),
+        err
+    )]
     pub async fn retry_execute_scan_query(&self, query: Query) -> YdbResult<StreamResult> {
         self.retry(|| async {
             let mut session = self.create_session().await?;
@@ -245,8 +255,18 @@ impl TableClient {
     }
 
     /// Execute scheme query with retry policy
+    #[instrument(
+        name = "ydb.TableClient.RetryExecuteSchemeQuery",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.query.text = tracing::field::Empty,
+        ),
+        err
+    )]
     pub async fn retry_execute_scheme_query<T: Into<String>>(&self, query: T) -> YdbResult<()> {
         let query = query.into();
+        tracing::Span::current().record("ydb.query.text", ensure_len_string(&query).as_ref());
         self.retry(|| async {
             let mut session = self.create_session().await?;
             session.execute_schema_query(query.clone()).await
@@ -282,17 +302,28 @@ impl TableClient {
     /// # Ok(())
     /// # }
     /// ```
+    #[instrument(
+        name = "ydb.TableClient.RetryReadRows",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.table.path = tracing::field::Empty,
+            ydb.table.keys = ?keys,
+            ydb.table.columns = ?columns,
+        ),
+        err
+    )]
     pub async fn retry_read_rows(
         &self,
         table_path: impl Into<String>,
         keys: Vec<Value>,
         columns: Option<Vec<String>>,
     ) -> YdbResult<crate::ResultSet> {
+        let table_path = table_path.into();
+        tracing::Span::current().record("ydb.table.path", &table_path);
         let Some(keys) = try_vec_to_list_of_structs(keys)? else {
             return Ok(crate::ResultSet::default());
         };
-
-        let table_path: String = table_path.into();
 
         let columns = columns.unwrap_or_default();
 
@@ -331,12 +362,23 @@ impl TableClient {
     /// #   Ok(())
     /// # }
     /// ```
+    #[instrument(
+        name = "ydb.TableClient.RetryExplainDataQuery",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.query.text = tracing::field::Empty,
+            ydb.table.collect_full_diagnostics = collect_full_diagnostics
+        ),
+        err
+    )]
     pub async fn retry_explain_data_query<T: Into<String>>(
         &self,
         query: T,
         collect_full_diagnostics: bool,
     ) -> YdbResult<crate::result::ExplainResult> {
         let query = query.into();
+        tracing::Span::current().record("ydb.query.text", ensure_len_string(&query).as_ref());
         self.retry(|| async {
             let mut session = self.create_session().await?;
             session
@@ -347,6 +389,16 @@ impl TableClient {
     }
 
     /// Execute bulk upsert with retry policy
+    #[instrument(
+        name = "ydb.TableClient.RetryBulkUpsert",
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            ydb.table.path = %table_path,
+            ydb.table.rows = ?rows
+        ),
+        err
+    )]
     pub async fn retry_execute_bulk_upsert(
         &self,
         table_path: String,
@@ -417,7 +469,12 @@ impl TableClient {
     /// #   return Ok(());
     /// # }
     /// ```
-    #[instrument(level = "trace", skip_all, err)]
+    #[instrument(
+        name = "ydb.TableClient.RetryTransaction",
+        skip_all,
+        fields(db.system.name = "ydb"),
+        err
+    )]
     pub async fn retry_transaction<CallbackFuture, CallbackResult>(
         &self,
         callback: impl Fn(TransactionArgType) -> CallbackFuture,
@@ -429,7 +486,7 @@ impl TableClient {
         let start = Instant::now();
         loop {
             attempts += 1;
-            trace!("attempt: {}", attempts);
+            trace!(attempt = %attempts, "retry attempt");
             let transaction: Box<dyn Transaction> = if self.transaction_options.autocommit {
                 Box::new(self.create_autocommit_transaction(self.transaction_options.mode))
             } else {
@@ -526,7 +583,16 @@ impl TableClient {
         self
     }
 
-    #[instrument(level = "trace", ret)]
+    #[instrument(
+        level = "trace",
+        name = "ydb.TableClient.CheckRetryError",
+        skip_all,
+        fields(
+            db.system.name = "ydb", 
+            ydb.table.error = %err
+        ),
+        ret
+    )]
     fn check_retry_error(is_idempotent_operation: bool, err: &YdbOrCustomerError) -> bool {
         let ydb_err = match &err {
             YdbOrCustomerError::Customer(_) => return false,
@@ -540,6 +606,14 @@ impl TableClient {
         }
     }
 
+    #[instrument(
+        name = "ydb.TableClient.CopyTable",
+        skip_all,
+        fields(
+            db.system.name = "ydb", 
+        ),
+        err
+    )]
     pub async fn copy_table(&self, source_path: String, destination_path: String) -> YdbResult<()> {
         self.retry_with_session(RetryOptions::new(), |session| async {
             let mut session = session; // force borrow for lifetime of t inside closure
@@ -553,6 +627,15 @@ impl TableClient {
         .map_err(YdbOrCustomerError::to_ydb_error)
     }
 
+    #[instrument(
+        name = "ydb.TableClient.CopyTables",
+        skip_all,
+        fields(
+            db.system.name = "ydb", 
+            ydb.table.tables = %tables.iter().format(", "),  
+        ),
+        err
+    )]
     pub async fn copy_tables(&self, tables: Vec<CopyTableItem>) -> YdbResult<()> {
         self.retry_with_session(RetryOptions::new(), |session| async {
             let mut session = session; // force borrow for lifetime of t inside closure

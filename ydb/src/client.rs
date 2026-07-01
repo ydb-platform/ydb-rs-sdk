@@ -8,6 +8,7 @@ use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::load_balancer::SharedLoadBalancer;
 use crate::session_pool::{default_session_pool_settings, SessionPool};
+use crate::traces::span_names::DRIVER_INITIALIZE;
 use crate::waiter::Waiter;
 
 pub use crate::session_pool::{SessionPoolSettings, SessionPoolStats};
@@ -19,7 +20,7 @@ use crate::client_topic::client::TopicClient;
 use crate::client_topic::compression::{default_executor, Executor};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-use tracing::trace;
+use tracing::{instrument, trace};
 
 /// YDB client.
 ///
@@ -151,13 +152,22 @@ impl Client {
     ///
     /// Wait all background process get first successfully result and client fully
     /// available to work.
+    #[instrument(
+        name = DRIVER_INITIALIZE,
+        skip_all,
+        fields(
+            db.system.name = "ydb",
+            db.namespace = %self.credentials.database,
+        ),
+        err
+    )]
     pub async fn wait(&self) -> YdbResult<()> {
-        trace!("waiting_token");
+        trace!("waiting for token");
         self.credentials.token_cache.wait().await?;
-        trace!("wait discovery");
+        trace!("waiting for discovery");
         self.discovery.wait().await?;
 
-        trace!("wait balancer");
+        trace!("waiting for balancer");
         self.load_balancer.wait().await?;
         Ok(())
     }

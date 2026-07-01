@@ -425,7 +425,7 @@ mod test {
             interceptor,
             None,
             crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
-        );
+        )?;
 
         let discovery_shared =
             DiscoverySharedState::new(connection_manager, test_client_builder().endpoint.as_str())?;
