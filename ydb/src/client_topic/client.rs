@@ -256,16 +256,16 @@ impl TopicClient {
         Ok(())
     }
 
-    #[instrument(
-        name = "ydb.TopicClient.CreateReader",
-        skip_all,
-        fields(
-            db.system.name = "ydb",
-            ydb.topic.path = tracing::field::Empty,
-            ydb.consumer.name = %consumer,
-        ),
-        err
-    )]
+    // #[instrument(
+    //     name = "ydb.TopicClient.CreateReader",
+    //     skip_all,
+    //     fields(
+    //         db.system.name = "ydb",
+    //         ydb.topic.path = tracing::field::Empty,
+    //         ydb.consumer.name = %consumer,
+    //     ),
+    //     err
+    // )]
     pub async fn create_reader(
         &mut self,
         consumer: impl Into<String>,

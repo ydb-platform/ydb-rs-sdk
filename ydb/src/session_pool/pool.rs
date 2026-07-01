@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use http::Uri;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tracing::{instrument, trace, warn};
+use tracing::{trace, warn};
 
 use crate::client::TimeoutSettings;
 use crate::discovery::Discovery;
@@ -765,7 +765,8 @@ impl SessionPool {
             MultiInterceptor::new(),
             None,
             DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
-        );
+        )
+        .unwrap();
 
         let inner = Arc::new(SessionPoolInner {
             settings,

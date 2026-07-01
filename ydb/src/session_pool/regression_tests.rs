@@ -93,7 +93,8 @@ async fn bad_session_marks_table_session_non_poolable() {
             MultiInterceptor::new(),
             None,
             DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
-        ),
+        )
+        .unwrap(),
         TimeoutSettings::default(),
     );
 

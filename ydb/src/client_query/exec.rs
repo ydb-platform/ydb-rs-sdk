@@ -17,7 +17,6 @@ use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::grpc_wrapper::raw_query_service::transaction_control::{
     begin_tx_control, tx_id_control, RawQueryTxMode,
 };
-use crate::grpc_wrapper::raw_services::Service;
 use crate::traces::helpers::ensure_len_string;
 use crate::traces::span_names::{
     BEGIN_TRANSACTION, COMMIT, EXECUTE_QUERY, QUERY_CLIENT_BEGIN_STREAM,
@@ -951,7 +950,8 @@ mod unit_tests {
                 MultiInterceptor::new(),
                 None,
                 DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
-            )?,
+            )
+            .unwrap(),
             TimeoutSettings::default(),
             SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
             QueryTransactionOptions::default(),

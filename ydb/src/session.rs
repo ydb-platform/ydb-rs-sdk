@@ -514,7 +514,8 @@ mod discard_session_tests {
                     MultiInterceptor::new(),
                     None,
                     DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
-                ),
+                )
+                .unwrap(),
                 Uri::from_static("http://127.0.0.1/bench"),
             ),
             TimeoutSettings::default(),

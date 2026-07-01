@@ -269,7 +269,8 @@ mod tx_state_tests {
                 MultiInterceptor::new(),
                 None,
                 DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
-            ),
+            )
+            .unwrap(),
             TimeoutSettings::default(),
         );
         SerializableReadWriteTx::new(pool, TimeoutSettings::default())
