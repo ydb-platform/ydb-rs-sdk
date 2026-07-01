@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::time::SystemTime;
 
 use ydb::{ydb_struct, Bytes, QueryClient, QueryTxMode, Value, YdbResult};
@@ -135,7 +136,11 @@ fn format_id(bytes: &[u8]) -> String {
 }
 
 fn hex_id(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    let mut id = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(id, "{b:02x}");
+    }
+    id
 }
 
 fn bytes_value(id: &[u8]) -> Value {

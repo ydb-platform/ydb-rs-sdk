@@ -1,9 +1,17 @@
 use crate::client_topic::topicreader::partition_state::PartitionSession;
 use crate::client_topic::topicreader::reader::TopicReaderCommitMarker;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::RawBatch;
-use crate::YdbResult;
+use crate::{Codec, YdbResult};
 use std::time;
 use std::time::SystemTime;
+
+/// Internal pre-decompression batch carried from `grpc_stream` to `decompressor`.
+/// Each `MessageBatch` is one `RawBatch`'s worth of messages plus the codec they
+/// were compressed with.
+pub(super) struct MessageBatch {
+    pub(super) messages: Vec<TopicReaderMessage>,
+    pub(super) codec: Codec,
+}
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 #[derive(Debug)]
@@ -130,8 +138,7 @@ pub struct TopicReaderMessage {
     // response's bytes_size for flow-control (sent back as ReadRequest).
     pub(crate) bytes_to_release: i64,
 
-    /// Identificator, which holds: messages with one `partition_session_key` MUST arrive in order
-    /// of `seq_no`
+    /// Identifier that groups messages whose `seq_no` values must arrive in order.
     partition_session_key: PartitionSessionKey,
 }
 
@@ -158,6 +165,33 @@ impl TopicReaderMessage {
 
     pub fn partition_session_key(&self) -> PartitionSessionKey {
         self.partition_session_key
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_message(epoch: usize, bytes_to_release: i64) -> Self {
+        Self {
+            seq_no: 0,
+            created_at: None,
+            offset: 0,
+            written_at: time::SystemTime::UNIX_EPOCH,
+            uncompressed_size: 0,
+            producer_id: String::new(),
+            raw_data: Some(vec![]),
+            commit_marker: TopicReaderCommitMarker {
+                partition_session_id: 1,
+                partition_id: 1,
+                start_offset: 0,
+                end_offset: 1,
+                topic: "test".into(),
+                epoch,
+            },
+            bytes_to_release,
+            partition_session_key: PartitionSessionKey {
+                reader_id: 0,
+                epoch,
+                partition_session_id: 1,
+            },
+        }
     }
 }
 
