@@ -1,3 +1,4 @@
+mod auth_token_sender;
 mod decompressor;
 mod grpc_streamer;
 pub(crate) mod messages;
@@ -7,4 +8,3 @@ pub(crate) mod reader_options;
 mod reconnector;
 mod runtime;
 mod task_supervisor;
-mod auth_token_sender;

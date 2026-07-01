@@ -13,13 +13,13 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::retry::{Retry, RetryParams};
 use crate::{YdbError, YdbResult};
 
+use super::auth_token_sender::AuthTokenSender;
 use super::decompressor::Decompressor;
 use super::grpc_streamer::GrpcStreamer;
 use super::messages::MessageBatch;
 use super::reader_options::TopicReaderOptions;
 use super::runtime;
 use super::task_supervisor::{is_retriable, wait_child_tasks};
-use super::auth_token_sender::AuthTokenSender;
 
 pub(super) struct ConnectionAttempt {
     pub(super) manager: GrpcConnectionManager,
