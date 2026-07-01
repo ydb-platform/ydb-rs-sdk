@@ -41,6 +41,7 @@ pub(super) struct GrpcStreamer {
     decompression_input_tx: mpsc::UnboundedSender<MessageBatch>,
     client_message_rx: mpsc::UnboundedReceiver<RawFromClientOneOf>,
     runtime: runtime::RuntimeHandle,
+    reader_id: usize,
     epoch: usize,
 }
 
@@ -59,6 +60,7 @@ impl GrpcStreamer {
             decompression_input_tx,
             client_message_rx,
             runtime,
+            reader_id: attempt.reader_id,
             epoch: attempt.epoch,
         })
     }
@@ -70,6 +72,7 @@ impl GrpcStreamer {
             decompression_input_tx,
             client_message_rx,
             runtime,
+            reader_id,
             epoch,
         } = self;
 
@@ -83,6 +86,7 @@ impl GrpcStreamer {
             runtime,
             decompression_input_tx,
             stream_cancellation.clone(),
+            reader_id,
             epoch,
         ));
 
@@ -121,6 +125,7 @@ async fn receive_loop(
     runtime: runtime::RuntimeHandle,
     decompression_input_tx: mpsc::UnboundedSender<MessageBatch>,
     cancellation: CancellationToken,
+    reader_id: usize,
     epoch: usize,
 ) -> YdbResult<()> {
     select! {
@@ -128,7 +133,7 @@ async fn receive_loop(
             debug!("topic reader grpc receive loop cancelled, stopping");
             Ok(())
         }
-        result = receive_messages(stream, runtime, decompression_input_tx, epoch) => {
+        result = receive_messages(stream, runtime, decompression_input_tx, reader_id, epoch) => {
             let Err(err) = result;
             Err(err)
         }
@@ -139,6 +144,7 @@ async fn receive_messages(
     mut stream: GrpcStream,
     runtime: runtime::RuntimeHandle,
     decompression_input_tx: mpsc::UnboundedSender<MessageBatch>,
+    reader_id: usize,
     epoch: usize,
 ) -> YdbResult<Infallible> {
     let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
@@ -148,7 +154,13 @@ async fn receive_messages(
 
         match message {
             RawFromServer::ReadResponse(resp) => {
-                handle_read_response(resp, &mut sessions, &decompression_input_tx, epoch)?;
+                handle_read_response(
+                    resp,
+                    &mut sessions,
+                    &decompression_input_tx,
+                    reader_id,
+                    epoch,
+                )?;
             }
 
             RawFromServer::InitResponse(_) => {
@@ -232,6 +244,7 @@ fn handle_read_response(
     resp: RawReadResponse,
     sessions: &mut HashMap<i64, PartitionSession>,
     decompression_input_tx: &mpsc::UnboundedSender<MessageBatch>,
+    reader_id: usize,
     epoch: usize,
 ) -> YdbResult<()> {
     for partition_data in resp.partition_data {
@@ -254,7 +267,7 @@ fn handle_read_response(
 
             let codec = raw_batch.codec.into();
             let batch_bytes = raw_batch.get_read_session_size();
-            let batch = TopicReaderBatch::new(raw_batch, session, epoch);
+            let batch = TopicReaderBatch::new(raw_batch, session, reader_id, epoch);
             let mut messages = batch.messages;
             if let Some(last) = messages.last_mut() {
                 last.bytes_to_release = batch_bytes;

@@ -49,6 +49,8 @@ jobs:
             path: native/table
           - name: native-query
             path: native/query
+          - name: native-topic
+            path: native/topic
 
     concurrency:
       group: slo-${{ github.ref }}-${{ matrix.sdk.name }}

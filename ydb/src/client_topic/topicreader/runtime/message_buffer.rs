@@ -33,17 +33,17 @@ fn cut_prefix(
     buffer: &mut VecDeque<TopicReaderMessage>,
     cap: usize,
 ) -> Option<(Vec<TopicReaderMessage>, i64, usize)> {
-    let session_id = buffer.front()?.commit_marker.partition_session_id;
+    let session_key = buffer.front()?.partition_session_key();
     let epoch = buffer.front()?.commit_marker.epoch;
     let mut out = Vec::new();
     let mut bytes: i64 = 0;
 
     while out.len() < cap {
-        let next_session = buffer.front().map(|m| m.commit_marker.partition_session_id);
-        let Some(next_session) = next_session else {
+        let next_session_key = buffer.front().map(|m| m.partition_session_key());
+        let Some(next_session_key) = next_session_key else {
             break;
         };
-        if next_session != session_id {
+        if next_session_key != session_key {
             break;
         }
         let Some(m) = buffer.pop_front() else {
