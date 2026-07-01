@@ -28,6 +28,14 @@ type CapturedTxIdentity = Arc<Mutex<Option<TransactionIdentity>>>;
 type CapturedInitRequest = Arc<Mutex<Option<InitRequest>>>;
 type CapturedTxVec = Arc<Mutex<Vec<TransactionIdentity>>>;
 type CapturedStreamId = Arc<Mutex<Option<u64>>>;
+type CapturedTxLifecycle = Arc<Mutex<TxLifecycle>>;
+
+#[derive(Default)]
+struct TxLifecycle {
+    begin_count: usize,
+    commit_count: usize,
+    rollback_count: usize,
+}
 
 enum AckMode {
     WrittenInTx,
@@ -57,19 +65,29 @@ struct AutoReplyHandler {
     ack_mode: AckMode,
     captured_tx_identity: CapturedTxIdentity,
     captured_init_request: CapturedInitRequest,
+    tx_lifecycle: CapturedTxLifecycle,
 }
 
 impl AutoReplyHandler {
-    fn new(ack_mode: AckMode) -> (Self, CapturedTxIdentity, CapturedInitRequest) {
+    fn new(
+        ack_mode: AckMode,
+    ) -> (
+        Self,
+        CapturedTxIdentity,
+        CapturedInitRequest,
+        CapturedTxLifecycle,
+    ) {
         let captured_tx = Arc::new(Mutex::new(None));
         let captured_init = Arc::new(Mutex::new(None));
+        let tx_lifecycle = Arc::new(Mutex::new(TxLifecycle::default()));
         let handler = Self {
             replies: ReplySink::default(),
             ack_mode,
             captured_tx_identity: captured_tx.clone(),
             captured_init_request: captured_init.clone(),
+            tx_lifecycle: tx_lifecycle.clone(),
         };
-        (handler, captured_tx, captured_init)
+        (handler, captured_tx, captured_init, tx_lifecycle)
     }
 }
 
@@ -79,6 +97,8 @@ impl Handler for AutoReplyHandler {
     }
 
     fn handle(&self, incoming: Incoming) -> Option<Incoming> {
+        record_tx_lifecycle(&incoming, &self.tx_lifecycle);
+
         if let Incoming::Topic(TopicIncoming::StreamWrite { stream_id, msg }) = &incoming {
             let stream_id = *stream_id;
             match msg {
@@ -114,6 +134,21 @@ impl Handler for AutoReplyHandler {
     }
 }
 
+fn record_tx_lifecycle(incoming: &Incoming, tx_lifecycle: &CapturedTxLifecycle) {
+    match incoming {
+        Incoming::Query(QueryIncoming::BeginTransaction(_, _)) => {
+            tx_lifecycle.lock().unwrap().begin_count += 1;
+        }
+        Incoming::Query(QueryIncoming::CommitTransaction(_, _)) => {
+            tx_lifecycle.lock().unwrap().commit_count += 1;
+        }
+        Incoming::Query(QueryIncoming::RollbackTransaction(_, _)) => {
+            tx_lifecycle.lock().unwrap().rollback_count += 1;
+        }
+        _ => {}
+    }
+}
+
 fn make_client(server: &MockServer) -> YdbResult<Client> {
     ClientBuilder::new_from_connection_string(format!(
         "{}{DATABASE}?use_discovery=false",
@@ -132,7 +167,7 @@ fn test_message() -> TopicWriterMessage {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn write_single_message_written_in_tx() -> YdbResult<()> {
-    let (handler, _, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
+    let (handler, _, _, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server)?;
 
@@ -155,13 +190,13 @@ async fn write_single_message_written_in_tx() -> YdbResult<()> {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
-    let (handler, _, _) = AutoReplyHandler::new(AckMode::Written {
+    let (handler, _, _, tx_lifecycle) = AutoReplyHandler::new(AckMode::Written {
         offset: WRONG_ACK_OFFSET,
     });
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server)?;
 
-    client
+    let result = client
         .query_client()
         .retry_transaction(async |tx| {
             let mut writer = client
@@ -170,11 +205,24 @@ async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
                 .await?;
 
             let result = writer.write(test_message()).await;
-            assert!(result.is_err(), "expected error for non-WrittenInTx ack");
             writer.stop().await?;
+            result?;
             Ok(())
         })
-        .await?;
+        .await;
+
+    assert!(result.is_err(), "expected error for non-WrittenInTx ack");
+
+    let tx_lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(tx_lifecycle.begin_count, 1);
+    assert_eq!(
+        tx_lifecycle.rollback_count, 1,
+        "write error must roll back the query transaction"
+    );
+    assert_eq!(
+        tx_lifecycle.commit_count, 0,
+        "failed write must not commit the query transaction"
+    );
 
     Ok(())
 }
@@ -182,7 +230,7 @@ async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn tx_identity_present_in_write_request() -> YdbResult<()> {
-    let (handler, captured_tx, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
+    let (handler, captured_tx, _, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server)?;
 
@@ -210,7 +258,7 @@ async fn tx_identity_present_in_write_request() -> YdbResult<()> {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn regular_writer_sends_no_tx_identity() -> YdbResult<()> {
-    let (handler, captured_tx, _) = AutoReplyHandler::new(AckMode::Written {
+    let (handler, captured_tx, _, _) = AutoReplyHandler::new(AckMode::Written {
         offset: REGULAR_WRITER_OFFSET,
     });
     let (server, _reply_tx) = MockServer::start(handler).await;
@@ -236,7 +284,7 @@ async fn regular_writer_sends_no_tx_identity() -> YdbResult<()> {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn tx_writer_options_propagated_to_init_request() -> YdbResult<()> {
-    let (handler, _, captured_init) = AutoReplyHandler::new(AckMode::WrittenInTx);
+    let (handler, _, captured_init, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
     let (server, _reply_tx) = MockServer::start(handler).await;
 
     let options = TopicWriterTxOptionsBuilder::default()
@@ -272,18 +320,21 @@ struct ReconnectHandler {
     replies: ReplySink,
     captured_txs: CapturedTxVec,
     captured_stream_id: CapturedStreamId,
+    tx_lifecycle: CapturedTxLifecycle,
 }
 
 impl ReconnectHandler {
-    fn new() -> (Self, CapturedTxVec, CapturedStreamId) {
+    fn new() -> (Self, CapturedTxVec, CapturedStreamId, CapturedTxLifecycle) {
         let txs = Arc::new(Mutex::new(Vec::new()));
         let stream_id = Arc::new(Mutex::new(None));
+        let tx_lifecycle = Arc::new(Mutex::new(TxLifecycle::default()));
         let handler = Self {
             replies: ReplySink::default(),
             captured_txs: txs.clone(),
             captured_stream_id: stream_id.clone(),
+            tx_lifecycle: tx_lifecycle.clone(),
         };
-        (handler, txs, stream_id)
+        (handler, txs, stream_id, tx_lifecycle)
     }
 }
 
@@ -293,6 +344,8 @@ impl Handler for ReconnectHandler {
     }
 
     fn handle(&self, incoming: Incoming) -> Option<Incoming> {
+        record_tx_lifecycle(&incoming, &self.tx_lifecycle);
+
         if let Incoming::Topic(TopicIncoming::StreamWrite { stream_id, msg }) = &incoming {
             let stream_id = *stream_id;
             match msg {
@@ -325,7 +378,7 @@ impl Handler for ReconnectHandler {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn write_skipped_already_written_treated_as_success() -> YdbResult<()> {
-    let (handler, _, _) = AutoReplyHandler::new(AckMode::SkippedAlreadyWritten);
+    let (handler, _, _, _) = AutoReplyHandler::new(AckMode::SkippedAlreadyWritten);
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server)?;
 
@@ -347,12 +400,12 @@ async fn write_skipped_already_written_treated_as_success() -> YdbResult<()> {
 
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn write_errors_in_retriable_err() -> YdbResult<()> {
-    let (handler, _, captured_stream_id) = ReconnectHandler::new();
+async fn write_returns_error_after_stream_close_and_rolls_back() -> YdbResult<()> {
+    let (handler, _, captured_stream_id, tx_lifecycle) = ReconnectHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server)?;
 
-    client
+    let result = client
         .query_client()
         .retry_transaction(async |tx| {
             let mut writer = client
@@ -370,12 +423,24 @@ async fn write_errors_in_retriable_err() -> YdbResult<()> {
                 .expect("mock server failed to fail write stream");
 
             let result = writer.write(test_message()).await;
-            assert!(result.is_err(), "expected error after stream failure");
-
             let _ = writer.stop().await;
+            result?;
             Ok(())
         })
-        .await?;
+        .await;
+
+    assert!(result.is_err(), "expected error after stream failure");
+
+    let tx_lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(tx_lifecycle.begin_count, 1);
+    assert_eq!(
+        tx_lifecycle.rollback_count, 1,
+        "write error must roll back the query transaction"
+    );
+    assert_eq!(
+        tx_lifecycle.commit_count, 0,
+        "failed write must not commit the query transaction"
+    );
 
     Ok(())
 }
