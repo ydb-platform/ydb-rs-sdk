@@ -10,7 +10,7 @@ use crate::Framework;
 pub struct QueueFlags {
     #[arg(long, default_value_t = 1_000)]
     pub read_rps: u32,
-    #[arg(long, default_value_t = 2_000)]
+    #[arg(long, default_value_t = 100)]
     pub write_rps: u32,
     #[arg(long, default_value_t = 120_000 /* two minutes */)]
     pub read_timeout: u64,
