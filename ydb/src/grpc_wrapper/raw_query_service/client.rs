@@ -14,6 +14,7 @@ use crate::grpc_wrapper::raw_query_service::transaction_control::{
 };
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
+use crate::traces::span_names::{EXECUTE_QUERY, YDB};
 use tracing::instrument;
 use ydb_grpc::ydb_proto::query::v1::query_service_client::QueryServiceClient;
 use ydb_grpc::ydb_proto::query::{
@@ -56,7 +57,7 @@ impl RawQueryClient {
         }
     }
 
-    #[instrument(name = "ydb.grpc.ExecuteQuery", skip_all, fields(db.system.name = "ydb", ydb.session.id = %req.session_id), err)]
+    #[instrument(name = EXECUTE_QUERY, skip_all, fields(db.system.name = YDB, ydb.session.id = %req.session_id), err)]
     pub async fn execute_query(
         &mut self,
         req: RawExecuteQueryRequest,
@@ -66,7 +67,7 @@ impl RawQueryClient {
         Ok(response.into_inner())
     }
 
-    #[instrument(name = "ydb.grpc.ExecuteScript", skip_all, fields(db.system.name = "ydb"), err)]
+    #[instrument(name = "ydb.grpc.ExecuteScript", skip_all, fields(db.system.name = YDB), err)]
     pub async fn execute_script(
         &mut self,
         req: RawExecuteScriptRequest,
@@ -76,7 +77,7 @@ impl RawQueryClient {
         parse_execute_script_operation(response.into_inner())
     }
 
-    #[instrument(name = "ydb.grpc.FetchScriptResults", skip_all, fields(db.system.name = "ydb"), err)]
+    #[instrument(name = "ydb.grpc.FetchScriptResults", skip_all, fields(db.system.name = YDB), err)]
     pub async fn fetch_script_results(
         &mut self,
         req: RawFetchScriptResultsRequest,
@@ -90,7 +91,7 @@ impl RawQueryClient {
         parse_response(response.into_inner())
     }
 
-    #[instrument(name = "ydb.grpc.CreateSession", skip_all, fields(db.system.name = "ydb"), err)]
+    #[instrument(name = "ydb.grpc.CreateSession", skip_all, fields(db.system.name = YDB), err)]
     pub async fn create_session(&mut self) -> RawResult<CreateSessionResult> {
         let mut request = tonic::Request::new(CreateSessionRequest {});
         request.metadata_mut().append(
@@ -105,7 +106,7 @@ impl RawQueryClient {
         })
     }
 
-    #[instrument(name = "ydb.grpc.DeleteSession", skip_all, fields(db.system.name = "ydb", ydb.session.id = %session_id), err)]
+    #[instrument(name = "ydb.grpc.DeleteSession", skip_all, fields(db.system.name = YDB, ydb.session.id = %session_id), err)]
     pub async fn delete_session(&mut self, session_id: &str) -> RawResult<()> {
         let response = self
             .service
@@ -117,7 +118,7 @@ impl RawQueryClient {
         check_status(inner.status, &inner.issues)
     }
 
-    #[instrument(name = "ydb.grpc.AttachSession", skip_all, fields(db.system.name = "ydb", ydb.session.id = %session_id), err)]
+    #[instrument(name = "ydb.grpc.AttachSession", skip_all, fields(db.system.name = YDB, ydb.session.id = %session_id), err)]
     pub async fn attach_session(
         &mut self,
         session_id: &str,
@@ -131,7 +132,7 @@ impl RawQueryClient {
         Ok(response.into_inner())
     }
 
-    #[instrument(name = "ydb.grpc.BeginTransaction", skip_all, fields(db.system.name = "ydb", ydb.session.id = %session_id, ydb.tx.mode = ?mode), err)]
+    #[instrument(name = "ydb.grpc.BeginTransaction", skip_all, fields(db.system.name = YDB, ydb.session.id = %session_id, ydb.tx.mode = ?mode), err)]
     pub async fn begin_transaction(
         &mut self,
         session_id: &str,
@@ -153,7 +154,7 @@ impl RawQueryClient {
             .ok_or_else(|| RawError::custom("BeginTransaction response missing tx_meta.id"))
     }
 
-    #[instrument(name = "ydb.grpc.CommitTransaction", skip_all, fields(db.system.name = "ydb", ydb.session.id = %session_id, ydb.tx.id = %tx_id), err)]
+    #[instrument(name = "ydb.grpc.CommitTransaction", skip_all, fields(db.system.name = YDB, ydb.session.id = %session_id, ydb.tx.id = %tx_id), err)]
     pub async fn commit_transaction(&mut self, session_id: &str, tx_id: &str) -> RawResult<()> {
         let response = self
             .service
@@ -166,7 +167,7 @@ impl RawQueryClient {
         check_status(inner.status, &inner.issues)
     }
 
-    #[instrument(name = "ydb.grpc.RollbackTransaction", skip_all, fields(db.system.name = "ydb", ydb.session.id = %session_id, ydb.tx.id = %tx_id), err)]
+    #[instrument(name = "ydb.grpc.RollbackTransaction", skip_all, fields(db.system.name = YDB, ydb.session.id = %session_id, ydb.tx.id = %tx_id), err)]
     pub async fn rollback_transaction(&mut self, session_id: &str, tx_id: &str) -> RawResult<()> {
         let response = self
             .service

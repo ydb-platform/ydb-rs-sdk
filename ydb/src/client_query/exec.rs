@@ -717,7 +717,7 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
         let tx_id = tx.tx_id.take().expect("checked Some");
         if let Ok(session_id) = tx_session_id(tx) {
             tracing::Span::current()
-                .record("ydb.session.id", &session_id)
+                .record("ydb.session.id", session_id)
                 .record("ydb.tx.id", &tx_id);
 
             if let Ok(mut client) = query_client_from_tx(tx).await {
