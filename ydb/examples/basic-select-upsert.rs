@@ -13,13 +13,10 @@ async fn main() -> YdbResult<()> {
         return Err(YdbError::from("Connection timeout"));
     };
 
-    let table_client = client.table_client();
     let mut qc = client.query_client();
-    let _ = table_client.execute_scheme_query("DROP TABLE test").await; // ignore drop error
+    let _ = qc.exec("DROP TABLE test").await; // ignore drop error
 
-    // create table
-    table_client
-        .execute_scheme_query("CREATE TABLE test (id Int64, val Utf8, PRIMARY KEY(id))")
+    qc.exec("CREATE TABLE test (id Int64, val Utf8, PRIMARY KEY(id))")
         .await?;
 
     // fill with data

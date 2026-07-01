@@ -20,7 +20,6 @@ use crate::grpc_wrapper::raw_table_service::describe_table_options::{
     RawDescribeTableOptionsRequest, RawDescribeTableOptionsResult,
 };
 use crate::grpc_wrapper::raw_table_service::drop_table::RawDropTableRequest;
-use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
 use crate::grpc_wrapper::raw_table_service::read_rows::RawReadRowsRequest;
 use crate::grpc_wrapper::raw_table_service::rename_tables::{
     RawRenameTableItem, RawRenameTablesRequest,
@@ -88,9 +87,10 @@ impl Default for RetryOptions {
     }
 }
 
-/// Client for YDB Table service: DDL, sessionless data plane (`ReadRows`, `BulkUpsert`), describe.
+/// Client for YDB Table service: DDL via RPC (`CreateTable`, …), sessionless data plane (`ReadRows`, `BulkUpsert`), describe.
 ///
-/// YQL execution, transactions, explain, and streaming reads belong to [`crate::QueryClient`].
+/// Ad-hoc DDL YQL (`CREATE TABLE` / `DROP TABLE` as text) belongs to [`crate::QueryClient::exec`] with [`crate::TxMode::Implicit`].
+/// YQL execution, transactions, explain, and streaming reads also belong to [`crate::QueryClient`].
 #[derive(Clone)]
 pub struct TableClient {
     session_pool: TableSessionPool,
@@ -221,28 +221,6 @@ impl TableClient {
             }
             tokio::time::sleep(retry_decision.wait_timeout).await;
         }
-    }
-
-    /// Execute scheme query with retry policy
-    pub async fn execute_scheme_query<T: Into<String>>(&self, query: T) -> YdbResult<()> {
-        let query = query.into();
-        self.retry_operation(|| async {
-            let mut session = self.create_session().await?;
-            let session_id = session.id.clone();
-            let operation_params = session.operation_params();
-            session
-                .in_flight_rpc(async |table| {
-                    table
-                        .execute_scheme_query(RawExecuteSchemeQueryRequest {
-                            session_id,
-                            yql_text: query.clone(),
-                            operation_params,
-                        })
-                        .await
-                })
-                .await
-        })
-        .await
     }
 
     /// Read rows by primary key without opening a session (go-sdk: `table.Client.ReadRows`).

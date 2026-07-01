@@ -13,12 +13,11 @@ async fn main() -> YdbResult<()> {
         return Err(YdbError::from("Connection timeout"));
     };
 
-    let table_client = client.table_client();
-    let _ = table_client.execute_scheme_query("DROP TABLE test").await; // ignore drop error
+    let mut query_client = client.query_client();
+    let _ = query_client.exec("DROP TABLE test").await; // ignore drop error
 
-    // create table
-    table_client
-        .execute_scheme_query("CREATE TABLE test (id Int64 NOT NULL, val Utf8, PRIMARY KEY(id))")
+    query_client
+        .exec("CREATE TABLE test (id Int64 NOT NULL, val Utf8, PRIMARY KEY(id))")
         .await?;
 
     // Create vec of structs, there values will insert to table

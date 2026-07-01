@@ -15,6 +15,11 @@ use crate::test_integration_helper::create_client;
 use crate::types::Value;
 use crate::ydb_struct;
 
+async fn exec_ddl(client: &crate::Client, sql: impl Into<String>) -> YdbResult<()> {
+    let mut qc = client.query_client();
+    qc.exec(sql).await
+}
+
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
@@ -26,11 +31,11 @@ async fn copy_table() -> YdbResult<()> {
     let table_name = format!("temp_table_{rand_str}");
     let copy_table_name = format!("copy_{table_name}");
 
-    table_client
-        .execute_scheme_query(format!(
-            "CREATE TABLE {table_name} (id Int64, vInt64 Int64, PRIMARY KEY (id))"
-        ))
-        .await?;
+    exec_ddl(
+        &client,
+        format!("CREATE TABLE {table_name} (id Int64, vInt64 Int64, PRIMARY KEY (id))"),
+    )
+    .await?;
 
     table_client
         .bulk_upsert(
@@ -56,11 +61,7 @@ async fn copy_table() -> YdbResult<()> {
         )
         .await?;
 
-    let field = res
-        .rows()
-        .next()
-        .unwrap()
-        .remove_field_by_name("vInt64")?;
+    let field = res.rows().next().unwrap().remove_field_by_name("vInt64")?;
     let v_int64 = match field {
         Value::Int64(v) => v,
         Value::Optional(opt) => match opt.value {
@@ -81,9 +82,7 @@ async fn copy_table() -> YdbResult<()> {
     assert_eq!(2, v_int64);
 
     for &target in [&table_name, &copy_table_name].iter() {
-        table_client
-            .execute_scheme_query(format!("DROP TABLE {target}"))
-            .await?;
+        exec_ddl(&client, format!("DROP TABLE {target}")).await?;
     }
 
     Ok(())
@@ -100,11 +99,11 @@ async fn copy_tables() -> YdbResult<()> {
     let table_name = format!("temp_table_{rand_str}");
     let copy_table_name = format!("copy_{table_name}");
 
-    table_client
-        .execute_scheme_query(format!(
-            "CREATE TABLE {table_name} (id Int64, vInt64 Int64, PRIMARY KEY (id))"
-        ))
-        .await?;
+    exec_ddl(
+        &client,
+        format!("CREATE TABLE {table_name} (id Int64, vInt64 Int64, PRIMARY KEY (id))"),
+    )
+    .await?;
 
     table_client
         .bulk_upsert(
@@ -131,11 +130,7 @@ async fn copy_tables() -> YdbResult<()> {
         )
         .await?;
 
-    let field = res
-        .rows()
-        .next()
-        .unwrap()
-        .remove_field_by_name("vInt64")?;
+    let field = res.rows().next().unwrap().remove_field_by_name("vInt64")?;
     let v_int64 = match field {
         Value::Int64(v) => v,
         Value::Optional(opt) => match opt.value {
@@ -156,9 +151,7 @@ async fn copy_tables() -> YdbResult<()> {
     assert_eq!(2, v_int64);
 
     for &target in [&table_name, &copy_table_name].iter() {
-        table_client
-            .execute_scheme_query(format!("DROP TABLE {target}"))
-            .await?;
+        exec_ddl(&client, format!("DROP TABLE {target}")).await?;
     }
 
     Ok(())
@@ -169,20 +162,17 @@ async fn copy_tables() -> YdbResult<()> {
 #[ignore] // need YDB access
 async fn scheme_query() -> YdbResult<()> {
     let client = create_client().await?;
-    let table_client = client.table_client();
 
     let time_now = time::SystemTime::now().duration_since(UNIX_EPOCH)?;
     let table_name = format!("test_table_{}", time_now.as_millis());
 
-    table_client
-        .execute_scheme_query(format!(
-            "CREATE TABLE {table_name} (id String, PRIMARY KEY (id))"
-        ))
-        .await?;
+    exec_ddl(
+        &client,
+        format!("CREATE TABLE {table_name} (id String, PRIMARY KEY (id))"),
+    )
+    .await?;
 
-    table_client
-        .execute_scheme_query(format!("DROP TABLE {table_name}"))
-        .await?;
+    exec_ddl(&client, format!("DROP TABLE {table_name}")).await?;
 
     Ok(())
 }
@@ -197,8 +187,7 @@ async fn read_rows() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
 
-    table_client
-        .execute_scheme_query(format!(
+    exec_ddl(&client, format!(
             "CREATE TABLE {TABLE_NAME} (id Int64 NOT NULL, first Int64 NOT NULL, second Int64 NOT NULL, PRIMARY KEY (id))"
         ))
         .await?;
@@ -293,9 +282,7 @@ async fn read_rows() -> YdbResult<()> {
     assert!(unknown.is_err());
 
     // Clear table
-    table_client
-        .execute_scheme_query(format!("DROP TABLE {TABLE_NAME}"))
-        .await?;
+    exec_ddl(&client, format!("DROP TABLE {TABLE_NAME}")).await?;
 
     Ok(())
 }
@@ -308,8 +295,9 @@ async fn bulk_upsert() -> YdbResult<()> {
     let table_client = client.table_client();
     let table_name = "bulk_upsert";
 
-    table_client
-        .execute_scheme_query(format!(
+    exec_ddl(
+        &client,
+        format!(
             "
                 CREATE TABLE {table_name} (
                     id Int64 NOT NULL,
@@ -317,8 +305,9 @@ async fn bulk_upsert() -> YdbResult<()> {
                     PRIMARY KEY (id)
                 );
             "
-        ))
-        .await?;
+        ),
+    )
+    .await?;
 
     let rows = vec![
         ydb_struct!(
@@ -352,9 +341,7 @@ async fn bulk_upsert() -> YdbResult<()> {
 
     assert_eq!(vec![3, 6], read_rows_id);
 
-    table_client
-        .execute_scheme_query(format!("DROP TABLE {table_name}"))
-        .await?;
+    exec_ddl(&client, format!("DROP TABLE {table_name}")).await?;
 
     Ok(())
 }
@@ -367,11 +354,10 @@ async fn describe_table() -> YdbResult<()> {
     let table_client = client.table_client();
     let table_name = "temp_describe_test";
 
-    table_client
-        .execute_scheme_query(format!("DROP TABLE IF EXISTS {table_name}"))
-        .await?;
-    table_client
-        .execute_scheme_query(format!(
+    exec_ddl(&client, format!("DROP TABLE IF EXISTS {table_name}")).await?;
+    exec_ddl(
+        &client,
+        format!(
             "
                 CREATE TABLE {table_name} (
                     id Utf8 NOT NULL,
@@ -388,8 +374,9 @@ async fn describe_table() -> YdbResult<()> {
                     INDEX idx_host GLOBAL ON (host)
                 );
             "
-        ))
-        .await?;
+        ),
+    )
+    .await?;
 
     let database_path = client.database();
     let table_desc = table_client
@@ -434,9 +421,7 @@ async fn describe_table() -> YdbResult<()> {
         assert_eq!(idx.index_type, IndexType::Global);
     }
 
-    table_client
-        .execute_scheme_query(format!("DROP TABLE {table_name}"))
-        .await?;
+    exec_ddl(&client, format!("DROP TABLE {table_name}")).await?;
 
     Ok(())
 }

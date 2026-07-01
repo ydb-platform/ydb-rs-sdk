@@ -14,15 +14,13 @@ async fn main() -> YdbResult<()> {
     };
 
     let table_client = client.table_client();
+    let mut query_client = client.query_client();
     let table_name = "test";
 
-    let _ = table_client
-        .execute_scheme_query(format!("DROP TABLE {table_name}"))
-        .await; // ignore drop error
+    let _ = query_client.exec(format!("DROP TABLE {table_name}")).await; // ignore drop error
 
-    // create table
-    table_client
-        .execute_scheme_query(format!(
+    query_client
+        .exec(format!(
             "CREATE TABLE {table_name} (id Int64 NOT NULL, val Utf8, PRIMARY KEY(id))",
         ))
         .await?;

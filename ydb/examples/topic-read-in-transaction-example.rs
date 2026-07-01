@@ -132,30 +132,21 @@ use ydb::{
 /// - **Explicit Sequence Numbers**: Ensures deterministic message ordering
 /// - **Wait for Deletion**: Prevents race conditions between drop and create operations
 async fn setup_environment(client: &ydb::Client) -> YdbResult<()> {
-    let table_client = client.table_client();
+    let mut query_client = client.query_client();
 
     // ============================================================================
     // TABLE SETUP: Create storage table for processed messages
     // ============================================================================
 
-    // Drop test table unconditionally (ignore errors)
-    // This ensures a clean state for each test run
-    let _ = table_client
-        .execute_scheme_query("DROP TABLE topic_offset_storage")
-        .await;
+    let _ = query_client.exec("DROP TABLE topic_offset_storage").await;
 
-    // Create test table with schema designed for message storage
-    // The primary key (topic, partition, offset) is the unique identifier for each message in YDB topics:
-    // - This tuple uniquely identifies every message across all topics and partitions
-    // - It allows us to store every message exactly once in our processing table
-    // - Transactions ensure we don't process the same message multiple times
-    table_client
-        .execute_scheme_query(
+    query_client
+        .exec(
             "CREATE TABLE topic_offset_storage (
-                topic Text NOT NULL,      -- Topic name for multi-topic scenarios
-                partition Int64 NOT NULL, -- Partition ID for parallel processing
-                offset Int64 NOT NULL,    -- Message offset (unique per partition)
-                body Text,                -- Message content for verification
+                topic Text NOT NULL,
+                partition Int64 NOT NULL,
+                offset Int64 NOT NULL,
+                body Text,
                 PRIMARY KEY(topic, partition, offset)
             )",
         )
