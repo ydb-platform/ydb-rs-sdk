@@ -62,8 +62,8 @@ impl TopicWriterTx {
 
             MessageWriteStatus::Skipped(MessageSkipReason::AlreadyWritten) => Ok(()),
 
-            status => Err(YdbError::custom(format!(
-                "expected WrittenInTx or AlreadyWritten ack from server, got: {status:?}"
+            other_message_status => Err(YdbError::custom(format!(
+                "expected WrittenInTx or AlreadyWritten ack from server, got: {other_message_status:?}"
             ))),
         }
     }
