@@ -41,7 +41,7 @@ impl<'a> TopicWriterTx<'a> {
 
         // All validation and configuration, specific for `TopicWriterTx` should be done in
         // options construction and conversion.
-        let options = options.try_into()?;
+        let options = options.try_into_non_tx_options()?;
 
         let inner =
             TopicWriter::with_tx_identity(options, connection_manager, executor, tx_identity)
