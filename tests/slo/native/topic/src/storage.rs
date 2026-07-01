@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 
-use slo_framework::topic::{Params, Topic};
+use slo_framework::topic::{Params, TopicService};
 use slo_framework::{Framework, TopicWorkload, Workload};
 use ydb::{
     ClientBuilder, ConsumerBuilder, CreateTopicOptionsBuilder, PartitioningStrategy, TopicClient,
@@ -34,7 +34,7 @@ impl TopicStorage {
 }
 
 #[async_trait]
-impl Topic for TopicStorage {
+impl TopicService for TopicStorage {
     async fn create_topic(&self) -> Result<(), String> {
         let consumer = ConsumerBuilder::default()
             .name(self.params.consumer_name.clone())

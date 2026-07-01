@@ -8,15 +8,15 @@ use crate::helpers::{new_rate_limiter, run_workers_for, timeout_or_cancel, Timeo
 use crate::metrics::{OPERATION_MESSAGE_RTT, OPERATION_READ, OPERATION_WRITE};
 use crate::Framework;
 
-use super::{verification, Params, Topic};
+use super::{verification, Params, TopicService};
 
-pub struct TopicWorkload<T: Topic> {
+pub struct TopicWorkload<T: TopicService> {
     fw: Arc<Framework>,
     topic: Arc<T>,
     params: Params,
 }
 
-impl<T: Topic + 'static> TopicWorkload<T> {
+impl<T: TopicService + 'static> TopicWorkload<T> {
     pub fn new(fw: Framework, params: Params, topic: T) -> Self {
         Self {
             fw: Arc::new(fw),
@@ -27,7 +27,7 @@ impl<T: Topic + 'static> TopicWorkload<T> {
 }
 
 #[async_trait::async_trait]
-impl<T: Topic + 'static> Workload for TopicWorkload<T> {
+impl<T: TopicService + 'static> Workload for TopicWorkload<T> {
     async fn setup(&self, _ctx: &CancellationToken) -> Result<(), String> {
         self.topic.create_topic().await?;
         self.fw.logger.printf("create topic ok");
