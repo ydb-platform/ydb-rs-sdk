@@ -1,7 +1,0 @@
-{
-  "git": {
-    "sha1": "96bb7637d2bf453ba538b591353d86f847c01981",
-    "dirty": true
-  },
-  "path_in_vcs": "ydb-grpc-helpers"
-}

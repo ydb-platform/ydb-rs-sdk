@@ -1,1 +1,0 @@
-/Users/asmyasnikov/git/github.com/ydb-platform/ydb-rs-sdk/ydb-grpc-helpers/target/debug/libydb_grpc_helpers.rlib: /Users/asmyasnikov/git/github.com/ydb-platform/ydb-rs-sdk/ydb-grpc-helpers/target/package/ydb-grpc-helpers-0.0.10/src/lib.rs
