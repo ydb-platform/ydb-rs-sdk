@@ -1,5 +1,16 @@
 # Workflow
 
+## Finish every task
+
+Before handoff, commit, or PR — **always** run the linter gate from repo root:
+
+```bash
+cargo fmt --check
+cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
+```
+
+Fix every reported warning (`-D warnings`). If you changed Rust code, run `cargo test --workspace` (or the relevant crate) as well. Do not mark work complete while clippy fails.
+
 ## Issue-first (required for non-trivial work)
 
 Per [`CONTRIBUTING.md`](../../CONTRIBUTING.md): discuss new features and bug fixes in a GitHub issue before implementing. If no issue exists, open one.

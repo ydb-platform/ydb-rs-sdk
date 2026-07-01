@@ -420,6 +420,7 @@ impl From<RawStartPartitionSessionResponse> for stream_read_message::StartPartit
 pub(crate) struct RawStopPartitionSessionRequest {
     pub partition_session_id: i64,
     pub graceful: bool,
+    pub committed_offset: i64,
 }
 
 impl From<stream_read_message::StopPartitionSessionRequest> for RawStopPartitionSessionRequest {
@@ -427,6 +428,7 @@ impl From<stream_read_message::StopPartitionSessionRequest> for RawStopPartition
         RawStopPartitionSessionRequest {
             partition_session_id: value.partition_session_id,
             graceful: value.graceful,
+            committed_offset: value.committed_offset,
         }
     }
 }

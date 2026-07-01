@@ -6,7 +6,6 @@ mod builders;
 mod exec;
 mod internal;
 mod script;
-mod session_pool;
 mod stream_facade;
 
 #[cfg(test)]
@@ -26,38 +25,24 @@ mod concurrent_result_sets_test;
 
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::FutureExt;
 use tokio::time::sleep;
 
 use crate::client::TimeoutSettings;
-use crate::discovery::Discovery;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::result::Row;
 use crate::TransactionInfo;
 
-use builders::impl_query_methods;
+use crate::session_pool::SessionPool;
+use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{
-    check_retry_transaction_error, retry_wait, transaction_commit, transaction_ensure_begin,
-    transaction_exec_context, transaction_rollback, ClientExecContext, TransactionExecContext,
-    DEFAULT_QUERY_RETRY_BUDGET,
+    check_retry_transaction_error, retry_wait, spawn_query_tx_rollback_on_drop, transaction_commit,
+    transaction_ensure_begin, transaction_exec_context, transaction_rollback, ClientExecContext,
+    TransactionExecContext, DEFAULT_QUERY_RETRY_BUDGET,
 };
-use internal::{ExecCoreRef, HasCore};
-use session_pool::{QuerySessionPool, QuerySessionRpcTimeouts};
-
-/// How [`QueryClient`] acquires a YDB session for each call.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum QuerySessionMode {
-    /// Empty `session_id` in `ExecuteQueryRequest`: the server creates a session,
-    /// runs the query, and closes the session. This is the default mode.
-    #[default]
-    Implicit,
-    /// Use an explicit session pool ([`QueryClient::with_session_pool`]).
-    Pool,
-}
 
 /// Row-to-struct mapping (the sqlx `FromRow` analogue).
 pub trait FromYdbRow: Sized {
@@ -169,81 +154,23 @@ impl Clone for QueryClient {
 }
 
 impl QueryClient {
-    impl_query_methods!();
+    impl_client_query_methods!();
 
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
-        discovery: Arc<Box<dyn Discovery>>,
+        session_pool: SessionPool,
     ) -> Self {
         Self {
             ctx: ClientExecContext {
                 connection_manager,
                 timeouts,
-                discovery,
-                session_mode: QuerySessionMode::Implicit,
                 idempotent_operation: false,
                 retry_budget: DEFAULT_QUERY_RETRY_BUDGET,
-                session_pool: None,
-                implicit_session_pool: None,
-                session_rpc_timeouts: QuerySessionRpcTimeouts::default(),
+                session_pool,
             },
             tx_options: QueryTransactionOptions::default(),
         }
-    }
-
-    /// Configure an explicit session pool (CreateSession + AttachSession) and switch to
-    /// [`QuerySessionMode::Pool`]. Sessions are not exposed to the caller; the pool owns
-    /// their lifecycle.
-    pub async fn with_session_pool(self, settings: QuerySessionPoolSettings) -> YdbResult<Self> {
-        let pool = QuerySessionPool::new_explicit(
-            self.ctx.connection_manager.clone(),
-            self.ctx.timeouts,
-            self.ctx.discovery.clone(),
-            settings,
-        )
-        .await?;
-        Ok(Self {
-            ctx: ClientExecContext {
-                session_pool: Some(pool.clone()),
-                session_mode: QuerySessionMode::Pool,
-                session_rpc_timeouts: pool.session_rpc_timeouts(),
-                ..self.ctx
-            },
-            tx_options: self.tx_options,
-        })
-    }
-
-    /// Configure an implicit session pool (empty `session_id`, no AttachSession) while keeping
-    /// [`QuerySessionMode::Implicit`]. Limits concurrency and enables warm-up like the explicit pool.
-    pub fn with_implicit_session_pool(self, settings: QuerySessionPoolSettings) -> Self {
-        let pool = QuerySessionPool::new_implicit(
-            self.ctx.connection_manager.clone(),
-            self.ctx.timeouts,
-            self.ctx.discovery.clone(),
-            settings,
-        );
-        Self {
-            ctx: ClientExecContext {
-                implicit_session_pool: Some(pool.clone()),
-                session_rpc_timeouts: pool.session_rpc_timeouts(),
-                ..self.ctx
-            },
-            tx_options: self.tx_options,
-        }
-    }
-
-    /// Pool stats for the explicit session pool ([`Self::with_session_pool`]), if configured.
-    pub fn session_pool_stats(&self) -> Option<QuerySessionPoolStats> {
-        self.ctx.session_pool.as_ref().map(|pool| pool.stats())
-    }
-
-    /// Pool stats for the implicit session pool ([`Self::with_implicit_session_pool`]), if configured.
-    pub fn implicit_session_pool_stats(&self) -> Option<QuerySessionPoolStats> {
-        self.ctx
-            .implicit_session_pool
-            .as_ref()
-            .map(|pool| pool.stats())
     }
 
     pub fn clone_with_idempotent_operations(&self, idempotent: bool) -> Self {
@@ -285,16 +212,6 @@ impl QueryClient {
         }
     }
 
-    pub fn clone_with_session_mode(&self, session_mode: QuerySessionMode) -> Self {
-        Self {
-            ctx: ClientExecContext {
-                session_mode,
-                ..self.ctx.clone()
-            },
-            tx_options: self.tx_options.clone(),
-        }
-    }
-
     /// Start a long-running script operation. Poll completion via
     /// [`crate::OperationClient::get_operation`], then read rows with
     /// [`Self::fetch_script_results`].
@@ -323,10 +240,7 @@ impl QueryClient {
             let mut tx = QueryTransaction::new(
                 self.ctx.connection_manager.clone(),
                 self.ctx.timeouts,
-                self.ctx.discovery.clone(),
-                self.ctx.session_mode,
                 self.ctx.session_pool.clone(),
-                self.ctx.session_rpc_timeouts,
                 self.tx_options.clone(),
             );
 
@@ -372,13 +286,25 @@ impl QueryClient {
     }
 }
 
-impl HasCore for QueryClient {
-    fn core_mut(&mut self) -> ExecCoreRef<'_> {
-        ExecCoreRef::Client(&mut self.ctx)
+impl QueryExecutor for QueryClient {
+    type Scope = builders::ClientOneShot;
+
+    fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_, Self::Scope> {
+        QueryClient::exec(self, text)
+    }
+
+    fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_, Self::Scope> {
+        QueryClient::query(self, text)
+    }
+
+    fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_, Self::Scope> {
+        QueryClient::query_result_set(self, text)
+    }
+
+    fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row, Self::Scope> {
+        QueryClient::query_row(self, text)
     }
 }
-
-impl QueryExecutor for QueryClient {}
 
 #[derive(Debug, PartialEq, Eq)]
 enum TxState {
@@ -393,27 +319,16 @@ pub struct QueryTransaction {
 }
 
 impl QueryTransaction {
-    impl_query_methods!();
+    impl_transaction_query_methods!();
 
     fn new(
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
-        discovery: Arc<Box<dyn Discovery>>,
-        session_mode: QuerySessionMode,
-        session_pool: Option<QuerySessionPool>,
-        session_rpc_timeouts: QuerySessionRpcTimeouts,
+        session_pool: SessionPool,
         options: QueryTransactionOptions,
     ) -> Self {
         Self {
-            ctx: transaction_exec_context(
-                connection_manager,
-                timeouts,
-                discovery,
-                session_mode,
-                session_pool,
-                session_rpc_timeouts,
-                options,
-            ),
+            ctx: transaction_exec_context(connection_manager, timeouts, session_pool, options),
             state: TxState::Active,
         }
     }
@@ -435,8 +350,8 @@ impl QueryTransaction {
     }
 
     pub async fn rollback(&mut self) -> YdbResult<()> {
-        if self.state != TxState::Active || self.ctx.finished {
-            return Err(YdbError::Custom("transaction already finished".to_string()));
+        if self.ctx.finished || self.state == TxState::RolledBack {
+            return Ok(());
         }
         transaction_rollback(&mut self.ctx).await?;
         self.state = TxState::RolledBack;
@@ -467,35 +382,50 @@ impl QueryTransaction {
 
     pub(crate) fn transaction_info(&self) -> Option<TransactionInfo> {
         let transaction_id = self.ctx.tx_id.as_ref()?.clone();
-        let session_id = {
-            if let Some(leased) = self.ctx.pooled_lease.as_ref() {
-                leased.session_id().to_string()
-            } else if let Some(attached) = self.ctx.attached_session.as_ref() {
-                attached.session_id().to_string()
-            } else {
-                return None;
-            }
-        };
+        let session_id = self.ctx.pooled_lease.as_ref()?.session_id().to_string();
 
         Some(TransactionInfo::new(transaction_id, session_id))
     }
 }
 
-impl HasCore for QueryTransaction {
-    fn core_mut(&mut self) -> ExecCoreRef<'_> {
-        ExecCoreRef::Transaction(&mut self.ctx)
+impl Drop for QueryTransaction {
+    fn drop(&mut self) {
+        if self.state != TxState::Active || self.ctx.finished {
+            return;
+        }
+        self.state = TxState::RolledBack;
+        self.ctx.finished = true;
+        spawn_query_tx_rollback_on_drop(&mut self.ctx);
     }
 }
 
-impl QueryExecutor for QueryTransaction {}
+impl QueryExecutor for QueryTransaction {
+    type Scope = builders::Interactive;
+
+    fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_, Self::Scope> {
+        QueryTransaction::exec(self, text)
+    }
+
+    fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_, Self::Scope> {
+        QueryTransaction::query(self, text)
+    }
+
+    fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_, Self::Scope> {
+        QueryTransaction::query_result_set(self, text)
+    }
+
+    fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row, Self::Scope> {
+        QueryTransaction::query_row(self, text)
+    }
+}
 
 pub use builders::{
-    CallBuilder, ExecBuilder, ExecCall, OneResultSet, OneRow, OptionalRow, OptionalRowBuilder,
-    QueryExecutor, QueryRowBuilder, QueryStreamBuilder, ResultSetBuilder, Streamed,
+    CallBuilder, ClientOneShot, ExecBuilder, ExecCall, Interactive, OneResultSet, OneRow,
+    OptionalRow, OptionalRowBuilder, QueryExecutor, QueryRowBuilder, QueryStreamBuilder,
+    ResultSetBuilder, Streamed,
 };
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};
-pub use session_pool::{QuerySessionPoolSettings, QuerySessionPoolStats};
 pub use stream_facade::{QueryStats, QueryStream};
 
 fn panic_message(payload: Box<dyn Any + Send>) -> String {

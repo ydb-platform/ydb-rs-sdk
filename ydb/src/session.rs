@@ -9,10 +9,10 @@ use derivative::Derivative;
 use itertools::Itertools;
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use http::Uri;
+
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::grpc_wrapper::raw_table_service::client::{
-    CollectStatsMode, RawTableClient, SessionStatus,
-};
+use crate::grpc_wrapper::raw_table_service::client::{CollectStatsMode, RawTableClient};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
 use crate::grpc_wrapper::raw_errors::RawResult;
@@ -25,7 +25,6 @@ use crate::grpc_wrapper::raw_table_service::describe_table::RawDescribeTableRequ
 use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryRequest;
 use crate::grpc_wrapper::raw_table_service::execute_scheme_query::RawExecuteSchemeQueryRequest;
 use crate::grpc_wrapper::raw_table_service::explain_data_query::RawExplainDataQueryRequest;
-use crate::grpc_wrapper::raw_table_service::keepalive::RawKeepAliveRequest;
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::table_service_types::{ColumnDescription, CopyTableItem, TableDescription};
 use crate::trace_helpers::ensure_len_string;
@@ -41,6 +40,36 @@ fn req_number() -> i64 {
 }
 
 type DropSessionCallback = dyn FnOnce(&mut Session) + Send + Sync;
+
+/// If an RPC is cancelled mid-flight (e.g. operation timeout), the server may still be
+/// processing it. Mark the session non-poolable so the next lease gets a fresh session
+/// instead of hitting SessionBusy on reuse (aligned with go-sdk context-error handling).
+struct InFlightTableRpcGuard<'a> {
+    session: &'a mut Session,
+    active: bool,
+}
+
+impl Drop for InFlightTableRpcGuard<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            self.session.discard_from_pool();
+        }
+    }
+}
+
+/// Await a table RPC under [`InFlightTableRpcGuard`] (discard session on cancel/timeout).
+macro_rules! in_flight_table_rpc {
+    ($session:expr, $table:ident, $rpc:expr) => {{
+        let mut $table = $session.get_table_client().await?;
+        let mut guard = InFlightTableRpcGuard {
+            session: $session,
+            active: true,
+        };
+        let res = $rpc.await;
+        guard.active = false;
+        guard.session.handle_raw_result(res)
+    }};
+}
 
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -74,14 +103,13 @@ impl Session {
     }
 
     pub(crate) fn handle_error(&mut self, err: &YdbError) {
-        if let YdbError::YdbStatusError(err) = err {
-            use ydb_grpc::ydb_proto::status_ids::StatusCode;
-            if let Ok(status) = StatusCode::try_from(err.operation_status) {
-                if status == StatusCode::BadSession || status == StatusCode::SessionExpired {
-                    self.can_pooled = false;
-                }
-            }
+        if should_discard_session_from_pool(err) {
+            self.discard_from_pool();
         }
+    }
+
+    pub(crate) fn discard_from_pool(&mut self) {
+        self.can_pooled = false;
     }
 
     fn handle_raw_result<T>(&mut self, res: RawResult<T>) -> YdbResult<T> {
@@ -93,30 +121,29 @@ impl Session {
     }
 
     pub(crate) async fn commit_transaction(&mut self, tx_id: String) -> YdbResult<()> {
-        let mut table = self.get_table_client().await?;
-        let res = table
-            .commit_transaction(RawCommitTransactionRequest {
-                session_id: self.id.clone(),
+        let session_id = self.id.clone();
+        let operation_params = self.timeouts.operation_params();
+        in_flight_table_rpc!(self, table, {
+            table.commit_transaction(RawCommitTransactionRequest {
+                session_id,
                 tx_id,
-                operation_params: self.timeouts.operation_params(),
+                operation_params,
                 collect_stats: DEFAULT_COLLECT_STAT_MODE,
             })
-            .await;
-        self.handle_raw_result(res)?;
+        })?;
         Ok(())
     }
 
     pub(crate) async fn execute_schema_query(&mut self, query: String) -> YdbResult<()> {
-        let res = self
-            .get_table_client()
-            .await?
-            .execute_scheme_query(RawExecuteSchemeQueryRequest {
-                session_id: self.id.clone(),
+        let session_id = self.id.clone();
+        let operation_params = self.timeouts.operation_params();
+        in_flight_table_rpc!(self, table, {
+            table.execute_scheme_query(RawExecuteSchemeQueryRequest {
+                session_id,
                 yql_text: query,
-                operation_params: self.timeouts.operation_params(),
+                operation_params,
             })
-            .await;
-        self.handle_raw_result(res)?;
+        })?;
         Ok(())
     }
 
@@ -135,10 +162,7 @@ impl Session {
             columns,
         };
 
-        let mut table_client = self.get_table_client().await?;
-        let raw_res = table_client.read_rows(req).await;
-
-        let raw_read_rows_response = self.handle_raw_result(raw_res)?;
+        let raw_read_rows_response = in_flight_table_rpc!(self, table, table.read_rows(req))?;
 
         raw_read_rows_response.result_set.try_into()
     }
@@ -155,8 +179,7 @@ impl Session {
             rows: raw_rows.into(),
             operation_params: self.timeouts.operation_params(),
         };
-        let res = self.get_table_client().await?.bulk_upsert(req).await;
-        self.handle_raw_result(res)?;
+        in_flight_table_rpc!(self, table, table.bulk_upsert(req))?;
         Ok(())
     }
 
@@ -174,15 +197,18 @@ impl Session {
             ensure_len_string(serde_json::to_string(&req)?)
         );
 
-        let res = self.get_table_client().await?.execute_data_query(req).await;
-        let res = self.handle_raw_result(res)?;
+        let mut table = self.get_table_client().await?;
+        let mut in_flight = InFlightTableRpcGuard {
+            session: self,
+            active: true,
+        };
+        let res = table.execute_data_query(req).await;
+        in_flight.active = false;
+        let res = in_flight.session.handle_raw_result(res)?;
         trace!(
             "result: {}",
             ensure_len_string(serde_json::to_string(&res)?)
         );
-        if error_on_truncated {
-            return Err(YdbError::from_str("result of query was truncated"));
-        }
         QueryResult::from_raw_result(error_on_truncated, res)
     }
 
@@ -198,14 +224,12 @@ impl Session {
             operation_params: self.timeouts.operation_params(),
             collect_full_diagnostics,
         };
-
         trace!(
             "request: {}",
             ensure_len_string(serde_json::to_string(&req)?)
         );
 
-        let res = self.get_table_client().await?.explain_data_query(req).await;
-        let res = self.handle_raw_result(res)?;
+        let res = in_flight_table_rpc!(self, table, table.explain_data_query(req))?;
         trace!(
             "result: {}",
             ensure_len_string(serde_json::to_string(&res)?)
@@ -225,23 +249,37 @@ impl Session {
             "request: {}",
             crate::trace_helpers::ensure_len_string(serde_json::to_string(&req)?)
         );
-        let mut channel = self.get_channel().await?;
-        let resp = channel.stream_execute_scan_query(req).await?;
+        let mut in_flight = InFlightTableRpcGuard {
+            session: self,
+            active: true,
+        };
+        let mut channel = in_flight.session.get_channel().await?;
+        let resp = match channel.stream_execute_scan_query(req).await {
+            Ok(resp) => {
+                in_flight.active = false;
+                resp
+            }
+            Err(err) => {
+                in_flight.active = false;
+                let err = YdbError::from(err);
+                in_flight.session.handle_error(&err);
+                return Err(err);
+            }
+        };
         let stream = resp.into_inner();
         Ok(StreamResult { results: stream })
     }
 
     pub(crate) async fn rollback_transaction(&mut self, tx_id: String) -> YdbResult<()> {
-        let mut table = self.get_table_client().await?;
-        let res = table
-            .rollback_transaction(RawRollbackTransactionRequest {
-                session_id: self.id.clone(),
+        let session_id = self.id.clone();
+        let operation_params = self.timeouts.operation_params();
+        in_flight_table_rpc!(self, table, {
+            table.rollback_transaction(RawRollbackTransactionRequest {
+                session_id,
                 tx_id,
-                operation_params: self.timeouts.operation_params(),
+                operation_params,
             })
-            .await;
-
-        self.handle_raw_result(res)
+        })
     }
 
     pub async fn copy_table(
@@ -249,43 +287,42 @@ impl Session {
         source_path: String,
         destination_path: String,
     ) -> YdbResult<()> {
-        let mut table = self.get_table_client().await?;
-        let res = table
-            .copy_table(RawCopyTableRequest {
-                session_id: self.id.clone(),
+        let session_id = self.id.clone();
+        let operation_params = self.timeouts.operation_params();
+        in_flight_table_rpc!(self, table, {
+            table.copy_table(RawCopyTableRequest {
+                session_id,
                 source_path,
                 destination_path,
-                operation_params: self.timeouts.operation_params(),
+                operation_params,
             })
-            .await;
-
-        self.handle_raw_result(res)
+        })?;
+        Ok(())
     }
 
     pub async fn copy_tables(&mut self, tables: Vec<CopyTableItem>) -> YdbResult<()> {
-        let mut table = self.get_table_client().await?;
-        let res = table
-            .copy_tables(RawCopyTablesRequest {
-                operation_params: self.timeouts.operation_params(),
-                session_id: self.id.clone(),
+        let session_id = self.id.clone();
+        let operation_params = self.timeouts.operation_params();
+        in_flight_table_rpc!(self, table, {
+            table.copy_tables(RawCopyTablesRequest {
+                operation_params,
+                session_id,
                 tables: tables.into_iter().map_into().collect(),
             })
-            .await;
-
-        self.handle_raw_result(res)
+        })?;
+        Ok(())
     }
 
     pub async fn describe_table(&mut self, path: String) -> YdbResult<TableDescription> {
-        let mut table = self.get_table_client().await?;
-        let res = table
-            .describe_table(RawDescribeTableRequest {
-                session_id: self.id.clone(),
+        let session_id = self.id.clone();
+        let operation_params = self.timeouts.operation_params();
+        let raw_result = in_flight_table_rpc!(self, table, {
+            table.describe_table(RawDescribeTableRequest {
+                session_id,
                 path: path.clone(),
-                operation_params: self.timeouts.operation_params(),
+                operation_params,
             })
-            .await;
-
-        let raw_result = self.handle_raw_result(res)?;
+        })?;
 
         let columns = raw_result
             .columns
@@ -315,26 +352,6 @@ impl Session {
         })
     }
 
-    pub(crate) async fn keepalive(&mut self) -> YdbResult<()> {
-        let mut table = self.get_table_client().await?;
-        let res = table
-            .keep_alive(RawKeepAliveRequest {
-                operation_params: self.timeouts.operation_params(),
-                session_id: self.id.clone(),
-            })
-            .await;
-
-        let res = self.handle_raw_result(res)?;
-
-        if let SessionStatus::Ready = res.session_status {
-            Ok(())
-        } else {
-            let err = YdbError::from_str(format!("bad status while session ping: {res:?}"));
-            self.handle_error(&err);
-            Err(err)
-        }
-    }
-
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {
         self.timeouts = timeouts;
         self
@@ -345,23 +362,18 @@ impl Session {
         self.channel_pool.create_grpc_table_client().await
     }
 
-    async fn get_table_client(&self) -> YdbResult<RawTableClient> {
-        self.channel_pool.create_table_client(self.timeouts).await
+    async fn get_table_client(&mut self) -> YdbResult<RawTableClient> {
+        match self.channel_pool.create_table_client(self.timeouts).await {
+            Ok(client) => Ok(client),
+            Err(err) => {
+                self.handle_error(&err);
+                Err(err)
+            }
+        }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn on_drop(&mut self, f: Box<dyn FnOnce(&mut Self) + Send + Sync>) {
         self.on_drop_callbacks.push(f)
-    }
-
-    pub(crate) fn clone_without_ondrop(&self) -> Self {
-        Self {
-            id: self.id.clone(),
-            can_pooled: self.can_pooled,
-            on_drop_callbacks: Vec::new(),
-            channel_pool: self.channel_pool.clone_box(),
-            timeouts: self.timeouts,
-        }
     }
 }
 
@@ -374,11 +386,149 @@ impl Drop for Session {
     }
 }
 
+/// Whether a failed RPC means the pooled session must not be reused.
+///
+/// Aligned with go-sdk `xerrors.MustDeleteTableOrQuerySession` (broader than the legacy
+/// table pool, which only discarded on `BadSession` / `SessionExpired`). Transient
+/// transport failures now invalidate the session to avoid `SessionBusy` on reuse.
+pub(crate) fn should_discard_session_from_pool(err: &YdbError) -> bool {
+    match err {
+        YdbError::YdbStatusError(ydb_err) => {
+            use ydb_grpc::ydb_proto::status_ids::StatusCode;
+            StatusCode::try_from(ydb_err.operation_status).is_ok_and(|status| {
+                matches!(
+                    status,
+                    StatusCode::BadSession | StatusCode::SessionBusy | StatusCode::SessionExpired
+                )
+            })
+        }
+        YdbError::Transport(_) | YdbError::TransportDial(_) => true,
+        YdbError::TransportGRPCStatus(status) => {
+            use tonic::Code;
+            // Intentional parity with go-sdk `xerrors.MustDeleteTableOrQuerySession` on
+            // gRPC transport errors (`IsTransportError`): includes `InvalidArgument`,
+            // `NotFound`, etc. even though they often reflect request-level issues, because
+            // the SDK cannot tell whether the server left a query/tx in flight. YDB operation
+            // status errors use the narrower match above (BadSession / SessionBusy / Expired).
+            matches!(
+                status.code(),
+                Code::Cancelled
+                    | Code::Unknown
+                    | Code::InvalidArgument
+                    | Code::DeadlineExceeded
+                    | Code::NotFound
+                    | Code::AlreadyExists
+                    | Code::PermissionDenied
+                    | Code::FailedPrecondition
+                    | Code::Aborted
+                    | Code::Unimplemented
+                    | Code::Internal
+                    | Code::Unavailable
+                    | Code::DataLoss
+                    | Code::Unauthenticated
+            )
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod discard_session_tests {
+    use super::*;
+    use std::sync::Arc;
+    use tonic::{Code, Status};
+    use ydb_grpc::ydb_proto::status_ids::StatusCode;
+
+    fn ydb_status(status: StatusCode) -> YdbError {
+        YdbError::YdbStatusError(crate::errors::YdbStatusError {
+            message: "test".into(),
+            operation_status: status as i32,
+            issues: vec![],
+        })
+    }
+
+    #[test]
+    fn discard_on_bad_session_and_transport() {
+        assert!(should_discard_session_from_pool(&ydb_status(
+            StatusCode::BadSession
+        )));
+        assert!(should_discard_session_from_pool(&ydb_status(
+            StatusCode::SessionBusy
+        )));
+        assert!(should_discard_session_from_pool(&YdbError::Transport(
+            "connection refused".into()
+        )));
+        assert!(should_discard_session_from_pool(
+            &YdbError::TransportGRPCStatus(Arc::new(Status::new(Code::Unavailable, "node down")))
+        ));
+        assert!(should_discard_session_from_pool(
+            &YdbError::TransportGRPCStatus(Arc::new(Status::new(
+                Code::InvalidArgument,
+                "bad request"
+            )))
+        ));
+    }
+
+    #[test]
+    fn discard_grpc_transport_but_not_ydb_operation_errors() {
+        use tonic::{Code, Status};
+        assert!(!should_discard_session_from_pool(&ydb_status(
+            StatusCode::PreconditionFailed
+        )));
+        assert!(!should_discard_session_from_pool(
+            &YdbError::TransportGRPCStatus(Arc::new(Status::new(
+                Code::ResourceExhausted,
+                "rate limited"
+            )))
+        ));
+    }
+
+    #[test]
+    fn keep_session_on_business_errors() {
+        assert!(!should_discard_session_from_pool(&ydb_status(
+            StatusCode::PreconditionFailed
+        )));
+        assert!(!should_discard_session_from_pool(&YdbError::Custom(
+            "customer".into()
+        )));
+    }
+
+    #[test]
+    fn discard_from_pool_clears_can_pooled() {
+        use crate::client::TimeoutSettings;
+        use crate::grpc_connection_manager::GrpcConnectionManager;
+        use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
+        use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+        use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+        use crate::session::NodePinnedTableClient;
+        use http::Uri;
+
+        let mut session = Session::new(
+            "test-session".to_string(),
+            NodePinnedTableClient::new(
+                GrpcConnectionManager::new(
+                    SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
+                        Uri::from_static("http://127.0.0.1/bench"),
+                    ))),
+                    "bench".to_string(),
+                    MultiInterceptor::new(),
+                    None,
+                    DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+                ),
+                Uri::from_static("http://127.0.0.1/bench"),
+            ),
+            TimeoutSettings::default(),
+        );
+        assert!(session.can_pooled);
+        session.discard_from_pool();
+        assert!(!session.can_pooled);
+    }
+}
+
 #[async_trait::async_trait]
 pub(crate) trait CreateTableClient: Send + Sync {
     async fn create_grpc_table_client(&self) -> YdbResult<TableServiceClient<InterceptedChannel>>;
     async fn create_table_client(&self, timeouts: TimeoutSettings) -> YdbResult<RawTableClient>;
-    fn clone_box(&self) -> Box<dyn CreateTableClient>;
 }
 
 #[async_trait::async_trait]
@@ -393,8 +543,39 @@ impl CreateTableClient for GrpcConnectionManager {
             .await
             .map(|item| item.with_timeout(timeouts))
     }
+}
 
-    fn clone_box(&self) -> Box<dyn CreateTableClient> {
-        Box::new(self.clone())
+/// Routes table RPCs to the node that owns the pooled query session.
+#[derive(Clone)]
+pub(crate) struct NodePinnedTableClient {
+    connection_manager: GrpcConnectionManager,
+    node_uri: Uri,
+}
+
+impl NodePinnedTableClient {
+    pub(crate) fn new(connection_manager: GrpcConnectionManager, node_uri: Uri) -> Self {
+        Self {
+            connection_manager,
+            node_uri,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl CreateTableClient for NodePinnedTableClient {
+    async fn create_grpc_table_client(&self) -> YdbResult<TableServiceClient<InterceptedChannel>> {
+        self.connection_manager
+            .get_auth_service_to_node(
+                TableServiceClient::<InterceptedChannel>::new,
+                &self.node_uri,
+            )
+            .await
+    }
+
+    async fn create_table_client(&self, timeouts: TimeoutSettings) -> YdbResult<RawTableClient> {
+        self.connection_manager
+            .get_auth_service_to_node(RawTableClient::new, &self.node_uri)
+            .await
+            .map(|item| item.with_timeout(timeouts))
     }
 }

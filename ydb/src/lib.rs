@@ -131,7 +131,9 @@ pub use client_topic::list_types::{
     TopicDescription, TopicStats,
 };
 // full enum pub types
-pub use client_topic::topicreader::messages::{TopicReaderBatch, TopicReaderMessage};
+pub use client_topic::topicreader::messages::{
+    PartitionSessionKey, TopicReaderBatch, TopicReaderMessage,
+};
 // full enum pub types
 pub use client_topic::topicreader::reader::{
     TopicReader, TopicReaderCommitMarker, TopicSelector, TopicSelectors,
@@ -154,18 +156,18 @@ pub use client_topic::topicwriter::writer_tx_options::{
     TopicWriterTxOptions, TopicWriterTxOptionsBuilder,
 };
 // full enum pub types
-pub use client::{Client, TimeoutSettings};
+pub use client::{Client, SessionPoolSettings, SessionPoolStats, TimeoutSettings};
 
 // full enum pub types
 pub use client_builder::ClientBuilder;
 
 // full enum pub types
 pub use client_query::{
-    CallBuilder, ExecBuilder, ExecCall, ExecuteScriptBuilder, ExecuteScriptOperation,
-    FetchScriptResult, FetchScriptResultsBuilder, FromYdbRow, OneResultSet, OneRow, OptionalRow,
-    OptionalRowBuilder, QueryClient, QueryExecutor, QueryRowBuilder, QuerySessionMode,
-    QuerySessionPoolSettings, QuerySessionPoolStats, QueryStats, QueryStream, QueryStreamBuilder,
-    QueryTransaction, QueryTransactionOptions, QueryTxMode, ResultSetBuilder, Streamed,
+    CallBuilder, ClientOneShot, ExecBuilder, ExecCall, ExecuteScriptBuilder,
+    ExecuteScriptOperation, FetchScriptResult, FetchScriptResultsBuilder, FromYdbRow, Interactive,
+    OneResultSet, OneRow, OptionalRow, OptionalRowBuilder, QueryClient, QueryExecutor,
+    QueryRowBuilder, QueryStats, QueryStream, QueryStreamBuilder, QueryTransaction,
+    QueryTransactionOptions, QueryTxMode, ResultSetBuilder, Streamed,
 };
 
 // full enum pub types

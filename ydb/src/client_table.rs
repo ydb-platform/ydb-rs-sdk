@@ -2,7 +2,7 @@ use crate::client::TimeoutSettings;
 
 use crate::errors::*;
 use crate::session::Session;
-use crate::session_pool::SessionPool;
+use crate::session_pool::{SessionPool, TableSessionPool};
 use crate::transaction::{AutoCommit, Mode, SerializableReadWriteTx, Transaction};
 use crate::types::Value;
 
@@ -118,7 +118,7 @@ impl Default for RetryOptions {
 #[derive(Clone)]
 pub struct TableClient {
     error_on_truncate: bool,
-    session_pool: SessionPool,
+    session_pool: TableSessionPool,
     retrier: Arc<Box<dyn Retry>>,
     transaction_options: TransactionOptions,
     idempotent_operation: bool,
@@ -129,21 +129,16 @@ impl TableClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
+        session_pool: SessionPool,
     ) -> Self {
         Self {
             error_on_truncate: false,
-            session_pool: SessionPool::new(Box::new(connection_manager), timeouts),
+            session_pool: TableSessionPool::from_shared(session_pool, connection_manager, timeouts),
             retrier: Arc::new(Box::<TimeoutRetrier>::default()),
             transaction_options: TransactionOptions::new(),
             idempotent_operation: false,
             timeouts,
         }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn with_max_active_sessions(mut self, size: usize) -> Self {
-        self.session_pool = self.session_pool.with_max_active_sessions(size);
-        self
     }
 
     // Clone the table client and set new timeouts settings
@@ -440,7 +435,9 @@ impl TableClient {
             } else {
                 if self.transaction_options.mode != Mode::SerializableReadWrite {
                     return Err(YdbOrCustomerError::YDB(YdbError::Custom(
-                        "only serializable rw transactions allow to interactive mode".into(),
+                        "interactive retry_transaction requires Mode::SerializableReadWrite; \
+                         other modes (e.g. SnapshotReadOnly) are supported with autocommit: true"
+                            .into(),
                     )));
                 }
                 Box::new(self.create_interactive_transaction())
