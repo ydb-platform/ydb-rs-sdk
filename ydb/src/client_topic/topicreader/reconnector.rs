@@ -19,7 +19,7 @@ use super::messages::MessageBatch;
 use super::reader_options::TopicReaderOptions;
 use super::runtime;
 use super::task_supervisor::{is_retriable, wait_child_tasks};
-use super::tokenizer::Tokenizer;
+use super::auth_token_sender::AuthTokenSender;
 
 pub(super) struct ConnectionAttempt {
     pub(super) manager: GrpcConnectionManager,
@@ -231,12 +231,12 @@ impl Reconnector {
         )?;
 
         let decompressor = Decompressor::new(attempt_ctx, decomp_input_rx, runtime.clone());
-        let tokenizer = Tokenizer::new(attempt_ctx, outgoing_tx);
+        let auth_token_sender = AuthTokenSender::new(attempt_ctx, outgoing_tx);
 
         let mut tasks: JoinSet<YdbResult<()>> = JoinSet::new();
         tasks.spawn(grpc.run());
         tasks.spawn(decompressor.run());
-        tasks.spawn(tokenizer.run());
+        tasks.spawn(auth_token_sender.run());
 
         Ok(tasks)
     }

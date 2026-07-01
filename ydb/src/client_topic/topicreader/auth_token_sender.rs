@@ -17,13 +17,13 @@ use super::reconnector;
 
 const UPDATE_TOKEN_INTERVAL: Duration = Duration::from_secs(3600);
 
-pub(super) struct Tokenizer {
+pub(super) struct AuthTokenSender {
     token_cache: TokenCache,
     outgoing_tx: mpsc::UnboundedSender<RawFromClientOneOf>,
     cancellation: CancellationToken,
 }
 
-impl Tokenizer {
+impl AuthTokenSender {
     pub(super) fn new(
         attempt: &reconnector::ConnectionAttempt,
         outgoing_tx: mpsc::UnboundedSender<RawFromClientOneOf>,

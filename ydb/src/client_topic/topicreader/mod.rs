@@ -7,4 +7,4 @@ pub(crate) mod reader_options;
 mod reconnector;
 mod runtime;
 mod task_supervisor;
-mod tokenizer;
+mod auth_token_sender;
