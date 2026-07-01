@@ -219,16 +219,13 @@ async fn receive_messages(
                     // TODO: For graceful stops, delay response until buffered messages
                     // from this partition are processed and commits up to
                     // committed_offset are acknowledged.
-                    runtime.stop_partition(
+                    runtime.register_stopping_partition(
                         partition_session_id,
+                        partition_session.partition_id,
                         Some(committed_offset),
                         &YdbError::custom(format!(
                             "partition session {partition_session_id} stopped by server"
                         )),
-                    )?;
-                    runtime.register_stopping_partition(
-                        partition_session_id,
-                        partition_session.partition_id,
                     )?;
                 } else {
                     return Err(YdbError::custom(format!(

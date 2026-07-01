@@ -105,7 +105,22 @@ impl MessageBuffer {
         Ok(!queue.is_empty())
     }
 
-    pub(super) fn register_starting(&mut self, psid: i64, pid: i64) -> YdbResult<()> {
+    fn queue_has_messages(&self, session_id: PartitionSessionId) -> bool {
+        self.queues
+            .get(&session_id)
+            .map(|queue| !queue.is_empty())
+            .unwrap_or(false)
+    }
+
+    pub(super) fn has_session(&self, psid: PartitionSessionId) -> bool {
+        self.queues.contains_key(&psid)
+    }
+
+    pub(super) fn register_starting(
+        &mut self,
+        psid: PartitionSessionId,
+        pid: PartitionId,
+    ) -> YdbResult<()> {
         if self.queues.contains_key(&psid) {
             return Err(YdbError::custom(format!(
                 "topic reader duplicate start partition session {psid}"

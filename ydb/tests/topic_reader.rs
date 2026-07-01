@@ -382,6 +382,69 @@ topic_test!(retryable_fail, timeout_secs = 20, {
     Ok(())
 });
 
+topic_test!(
+    commit_after_partition_stop_must_resolve,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader(&driver.server).await?;
+        driver.state.partition_ready.notified().await;
+
+        let m0 = deliver_and_read(&driver, &mut reader, 0, b"first").await?;
+
+        let stream_id = driver.state.current_stream_id();
+        driver.send(Reply::Topic(builders::stop_partition_session_request(
+            stream_id,
+            PARTITION_SESSION_ID,
+            /* graceful */ false,
+            /* committed_offset */ 0,
+        )));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        assert!(
+            reader.commit_with_ack(m0).await.is_err(),
+            "commit on stopped partition session must return Err"
+        );
+
+        Ok(())
+    }
+);
+
+topic_test!(
+    read_batch_after_partition_stop_skips_stopped_session,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader(&driver.server).await?;
+        driver.state.partition_ready.notified().await;
+
+        driver.send_read_response(0, b"buffered");
+        // Let the message reach the runtime buffer before the stop arrives.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let stream_id = driver.state.current_stream_id();
+        driver.send(Reply::Topic(builders::stop_partition_session_request(
+            stream_id,
+            PARTITION_SESSION_ID,
+            /* graceful */ false,
+            /* committed_offset */ 0,
+        )));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(300), reader.read_batch()).await;
+
+        if let Ok(Ok(batch)) = result {
+            panic!(
+                "read_batch returned {} message(s) from a stopped partition session",
+                batch.messages.len()
+            );
+        }
+
+        Ok(())
+    }
+);
+
 topic_test!(non_retryable_fail, timeout_secs = 20, {
     let driver = Driver::start().await;
     let mut reader = make_reader(&driver.server).await?;
