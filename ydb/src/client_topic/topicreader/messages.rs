@@ -1,9 +1,17 @@
 use crate::client_topic::topicreader::partition_state::PartitionSession;
 use crate::client_topic::topicreader::reader::TopicReaderCommitMarker;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::RawBatch;
-use crate::YdbResult;
+use crate::{Codec, YdbResult};
 use std::time;
 use std::time::SystemTime;
+
+/// Internal pre-decompression batch carried from `grpc_stream` to `decompressor`.
+/// Each `MessageBatch` is one `RawBatch`'s worth of messages plus the codec they
+/// were compressed with.
+pub(super) struct MessageBatch {
+    pub(super) messages: Vec<TopicReaderMessage>,
+    pub(super) codec: Codec,
+}
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 #[derive(Debug)]
@@ -17,9 +25,16 @@ impl TopicReaderBatch {
     pub(crate) fn new(
         raw_batch: RawBatch,
         partition_session: &mut PartitionSession,
+        reader_id: usize,
         epoch: usize,
     ) -> TopicReaderBatch {
         let written_at: SystemTime = raw_batch.written_at.into();
+
+        let partition_session_key = PartitionSessionKey {
+            reader_id,
+            epoch,
+            partition_session_id: partition_session.partition_session_id,
+        };
 
         let mut batch = Self {
             commit_marker: TopicReaderCommitMarker {
@@ -57,6 +72,7 @@ impl TopicReaderBatch {
                         },
 
                         bytes_to_release: 0,
+                        partition_session_key,
                     }
                 })
                 .collect(),
@@ -73,6 +89,14 @@ impl TopicReaderBatch {
 impl TopicReaderBatch {
     pub fn get_commit_marker(&self) -> TopicReaderCommitMarker {
         self.commit_marker.clone()
+    }
+
+    pub fn partition_id(&self) -> i64 {
+        self.commit_marker.partition_id
+    }
+
+    pub fn offset(&self) -> i64 {
+        self.commit_marker.end_offset
     }
 
     pub(crate) fn from_messages(messages: Vec<TopicReaderMessage>) -> Self {
@@ -113,6 +137,9 @@ pub struct TopicReaderMessage {
     // Non-zero only on the last message of a server ReadResponse; carries the
     // response's bytes_size for flow-control (sent back as ReadRequest).
     pub(crate) bytes_to_release: i64,
+
+    /// Identifier that groups messages whose `seq_no` values must arrive in order.
+    partition_session_key: PartitionSessionKey,
 }
 
 impl TopicReaderMessage {
@@ -135,6 +162,44 @@ impl TopicReaderMessage {
     pub fn get_partition_id(&self) -> i64 {
         self.commit_marker.partition_id
     }
+
+    pub fn partition_session_key(&self) -> PartitionSessionKey {
+        self.partition_session_key
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_message(epoch: usize, bytes_to_release: i64) -> Self {
+        Self {
+            seq_no: 0,
+            created_at: None,
+            offset: 0,
+            written_at: time::SystemTime::UNIX_EPOCH,
+            uncompressed_size: 0,
+            producer_id: String::new(),
+            raw_data: Some(vec![]),
+            commit_marker: TopicReaderCommitMarker {
+                partition_session_id: 1,
+                partition_id: 1,
+                start_offset: 0,
+                end_offset: 1,
+                topic: "test".into(),
+                epoch,
+            },
+            bytes_to_release,
+            partition_session_key: PartitionSessionKey {
+                reader_id: 0,
+                epoch,
+                partition_session_id: 1,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub struct PartitionSessionKey {
+    reader_id: usize,
+    epoch: usize,
+    partition_session_id: i64,
 }
 
 #[cfg(test)]
@@ -168,7 +233,7 @@ mod tests {
             }],
         };
 
-        let batch = TopicReaderBatch::new(raw_batch, &mut partition_session, 0);
+        let batch = TopicReaderBatch::new(raw_batch, &mut partition_session, 0, 0);
 
         let commit_marker = batch.get_commit_marker();
         assert_eq!(commit_marker.topic, "test-topic");
@@ -218,7 +283,7 @@ mod tests {
                 },
             ],
         };
-        let batch = TopicReaderBatch::new(raw_batch, &mut partition_session, 0);
+        let batch = TopicReaderBatch::new(raw_batch, &mut partition_session, 0, 0);
         assert!(batch.messages.iter().all(|m| m.bytes_to_release == 0));
     }
 
@@ -246,7 +311,7 @@ mod tests {
                 })
                 .collect(),
         };
-        let messages = TopicReaderBatch::new(raw_batch, &mut partition_session, 0).messages;
+        let messages = TopicReaderBatch::new(raw_batch, &mut partition_session, 0, 0).messages;
 
         let rebuilt = TopicReaderBatch::from_messages(messages);
         let m = rebuilt.get_commit_marker();

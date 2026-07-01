@@ -1,6 +1,7 @@
 use crate::client_topic::compression::CompressionDecoder;
 use crate::client_topic::topicreader::reader::TopicSelectors;
 use crate::errors;
+use crate::retry::{IndefiniteRetrier, Retry};
 use derive_builder::Builder;
 use std::sync::Arc;
 
@@ -14,6 +15,9 @@ pub struct TopicReaderOptions {
     pub(crate) batch_size: usize,
     #[builder(setter(custom), default)]
     pub(crate) extra_decoders: Vec<Arc<dyn CompressionDecoder>>,
+
+    #[builder(setter(skip), default = "Arc::new(IndefiniteRetrier{})")]
+    pub(crate) retrier: Arc<dyn Retry>,
 }
 
 impl TopicReaderOptionsBuilder {

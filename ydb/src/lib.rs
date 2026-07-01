@@ -130,7 +130,9 @@ pub use client_topic::list_types::{
     TopicDescription, TopicStats,
 };
 // full enum pub types
-pub use client_topic::topicreader::messages::{TopicReaderBatch, TopicReaderMessage};
+pub use client_topic::topicreader::messages::{
+    PartitionSessionKey, TopicReaderBatch, TopicReaderMessage,
+};
 // full enum pub types
 pub use client_topic::topicreader::reader::{
     TopicReader, TopicReaderCommitMarker, TopicSelector, TopicSelectors,

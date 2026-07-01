@@ -80,6 +80,9 @@ case "$src_path" in
   native/query)
     pkg_name="slo-native-query"
     ;;
+  native/topic)
+    pkg_name="slo-native-topic"
+    ;;
   *)
     die "Unknown --src-path: $src_path"
     ;;
