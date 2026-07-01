@@ -9,7 +9,6 @@ rust-version = "1.85"
 async-trait = "0.1"
 base64 = "0.22.1"
 clap = { version = "=4.2.7", features = ["derive"] }
-dashmap = { version = "6.2.1" }
 hdrhistogram = "7.5.4"
 opentelemetry = "0.27"
 opentelemetry-otlp = { version = "0.27", default-features = false, features = [
