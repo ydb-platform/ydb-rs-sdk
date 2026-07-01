@@ -14,6 +14,7 @@ use itertools::Itertools;
 use tracing::trace;
 use ydb_grpc::ydb_proto::table::transaction_settings::TxMode;
 use ydb_grpc::ydb_proto::table::{OnlineModeSettings, SerializableModeSettings};
+use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
 #[derive(Clone, Debug)]
 pub struct TransactionInfo {
@@ -27,6 +28,15 @@ impl TransactionInfo {
         Self {
             transaction_id: transaction_id.into(),
             session_id: session_id.into(),
+        }
+    }
+}
+
+impl From<TransactionInfo> for TransactionIdentity {
+    fn from(value: TransactionInfo) -> Self {
+        Self {
+            id: value.transaction_id,
+            session: value.session_id,
         }
     }
 }

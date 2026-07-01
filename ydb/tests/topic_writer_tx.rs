@@ -158,7 +158,7 @@ fn make_client(server: &MockServer) -> YdbResult<Client> {
 async fn make_writer_tx<'a>(
     server: &MockServer,
     tx: &'a mut dyn Transaction,
-) -> YdbResult<ydb::TopicWriterTx<'a>> {
+) -> YdbResult<ydb::TopicWriterTx> {
     let client = make_client(server)?;
     client
         .topic_client()

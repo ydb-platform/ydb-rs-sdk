@@ -20,7 +20,7 @@ use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsumerRequest;
 use crate::grpc_wrapper::raw_topic_service::describe_topic::RawDescribeTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::drop_topic::RawDropTopicRequest;
-use crate::Transaction;
+use crate::QueryTransaction;
 use crate::YdbError::InternalError;
 use crate::{grpc_wrapper, YdbResult};
 use derive_builder::{Builder, UninitializedFieldError};
@@ -255,22 +255,22 @@ impl TopicClient {
         .await
     }
 
-    pub async fn create_writer_tx<'a>(
+    pub async fn create_writer_tx(
         &mut self,
         topic_path: impl Into<String>,
-        tx: &'a mut dyn Transaction,
-    ) -> YdbResult<TopicWriterTx<'a>> {
+        tx: &mut QueryTransaction,
+    ) -> YdbResult<TopicWriterTx> {
         let options = TopicWriterTxOptionsBuilder::default()
             .topic_path(topic_path.into())
             .build()?;
         self.create_writer_tx_with_params(options, tx).await
     }
 
-    pub async fn create_writer_tx_with_params<'a>(
+    pub async fn create_writer_tx_with_params(
         &mut self,
         writer_tx_options: TopicWriterTxOptions,
-        tx: &'a mut dyn Transaction,
-    ) -> YdbResult<TopicWriterTx<'a>> {
+        tx: &mut QueryTransaction,
+    ) -> YdbResult<TopicWriterTx> {
         TopicWriterTx::new(
             writer_tx_options,
             self.connection_manager.clone(),

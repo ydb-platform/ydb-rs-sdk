@@ -37,6 +37,7 @@ use crate::discovery::Discovery;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::result::Row;
+use crate::TransactionInfo;
 
 use builders::impl_query_methods;
 use exec::{
@@ -462,6 +463,21 @@ impl QueryTransaction {
     #[cfg(test)]
     pub(crate) fn tx_id_for_test(&self) -> Option<&str> {
         self.ctx.tx_id.as_deref()
+    }
+
+    pub(crate) fn transaction_info(&self) -> Option<TransactionInfo> {
+        let transaction_id = self.ctx.tx_id.as_ref()?.clone();
+        let session_id = {
+            if let Some(leased) = self.ctx.pooled_lease.as_ref() {
+                leased.session_id().to_string()
+            } else if let Some(attached) = self.ctx.attached_session.as_ref() {
+                attached.session_id().to_string()
+            } else {
+                return None;
+            }
+        };
+
+        Some(TransactionInfo::new(transaction_id, session_id))
     }
 }
 

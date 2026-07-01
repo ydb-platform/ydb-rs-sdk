@@ -1,7 +1,4 @@
-use std::marker::PhantomData;
 use std::sync::Arc;
-
-use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
@@ -10,47 +7,39 @@ use crate::client_topic::topicwriter::message_write_status::{
 };
 use crate::client_topic::topicwriter::writer::TopicWriter;
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::{Transaction, YdbError, YdbResult};
+use crate::{QueryTransaction, YdbError, YdbResult};
 
 use super::writer_tx_options::TopicWriterTxOptions;
 
 /// A topic writer bound to an active YDB transaction.
 ///
 /// Messages written through this writer are attached to the transaction and become visible
-/// only after the transaction is committed. The writer borrows the transaction mutably for
-/// its whole lifetime, so callers cannot use the transaction again until the writer is
-/// stopped or dropped.
-pub struct TopicWriterTx<'a> {
+/// only after the transaction is committed.
+pub struct TopicWriterTx {
     inner: TopicWriter,
-    _tx: PhantomData<&'a mut dyn Transaction>,
 }
 
-impl<'a> TopicWriterTx<'a> {
+impl TopicWriterTx {
     pub(crate) async fn new(
         options: TopicWriterTxOptions,
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
-        tx: &'a mut dyn Transaction,
+        tx: &mut QueryTransaction,
     ) -> YdbResult<Self> {
-        let info = tx.transaction_info().await?;
-
-        let tx_identity = TransactionIdentity {
-            id: info.transaction_id.clone(),
-            session: info.session_id.clone(),
-        };
+        tx.begin().await?;
+        let tx_info = tx.transaction_info().ok_or(YdbError::custom(
+            "no transaction id or session id in query transaction",
+        ))?;
 
         // All validation and configuration, specific for `TopicWriterTx` should be done in
         // options construction and conversion.
         let options = options.try_into_non_tx_options()?;
 
         let inner =
-            TopicWriter::with_tx_identity(options, connection_manager, executor, tx_identity)
+            TopicWriter::with_tx_identity(options, connection_manager, executor, tx_info.into())
                 .await?;
 
-        Ok(Self {
-            inner,
-            _tx: PhantomData,
-        })
+        Ok(Self { inner })
     }
 
     /// Writes a message and waits for the server acknowledgement.
