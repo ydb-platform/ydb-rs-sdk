@@ -1,5 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
+use tracing::debug;
+
 use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
 use crate::client_topic::topicreader::messages::TopicReaderMessage;
 use crate::{YdbError, YdbResult};
@@ -37,6 +39,7 @@ pub(super) struct MessageBuffer {
 }
 
 impl MessageBuffer {
+    /// Push a batch onto its session's queue.
     pub(super) fn push_batch(&mut self, messages: Vec<TopicReaderMessage>) -> YdbResult<bool> {
         let Some(first) = messages.first() else {
             return Ok(false);
@@ -46,20 +49,32 @@ impl MessageBuffer {
         let partition_id = first.commit_marker.partition_id;
 
         let Some(&registered_session_id) = self.partition_to_session.get(&partition_id) else {
-            return Err(YdbError::custom(format!(
-                "topic reader received messages for partition {partition_id} before start partition session {session_id}"
-            )));
+            debug!(
+                %session_id,
+                %partition_id,
+                dropped = messages.len(),
+                "topic reader dropping in-flight batch: partition already released"
+            );
+            return Ok(false);
         };
         if registered_session_id != session_id {
-            return Err(YdbError::custom(format!(
-                "topic reader received messages for partition {partition_id} in partition session {session_id}, but partition belongs to session {registered_session_id}"
-            )));
+            debug!(
+                %session_id,
+                %partition_id,
+                %registered_session_id,
+                dropped = messages.len(),
+                "topic reader dropping in-flight batch: partition reassigned"
+            );
+            return Ok(false);
         }
 
         let Some(queue) = self.queues.get_mut(&session_id) else {
-            return Err(YdbError::custom(format!(
-                "topic reader received messages for unknown partition session {session_id}"
-            )));
+            debug!(
+                %session_id,
+                dropped = messages.len(),
+                "topic reader dropping in-flight batch: session already stopped"
+            );
+            return Ok(false);
         };
 
         queue.extend(messages);
@@ -391,9 +406,28 @@ mod tests {
     }
 
     #[test]
-    fn push_before_start_returns_error() {
+    fn push_after_stop_is_silent_drop() {
+        let mut buf = MessageBuffer::default();
+        buf.register_starting(psid(1), pid(10)).unwrap();
+        buf.register_stopping(psid(1), pid(10)).unwrap();
+
+        assert!(!buf.push_batch(vec![msg(1, 10, 0, 0)]).unwrap());
+    }
+
+    #[test]
+    fn push_after_partition_reassignment_is_silent_drop() {
+        let mut buf = MessageBuffer::default();
+        buf.register_starting(psid(1), pid(10)).unwrap();
+        buf.register_stopping(psid(1), pid(10)).unwrap();
+        buf.register_starting(psid(2), pid(10)).unwrap();
+
+        assert!(!buf.push_batch(vec![msg(1, 10, 0, 0)]).unwrap());
+    }
+
+    #[test]
+    fn push_before_start_is_silent_drop() {
         let mut buf = MessageBuffer::default();
 
-        assert!(buf.push_batch(vec![msg(1, 10, 0, 0)]).is_err());
+        assert!(!buf.push_batch(vec![msg(1, 10, 0, 0)]).unwrap());
     }
 }
