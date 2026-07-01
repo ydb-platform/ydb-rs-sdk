@@ -1,10 +1,9 @@
 mod mock_server;
 
-use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 use ydb::{
-    Client, ClientBuilder, Query, QueryResult, TopicWriterMessage, TopicWriterMessageBuilder,
-    TopicWriterTxOptionsBuilder, Transaction, TransactionInfo, YdbResult,
+    Client, ClientBuilder, TopicWriterMessage, TopicWriterMessageBuilder,
+    TopicWriterTxOptionsBuilder, YdbResult,
 };
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage as WriteFromClient;
 use ydb_grpc::ydb_proto::topic::stream_write_message::InitRequest;
@@ -23,39 +22,6 @@ const PARTITION_ID: i64 = 0;
 const WRONG_ACK_OFFSET: i64 = 42;
 const REGULAR_WRITER_OFFSET: i64 = 0;
 const TEST_MESSAGE_DATA: &[u8] = b"hello tx";
-
-struct MockTransaction {
-    tx_id: String,
-    session_id: String,
-}
-
-impl MockTransaction {
-    fn new(tx_id: impl Into<String>, session_id: impl Into<String>) -> Self {
-        Self {
-            tx_id: tx_id.into(),
-            session_id: session_id.into(),
-        }
-    }
-}
-
-#[async_trait]
-impl Transaction for MockTransaction {
-    async fn query(&mut self, _: Query) -> YdbResult<QueryResult> {
-        unimplemented!()
-    }
-    async fn commit(&mut self) -> YdbResult<()> {
-        Ok(())
-    }
-    async fn rollback(&mut self) -> YdbResult<()> {
-        Ok(())
-    }
-    async fn transaction_info(&mut self) -> YdbResult<TransactionInfo> {
-        Ok(TransactionInfo::new(
-            self.tx_id.clone(),
-            self.session_id.clone(),
-        ))
-    }
-}
 
 type CapturedTxIdentity = Arc<Mutex<Option<TransactionIdentity>>>;
 type CapturedInitRequest = Arc<Mutex<Option<InitRequest>>>;
@@ -155,17 +121,6 @@ fn make_client(server: &MockServer) -> YdbResult<Client> {
     .client()
 }
 
-async fn make_writer_tx<'a>(
-    server: &MockServer,
-    tx: &'a mut dyn Transaction,
-) -> YdbResult<ydb::TopicWriterTx> {
-    let client = make_client(server)?;
-    client
-        .topic_client()
-        .create_writer_tx(TOPIC_PATH.to_string(), tx)
-        .await
-}
-
 fn test_message() -> TopicWriterMessage {
     TopicWriterMessageBuilder::default()
         .data(TEST_MESSAGE_DATA.to_vec())
@@ -178,11 +133,20 @@ fn test_message() -> TopicWriterMessage {
 async fn write_single_message_written_in_tx() -> YdbResult<()> {
     let (handler, _, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let mut tx = MockTransaction::new(TX_ID, SESSION_ID);
-    let mut writer = make_writer_tx(&server, &mut tx).await?;
+    let client = make_client(&server)?;
 
-    writer.write(test_message()).await?;
-    writer.stop().await?;
+    client
+        .query_client()
+        .retry_transaction(async |tx| {
+            let mut writer = client
+                .topic_client()
+                .create_writer_tx(TOPIC_PATH.to_string(), tx)
+                .await?;
+            writer.write(test_message()).await?;
+            writer.stop().await?;
+            Ok(())
+        })
+        .await?;
 
     Ok(())
 }
@@ -194,12 +158,22 @@ async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
         offset: WRONG_ACK_OFFSET,
     });
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let mut tx = MockTransaction::new(TX_ID, SESSION_ID);
-    let mut writer = make_writer_tx(&server, &mut tx).await?;
+    let client = make_client(&server)?;
 
-    let result = writer.write(test_message()).await;
-    assert!(result.is_err(), "expected error for non-WrittenInTx ack");
-    writer.stop().await?;
+    client
+        .query_client()
+        .retry_transaction(async |tx| {
+            let mut writer = client
+                .topic_client()
+                .create_writer_tx(TOPIC_PATH.to_string(), tx)
+                .await?;
+
+            let result = writer.write(test_message()).await;
+            assert!(result.is_err(), "expected error for non-WrittenInTx ack");
+            writer.stop().await?;
+            Ok(())
+        })
+        .await?;
 
     Ok(())
 }
@@ -209,11 +183,20 @@ async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
 async fn tx_identity_present_in_write_request() -> YdbResult<()> {
     let (handler, captured_tx, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let mut tx = MockTransaction::new(TX_ID, SESSION_ID);
-    let mut writer = make_writer_tx(&server, &mut tx).await?;
+    let client = make_client(&server)?;
 
-    writer.write(test_message()).await?;
-    writer.stop().await?;
+    client
+        .query_client()
+        .retry_transaction(async |tx| {
+            let mut writer = client
+                .topic_client()
+                .create_writer_tx(TOPIC_PATH.to_string(), tx)
+                .await?;
+            writer.write(test_message()).await?;
+            writer.stop().await?;
+            Ok(())
+        })
+        .await?;
 
     let identity = captured_tx.lock().unwrap().clone();
     let identity = identity.expect("WriteRequest.tx must be set for tx writer");
@@ -254,20 +237,24 @@ async fn regular_writer_sends_no_tx_identity() -> YdbResult<()> {
 async fn tx_writer_options_propagated_to_init_request() -> YdbResult<()> {
     let (handler, _, captured_init) = AutoReplyHandler::new(AckMode::WrittenInTx);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let mut tx = MockTransaction::new(TX_ID, SESSION_ID);
 
     let options = TopicWriterTxOptionsBuilder::default()
         .topic_path(TOPIC_PATH.to_string())
         .build()?;
 
     let client = make_client(&server)?;
-    let mut writer = client
-        .topic_client()
-        .create_writer_tx_with_params(options, &mut tx)
+    client
+        .query_client()
+        .retry_transaction(async |tx| {
+            let mut writer = client
+                .topic_client()
+                .create_writer_tx_with_params(options.clone(), tx)
+                .await?;
+            writer.write(test_message()).await?;
+            writer.stop().await?;
+            Ok(())
+        })
         .await?;
-
-    writer.write(test_message()).await?;
-    writer.stop().await?;
 
     let init = captured_init.lock().unwrap().clone();
     let init = init.expect("InitRequest must be captured");
@@ -339,11 +326,20 @@ impl Handler for ReconnectHandler {
 async fn write_skipped_already_written_treated_as_success() -> YdbResult<()> {
     let (handler, _, _) = AutoReplyHandler::new(AckMode::SkippedAlreadyWritten);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let mut tx = MockTransaction::new(TX_ID, SESSION_ID);
-    let mut writer = make_writer_tx(&server, &mut tx).await?;
+    let client = make_client(&server)?;
 
-    writer.write(test_message()).await?;
-    writer.stop().await?;
+    client
+        .query_client()
+        .retry_transaction(async |tx| {
+            let mut writer = client
+                .topic_client()
+                .create_writer_tx(TOPIC_PATH.to_string(), tx)
+                .await?;
+            writer.write(test_message()).await?;
+            writer.stop().await?;
+            Ok(())
+        })
+        .await?;
 
     Ok(())
 }
@@ -353,22 +349,32 @@ async fn write_skipped_already_written_treated_as_success() -> YdbResult<()> {
 async fn write_errors_in_retriable_err() -> YdbResult<()> {
     let (handler, _, captured_stream_id) = ReconnectHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let mut tx = MockTransaction::new(TX_ID, SESSION_ID);
-    let mut writer = make_writer_tx(&server, &mut tx).await?;
+    let client = make_client(&server)?;
 
-    let stream_id = captured_stream_id
-        .lock()
-        .unwrap()
-        .expect("stream_id must be set after writer init");
-    server
-        .write_sender()
-        .close(stream_id)
-        .expect("mock server failed to fail write stream");
+    client
+        .query_client()
+        .retry_transaction(async |tx| {
+            let mut writer = client
+                .topic_client()
+                .create_writer_tx(TOPIC_PATH.to_string(), tx)
+                .await?;
 
-    let result = writer.write(test_message()).await;
-    assert!(result.is_err(), "expected error after stream failure");
+            let stream_id = captured_stream_id
+                .lock()
+                .unwrap()
+                .expect("stream_id must be set after writer init");
+            server
+                .write_sender()
+                .close(stream_id)
+                .expect("mock server failed to fail write stream");
 
-    let _ = writer.stop().await;
+            let result = writer.write(test_message()).await;
+            assert!(result.is_err(), "expected error after stream failure");
+
+            let _ = writer.stop().await;
+            Ok(())
+        })
+        .await?;
 
     Ok(())
 }

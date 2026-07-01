@@ -3,6 +3,7 @@ use super::{
         FromHandlerToService, FromServerToServiceRx, FromServiceToServerRx, Handler, Incoming,
         Reply,
     },
+    query::MockQueryService,
     topic::{
         default::TopicDefaultHandler, handler::TopicTx, sender::WriteStreamSender, MockTopicService,
     },
@@ -12,6 +13,7 @@ use std::net::SocketAddr;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Server;
+use ydb_grpc::ydb_proto::query::v1::query_service_server::QueryServiceServer;
 use ydb_grpc::ydb_proto::topic::v1::topic_service_server::TopicServiceServer;
 
 struct ForwardChannels {
@@ -85,6 +87,7 @@ impl MockServer {
         let (topic_tx, topic_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let topic_service = MockTopicService::new(from_service_to_server_tx, topic_rx);
+        let query_service = MockQueryService;
         let write_sender = topic_service.write_sender.clone();
 
         let tcp_streams = stream::unfold(listener, |listener| async {
@@ -97,6 +100,7 @@ impl MockServer {
         let tonic_services = tokio::spawn(async move {
             let result = Server::builder()
                 .add_service(TopicServiceServer::new(topic_service))
+                .add_service(QueryServiceServer::new(query_service))
                 .serve_with_incoming_shutdown(tcp_streams, shutdown_signal.cancelled())
                 .await;
 
