@@ -41,7 +41,7 @@ impl Config {
         };
 
         let ref_name = env::var("WORKLOAD_REF").unwrap_or_else(|_| "current".to_string());
-        let label = env::var("WORKLOAD_NAME").unwrap_or_else(|_| "native-table".to_string());
+        let label = env::var("WORKLOAD_NAME").unwrap_or_else(|_| "native-query".to_string());
 
         let duration_secs = env::var("WORKLOAD_DURATION")
             .ok()

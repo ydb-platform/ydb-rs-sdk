@@ -29,6 +29,7 @@ use crate::grpc_wrapper::raw_table_service::explain_data_query::{
     RawExplainDataQueryRequest, RawExplainDataQueryResult,
 };
 use crate::grpc_wrapper::raw_table_service::read_rows::{RawReadRowsRequest, RawReadRowsResponse};
+use crate::grpc_wrapper::raw_table_service::rename_tables::RawRenameTablesRequest;
 use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
 use crate::grpc_wrapper::raw_table_service::stream_read_table::RawStreamReadTableRequest;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
@@ -144,6 +145,13 @@ impl RawTableClient {
         request_without_result!(
             self.service.copy_tables,
             req => ydb_grpc::ydb_proto::table::CopyTablesRequest
+        );
+    }
+
+    pub async fn rename_tables(&mut self, req: RawRenameTablesRequest) -> RawResult<()> {
+        request_without_result!(
+            self.service.rename_tables,
+            req => ydb_grpc::ydb_proto::table::RenameTablesRequest
         );
     }
 

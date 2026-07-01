@@ -16,22 +16,12 @@
 //!  // wait until driver background initialization finish
 //!  client.wait().await?;
 //!
-//!  // read query result
+//!  // read query result via Query API
 //!  let sum: i32 = client
-//!     .table_client() // create table client
-//!     .retry_transaction(|mut t| async move {
-//!         // code in transaction can retry few times if was some retriable error
-//!
-//!         // send query to database
-//!         let res = t.query(Query::from("SELECT 1 + 1 AS sum")).await?;
-//!
-//!         // read exact one result from db
-//!         let field_val: i32 = res.into_only_row()?.remove_field_by_name("sum")?.try_into()?;
-//!
-//!         // return result
-//!         return Ok(field_val);
-//!     })
-//!     .await?;
+//!     .query_client()
+//!     .query_row("SELECT 1 + 1 AS sum", &())
+//!     .await?
+//!     .ok_or_else(|| ydb::YdbError::custom("no row"))?;
 //!
 //!  // it will print "sum: 2"
 //!  println!("sum: {}", sum);
@@ -95,7 +85,6 @@ pub(crate) mod topics_compression_test;
 pub(crate) mod topics_test;
 mod trace_helpers;
 mod trait_operation;
-pub(crate) mod transaction;
 mod types;
 mod types_converters;
 pub(crate) mod waiter;
@@ -161,18 +150,17 @@ pub use client_query::{
     CallBuilder, ClientOneShot, ExecBuilder, ExecCall, ExecuteScriptBuilder,
     ExecuteScriptOperation, FetchScriptResult, FetchScriptResultsBuilder, FromYdbRow, Interactive,
     OneResultSet, OneRow, OptionalRow, OptionalRowBuilder, QueryClient, QueryExecutor,
-    QueryRowBuilder, QueryStats, QueryStream, QueryStreamBuilder, QueryTransaction,
-    QueryTransactionOptions, QueryTxMode, ResultSetBuilder, Streamed,
+    QueryRowBuilder, QueryStats, QueryStream, QueryStreamBuilder, ResultSetBuilder, Streamed,
+    Transaction, TransactionOptions, TxMode,
 };
 
 // full enum pub types
-pub use client_table::{RetryOptions, TableClient, TransactionOptions};
-pub use session::Session;
+pub use client_table::{RetryOptions, TableClient};
 
 // full enum pub types
 pub use table_service_types::{
-    ColumnDescription, IndexDescription, IndexStatus, IndexType, StoreType, TableDescription,
-    UnknownTypeDescription,
+    ColumnDescription, CopyTableItem, IndexDescription, IndexStatus, IndexType, RenameTableItem,
+    StoreType, TableDescription, UnknownTypeDescription,
 };
 
 // full enum pub types
@@ -188,17 +176,11 @@ pub use discovery::{Discovery, DiscoveryState, StaticDiscovery};
 // full enum pub types
 pub use query::Query;
 // full enum pub types
-pub use result::{
-    ExplainResult, QueryResult, ResultSet, ResultSetRowsIter, Row, StreamReadTableResult,
-    StreamResult,
-};
+pub use result::{ResultSet, ResultSetRowsIter, Row};
 pub use table_requests::{
     AlterTableRequest, CreateTableRequest, DropTableRequest, NamedPolicyDescription,
-    ReadRowsRequest, ReadTableKeyBound, ReadTableKeyRange, ReadTableOptions, TableColumn,
-    TableOptionsDescription,
+    ReadRowsRequest, TableColumn, TableOptionsDescription,
 };
-// full enum pub types
-pub use transaction::{Mode, Transaction, TransactionInfo};
 // full enum pub types
 pub use waiter::Waiter;
 // full enum pub types

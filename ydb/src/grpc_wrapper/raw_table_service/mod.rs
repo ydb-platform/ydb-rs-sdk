@@ -13,6 +13,7 @@ pub(crate) mod execute_scheme_query;
 pub(crate) mod explain_data_query;
 pub(crate) mod query_stats;
 pub(crate) mod read_rows;
+pub(crate) mod rename_tables;
 pub(crate) mod rollback_transaction;
 pub(crate) mod stream_read_table;
 pub(crate) mod transaction_control;

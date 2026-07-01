@@ -6,9 +6,6 @@ use std::collections::HashMap;
 
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_wrapper::raw_table_service::create_table::RawCreateTableColumn;
-use crate::grpc_wrapper::raw_table_service::stream_read_table::{
-    RawReadTableKeyBound, RawReadTableKeyRange,
-};
 use crate::types::Value;
 
 /// Column specification for [`CreateTableRequest`] and [`AlterTableRequest`].
@@ -234,122 +231,7 @@ impl AlterTableRequest {
     }
 }
 
-/// Primary-key bound for [`ReadTableOptions`].
-#[derive(Clone, Debug)]
-pub enum ReadTableKeyBound {
-    Greater(Value),
-    GreaterOrEqual(Value),
-    Less(Value),
-    LessOrEqual(Value),
-}
-
-impl ReadTableKeyBound {
-    fn into_raw(self) -> YdbResult<RawReadTableKeyBound> {
-        Ok(match self {
-            ReadTableKeyBound::Greater(v) => {
-                RawReadTableKeyBound::Greater(v.try_into().map_err(YdbError::from)?)
-            }
-            ReadTableKeyBound::GreaterOrEqual(v) => {
-                RawReadTableKeyBound::GreaterOrEqual(v.try_into().map_err(YdbError::from)?)
-            }
-            ReadTableKeyBound::Less(v) => {
-                RawReadTableKeyBound::Less(v.try_into().map_err(YdbError::from)?)
-            }
-            ReadTableKeyBound::LessOrEqual(v) => {
-                RawReadTableKeyBound::LessOrEqual(v.try_into().map_err(YdbError::from)?)
-            }
-        })
-    }
-}
-
-/// Primary-key range for [`ReadTableOptions`].
-#[derive(Clone, Debug, Default)]
-pub struct ReadTableKeyRange {
-    pub from: Option<ReadTableKeyBound>,
-    pub to: Option<ReadTableKeyBound>,
-}
-
-impl ReadTableKeyRange {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_from(mut self, bound: ReadTableKeyBound) -> Self {
-        self.from = Some(bound);
-        self
-    }
-
-    pub fn with_to(mut self, bound: ReadTableKeyBound) -> Self {
-        self.to = Some(bound);
-        self
-    }
-
-    pub(crate) fn into_raw(self) -> YdbResult<RawReadTableKeyRange> {
-        let mut raw = RawReadTableKeyRange::default();
-        if let Some(from) = self.from {
-            let bound = from.into_raw()?;
-            raw.from = match bound {
-                RawReadTableKeyBound::Greater(v) => RawReadTableKeyBound::Greater(v),
-                RawReadTableKeyBound::GreaterOrEqual(v) => RawReadTableKeyBound::GreaterOrEqual(v),
-                other => {
-                    return Err(YdbError::Custom(format!(
-                        "invalid lower bound for read table key range: {other:?}"
-                    )));
-                }
-            };
-        }
-        if let Some(to) = self.to {
-            let bound = to.into_raw()?;
-            raw.to = match bound {
-                RawReadTableKeyBound::Less(v) => RawReadTableKeyBound::Less(v),
-                RawReadTableKeyBound::LessOrEqual(v) => RawReadTableKeyBound::LessOrEqual(v),
-                other => {
-                    return Err(YdbError::Custom(format!(
-                        "invalid upper bound for read table key range: {other:?}"
-                    )));
-                }
-            };
-        }
-        Ok(raw)
-    }
-}
-
-/// Options for [`Session::stream_read_table`] (go-sdk: `ReadTableOption`).
-#[derive(Clone, Debug, Default)]
-pub struct ReadTableOptions {
-    pub columns: Vec<String>,
-    pub ordered: bool,
-    pub row_limit: u64,
-    pub key_range: Option<ReadTableKeyRange>,
-}
-
-impl ReadTableOptions {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_column(mut self, name: impl Into<String>) -> Self {
-        self.columns.push(name.into());
-        self
-    }
-
-    pub fn with_ordered(mut self, ordered: bool) -> Self {
-        self.ordered = ordered;
-        self
-    }
-
-    pub fn with_row_limit(mut self, limit: u64) -> Self {
-        self.row_limit = limit;
-        self
-    }
-
-    pub fn with_key_range(mut self, range: ReadTableKeyRange) -> Self {
-        self.key_range = Some(range);
-        self
-    }
-}
-
-/// Named policy preset from [`TableClient::retry_describe_table_options`].
+/// Named policy preset from [`TableClient::describe_table_options`].
 #[derive(Clone, Debug)]
 pub struct NamedPolicyDescription {
     pub name: String,

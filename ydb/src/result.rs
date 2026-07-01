@@ -1,80 +1,11 @@
 use crate::errors;
-use crate::errors::{YdbError, YdbResult, YdbStatusError};
-use crate::grpc::proto_issues_to_ydb_issues;
-use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryResult;
+use crate::errors::YdbError;
 use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawTypedValue, RawValue};
-use crate::trace_helpers::ensure_len_string;
 use crate::types::Value;
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec::IntoIter;
-use tracing::trace;
-use ydb_grpc::ydb_proto::status_ids::StatusCode;
-use ydb_grpc::ydb_proto::table::ExecuteScanQueryPartialResponse;
-
-#[derive(Debug)]
-pub struct QueryResult {
-    pub(crate) results: Vec<ResultSet>,
-    pub(crate) tx_id: String,
-}
-
-impl QueryResult {
-    pub(crate) fn from_raw_result(
-        ignore_truncated: bool,
-        raw_res: RawExecuteDataQueryResult,
-    ) -> YdbResult<Self> {
-        trace!(
-            "raw_res: {}",
-            ensure_len_string(serde_json::to_string(&raw_res)?)
-        );
-        let mut results = Vec::with_capacity(raw_res.result_sets.len());
-        for current_set in raw_res.result_sets.into_iter() {
-            if !ignore_truncated && current_set.truncated {
-                return Err(YdbError::TruncatedResult {
-                    result_set_index: results.len(),
-                });
-            }
-            let result_set = ResultSet::try_from(current_set)?;
-
-            results.push(result_set);
-        }
-
-        Ok(QueryResult {
-            results,
-            tx_id: raw_res.tx_meta.id,
-        })
-    }
-
-    pub fn into_only_result(self) -> YdbResult<ResultSet> {
-        let mut iter = self.results.into_iter();
-        match iter.next() {
-            Some(result_set) => {
-                if iter.next().is_none() {
-                    Ok(result_set)
-                } else {
-                    Err(YdbError::from_str("more then one result set"))
-                }
-            }
-            None => Err(YdbError::from_str("no result set")),
-        }
-    }
-
-    pub fn into_only_row(self) -> YdbResult<Row> {
-        let result_set = self.into_only_result()?;
-        let mut rows = result_set.rows();
-        match rows.next() {
-            Some(first_row) => {
-                if rows.next().is_none() {
-                    Ok(first_row)
-                } else {
-                    Err(YdbError::from_str("result set has more then one row"))
-                }
-            }
-            None => Err(YdbError::NoRows),
-        }
-    }
-}
 
 #[derive(Debug, Default)]
 pub struct ResultSet {
@@ -177,89 +108,6 @@ impl Iterator for ResultSetRowsIter {
                 columns_by_name: self.columns_by_name.clone(),
                 raw_values: row.into_iter().enumerate().collect(),
             }),
-        }
-    }
-}
-
-pub struct StreamResult {
-    pub(crate) results: tonic::codec::Streaming<ExecuteScanQueryPartialResponse>,
-}
-
-/// Streaming table read (`StreamReadTable` RPC, go-sdk: `Session.StreamReadTable`).
-pub struct StreamReadTableResult {
-    pub(crate) parts: tonic::codec::Streaming<ydb_grpc::ydb_proto::table::ReadTableResponse>,
-}
-
-impl StreamReadTableResult {
-    pub async fn next_result_set(&mut self) -> YdbResult<Option<ResultSet>> {
-        let Some(part) = self.parts.message().await? else {
-            return Ok(None);
-        };
-        let raw_part =
-            crate::grpc_wrapper::raw_table_service::stream_read_table::RawReadTableResponsePart::try_from(
-                part,
-            )
-            .map_err(YdbError::from)?;
-        if raw_part.status != StatusCode::Success {
-            return Err(YdbError::YdbStatusError(YdbStatusError {
-                message: format!("{:?}", raw_part.issues),
-                operation_status: raw_part.status.into(),
-                issues: raw_part.issues,
-            }));
-        }
-        let Some(raw_set) = raw_part.result_set else {
-            return Ok(None);
-        };
-        Ok(Some(ResultSet::try_from(raw_set)?))
-    }
-}
-
-impl StreamResult {
-    pub async fn next(&mut self) -> YdbResult<Option<ResultSet>> {
-        let partial_response = if let Some(partial_response) = self.results.message().await? {
-            partial_response
-        } else {
-            return Ok(None);
-        };
-        if partial_response.status() != StatusCode::Success {
-            return Err(YdbError::YdbStatusError(YdbStatusError {
-                message: format!("{:?}", partial_response.issues),
-                operation_status: partial_response.status,
-                issues: proto_issues_to_ydb_issues(partial_response.issues),
-            }));
-        };
-        let proto_result_set = if let Some(partial_result) = partial_response.result {
-            if let Some(proto_result_set) = partial_result.result_set {
-                proto_result_set
-            } else {
-                return Ok(None);
-            }
-        } else {
-            return Err(YdbError::InternalError("unexpected empty result".into()));
-        };
-        let raw_res = RawResultSet::try_from(proto_result_set)?;
-        let result_set = ResultSet::try_from(raw_res)?;
-        Ok(Some(result_set))
-    }
-}
-
-#[derive(Debug)]
-pub struct ExplainResult {
-    pub query_ast: String,
-    pub query_plan: String,
-    pub query_full_diagnostics: String,
-}
-
-impl From<crate::grpc_wrapper::raw_table_service::explain_data_query::RawExplainDataQueryResult>
-    for ExplainResult
-{
-    fn from(
-        value: crate::grpc_wrapper::raw_table_service::explain_data_query::RawExplainDataQueryResult,
-    ) -> Self {
-        Self {
-            query_ast: value.query_ast,
-            query_plan: value.query_plan,
-            query_full_diagnostics: value.query_full_diagnostics,
         }
     }
 }

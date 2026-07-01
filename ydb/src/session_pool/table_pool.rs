@@ -3,7 +3,7 @@ use tracing::trace;
 use crate::client::TimeoutSettings;
 use crate::errors::YdbResult;
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::session::{NodePinnedTableClient, Session};
+use crate::session::{NodePinnedTableClient, TableSession};
 
 use super::pool::{spawn_pool_release, SessionPool};
 
@@ -32,20 +32,20 @@ impl TableSessionPool {
         &self.connection_manager
     }
 
-    pub(crate) async fn session(&self) -> YdbResult<Session> {
+    pub(crate) async fn session(&self) -> YdbResult<TableSession> {
         let mut lease = self.pool.acquire_explicit().await?;
         lease.ensure_alive()?;
         lease.begin_use();
         let session_id = lease.session_id().to_string();
         let node_uri = lease.node_uri().clone();
 
-        let mut session = Session::new(
+        let mut session = TableSession::new(
             session_id,
             NodePinnedTableClient::new(self.connection_manager.clone(), node_uri),
             self.timeouts,
         );
 
-        session.on_drop(Box::new(move |s: &mut Session| {
+        session.on_drop(Box::new(move |s: &mut TableSession| {
             if !s.can_pooled {
                 lease.invalidate_session();
             }

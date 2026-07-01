@@ -1,43 +1,23 @@
 use crate::client::TimeoutSettings;
-use crate::client_table::TableServiceClientType;
 use crate::errors::{YdbError, YdbResult};
-use crate::query::Query;
-use crate::result::{QueryResult, StreamReadTableResult, StreamResult};
-use crate::table_requests::ReadTableOptions;
 use derivative::Derivative;
-use std::sync::atomic::{AtomicI64, Ordering};
 
 use http::Uri;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::grpc_wrapper::raw_table_service::client::{CollectStatsMode, RawTableClient};
-use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
+use crate::grpc_wrapper::raw_table_service::client::RawTableClient;
 
 use crate::grpc_wrapper::raw_errors::RawResult;
-use crate::grpc_wrapper::raw_table_service::commit_transaction::RawCommitTransactionRequest;
-use crate::grpc_wrapper::raw_table_service::execute_data_query::RawExecuteDataQueryRequest;
-use crate::grpc_wrapper::raw_table_service::rollback_transaction::RawRollbackTransactionRequest;
-use crate::grpc_wrapper::raw_table_service::stream_read_table::RawStreamReadTableRequest;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-use crate::trace_helpers::ensure_len_string;
-use tracing::{debug, trace};
-use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
-use ydb_grpc::ydb_proto::table::{execute_scan_query_request, ExecuteScanQueryRequest};
+use tracing::trace;
 
-static REQUEST_NUMBER: AtomicI64 = AtomicI64::new(0);
-static DEFAULT_COLLECT_STAT_MODE: CollectStatsMode = CollectStatsMode::None;
-
-fn req_number() -> i64 {
-    REQUEST_NUMBER.fetch_add(1, Ordering::Relaxed)
-}
-
-type DropSessionCallback = dyn FnOnce(&mut Session) + Send + Sync;
+type DropSessionCallback = dyn FnOnce(&mut TableSession) + Send + Sync;
 
 /// If an RPC is cancelled mid-flight (e.g. operation timeout), the server may still be
 /// processing it. Mark the session non-poolable so the next lease gets a fresh session
 /// instead of hitting SessionBusy on reuse (aligned with go-sdk context-error handling).
 struct InFlightTableRpcGuard<'a> {
-    session: &'a mut Session,
+    session: &'a mut TableSession,
     active: bool,
 }
 
@@ -49,26 +29,10 @@ impl Drop for InFlightTableRpcGuard<'_> {
     }
 }
 
-/// Await a table RPC under [`InFlightTableRpcGuard`] (discard session on cancel/timeout).
-macro_rules! in_flight_table_rpc {
-    ($session:expr, $table:ident, $rpc:expr) => {{
-        let mut $table = $session.get_table_client().await?;
-        let mut guard = InFlightTableRpcGuard {
-            session: $session,
-            active: true,
-        };
-        let res = $rpc.await;
-        guard.active = false;
-        guard.session.handle_raw_result(res)
-    }};
-}
-
 #[derive(Derivative)]
 #[derivative(Debug)]
-/// Pooled table session (go-sdk: `table.Session`).
-///
-/// Not constructed by user code directly — obtain from [`TableClient::retry`] (go-sdk: `Client.Do`).
-pub struct Session {
+/// Pooled table session used internally for DDL and describe RPCs.
+pub(crate) struct TableSession {
     pub(crate) id: String,
 
     pub(crate) can_pooled: bool,
@@ -82,7 +46,7 @@ pub struct Session {
     timeouts: TimeoutSettings,
 }
 
-impl Session {
+impl TableSession {
     pub(crate) fn new<CT: CreateTableClient + 'static>(
         id: String,
         channel_pool: CT,
@@ -134,135 +98,9 @@ impl Session {
         guard.session.handle_raw_result(res)
     }
 
-    pub(crate) async fn commit_transaction(&mut self, tx_id: String) -> YdbResult<()> {
-        let session_id = self.id.clone();
-        let operation_params = self.timeouts.operation_params();
-        in_flight_table_rpc!(self, table, {
-            table.commit_transaction(RawCommitTransactionRequest {
-                session_id,
-                tx_id,
-                operation_params,
-                collect_stats: DEFAULT_COLLECT_STAT_MODE,
-            })
-        })?;
-        Ok(())
-    }
-
-    #[tracing::instrument(skip(self, req), fields(req_number=req_number()))]
-    pub(crate) async fn execute_data_query(
-        &mut self,
-        mut req: RawExecuteDataQueryRequest,
-        ignore_truncated: bool,
-    ) -> YdbResult<QueryResult> {
-        req.session_id.clone_from(&self.id);
-        req.operation_params = self.timeouts.operation_params();
-
-        trace!(
-            "request: {}",
-            ensure_len_string(serde_json::to_string(&req)?)
-        );
-
-        let mut table = self.get_table_client().await?;
-        let mut in_flight = InFlightTableRpcGuard {
-            session: self,
-            active: true,
-        };
-        let res = table.execute_data_query(req).await;
-        in_flight.active = false;
-        let res = in_flight.session.handle_raw_result(res)?;
-        trace!(
-            "result: {}",
-            ensure_len_string(serde_json::to_string(&res)?)
-        );
-        QueryResult::from_raw_result(ignore_truncated, res)
-    }
-
-    #[tracing::instrument(skip(self, query), fields(req_number=req_number()))]
-    pub async fn execute_scan_query(&mut self, query: Query) -> YdbResult<StreamResult> {
-        let req = ExecuteScanQueryRequest {
-            query: Some(query.query_to_proto()),
-            parameters: query.params_to_proto()?,
-            mode: execute_scan_query_request::Mode::Exec as i32,
-            ..ExecuteScanQueryRequest::default()
-        };
-        debug!(
-            "request: {}",
-            crate::trace_helpers::ensure_len_string(serde_json::to_string(&req)?)
-        );
-        let mut in_flight = InFlightTableRpcGuard {
-            session: self,
-            active: true,
-        };
-        let mut channel = in_flight.session.get_channel().await?;
-        let resp = match channel.stream_execute_scan_query(req).await {
-            Ok(resp) => {
-                in_flight.active = false;
-                resp
-            }
-            Err(err) => {
-                in_flight.active = false;
-                let err = YdbError::from(err);
-                in_flight.session.handle_error(&err);
-                return Err(err);
-            }
-        };
-        let stream = resp.into_inner();
-        Ok(StreamResult { results: stream })
-    }
-
-    pub(crate) async fn rollback_transaction(&mut self, tx_id: String) -> YdbResult<()> {
-        let session_id = self.id.clone();
-        let operation_params = self.timeouts.operation_params();
-        in_flight_table_rpc!(self, table, {
-            table.rollback_transaction(RawRollbackTransactionRequest {
-                session_id,
-                tx_id,
-                operation_params,
-            })
-        })
-    }
-
-    pub async fn stream_read_table(
-        &mut self,
-        path: String,
-        options: ReadTableOptions,
-    ) -> YdbResult<StreamReadTableResult> {
-        let key_range = options
-            .key_range
-            .map(|range| range.into_raw())
-            .transpose()?;
-        let req = RawStreamReadTableRequest {
-            session_id: self.id.clone(),
-            path,
-            key_range,
-            columns: options.columns,
-            ordered: options.ordered,
-            row_limit: options.row_limit,
-        };
-        let mut in_flight = InFlightTableRpcGuard {
-            session: self,
-            active: true,
-        };
-        let stream = match in_flight.session.get_table_client().await {
-            Ok(mut client) => client.stream_read_table(req).await,
-            Err(err) => {
-                in_flight.active = false;
-                return Err(err);
-            }
-        };
-        in_flight.active = false;
-        let stream = in_flight.session.handle_raw_result(stream)?;
-        Ok(StreamReadTableResult { parts: stream })
-    }
-
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {
         self.timeouts = timeouts;
         self
-    }
-
-    // deprecated, use get_table_client instead
-    async fn get_channel(&self) -> YdbResult<TableServiceClientType> {
-        self.channel_pool.create_grpc_table_client().await
     }
 
     async fn get_table_client(&mut self) -> YdbResult<RawTableClient> {
@@ -280,7 +118,7 @@ impl Session {
     }
 }
 
-impl Drop for Session {
+impl Drop for TableSession {
     fn drop(&mut self) {
         trace!("drop session: {}", &self.id);
         while let Some(on_drop) = self.on_drop_callbacks.pop() {
@@ -406,7 +244,7 @@ mod discard_session_tests {
         use crate::session::NodePinnedTableClient;
         use http::Uri;
 
-        let mut session = Session::new(
+        let mut session = TableSession::new(
             "test-session".to_string(),
             NodePinnedTableClient::new(
                 GrpcConnectionManager::new(
@@ -430,17 +268,11 @@ mod discard_session_tests {
 
 #[async_trait::async_trait]
 pub(crate) trait CreateTableClient: Send + Sync {
-    async fn create_grpc_table_client(&self) -> YdbResult<TableServiceClient<InterceptedChannel>>;
     async fn create_table_client(&self, timeouts: TimeoutSettings) -> YdbResult<RawTableClient>;
 }
 
 #[async_trait::async_trait]
 impl CreateTableClient for GrpcConnectionManager {
-    async fn create_grpc_table_client(&self) -> YdbResult<TableServiceClient<InterceptedChannel>> {
-        self.get_auth_service(TableServiceClient::<InterceptedChannel>::new)
-            .await
-    }
-
     async fn create_table_client(&self, timeouts: TimeoutSettings) -> YdbResult<RawTableClient> {
         self.get_auth_service(RawTableClient::new)
             .await
@@ -466,15 +298,6 @@ impl NodePinnedTableClient {
 
 #[async_trait::async_trait]
 impl CreateTableClient for NodePinnedTableClient {
-    async fn create_grpc_table_client(&self) -> YdbResult<TableServiceClient<InterceptedChannel>> {
-        self.connection_manager
-            .get_auth_service_to_node(
-                TableServiceClient::<InterceptedChannel>::new,
-                &self.node_uri,
-            )
-            .await
-    }
-
     async fn create_table_client(&self, timeouts: TimeoutSettings) -> YdbResult<RawTableClient> {
         self.connection_manager
             .get_auth_service_to_node(RawTableClient::new, &self.node_uri)

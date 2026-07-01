@@ -7,13 +7,11 @@ All examples (but listed below) need local ydb started with docker-compose up wi
 
 | Example | Layer | RPC |
 |---------|-------|-----|
-| `basic-read-rows`, `basic-bulk-upsert` | `TableClient` | sessionless `ReadRows` / `BulkUpsert` |
-| `explain-query-example` | `TableClient` | `ExplainDataQuery`, scheme queries |
-| `table-session-stream-read` | `Session` via [`TableClient::retry`] | `StreamReadTable` |
-| `table-session-scan-query` | `Session` via [`TableClient::retry`] | `StreamExecuteScanQuery` |
-| `table-tx-modes` | `TableClient` + `Transaction` | autocommit `ExecuteDataQuery` per `Mode` |
+| `basic-read-rows`, `basic-bulk-upsert` | `TableClient` | sessionless `ReadRows` / `BulkUpsert` + DDL |
+| `basic-select-upsert`, `basic-upsert-many-rows`, `container-types` | `QueryClient` | YQL queries and transactions |
+| `query-service-*` | `QueryClient` | Query Service (implicit sessions, streaming, tx modes) |
 
-Session-only RPCs use [`TableClient::retry`](TableClient::retry) (go-sdk: `table.Client.Do`): a session is leased from the pool for the callback and returned (or discarded) when the future completes.
+YQL queries and multi-statement transactions use [`QueryClient`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html). `TableClient` covers DDL, describe, copy, and sessionless `ReadRows` / `BulkUpsert`.
 
 ## Additional dependencies for some examples
 ### auth-yc-cmdline

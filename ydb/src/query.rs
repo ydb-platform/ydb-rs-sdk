@@ -1,11 +1,8 @@
-use crate::errors::YdbResult;
-use crate::grpc_wrapper::raw_table_service::value::RawTypedValue;
 use crate::types::Value;
 use std::collections::HashMap;
 use std::str::FromStr;
 
 use crate::YdbError;
-use ydb_grpc::ydb_proto::TypedValue;
 
 /// Query object
 #[derive(Clone)]
@@ -81,22 +78,9 @@ impl Query {
         self
     }
 
-    pub(crate) fn query_to_proto(&self) -> ydb_grpc::ydb_proto::table::Query {
-        ydb_grpc::ydb_proto::table::Query {
-            query: Some(ydb_grpc::ydb_proto::table::query::Query::YqlText(
-                self.text.clone(),
-            )),
-        }
-    }
-
-    pub(crate) fn params_to_proto(self) -> YdbResult<HashMap<String, TypedValue>> {
-        let mut params = HashMap::with_capacity(self.parameters.len());
-
-        for (name, val) in self.parameters.into_iter() {
-            let raw: RawTypedValue = val.try_into()?;
-            params.insert(name, raw.into());
-        }
-        Ok(params)
+    /// YQL text of the query.
+    pub fn yql_text(&self) -> &str {
+        &self.text
     }
 }
 

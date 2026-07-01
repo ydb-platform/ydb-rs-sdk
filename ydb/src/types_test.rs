@@ -2,7 +2,7 @@ use crate::client::Client;
 use crate::errors::YdbError;
 use crate::types::{Bytes, YdbDecimal};
 use crate::{
-    test_helpers::test_client_builder, ydb_params, Query, Sign, SignedInterval, Value, YdbResult,
+    test_helpers::test_client_builder, ydb_params, Sign, SignedInterval, Value, YdbResult,
 };
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
@@ -77,19 +77,17 @@ async fn test_decimal() -> YdbResult<()> {
 
     client.wait().await?;
 
-    let db_value: Option<decimal_rs::Decimal> = client
-        .table_client()
-        .retry_transaction(|mut t| async move {
-            let res = t
-                .query(Query::from(
-                    "select CAST(\"-1233333333333333333333345.34\" AS Decimal(28, 2)) as db_value",
-                ))
-                .await?;
-            Ok(res.into_only_row()?.remove_field_by_name("db_value")?)
-        })
-        .await?
-        .try_into()
-        .unwrap();
+    let db_value: Option<decimal_rs::Decimal> = {
+        let mut row = client
+            .query_client()
+            .query_row(
+                r#"select CAST("-1233333333333333333333345.34" AS Decimal(28, 2)) as db_value"#,
+            )
+            .await?;
+        row.remove_field_by_name("db_value")?
+    }
+    .try_into()
+    .unwrap();
     let test_value = Some(
         "-1233333333333333333333345.34"
             .parse::<decimal_rs::Decimal>()
@@ -799,21 +797,15 @@ fn type_cases() -> Vec<TypeCase> {
 async fn check_type_roundtrip(client: &Client, case: &TypeCase) -> YdbResult<()> {
     // --- 1) Value → server (no cast) → Value ---
     let q = "select $val AS db_result";
-    let recv_passthrough = client
-        .table_client()
-        .retry_transaction(|mut t| {
-            let v = case.value.clone();
-            async move {
-                let res = t
-                    .query(Query::new(q).with_params(ydb_params! {
-                        "$val" => v,
-                    }))
-                    .await?;
-                let mut row = res.into_only_row()?;
-                Ok(row.remove_field_by_name("db_result")?)
-            }
-        })
-        .await?;
+    let recv_passthrough = {
+        let v = case.value.clone();
+        let mut row = client
+            .query_client()
+            .query_row(q)
+            .params(ydb_params!("$val" => v))
+            .await?;
+        row.remove_field_by_name("db_result")?
+    };
     let inner_passthrough = unwrap_optional(recv_passthrough, &case.yql_type, &case.text)?;
     assert!(
         value_roundtrip_eq(&case.value, &inner_passthrough),
@@ -825,23 +817,16 @@ async fn check_type_roundtrip(client: &Client, case: &TypeCase) -> YdbResult<()>
         "select cast(cast($val AS {t}) AS Utf8) AS db_result",
         t = case.yql_type,
     );
-    let (db_text,): (Option<String>,) = client
-        .table_client()
-        .retry_transaction(|mut t| {
-            let q = q2.clone();
-            let v = case.value.clone();
-            async move {
-                let res = t
-                    .query(Query::new(q).with_params(ydb_params! {
-                        "$val" => v,
-                    }))
-                    .await?;
-                let mut row = res.into_only_row()?;
-                let v: Option<String> = row.remove_field_by_name("db_result")?.try_into()?;
-                Ok((v,))
-            }
-        })
-        .await?;
+    let (db_text,): (Option<String>,) = {
+        let v = case.value.clone();
+        let mut row = client
+            .query_client()
+            .query_row(&q2)
+            .params(ydb_params!("$val" => v))
+            .await?;
+        let v: Option<String> = row.remove_field_by_name("db_result")?.try_into()?;
+        (v,)
+    };
     assert_eq!(
         Some(case.text.clone()),
         db_text,
@@ -850,22 +835,15 @@ async fn check_type_roundtrip(client: &Client, case: &TypeCase) -> YdbResult<()>
 
     // --- 3) Text → CAST AS yql_type → Value ---
     let q3 = format!("select cast($val AS {t}) AS db_result", t = case.yql_type);
-    let recv_parsed = client
-        .table_client()
-        .retry_transaction(|mut t| {
-            let q = q3.clone();
-            let s = case.text.clone();
-            async move {
-                let res = t
-                    .query(Query::new(q).with_params(ydb_params! {
-                        "$val" => s,
-                    }))
-                    .await?;
-                let mut row = res.into_only_row()?;
-                Ok(row.remove_field_by_name("db_result")?)
-            }
-        })
-        .await?;
+    let recv_parsed = {
+        let s = case.text.clone();
+        let mut row = client
+            .query_client()
+            .query_row(&q3)
+            .params(ydb_params!("$val" => s))
+            .await?;
+        row.remove_field_by_name("db_result")?
+    };
     let inner_parsed = unwrap_optional(recv_parsed, &case.yql_type, &case.text)?;
     assert!(
         value_roundtrip_eq(&case.value, &inner_parsed),

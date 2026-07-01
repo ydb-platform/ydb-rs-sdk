@@ -1,4 +1,5 @@
 use crate::grpc_wrapper::raw_table_service::copy_table::RawCopyTableItem;
+use crate::grpc_wrapper::raw_table_service::rename_tables::RawRenameTableItem;
 
 #[derive(Clone)]
 pub struct CopyTableItem {
@@ -20,6 +21,33 @@ impl CopyTableItem {
 
 impl From<CopyTableItem> for RawCopyTableItem {
     fn from(value: CopyTableItem) -> Self {
+        value.inner
+    }
+}
+
+#[derive(Clone)]
+pub struct RenameTableItem {
+    inner: RawRenameTableItem,
+}
+
+impl RenameTableItem {
+    pub fn new(
+        source_path: impl Into<String>,
+        destination_path: impl Into<String>,
+        replace_destination: bool,
+    ) -> Self {
+        Self {
+            inner: RawRenameTableItem {
+                source_path: source_path.into(),
+                destination_path: destination_path.into(),
+                replace_destination,
+            },
+        }
+    }
+}
+
+impl From<RenameTableItem> for RawRenameTableItem {
+    fn from(value: RenameTableItem) -> Self {
         value.inner
     }
 }

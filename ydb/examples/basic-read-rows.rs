@@ -1,6 +1,6 @@
 use std::time::Duration;
 use tokio::time::timeout;
-use ydb::{ydb_params, ydb_struct, ClientBuilder, Query, Value, YdbError, YdbResult};
+use ydb::{ydb_params, ydb_struct, ClientBuilder, Value, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -17,12 +17,12 @@ async fn main() -> YdbResult<()> {
     let table_name = "test";
 
     let _ = table_client
-        .retry_execute_scheme_query(format!("DROP TABLE {table_name}"))
+        .execute_scheme_query(format!("DROP TABLE {table_name}"))
         .await; // ignore drop error
 
     // create table
     table_client
-        .retry_execute_scheme_query(format!(
+        .execute_scheme_query(format!(
             "CREATE TABLE {table_name} (id Int64 NOT NULL, val Utf8, PRIMARY KEY(id))"
         ))
         .await?;
@@ -50,21 +50,15 @@ async fn main() -> YdbResult<()> {
 
     let list = Value::list_from(example, rows)?;
 
-    let query = Query::new(
-        "
+    client
+        .query_client()
+        .exec(
+            "
 UPSERT INTO test
 SELECT * FROM AS_TABLE($list)
 ",
-    )
-    .with_params(ydb_params!("$list" => list));
-
-    table_client
-        .retry_transaction(|t| async {
-            let mut t = t;
-            t.query(query.clone()).await?;
-            t.commit().await?;
-            Ok(())
-        })
+        )
+        .params(ydb_params!("$list" => list))
         .await?;
 
     let keys = vec![
@@ -74,7 +68,7 @@ SELECT * FROM AS_TABLE($list)
     ];
 
     let result_set = table_client
-        .retry_read_rows(format!("/local/{table_name}"), keys, None)
+        .read_rows(format!("/local/{table_name}"), keys, None)
         .await?;
 
     let mut rows = result_set.rows();

@@ -1,6 +1,6 @@
 use std::time::Duration;
 use tokio::time::timeout;
-use ydb::{ydb_params, ClientBuilder, Query, Row, YdbError, YdbResult};
+use ydb::{ClientBuilder, Row, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -14,67 +14,36 @@ async fn main() -> YdbResult<()> {
     };
 
     let table_client = client.table_client();
-    let _ = table_client
-        .retry_execute_scheme_query("DROP TABLE test")
-        .await; // ignore drop error
+    let mut qc = client.query_client();
+    let _ = table_client.execute_scheme_query("DROP TABLE test").await; // ignore drop error
 
     // create table
     table_client
-        .retry_execute_scheme_query("CREATE TABLE test (id Int64, val Utf8, PRIMARY KEY(id))")
+        .execute_scheme_query("CREATE TABLE test (id Int64, val Utf8, PRIMARY KEY(id))")
         .await?;
 
     // fill with data
-    table_client
-        .retry_transaction(|mut t| async move {
-            // upsert 100 rows in loop
-            // use upsert instead of insert because insert need check if previous row exist
-            // and can't execute second time in the transaction
-            for i in 1..100 {
-                t.query(
-                    Query::new(
-                        "
-                    UPSERT INTO test (id, val) VALUES ($id, $val)
-                    ",
-                    )
-                    .with_params(ydb_params!(
-                        "$id" => i as i64,
-                        "$val" => format!("val: {}", i)
-                    )),
-                )
+    qc.retry_transaction(async |tx| {
+        for i in 1..100 {
+            tx.exec("UPSERT INTO test (id, val) VALUES ($id, $val)")
+                .param("$id", i as i64)
+                .param("$val", format!("val: {i}"))
                 .await?;
-            }
-            t.commit().await?;
-            Ok(())
-        })
-        .await
-        .unwrap();
+        }
+        Ok(())
+    })
+    .await?;
 
     // Select one row result
-    let sum: Option<i64> = table_client
-        .retry_transaction(|mut t| async move {
-            let value = t
-                .query(Query::new("SELECT SUM(id) AS sum FROM test"))
-                .await?
-                .into_only_row()?
-                .remove_field_by_name("sum")?;
-            let res = value.try_into(); // res: YdbResult<Option<i64>>
-            Ok(res.unwrap())
-        })
-        .await?;
+    let mut row = qc.query_row("SELECT SUM(id) AS sum FROM test").await?;
+    let sum: Option<i64> = row.remove_field_by_name("sum")?.try_into()?;
     println!("sum: {}", sum.unwrap_or(-1));
 
     // select first 10 rows
-    let rows: Vec<Row> = table_client
-        .retry_transaction(|mut t| async move {
-            Ok(
-                t.query(Query::new("SELECT * FROM test ORDER BY id LIMIT 10"))
-                    .await?
-                    .into_only_result()?
-                    .rows()
-                    .collect(),
-            )
-        })
+    let result_set = qc
+        .query_result_set("SELECT * FROM test ORDER BY id LIMIT 10")
         .await?;
+    let rows: Vec<Row> = result_set.rows().collect();
 
     for mut row in rows {
         let id: Option<i64> = row.remove_field_by_name("id")?.try_into()?;
