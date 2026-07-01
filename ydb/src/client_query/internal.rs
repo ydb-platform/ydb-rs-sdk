@@ -32,7 +32,3 @@ impl ExecCoreRef<'_> {
         }
     }
 }
-
-pub(crate) trait HasCore {
-    fn core_mut(&mut self) -> ExecCoreRef<'_>;
-}

@@ -45,16 +45,19 @@ On **"update memory bank"** — review all core files in [`.agents/context/READM
 - Integration tests are `#[ignore]`; need `YDB_CONNECTION_STRING` and `--include-ignored`.
 - `ydb-grpc` is generated; clippy excludes it. Do not bump crate versions unless asked.
 - Non-trivial changes: discuss in a GitHub issue first ([`CONTRIBUTING.md`](CONTRIBUTING.md)).
+- **Every task must end with the linter gate** (see [Done when](#done-when)) — do not hand off or open a PR until `cargo fmt --check` and CI clippy pass on touched crates.
 
 ## Done when
 
-From repo root:
+From repo root — **run before every handoff / PR**, even for small or doc-only changes in Rust code:
 
 ```bash
 cargo fmt --check
 cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
 cargo test --workspace
 ```
+
+Fix all clippy warnings (`-D warnings`); do not rely on `cargo test` alone. `ydb-grpc` is excluded from clippy (generated code).
 
 Also: update `progress.md` only when the delivered work merges.
 

@@ -5,10 +5,14 @@ use std::time::Duration;
 use async_trait::async_trait;
 use slo_framework::kv::{Database, KvWorkload, Params};
 use slo_framework::{test_row_from_row, Framework, RowID, TestRow, Workload};
-use ydb::{ydb_params, ClientBuilder, Query, TableClient, YdbOrCustomerError};
+use ydb::{
+    ydb_params, ClientBuilder, Mode, Query, SessionPoolSettings, TableClient, TransactionOptions,
+    YdbOrCustomerError,
+};
 
 pub struct Storage {
-    table_client: TableClient,
+    read_table_client: TableClient,
+    write_table_client: TableClient,
     table_path: String,
     read_timeout: Duration,
     write_timeout: Duration,
@@ -26,8 +30,32 @@ impl Storage {
 
         client.wait().await.map_err(|err| err.to_string())?;
 
+        let pool_limit = params.pool_size() as usize;
+        let session_rpc_timeout = params.read_timeout.max(params.write_timeout);
+        let client = client
+            .with_session_pool(
+                SessionPoolSettings::new()
+                    .with_limit(pool_limit)
+                    .with_warm_up(pool_limit)
+                    .with_session_create_timeout(session_rpc_timeout)
+                    .with_session_delete_timeout(session_rpc_timeout),
+            )
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let table_client = client.table_client().clone_with_idempotent_operations(true);
+
         Ok(Self {
-            table_client: client.table_client(),
+            read_table_client: table_client.clone_with_transaction_options(
+                TransactionOptions::default()
+                    .with_autocommit(true)
+                    .with_mode(Mode::SnapshotReadOnly),
+            ),
+            write_table_client: table_client.clone_with_transaction_options(
+                TransactionOptions::default()
+                    .with_autocommit(true)
+                    .with_mode(Mode::SerializableReadWrite),
+            ),
             table_path: params.table_path.clone(),
             read_timeout: params.read_timeout,
             write_timeout: params.write_timeout,
@@ -65,7 +93,7 @@ impl Database for Storage {
 
         tokio::time::timeout(
             self.write_timeout,
-            self.table_client.retry_execute_scheme_query(query),
+            self.write_table_client.retry_execute_scheme_query(query),
         )
         .await
         .map_err(|_| "create table timeout".to_string())?
@@ -76,7 +104,7 @@ impl Database for Storage {
         let query = format!("DROP TABLE `{table}`", table = self.table_path);
         tokio::time::timeout(
             self.write_timeout,
-            self.table_client.retry_execute_scheme_query(query),
+            self.write_table_client.retry_execute_scheme_query(query),
         )
         .await
         .map_err(|_| "drop table timeout".to_string())?
@@ -97,7 +125,7 @@ impl Database for Storage {
 
         let attempts_for_tx = attempts.clone();
         let result = tokio::time::timeout(self.read_timeout, async {
-            self.table_client
+            self.read_table_client
                 .retry_transaction(|t| {
                     let query = query.clone();
                     let attempts_for_tx = attempts_for_tx.clone();
@@ -147,7 +175,7 @@ impl Database for Storage {
 
         let attempts_for_tx = attempts.clone();
         tokio::time::timeout(self.write_timeout, async {
-            self.table_client
+            self.write_table_client
                 .retry_transaction(|t| {
                     let query = query.clone();
                     let attempts_for_tx = attempts_for_tx.clone();

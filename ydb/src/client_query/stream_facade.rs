@@ -7,7 +7,9 @@ use crate::result::ResultSet;
 use crate::types::Value;
 
 use super::exec::{
-    apply_stream_tx_id, resolve_commit_tx, transaction_finish_committed_via_query, CallOptions,
+    apply_stream_tx_id, finish_pooled_query_stream, resolve_commit_tx,
+    transaction_finish_committed_via_query, transaction_mark_invalidated_on_query_error,
+    CallOptions,
 };
 use super::internal::ExecCoreRef;
 
@@ -30,9 +32,13 @@ impl Drop for QueryStream<'_> {
         }
         // Do not mark the transaction finished here: with_commit(true) requires
         // draining the stream and calling close() so the server can commit.
+        let dropped_mid_stream = self.stream.in_progress();
         self.stream.cancel();
         if let ExecCoreRef::Transaction(ctx) = &mut self.core {
             if let Some(lease) = &mut ctx.pooled_lease {
+                if dropped_mid_stream {
+                    lease.invalidate_session();
+                }
                 lease.end_use();
             }
         }
@@ -41,9 +47,18 @@ impl Drop for QueryStream<'_> {
 
 impl QueryStream<'_> {
     pub async fn next_result_set(&mut self) -> YdbResult<Option<ResultSet>> {
-        let (raw, tx_id) = match self.stream.next_result_set().await? {
-            Some(v) => v,
-            None => return Ok(None),
+        let next = match self.stream.next_result_set().await {
+            Ok(v) => v,
+            Err(err) => {
+                let ydb_err = YdbError::from(err);
+                if let ExecCoreRef::Transaction(ctx) = &mut self.core {
+                    transaction_mark_invalidated_on_query_error(ctx, &ydb_err);
+                }
+                return Err(ydb_err);
+            }
+        };
+        let Some((raw, tx_id)) = next else {
+            return Ok(None);
         };
         if let ExecCoreRef::Transaction(ctx) = &mut self.core {
             apply_stream_tx_id(ctx, tx_id);
@@ -58,14 +73,25 @@ impl QueryStream<'_> {
     }
 
     pub async fn close(mut self) -> YdbResult<()> {
-        let meta = self.stream.close().await.map_err(YdbError::from)?;
-        if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-            apply_stream_tx_id(ctx, meta.tx_id);
-            if self.commit_tx {
-                transaction_finish_committed_via_query(ctx).await;
+        match self.stream.close().await {
+            Ok(meta) => {
+                finish_pooled_query_stream(&mut self.stream);
+                if let ExecCoreRef::Transaction(ctx) = &mut self.core {
+                    apply_stream_tx_id(ctx, meta.tx_id);
+                    if self.commit_tx {
+                        transaction_finish_committed_via_query(ctx).await;
+                    }
+                }
+                Ok(())
+            }
+            Err(err) => {
+                let ydb_err = YdbError::from(err);
+                if let ExecCoreRef::Transaction(ctx) = &mut self.core {
+                    transaction_mark_invalidated_on_query_error(ctx, &ydb_err);
+                }
+                Err(ydb_err)
             }
         }
-        Ok(())
     }
 }
 
@@ -82,19 +108,36 @@ pub(crate) async fn materialize_query(
     let commit_tx = resolve_commit_tx(core, &opts);
     let result: YdbResult<Vec<ResultSet>> = async {
         let mut stream = core.begin_stream(text, params, opts, true).await?;
-        let raw_sets = stream
-            .materialize_all_result_sets()
-            .await
-            .map_err(YdbError::from)?;
+        let raw_sets = match stream.materialize_all_result_sets().await {
+            Ok(v) => v,
+            Err(err) => {
+                let ydb_err = YdbError::from(err);
+                if let ExecCoreRef::Transaction(ctx) = core {
+                    transaction_mark_invalidated_on_query_error(ctx, &ydb_err);
+                }
+                return Err(ydb_err);
+            }
+        };
         let mut sets = Vec::with_capacity(raw_sets.len());
         for raw in raw_sets {
             sets.push(ResultSet::try_from(raw)?);
         }
-        let meta = stream.close().await.map_err(YdbError::from)?;
-        if let ExecCoreRef::Transaction(ctx) = core {
-            apply_stream_tx_id(ctx, meta.tx_id);
-            if commit_tx {
-                transaction_finish_committed_via_query(ctx).await;
+        match stream.close().await {
+            Ok(meta) => {
+                finish_pooled_query_stream(&mut stream);
+                if let ExecCoreRef::Transaction(ctx) = core {
+                    apply_stream_tx_id(ctx, meta.tx_id);
+                    if commit_tx {
+                        transaction_finish_committed_via_query(ctx).await;
+                    }
+                }
+            }
+            Err(err) => {
+                let ydb_err = YdbError::from(err);
+                if let ExecCoreRef::Transaction(ctx) = core {
+                    transaction_mark_invalidated_on_query_error(ctx, &ydb_err);
+                }
+                return Err(ydb_err);
             }
         }
         Ok(sets)

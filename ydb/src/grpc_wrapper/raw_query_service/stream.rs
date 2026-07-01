@@ -22,11 +22,26 @@ struct PartialResultSet {
 }
 
 /// Holds a pooled session lease until the stream is finished.
-struct SessionStreamGuard(#[allow(dead_code)] Option<Box<dyn std::any::Any + Send>>);
+struct SessionStreamGuard(Option<Box<dyn std::any::Any + Send>>);
 
 impl SessionStreamGuard {
     fn hold<T: Send + 'static>(value: T) -> Self {
         Self(Some(Box::new(value)))
+    }
+
+    fn finish_typed<T: Send + 'static>(&mut self, finish: impl FnOnce(&mut T)) {
+        let Some(holder) = self.0.take() else {
+            return;
+        };
+        match holder.downcast::<T>() {
+            Ok(mut typed) => {
+                finish(&mut typed);
+                self.0 = Some(typed);
+            }
+            Err(holder) => {
+                self.0 = Some(holder);
+            }
+        }
     }
 }
 
@@ -83,6 +98,10 @@ impl ExecuteQueryStream {
     pub fn with_session_guard(mut self, guard: impl Send + 'static) -> Self {
         self.session_guard = SessionStreamGuard::hold(guard);
         self
+    }
+
+    pub(crate) fn finish_session_guard<T: Send + 'static>(&mut self, finish: impl FnOnce(&mut T)) {
+        self.session_guard.finish_typed(finish);
     }
 
     pub fn stats(&self) -> Option<Duration> {
@@ -335,6 +354,10 @@ impl ExecuteQueryStream {
             return Some(id);
         }
         self.pending_part.as_ref().and_then(tx_id_from_part)
+    }
+
+    pub(crate) fn in_progress(&self) -> bool {
+        !self.finished
     }
 
     /// Drop the gRPC stream without draining unread parts (sends RST_STREAM).
