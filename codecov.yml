@@ -3,3 +3,19 @@ ignore:
   - ydb-grpc/src/generated
   - ydb/examples
   - tests/slo
+
+# Cross-repo uniform metric: every YDB SDK repo defines this same component_id,
+# so native-SDK coverage is queryable identically via the Codecov API
+# (?component_id=native-sdk), regardless of how each repo tags its uploads.
+#
+# native-sdk = the ydb crate plus the hand-written parts of ydb-grpc (lib.rs,
+# manual_workarounds.rs); the generated protobuf code (ydb-grpc/src/generated) is
+# already excluded via ignore above, mirroring the Python SDK where the grpc
+# wrapper counts but the generated stubs do not.
+component_management:
+  individual_components:
+    - component_id: native-sdk
+      name: Native SDK
+      paths:
+        - "ydb/**"
+        - "ydb-grpc/**"
