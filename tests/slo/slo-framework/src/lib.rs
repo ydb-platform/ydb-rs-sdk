@@ -15,4 +15,4 @@ pub use kv::{Database, KvWorkload};
 pub use logger::Logger;
 pub use metrics::Metrics;
 pub use row::{test_row_from_row, RowID, TestRow};
-pub use topic::{Topic, TopicWorkload};
+pub use topic::{TopicService, TopicWorkload};
