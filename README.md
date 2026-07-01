@@ -19,7 +19,7 @@ Rust 1.85.0 or newer
 Add the YDB dependency to your project using `cargo add ydb` or add this your Cargo.toml:
 ```toml
 [dependencies]
-ydb = "0.13.5"
+ydb = "0.14.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

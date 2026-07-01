@@ -7,7 +7,10 @@ use crate::client_table::TableClient;
 use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::load_balancer::SharedLoadBalancer;
+use crate::session_pool::{default_session_pool_settings, SessionPool};
 use crate::waiter::Waiter;
+
+pub use crate::session_pool::{SessionPoolSettings, SessionPoolStats};
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,7 +21,11 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use tracing::trace;
 
-/// YDB client
+/// YDB client.
+///
+/// The built-in session pool defaults to a limit of **50** concurrent sessions (shared by
+/// table and query clients). The legacy table-only pool used **1000**; use
+/// [`Self::with_session_pool`] with an explicit limit when migrating high-concurrency workloads.
 pub struct Client {
     credentials: DBCredentials,
     load_balancer: SharedLoadBalancer,
@@ -26,6 +33,7 @@ pub struct Client {
     timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
     executor: Arc<dyn Executor>,
+    session_pool: SessionPool,
 }
 
 impl Client {
@@ -41,6 +49,13 @@ impl Client {
             None => default_executor()?,
         };
 
+        let session_pool = SessionPool::new_explicit_sync(
+            connection_manager.clone(),
+            TimeoutSettings::default(),
+            discovery.clone(),
+            default_session_pool_settings(),
+        );
+
         Ok(Client {
             credentials,
             load_balancer,
@@ -48,7 +63,33 @@ impl Client {
             timeouts: TimeoutSettings::default(),
             connection_manager,
             executor,
+            session_pool,
         })
+    }
+
+    /// Replace the driver session pool (CreateSession + AttachSession) and optionally warm it up.
+    ///
+    /// Table and query clients created from this driver share the same pool.
+    ///
+    /// Pool acquire timeout is taken from [`Self::timeouts`] at creation time, and updated
+    /// when [`Self::with_timeouts`] is called later.
+    pub async fn with_session_pool(self, settings: SessionPoolSettings) -> YdbResult<Self> {
+        let session_pool = SessionPool::new_explicit(
+            self.connection_manager.clone(),
+            self.timeouts,
+            self.discovery.clone(),
+            settings,
+        )
+        .await?;
+        Ok(Self {
+            session_pool,
+            ..self
+        })
+    }
+
+    /// Session pool counters for the driver (shared by table and query clients).
+    pub fn session_pool_stats(&self) -> SessionPoolStats {
+        self.session_pool.stats()
     }
 
     pub fn database(&self) -> String {
@@ -57,7 +98,11 @@ impl Client {
 
     /// Create instance of client for table service
     pub fn table_client(&self) -> TableClient {
-        TableClient::new(self.connection_manager.clone(), self.timeouts)
+        TableClient::new(
+            self.connection_manager.clone(),
+            self.timeouts,
+            self.session_pool.clone(),
+        )
     }
 
     /// Create instance of client for query service.
@@ -65,7 +110,7 @@ impl Client {
         QueryClient::new(
             self.connection_manager.clone(),
             self.timeouts,
-            self.discovery.clone(),
+            self.session_pool.clone(),
         )
     }
 
@@ -94,8 +139,11 @@ impl Client {
         OperationClient::new(self.timeouts, self.connection_manager.clone())
     }
 
+    /// Update operation timeouts on the driver and the session pool acquire timeout.
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {
         self.timeouts = timeouts;
+        self.session_pool
+            .set_acquire_timeout(timeouts.operation_timeout);
         self
     }
 
