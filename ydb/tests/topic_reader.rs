@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::task::Poll;
 use tokio::sync::Notify;
 use ydb::{
-    ClientBuilder, Codec, Executor, TopicReader, TopicReaderBatch, TopicReaderCommitMarker,
-    TopicReaderOptionsBuilder, YdbResult,
+    ClientBuilder, Codec, CompressionDecoder, Executor, TopicReader, TopicReaderBatch,
+    TopicReaderCommitMarker, TopicReaderOptionsBuilder, YdbResult,
 };
 use ydb_grpc::ydb_proto::topic::stream_read_message::from_client::ClientMessage as ReadFromClient;
 
@@ -24,6 +24,54 @@ impl Executor for InplaceExecutor {
 
     fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>) {
         task();
+    }
+}
+
+// Routes each compression task to tokio's blocking pool so a synchronously
+// blocking decoder cannot stall the runtime.
+struct BlockingExecutor;
+
+impl Executor for BlockingExecutor {
+    fn available_parallelism(&self) -> std::num::NonZeroUsize {
+        const { std::num::NonZeroUsize::new(1).unwrap() }
+    }
+
+    fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+        tokio::task::spawn_blocking(task);
+    }
+}
+
+// Signals `entered` on decode entry, then parks on `release`.
+#[derive(Debug)]
+struct GatedDecoder {
+    codec: Codec,
+    entered: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+}
+
+impl CompressionDecoder for GatedDecoder {
+    fn decode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + 'static>> {
+        if let Some(tx) = self
+            .entered
+            .lock()
+            .expect("gated decoder entered mutex poisoned")
+            .take()
+        {
+            let _ = tx.send(());
+        }
+        if let Some(rx) = self
+            .release
+            .lock()
+            .expect("gated decoder release mutex poisoned")
+            .take()
+        {
+            let _ = rx.recv();
+        }
+        Ok(data.to_vec())
+    }
+
+    fn codec(&self) -> Codec {
+        self.codec
     }
 }
 
@@ -50,6 +98,7 @@ const PARTITION_SESSION_ID: i64 = 1;
 const PARTITION_SESSION_ID_2: i64 = 2;
 const PARTITION_ID_2: i64 = 1;
 const UNKNOWN_CODEC: Codec = Codec { code: 10001 };
+const RACE_CODEC: Codec = Codec { code: 10002 };
 
 #[derive(Default)]
 struct ServerState {
@@ -58,6 +107,8 @@ struct ServerState {
     auto_partitioning_seen: AtomicBool,
     commits_seen: AtomicUsize,
     commits_changed: Notify,
+    stops_seen: AtomicUsize,
+    stops_changed: Notify,
     stream_id: Arc<std::sync::Mutex<u64>>,
 }
 
@@ -80,6 +131,18 @@ impl ServerState {
             tokio::pin!(notified);
             notified.as_mut().enable();
             if self.partitions_ready.load(Ordering::SeqCst) >= target {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    async fn wait_stops(&self, target: usize) {
+        loop {
+            let notified = self.stops_changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.stops_seen.load(Ordering::SeqCst) >= target {
                 return;
             }
             notified.await;
@@ -113,6 +176,10 @@ impl Handler for Counter {
                 ReadFromClient::CommitOffsetRequest(_) => {
                     self.state.commits_seen.fetch_add(1, Ordering::SeqCst);
                     self.state.commits_changed.notify_waiters();
+                }
+                ReadFromClient::StopPartitionSessionResponse(_) => {
+                    self.state.stops_seen.fetch_add(1, Ordering::SeqCst);
+                    self.state.stops_changed.notify_waiters();
                 }
                 _ => {}
             }
@@ -589,6 +656,64 @@ topic_test!(
         let batch = reader.read_batch().await?;
         assert_eq!(batch.messages.len(), 1);
         assert_eq!(batch.messages[0].get_partition_id(), 1);
+        Ok(())
+    }
+);
+
+topic_test!(
+    stop_during_in_flight_decompression_must_not_kill_reader,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let decoder = GatedDecoder {
+            codec: RACE_CODEC,
+            entered: std::sync::Mutex::new(Some(entered_tx)),
+            release: std::sync::Mutex::new(Some(release_rx)),
+        };
+
+        let client = ClientBuilder::new_from_connection_string(format!(
+            "{}{DATABASE}?use_discovery=false",
+            driver.server.endpoint()
+        ))?
+        .with_executor(Arc::new(BlockingExecutor))
+        .client()?;
+        let mut reader = client
+            .topic_client()
+            .create_reader_with_params(
+                TopicReaderOptionsBuilder::default()
+                    .consumer(CONSUMER.to_string())
+                    .topic(TOPIC_PATH.into())
+                    .add_decoder(decoder)
+                    .build()?,
+            )
+            .await?;
+        driver.state.wait_partitions(1).await;
+
+        let payload = b"payload";
+        driver.send_read_response_with_codec(0, payload.len() as i64, payload.to_vec(), RACE_CODEC);
+        entered_rx.await.expect("decoder entered");
+
+        let stream_id = driver.state.current_stream_id();
+        driver.send(Reply::Topic(builders::stop_partition_session_request(
+            stream_id,
+            PARTITION_SESSION_ID,
+            /* graceful */ false,
+            /* committed_offset */ 0,
+        )));
+        driver.state.wait_stops(1).await;
+
+        release_tx.send(()).expect("release decoder");
+
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(500), reader.read_batch()).await;
+
+        if let Ok(Err(err)) = result {
+            panic!("reader failed permanently after a benign stop-vs-in-flight race: {err}");
+        }
+
         Ok(())
     }
 );
