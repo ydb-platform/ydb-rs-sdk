@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use http::uri::Authority;
 use http::Uri;
 
-use crate::errors::YdbResult;
+use crate::errors::{NeedRetry, YdbResult};
 
 use crate::waiter::Waiter;
 
@@ -200,7 +200,17 @@ impl TimerDiscovery {
     async fn start_discovery(&self) -> YdbResult<()> {
         let state_weak = Arc::downgrade(&self.state);
 
-        self.discovery_now().await?;
+        loop {
+            let Err(err) = self.discovery_now().await else {
+                break;
+            };
+
+            if err.need_retry() == NeedRetry::False {
+                return Err(err);
+            }
+
+            tokio::time::sleep(self.interval).await;
+        }
 
         tokio::spawn(DiscoverySharedState::background_discovery(
             state_weak,
