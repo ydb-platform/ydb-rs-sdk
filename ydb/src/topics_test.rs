@@ -940,7 +940,7 @@ async fn write_to_specific_partition() -> YdbResult<()> {
 #[traced_test]
 #[ignore] // need YDB access
 async fn read_batch_merges_and_respects_hard_limit() -> YdbResult<()> {
-    use crate::TopicReaderOptionsBuilder;
+    use crate::TopicReaderOptions;
 
     timeout(Duration::from_secs(10), async {
         let client = create_client().await?;
@@ -997,11 +997,11 @@ async fn read_batch_merges_and_respects_hard_limit() -> YdbResult<()> {
         }
         writer.stop().await?;
 
-        let options = TopicReaderOptionsBuilder::default()
+        let options = TopicReaderOptions::builder()
             .consumer(consumer_name.clone())
-            .topic(topic_path.clone().into())
+            .topic(topic_path.clone())
             .batch_size(BATCH_SIZE)
-            .build()?;
+            .build();
 
         let mut reader = topic_client.create_reader_with_params(options).await?;
 

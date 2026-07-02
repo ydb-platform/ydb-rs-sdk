@@ -6,9 +6,7 @@ use crate::client_common::TokenCache;
 use crate::client_query::Transaction;
 use crate::client_topic::list_types::{AlterConsumer, Consumer, MeteringMode};
 use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
-use crate::client_topic::topicreader::reader_options::{
-    TopicReaderOptions, TopicReaderOptionsBuilder,
-};
+use crate::client_topic::topicreader::reader_options::TopicReaderOptions;
 use crate::client_topic::topicwriter::writer::TopicWriter;
 use crate::client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
@@ -216,10 +214,10 @@ impl TopicClient {
         consumer: impl Into<String>,
         topic: impl Into<TopicSelectors>,
     ) -> YdbResult<TopicReader> {
-        let options = TopicReaderOptionsBuilder::default()
-            .consumer(consumer.into())
-            .topic(topic.into())
-            .build()?;
+        let options = TopicReaderOptions::builder()
+            .consumer(consumer)
+            .topic(topic)
+            .build();
         TopicReader::new(
             options,
             self.connection_manager.clone(),

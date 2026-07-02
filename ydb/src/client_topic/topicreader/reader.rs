@@ -10,9 +10,7 @@ use crate::client_common::TokenCache;
 use crate::client_query::Transaction;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicreader::messages::TopicReaderBatch;
-use crate::client_topic::topicreader::reader_options::{
-    TopicReaderOptions, TopicReaderOptionsBuilder,
-};
+use crate::client_topic::topicreader::reader_options::TopicReaderOptions;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
 use crate::grpc_wrapper::raw_topic_service::common::partition::RawOffsetsRange;
@@ -30,7 +28,8 @@ use super::runtime::RuntimeHandle;
 
 pub struct TopicReader {
     pub(super) manager: GrpcConnectionManager,
-    options: TopicReaderOptions,
+    batch_size: usize,
+    consumer: String,
     reconnect_handle: JoinHandle<YdbResult<()>>,
     runtime: RuntimeHandle,
     cancellation: CancellationToken,
@@ -50,13 +49,15 @@ impl TopicReader {
         compression_executor: Arc<dyn Executor>,
     ) -> YdbResult<Self> {
         let cancellation = CancellationToken::new();
+        let batch_size = options.batch_size;
+        let consumer = options.consumer.clone();
         let ReconnectorTask {
             join_handle,
             runtime,
             cancellation_token,
         } = Reconnector::new(
             manager.clone(),
-            options.clone(),
+            options,
             token_cache,
             compression_executor,
             cancellation,
@@ -66,7 +67,8 @@ impl TopicReader {
 
         Ok(Self {
             manager,
-            options,
+            batch_size,
+            consumer,
             reconnect_handle: join_handle,
             runtime,
             cancellation: cancellation_token,
@@ -74,7 +76,7 @@ impl TopicReader {
     }
 
     pub async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
-        self.runtime.pop_batch(self.options.batch_size).await
+        self.runtime.pop_batch(self.batch_size).await
     }
 
     /// Read a batch and register consumer offsets via [`UpdateOffsetsInTransaction`]
@@ -140,7 +142,7 @@ impl TopicReader {
     }
 
     pub(super) fn consumer(&self) -> &str {
-        &self.options.consumer
+        &self.consumer
     }
 
     async fn update_offsets_in_transaction(
@@ -170,7 +172,7 @@ impl TopicReader {
                     }],
                 }],
             }],
-            consumer: self.options.consumer.clone(),
+            consumer: self.consumer.clone(),
         };
 
         let mut topic_service = self.manager.get_auth_service(RawTopicClient::new).await?;
@@ -187,7 +189,7 @@ impl Drop for TopicReader {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TopicSelectors(pub Vec<TopicSelector>);
 
 impl TopicSelectors {
@@ -200,8 +202,9 @@ impl TopicSelectors {
 }
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
-#[derive(Clone)]
+#[derive(bon::Builder, Clone, Debug)]
 pub struct TopicSelector {
+    #[builder(into)]
     pub path: String,
     pub partition_ids: Option<Vec<i64>>,
     pub read_from: Option<SystemTime>,
@@ -243,17 +246,6 @@ impl<S: Into<TopicSelector>> From<S> for TopicSelectors {
 impl<S: Into<TopicSelector>> FromIterator<S> for TopicSelectors {
     fn from_iter<I: IntoIterator<Item = S>>(iter: I) -> Self {
         Self(iter.into_iter().map(Into::into).collect())
-    }
-}
-
-impl TopicReaderOptionsBuilder {
-    pub fn from_consumer_topic(
-        consumer: impl Into<String>,
-        topic: impl Into<TopicSelectors>,
-    ) -> Self {
-        let mut builder = TopicReaderOptionsBuilder::default();
-        builder.consumer(consumer.into()).topic(topic.into());
-        builder
     }
 }
 

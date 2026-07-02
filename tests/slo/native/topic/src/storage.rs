@@ -5,7 +5,7 @@ use slo_framework::topic::{Params, TopicService};
 use slo_framework::{Framework, TopicWorkload, Workload};
 use ydb::{
     ClientBuilder, ConsumerBuilder, CreateTopicOptionsBuilder, PartitioningStrategy, TopicClient,
-    TopicReader, TopicReaderOptionsBuilder, TopicSelector, TopicWriter, TopicWriterOptionsBuilder,
+    TopicReader, TopicReaderOptions, TopicSelector, TopicWriter, TopicWriterOptionsBuilder,
 };
 
 fn producer_id(prefix: &str, idx: u32) -> String {
@@ -93,12 +93,10 @@ impl TopicService for TopicStorage {
         for _ in 0..self.params.reader_count {
             let selector = TopicSelector::new(self.params.topic_path.clone());
 
-            let options = TopicReaderOptionsBuilder::from_consumer_topic(
-                self.params.consumer_name.clone(),
-                selector,
-            )
-            .build()
-            .map_err(|err| err.to_string())?;
+            let options = TopicReaderOptions::builder()
+                .consumer(self.params.consumer_name.clone())
+                .topic(selector)
+                .build();
 
             let reader = tc
                 .create_reader_with_params(options)

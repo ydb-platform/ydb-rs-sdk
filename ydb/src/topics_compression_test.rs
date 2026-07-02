@@ -15,7 +15,7 @@ use crate::Executor;
 use crate::TopicWriter;
 use crate::TopicWriterMessage;
 use crate::{
-    Client, Codec, TopicClient, TopicReaderOptionsBuilder, TopicWriterMessageBuilder,
+    Client, Codec, TopicClient, TopicReaderOptions, TopicWriterMessageBuilder,
     TopicWriterOptionsBuilder, YdbError, YdbResult,
 };
 use tracing::trace;
@@ -135,11 +135,11 @@ async fn roundtrip<W, R>(
     selection: CodecSelection,
     messages: Vec<Vec<u8>>,
     configure_writer: W,
-    configure_reader: R,
+    make_reader_options: R,
 ) -> YdbResult<()>
 where
     W: FnOnce(&mut TopicWriterOptionsBuilder),
-    R: FnOnce(&mut TopicReaderOptionsBuilder),
+    R: FnOnce(String, String) -> TopicReaderOptions,
 {
     let (mut topic_client, topic_path, consumer_name) =
         topic_setup(test_name, supported_codecs).await?;
@@ -161,12 +161,8 @@ where
     timeout(writer.flush()).await?;
     stop_writer(writer).await?;
 
-    let mut reader_opts = TopicReaderOptionsBuilder::default();
-    reader_opts.topic(topic_path.into()).consumer(consumer_name);
-    configure_reader(&mut reader_opts);
-
     let mut reader = topic_client
-        .create_reader_with_params(reader_opts.build()?)
+        .create_reader_with_params(make_reader_options(topic_path, consumer_name))
         .await?;
 
     let expected_count = messages.len();
@@ -288,8 +284,8 @@ async fn codec_fail_fast() -> YdbResult<()> {
     let fail_decoder = Arc::new(AtomicBool::new(false));
     let mut reader = topic_client
         .create_reader_with_params(
-            TopicReaderOptionsBuilder::default()
-                .topic(topic_path.clone().into())
+            TopicReaderOptions::builder()
+                .topic(topic_path.clone())
                 .consumer(consumer_name)
                 .add_decoder(decoder(Codec::INV, {
                     let fail_decoder = fail_decoder.clone();
@@ -302,7 +298,7 @@ async fn codec_fail_fast() -> YdbResult<()> {
                         invert(data)
                     }
                 }))
-                .build()?,
+                .build(),
         )
         .await?;
 
@@ -359,7 +355,12 @@ async fn codec_gzip_fixed() -> YdbResult<()> {
         CodecSelection::Fixed(Codec::GZIP),
         messages,
         |_| {},
-        |_| {},
+        |topic, consumer| {
+            TopicReaderOptions::builder()
+                .topic(topic)
+                .consumer(consumer)
+                .build()
+        },
     )
     .await
 }
@@ -412,8 +413,8 @@ async fn codec_parallelism() -> YdbResult<()> {
 
     let mut reader = topic_client
         .create_reader_with_params(
-            TopicReaderOptionsBuilder::default()
-                .topic(topic_path.clone().into())
+            TopicReaderOptions::builder()
+                .topic(topic_path.clone())
                 .consumer(consumer_name)
                 .add_decoder(decoder(Codec::PAR, {
                     let barrier = decoder_barrier.clone();
@@ -423,7 +424,7 @@ async fn codec_parallelism() -> YdbResult<()> {
                         Ok(data.into())
                     }
                 }))
-                .build()?,
+                .build(),
         )
         .await?;
 
@@ -458,8 +459,12 @@ async fn codec_auto() -> YdbResult<()> {
         |w| {
             w.add_encoder(encoder(Codec::INV, invert));
         },
-        |r| {
-            r.add_decoder(decoder(Codec::INV, invert));
+        |topic, consumer| {
+            TopicReaderOptions::builder()
+                .topic(topic)
+                .consumer(consumer)
+                .add_decoder(decoder(Codec::INV, invert))
+                .build()
         },
     )
     .await
