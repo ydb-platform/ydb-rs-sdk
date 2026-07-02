@@ -4,7 +4,13 @@
 use std::time::{Duration, Instant};
 
 use tokio::time::sleep;
-use ydb::{ClientBuilder, YdbError, YdbResult};
+use ydb::{ClientBuilder, ExecBuilder, YdbError, YdbResult};
+
+const EXAMPLE_RETRY: Duration = Duration::from_secs(30);
+
+fn idem_exec<'a>(b: ExecBuilder<'a>) -> ExecBuilder<'a> {
+    b.idempotent(true).retry_budget(EXAMPLE_RETRY)
+}
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -14,19 +20,24 @@ async fn main() -> YdbResult<()> {
     let client = ClientBuilder::new_from_connection_string(connection_string)?.client()?;
     client.wait().await?;
 
-    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let mut qc = client.query_client();
     let op_client = client.operation_client();
 
-    qc.exec("CREATE TABLE IF NOT EXISTS script_example (id Uint64, msg Utf8, PRIMARY KEY(id))")
-        .await?;
-    qc.exec("DELETE FROM script_example").await?;
-    qc.exec("UPSERT INTO script_example (id, msg) VALUES (123, \"hello from script\");")
-        .await?;
+    idem_exec(
+        qc.exec("CREATE TABLE IF NOT EXISTS script_example (id Uint64, msg Utf8, PRIMARY KEY(id))"),
+    )
+    .await?;
+    idem_exec(qc.exec("DELETE FROM script_example")).await?;
+    idem_exec(
+        qc.exec("UPSERT INTO script_example (id, msg) VALUES (123, \"hello from script\");"),
+    )
+    .await?;
 
     let op = qc
         .execute_script("SELECT id, msg FROM script_example WHERE id = $id;")
         .param("$id", 123_u64)
         .results_ttl(Duration::from_secs(3600))
+        .retry_budget(EXAMPLE_RETRY)
         .await?;
 
     println!("script operation id={}", op.id);
@@ -53,6 +64,7 @@ async fn main() -> YdbResult<()> {
             .result_set_index(0)
             .rows_limit(1000)
             .fetch_token(&next_token)
+            .retry_budget(EXAMPLE_RETRY)
             .await?;
         next_token = page.next_fetch_token;
 

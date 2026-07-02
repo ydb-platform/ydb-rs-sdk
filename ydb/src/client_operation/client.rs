@@ -15,7 +15,6 @@ use super::builders::{
 };
 use super::types::{ListOperationsRequest, ListOperationsResult, OperationInfo};
 
-pub(crate) const DEFAULT_RETRY_BUDGET: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
 const MAX_RETRY_BACKOFF_MILLISECONDS: u64 = 1_000;
 

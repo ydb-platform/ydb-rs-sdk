@@ -9,7 +9,7 @@ use crate::grpc_wrapper::raw_operation_service::types::{
     RawListOperationsResult, RawOperation,
 };
 
-use super::client::{retry_wait, OperationClient, DEFAULT_RETRY_BUDGET};
+use super::client::{retry_wait, OperationClient};
 use super::types::{ListOperationsRequest, ListOperationsResult, OperationInfo};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -21,16 +21,15 @@ pub(crate) struct OperationCallOptions {
     pub no_retry: bool,
 }
 
-pub(crate) fn resolve_operation_timeout(opts: &OperationCallOptions) -> Duration {
+pub(crate) fn resolve_operation_timeout(opts: &OperationCallOptions) -> Option<Duration> {
     opts.timeout
-        .unwrap_or_else(|| crate::client::TimeoutSettings::default().operation_timeout)
 }
 
 pub(crate) fn resolve_operation_retry_budget(opts: &OperationCallOptions) -> Duration {
     if opts.no_retry {
         Duration::ZERO
     } else {
-        opts.retry_budget.unwrap_or(DEFAULT_RETRY_BUDGET)
+        opts.retry_budget.unwrap_or(Duration::ZERO)
     }
 }
 
@@ -161,11 +160,14 @@ where
     Fut: Future<Output = YdbResult<T>>,
 {
     let timeout_duration = resolve_operation_timeout(opts);
-    match timeout(timeout_duration, operation()).await {
-        Ok(result) => result,
-        Err(_) => Err(YdbError::Transport(format!(
-            "operation service rpc timed out after {timeout_duration:?}"
-        ))),
+    match timeout_duration {
+        Some(limit) => match timeout(limit, operation()).await {
+            Ok(result) => result,
+            Err(_) => Err(YdbError::Transport(format!(
+                "operation service rpc timed out after {limit:?}"
+            ))),
+        },
+        None => operation().await,
     }
 }
 

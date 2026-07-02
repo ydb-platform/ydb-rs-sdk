@@ -153,20 +153,26 @@ impl Client {
     }
 }
 
-const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(600);
+const DEFAULT_OPERATION_TIMEOUT: Option<Duration> = None;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct TimeoutSettings {
-    pub operation_timeout: Duration,
+    pub operation_timeout: Option<Duration>,
 }
 
 impl TimeoutSettings {
     pub(crate) fn operation_params(&self) -> RawOperationParams {
-        RawOperationParams::new_with_timeouts(self.operation_timeout, self.operation_timeout)
+        match self.operation_timeout {
+            Some(timeout) => RawOperationParams::new_with_timeouts(timeout, timeout),
+            None => RawOperationParams::sync_unlimited(),
+        }
     }
 
     pub(crate) fn execute_script_operation_params(&self) -> RawOperationParams {
-        RawOperationParams::for_execute_script(self.operation_timeout, self.operation_timeout)
+        match self.operation_timeout {
+            Some(timeout) => RawOperationParams::for_execute_script(timeout, timeout),
+            None => RawOperationParams::for_execute_script_unlimited(),
+        }
     }
 }
 

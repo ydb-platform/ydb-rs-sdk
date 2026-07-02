@@ -22,7 +22,7 @@ pub(crate) const DEFAULT_POOL_LIMIT: usize = 50;
 pub(crate) const DEFAULT_SESSION_CREATE_TIMEOUT: Duration = Duration::from_millis(500);
 pub(crate) const DEFAULT_SESSION_DELETE_TIMEOUT: Duration = Duration::from_millis(500);
 /// Default max wait when acquiring a session from the pool.
-pub(crate) const DEFAULT_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(600);
+pub(crate) const DEFAULT_POOL_ACQUIRE_TIMEOUT: Duration = Duration::ZERO;
 
 /// Ensures `create_in_progress` is decremented when the outer future is dropped
 /// (e.g. per-call `with_operation_timeout` cancelling pool acquire + create).

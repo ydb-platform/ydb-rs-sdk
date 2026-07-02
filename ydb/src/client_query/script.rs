@@ -12,7 +12,7 @@ use crate::result::ResultSet;
 use crate::types::Value;
 
 use super::exec::{
-    call_operation_timeout, run_with_retry, with_operation_timeout, CallOptions, ClientExecContext,
+    maybe_with_operation_timeout, run_with_retry, CallOptions, ClientExecContext,
 };
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -189,13 +189,13 @@ async fn client_execute_script_once(
     opts: &CallOptions,
     results_ttl: Duration,
 ) -> YdbResult<ExecuteScriptOperation> {
-    let timeout_duration = call_operation_timeout(opts);
+    let timeout = opts.timeout;
     let req = RawExecuteScriptRequest {
         yql_text: text.to_string(),
         parameters: params.clone(),
         results_ttl,
         operation_params: TimeoutSettings {
-            operation_timeout: timeout_duration,
+            operation_timeout: timeout,
         }
         .execute_script_operation_params(),
         collect_stats: false,
@@ -204,7 +204,7 @@ async fn client_execute_script_once(
         .connection_manager
         .get_auth_service(RawQueryClient::new)
         .await?;
-    let (id, consumed_units) = match with_operation_timeout(timeout_duration, async {
+    let (id, consumed_units) = match maybe_with_operation_timeout(timeout, async {
         client.execute_script(req).await.map_err(YdbError::from)
     })
     .await
@@ -213,7 +213,7 @@ async fn client_execute_script_once(
         Err(err) => {
             if matches!(&err, YdbError::Transport(msg) if msg.contains("timed out")) {
                 tracing::warn!(
-                    ?timeout_duration,
+                    ?timeout,
                     "execute_script timed out waiting for RPC response; \
                      a server-side operation may still be running until cancel_after"
                 );
@@ -261,12 +261,12 @@ async fn client_fetch_script_results_once(
         fetch_token: fetch_token.to_string(),
         rows_limit,
     };
-    let timeout_duration = call_operation_timeout(opts);
+    let timeout = opts.timeout;
     let mut client = ctx
         .connection_manager
         .get_auth_service(RawQueryClient::new)
         .await?;
-    let (index, raw_set, next_token) = with_operation_timeout(timeout_duration, async {
+    let (index, raw_set, next_token) = maybe_with_operation_timeout(timeout, async {
         client
             .fetch_script_results(req)
             .await

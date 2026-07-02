@@ -6,8 +6,6 @@ use crate::client::TimeoutSettings;
 use crate::errors::{NeedRetry, YdbResult};
 use crate::retry::{Retry, RetryParams, TimeoutRetrier};
 
-pub(crate) const DEFAULT_TABLE_RETRY_BUDGET: Duration = Duration::from_secs(5);
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TableCallOptions {
     pub timeout: Option<Duration>,
@@ -16,18 +14,16 @@ pub(crate) struct TableCallOptions {
 }
 
 pub(crate) fn resolve_timeouts(opts: &TableCallOptions) -> TimeoutSettings {
-    opts.timeout
-        .map(|operation_timeout| TimeoutSettings {
-            operation_timeout,
-        })
-        .unwrap_or_default()
+    TimeoutSettings {
+        operation_timeout: opts.timeout,
+    }
 }
 
 pub(crate) fn resolve_retry_budget(opts: &TableCallOptions) -> Duration {
     if opts.no_retry {
         Duration::ZERO
     } else {
-        opts.retry_budget.unwrap_or(DEFAULT_TABLE_RETRY_BUDGET)
+        opts.retry_budget.unwrap_or(Duration::ZERO)
     }
 }
 

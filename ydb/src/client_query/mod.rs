@@ -5,6 +5,7 @@
 mod builders;
 mod exec;
 mod internal;
+mod retry_transaction;
 mod script;
 mod stream_facade;
 
@@ -37,9 +38,9 @@ use crate::result::Row;
 use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{
-    check_retry_transaction_error, retry_wait, spawn_query_tx_rollback_on_drop, transaction_commit,
-    transaction_ensure_begin, transaction_exec_context, transaction_identity, transaction_rollback,
-    ClientExecContext, TransactionExecContext, DEFAULT_QUERY_RETRY_BUDGET,
+    spawn_query_tx_rollback_on_drop, transaction_commit, transaction_ensure_begin,
+    transaction_exec_context, transaction_identity, transaction_rollback, ClientExecContext,
+    TransactionExecContext,
 };
 
 /// Row-to-struct mapping (the sqlx `FromRow` analogue).
@@ -105,7 +106,7 @@ impl Default for TransactionOptions {
         Self {
             mode: TxMode::SerializableReadWrite,
             begin: false,
-            retry_budget: DEFAULT_QUERY_RETRY_BUDGET,
+            retry_budget: Duration::ZERO,
         }
     }
 }
@@ -157,14 +158,12 @@ impl TransactionOptions {
 
 pub struct QueryClient {
     ctx: ClientExecContext,
-    tx_options: TransactionOptions,
 }
 
 impl Clone for QueryClient {
     fn clone(&self) -> Self {
         Self {
             ctx: self.ctx.clone(),
-            tx_options: self.tx_options.clone(),
         }
     }
 }
@@ -179,27 +178,105 @@ impl QueryClient {
         Self {
             ctx: ClientExecContext {
                 connection_manager,
-                idempotent_operation: false,
                 session_pool,
             },
-            tx_options: TransactionOptions::default(),
         }
     }
 
-    pub fn clone_with_idempotent_operations(&self, idempotent: bool) -> Self {
-        Self {
-            ctx: ClientExecContext {
-                idempotent_operation: idempotent,
-                ..self.ctx.clone()
+    /// Run a callback inside a retried interactive transaction.
+    ///
+    /// ```ignore
+    /// client.query_client()
+    ///     .retry_transaction(async |tx| { ... })
+    ///     .isolation(TxMode::SerializableReadWrite)
+    ///     .retry_budget(Duration::from_secs(5))
+    ///     .timeout(Duration::from_secs(30))
+    ///     .await?;
+    /// ```
+    pub fn retry_transaction<F, T>(
+        &self,
+        callback: F,
+    ) -> RetryTransactionBuilder<'_, F, T>
+    where
+        F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
+    {
+        RetryTransactionBuilder::new(self, callback)
+    }
+
+    pub(crate) async fn run_retry_transaction<F, T>(
+        &self,
+        mut callback: F,
+        options: TransactionOptions,
+        wall_timeout: Option<Duration>,
+    ) -> YdbResultWithCustomerErr<T>
+    where
+        F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
+    {
+        use exec::{check_retry_transaction_error, retry_wait};
+        use tokio::time::timeout;
+
+        let run = async {
+            let retry_budget = options.retry_budget();
+            let start = Instant::now();
+            let mut attempt = 0;
+
+            loop {
+                attempt += 1;
+                let mut tx = Transaction::new(
+                    self.ctx.connection_manager.clone(),
+                    self.ctx.session_pool.clone(),
+                    options.clone(),
+                );
+
+                let callback_result =
+                    AssertUnwindSafe(callback(&mut tx)).catch_unwind().await;
+
+                let err = match callback_result {
+                    Ok(Ok(value)) => {
+                        if tx.state == TxState::RolledBack {
+                            return Ok(value);
+                        }
+                        if tx.ctx.finished {
+                            tx.state = TxState::Committed;
+                            return Ok(value);
+                        }
+                        return match tx.commit().await {
+                            Ok(()) => Ok(value),
+                            Err(e) => Err(YdbOrCustomerError::YDB(e)),
+                        };
+                    }
+                    Ok(Err(err)) => {
+                        tx.rollback_quiet().await;
+                        err
+                    }
+                    Err(panic_payload) => {
+                        tx.rollback_quiet().await;
+                        YdbOrCustomerError::YDB(YdbError::Custom(format!(
+                            "query transaction callback panicked: {}",
+                            panic_message(panic_payload)
+                        )))
+                    }
+                };
+
+                if !check_retry_transaction_error(&err) {
+                    return Err(err);
+                }
+                match retry_wait(attempt, start.elapsed(), retry_budget) {
+                    Some(wait) if wait > Duration::ZERO => sleep(wait).await,
+                    Some(_) => {}
+                    None => return Err(err),
+                }
+            }
+        };
+
+        match wall_timeout {
+            Some(limit) => match timeout(limit, run).await {
+                Ok(result) => result,
+                Err(_) => Err(YdbOrCustomerError::YDB(YdbError::Transport(format!(
+                    "retry_transaction timed out after {limit:?}"
+                )))),
             },
-            tx_options: self.tx_options.clone(),
-        }
-    }
-
-    pub fn clone_with_transaction_options(&self, opts: TransactionOptions) -> Self {
-        Self {
-            tx_options: opts,
-            ..self.clone()
+            None => run.await,
         }
     }
 
@@ -216,63 +293,6 @@ impl QueryClient {
         operation_id: impl Into<String>,
     ) -> script::FetchScriptResultsBuilder<'_> {
         script::FetchScriptResultsBuilder::new(&self.ctx, operation_id.into())
-    }
-
-    pub async fn retry_transaction<T>(
-        &self,
-        mut callback: impl AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
-    ) -> YdbResultWithCustomerErr<T> {
-        let retry_budget = self.tx_options.retry_budget();
-        let start = Instant::now();
-        let mut attempt = 0;
-
-        loop {
-            attempt += 1;
-            let mut tx = Transaction::new(
-                self.ctx.connection_manager.clone(),
-                self.ctx.session_pool.clone(),
-                self.tx_options.clone(),
-            );
-
-            let callback_result = AssertUnwindSafe(callback(&mut tx)).catch_unwind().await;
-
-            let err = match callback_result {
-                Ok(Ok(value)) => {
-                    if tx.state == TxState::RolledBack {
-                        return Ok(value);
-                    }
-                    if tx.ctx.finished {
-                        tx.state = TxState::Committed;
-                        return Ok(value);
-                    }
-                    return match tx.commit().await {
-                        Ok(()) => Ok(value),
-                        // Commit outcome is ambiguous on transport errors; never retry.
-                        Err(e) => Err(YdbOrCustomerError::YDB(e)),
-                    };
-                }
-                Ok(Err(err)) => {
-                    tx.rollback_quiet().await;
-                    err
-                }
-                Err(panic_payload) => {
-                    tx.rollback_quiet().await;
-                    YdbOrCustomerError::YDB(YdbError::Custom(format!(
-                        "query transaction callback panicked: {}",
-                        panic_message(panic_payload)
-                    )))
-                }
-            };
-
-            if !check_retry_transaction_error(&err) {
-                return Err(err);
-            }
-            match retry_wait(attempt, start.elapsed(), retry_budget) {
-                Some(wait) if wait > Duration::ZERO => sleep(wait).await,
-                Some(_) => {}
-                None => return Err(err),
-            }
-        }
     }
 }
 
@@ -414,6 +434,7 @@ pub use builders::{
     OptionalRow, OptionalRowBuilder, QueryExecutor, QueryRowBuilder, QueryStreamBuilder,
     ResultSetBuilder, Streamed,
 };
+pub use retry_transaction::RetryTransactionBuilder;
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};
 pub use stream_facade::{QueryStats, QueryStream};

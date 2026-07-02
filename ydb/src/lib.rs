@@ -150,8 +150,8 @@ pub use client_query::{
     CallBuilder, ClientOneShot, ExecBuilder, ExecCall, ExecuteScriptBuilder,
     ExecuteScriptOperation, FetchScriptResult, FetchScriptResultsBuilder, FromYdbRow, Interactive,
     OneResultSet, OneRow, OptionalRow, OptionalRowBuilder, QueryClient, QueryExecutor,
-    QueryRowBuilder, QueryStats, QueryStream, QueryStreamBuilder, ResultSetBuilder, Streamed,
-    Transaction, TransactionOptions, TxMode,
+    QueryRowBuilder, QueryStats, QueryStream, QueryStreamBuilder, ResultSetBuilder,
+    RetryTransactionBuilder, Streamed, Transaction, TransactionOptions, TxMode,
 };
 
 // full enum pub types

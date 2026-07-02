@@ -40,7 +40,7 @@ impl Storage {
             .await
             .map_err(|err| err.to_string())?;
 
-        let query_client = client.query_client().clone_with_idempotent_operations(true);
+        let query_client = client.query_client();
 
         Ok(Self {
             query_client,
@@ -51,10 +51,6 @@ impl Storage {
             min_partition_count: params.min_partition_count,
             max_partition_count: params.max_partition_count,
         })
-    }
-
-    fn idempotent_client(&self) -> QueryClient {
-        self.query_client.clone_with_idempotent_operations(true)
     }
 }
 
@@ -83,20 +79,32 @@ impl Database for Storage {
             partition_size = self.partition_size,
         );
 
-        let mut qc = self.idempotent_client();
-        tokio::time::timeout(self.write_timeout, async move { qc.exec(query).await })
-            .await
-            .map_err(|_| "create table timeout".to_string())?
-            .map_err(|err| err.to_string())
+        let retry_budget = self.write_timeout.max(self.read_timeout);
+        let mut qc = self.query_client.clone();
+        tokio::time::timeout(self.write_timeout, async move {
+            qc.exec(query)
+                .idempotent(true)
+                .retry_budget(retry_budget)
+                .await
+        })
+        .await
+        .map_err(|_| "create table timeout".to_string())?
+        .map_err(|err| err.to_string())
     }
 
     async fn drop_table(&self) -> Result<(), String> {
         let query = format!("DROP TABLE `{table}`", table = self.table_path);
-        let mut qc = self.idempotent_client();
-        tokio::time::timeout(self.write_timeout, async move { qc.exec(query).await })
-            .await
-            .map_err(|_| "drop table timeout".to_string())?
-            .map_err(|err| err.to_string())
+        let retry_budget = self.write_timeout.max(self.read_timeout);
+        let mut qc = self.query_client.clone();
+        tokio::time::timeout(self.write_timeout, async move {
+            qc.exec(query)
+                .idempotent(true)
+                .retry_budget(retry_budget)
+                .await
+        })
+        .await
+        .map_err(|_| "drop table timeout".to_string())?
+        .map_err(|err| err.to_string())
     }
 
     async fn read(&self, id: RowID) -> Result<(TestRow, u64), String> {
@@ -111,7 +119,8 @@ impl Database for Storage {
         );
 
         let attempts_for_op = attempts.clone();
-        let mut qc = self.idempotent_client();
+        let retry_budget = self.read_timeout;
+        let mut qc = self.query_client.clone();
         // Counts logical read invocations (one per timeout-wrapped call), not SDK-internal
         // retries inside query_row — the one-shot API has no attempt callback (unlike table retry_transaction).
         let row = tokio::time::timeout(self.read_timeout, async move {
@@ -119,6 +128,8 @@ impl Database for Storage {
             qc.query_row(select_sql)
                 .param("$id", id)
                 .with_tx_mode(TxMode::SnapshotReadOnly)
+                .idempotent(true)
+                .retry_budget(retry_budget)
                 .await
         })
         .await
@@ -153,7 +164,8 @@ impl Database for Storage {
         );
 
         let attempts_for_op = attempts.clone();
-        let mut qc = self.idempotent_client();
+        let retry_budget = self.write_timeout.max(self.read_timeout);
+        let mut qc = self.query_client.clone();
         tokio::time::timeout(self.write_timeout, async move {
             attempts_for_op.fetch_add(1, Ordering::Relaxed);
             qc.exec(upsert_sql)
@@ -161,6 +173,8 @@ impl Database for Storage {
                 .param("$payload_str", row.payload_str)
                 .param("$payload_double", row.payload_double)
                 .param("$payload_timestamp", row.payload_timestamp)
+                .idempotent(true)
+                .retry_budget(retry_budget)
                 .await
         })
         .await

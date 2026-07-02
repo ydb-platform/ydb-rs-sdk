@@ -6,7 +6,6 @@ use http::Uri;
 use rand::Rng;
 use tokio::time::{sleep, timeout};
 
-use crate::client::TimeoutSettings;
 use crate::errors::{NeedRetry, YdbError, YdbOrCustomerError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
@@ -47,7 +46,6 @@ pub(crate) fn finish_pooled_query_stream(stream: &mut ExecuteQueryStream) {
     stream.finish_session_guard::<PooledQuerySessionGuard>(|guard| guard.finish_rpc());
 }
 
-const DEFAULT_RETRY_BUDGET: Duration = Duration::from_secs(5);
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
 const MAX_RETRY_BACKOFF_MILLISECONDS: u64 = 1_000;
 
@@ -69,7 +67,6 @@ pub(crate) struct CallOptions {
 #[derive(Clone)]
 pub(crate) struct ClientExecContext {
     pub connection_manager: GrpcConnectionManager,
-    pub idempotent_operation: bool,
     pub session_pool: SessionPool,
 }
 
@@ -85,17 +82,25 @@ pub(crate) struct TransactionExecContext {
     pub finished: bool,
 }
 
-fn operation_timeout(opts: &CallOptions) -> Duration {
-    opts.timeout
-        .unwrap_or_else(|| TimeoutSettings::default().operation_timeout)
-}
-
-pub(crate) fn call_operation_timeout(opts: &CallOptions) -> Duration {
-    operation_timeout(opts)
+fn resolve_idempotent(opts: &CallOptions) -> bool {
+    opts.idempotent.unwrap_or(false)
 }
 
 pub(crate) fn resolve_retry_budget(opts: &CallOptions) -> Duration {
-    opts.retry_budget.unwrap_or(DEFAULT_RETRY_BUDGET)
+    opts.retry_budget.unwrap_or(Duration::ZERO)
+}
+
+pub(crate) async fn maybe_with_operation_timeout<T, F>(
+    timeout: Option<Duration>,
+    operation: F,
+) -> YdbResult<T>
+where
+    F: Future<Output = YdbResult<T>>,
+{
+    match timeout {
+        Some(duration) => with_operation_timeout(duration, operation).await,
+        None => operation.await,
+    }
 }
 
 pub(crate) async fn with_operation_timeout<T, F>(
@@ -316,10 +321,10 @@ async fn client_begin_stream_once(
     opts: &CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
-    let timeout_duration = operation_timeout(opts);
+    let timeout = opts.timeout;
 
     if opts.implicit_session {
-        return with_operation_timeout(timeout_duration, async {
+        return maybe_with_operation_timeout(timeout, async {
             let (mut client, req) =
                 client_implicit_session_request(ctx, text, params, opts, concurrent_result_sets)
                     .await?;
@@ -330,7 +335,7 @@ async fn client_begin_stream_once(
     }
 
     let mut pooled_lease: Option<SessionPoolLease> = None;
-    let result: YdbResult<ExecuteQueryStream> = with_operation_timeout(timeout_duration, async {
+    let result: YdbResult<ExecuteQueryStream> = maybe_with_operation_timeout(timeout, async {
         let lease = ctx.session_pool.acquire_explicit().await?;
         pooled_lease = Some(lease);
         let lease_ref = pooled_lease
@@ -403,7 +408,7 @@ pub(crate) async fn client_begin_stream(
     opts: CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
-    let idempotent = opts.idempotent.unwrap_or(ctx.idempotent_operation);
+    let idempotent = resolve_idempotent(&opts);
     retry_with_budget(idempotent, resolve_retry_budget(&opts), || {
         client_begin_stream_once(ctx, &text, &params, &opts, concurrent_result_sets)
     })
@@ -502,8 +507,7 @@ pub(crate) async fn transaction_ensure_begin(
     }
     let session_id = tx_session_id(tx)?.to_string();
     let mut client = query_client_from_tx(tx).await?;
-    let timeout_duration = TimeoutSettings::default().operation_timeout;
-    let tx_id = with_operation_timeout(timeout_duration, async {
+    let tx_id = maybe_with_operation_timeout(None, async {
         client
             .begin_transaction(&session_id, tx_mode_to_raw(tx.tx_mode)?)
             .await
@@ -548,8 +552,7 @@ pub(crate) async fn transaction_begin_stream(
             "transaction already finished (committed or rolled back)".to_string(),
         ));
     }
-    let timeout_duration = operation_timeout(&opts);
-    let result: YdbResult<ExecuteQueryStream> = with_operation_timeout(timeout_duration, async {
+    let result: YdbResult<ExecuteQueryStream> = maybe_with_operation_timeout(opts.timeout, async {
         ensure_tx_session(tx).await?;
         if let Some(lease) = &mut tx.pooled_lease {
             lease.begin_use();
@@ -591,8 +594,7 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
     let tx_id = tx.tx_id.take().expect("checked Some");
     let session_id = tx_session_id(tx)?.to_string();
     let mut client = query_client_from_tx(tx).await?;
-    let timeout_duration = TimeoutSettings::default().operation_timeout;
-    let result = with_operation_timeout(timeout_duration, async {
+    let result = maybe_with_operation_timeout(None, async {
         client
             .commit_transaction(&session_id, &tx_id)
             .await
@@ -614,8 +616,7 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
         let tx_id = tx.tx_id.take().expect("checked Some");
         if let Ok(session_id) = tx_session_id(tx) {
             if let Ok(mut client) = query_client_from_tx(tx).await {
-                let timeout_duration = TimeoutSettings::default().operation_timeout;
-                let rollback_result = with_operation_timeout(timeout_duration, async {
+                let rollback_result = maybe_with_operation_timeout(None, async {
                     client
                         .rollback_transaction(session_id, &tx_id)
                         .await
@@ -761,8 +762,6 @@ pub(crate) fn retry_wait(
         None
     }
 }
-
-pub(crate) const DEFAULT_QUERY_RETRY_BUDGET: Duration = DEFAULT_RETRY_BUDGET;
 
 #[cfg(test)]
 pub(super) fn build_client_execute_request_for_test(

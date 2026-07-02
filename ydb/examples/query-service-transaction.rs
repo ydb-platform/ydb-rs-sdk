@@ -1,9 +1,21 @@
 //! `retry_transaction` with `AsyncFnMut(&mut Transaction)` on implicit sessions.
 
+use std::time::Duration;
+
 use ydb::{
-    ClientBuilder, QueryExecutor, Transaction, TransactionOptions, YdbOrCustomerError, YdbResult,
-    YdbResultWithCustomerErr,
+    ClientBuilder, ExecBuilder, QueryExecutor, QueryRowBuilder, Transaction, YdbOrCustomerError,
+    YdbResult, YdbResultWithCustomerErr,
 };
+
+const EXAMPLE_RETRY: Duration = Duration::from_secs(30);
+
+fn idem_exec<'a>(b: ExecBuilder<'a>) -> ExecBuilder<'a> {
+    b.idempotent(true).retry_budget(EXAMPLE_RETRY)
+}
+
+fn idem_row<'a>(b: QueryRowBuilder<'a>) -> QueryRowBuilder<'a> {
+    b.idempotent(true).retry_budget(EXAMPLE_RETRY)
+}
 
 enum Withdraw {
     Done { remaining: i64 },
@@ -24,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.client()?;
     client.wait().await?;
 
-    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let mut qc = client.query_client();
 
     // --- 1. Borrowing the environment across attempts ----------------------
     // The query text lives outside the callback and is reused on every
@@ -49,15 +61,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let sum = fetch_total(tx).await?; // generic over QueryExecutor
             Ok(sum) // Ok => commit; Err => rollback + retry
         })
+        .retry_budget(EXAMPLE_RETRY)
         .await?;
     println!("total = {total} after {attempts} attempt(s)");
 
     // --- 2. Rollback without an error ---------------------------------------
     // Requires `accounts` table; create minimal schema for the example.
-    qc.exec("CREATE TABLE IF NOT EXISTS accounts (id Int64, balance Int64, PRIMARY KEY(id))")
-        .await?;
-    qc.exec("UPSERT INTO accounts (id, balance) VALUES (1, 500)")
-        .await?;
+    idem_exec(
+        qc.exec("CREATE TABLE IF NOT EXISTS accounts (id Int64, balance Int64, PRIMARY KEY(id))"),
+    )
+    .await?;
+    idem_exec(qc.exec("UPSERT INTO accounts (id, balance) VALUES (1, 500)")).await?;
 
     // A business outcome, not a failure: finish the transaction explicitly
     // and return a value. No commit, no retry, no Err.
@@ -80,6 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 remaining: balance - 100,
             })
         })
+        .retry_budget(EXAMPLE_RETRY)
         .await?;
     match outcome {
         Withdraw::Done { remaining } => println!("done, remaining = {remaining}"),
@@ -94,6 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "business rule violated",
             )))
         })
+        .retry_budget(EXAMPLE_RETRY)
         .await;
     println!("customer error passed through: {}", res.is_err());
 
@@ -103,6 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tx.exec("SELECT 1").await?;
         Ok(())
     })
+    .retry_budget(EXAMPLE_RETRY)
     .await?;
 
     // Explicit BeginTransaction RPC before any YQL:
@@ -111,22 +128,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tx.exec("SELECT 1").await?;
         Ok(())
     })
+    .retry_budget(EXAMPLE_RETRY)
     .await?;
 
-    // Or configure explicit begin on the client for every retry_transaction:
-    let with_begin_qc = qc.clone_with_transaction_options(TransactionOptions::new().with_begin());
-    with_begin_qc
-        .retry_transaction(async |tx: &mut Transaction| {
-            tx.exec("SELECT 1").await?; // BeginTransaction RPC runs before this query
-            Ok(())
-        })
-        .await?;
+    // Or configure explicit begin per retry_transaction call:
+    qc.retry_transaction(async |tx: &mut Transaction| {
+        tx.exec("SELECT 1").await?; // BeginTransaction RPC runs before this query
+        Ok(())
+    })
+    .with_begin()
+    .retry_budget(EXAMPLE_RETRY)
+    .await?;
 
     // --- 6. Commit with the last query (with_commit) ------------------------
     let table = "query_example_with_commit";
-    qc.exec(format!(
-        "CREATE TABLE IF NOT EXISTS {table} (id Int64, val Int64, PRIMARY KEY(id))"
-    ))
+    idem_exec(
+        qc.exec(format!(
+            "CREATE TABLE IF NOT EXISTS {table} (id Int64, val Int64, PRIMARY KEY(id))"
+        )),
+    )
     .await?;
 
     qc.retry_transaction(async |tx: &mut Transaction| {
@@ -138,11 +158,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Transaction is already committed; further queries in this callback would fail.
         Ok(())
     })
+    .retry_budget(EXAMPLE_RETRY)
     .await?; // retry_transaction commit is a no-op
 
-    let mut row = qc
-        .query_row(format!("SELECT val FROM {table} WHERE id = 1"))
-        .await?;
+    let mut row = idem_row(qc.query_row(format!("SELECT val FROM {table} WHERE id = 1"))).await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     println!("with_commit persisted val = {:?}", val);
 
