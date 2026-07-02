@@ -12,19 +12,16 @@ use super::pool::{spawn_pool_release, SessionPool};
 pub(crate) struct TableSessionPool {
     pool: SessionPool,
     connection_manager: GrpcConnectionManager,
-    timeouts: TimeoutSettings,
 }
 
 impl TableSessionPool {
     pub(crate) fn from_shared(
         pool: SessionPool,
         connection_manager: GrpcConnectionManager,
-        timeouts: TimeoutSettings,
     ) -> Self {
         Self {
             pool,
             connection_manager,
-            timeouts,
         }
     }
 
@@ -42,7 +39,7 @@ impl TableSessionPool {
         let mut session = TableSession::new(
             session_id,
             NodePinnedTableClient::new(self.connection_manager.clone(), node_uri),
-            self.timeouts,
+            TimeoutSettings::default(),
         );
 
         session.on_drop(Box::new(move |s: &mut TableSession| {
@@ -65,7 +62,6 @@ impl TableSessionPool {
 #[cfg(test)]
 mod test {
     use super::TableSessionPool;
-    use crate::client::TimeoutSettings;
     use crate::errors::YdbResult;
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
@@ -97,7 +93,6 @@ mod test {
         let pool = TableSessionPool::from_shared(
             bench_pool(),
             bench_connection_manager(),
-            TimeoutSettings::default(),
         );
         let first_session = pool.session().await?;
 

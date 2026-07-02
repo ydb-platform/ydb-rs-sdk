@@ -54,6 +54,7 @@ const MAX_RETRY_BACKOFF_MILLISECONDS: u64 = 1_000;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CallOptions {
     pub timeout: Option<Duration>,
+    pub retry_budget: Option<Duration>,
     pub idempotent: Option<bool>,
     pub collect_stats: bool,
     /// Override Query Service `commit_tx`. `None` uses context default.
@@ -68,16 +69,12 @@ pub(crate) struct CallOptions {
 #[derive(Clone)]
 pub(crate) struct ClientExecContext {
     pub connection_manager: GrpcConnectionManager,
-    pub timeouts: TimeoutSettings,
     pub idempotent_operation: bool,
-    /// Total wall-clock budget for automatic retries (same idea as [`crate::TableClient::clone_with_retry_timeout`]).
-    pub retry_budget: Duration,
     pub session_pool: SessionPool,
 }
 
 pub(crate) struct TransactionExecContext {
     pub connection_manager: GrpcConnectionManager,
-    pub timeouts: TimeoutSettings,
     pub tx_mode: TxMode,
     pub session_pool: SessionPool,
     /// When set, the first operation calls `BeginTransaction` RPC instead of lazy `BeginTx` in `ExecuteQuery`.
@@ -88,12 +85,17 @@ pub(crate) struct TransactionExecContext {
     pub finished: bool,
 }
 
-fn operation_timeout(opts: &CallOptions, defaults: &TimeoutSettings) -> Duration {
-    opts.timeout.unwrap_or(defaults.operation_timeout)
+fn operation_timeout(opts: &CallOptions) -> Duration {
+    opts.timeout
+        .unwrap_or_else(|| TimeoutSettings::default().operation_timeout)
 }
 
-pub(crate) fn call_operation_timeout(opts: &CallOptions, defaults: &TimeoutSettings) -> Duration {
-    operation_timeout(opts, defaults)
+pub(crate) fn call_operation_timeout(opts: &CallOptions) -> Duration {
+    operation_timeout(opts)
+}
+
+pub(crate) fn resolve_retry_budget(opts: &CallOptions) -> Duration {
+    opts.retry_budget.unwrap_or(DEFAULT_RETRY_BUDGET)
 }
 
 pub(crate) async fn with_operation_timeout<T, F>(
@@ -112,7 +114,7 @@ where
 }
 
 pub(crate) async fn run_with_retry<T, F, Fut>(
-    ctx: &ClientExecContext,
+    opts: &CallOptions,
     idempotent: bool,
     attempt_fn: F,
 ) -> YdbResult<T>
@@ -120,7 +122,7 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = YdbResult<T>>,
 {
-    retry_with_budget(idempotent, ctx.retry_budget, attempt_fn).await
+    retry_with_budget(idempotent, resolve_retry_budget(opts), attempt_fn).await
 }
 
 async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQueryClient> {
@@ -314,7 +316,7 @@ async fn client_begin_stream_once(
     opts: &CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
-    let timeout_duration = operation_timeout(opts, &ctx.timeouts);
+    let timeout_duration = operation_timeout(opts);
 
     if opts.implicit_session {
         return with_operation_timeout(timeout_duration, async {
@@ -402,7 +404,7 @@ pub(crate) async fn client_begin_stream(
     concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
     let idempotent = opts.idempotent.unwrap_or(ctx.idempotent_operation);
-    retry_with_budget(idempotent, ctx.retry_budget, || {
+    retry_with_budget(idempotent, resolve_retry_budget(&opts), || {
         client_begin_stream_once(ctx, &text, &params, &opts, concurrent_result_sets)
     })
     .await
@@ -500,7 +502,7 @@ pub(crate) async fn transaction_ensure_begin(
     }
     let session_id = tx_session_id(tx)?.to_string();
     let mut client = query_client_from_tx(tx).await?;
-    let timeout_duration = tx.timeouts.operation_timeout;
+    let timeout_duration = TimeoutSettings::default().operation_timeout;
     let tx_id = with_operation_timeout(timeout_duration, async {
         client
             .begin_transaction(&session_id, tx_mode_to_raw(tx.tx_mode)?)
@@ -546,7 +548,7 @@ pub(crate) async fn transaction_begin_stream(
             "transaction already finished (committed or rolled back)".to_string(),
         ));
     }
-    let timeout_duration = operation_timeout(&opts, &tx.timeouts);
+    let timeout_duration = operation_timeout(&opts);
     let result: YdbResult<ExecuteQueryStream> = with_operation_timeout(timeout_duration, async {
         ensure_tx_session(tx).await?;
         if let Some(lease) = &mut tx.pooled_lease {
@@ -589,7 +591,7 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
     let tx_id = tx.tx_id.take().expect("checked Some");
     let session_id = tx_session_id(tx)?.to_string();
     let mut client = query_client_from_tx(tx).await?;
-    let timeout_duration = tx.timeouts.operation_timeout;
+    let timeout_duration = TimeoutSettings::default().operation_timeout;
     let result = with_operation_timeout(timeout_duration, async {
         client
             .commit_transaction(&session_id, &tx_id)
@@ -612,7 +614,7 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
         let tx_id = tx.tx_id.take().expect("checked Some");
         if let Ok(session_id) = tx_session_id(tx) {
             if let Ok(mut client) = query_client_from_tx(tx).await {
-                let timeout_duration = tx.timeouts.operation_timeout;
+                let timeout_duration = TimeoutSettings::default().operation_timeout;
                 let rollback_result = with_operation_timeout(timeout_duration, async {
                     client
                         .rollback_transaction(session_id, &tx_id)
@@ -682,13 +684,11 @@ pub(crate) fn spawn_query_tx_rollback_on_drop(ctx: &mut TransactionExecContext) 
 
 pub(crate) fn transaction_exec_context(
     connection_manager: GrpcConnectionManager,
-    timeouts: TimeoutSettings,
     session_pool: SessionPool,
     options: TransactionOptions,
 ) -> TransactionExecContext {
     TransactionExecContext {
         connection_manager,
-        timeouts,
         session_pool,
         tx_mode: options.mode(),
         begin: options.begin(),
@@ -811,7 +811,6 @@ mod unit_tests {
 
     #[tokio::test]
     async fn transaction_rollback_is_nop_when_finished() {
-        use crate::client::TimeoutSettings;
         use crate::client_query::TransactionOptions;
         use crate::grpc_connection_manager::GrpcConnectionManager;
         use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
@@ -831,7 +830,6 @@ mod unit_tests {
                 None,
                 DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
             ),
-            TimeoutSettings::default(),
             SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
             TransactionOptions::default(),
         );

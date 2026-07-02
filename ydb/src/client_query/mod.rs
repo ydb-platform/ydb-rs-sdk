@@ -30,7 +30,6 @@ use std::time::{Duration, Instant};
 use futures_util::FutureExt;
 use tokio::time::sleep;
 
-use crate::client::TimeoutSettings;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::result::Row;
@@ -98,6 +97,7 @@ pub struct TransactionOptions {
     mode: TxMode,
     /// Call `BeginTransaction` RPC before the first `ExecuteQuery` instead of lazy `BeginTx`.
     begin: bool,
+    retry_budget: Duration,
 }
 
 impl Default for TransactionOptions {
@@ -105,6 +105,7 @@ impl Default for TransactionOptions {
         Self {
             mode: TxMode::SerializableReadWrite,
             begin: false,
+            retry_budget: DEFAULT_QUERY_RETRY_BUDGET,
         }
     }
 }
@@ -129,12 +130,28 @@ impl TransactionOptions {
         self
     }
 
+    /// Total wall-clock budget for automatic retries in [`QueryClient::retry_transaction`].
+    pub fn with_retry_budget(mut self, budget: Duration) -> Self {
+        self.retry_budget = budget;
+        self
+    }
+
+    /// Disable automatic retries in [`QueryClient::retry_transaction`].
+    pub fn with_no_retry(mut self) -> Self {
+        self.retry_budget = Duration::ZERO;
+        self
+    }
+
     pub(crate) fn mode(&self) -> TxMode {
         self.mode
     }
 
     pub(crate) fn begin(&self) -> bool {
         self.begin
+    }
+
+    pub(crate) fn retry_budget(&self) -> Duration {
+        self.retry_budget
     }
 }
 
@@ -157,15 +174,12 @@ impl QueryClient {
 
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
-        timeouts: TimeoutSettings,
         session_pool: SessionPool,
     ) -> Self {
         Self {
             ctx: ClientExecContext {
                 connection_manager,
-                timeouts,
                 idempotent_operation: false,
-                retry_budget: DEFAULT_QUERY_RETRY_BUDGET,
                 session_pool,
             },
             tx_options: TransactionOptions::default(),
@@ -189,28 +203,6 @@ impl QueryClient {
         }
     }
 
-    /// Total wall-clock budget for automatic retries on idempotent operations
-    /// (aligned with [`crate::TableClient::clone_with_retry_timeout`]).
-    pub fn clone_with_retry_timeout(&self, timeout: Duration) -> Self {
-        Self {
-            ctx: ClientExecContext {
-                retry_budget: timeout,
-                ..self.ctx.clone()
-            },
-            tx_options: self.tx_options.clone(),
-        }
-    }
-
-    pub fn clone_with_no_retry(&self) -> Self {
-        Self {
-            ctx: ClientExecContext {
-                retry_budget: Duration::ZERO,
-                ..self.ctx.clone()
-            },
-            tx_options: self.tx_options.clone(),
-        }
-    }
-
     /// Start a long-running script operation. Poll completion via
     /// [`crate::OperationClient::get_operation`], then read rows with
     /// [`Self::fetch_script_results`].
@@ -230,7 +222,7 @@ impl QueryClient {
         &self,
         mut callback: impl AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
     ) -> YdbResultWithCustomerErr<T> {
-        let retry_budget = self.ctx.retry_budget;
+        let retry_budget = self.tx_options.retry_budget();
         let start = Instant::now();
         let mut attempt = 0;
 
@@ -238,7 +230,6 @@ impl QueryClient {
             attempt += 1;
             let mut tx = Transaction::new(
                 self.ctx.connection_manager.clone(),
-                self.ctx.timeouts,
                 self.ctx.session_pool.clone(),
                 self.tx_options.clone(),
             );
@@ -322,12 +313,11 @@ impl Transaction {
 
     fn new(
         connection_manager: GrpcConnectionManager,
-        timeouts: TimeoutSettings,
         session_pool: SessionPool,
         options: TransactionOptions,
     ) -> Self {
         Self {
-            ctx: transaction_exec_context(connection_manager, timeouts, session_pool, options),
+            ctx: transaction_exec_context(connection_manager, session_pool, options),
             state: TxState::Active,
         }
     }

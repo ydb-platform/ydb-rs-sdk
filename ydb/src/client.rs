@@ -30,7 +30,6 @@ pub struct Client {
     credentials: DBCredentials,
     load_balancer: SharedLoadBalancer,
     discovery: Arc<Box<dyn Discovery>>,
-    timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
     executor: Arc<dyn Executor>,
     session_pool: SessionPool,
@@ -51,7 +50,6 @@ impl Client {
 
         let session_pool = SessionPool::new_explicit_sync(
             connection_manager.clone(),
-            TimeoutSettings::default(),
             discovery.clone(),
             default_session_pool_settings(),
         );
@@ -60,7 +58,6 @@ impl Client {
             credentials,
             load_balancer,
             discovery,
-            timeouts: TimeoutSettings::default(),
             connection_manager,
             executor,
             session_pool,
@@ -71,12 +68,9 @@ impl Client {
     ///
     /// Table and query clients created from this driver share the same pool.
     ///
-    /// Pool acquire timeout is taken from [`Self::timeouts`] at creation time, and updated
-    /// when [`Self::with_timeouts`] is called later.
     pub async fn with_session_pool(self, settings: SessionPoolSettings) -> YdbResult<Self> {
         let session_pool = SessionPool::new_explicit(
             self.connection_manager.clone(),
-            self.timeouts,
             self.discovery.clone(),
             settings,
         )
@@ -100,7 +94,6 @@ impl Client {
     pub fn table_client(&self) -> TableClient {
         TableClient::new(
             self.connection_manager.clone(),
-            self.timeouts,
             self.session_pool.clone(),
         )
     }
@@ -109,20 +102,18 @@ impl Client {
     pub fn query_client(&self) -> QueryClient {
         QueryClient::new(
             self.connection_manager.clone(),
-            self.timeouts,
             self.session_pool.clone(),
         )
     }
 
     /// Create instance of client for directory service
     pub fn scheme_client(&self) -> SchemeClient {
-        SchemeClient::new(self.timeouts, self.connection_manager.clone())
+        SchemeClient::new(self.connection_manager.clone())
     }
 
     /// Create instance of client for topic service
     pub fn topic_client(&self) -> TopicClient {
         TopicClient::new(
-            self.timeouts,
             self.connection_manager.clone(),
             self.credentials.token_cache.clone(),
             self.executor.clone(),
@@ -131,20 +122,12 @@ impl Client {
 
     /// Create instance of client for coordination service
     pub fn coordination_client(&self) -> CoordinationClient {
-        CoordinationClient::new(self.timeouts, self.connection_manager.clone())
+        CoordinationClient::new(self.connection_manager.clone())
     }
 
     /// Create instance of client for operation service (list/get/forget long-running operations).
     pub fn operation_client(&self) -> OperationClient {
-        OperationClient::new(self.timeouts, self.connection_manager.clone())
-    }
-
-    /// Update operation timeouts on the driver and the session pool acquire timeout.
-    pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {
-        self.timeouts = timeouts;
-        self.session_pool
-            .set_acquire_timeout(timeouts.operation_timeout);
-        self
+        OperationClient::new(self.connection_manager.clone())
     }
 
     /// Wait initialization completed
@@ -172,9 +155,8 @@ impl Client {
 
 const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(600);
 
-#[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 #[derive(Copy, Clone, Debug)]
-pub struct TimeoutSettings {
+pub(crate) struct TimeoutSettings {
     pub operation_timeout: Duration,
 }
 

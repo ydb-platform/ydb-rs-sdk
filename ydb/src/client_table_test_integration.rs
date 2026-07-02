@@ -8,7 +8,7 @@ use tracing_test::traced_test;
 
 use crate::errors::{YdbError, YdbResult};
 use crate::table_requests::{
-    AlterTableRequest, CreateTableRequest, DropTableRequest, ReadRowsRequest, TableColumn,
+    AlterTableRequest, CreateTableRequest, DropTableRequest, TableColumn,
 };
 use crate::table_service_types::{CopyTableItem, IndexType, StoreType};
 use crate::test_integration_helper::create_client;
@@ -456,9 +456,10 @@ async fn bulk_upsert_rpc() -> YdbResult<()> {
         .await?;
 
     let result = table_client
-        .read_rows_request(
-            ReadRowsRequest::new(table_path.clone())
-                .with_keys(vec![ydb_struct!("id" => 1_i64), ydb_struct!("id" => 2_i64)]),
+        .read_rows(
+            table_path.clone(),
+            vec![ydb_struct!("id" => 1_i64), ydb_struct!("id" => 2_i64)],
+            None,
         )
         .await?;
 

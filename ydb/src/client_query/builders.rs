@@ -107,6 +107,18 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
         self
     }
 
+    /// Total wall-clock budget for automatic retries on transient errors.
+    pub fn retry_budget(mut self, budget: Duration) -> Self {
+        self.opts.retry_budget = Some(budget);
+        self
+    }
+
+    /// Disable automatic retries for this call.
+    pub fn no_retry(mut self) -> Self {
+        self.opts.retry_budget = Some(Duration::ZERO);
+        self
+    }
+
     pub fn idempotent(mut self, idempotent: bool) -> Self {
         self.opts.idempotent = Some(idempotent);
         self

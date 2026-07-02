@@ -140,7 +140,7 @@ pub use client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
 };
 // full enum pub types
-pub use client::{Client, SessionPoolSettings, SessionPoolStats, TimeoutSettings};
+pub use client::{Client, SessionPoolSettings, SessionPoolStats};
 
 // full enum pub types
 pub use client_builder::ClientBuilder;
@@ -155,7 +155,7 @@ pub use client_query::{
 };
 
 // full enum pub types
-pub use client_table::{RetryOptions, TableClient};
+pub use client_table::TableClient;
 
 // full enum pub types
 pub use table_service_types::{

@@ -3,6 +3,7 @@ use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 use std::time::Duration;
 
+use crate::client::TimeoutSettings;
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::execute_script::RawExecuteScriptRequest;
@@ -72,6 +73,16 @@ impl<'a> ExecuteScriptBuilder<'a> {
         self.opts.timeout = Some(timeout);
         self
     }
+
+    pub fn retry_budget(mut self, budget: Duration) -> Self {
+        self.opts.retry_budget = Some(budget);
+        self
+    }
+
+    pub fn no_retry(mut self) -> Self {
+        self.opts.retry_budget = Some(Duration::ZERO);
+        self
+    }
 }
 
 impl<'a> IntoFuture for ExecuteScriptBuilder<'a> {
@@ -128,6 +139,16 @@ impl<'a> FetchScriptResultsBuilder<'a> {
         self.opts.timeout = Some(timeout);
         self
     }
+
+    pub fn retry_budget(mut self, budget: Duration) -> Self {
+        self.opts.retry_budget = Some(budget);
+        self
+    }
+
+    pub fn no_retry(mut self) -> Self {
+        self.opts.retry_budget = Some(Duration::ZERO);
+        self
+    }
 }
 
 impl<'a> IntoFuture for FetchScriptResultsBuilder<'a> {
@@ -168,14 +189,17 @@ async fn client_execute_script_once(
     opts: &CallOptions,
     results_ttl: Duration,
 ) -> YdbResult<ExecuteScriptOperation> {
+    let timeout_duration = call_operation_timeout(opts);
     let req = RawExecuteScriptRequest {
         yql_text: text.to_string(),
         parameters: params.clone(),
         results_ttl,
-        operation_params: ctx.timeouts.execute_script_operation_params(),
+        operation_params: TimeoutSettings {
+            operation_timeout: timeout_duration,
+        }
+        .execute_script_operation_params(),
         collect_stats: false,
     };
-    let timeout_duration = call_operation_timeout(opts, &ctx.timeouts);
     let mut client = ctx
         .connection_manager
         .get_auth_service(RawQueryClient::new)
@@ -210,7 +234,7 @@ async fn client_fetch_script_results(
     opts: CallOptions,
 ) -> YdbResult<FetchScriptResult> {
     // FetchScriptResults is always safe to retry (aligned with Go SDK).
-    run_with_retry(ctx, true, || {
+    run_with_retry(&opts, true, || {
         client_fetch_script_results_once(
             ctx,
             &operation_id,
@@ -237,7 +261,7 @@ async fn client_fetch_script_results_once(
         fetch_token: fetch_token.to_string(),
         rows_limit,
     };
-    let timeout_duration = call_operation_timeout(opts, &ctx.timeouts);
+    let timeout_duration = call_operation_timeout(opts);
     let mut client = ctx
         .connection_manager
         .get_auth_service(RawQueryClient::new)

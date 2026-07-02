@@ -6,7 +6,6 @@ use http::Uri;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{trace, warn};
 
-use crate::client::TimeoutSettings;
 use crate::discovery::Discovery;
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -22,6 +21,8 @@ use crate::grpc_wrapper::raw_services::Service;
 pub(crate) const DEFAULT_POOL_LIMIT: usize = 50;
 pub(crate) const DEFAULT_SESSION_CREATE_TIMEOUT: Duration = Duration::from_millis(500);
 pub(crate) const DEFAULT_SESSION_DELETE_TIMEOUT: Duration = Duration::from_millis(500);
+/// Default max wait when acquiring a session from the pool.
+pub(crate) const DEFAULT_POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Ensures `create_in_progress` is decremented when the outer future is dropped
 /// (e.g. per-call `with_operation_timeout` cancelling pool acquire + create).
@@ -76,6 +77,8 @@ pub struct SessionPoolSettings {
     pub idle_ttl: Duration,
     pub session_create_timeout: Duration,
     pub session_delete_timeout: Duration,
+    /// Max wait when [`SessionPool::acquire_explicit`] blocks on the pool semaphore.
+    pub acquire_timeout: Duration,
 }
 
 impl Default for SessionPoolSettings {
@@ -88,6 +91,7 @@ impl Default for SessionPoolSettings {
             idle_ttl: Duration::ZERO,
             session_create_timeout: DEFAULT_SESSION_CREATE_TIMEOUT,
             session_delete_timeout: DEFAULT_SESSION_DELETE_TIMEOUT,
+            acquire_timeout: DEFAULT_POOL_ACQUIRE_TIMEOUT,
         }
     }
 }
@@ -150,6 +154,12 @@ impl SessionPoolSettings {
     /// Maximum time for DeleteSession when the pool closes a session.
     pub fn with_session_delete_timeout(mut self, timeout: Duration) -> Self {
         self.session_delete_timeout = timeout;
+        self
+    }
+
+    /// Maximum time to wait for a free session when the pool is at capacity.
+    pub fn with_acquire_timeout(mut self, timeout: Duration) -> Self {
+        self.acquire_timeout = timeout;
         self
     }
 }
@@ -272,18 +282,18 @@ struct SessionPoolInner {
 impl SessionPool {
     pub fn new_explicit_sync(
         connection_manager: GrpcConnectionManager,
-        timeouts: TimeoutSettings,
         discovery: Arc<Box<dyn Discovery>>,
         settings: SessionPoolSettings,
     ) -> Self {
         let settings = normalize_pool_settings(settings);
         let limit = settings.limit;
+        let acquire_timeout = settings.acquire_timeout;
         let inner = Arc::new_cyclic(|weak: &std::sync::Weak<SessionPoolInner>| {
             let discovery_for_shutdown = discovery.clone();
             let pool_weak = weak.clone();
             SessionPoolInner {
                 settings: settings.clone(),
-                acquire_timeout_ms: AtomicU64::new(timeouts.operation_timeout.as_millis() as u64),
+                acquire_timeout_ms: AtomicU64::new(acquire_timeout.as_millis() as u64),
                 connection_manager: connection_manager.clone(),
                 semaphore: Arc::new(Semaphore::new(limit)),
                 explicit_idle: Mutex::new(Vec::new()),
@@ -316,13 +326,12 @@ impl SessionPool {
 
     pub async fn new_explicit(
         connection_manager: GrpcConnectionManager,
-        timeouts: TimeoutSettings,
         discovery: Arc<Box<dyn Discovery>>,
         settings: SessionPoolSettings,
     ) -> YdbResult<Self> {
         let settings = normalize_pool_settings(settings);
         let warm_up = settings.warm_up;
-        let pool = Self::new_explicit_sync(connection_manager, timeouts, discovery, settings);
+        let pool = Self::new_explicit_sync(connection_manager, discovery, settings);
 
         if warm_up > 0 {
             SessionPoolInner::warm_up_parallel(pool.inner.clone(), warm_up).await?;
@@ -333,12 +342,6 @@ impl SessionPool {
 
     pub fn stats(&self) -> SessionPoolStats {
         self.inner.stats()
-    }
-
-    pub(crate) fn set_acquire_timeout(&self, timeout: Duration) {
-        self.inner
-            .acquire_timeout_ms
-            .store(timeout.as_millis() as u64, Ordering::Relaxed);
     }
 
     pub async fn acquire_explicit(&self) -> YdbResult<SessionPoolLease> {
