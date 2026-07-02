@@ -80,6 +80,8 @@ mod table_service_types;
 #[cfg(test)]
 mod test_integration_helper;
 #[cfg(test)]
+pub(crate) mod topic_reader_tx_test;
+#[cfg(test)]
 pub(crate) mod topics_compression_test;
 #[cfg(test)]
 pub(crate) mod topics_test;
@@ -129,6 +131,7 @@ pub use client_topic::topicreader::reader::{
 pub use client_topic::topicreader::reader_options::{
     TopicReaderOptions, TopicReaderOptionsBuilder,
 };
+pub use client_topic::topicreader::reader_tx::TopicReaderTx;
 // full enum pub types
 pub use client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMessageBuilder};
 // full enum pub types
