@@ -65,10 +65,9 @@ where
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(self.client.run_retry_transaction(
-            self.callback,
-            self.options,
-            self.timeout,
-        ))
+        Box::pin(
+            self.client
+                .run_retry_transaction(self.callback, self.options, self.timeout),
+        )
     }
 }

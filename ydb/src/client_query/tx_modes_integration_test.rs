@@ -76,16 +76,15 @@ async fn query_client_implicit_tx_ddl_and_dml() -> YdbResult<()> {
         "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
     )))
     .await?;
-    idem!(qc.exec(format!(
-        "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
-    ))
-    .param("$id", 1_i64)
-    .param("$val", 7_i64))
+    idem!(qc
+        .exec(format!(
+            "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
+        ))
+        .param("$id", 1_i64)
+        .param("$val", 7_i64))
     .await?;
 
-    let mut row = idem!(qc
-        .query_row(format!("SELECT val FROM {table_name} WHERE id = 1")))
-    .await?;
+    let mut row = idem!(qc.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     assert_eq!(val, Some(7));
 
@@ -213,9 +212,7 @@ async fn query_tx_snapshot_rw_upsert() -> YdbResult<()> {
         return Err(customer_err(err));
     }
 
-    let mut row = idem!(qc
-        .query_row(format!("SELECT val FROM {table_name} WHERE id = 1")))
-    .await?;
+    let mut row = idem!(qc.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     assert_eq!(val, Some(55));
 

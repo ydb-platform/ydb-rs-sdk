@@ -92,18 +92,12 @@ impl Client {
 
     /// Create instance of client for table service
     pub fn table_client(&self) -> TableClient {
-        TableClient::new(
-            self.connection_manager.clone(),
-            self.session_pool.clone(),
-        )
+        TableClient::new(self.connection_manager.clone(), self.session_pool.clone())
     }
 
     /// Create instance of client for query service.
     pub fn query_client(&self) -> QueryClient {
-        QueryClient::new(
-            self.connection_manager.clone(),
-            self.session_pool.clone(),
-        )
+        QueryClient::new(self.connection_manager.clone(), self.session_pool.clone())
     }
 
     /// Create instance of client for directory service

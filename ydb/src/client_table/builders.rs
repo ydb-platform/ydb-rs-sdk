@@ -42,12 +42,10 @@ impl<'a> IntoFuture for ReadRowsBuilder<'a> {
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(self.client.read_rows_call(
-            self.table_path,
-            self.keys,
-            self.columns,
-            self.opts,
-        ))
+        Box::pin(
+            self.client
+                .read_rows_call(self.table_path, self.keys, self.columns, self.opts),
+        )
     }
 }
 
@@ -65,7 +63,10 @@ impl<'a> IntoFuture for BulkUpsertBuilder<'a> {
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(self.client.bulk_upsert_call(self.table_path, self.rows, self.opts))
+        Box::pin(
+            self.client
+                .bulk_upsert_call(self.table_path, self.rows, self.opts),
+        )
     }
 }
 
@@ -81,11 +82,10 @@ impl<'a> IntoFuture for CopyTableBuilder<'a> {
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(self.client.copy_table_call(
-            self.source_path,
-            self.destination_path,
-            self.opts,
-        ))
+        Box::pin(
+            self.client
+                .copy_table_call(self.source_path, self.destination_path, self.opts),
+        )
     }
 }
 

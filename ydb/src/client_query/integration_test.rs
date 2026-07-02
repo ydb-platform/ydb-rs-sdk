@@ -50,7 +50,8 @@ async fn query_client_exec_ddl() -> YdbResult<()> {
     let _ = idem!(qc.exec(format!("DROP TABLE IF EXISTS {table_name}"))).await;
     idem!(qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Utf8, PRIMARY KEY(id))"
-    ))).await?;
+    )))
+    .await?;
     idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;
     Ok(())
 }
@@ -66,16 +67,18 @@ async fn query_client_autocommit_by_default() -> YdbResult<()> {
     let _ = idem!(qc.exec(format!("DROP TABLE IF EXISTS {table_name}"))).await;
     idem!(qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
-    ))).await?;
+    )))
+    .await?;
 
-    idem!(qc.exec(format!(
-        "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
-    ))
-    .param("$id", 1_i64)
-    .param("$val", 77_i64)).await?;
+    idem!(qc
+        .exec(format!(
+            "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
+        ))
+        .param("$id", 1_i64)
+        .param("$val", 77_i64))
+    .await?;
 
-    let mut row = idem!(qc
-        .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
+    let mut row = idem!(qc.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     assert_eq!(val, Some(77));
 
@@ -118,7 +121,8 @@ async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
     let _ = idem!(qc.exec(format!("DROP TABLE IF EXISTS {table_name}"))).await;
     idem!(qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Utf8, PRIMARY KEY(id))"
-    ))).await?;
+    )))
+    .await?;
 
     let upsert = format!("UPSERT INTO {table_name} (id, val) VALUES ($id, $val)");
 
@@ -134,8 +138,7 @@ async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
     .timeout(TEST_TIMEOUT)
     .await?;
 
-    let mut row = idem!(qc
-        .query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))).await?;
+    let mut row = idem!(qc.query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))).await?;
     let cnt: u64 = row.remove_field_by_name("cnt")?.try_into()?;
     assert_eq!(cnt, 3);
 
@@ -165,9 +168,7 @@ async fn query_client_implicit_session_select() -> YdbResult<()> {
     let client = create_client_with_session_pool(SessionPoolSettings::new().with_limit(1)).await?;
     let mut qc = client.query_client();
 
-    let mut row = idem!(qc
-        .query_row("SELECT 1 + 1 AS sum")
-        .with_implicit_session()).await?;
+    let mut row = idem!(qc.query_row("SELECT 1 + 1 AS sum").with_implicit_session()).await?;
     let sum: i64 = row.remove_field_by_name("sum")?.try_into()?;
     assert_eq!(sum, 2);
 
@@ -208,7 +209,8 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
     let _ = idem!(qc.exec(format!("DROP TABLE IF EXISTS {table_name}"))).await;
     idem!(qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
-    ))).await?;
+    )))
+    .await?;
 
     qc.retry_transaction(async |tx| {
         assert!(
@@ -239,8 +241,7 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
     .timeout(TEST_TIMEOUT)
     .await?;
 
-    let mut row = idem!(qc
-        .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
+    let mut row = idem!(qc.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     assert_eq!(val, Some(42));
 
@@ -329,7 +330,8 @@ async fn query_with_commit_on_last_query() -> YdbResult<()> {
     let _ = idem!(qc.exec(format!("DROP TABLE IF EXISTS {table_name}"))).await;
     idem!(qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
-    ))).await?;
+    )))
+    .await?;
 
     qc.retry_transaction(async |tx| {
         tx.exec(format!(
@@ -354,8 +356,7 @@ async fn query_with_commit_on_last_query() -> YdbResult<()> {
     .timeout(TEST_TIMEOUT)
     .await?;
 
-    let mut row = idem!(qc
-        .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
+    let mut row = idem!(qc.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     assert_eq!(val, Some(99));
 
@@ -381,7 +382,8 @@ async fn query_execute_script() -> YdbResult<()> {
     let _ = idem!(qc.exec(format!("DROP TABLE IF EXISTS {table_name}"))).await;
     idem!(qc.exec(format!(
         "CREATE TABLE {table_name} (val Int64, PRIMARY KEY (val))"
-    ))).await?;
+    )))
+    .await?;
 
     let upsert_query = format!("UPSERT INTO {table_name} SELECT val FROM AS_TABLE($values);");
 
@@ -397,13 +399,11 @@ async fn query_execute_script() -> YdbResult<()> {
     }
     assert_eq!(upserted, UPSERT_ROWS_COUNT as u32);
 
-    let mut row = idem!(qc
-        .query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))).await?;
+    let mut row = idem!(qc.query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))).await?;
     let rows_from_db: Option<u64> = row.remove_field_by_name("cnt")?.try_into()?;
     assert_eq!(rows_from_db.unwrap_or(0), UPSERT_ROWS_COUNT as u64);
 
-    let mut row = idem!(qc
-        .query_row(format!("SELECT SUM(val) AS s FROM {table_name}"))).await?;
+    let mut row = idem!(qc.query_row(format!("SELECT SUM(val) AS s FROM {table_name}"))).await?;
     let checksum_from_db: Option<i64> = row.remove_field_by_name("s")?.try_into()?;
     assert_eq!(checksum_from_db.unwrap_or(0) as u64, EXPECTED_CHECKSUM);
 

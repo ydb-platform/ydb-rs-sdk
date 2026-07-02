@@ -80,17 +80,10 @@ impl TableClient {
         opts: &TableCallOptions,
     ) -> YdbResult<TableSession> {
         let timeouts = resolve_timeouts(opts);
-        Ok(self
-            .session_pool
-            .session()
-            .await?
-            .with_timeouts(timeouts))
+        Ok(self.session_pool.session().await?.with_timeouts(timeouts))
     }
 
-    async fn sessionless_table_client(
-        &self,
-        opts: &TableCallOptions,
-    ) -> YdbResult<RawTableClient> {
+    async fn sessionless_table_client(&self, opts: &TableCallOptions) -> YdbResult<RawTableClient> {
         self.session_pool
             .connection_manager()
             .create_table_client(resolve_timeouts(opts))

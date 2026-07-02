@@ -5,9 +5,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 use crate::errors::{NeedRetry, YdbError, YdbResult};
-use crate::grpc_wrapper::raw_operation_service::types::{
-    RawListOperationsResult, RawOperation,
-};
+use crate::grpc_wrapper::raw_operation_service::types::{RawListOperationsResult, RawOperation};
 
 use super::client::{retry_wait, OperationClient};
 use super::types::{ListOperationsRequest, ListOperationsResult, OperationInfo};

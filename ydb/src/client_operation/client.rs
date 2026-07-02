@@ -9,8 +9,8 @@ use crate::grpc_wrapper::raw_operation_service::client::RawOperationClient;
 use crate::grpc_wrapper::raw_operation_service::types::RawListOperationsRequest;
 
 use super::builders::{
-    retry_operation_call, CancelOperationBuilder, ForgetOperationBuilder, GetOperationBuilder,
-    ListOperationsBuilder, OperationCallOptions, raw_to_list_result, raw_to_operation_info,
+    raw_to_list_result, raw_to_operation_info, retry_operation_call, CancelOperationBuilder,
+    ForgetOperationBuilder, GetOperationBuilder, ListOperationsBuilder, OperationCallOptions,
 };
 use super::types::{ListOperationsRequest, ListOperationsResult, OperationInfo};
 
@@ -48,10 +48,7 @@ impl OperationClient {
         .await
     }
 
-    pub fn list_operations(
-        &self,
-        request: ListOperationsRequest,
-    ) -> ListOperationsBuilder<'_> {
+    pub fn list_operations(&self, request: ListOperationsRequest) -> ListOperationsBuilder<'_> {
         ListOperationsBuilder {
             client: self,
             request,
@@ -127,10 +124,7 @@ impl OperationClient {
     ) -> YdbResult<()> {
         retry_operation_call(&opts, || async {
             let mut client = self.raw_client().await?;
-            client
-                .cancel_operation(&id)
-                .await
-                .map_err(YdbError::from)?;
+            client.cancel_operation(&id).await.map_err(YdbError::from)?;
             Ok(())
         })
         .await

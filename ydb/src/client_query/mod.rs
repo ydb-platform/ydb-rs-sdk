@@ -174,10 +174,7 @@ impl QueryClient {
     ///     .timeout(Duration::from_secs(30))
     ///     .await?;
     /// ```
-    pub fn retry_transaction<F, T>(
-        &self,
-        callback: F,
-    ) -> RetryTransactionBuilder<'_, F, T>
+    pub fn retry_transaction<F, T>(&self, callback: F) -> RetryTransactionBuilder<'_, F, T>
     where
         F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
     {
@@ -209,8 +206,7 @@ impl QueryClient {
                     options.clone(),
                 );
 
-                let callback_result =
-                    AssertUnwindSafe(callback(&mut tx)).catch_unwind().await;
+                let callback_result = AssertUnwindSafe(callback(&mut tx)).catch_unwind().await;
 
                 let err = match callback_result {
                     Ok(Ok(value)) => {

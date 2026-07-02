@@ -11,9 +11,7 @@ use crate::grpc_wrapper::raw_query_service::fetch_script_results::RawFetchScript
 use crate::result::ResultSet;
 use crate::types::Value;
 
-use super::exec::{
-    maybe_with_operation_timeout, run_with_retry, CallOptions, ClientExecContext,
-};
+use super::exec::{maybe_with_operation_timeout, run_with_retry, CallOptions, ClientExecContext};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 

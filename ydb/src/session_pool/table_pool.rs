@@ -90,10 +90,7 @@ mod test {
 
     #[tokio::test]
     async fn max_active_session() -> YdbResult<()> {
-        let pool = TableSessionPool::from_shared(
-            bench_pool(),
-            bench_connection_manager(),
-        );
+        let pool = TableSessionPool::from_shared(bench_pool(), bench_connection_manager());
         let first_session = pool.session().await?;
 
         let (thread_started_sender, thread_started_receiver) = oneshot::channel();

@@ -142,11 +142,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- 6. Commit with the last query (with_commit) ------------------------
     let table = "query_example_with_commit";
-    idem_exec(
-        qc.exec(format!(
-            "CREATE TABLE IF NOT EXISTS {table} (id Int64, val Int64, PRIMARY KEY(id))"
-        )),
-    )
+    idem_exec(qc.exec(format!(
+        "CREATE TABLE IF NOT EXISTS {table} (id Int64, val Int64, PRIMARY KEY(id))"
+    )))
     .await?;
 
     qc.retry_transaction(async |tx: &mut Transaction| {

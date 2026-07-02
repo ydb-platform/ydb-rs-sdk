@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use ydb::{ClientBuilder, ExecBuilder, QueryRowBuilder, TxMode, YdbError, YdbOrCustomerError, YdbResult};
+use ydb::{
+    ClientBuilder, ExecBuilder, QueryRowBuilder, TxMode, YdbError, YdbOrCustomerError, YdbResult,
+};
 
 const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
 

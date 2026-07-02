@@ -28,10 +28,8 @@ async fn main() -> YdbResult<()> {
     )
     .await?;
     idem_exec(qc.exec("DELETE FROM script_example")).await?;
-    idem_exec(
-        qc.exec("UPSERT INTO script_example (id, msg) VALUES (123, \"hello from script\");"),
-    )
-    .await?;
+    idem_exec(qc.exec("UPSERT INTO script_example (id, msg) VALUES (123, \"hello from script\");"))
+        .await?;
 
     let op = qc
         .execute_script("SELECT id, msg FROM script_example WHERE id = $id;")

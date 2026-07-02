@@ -338,15 +338,9 @@ async fn client_begin_stream_once(
     let lease_ref = pooled_lease
         .as_mut()
         .expect("lease set on successful acquire");
-    let (mut client, req) = client_pooled_explicit_request(
-        ctx,
-        lease_ref,
-        text,
-        params,
-        opts,
-        concurrent_result_sets,
-    )
-    .await?;
+    let (mut client, req) =
+        client_pooled_explicit_request(ctx, lease_ref, text, params, opts, concurrent_result_sets)
+            .await?;
     let stream = client.execute_query(req).await.map_err(YdbError::from)?;
     let mut stream = ExecuteQueryStream::new(stream);
     if let Some(lease) = pooled_lease.take() {

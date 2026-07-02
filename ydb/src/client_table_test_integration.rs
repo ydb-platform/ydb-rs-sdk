@@ -7,9 +7,7 @@ use tracing::trace;
 use tracing_test::traced_test;
 
 use crate::errors::{YdbError, YdbResult};
-use crate::table_requests::{
-    AlterTableRequest, CreateTableRequest, DropTableRequest, TableColumn,
-};
+use crate::table_requests::{AlterTableRequest, CreateTableRequest, DropTableRequest, TableColumn};
 use crate::table_service_types::{CopyTableItem, IndexType, StoreType};
 use crate::test_integration_helper::create_client;
 use crate::types::Value;

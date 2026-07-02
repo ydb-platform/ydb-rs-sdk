@@ -122,9 +122,7 @@ async fn create_client_with_short_pool_acquire_timeout(
     client.wait().await.expect("discovery");
     Arc::new(
         client
-            .with_session_pool(
-                settings.with_acquire_timeout(Duration::from_millis(300)),
-            )
+            .with_session_pool(settings.with_acquire_timeout(Duration::from_millis(300)))
             .await
             .expect("session pool"),
     )
