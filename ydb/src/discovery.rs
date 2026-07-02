@@ -458,4 +458,25 @@ mod test {
 
         Ok(())
     }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_wrong_db_name() {
+        let good_client = test_client_builder().client().unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), good_client.wait())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let bad_client = test_client_builder()
+            .with_database("/some-amogus-db")
+            .client()
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), bad_client.wait())
+            .await
+            .unwrap()
+            .unwrap_err();
+    }
 }
