@@ -4,6 +4,7 @@
 
 mod builders;
 mod exec;
+pub(crate) mod hooks;
 mod internal;
 mod script;
 mod stream_facade;
@@ -28,6 +29,7 @@ use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
 
 use futures_util::FutureExt;
+use http::Uri;
 use tokio::time::sleep;
 
 use crate::client::TimeoutSettings;
@@ -42,6 +44,7 @@ use exec::{
     transaction_ensure_begin, transaction_exec_context, transaction_identity, transaction_rollback,
     ClientExecContext, TransactionExecContext, DEFAULT_QUERY_RETRY_BUDGET,
 };
+use hooks::{QueryTxCommitStatus, QueryTxHook};
 
 /// Row-to-struct mapping (the sqlx `FromRow` analogue).
 pub trait FromYdbRow: Sized {
@@ -248,24 +251,35 @@ impl QueryClient {
             let err = match callback_result {
                 Ok(Ok(value)) => {
                     if tx.state == TxState::RolledBack {
+                        tx.notify_hooks(QueryTxCommitStatus::Aborted);
                         return Ok(value);
                     }
                     if tx.ctx.finished {
                         tx.state = TxState::Committed;
+                        tx.notify_hooks(QueryTxCommitStatus::Committed);
                         return Ok(value);
                     }
                     return match tx.commit().await {
-                        Ok(()) => Ok(value),
+                        Ok(()) => {
+                            tx.notify_hooks(QueryTxCommitStatus::Committed);
+                            Ok(value)
+                        }
                         // Commit outcome is ambiguous on transport errors; never retry.
-                        Err(e) => Err(YdbOrCustomerError::YDB(e)),
+                        Err(e) => {
+                            tx.notify_hooks(QueryTxCommitStatus::Aborted);
+                            tx.state = TxState::RolledBack;
+                            Err(YdbOrCustomerError::YDB(e))
+                        }
                     };
                 }
                 Ok(Err(err)) => {
                     tx.rollback_quiet().await;
+                    tx.notify_hooks(QueryTxCommitStatus::Aborted);
                     err
                 }
                 Err(panic_payload) => {
                     tx.rollback_quiet().await;
+                    tx.notify_hooks(QueryTxCommitStatus::Aborted);
                     YdbOrCustomerError::YDB(YdbError::Custom(format!(
                         "query transaction callback panicked: {}",
                         panic_message(panic_payload)
@@ -315,6 +329,7 @@ enum TxState {
 pub struct Transaction {
     ctx: TransactionExecContext,
     state: TxState,
+    hooks: Vec<Box<dyn QueryTxHook>>,
 }
 
 impl Transaction {
@@ -329,11 +344,16 @@ impl Transaction {
         Self {
             ctx: transaction_exec_context(connection_manager, timeouts, session_pool, options),
             state: TxState::Active,
+            hooks: Vec::new(),
         }
     }
 
     pub fn mode(&self) -> TxMode {
         self.ctx.tx_mode
+    }
+
+    pub(crate) fn register_hook(&mut self, hook: impl QueryTxHook + 'static) {
+        self.hooks.push(Box::new(hook));
     }
 
     /// Explicitly open the transaction via `BeginTransaction` RPC.
@@ -382,10 +402,50 @@ impl Transaction {
         }
     }
 
+    fn notify_hooks(&mut self, status: QueryTxCommitStatus) {
+        for hook in &mut self.hooks {
+            hook.after_commit(status);
+        }
+    }
+
+    pub(crate) async fn tx_identity(&mut self) -> YdbResult<QueryTxIdentity> {
+        transaction_ensure_begin(&mut self.ctx, false).await?;
+
+        let transaction_id = self
+            .ctx
+            .tx_id
+            .as_ref()
+            .ok_or(YdbError::custom("no transaction id"))?
+            .to_string();
+
+        let session_id = self
+            .ctx
+            .pooled_lease
+            .as_ref()
+            .ok_or(YdbError::custom("no session id"))?
+            .session_id()
+            .to_string();
+
+        Ok(QueryTxIdentity {
+            transaction_id,
+            session_id,
+        })
+    }
+
+    pub(crate) async fn uri(&mut self) -> YdbResult<Option<&Uri>> {
+        transaction_ensure_begin(&mut self.ctx, false).await?;
+        Ok(self.ctx.query_node.as_ref())
+    }
+
     #[cfg(test)]
     pub(crate) fn tx_id_for_test(&self) -> Option<&str> {
         self.ctx.tx_id.as_deref()
     }
+}
+
+pub(crate) struct QueryTxIdentity {
+    pub(crate) transaction_id: String,
+    pub(crate) session_id: String,
 }
 
 impl Drop for Transaction {
@@ -395,6 +455,7 @@ impl Drop for Transaction {
         }
         self.state = TxState::RolledBack;
         self.ctx.finished = true;
+        self.notify_hooks(QueryTxCommitStatus::Aborted);
         spawn_query_tx_rollback_on_drop(&mut self.ctx);
     }
 }
