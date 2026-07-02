@@ -12,6 +12,7 @@ use crate::grpc_wrapper::raw_table_service::copy_table::{
 use crate::grpc_wrapper::raw_table_service::create_session::{
     RawCreateSessionRequest, RawCreateSessionResult,
 };
+use crate::grpc_wrapper::raw_table_service::create_table::RawCreateTableRequest;
 use crate::grpc_wrapper::raw_table_service::describe_table::{
     RawDescribeTableRequest, RawDescribeTableResult,
 };
@@ -147,6 +148,20 @@ impl RawTableClient {
             self.service.copy_tables,
             req => ydb_grpc::ydb_proto::table::CopyTablesRequest
         );
+    }
+
+    pub async fn create_table(&mut self, req: RawCreateTableRequest) -> RawResult<()> {
+        let grpc_req: ydb_grpc::ydb_proto::table::CreateTableRequest = req.into();
+
+        trace!(
+            " RawTableClient.create_table request: {}",
+            crate::trace_helpers::ensure_len_string(
+                serde_json::to_string(&grpc_req).unwrap_or("bad json".into())
+            )
+        );
+
+        let response = self.service.create_table(grpc_req).await?;
+        crate::grpc_wrapper::grpc::grpc_read_void_operation_result(response)
     }
 
     pub async fn bulk_upsert(&mut self, req: RawBulkUpsertRequest) -> RawResult<()> {

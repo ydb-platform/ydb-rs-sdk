@@ -58,6 +58,7 @@ pub(crate) mod client_table;
 mod client_table_test_integration;
 pub(crate) mod client_topic;
 pub(crate) mod connection_pool;
+mod create_table_types;
 mod credentials;
 pub(crate) mod discovery;
 mod errors;
@@ -166,6 +167,30 @@ pub use client_query::{
 
 // full enum pub types
 pub use client_table::{RetryOptions, TableClient, TransactionOptions};
+
+pub use create_table_types::{
+    AutoPartitioningPolicy as CreateTableOptionAutoPartitioningPolicy,
+    CachingPolicy as CreateTableOptionCachingPolicy,
+    ColumnDefault as CreateTableOptionColumnDefault, ColumnFamily as CreateTableOptionColumnFamily,
+    ColumnFamilyCompression as CreateTableOptionColumnFamilyCompression,
+    ColumnFamilyPolicy as CreateTableOptionColumnFamilyPolicy,
+    ColumnFamilyPolicyCompression as CreateTableOptionColumnFamilyPolicyCompression,
+    CompactionPolicy as CreateTableOptionCompactionPolicy, CreateTableIndex, CreateTableOptions,
+    CreateTableOptionsBuilder, DateTypeColumnTtl as CreateTableOptionDateTypeColumnTtl,
+    ExecutionPolicy as CreateTableOptionExecutionPolicy,
+    FeatureFlag as CreateTableOptionFeatureFlag,
+    PartitioningPolicy as CreateTableOptionPartitioningPolicy,
+    ReadReplicasSettings as CreateTableOptionReadReplicasSettings,
+    ReplicationPolicy as CreateTableOptionReplicationPolicy,
+    SequenceOptions as CreateTableOptionSequenceOptions,
+    StoragePolicy as CreateTableOptionStoragePolicy, StoragePool as CreateTableOptionStoragePool,
+    StorageSettings as CreateTableOptionStorageSettings, TableColumn,
+    TablePartitioningSettings as CreateTableOptionTablePartitioningSettings,
+    TablePartitions as CreateTableOptionTablePartitions,
+    TableProfile as CreateTableOptionTableProfile, TtlMode as CreateTableOptionTtlMode,
+    TtlSettings as CreateTableOptionTtlSettings, UnixEpochUnit as CreateTableOptionUnixEpochUnit,
+    ValueSinceUnixEpochTtl as CreateTableOptionValueSinceUnixEpochTtl,
+};
 
 // full enum pub types
 pub use table_service_types::{
