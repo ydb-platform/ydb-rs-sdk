@@ -1,4 +1,5 @@
 use crate::grpc_wrapper::raw_table_service::copy_table::RawCopyTableItem;
+use crate::grpc_wrapper::raw_table_service::rename_tables::RawRenameTableItem;
 
 #[derive(Clone)]
 pub struct CopyTableItem {
@@ -24,6 +25,33 @@ impl From<CopyTableItem> for RawCopyTableItem {
     }
 }
 
+#[derive(Clone)]
+pub struct RenameTableItem {
+    inner: RawRenameTableItem,
+}
+
+impl RenameTableItem {
+    pub fn new(
+        source_path: impl Into<String>,
+        destination_path: impl Into<String>,
+        replace_destination: bool,
+    ) -> Self {
+        Self {
+            inner: RawRenameTableItem {
+                source_path: source_path.into(),
+                destination_path: destination_path.into(),
+                replace_destination,
+            },
+        }
+    }
+}
+
+impl From<RenameTableItem> for RawRenameTableItem {
+    fn from(value: RenameTableItem) -> Self {
+        value.inner
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TableDescription {
     /// List of table columns
@@ -34,6 +62,8 @@ pub struct TableDescription {
     pub indexes: Vec<IndexDescription>,
     /// YDB table storage type (Row/Column)
     pub store_type: StoreType,
+    /// User-defined table attributes (key/value, up to 10 KB total).
+    pub attributes: std::collections::HashMap<String, String>,
 }
 
 /// Error description of an unknown/unsupported column type

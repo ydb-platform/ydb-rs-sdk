@@ -11,9 +11,11 @@ use ydb_grpc::ydb_proto::scheme::{
 };
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 use ydb_grpc::ydb_proto::table::{
-    BulkUpsertResponse, CommitTransactionResponse, CopyTableResponse, CopyTablesResponse,
-    CreateSessionResponse, DeleteSessionResponse, DescribeTableResponse, ExecuteDataQueryResponse,
-    ExecuteSchemeQueryResponse, ExplainDataQueryResponse, KeepAliveResponse, ReadRowsResponse,
+    AlterTableResponse, BulkUpsertResponse, CommitTransactionResponse, CopyTableResponse,
+    CopyTablesResponse, CreateSessionResponse, CreateTableResponse, DeleteSessionResponse,
+    DescribeTableOptionsResponse, DescribeTableResponse, DropTableResponse,
+    ExecuteDataQueryResponse, ExecuteSchemeQueryResponse, ExplainDataQueryResponse,
+    PrepareDataQueryResponse, ReadRowsResponse, ReadTableResponse, RenameTablesResponse,
     RollbackTransactionResponse,
 };
 use ydb_grpc::ydb_proto::topic::{
@@ -39,6 +41,20 @@ impl YdbGrpcStatus<ReadRowsResponse> for ReadRowsResponse {
     }
 
     fn into_result(self) -> RawResult<ReadRowsResponse> {
+        Ok(self)
+    }
+}
+
+impl YdbGrpcStatus<ReadTableResponse> for ReadTableResponse {
+    fn status(&self) -> RawResult<StatusCode> {
+        Ok(self.status())
+    }
+
+    fn issues(&self) -> RawResult<&[IssueMessage]> {
+        Ok(&self.issues)
+    }
+
+    fn into_result(self) -> RawResult<ReadTableResponse> {
         Ok(self)
     }
 }
@@ -96,7 +112,6 @@ operation_impl_for!(DeleteSessionResponse);
 operation_impl_for!(ExecuteDataQueryResponse);
 operation_impl_for!(ExecuteSchemeQueryResponse);
 operation_impl_for!(ExplainDataQueryResponse);
-operation_impl_for!(KeepAliveResponse);
 operation_impl_for!(ListEndpointsResponse);
 operation_impl_for!(RollbackTransactionResponse);
 operation_impl_for!(WhoAmIResponse);
@@ -114,8 +129,14 @@ operation_impl_for!(AlterNodeResponse);
 operation_impl_for!(DropNodeResponse);
 operation_impl_for!(CopyTableResponse);
 operation_impl_for!(CopyTablesResponse);
+operation_impl_for!(RenameTablesResponse);
 operation_impl_for!(DescribeTableResponse);
 operation_impl_for!(LoginResponse);
 operation_impl_for!(DescribeConsumerResponse);
 operation_impl_for!(UpdateOffsetsInTransactionResponse);
 operation_impl_for!(BulkUpsertResponse);
+operation_impl_for!(CreateTableResponse);
+operation_impl_for!(DropTableResponse);
+operation_impl_for!(AlterTableResponse);
+operation_impl_for!(PrepareDataQueryResponse);
+operation_impl_for!(DescribeTableOptionsResponse);

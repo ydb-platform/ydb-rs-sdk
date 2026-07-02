@@ -7,6 +7,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::client_common::TokenCache;
+use crate::client_query::Transaction;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicreader::messages::TopicReaderBatch;
 use crate::client_topic::topicreader::reader_options::{
@@ -21,7 +22,6 @@ use crate::grpc_wrapper::raw_topic_service::update_offsets_in_transaction::{
     RawUpdateOffsetsInTransactionRequest,
 };
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-use crate::transaction::{Transaction, TransactionInfo};
 use crate::{YdbError, YdbResult};
 
 use super::reconnector::{Reconnector, ReconnectorTask};
@@ -76,19 +76,15 @@ impl TopicReader {
         self.runtime.pop_batch(self.options.batch_size).await
     }
 
-    /// WARN: DO NOT USE IN PRODUCTION
+    /// Read a batch and register consumer offsets via [`UpdateOffsetsInTransaction`]
+    /// using the given [`Transaction`].
     ///
-    /// Read a batch of messages within a transaction context.
-    /// The TopicReaderBatch from the result will be committed within the `tx` transaction.
-    /// This is an EXAMPLE of the interface. IT IS NOT PRODUCTION READY.
-    /// The reader will fail consistently on ANY error, including TLI.
-    pub async fn pop_batch_in_tx(
-        &mut self,
-        tx: &mut Box<dyn Transaction>,
-    ) -> YdbResult<TopicReaderBatch> {
-        let tx_info = tx.transaction_info().await?;
+    /// Offsets are committed when the query transaction commits.
+    pub async fn pop_batch_in_tx(&mut self, tx: &mut Transaction) -> YdbResult<TopicReaderBatch> {
+        let (session_id, transaction_id) = tx.identity().await?;
         let batch = self.read_batch().await?;
-        self.update_offsets_in_transaction(&batch, &tx_info).await?;
+        self.update_offsets_in_transaction(&batch, session_id, transaction_id)
+            .await?;
         Ok(batch)
     }
 
@@ -137,7 +133,8 @@ impl TopicReader {
     async fn update_offsets_in_transaction(
         &self,
         batch: &TopicReaderBatch,
-        tx_info: &TransactionInfo,
+        session_id: String,
+        transaction_id: String,
     ) -> YdbResult<()> {
         let commit_marker = batch.get_commit_marker();
 
@@ -147,8 +144,8 @@ impl TopicReader {
                 Duration::from_secs(60),
             ),
             tx: RawTransactionIdentity {
-                id: tx_info.transaction_id.clone(),
-                session: tx_info.session_id.clone(),
+                id: transaction_id,
+                session: session_id,
             },
             topics: vec![RawTopicOffsets {
                 path: commit_marker.topic.clone(),

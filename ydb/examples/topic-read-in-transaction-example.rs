@@ -109,9 +109,8 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 use ydb::{
-    ydb_params, ClientBuilder, ConsumerBuilder, CreateTopicOptionsBuilder,
-    DescribeTopicOptionsBuilder, Query, TopicWriterMessageBuilder, TopicWriterOptionsBuilder,
-    YdbError, YdbResult,
+    ClientBuilder, ConsumerBuilder, CreateTopicOptionsBuilder, DescribeTopicOptionsBuilder,
+    TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError, YdbResult,
 };
 
 /// Sets up the test environment including table and topic creation, and publishes test messages.
@@ -133,30 +132,21 @@ use ydb::{
 /// - **Explicit Sequence Numbers**: Ensures deterministic message ordering
 /// - **Wait for Deletion**: Prevents race conditions between drop and create operations
 async fn setup_environment(client: &ydb::Client) -> YdbResult<()> {
-    let table_client = client.table_client();
+    let mut query_client = client.query_client();
 
     // ============================================================================
     // TABLE SETUP: Create storage table for processed messages
     // ============================================================================
 
-    // Drop test table unconditionally (ignore errors)
-    // This ensures a clean state for each test run
-    let _ = table_client
-        .retry_execute_scheme_query("DROP TABLE topic_offset_storage")
-        .await;
+    let _ = query_client.exec("DROP TABLE topic_offset_storage").await;
 
-    // Create test table with schema designed for message storage
-    // The primary key (topic, partition, offset) is the unique identifier for each message in YDB topics:
-    // - This tuple uniquely identifies every message across all topics and partitions
-    // - It allows us to store every message exactly once in our processing table
-    // - Transactions ensure we don't process the same message multiple times
-    table_client
-        .retry_execute_scheme_query(
+    query_client
+        .exec(
             "CREATE TABLE topic_offset_storage (
-                topic Text NOT NULL,      -- Topic name for multi-topic scenarios
-                partition Int64 NOT NULL, -- Partition ID for parallel processing
-                offset Int64 NOT NULL,    -- Message offset (unique per partition)
-                body Text,                -- Message content for verification
+                topic Text NOT NULL,
+                partition Int64 NOT NULL,
+                offset Int64 NOT NULL,
+                body Text,
                 PRIMARY KEY(topic, partition, offset)
             )",
         )
@@ -324,7 +314,7 @@ async fn main() -> YdbResult<()> {
     let consumer_name = "test_consumer";
 
     let mut topic_client = client.topic_client();
-    let table_client = client.table_client();
+    let query_client = client.query_client();
 
     // Create topic reader for the consumer
     let reader = topic_client
@@ -358,30 +348,17 @@ async fn main() -> YdbResult<()> {
         // This provides automatic retry with exponential backoff for transient failures
         // IMPORTANT: The code inside this block can be executed MULTIPLE TIMES if retries occur!
         // Our approach prevents multiply side effects (like duplicate prints) during retries
-        let result = table_client
-            .retry_transaction(|mut t| {
-                let reader_mutex = reader_mutex.clone();
-                async move {
-                    // Lock the reader for use within this transaction attempt
-                    // The lock is held only during the transaction, not across retries
-                    let mut reader_guard = reader_mutex.lock().await;
+        let result = query_client
+            .retry_transaction(async |tx| {
+                let mut reader_guard = reader_mutex.lock().await;
 
-                    // Read batch with 3-second timeout
-                    // IMPORTANT: The timeout here is NOT an error condition!
-                    // It's how we detect that all available messages have been consumed.
-                    // In production, you might use a longer timeout or different strategy.
-                    let batch_result = timeout(
-                        Duration::from_secs(3),
-                        reader_guard.pop_batch_in_tx(&mut t)
-                    ).await;
+                let batch_result =
+                    timeout(Duration::from_secs(3), reader_guard.pop_batch_in_tx(tx)).await;
 
-                    match batch_result {
+                match batch_result {
                         Ok(Ok(batch)) => {
                             println!("  Read batch with {} messages", batch.messages.len());
 
-                            // Process each message in the batch within this transaction
-                            // CRITICAL: All message processing must be within the same transaction
-                            // that reads the messages to ensure exactly-once semantics
                             for mut message in batch.messages {
                                 let topic = message.get_topic().to_string();
                                 let partition_id = message.get_partition_id();
@@ -389,33 +366,25 @@ async fn main() -> YdbResult<()> {
                                 let message_body = message.read_and_take().await?.unwrap_or_default();
                                 let body_str = String::from_utf8_lossy(&message_body).to_string();
 
-                                // Insert message into table within the same transaction
-                                // The unique tuple (topic, partition, offset) serves as the message identifier
-                                t.query(
-                                    Query::new(
-                                        "
-                                        INSERT INTO topic_offset_storage (topic, partition, offset, body)
-                                        VALUES ($topic, $partition, $offset, $body)
-                                        "
-                                    )
-                                        .with_params(ydb_params!(
-                                        "$topic" => topic.clone(),
-                                        "$partition" => partition_id,
-                                        "$offset" => offset,
-                                        "$body" => body_str.clone()
-                                    ))
-                                ).await?;
+                                tx.exec(
+                                    "INSERT INTO topic_offset_storage (topic, partition, offset, body)
+                                     VALUES ($topic, $partition, $offset, $body)",
+                                )
+                                .param("$topic", topic.clone())
+                                .param("$partition", partition_id)
+                                .param("$offset", offset)
+                                .param("$body", body_str.clone())
+                                .await?;
 
-                                println!("    Stored message: topic={}, partition={}, offset={}, body_len={}",
-                                         topic, partition_id, offset, body_str.len());
+                                println!(
+                                    "    Stored message: topic={}, partition={}, offset={}, body_len={}",
+                                    topic, partition_id, offset, body_str.len()
+                                );
                             }
 
-                            // Explicit commit currently required
-                            // Will be auto-committed in future SDK versions
-                            t.commit().await?;
                             println!("  Transaction committed successfully");
 
-                            Ok(true) // Continue reading more batches
+                            Ok(true)
                         }
                         Ok(Err(err)) => {
                             // Actual error from the topic reader
@@ -429,7 +398,6 @@ async fn main() -> YdbResult<()> {
                             Ok(false) // Stop reading
                         }
                     }
-                }
             })
             .await;
 
@@ -478,24 +446,19 @@ async fn main() -> YdbResult<()> {
     // 2. Avoids I/O operations inside transactions
     // 3. Makes the code more testable and modular
     // 4. Reduces transaction retry overhead
-    let table_data = table_client
-        .retry_transaction(|mut t| {
-            async move {
-                // Select all records from the table ordered by topic, partition, offset
-                // The ordering ensures consistent output across runs
-                let result_set = t
-                    .query(Query::new(
-                        "SELECT topic, partition, offset, body
-                         FROM topic_offset_storage
-                         ORDER BY topic, partition, offset",
-                    ))
-                    .await?
-                    .into_only_result()?;
+    let table_data = query_client
+        .retry_transaction(async |tx| {
+            let mut stream = tx
+                .query(
+                    "SELECT topic, partition, offset, body
+                     FROM topic_offset_storage
+                     ORDER BY topic, partition, offset",
+                )
+                .await?;
 
-                let mut rows = Vec::new();
-                for mut row in result_set.rows() {
-                    // Extract each field with proper error handling
-                    // NOT NULL columns are guaranteed to have values
+            let mut rows = Vec::new();
+            if let Some(result_set) = stream.next_result_set().await? {
+                for mut row in result_set {
                     let topic: String = row.remove_field_by_name("topic")?.try_into()?;
                     let partition: i64 = row.remove_field_by_name("partition")?.try_into()?;
                     let offset: i64 = row.remove_field_by_name("offset")?.try_into()?;
@@ -508,14 +471,10 @@ async fn main() -> YdbResult<()> {
                         body: body.unwrap_or_default(),
                     });
                 }
-
-                // Explicit commit currently required
-                // Will be auto-committed in future SDK versions
-                t.commit().await?;
-
-                // Return the data for processing outside the transaction
-                Ok(rows)
             }
+            stream.close().await?;
+
+            Ok(rows)
         })
         .await;
 

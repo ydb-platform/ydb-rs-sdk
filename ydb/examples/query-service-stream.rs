@@ -1,6 +1,6 @@
 //! Multi-result-set streaming inside `retry_transaction` (lazy tx on implicit session).
 
-use ydb::{ClientBuilder, QueryTransaction};
+use ydb::{ClientBuilder, Transaction};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,11 +11,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let qc = client.query_client();
 
     let sets = qc
-        // Annotate the parameter type (`tx: &mut QueryTransaction`) so the
+        // Annotate the parameter type (`tx: &mut Transaction`) so the
         // IDE can complete methods on `tx`: rust-analyzer does not yet
         // reliably infer `async ||` closure parameter types from the
         // `AsyncFnMut` bound. The compiler infers it fine without this.
-        .retry_transaction(async |tx: &mut QueryTransaction| {
+        .retry_transaction(async |tx: &mut Transaction| {
             let mut stream = tx.query("SELECT 42 AS a; SELECT 1 AS b, 2 AS c;").await?;
 
             // While `stream` is alive, `tx` stays mutably borrowed — a second

@@ -74,9 +74,6 @@ echo "  SRC_PATH:   $src_path"
 
 pkg_name=""
 case "$src_path" in
-  native/table)
-    pkg_name="slo-native-table"
-    ;;
   native/query)
     pkg_name="slo-native-query"
     ;;

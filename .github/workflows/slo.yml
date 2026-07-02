@@ -45,8 +45,6 @@ jobs:
       fail-fast: false
       matrix:
         sdk:
-          - name: native-table
-            path: native/table
           - name: native-query
             path: native/query
           - name: native-topic

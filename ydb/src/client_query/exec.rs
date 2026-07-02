@@ -13,10 +13,10 @@ use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryRequest;
 use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::grpc_wrapper::raw_query_service::transaction_control::{
-    begin_tx_control, tx_id_control, RawQueryTxMode,
+    begin_tx_control, tx_id_control, RawTxMode,
 };
 use crate::types::Value;
-use crate::{QueryTransactionOptions, QueryTxMode};
+use crate::{TransactionOptions, TxMode};
 
 use crate::session_pool::{spawn_pool_release, SessionPool, SessionPoolLease};
 
@@ -58,9 +58,9 @@ pub(crate) struct CallOptions {
     pub collect_stats: bool,
     /// Override Query Service `commit_tx`. `None` uses context default.
     pub commit_tx: Option<bool>,
-    /// Per-call isolation override. `None` → [`QueryTxMode::Implicit`] on client,
+    /// Per-call isolation override. `None` → [`TxMode::Implicit`] on client,
     /// [`TransactionExecContext::tx_mode`] in interactive transactions.
-    pub tx_mode: Option<QueryTxMode>,
+    pub tx_mode: Option<TxMode>,
     /// One-shot [`QueryClient`] only: send `ExecuteQuery` with an empty `session_id`.
     pub implicit_session: bool,
 }
@@ -78,7 +78,7 @@ pub(crate) struct ClientExecContext {
 pub(crate) struct TransactionExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub timeouts: TimeoutSettings,
-    pub tx_mode: QueryTxMode,
+    pub tx_mode: TxMode,
     pub session_pool: SessionPool,
     /// When set, the first operation calls `BeginTransaction` RPC instead of lazy `BeginTx` in `ExecuteQuery`.
     pub begin: bool,
@@ -135,26 +135,26 @@ async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQuery
     }
 }
 
-fn tx_mode_to_raw(mode: QueryTxMode) -> YdbResult<RawQueryTxMode> {
+fn tx_mode_to_raw(mode: TxMode) -> YdbResult<RawTxMode> {
     match mode {
-        QueryTxMode::Implicit => Err(YdbError::Custom(
-            "QueryTxMode::Implicit cannot be converted to a raw tx mode; \
+        TxMode::Implicit => Err(YdbError::Custom(
+            "TxMode::Implicit cannot be converted to a raw tx mode; \
              use server-side inference (no tx_control) instead"
                 .to_string(),
         )),
-        QueryTxMode::SerializableReadWrite => Ok(RawQueryTxMode::SerializableReadWrite),
-        QueryTxMode::SnapshotReadOnly => Ok(RawQueryTxMode::SnapshotReadOnly),
-        QueryTxMode::SnapshotReadWrite => Ok(RawQueryTxMode::SnapshotReadWrite),
-        QueryTxMode::StaleReadOnly => Ok(RawQueryTxMode::StaleReadOnly),
-        QueryTxMode::OnlineReadOnly => Ok(RawQueryTxMode::OnlineReadOnly),
-        QueryTxMode::OnlineReadOnlyInconsistent => Ok(RawQueryTxMode::OnlineReadOnlyInconsistent),
+        TxMode::SerializableReadWrite => Ok(RawTxMode::SerializableReadWrite),
+        TxMode::SnapshotReadOnly => Ok(RawTxMode::SnapshotReadOnly),
+        TxMode::SnapshotReadWrite => Ok(RawTxMode::SnapshotReadWrite),
+        TxMode::StaleReadOnly => Ok(RawTxMode::StaleReadOnly),
+        TxMode::OnlineReadOnly => Ok(RawTxMode::OnlineReadOnly),
+        TxMode::OnlineReadOnlyInconsistent => Ok(RawTxMode::OnlineReadOnlyInconsistent),
     }
 }
 
-fn ensure_interactive_tx_mode(mode: QueryTxMode) -> YdbResult<()> {
-    if mode == QueryTxMode::Implicit {
+fn ensure_interactive_tx_mode(mode: TxMode) -> YdbResult<()> {
+    if mode == TxMode::Implicit {
         return Err(YdbError::Custom(
-            "QueryTxMode::Implicit is not available inside QueryTransaction; \
+            "TxMode::Implicit is not available inside Transaction; \
              DDL and other non-transactional statements must run on QueryClient, not inside tx"
                 .to_string(),
         ));
@@ -183,17 +183,17 @@ fn reject_per_call_tx_mode_override(
     Ok(())
 }
 
-fn client_tx_mode(opts: &CallOptions) -> QueryTxMode {
-    opts.tx_mode.unwrap_or(QueryTxMode::Implicit)
+fn client_tx_mode(opts: &CallOptions) -> TxMode {
+    opts.tx_mode.unwrap_or(TxMode::Implicit)
 }
 
-fn interactive_tx_mode(tx: &TransactionExecContext, opts: &CallOptions) -> YdbResult<QueryTxMode> {
+fn interactive_tx_mode(tx: &TransactionExecContext, opts: &CallOptions) -> YdbResult<TxMode> {
     reject_per_call_tx_mode_override(tx, opts)?;
     ensure_interactive_tx_mode(opts.tx_mode.unwrap_or(tx.tx_mode))?;
     Ok(tx.tx_mode)
 }
 
-fn default_commit_tx_client(_mode: QueryTxMode) -> bool {
+fn default_commit_tx_client(_mode: TxMode) -> bool {
     // All one-shot modes auto-commit today; revisit if a future mode should not.
     true
 }
@@ -271,12 +271,12 @@ where
 
 /// Build `tx_control` for one-shot [`QueryClient`] calls.
 ///
-/// Default [`QueryTxMode::Implicit`] omits `tx_control` (server-side inference).
+/// Default [`TxMode::Implicit`] omits `tx_control` (server-side inference).
 fn tx_control_for_client(
     opts: &CallOptions,
 ) -> YdbResult<Option<ydb_grpc::ydb_proto::query::TransactionControl>> {
     let mode = client_tx_mode(opts);
-    if mode == QueryTxMode::Implicit {
+    if mode == TxMode::Implicit {
         return Ok(None);
     }
     let commit_tx = opts
@@ -425,6 +425,21 @@ fn tx_session_id(tx: &TransactionExecContext) -> YdbResult<&str> {
         .as_ref()
         .map(|lease| lease.session_id())
         .ok_or_else(|| YdbError::Custom("query transaction session is not initialized".to_string()))
+}
+
+/// Session and transaction ids for cross-service RPCs (e.g. topic `UpdateOffsetsInTransaction`).
+pub(crate) async fn transaction_identity(
+    tx: &mut TransactionExecContext,
+) -> YdbResult<(String, String)> {
+    transaction_ensure_begin(tx, false).await?;
+    let session_id = tx_session_id(tx)?.to_string();
+    let transaction_id = tx
+        .tx_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| YdbError::Custom("query transaction id is not available".to_string()))?
+        .to_string();
+    Ok((session_id, transaction_id))
 }
 
 async fn release_tx_session(tx: &mut TransactionExecContext) {
@@ -621,7 +636,7 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
     }
 }
 
-/// Best-effort rollback when [`super::QueryTransaction`] is dropped without `commit`/`rollback`.
+/// Best-effort rollback when [`super::Transaction`] is dropped without `commit`/`rollback`.
 pub(crate) fn spawn_query_tx_rollback_on_drop(ctx: &mut TransactionExecContext) {
     let tx_id = ctx.tx_id.take();
     let Some(mut lease) = ctx.pooled_lease.take() else {
@@ -669,7 +684,7 @@ pub(crate) fn transaction_exec_context(
     connection_manager: GrpcConnectionManager,
     timeouts: TimeoutSettings,
     session_pool: SessionPool,
-    options: QueryTransactionOptions,
+    options: TransactionOptions,
 ) -> TransactionExecContext {
     TransactionExecContext {
         connection_manager,
@@ -797,7 +812,7 @@ mod unit_tests {
     #[tokio::test]
     async fn transaction_rollback_is_nop_when_finished() {
         use crate::client::TimeoutSettings;
-        use crate::client_query::QueryTransactionOptions;
+        use crate::client_query::TransactionOptions;
         use crate::grpc_connection_manager::GrpcConnectionManager;
         use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
         use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
@@ -818,7 +833,7 @@ mod unit_tests {
             ),
             TimeoutSettings::default(),
             SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
-            QueryTransactionOptions::default(),
+            TransactionOptions::default(),
         );
         ctx.tx_id = Some("tx-1".into());
         ctx.finished = true;

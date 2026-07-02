@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::timeout;
-use ydb::{ydb_params, ClientBuilder, Query, Value, YdbError, YdbResult};
+use ydb::{ydb_params, ClientBuilder, Value, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -14,64 +14,39 @@ async fn main() -> YdbResult<()> {
         return Err(YdbError::from("Connection timeout"));
     };
 
-    let table_client = client.table_client();
+    let mut qc = client.query_client();
 
     // List
-    table_client
-        .retry_transaction(|mut t| async move {
-            let source = vec![1_i32, 2, 3];
-            let source_value = Value::from_iter(source.clone());
-            let res: Vec<i32> = t
-                .query(
-                    Query::new(
-                        "
-                    SELECT $val AS val;
-                ",
-                    )
-                    .with_params(HashMap::from_iter(vec![(
-                        "$val".to_string(),
-                        source_value, //
-                    )])),
-                )
-                .await?
-                .into_only_row()?
-                .remove_field_by_name("val")?
-                .try_into()?;
+    {
+        let source = vec![1_i32, 2, 3];
+        let source_value = Value::from_iter(source.clone());
+        let mut row = qc
+            .query_row("SELECT $val AS val")
+            .params(HashMap::from_iter(vec![("$val".to_string(), source_value)]))
+            .await?;
+        let res: Vec<i32> = row.remove_field_by_name("val")?.try_into()?;
 
-            assert_eq!(vec![1, 2, 3], res);
-            println!("List: {res:?}");
-            Ok(())
-        })
-        .await?;
+        assert_eq!(vec![1, 2, 3], res);
+        println!("List: {res:?}");
+    }
 
     // Struct
-    table_client
-        .retry_transaction(|mut t| async move {
-            let source: HashMap<String, Value> = HashMap::from_iter([
-                ("a".into(), 12_i32.into()),
-                ("b".into(), "test".to_string().into()),
-                ("c".into(), 1.0_f64.into()),
-            ]);
+    {
+        let source: HashMap<String, Value> = HashMap::from_iter([
+            ("a".into(), 12_i32.into()),
+            ("b".into(), "test".to_string().into()),
+            ("c".into(), 1.0_f64.into()),
+        ]);
 
-            let res: HashMap<String, Value> = t
-                .query(
-                    Query::new(
-                        "
-            SELECT $val AS res;
-        ",
-                    )
-                    .with_params(ydb_params!("$val" => source.clone())),
-                )
-                .await?
-                .into_only_row()?
-                .remove_field_by_name("res")?
-                .try_into()?;
+        let mut row = qc
+            .query_row("SELECT $val AS res")
+            .params(ydb_params!("$val" => source.clone()))
+            .await?;
+        let res: HashMap<String, Value> = row.remove_field_by_name("res")?.try_into()?;
 
-            assert_eq!(source, res);
-            println!("Struct: {res:?}");
-            Ok(())
-        })
-        .await?;
+        assert_eq!(source, res);
+        println!("Struct: {res:?}");
+    }
 
     println!("done");
     Ok(())

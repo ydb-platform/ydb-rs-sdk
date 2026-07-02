@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use slo_framework::kv::{Database, KvWorkload, Params};
 use slo_framework::{test_row_from_row, Framework, RowID, TestRow, Workload};
 use ydb::ClientBuilder;
-use ydb::{QueryClient, QueryTxMode, SessionPoolSettings};
+use ydb::{QueryClient, SessionPoolSettings, TxMode};
 
 pub struct Storage {
     query_client: QueryClient,
@@ -118,7 +118,7 @@ impl Database for Storage {
             attempts_for_op.fetch_add(1, Ordering::Relaxed);
             qc.query_row(select_sql)
                 .param("$id", id)
-                .with_tx_mode(QueryTxMode::SnapshotReadOnly)
+                .with_tx_mode(TxMode::SnapshotReadOnly)
                 .await
         })
         .await

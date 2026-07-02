@@ -12,6 +12,7 @@ use crate::{
     YdbIssue,
 };
 
+#[derive(Clone)]
 pub(crate) struct RawReadRowsRequest {
     pub session_id: String,
     pub path: String,

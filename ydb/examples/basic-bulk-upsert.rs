@@ -1,6 +1,6 @@
 use std::time::Duration;
 use tokio::time::timeout;
-use ydb::{ydb_struct, ClientBuilder, Query, Value, YdbError, YdbResult};
+use ydb::{ydb_struct, ClientBuilder, Value, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -14,15 +14,13 @@ async fn main() -> YdbResult<()> {
     };
 
     let table_client = client.table_client();
+    let mut query_client = client.query_client();
     let table_name = "test";
 
-    let _ = table_client
-        .retry_execute_scheme_query(format!("DROP TABLE {table_name}"))
-        .await; // ignore drop error
+    let _ = query_client.exec(format!("DROP TABLE {table_name}")).await; // ignore drop error
 
-    // create table
-    table_client
-        .retry_execute_scheme_query(format!(
+    query_client
+        .exec(format!(
             "CREATE TABLE {table_name} (id Int64 NOT NULL, val Utf8, PRIMARY KEY(id))",
         ))
         .await?;
@@ -40,23 +38,15 @@ async fn main() -> YdbResult<()> {
     ];
 
     table_client
-        .retry_execute_bulk_upsert(format!("/local/{table_name}").to_string(), rows)
+        .bulk_upsert(format!("/local/{table_name}"), rows)
         .await?;
 
-    let read = table_client
-        .retry_transaction(|t| async {
-            let mut t = t;
-            let res = t
-                .query(Query::new(format!(
-                    "SELECT * FROM {table_name} ORDER BY id"
-                )))
-                .await?;
-            Ok(res)
-        })
+    let result_set = client
+        .query_client()
+        .query_result_set(format!("SELECT * FROM {table_name} ORDER BY id"))
         .await?;
 
-    let read_rows_id: YdbResult<Vec<i64>> = read
-        .into_only_result()?
+    let read_rows_id: YdbResult<Vec<i64>> = result_set
         .rows()
         .map(|mut row| {
             let val = row.remove_field_by_name("id")?;

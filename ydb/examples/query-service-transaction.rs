@@ -1,8 +1,8 @@
-//! `retry_transaction` with `AsyncFnMut(&mut QueryTransaction)` on implicit sessions.
+//! `retry_transaction` with `AsyncFnMut(&mut Transaction)` on implicit sessions.
 
 use ydb::{
-    ClientBuilder, QueryExecutor, QueryTransaction, QueryTransactionOptions, YdbOrCustomerError,
-    YdbResult, YdbResultWithCustomerErr,
+    ClientBuilder, QueryExecutor, Transaction, TransactionOptions, YdbOrCustomerError, YdbResult,
+    YdbResultWithCustomerErr,
 };
 
 enum Withdraw {
@@ -11,7 +11,7 @@ enum Withdraw {
 }
 
 /// Generic over the executor via the `QueryExecutor` trait: works with both a
-/// `QueryClient` and a `QueryTransaction`. This is how an external library /
+/// `QueryClient` and a `Transaction`. This is how an external library /
 /// ORM adapter stays decoupled from the concrete type.
 async fn fetch_total(e: &mut impl QueryExecutor) -> YdbResult<i64> {
     let mut row = e.query_row("SELECT SUM(id) AS s FROM test").await?;
@@ -34,11 +34,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut attempts = 0_u32;
 
     let total: i64 = qc
-        // Annotate `tx: &mut QueryTransaction` so the IDE completes methods
+        // Annotate `tx: &mut Transaction` so the IDE completes methods
         // on `tx`: rust-analyzer does not yet reliably infer `async ||`
         // closure parameter types from the `AsyncFnMut` bound (the compiler
         // infers it fine without this).
-        .retry_transaction(async |tx: &mut QueryTransaction| {
+        .retry_transaction(async |tx: &mut Transaction| {
             attempts += 1; // mutable capture: AsyncFnMut allows it
             for id in 0..10_i64 {
                 tx.exec(upsert)
@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A business outcome, not a failure: finish the transaction explicitly
     // and return a value. No commit, no retry, no Err.
     let outcome = qc
-        .retry_transaction(async |tx: &mut QueryTransaction| {
+        .retry_transaction(async |tx: &mut Transaction| {
             let mut row = tx
                 .query_row("SELECT balance FROM accounts WHERE id = $id")
                 .param("$id", 1_i64)
@@ -88,7 +88,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- 3. Customer errors are never retried -------------------------------
     let res: YdbResultWithCustomerErr<()> = qc
-        .retry_transaction(async |tx: &mut QueryTransaction| {
+        .retry_transaction(async |tx: &mut Transaction| {
             tx.exec("DELETE FROM test").await?;
             Err(YdbOrCustomerError::from_err(std::io::Error::other(
                 "business rule violated",
@@ -99,14 +99,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- 5. Lazy tx vs explicit begin ---------------------------------------
     // Default (lazy): the first ExecuteQuery opens the transaction (BeginTx in tx_control).
-    qc.retry_transaction(async |tx: &mut QueryTransaction| {
+    qc.retry_transaction(async |tx: &mut Transaction| {
         tx.exec("SELECT 1").await?;
         Ok(())
     })
     .await?;
 
     // Explicit BeginTransaction RPC before any YQL:
-    qc.retry_transaction(async |tx: &mut QueryTransaction| {
+    qc.retry_transaction(async |tx: &mut Transaction| {
         tx.begin().await?;
         tx.exec("SELECT 1").await?;
         Ok(())
@@ -114,10 +114,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     // Or configure explicit begin on the client for every retry_transaction:
-    let with_begin_qc =
-        qc.clone_with_transaction_options(QueryTransactionOptions::new().with_begin());
+    let with_begin_qc = qc.clone_with_transaction_options(TransactionOptions::new().with_begin());
     with_begin_qc
-        .retry_transaction(async |tx: &mut QueryTransaction| {
+        .retry_transaction(async |tx: &mut Transaction| {
             tx.exec("SELECT 1").await?; // BeginTransaction RPC runs before this query
             Ok(())
         })
@@ -130,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))
     .await?;
 
-    qc.retry_transaction(async |tx: &mut QueryTransaction| {
+    qc.retry_transaction(async |tx: &mut Transaction| {
         tx.exec(format!("UPSERT INTO {table} (id, val) VALUES ($id, $val)"))
             .param("$id", 1_i64)
             .param("$val", 100_i64)
