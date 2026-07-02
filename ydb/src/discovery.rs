@@ -6,13 +6,14 @@ use async_trait::async_trait;
 use http::uri::Authority;
 use http::Uri;
 
-use crate::errors::YdbResult;
+use crate::errors::{NeedRetry, YdbResult};
 
+use crate::retry::{Retry, RetryParams, TimeoutRetrier};
 use crate::waiter::Waiter;
 
 use derivative::Derivative;
 use itertools::Itertools;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::watch::Receiver;
 use tokio::sync::{watch, Mutex};
 
@@ -183,6 +184,7 @@ impl Waiter for StaticDiscovery {
 #[derive(Clone)]
 pub(crate) struct TimerDiscovery {
     state: Arc<DiscoverySharedState>,
+    interval: Duration,
 }
 
 impl TimerDiscovery {
@@ -191,18 +193,39 @@ impl TimerDiscovery {
         connection_manager: GrpcConnectionManager,
         endpoint: &str,
         interval: Duration,
-        token_waiter: Box<dyn Waiter>,
     ) -> YdbResult<Self> {
         let state = Arc::new(DiscoverySharedState::new(connection_manager, endpoint)?);
-        let state_weak = Arc::downgrade(&state);
-        tokio::spawn(async move {
-            trace!("timer discovery wait token");
-            let result = token_waiter.wait().await;
-            trace!("timer discovery first token done with result: {:?}", result);
-            drop(token_waiter);
-            DiscoverySharedState::background_discovery(state_weak, interval).await;
-        });
-        Ok(TimerDiscovery { state })
+        Ok(TimerDiscovery { state, interval })
+    }
+
+    async fn start_discovery(&self) -> YdbResult<()> {
+        let state_weak = Arc::downgrade(&self.state);
+
+        let discovery_start = Instant::now();
+        let retrier = TimeoutRetrier::default();
+        let mut attempt = 0;
+
+        while let Err(err) = self.discovery_now().await {
+            attempt += 1;
+
+            let decision = retrier.wait_duration(RetryParams {
+                attempt,
+                time_from_start: discovery_start.elapsed(),
+            });
+
+            if err.need_retry() == NeedRetry::False || !decision.allow_retry {
+                return Err(err);
+            }
+
+            tokio::time::sleep(decision.wait_timeout).await;
+        }
+
+        tokio::spawn(DiscoverySharedState::background_discovery(
+            state_weak,
+            self.interval,
+        ));
+
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -244,6 +267,7 @@ impl Discovery for TimerDiscovery {
 #[async_trait::async_trait]
 impl Waiter for TimerDiscovery {
     async fn wait(&self) -> YdbResult<()> {
+        self.start_discovery().await?;
         self.state.wait().await
     }
 }
@@ -317,12 +341,16 @@ impl DiscoverySharedState {
 
     #[tracing::instrument(skip(state))]
     async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
-        while let Some(state) = state.upgrade() {
+        loop {
+            tokio::time::sleep(interval).await;
+
+            let Some(state) = state.upgrade() else {
+                break;
+            };
+
             trace!("rekby-discovery");
             let res = state.discovery_now().await;
             trace!("rekby-res: {:?}", res);
-            // return;
-            tokio::time::sleep(interval).await;
         }
         trace!("stop background_discovery");
     }
@@ -447,5 +475,26 @@ mod test {
         }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_wrong_db_name() {
+        let good_client = test_client_builder().client().unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), good_client.wait())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let bad_client = test_client_builder()
+            .with_database("/some-amogus-db")
+            .client()
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), bad_client.wait())
+            .await
+            .unwrap()
+            .unwrap_err();
     }
 }
