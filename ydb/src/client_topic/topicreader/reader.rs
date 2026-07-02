@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::client_common::TokenCache;
 use crate::client_query::Transaction;
 use crate::client_topic::compression::Executor;
+use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
 use crate::client_topic::topicreader::messages::TopicReaderBatch;
 use crate::client_topic::topicreader::reader_options::{
     TopicReaderOptions, TopicReaderOptionsBuilder,
@@ -150,7 +151,7 @@ impl TopicReader {
             topics: vec![RawTopicOffsets {
                 path: commit_marker.topic.clone(),
                 partitions: vec![RawPartitionOffsets {
-                    partition_id: commit_marker.partition_id,
+                    partition_id: commit_marker.partition_id.as_raw(),
                     partition_offsets: vec![RawOffsetsRange {
                         start: commit_marker.start_offset,
                         end: commit_marker.end_offset,
@@ -246,8 +247,8 @@ impl TopicReaderOptionsBuilder {
 
 #[derive(Clone, Debug)]
 pub struct TopicReaderCommitMarker {
-    pub(crate) partition_session_id: i64,
-    pub(crate) partition_id: i64,
+    pub(crate) partition_session_id: PartitionSessionId,
+    pub(crate) partition_id: PartitionId,
     pub(crate) start_offset: i64,
     pub(crate) end_offset: i64,
     pub(crate) topic: String,

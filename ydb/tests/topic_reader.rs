@@ -2,14 +2,78 @@ mod mock_server;
 
 use flate2::{write::GzEncoder, Compression};
 use std::io::Write;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
 use tokio::sync::Notify;
 use ydb::{
-    ClientBuilder, Codec, TopicReader, TopicReaderBatch, TopicReaderCommitMarker, YdbResult,
+    ClientBuilder, Codec, CompressionDecoder, Executor, TopicReader, TopicReaderBatch,
+    TopicReaderCommitMarker, TopicReaderOptionsBuilder, YdbResult,
 };
 use ydb_grpc::ydb_proto::topic::stream_read_message::from_client::ClientMessage as ReadFromClient;
+
+// Runs compression tasks inline on the calling thread.
+// available_parallelism() == 1 keeps the decompressor's chunk_size at the full batch
+// size, so a multi-message ReadResponse is forwarded as a single push_batch call.
+struct InplaceExecutor;
+
+impl Executor for InplaceExecutor {
+    fn available_parallelism(&self) -> std::num::NonZeroUsize {
+        const { std::num::NonZeroUsize::new(1).unwrap() }
+    }
+
+    fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+        task();
+    }
+}
+
+// Routes each compression task to tokio's blocking pool so a synchronously
+// blocking decoder cannot stall the runtime.
+struct BlockingExecutor;
+
+impl Executor for BlockingExecutor {
+    fn available_parallelism(&self) -> std::num::NonZeroUsize {
+        const { std::num::NonZeroUsize::new(1).unwrap() }
+    }
+
+    fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+        tokio::task::spawn_blocking(task);
+    }
+}
+
+// Signals `entered` on decode entry, then parks on `release`.
+#[derive(Debug)]
+struct GatedDecoder {
+    codec: Codec,
+    entered: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+}
+
+impl CompressionDecoder for GatedDecoder {
+    fn decode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + 'static>> {
+        if let Some(tx) = self
+            .entered
+            .lock()
+            .expect("gated decoder entered mutex poisoned")
+            .take()
+        {
+            let _ = tx.send(());
+        }
+        if let Some(rx) = self
+            .release
+            .lock()
+            .expect("gated decoder release mutex poisoned")
+            .take()
+        {
+            let _ = rx.recv();
+        }
+        Ok(data.to_vec())
+    }
+
+    fn codec(&self) -> Codec {
+        self.codec
+    }
+}
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply};
 use crate::mock_server::server::MockServer;
@@ -31,13 +95,20 @@ const DATABASE: &str = "/local";
 const TOPIC_PATH: &str = "/local/topic";
 const CONSUMER: &str = "consumer";
 const PARTITION_SESSION_ID: i64 = 1;
+const PARTITION_SESSION_ID_2: i64 = 2;
+const PARTITION_ID_2: i64 = 1;
 const UNKNOWN_CODEC: Codec = Codec { code: 10001 };
+const RACE_CODEC: Codec = Codec { code: 10002 };
 
 #[derive(Default)]
 struct ServerState {
     partition_ready: Notify,
+    partitions_ready: AtomicUsize,
+    auto_partitioning_seen: AtomicBool,
     commits_seen: AtomicUsize,
     commits_changed: Notify,
+    stops_seen: AtomicUsize,
+    stops_changed: Notify,
     stream_id: Arc<std::sync::Mutex<u64>>,
 }
 
@@ -48,6 +119,30 @@ impl ServerState {
             tokio::pin!(notified);
             notified.as_mut().enable();
             if self.commits_seen.load(Ordering::SeqCst) >= target {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    async fn wait_partitions(&self, target: usize) {
+        loop {
+            let notified = self.partition_ready.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.partitions_ready.load(Ordering::SeqCst) >= target {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    async fn wait_stops(&self, target: usize) {
+        loop {
+            let notified = self.stops_changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.stops_seen.load(Ordering::SeqCst) >= target {
                 return;
             }
             notified.await;
@@ -67,16 +162,24 @@ impl Handler for Counter {
     fn handle(&self, incoming: Incoming) -> Option<Incoming> {
         if let Incoming::Topic(TopicIncoming::StreamRead { stream_id, msg }) = &incoming {
             match msg {
-                ReadFromClient::InitRequest(_) => {
+                ReadFromClient::InitRequest(req) => {
+                    self.state
+                        .auto_partitioning_seen
+                        .store(req.auto_partitioning_support, Ordering::SeqCst);
                     *self.state.stream_id.lock().unwrap() = *stream_id;
                 }
 
                 ReadFromClient::StartPartitionSessionResponse(_) => {
+                    self.state.partitions_ready.fetch_add(1, Ordering::SeqCst);
                     self.state.partition_ready.notify_waiters();
                 }
                 ReadFromClient::CommitOffsetRequest(_) => {
                     self.state.commits_seen.fetch_add(1, Ordering::SeqCst);
                     self.state.commits_changed.notify_waiters();
+                }
+                ReadFromClient::StopPartitionSessionResponse(_) => {
+                    self.state.stops_seen.fetch_add(1, Ordering::SeqCst);
+                    self.state.stops_changed.notify_waiters();
                 }
                 _ => {}
             }
@@ -142,6 +245,47 @@ impl Driver {
             committed_offset,
         )))
     }
+
+    async fn start_session(&self, partition_session_id: i64, partition_id: i64) {
+        let target = self.state.partitions_ready.load(Ordering::SeqCst) + 1;
+        self.send(Reply::Topic(builders::start_partition_session_request(
+            self.state.current_stream_id(),
+            partition_session_id,
+            TOPIC_PATH,
+            partition_id,
+            0,
+        )));
+        self.state.wait_partitions(target).await;
+    }
+
+    fn send_end_partition_session(&self, partition_session_id: i64, child_partition_ids: Vec<i64>) {
+        self.send(Reply::Topic(builders::end_partition_session(
+            self.state.current_stream_id(),
+            partition_session_id,
+            child_partition_ids,
+        )))
+    }
+}
+
+async fn make_reader_with_batch_size(
+    server: &MockServer,
+    batch_size: usize,
+) -> YdbResult<TopicReader> {
+    let client = ClientBuilder::new_from_connection_string(format!(
+        "{}{DATABASE}?use_discovery=false",
+        server.endpoint()
+    ))?
+    .with_executor(Arc::new(InplaceExecutor))
+    .client()?;
+    let options = TopicReaderOptionsBuilder::default()
+        .consumer(CONSUMER.to_string())
+        .topic(TOPIC_PATH.into())
+        .batch_size(batch_size)
+        .build()?;
+    client
+        .topic_client()
+        .create_reader_with_params(options)
+        .await
 }
 
 async fn make_reader(server: &MockServer) -> YdbResult<TopicReader> {
@@ -305,6 +449,69 @@ topic_test!(retryable_fail, timeout_secs = 20, {
     Ok(())
 });
 
+topic_test!(
+    commit_after_partition_stop_must_resolve,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader(&driver.server).await?;
+        driver.state.partition_ready.notified().await;
+
+        let m0 = deliver_and_read(&driver, &mut reader, 0, b"first").await?;
+
+        let stream_id = driver.state.current_stream_id();
+        driver.send(Reply::Topic(builders::stop_partition_session_request(
+            stream_id,
+            PARTITION_SESSION_ID,
+            /* graceful */ false,
+            /* committed_offset */ 0,
+        )));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        assert!(
+            reader.commit_with_ack(m0).await.is_err(),
+            "commit on stopped partition session must return Err"
+        );
+
+        Ok(())
+    }
+);
+
+topic_test!(
+    read_batch_after_partition_stop_skips_stopped_session,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader(&driver.server).await?;
+        driver.state.partition_ready.notified().await;
+
+        driver.send_read_response(0, b"buffered");
+        // Let the message reach the runtime buffer before the stop arrives.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let stream_id = driver.state.current_stream_id();
+        driver.send(Reply::Topic(builders::stop_partition_session_request(
+            stream_id,
+            PARTITION_SESSION_ID,
+            /* graceful */ false,
+            /* committed_offset */ 0,
+        )));
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(300), reader.read_batch()).await;
+
+        if let Ok(Ok(batch)) = result {
+            panic!(
+                "read_batch returned {} message(s) from a stopped partition session",
+                batch.messages.len()
+            );
+        }
+
+        Ok(())
+    }
+);
+
 topic_test!(non_retryable_fail, timeout_secs = 20, {
     let driver = Driver::start().await;
     let mut reader = make_reader(&driver.server).await?;
@@ -329,3 +536,184 @@ topic_test!(non_retryable_fail, timeout_secs = 20, {
 });
 
 // TODO: Test TopicReader Token recieving before restart, Token recieving after restart.
+
+topic_test!(
+    auto_partitioning_support_is_set_in_init_request,
+    timeout_secs = 1,
+    {
+        let driver = Driver::start().await;
+        let _reader = make_reader(&driver.server).await?;
+        driver.state.wait_partitions(1).await;
+        assert!(
+            driver.state.auto_partitioning_seen.load(Ordering::SeqCst),
+            "reader must set auto_partitioning_support=true in InitRequest"
+        );
+        Ok(())
+    }
+);
+
+topic_test!(round_robin_interleaves_two_partitions, timeout_secs = 2, {
+    let driver = Driver::start().await;
+    let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
+    driver.state.wait_partitions(1).await;
+    driver
+        .start_session(PARTITION_SESSION_ID_2, PARTITION_ID_2)
+        .await;
+
+    let sid = driver.state.current_stream_id();
+    // Send both p0 messages atomically so they land in session 1's buffer before the
+    // first notify fires. Separate sends would race: only p0-first buffered when
+    // read_batch(1) first runs, leaving session 1 with a queued p0-second that RR
+    // would serve before switching — making RR indistinguishable from FIFO.
+    driver.send(Reply::Topic(builders::read_response_batch_with_codec(
+        sid,
+        PARTITION_SESSION_ID,
+        vec![(0, 8, b"p0-first".to_vec()), (1, 9, b"p0-second".to_vec())],
+        Codec::RAW,
+    )));
+    driver.send(Reply::Topic(builders::read_response(
+        sid,
+        PARTITION_SESSION_ID_2,
+        0,
+        b"p1-only",
+    )));
+
+    let b1 = reader.read_batch().await?;
+    let b2 = reader.read_batch().await?;
+    let b3 = reader.read_batch().await?;
+    assert_eq!(b1.messages[0].get_partition_id(), 0);
+    assert_eq!(
+        b2.messages[0].get_partition_id(),
+        1,
+        "RR must switch to p1 before returning to p0-second"
+    );
+    assert_eq!(b3.messages[0].get_partition_id(), 0);
+    Ok(())
+});
+
+topic_test!(
+    end_partition_session_child_blocked_until_parent_drained,
+    timeout_secs = 2,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader(&driver.server).await?;
+        driver.state.wait_partitions(1).await;
+
+        driver.send_read_response(0, b"parent-message");
+        driver.send_end_partition_session(PARTITION_SESSION_ID, vec![PARTITION_ID_2]);
+        driver
+            .start_session(PARTITION_SESSION_ID_2, PARTITION_ID_2)
+            .await;
+
+        // Parent message must come first.
+        let b1 = reader.read_batch().await?;
+        assert_eq!(
+            b1.messages[0].get_partition_id(),
+            0,
+            "parent must come first"
+        );
+
+        // After draining parent, drain_ending removes the block on child_pid. Child session
+        // is not yet known to the buffer (no push_batch for session 2 yet), so child is not
+        // added to RR here. When child data arrives, push_batch adds it to RR and notifies.
+        let sid = driver.state.current_stream_id();
+        let (b2_result, ()) = tokio::join!(reader.read_batch(), async {
+            tokio::task::yield_now().await;
+            driver.send(Reply::Topic(builders::read_response(
+                sid,
+                PARTITION_SESSION_ID_2,
+                0,
+                b"child-message",
+            )));
+        });
+        assert_eq!(b2_result?.messages[0].get_partition_id(), 1);
+        Ok(())
+    }
+);
+
+topic_test!(
+    end_partition_session_no_children_reader_stays_healthy,
+    timeout_secs = 2,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader(&driver.server).await?;
+        driver.state.wait_partitions(1).await;
+
+        deliver_and_read(&driver, &mut reader, 0, b"before-end").await?;
+        driver.send_end_partition_session(PARTITION_SESSION_ID, vec![]);
+        driver
+            .start_session(PARTITION_SESSION_ID_2, PARTITION_ID_2)
+            .await;
+
+        let sid = driver.state.current_stream_id();
+        driver.send(Reply::Topic(builders::read_response(
+            sid,
+            PARTITION_SESSION_ID_2,
+            0,
+            b"after-end",
+        )));
+
+        let batch = reader.read_batch().await?;
+        assert_eq!(batch.messages.len(), 1);
+        assert_eq!(batch.messages[0].get_partition_id(), 1);
+        Ok(())
+    }
+);
+
+topic_test!(
+    stop_during_in_flight_decompression_must_not_kill_reader,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let decoder = GatedDecoder {
+            codec: RACE_CODEC,
+            entered: std::sync::Mutex::new(Some(entered_tx)),
+            release: std::sync::Mutex::new(Some(release_rx)),
+        };
+
+        let client = ClientBuilder::new_from_connection_string(format!(
+            "{}{DATABASE}?use_discovery=false",
+            driver.server.endpoint()
+        ))?
+        .with_executor(Arc::new(BlockingExecutor))
+        .client()?;
+        let mut reader = client
+            .topic_client()
+            .create_reader_with_params(
+                TopicReaderOptionsBuilder::default()
+                    .consumer(CONSUMER.to_string())
+                    .topic(TOPIC_PATH.into())
+                    .add_decoder(decoder)
+                    .build()?,
+            )
+            .await?;
+        driver.state.wait_partitions(1).await;
+
+        let payload = b"payload";
+        driver.send_read_response_with_codec(0, payload.len() as i64, payload.to_vec(), RACE_CODEC);
+        entered_rx.await.expect("decoder entered");
+
+        let stream_id = driver.state.current_stream_id();
+        driver.send(Reply::Topic(builders::stop_partition_session_request(
+            stream_id,
+            PARTITION_SESSION_ID,
+            /* graceful */ false,
+            /* committed_offset */ 0,
+        )));
+        driver.state.wait_stops(1).await;
+
+        release_tx.send(()).expect("release decoder");
+
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(500), reader.read_batch()).await;
+
+        if let Ok(Err(err)) = result {
+            panic!("reader failed permanently after a benign stop-vs-in-flight race: {err}");
+        }
+
+        Ok(())
+    }
+);

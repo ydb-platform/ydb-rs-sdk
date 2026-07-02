@@ -800,10 +800,156 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
             .read_and_take()
             .await?
             .expect("Message should contain data");
-        let received_content = String::from_utf8(received_data).expect("valid UTF-8");
-        assert_eq!(received_content, *expected_content);
-        assert_eq!(received_msg.get_producer_id(), producer_id);
-        assert_eq!(received_msg.get_topic(), topic_name);
+        let received_content =
+            String::from_utf8(received_data).expect("Message data should be valid UTF-8");
+
+        assert_eq!(
+            received_content,
+            *expected_content,
+            "Message {} should contain '{}', but got '{}'",
+            i + 1,
+            expected_content,
+            received_content
+        );
+
+        // ==========================================
+        // PRODUCER VALIDATION
+        // ==========================================
+
+        assert_eq!(
+            received_msg.get_producer_id(),
+            producer_id,
+            "Message {} should have producer_id '{}', but got '{}'",
+            i + 1,
+            producer_id,
+            received_msg.get_producer_id()
+        );
+
+        // ==========================================
+        // TOPIC/PARTITION INFORMATION VALIDATION
+        // ==========================================
+
+        // Validate topic name through getter function
+        assert_eq!(
+            received_msg.get_topic(),
+            topic_name,
+            "Message {} should have topic name '{}', but got '{}'",
+            i + 1,
+            topic_name,
+            received_msg.get_topic()
+        );
+
+        // Validate partition ID is valid (should be >= 0)
+        let partition_id = received_msg.get_partition_id();
+        assert!(
+            partition_id >= 0,
+            "Message {} should have valid partition_id >= 0, but got {}",
+            i + 1,
+            partition_id
+        );
+
+        // ==========================================
+        // OFFSET AND TIMING VALIDATION
+        // ==========================================
+
+        // Validate offset is valid (should be >= 0)
+        assert!(
+            received_msg.offset >= 0,
+            "Message {} should have valid offset >= 0, but got {}",
+            i + 1,
+            received_msg.offset
+        );
+
+        // Validate uncompressed_size matches actual content length
+        assert_eq!(
+            received_msg.uncompressed_size,
+            expected_content.len() as i64,
+            "Message {} should have uncompressed_size {}, but got {}",
+            i + 1,
+            expected_content.len(),
+            received_msg.uncompressed_size
+        );
+
+        // Validate written_at timestamp is reasonable (not too far in future, not too old)
+        let now = SystemTime::now();
+        let written_at = received_msg.written_at;
+
+        // Allow up to 1 second in the future to account for small timing differences
+        let one_second_future = now + Duration::from_secs(1);
+        assert!(
+            written_at <= one_second_future,
+            "Message {} written_at timestamp should not be more than 1 second in the future. written_at: {:?}, threshold: {:?}",
+            i + 1, written_at, one_second_future
+        );
+
+        // Allow up to 10 minute in the past (generous for test environments)
+        let ten_minutes_ago = now - Duration::from_secs(600);
+        assert!(
+            written_at >= ten_minutes_ago,
+            "Message {} written_at timestamp should not be more than 1 minute old. written_at: {:?}, threshold: {:?}",
+            i + 1, written_at, ten_minutes_ago
+        );
+
+        // Validate created_at if present
+        if let Some(created_at) = received_msg.created_at {
+            // Allow up to 1 second in the future to account for small timing differences
+            let one_second_future = now + Duration::from_secs(1);
+            assert!(
+                created_at <= one_second_future,
+                "Message {} created_at timestamp should not be more than 1 second in the future. created_at: {:?}, threshold: {:?}",
+                i + 1, created_at, one_second_future
+            );
+
+            // Allow up to 10 minutes in the past (generous for test environments)
+            let ten_minutes_ago = now - Duration::from_secs(600);
+            assert!(
+                created_at >= ten_minutes_ago,
+                "Message {} created_at timestamp should not be more than 10 minutes old. created_at: {:?}, threshold: {:?}",
+                i + 1, created_at, ten_minutes_ago
+            );
+        }
+
+        // ==========================================
+        // COMMIT MARKER VALIDATION
+        // ==========================================
+
+        let commit_marker = received_msg.get_commit_marker();
+
+        // Validate commit marker topic matches
+        assert_eq!(
+            commit_marker.topic,
+            topic_name,
+            "Message {} commit marker should have topic '{}', but got '{}'",
+            i + 1,
+            topic_name,
+            commit_marker.topic
+        );
+
+        // Validate commit marker partition_id matches message partition_id
+        assert_eq!(
+            commit_marker.partition_id.as_raw(),
+            received_msg.get_partition_id(),
+            "Message {} commit marker partition_id should match message partition_id. marker: {}, message: {}",
+            i + 1, commit_marker.partition_id, received_msg.get_partition_id()
+        );
+
+        // Validate commit marker offsets are reasonable
+        assert!(
+            commit_marker.start_offset <= commit_marker.end_offset,
+            "Message {} commit marker should have start_offset <= end_offset. start: {}, end: {}",
+            i + 1,
+            commit_marker.start_offset,
+            commit_marker.end_offset
+        );
+
+        info!(
+            "✓ Message {} validation passed - seq_no: {}, content: '{}', offset: {}, partition: {}",
+            i + 1,
+            received_msg.seq_no,
+            expected_content,
+            received_msg.offset,
+            partition_id
+        );
     }
 
     let consumer_description_after_commit = topic_client

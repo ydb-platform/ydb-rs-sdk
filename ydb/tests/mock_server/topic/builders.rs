@@ -134,6 +134,23 @@ pub fn read_response_batch_with_codec(
     )
 }
 
+pub fn end_partition_session(
+    stream_id: u64,
+    partition_session_id: i64,
+    child_partition_ids: Vec<i64>,
+) -> TopicReply {
+    stream_read(
+        stream_id,
+        stream_read_message::from_server::ServerMessage::EndPartitionSession(
+            stream_read_message::EndPartitionSession {
+                partition_session_id,
+                adjacent_partition_ids: vec![],
+                child_partition_ids,
+            },
+        ),
+    )
+}
+
 pub fn commit_offset_response(
     stream_id: u64,
     partition_session_id: i64,

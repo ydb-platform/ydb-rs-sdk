@@ -1,15 +1,16 @@
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 use std::convert::Infallible;
 
 use tokio::select;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, warn};
+use tracing::debug;
 use ydb_grpc::ydb_proto::topic::stream_read_message::{FromClient, FromServer};
 
 use crate::TopicReaderBatch;
 use crate::{
+    client_topic::topicreader::ids::{PartitionId, PartitionSessionId},
     grpc_connection_manager::GrpcConnectionManager,
     grpc_wrapper::{
         grpc_stream_wrapper::AsyncGrpcStreamWrapper,
@@ -25,7 +26,7 @@ use crate::{
     TopicReaderOptions, YdbError, YdbResult,
 };
 
-use super::messages::MessageBatch;
+use super::messages::ReaderEvent;
 use super::partition_state::PartitionSession;
 use super::reconnector;
 use super::runtime;
@@ -38,7 +39,7 @@ type GrpcStream = AsyncGrpcStreamWrapper<FromClient, FromServer>;
 pub(super) struct GrpcStreamer {
     stream: GrpcStream,
     cancellation: CancellationToken,
-    decompression_input_tx: mpsc::UnboundedSender<MessageBatch>,
+    decompression_input_tx: mpsc::UnboundedSender<ReaderEvent>,
     client_message_rx: mpsc::UnboundedReceiver<RawFromClientOneOf>,
     runtime: runtime::RuntimeHandle,
     reader_id: usize,
@@ -48,7 +49,7 @@ pub(super) struct GrpcStreamer {
 impl GrpcStreamer {
     pub(super) async fn new(
         attempt: &reconnector::ConnectionAttempt,
-        decompression_input_tx: mpsc::UnboundedSender<MessageBatch>,
+        decompression_input_tx: mpsc::UnboundedSender<ReaderEvent>,
         client_message_rx: mpsc::UnboundedReceiver<RawFromClientOneOf>,
         runtime: runtime::RuntimeHandle,
     ) -> YdbResult<Self> {
@@ -123,7 +124,7 @@ async fn grpc_connect(
 async fn receive_loop(
     stream: GrpcStream,
     runtime: runtime::RuntimeHandle,
-    decompression_input_tx: mpsc::UnboundedSender<MessageBatch>,
+    decompression_input_tx: mpsc::UnboundedSender<ReaderEvent>,
     cancellation: CancellationToken,
     reader_id: usize,
     epoch: usize,
@@ -143,11 +144,11 @@ async fn receive_loop(
 async fn receive_messages(
     mut stream: GrpcStream,
     runtime: runtime::RuntimeHandle,
-    decompression_input_tx: mpsc::UnboundedSender<MessageBatch>,
+    decompression_input_tx: mpsc::UnboundedSender<ReaderEvent>,
     reader_id: usize,
     epoch: usize,
 ) -> YdbResult<Infallible> {
-    let mut sessions: HashMap<i64, PartitionSession> = HashMap::new();
+    let mut sessions: HashMap<PartitionSessionId, PartitionSession> = HashMap::new();
 
     loop {
         let message = stream.receive::<RawFromServer>().await?;
@@ -168,10 +169,12 @@ async fn receive_messages(
             }
 
             RawFromServer::CommitOffsetResponse(resp) => {
-                let committed_iter = resp
-                    .partitions_committed_offsets
-                    .into_iter()
-                    .map(|offset| (offset.partition_session_id, offset.committed_offset));
+                let committed_iter = resp.partitions_committed_offsets.into_iter().map(|offset| {
+                    (
+                        PartitionSessionId::from_raw(offset.partition_session_id),
+                        offset.committed_offset,
+                    )
+                });
 
                 runtime.ack_commits(committed_iter)?;
             }
@@ -179,11 +182,23 @@ async fn receive_messages(
             RawFromServer::StartPartitionSessionRequest(req) => {
                 let partition_session = PartitionSession::from(req);
                 let partition_session_id = partition_session.partition_session_id;
-                sessions.insert(partition_session_id, partition_session);
+                let partition_id = partition_session.partition_id;
+
+                match sessions.entry(partition_session_id) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(partition_session);
+                        runtime.register_starting_partition(partition_session_id, partition_id)?;
+                    }
+                    Entry::Occupied(_) => {
+                        return Err(YdbError::custom(format!(
+                            "topic reader received duplicate start partition session request for partition session {partition_session_id}"
+                        )));
+                    }
+                }
 
                 let response = RawFromClientOneOf::StartPartitionSessionResponse(
                     RawStartPartitionSessionResponse {
-                        partition_session_id,
+                        partition_session_id: partition_session_id.as_raw(),
                     },
                 );
                 stream.send_nowait(response)?;
@@ -195,38 +210,68 @@ async fn receive_messages(
                     graceful,
                     committed_offset,
                 } = req;
+                let partition_session_id = PartitionSessionId::from_raw(partition_session_id);
 
                 debug!(
-                    partition_session_id,
+                    %partition_session_id,
                     graceful,
                     committed_offset,
                     "topic reader received stop partition session request"
                 );
 
-                if sessions.remove(&partition_session_id).is_some() {
+                if let Some(partition_session) = sessions.remove(&partition_session_id) {
                     // TODO: For graceful stops, delay response until buffered messages
                     // from this partition are processed and commits up to
                     // committed_offset are acknowledged.
-                    runtime.stop_partition(
+                    runtime.register_stopping_partition(
                         partition_session_id,
+                        partition_session.partition_id,
                         Some(committed_offset),
                         &YdbError::custom(format!(
                             "partition session {partition_session_id} stopped by server"
                         )),
                     )?;
                 } else {
-                    warn!(
-                        partition_session_id,
-                        "topic reader received stop for unknown partition session"
-                    );
+                    return Err(YdbError::custom(format!(
+                        "topic reader received stop for unknown partition session {partition_session_id}"
+                    )));
                 }
 
                 let response = RawFromClientOneOf::StopPartitionSessionResponse(
                     RawStopPartitionSessionResponse {
-                        partition_session_id,
+                        partition_session_id: partition_session_id.as_raw(),
                     },
                 );
                 stream.send_nowait(response)?;
+            }
+
+            RawFromServer::EndPartitionSession(end) => {
+                let partition_session_id = PartitionSessionId::from_raw(end.partition_session_id);
+                debug!(
+                    %partition_session_id,
+                    "topic reader received end partition session"
+                );
+                if sessions.contains_key(&partition_session_id) {
+                    decompression_input_tx
+                        .send(ReaderEvent::EndPartitionSession {
+                            session_id: partition_session_id,
+                            child_partition_ids: end
+                                .child_partition_ids
+                                .into_iter()
+                                .map(PartitionId::from_raw)
+                                .collect(),
+                        })
+                        .map_err(|_| {
+                            YdbError::Transport(
+                                "topic reader grpc -> decompressor channel closed".to_string(),
+                            )
+                        })?;
+                } else {
+                    return Err(YdbError::custom(format!(
+                        "topic reader received end for unknown partition session {}",
+                        partition_session_id
+                    )));
+                }
             }
 
             RawFromServer::UpdateTokenResponse(_) => {
@@ -242,21 +287,20 @@ async fn receive_messages(
 
 fn handle_read_response(
     resp: RawReadResponse,
-    sessions: &mut HashMap<i64, PartitionSession>,
-    decompression_input_tx: &mpsc::UnboundedSender<MessageBatch>,
+    sessions: &mut HashMap<PartitionSessionId, PartitionSession>,
+    decompression_input_tx: &mpsc::UnboundedSender<ReaderEvent>,
     reader_id: usize,
     epoch: usize,
 ) -> YdbResult<()> {
     for partition_data in resp.partition_data {
         let partition_session_id = partition_data.partition_session_id;
+        let partition_session_id = PartitionSessionId::from_raw(partition_session_id);
         let session = match sessions.get_mut(&partition_session_id) {
             Some(s) => s,
             None => {
-                error!(
-                    "read_response for unknown partition_session_id: {}",
-                    partition_session_id
-                );
-                continue;
+                return Err(YdbError::custom(format!(
+                    "topic reader received read response for unknown partition session {partition_session_id}"
+                )));
             }
         };
 
@@ -273,11 +317,13 @@ fn handle_read_response(
                 last.bytes_to_release = batch_bytes;
             }
 
-            let message_batch = MessageBatch { messages, codec };
-
-            decompression_input_tx.send(message_batch).map_err(|_| {
-                YdbError::Transport("topic reader grpc -> decompressor channel closed".to_string())
-            })?;
+            decompression_input_tx
+                .send(ReaderEvent::Messages { messages, codec })
+                .map_err(|_| {
+                    YdbError::Transport(
+                        "topic reader grpc -> decompressor channel closed".to_string(),
+                    )
+                })?;
         }
     }
 
