@@ -602,6 +602,32 @@ async fn table_attributes_rpc() -> YdbResult<()> {
     );
 
     table_client
+        .alter_table(AlterTableRequest::new(table_path.clone()).add_attribute("foo", "bar"))
+        .await?;
+
+    let desc = table_client.describe_table(table_path.clone()).await?;
+    assert_eq!(desc.attributes.get("foo").map(String::as_str), Some("bar"));
+    assert_eq!(
+        desc.attributes.get("owner").map(String::as_str),
+        Some("updated")
+    );
+
+    table_client
+        .alter_table(AlterTableRequest::new(table_path.clone()).drop_attribute("owner"))
+        .await?;
+
+    let desc = table_client.describe_table(table_path.clone()).await?;
+    assert!(!desc.attributes.contains_key("owner"));
+    assert_eq!(desc.attributes.get("foo").map(String::as_str), Some("bar"));
+
+    table_client
+        .alter_table(AlterTableRequest::new(table_path.clone()).drop_attribute("foo"))
+        .await?;
+
+    let desc = table_client.describe_table(table_path.clone()).await?;
+    assert!(desc.attributes.is_empty());
+
+    table_client
         .drop_table(DropTableRequest::new(table_path))
         .await?;
 
