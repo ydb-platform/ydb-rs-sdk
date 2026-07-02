@@ -8,11 +8,12 @@ use http::Uri;
 
 use crate::errors::{NeedRetry, YdbResult};
 
+use crate::retry::{Retry, RetryParams, TimeoutRetrier};
 use crate::waiter::Waiter;
 
 use derivative::Derivative;
 use itertools::Itertools;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::watch::Receiver;
 use tokio::sync::{watch, Mutex};
 
@@ -200,16 +201,23 @@ impl TimerDiscovery {
     async fn start_discovery(&self) -> YdbResult<()> {
         let state_weak = Arc::downgrade(&self.state);
 
-        loop {
-            let Err(err) = self.discovery_now().await else {
-                break;
-            };
+        let discovery_start = Instant::now();
+        let retrier = TimeoutRetrier::default();
+        let mut attempt = 0;
 
-            if err.need_retry() == NeedRetry::False {
+        while let Err(err) = self.discovery_now().await {
+            attempt += 1;
+
+            let decision = retrier.wait_duration(RetryParams {
+                attempt,
+                time_from_start: discovery_start.elapsed(),
+            });
+
+            if err.need_retry() == NeedRetry::False || !decision.allow_retry {
                 return Err(err);
             }
 
-            tokio::time::sleep(self.interval).await;
+            tokio::time::sleep(decision.wait_timeout).await;
         }
 
         tokio::spawn(DiscoverySharedState::background_discovery(
