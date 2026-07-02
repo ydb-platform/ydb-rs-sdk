@@ -136,13 +136,6 @@ impl TableClient {
         }
     }
 
-    pub fn clone_with_idempotent_operations(&self, idempotent: bool) -> Self {
-        Self {
-            idempotent_operation: idempotent,
-            ..self.clone()
-        }
-    }
-
     pub(crate) async fn create_session(&self) -> YdbResult<TableSession> {
         Ok(self
             .session_pool
@@ -186,9 +179,12 @@ impl TableClient {
     where
         CallbackFuture: Future<Output = YdbResult<CallbackResult>>,
     {
-        self.clone_with_idempotent_operations(true)
-            .retry_operation(callback)
-            .await
+        Self {
+            idempotent_operation: true,
+            ..self.clone()
+        }
+        .retry_operation(callback)
+        .await
     }
 
     async fn retry_operation<CallbackFuture, CallbackResult>(
