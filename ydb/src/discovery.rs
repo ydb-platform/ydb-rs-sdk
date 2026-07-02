@@ -183,6 +183,7 @@ impl Waiter for StaticDiscovery {
 #[derive(Clone)]
 pub(crate) struct TimerDiscovery {
     state: Arc<DiscoverySharedState>,
+    interval: Duration,
 }
 
 impl TimerDiscovery {
@@ -191,18 +192,22 @@ impl TimerDiscovery {
         connection_manager: GrpcConnectionManager,
         endpoint: &str,
         interval: Duration,
-        token_waiter: Box<dyn Waiter>,
     ) -> YdbResult<Self> {
         let state = Arc::new(DiscoverySharedState::new(connection_manager, endpoint)?);
-        let state_weak = Arc::downgrade(&state);
-        tokio::spawn(async move {
-            trace!("timer discovery wait token");
-            let result = token_waiter.wait().await;
-            trace!("timer discovery first token done with result: {:?}", result);
-            drop(token_waiter);
-            DiscoverySharedState::background_discovery(state_weak, interval).await;
-        });
-        Ok(TimerDiscovery { state })
+        Ok(TimerDiscovery { state, interval })
+    }
+
+    async fn start_discovery(&self) -> YdbResult<()> {
+        let state_weak = Arc::downgrade(&self.state);
+
+        self.discovery_now().await?;
+
+        tokio::spawn(DiscoverySharedState::background_discovery(
+            state_weak,
+            self.interval,
+        ));
+
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -244,6 +249,7 @@ impl Discovery for TimerDiscovery {
 #[async_trait::async_trait]
 impl Waiter for TimerDiscovery {
     async fn wait(&self) -> YdbResult<()> {
+        self.start_discovery().await?;
         self.state.wait().await
     }
 }
@@ -317,12 +323,16 @@ impl DiscoverySharedState {
 
     #[tracing::instrument(skip(state))]
     async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
-        while let Some(state) = state.upgrade() {
+        loop {
+            tokio::time::sleep(interval).await;
+
+            let Some(state) = state.upgrade() else {
+                break;
+            };
+
             trace!("rekby-discovery");
             let res = state.discovery_now().await;
             trace!("rekby-res: {:?}", res);
-            // return;
-            tokio::time::sleep(interval).await;
         }
         trace!("stop background_discovery");
     }
