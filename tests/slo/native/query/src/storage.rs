@@ -79,32 +79,22 @@ impl Database for Storage {
             partition_size = self.partition_size,
         );
 
-        let retry_budget = self.write_timeout.max(self.read_timeout);
         let mut qc = self.query_client.clone();
-        tokio::time::timeout(self.write_timeout, async move {
-            qc.exec(query)
-                .idempotent(true)
-                .retry_budget(retry_budget)
-                .await
-        })
-        .await
-        .map_err(|_| "create table timeout".to_string())?
-        .map_err(|err| err.to_string())
+        qc.exec(query)
+            .idempotent(true)
+            .timeout(self.write_timeout.max(self.read_timeout))
+            .await
+            .map_err(|err| err.to_string())
     }
 
     async fn drop_table(&self) -> Result<(), String> {
         let query = format!("DROP TABLE `{table}`", table = self.table_path);
-        let retry_budget = self.write_timeout.max(self.read_timeout);
         let mut qc = self.query_client.clone();
-        tokio::time::timeout(self.write_timeout, async move {
-            qc.exec(query)
-                .idempotent(true)
-                .retry_budget(retry_budget)
-                .await
-        })
-        .await
-        .map_err(|_| "drop table timeout".to_string())?
-        .map_err(|err| err.to_string())
+        qc.exec(query)
+            .idempotent(true)
+            .timeout(self.write_timeout.max(self.read_timeout))
+            .await
+            .map_err(|err| err.to_string())
     }
 
     async fn read(&self, id: RowID) -> Result<(TestRow, u64), String> {
@@ -119,22 +109,16 @@ impl Database for Storage {
         );
 
         let attempts_for_op = attempts.clone();
-        let retry_budget = self.read_timeout;
         let mut qc = self.query_client.clone();
-        // Counts logical read invocations (one per timeout-wrapped call), not SDK-internal
-        // retries inside query_row — the one-shot API has no attempt callback (unlike table retry_transaction).
-        let row = tokio::time::timeout(self.read_timeout, async move {
-            attempts_for_op.fetch_add(1, Ordering::Relaxed);
-            qc.query_row(select_sql)
-                .param("$id", id)
-                .with_tx_mode(TxMode::SnapshotReadOnly)
-                .idempotent(true)
-                .retry_budget(retry_budget)
-                .await
-        })
-        .await
-        .map_err(|_| "read timeout".to_string())?
-        .map_err(|err| err.to_string())?;
+        attempts_for_op.fetch_add(1, Ordering::Relaxed);
+        let row = qc
+            .query_row(select_sql)
+            .param("$id", id)
+            .with_tx_mode(TxMode::SnapshotReadOnly)
+            .idempotent(true)
+            .timeout(self.read_timeout)
+            .await
+            .map_err(|err| err.to_string())?;
 
         Ok((
             test_row_from_row(row)?,
@@ -164,22 +148,17 @@ impl Database for Storage {
         );
 
         let attempts_for_op = attempts.clone();
-        let retry_budget = self.write_timeout.max(self.read_timeout);
         let mut qc = self.query_client.clone();
-        tokio::time::timeout(self.write_timeout, async move {
-            attempts_for_op.fetch_add(1, Ordering::Relaxed);
-            qc.exec(upsert_sql)
-                .param("$id", row.id)
-                .param("$payload_str", row.payload_str)
-                .param("$payload_double", row.payload_double)
-                .param("$payload_timestamp", row.payload_timestamp)
-                .idempotent(true)
-                .retry_budget(retry_budget)
-                .await
-        })
-        .await
-        .map_err(|_| "write timeout".to_string())?
-        .map_err(|err| err.to_string())?;
+        attempts_for_op.fetch_add(1, Ordering::Relaxed);
+        qc.exec(upsert_sql)
+            .param("$id", row.id)
+            .param("$payload_str", row.payload_str)
+            .param("$payload_double", row.payload_double)
+            .param("$payload_timestamp", row.payload_timestamp)
+            .idempotent(true)
+            .timeout(self.write_timeout.max(self.read_timeout))
+            .await
+            .map_err(|err| err.to_string())?;
 
         Ok(attempts.load(Ordering::Relaxed) as u64)
     }

@@ -4,11 +4,11 @@ use crate::TxMode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing_test::traced_test;
 
-const TEST_RETRY_BUDGET: Duration = Duration::from_secs(5);
+const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 macro_rules! idem {
     ($builder:expr) => {
-        $builder.idempotent(true).retry_budget(TEST_RETRY_BUDGET)
+        $builder.idempotent(true).timeout(TEST_TIMEOUT)
     };
 }
 
@@ -140,7 +140,7 @@ macro_rules! interactive_mode_select {
                     Ok(row.remove_field_by_name("v")?.try_into()?)
                 })
                 .isolation($mode)
-                .retry_budget(TEST_RETRY_BUDGET)
+                .timeout(TEST_TIMEOUT)
                 .await?;
             assert_eq!(v, 42);
             Ok(())
@@ -165,7 +165,7 @@ async fn query_tx_snapshot_rw() -> YdbResult<()> {
             Ok(v)
         })
         .isolation(TxMode::SnapshotReadWrite)
-        .retry_budget(TEST_RETRY_BUDGET)
+        .timeout(TEST_TIMEOUT)
         .await
     {
         Ok(v) => assert_eq!(v, 42_i64),
@@ -202,7 +202,7 @@ async fn query_tx_snapshot_rw_upsert() -> YdbResult<()> {
             Ok(())
         })
         .isolation(TxMode::SnapshotReadWrite)
-        .retry_budget(TEST_RETRY_BUDGET)
+        .timeout(TEST_TIMEOUT)
         .await
     {
         if is_snapshot_rw_unsupported(&err) {
@@ -236,7 +236,7 @@ async fn query_tx_stale_ro_rejected_in_interactive() {
             Ok(())
         })
         .isolation(TxMode::StaleReadOnly)
-        .retry_budget(TEST_RETRY_BUDGET)
+        .timeout(TEST_TIMEOUT)
         .await
         .unwrap_err();
     assert!(
@@ -259,7 +259,7 @@ async fn query_tx_implicit_rejected_in_interactive() {
             Ok(())
         })
         .isolation(TxMode::Implicit)
-        .retry_budget(TEST_RETRY_BUDGET)
+        .timeout(TEST_TIMEOUT)
         .await
         .unwrap_err();
     assert!(

@@ -73,16 +73,6 @@ impl<'a> ExecuteScriptBuilder<'a> {
         self.opts.timeout = Some(timeout);
         self
     }
-
-    pub fn retry_budget(mut self, budget: Duration) -> Self {
-        self.opts.retry_budget = Some(budget);
-        self
-    }
-
-    pub fn no_retry(mut self) -> Self {
-        self.opts.retry_budget = Some(Duration::ZERO);
-        self
-    }
 }
 
 impl<'a> IntoFuture for ExecuteScriptBuilder<'a> {
@@ -137,16 +127,6 @@ impl<'a> FetchScriptResultsBuilder<'a> {
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.opts.timeout = Some(timeout);
-        self
-    }
-
-    pub fn retry_budget(mut self, budget: Duration) -> Self {
-        self.opts.retry_budget = Some(budget);
-        self
-    }
-
-    pub fn no_retry(mut self) -> Self {
-        self.opts.retry_budget = Some(Duration::ZERO);
         self
     }
 }
@@ -253,7 +233,7 @@ async fn client_fetch_script_results_once(
     result_set_index: i64,
     fetch_token: &str,
     rows_limit: i64,
-    opts: &CallOptions,
+    _opts: &CallOptions,
 ) -> YdbResult<FetchScriptResult> {
     let req = RawFetchScriptResultsRequest {
         operation_id: operation_id.to_string(),
@@ -261,18 +241,14 @@ async fn client_fetch_script_results_once(
         fetch_token: fetch_token.to_string(),
         rows_limit,
     };
-    let timeout = opts.timeout;
     let mut client = ctx
         .connection_manager
         .get_auth_service(RawQueryClient::new)
         .await?;
-    let (index, raw_set, next_token) = maybe_with_operation_timeout(timeout, async {
-        client
-            .fetch_script_results(req)
-            .await
-            .map_err(YdbError::from)
-    })
-    .await?;
+    let (index, raw_set, next_token) = client
+        .fetch_script_results(req)
+        .await
+        .map_err(YdbError::from)?;
 
     Ok(FetchScriptResult {
         result_set_index: index,

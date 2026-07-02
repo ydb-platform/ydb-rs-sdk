@@ -5,14 +5,14 @@ use std::time::Duration;
 
 use ydb::{ydb_struct, Bytes, ClientBuilder, ExecBuilder, QueryStreamBuilder, Value, YdbResult};
 
-const EXAMPLE_RETRY: Duration = Duration::from_secs(30);
+const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn idem_exec<'a>(b: ExecBuilder<'a>) -> ExecBuilder<'a> {
-    b.idempotent(true).retry_budget(EXAMPLE_RETRY)
+    b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
 }
 
 fn idem_query<'a>(b: QueryStreamBuilder<'a>) -> QueryStreamBuilder<'a> {
-    b.idempotent(true).retry_budget(EXAMPLE_RETRY)
+    b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
 }
 
 const TABLE_NAME: &str = "ydb_vector_search";

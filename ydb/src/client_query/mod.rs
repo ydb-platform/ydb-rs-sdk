@@ -98,7 +98,6 @@ pub struct TransactionOptions {
     mode: TxMode,
     /// Call `BeginTransaction` RPC before the first `ExecuteQuery` instead of lazy `BeginTx`.
     begin: bool,
-    retry_budget: Duration,
 }
 
 impl Default for TransactionOptions {
@@ -106,7 +105,6 @@ impl Default for TransactionOptions {
         Self {
             mode: TxMode::SerializableReadWrite,
             begin: false,
-            retry_budget: Duration::ZERO,
         }
     }
 }
@@ -131,28 +129,12 @@ impl TransactionOptions {
         self
     }
 
-    /// Total wall-clock budget for automatic retries in [`QueryClient::retry_transaction`].
-    pub fn with_retry_budget(mut self, budget: Duration) -> Self {
-        self.retry_budget = budget;
-        self
-    }
-
-    /// Disable automatic retries in [`QueryClient::retry_transaction`].
-    pub fn with_no_retry(mut self) -> Self {
-        self.retry_budget = Duration::ZERO;
-        self
-    }
-
     pub(crate) fn mode(&self) -> TxMode {
         self.mode
     }
 
     pub(crate) fn begin(&self) -> bool {
         self.begin
-    }
-
-    pub(crate) fn retry_budget(&self) -> Duration {
-        self.retry_budget
     }
 }
 
@@ -189,7 +171,6 @@ impl QueryClient {
     /// client.query_client()
     ///     .retry_transaction(async |tx| { ... })
     ///     .isolation(TxMode::SerializableReadWrite)
-    ///     .retry_budget(Duration::from_secs(5))
     ///     .timeout(Duration::from_secs(30))
     ///     .await?;
     /// ```
@@ -216,7 +197,7 @@ impl QueryClient {
         use tokio::time::timeout;
 
         let run = async {
-            let retry_budget = options.retry_budget();
+            let retry_limit = wall_timeout.unwrap_or(Duration::ZERO);
             let start = Instant::now();
             let mut attempt = 0;
 
@@ -261,7 +242,7 @@ impl QueryClient {
                 if !check_retry_transaction_error(&err) {
                     return Err(err);
                 }
-                match retry_wait(attempt, start.elapsed(), retry_budget) {
+                match retry_wait(attempt, start.elapsed(), retry_limit) {
                     Some(wait) if wait > Duration::ZERO => sleep(wait).await,
                     Some(_) => {}
                     None => return Err(err),

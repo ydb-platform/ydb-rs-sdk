@@ -17,20 +17,6 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OperationCallOptions {
     pub timeout: Option<Duration>,
-    pub retry_budget: Option<Duration>,
-    pub no_retry: bool,
-}
-
-pub(crate) fn resolve_operation_timeout(opts: &OperationCallOptions) -> Option<Duration> {
-    opts.timeout
-}
-
-pub(crate) fn resolve_operation_retry_budget(opts: &OperationCallOptions) -> Duration {
-    if opts.no_retry {
-        Duration::ZERO
-    } else {
-        opts.retry_budget.unwrap_or(Duration::ZERO)
-    }
 }
 
 macro_rules! impl_operation_call_builder {
@@ -38,16 +24,6 @@ macro_rules! impl_operation_call_builder {
         impl<'a> $name<'a> {
             pub fn timeout(mut self, timeout: Duration) -> Self {
                 self.opts.timeout = Some(timeout);
-                self
-            }
-
-            pub fn retry_budget(mut self, budget: Duration) -> Self {
-                self.opts.retry_budget = Some(budget);
-                self
-            }
-
-            pub fn no_retry(mut self) -> Self {
-                self.opts.no_retry = true;
                 self
             }
         }
@@ -127,47 +103,38 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = YdbResult<T>>,
 {
-    let retry_budget = resolve_operation_retry_budget(opts);
+    let limit = opts.timeout.unwrap_or(Duration::ZERO);
     let start = std::time::Instant::now();
     let mut attempt = 0usize;
-    loop {
-        attempt += 1;
-        match attempt_fn().await {
-            Ok(value) => return Ok(value),
-            Err(err) => {
-                if !matches!(
-                    err.need_retry(),
-                    NeedRetry::True | NeedRetry::IdempotentOnly
-                ) {
-                    return Err(err);
-                }
-                match retry_wait(attempt, start.elapsed(), retry_budget) {
-                    Some(wait) if wait > Duration::ZERO => tokio::time::sleep(wait).await,
-                    Some(_) => {}
-                    None => return Err(err),
+    let run = async {
+        loop {
+            attempt += 1;
+            match attempt_fn().await {
+                Ok(value) => return Ok(value),
+                Err(err) => {
+                    if !matches!(
+                        err.need_retry(),
+                        NeedRetry::True | NeedRetry::IdempotentOnly
+                    ) {
+                        return Err(err);
+                    }
+                    match retry_wait(attempt, start.elapsed(), limit) {
+                        Some(wait) if wait > Duration::ZERO => tokio::time::sleep(wait).await,
+                        Some(_) => {}
+                        None => return Err(err),
+                    }
                 }
             }
         }
-    }
-}
-
-pub(crate) async fn with_rpc_timeout<T, F, Fut>(
-    opts: &OperationCallOptions,
-    operation: F,
-) -> YdbResult<T>
-where
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = YdbResult<T>>,
-{
-    let timeout_duration = resolve_operation_timeout(opts);
-    match timeout_duration {
-        Some(limit) => match timeout(limit, operation()).await {
+    };
+    match opts.timeout {
+        Some(duration) => match timeout(duration, run).await {
             Ok(result) => result,
             Err(_) => Err(YdbError::Transport(format!(
-                "operation service rpc timed out after {limit:?}"
+                "operation service rpc timed out after {duration:?}"
             ))),
         },
-        None => operation().await,
+        None => run.await,
     }
 }
 

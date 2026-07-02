@@ -52,7 +52,6 @@ const MAX_RETRY_BACKOFF_MILLISECONDS: u64 = 1_000;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CallOptions {
     pub timeout: Option<Duration>,
-    pub retry_budget: Option<Duration>,
     pub idempotent: Option<bool>,
     pub collect_stats: bool,
     /// Override Query Service `commit_tx`. `None` uses context default.
@@ -86,8 +85,8 @@ fn resolve_idempotent(opts: &CallOptions) -> bool {
     opts.idempotent.unwrap_or(false)
 }
 
-pub(crate) fn resolve_retry_budget(opts: &CallOptions) -> Duration {
-    opts.retry_budget.unwrap_or(Duration::ZERO)
+pub(crate) fn resolve_retry_limit(opts: &CallOptions) -> Duration {
+    opts.timeout.unwrap_or(Duration::ZERO)
 }
 
 pub(crate) async fn maybe_with_operation_timeout<T, F>(
@@ -127,7 +126,12 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = YdbResult<T>>,
 {
-    retry_with_budget(idempotent, resolve_retry_budget(opts), attempt_fn).await
+    let limit = opts.timeout;
+    let run = retry_with_budget(idempotent, resolve_retry_limit(opts), attempt_fn);
+    match limit {
+        Some(duration) => with_operation_timeout(duration, run).await,
+        None => run.await,
+    }
 }
 
 async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQueryClient> {
@@ -321,58 +325,37 @@ async fn client_begin_stream_once(
     opts: &CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
-    let timeout = opts.timeout;
-
     if opts.implicit_session {
-        return maybe_with_operation_timeout(timeout, async {
-            let (mut client, req) =
-                client_implicit_session_request(ctx, text, params, opts, concurrent_result_sets)
-                    .await?;
-            let stream = client.execute_query(req).await.map_err(YdbError::from)?;
-            Ok(ExecuteQueryStream::new(stream))
-        })
-        .await;
-    }
-
-    let mut pooled_lease: Option<SessionPoolLease> = None;
-    let result: YdbResult<ExecuteQueryStream> = maybe_with_operation_timeout(timeout, async {
-        let lease = ctx.session_pool.acquire_explicit().await?;
-        pooled_lease = Some(lease);
-        let lease_ref = pooled_lease
-            .as_mut()
-            .expect("lease set on successful acquire");
-        let (mut client, req) = client_pooled_explicit_request(
-            ctx,
-            lease_ref,
-            text,
-            params,
-            opts,
-            concurrent_result_sets,
-        )
-        .await?;
+        let (mut client, req) =
+            client_implicit_session_request(ctx, text, params, opts, concurrent_result_sets)
+                .await?;
         let stream = client.execute_query(req).await.map_err(YdbError::from)?;
-        Ok(ExecuteQueryStream::new(stream))
-    })
-    .await;
-
-    match result {
-        Ok(mut stream) => {
-            if let Some(lease) = pooled_lease.take() {
-                stream = stream.with_session_guard(PooledQuerySessionGuard {
-                    lease,
-                    rpc_finished: false,
-                });
-            }
-            Ok(stream)
-        }
-        Err(err) => {
-            if let Some(lease) = &mut pooled_lease {
-                lease.handle_pool_error(&err);
-                lease.end_use();
-            }
-            Err(err)
-        }
+        return Ok(ExecuteQueryStream::new(stream));
     }
+
+    let lease = ctx.session_pool.acquire_explicit().await?;
+    let mut pooled_lease = Some(lease);
+    let lease_ref = pooled_lease
+        .as_mut()
+        .expect("lease set on successful acquire");
+    let (mut client, req) = client_pooled_explicit_request(
+        ctx,
+        lease_ref,
+        text,
+        params,
+        opts,
+        concurrent_result_sets,
+    )
+    .await?;
+    let stream = client.execute_query(req).await.map_err(YdbError::from)?;
+    let mut stream = ExecuteQueryStream::new(stream);
+    if let Some(lease) = pooled_lease.take() {
+        stream = stream.with_session_guard(PooledQuerySessionGuard {
+            lease,
+            rpc_finished: false,
+        });
+    }
+    Ok(stream)
 }
 
 async fn client_pooled_explicit_request(
@@ -409,10 +392,14 @@ pub(crate) async fn client_begin_stream(
     concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
     let idempotent = resolve_idempotent(&opts);
-    retry_with_budget(idempotent, resolve_retry_budget(&opts), || {
+    let limit = opts.timeout;
+    let run = retry_with_budget(idempotent, resolve_retry_limit(&opts), || {
         client_begin_stream_once(ctx, &text, &params, &opts, concurrent_result_sets)
-    })
-    .await
+    });
+    match limit {
+        Some(duration) => with_operation_timeout(duration, run).await,
+        None => run.await,
+    }
 }
 
 /// Interactive transactions need a stable attached session from the driver pool.

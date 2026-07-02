@@ -16,7 +16,7 @@ pub struct RetryTransactionBuilder<'a, F, T> {
     client: &'a QueryClient,
     callback: F,
     options: TransactionOptions,
-    wall_timeout: Option<Duration>,
+    timeout: Option<Duration>,
     _phantom: PhantomData<fn() -> T>,
 }
 
@@ -26,7 +26,7 @@ impl<'a, F, T> RetryTransactionBuilder<'a, F, T> {
             client,
             callback,
             options: TransactionOptions::default(),
-            wall_timeout: None,
+            timeout: None,
             _phantom: PhantomData,
         }
     }
@@ -48,21 +48,9 @@ impl<'a, F, T> RetryTransactionBuilder<'a, F, T> {
         self
     }
 
-    /// Total wall-clock budget for automatic retries on transient errors.
-    pub fn retry_budget(mut self, budget: Duration) -> Self {
-        self.options = self.options.with_retry_budget(budget);
-        self
-    }
-
-    /// Disable automatic retries.
-    pub fn no_retry(mut self) -> Self {
-        self.options = self.options.with_no_retry();
-        self
-    }
-
-    /// Max wall-clock time for the whole `retry_transaction` call (all attempts).
+    /// Max wall-clock time for the whole `retry_transaction` call (all attempts and backoff).
     pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.wall_timeout = Some(timeout);
+        self.timeout = Some(timeout);
         self
     }
 }
@@ -80,7 +68,7 @@ where
         Box::pin(self.client.run_retry_transaction(
             self.callback,
             self.options,
-            self.wall_timeout,
+            self.timeout,
         ))
     }
 }

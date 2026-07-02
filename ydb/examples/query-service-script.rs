@@ -6,10 +6,10 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use ydb::{ClientBuilder, ExecBuilder, YdbError, YdbResult};
 
-const EXAMPLE_RETRY: Duration = Duration::from_secs(30);
+const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn idem_exec<'a>(b: ExecBuilder<'a>) -> ExecBuilder<'a> {
-    b.idempotent(true).retry_budget(EXAMPLE_RETRY)
+    b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
 }
 
 #[tokio::main]
@@ -37,7 +37,7 @@ async fn main() -> YdbResult<()> {
         .execute_script("SELECT id, msg FROM script_example WHERE id = $id;")
         .param("$id", 123_u64)
         .results_ttl(Duration::from_secs(3600))
-        .retry_budget(EXAMPLE_RETRY)
+        .timeout(EXAMPLE_TIMEOUT)
         .await?;
 
     println!("script operation id={}", op.id);
@@ -64,7 +64,7 @@ async fn main() -> YdbResult<()> {
             .result_set_index(0)
             .rows_limit(1000)
             .fetch_token(&next_token)
-            .retry_budget(EXAMPLE_RETRY)
+            .timeout(EXAMPLE_TIMEOUT)
             .await?;
         next_token = page.next_fetch_token;
 

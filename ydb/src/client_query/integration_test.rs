@@ -8,11 +8,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 use tracing_test::traced_test;
 
-const TEST_RETRY_BUDGET: Duration = Duration::from_secs(5);
+const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 macro_rules! idem {
     ($builder:expr) => {
-        $builder.idempotent(true).retry_budget(TEST_RETRY_BUDGET)
+        $builder.idempotent(true).timeout(TEST_TIMEOUT)
     };
 }
 
@@ -100,7 +100,7 @@ async fn query_client_multi_result_set() -> YdbResult<()> {
             stream.close().await?;
             Ok(count)
         })
-        .retry_budget(TEST_RETRY_BUDGET)
+        .timeout(TEST_TIMEOUT)
         .await?;
 
     assert_eq!(set_count, 2);
@@ -131,7 +131,7 @@ async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
         }
         Ok(())
     })
-    .retry_budget(TEST_RETRY_BUDGET)
+    .timeout(TEST_TIMEOUT)
     .await?;
 
     let mut row = idem!(qc
@@ -190,7 +190,7 @@ async fn query_client_snapshot_read_only_tx() -> YdbResult<()> {
             Ok(row.remove_field_by_name("v")?.try_into()?)
         })
         .isolation(TxMode::SnapshotReadOnly)
-        .retry_budget(TEST_RETRY_BUDGET)
+        .timeout(TEST_TIMEOUT)
         .await?;
 
     assert_eq!(value, 42);
@@ -236,7 +236,7 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
 
         Ok(())
     })
-    .retry_budget(TEST_RETRY_BUDGET)
+    .timeout(TEST_TIMEOUT)
     .await?;
 
     let mut row = idem!(qc
@@ -260,7 +260,7 @@ async fn query_lazy_tx_commit_without_queries() -> YdbResult<()> {
             assert!(tx.tx_id_for_test().is_none());
             Ok(7_i32)
         })
-        .retry_budget(TEST_RETRY_BUDGET)
+        .timeout(TEST_TIMEOUT)
         .await?;
 
     assert_eq!(value, 7);
@@ -290,7 +290,7 @@ async fn query_explicit_begin_via_begin() -> YdbResult<()> {
         assert_eq!(v, 1);
         Ok(())
     })
-    .retry_budget(TEST_RETRY_BUDGET)
+    .timeout(TEST_TIMEOUT)
     .await?;
 
     Ok(())
@@ -312,7 +312,7 @@ async fn query_explicit_begin_via_client_option() -> YdbResult<()> {
         Ok(())
     })
     .with_begin()
-    .retry_budget(TEST_RETRY_BUDGET)
+    .timeout(TEST_TIMEOUT)
     .await?;
 
     Ok(())
@@ -351,7 +351,7 @@ async fn query_with_commit_on_last_query() -> YdbResult<()> {
 
         Ok(())
     })
-    .retry_budget(TEST_RETRY_BUDGET)
+    .timeout(TEST_TIMEOUT)
     .await?;
 
     let mut row = idem!(qc
@@ -410,7 +410,7 @@ async fn query_execute_script() -> YdbResult<()> {
     let op = qc
         .execute_script(format!("SELECT val FROM {table_name};"))
         .results_ttl(Duration::from_secs(3600))
-        .retry_budget(TEST_RETRY_BUDGET)
+        .timeout(TEST_TIMEOUT)
         .await?;
 
     let poll_deadline = Instant::now() + Duration::from_secs(120);
@@ -436,7 +436,7 @@ async fn query_execute_script() -> YdbResult<()> {
             .result_set_index(0)
             .rows_limit(1000)
             .fetch_token(&next_token)
-            .retry_budget(TEST_RETRY_BUDGET)
+            .timeout(TEST_TIMEOUT)
             .await?;
         next_token = page.next_fetch_token;
         assert_eq!(page.result_set_index, 0);

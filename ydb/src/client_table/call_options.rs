@@ -9,8 +9,6 @@ use crate::retry::{Retry, RetryParams, TimeoutRetrier};
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TableCallOptions {
     pub timeout: Option<Duration>,
-    pub retry_budget: Option<Duration>,
-    pub no_retry: bool,
 }
 
 pub(crate) fn resolve_timeouts(opts: &TableCallOptions) -> TimeoutSettings {
@@ -19,12 +17,8 @@ pub(crate) fn resolve_timeouts(opts: &TableCallOptions) -> TimeoutSettings {
     }
 }
 
-pub(crate) fn resolve_retry_budget(opts: &TableCallOptions) -> Duration {
-    if opts.no_retry {
-        Duration::ZERO
-    } else {
-        opts.retry_budget.unwrap_or(Duration::ZERO)
-    }
+pub(crate) fn resolve_retry_limit(opts: &TableCallOptions) -> Duration {
+    opts.timeout.unwrap_or(Duration::ZERO)
 }
 
 pub(crate) async fn retry_table_operation<CallbackFuture, CallbackResult>(
@@ -35,9 +29,9 @@ pub(crate) async fn retry_table_operation<CallbackFuture, CallbackResult>(
 where
     CallbackFuture: Future<Output = YdbResult<CallbackResult>>,
 {
-    let retry_budget = resolve_retry_budget(opts);
+    let retry_limit = resolve_retry_limit(opts);
     let retrier: Arc<Box<dyn Retry>> = Arc::new(Box::new(TimeoutRetrier {
-        timeout: retry_budget,
+        timeout: retry_limit,
     }));
     let mut attempt: usize = 0;
     let start = Instant::now();

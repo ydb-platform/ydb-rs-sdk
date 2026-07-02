@@ -97,25 +97,13 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
         self
     }
 
-    /// Per-call operation timeout.
+    /// Wall-clock limit for the call. When set together with [`.idempotent(true)`](Self::idempotent),
+    /// transient errors are retried until this deadline.
     ///
-    /// For one-shot calls (`exec`, `query_row`, …) this limits the full RPC.
-    /// For [`QueryStream`](Self) the timeout applies only while opening the gRPC
-    /// stream; iterating result sets is not bounded by this value.
+    /// For [`QueryStream`](Self) the timeout bounds opening the gRPC stream and any retries;
+    /// iterating result sets is not bounded by this value.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.opts.timeout = Some(timeout);
-        self
-    }
-
-    /// Total wall-clock budget for automatic retries on transient errors.
-    pub fn retry_budget(mut self, budget: Duration) -> Self {
-        self.opts.retry_budget = Some(budget);
-        self
-    }
-
-    /// Disable automatic retries for this call.
-    pub fn no_retry(mut self) -> Self {
-        self.opts.retry_budget = Some(Duration::ZERO);
         self
     }
 

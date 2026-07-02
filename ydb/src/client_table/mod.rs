@@ -58,7 +58,7 @@ impl WithGrpcMaxMessageSize for TableServiceClientType {
 /// Ad-hoc DDL YQL (`CREATE TABLE` / `DROP TABLE` as text) belongs to [`crate::QueryClient::exec`] with [`crate::TxMode::Implicit`].
 /// YQL execution, transactions, explain, and streaming reads also belong to [`crate::QueryClient`].
 ///
-/// Per-call timeouts and retry budgets are set on operation builders, e.g.
+/// Per-call timeouts are set on operation builders, e.g.
 /// `table_client.read_rows(path, keys, None).timeout(Duration::from_secs(1)).await`.
 #[derive(Clone)]
 pub struct TableClient {

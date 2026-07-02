@@ -9,9 +9,8 @@ use crate::grpc_wrapper::raw_operation_service::client::RawOperationClient;
 use crate::grpc_wrapper::raw_operation_service::types::RawListOperationsRequest;
 
 use super::builders::{
-    retry_operation_call, with_rpc_timeout, CancelOperationBuilder, ForgetOperationBuilder,
-    GetOperationBuilder, ListOperationsBuilder, OperationCallOptions, raw_to_list_result,
-    raw_to_operation_info,
+    retry_operation_call, CancelOperationBuilder, ForgetOperationBuilder, GetOperationBuilder,
+    ListOperationsBuilder, OperationCallOptions, raw_to_list_result, raw_to_operation_info,
 };
 use super::types::{ListOperationsRequest, ListOperationsResult, OperationInfo};
 
@@ -43,10 +42,7 @@ impl OperationClient {
     ) -> YdbResult<OperationInfo> {
         retry_operation_call(&opts, || async {
             let mut client = self.raw_client().await?;
-            let op = with_rpc_timeout(&opts, || async {
-                client.get_operation(&id).await.map_err(YdbError::from)
-            })
-            .await?;
+            let op = client.get_operation(&id).await.map_err(YdbError::from)?;
             Ok(raw_to_operation_info(op))
         })
         .await
@@ -75,13 +71,10 @@ impl OperationClient {
         };
         retry_operation_call(&opts, || async {
             let mut client = self.raw_client().await?;
-            let result = with_rpc_timeout(&opts, || async {
-                client
-                    .list_operations(raw_req.clone())
-                    .await
-                    .map_err(YdbError::from)
-            })
-            .await?;
+            let result = client
+                .list_operations(raw_req.clone())
+                .await
+                .map_err(YdbError::from)?;
             Ok(raw_to_list_result(result))
         })
         .await
@@ -106,11 +99,7 @@ impl OperationClient {
     ) -> YdbResult<()> {
         retry_operation_call(&opts, || async {
             let mut client = self.raw_client().await?;
-            match with_rpc_timeout(&opts, || async {
-                client.forget_operation(&id).await.map_err(YdbError::from)
-            })
-            .await
-            {
+            match client.forget_operation(&id).await.map_err(YdbError::from) {
                 Ok(()) => Ok(()),
                 Err(YdbError::YdbStatusError(status))
                     if status.operation_status == StatusCode::NotFound as i32 =>
@@ -138,10 +127,10 @@ impl OperationClient {
     ) -> YdbResult<()> {
         retry_operation_call(&opts, || async {
             let mut client = self.raw_client().await?;
-            with_rpc_timeout(&opts, || async {
-                client.cancel_operation(&id).await.map_err(YdbError::from)
-            })
-            .await?;
+            client
+                .cancel_operation(&id)
+                .await
+                .map_err(YdbError::from)?;
             Ok(())
         })
         .await

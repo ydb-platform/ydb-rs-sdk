@@ -7,14 +7,14 @@ use ydb::{
     YdbResult, YdbResultWithCustomerErr,
 };
 
-const EXAMPLE_RETRY: Duration = Duration::from_secs(30);
+const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn idem_exec<'a>(b: ExecBuilder<'a>) -> ExecBuilder<'a> {
-    b.idempotent(true).retry_budget(EXAMPLE_RETRY)
+    b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
 }
 
 fn idem_row<'a>(b: QueryRowBuilder<'a>) -> QueryRowBuilder<'a> {
-    b.idempotent(true).retry_budget(EXAMPLE_RETRY)
+    b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
 }
 
 enum Withdraw {
@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let sum = fetch_total(tx).await?; // generic over QueryExecutor
             Ok(sum) // Ok => commit; Err => rollback + retry
         })
-        .retry_budget(EXAMPLE_RETRY)
+        .timeout(EXAMPLE_TIMEOUT)
         .await?;
     println!("total = {total} after {attempts} attempt(s)");
 
@@ -94,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 remaining: balance - 100,
             })
         })
-        .retry_budget(EXAMPLE_RETRY)
+        .timeout(EXAMPLE_TIMEOUT)
         .await?;
     match outcome {
         Withdraw::Done { remaining } => println!("done, remaining = {remaining}"),
@@ -109,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "business rule violated",
             )))
         })
-        .retry_budget(EXAMPLE_RETRY)
+        .timeout(EXAMPLE_TIMEOUT)
         .await;
     println!("customer error passed through: {}", res.is_err());
 
@@ -119,7 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tx.exec("SELECT 1").await?;
         Ok(())
     })
-    .retry_budget(EXAMPLE_RETRY)
+    .timeout(EXAMPLE_TIMEOUT)
     .await?;
 
     // Explicit BeginTransaction RPC before any YQL:
@@ -128,7 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tx.exec("SELECT 1").await?;
         Ok(())
     })
-    .retry_budget(EXAMPLE_RETRY)
+    .timeout(EXAMPLE_TIMEOUT)
     .await?;
 
     // Or configure explicit begin per retry_transaction call:
@@ -137,7 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     })
     .with_begin()
-    .retry_budget(EXAMPLE_RETRY)
+    .timeout(EXAMPLE_TIMEOUT)
     .await?;
 
     // --- 6. Commit with the last query (with_commit) ------------------------
@@ -158,7 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Transaction is already committed; further queries in this callback would fail.
         Ok(())
     })
-    .retry_budget(EXAMPLE_RETRY)
+    .timeout(EXAMPLE_TIMEOUT)
     .await?; // retry_transaction commit is a no-op
 
     let mut row = idem_row(qc.query_row(format!("SELECT val FROM {table} WHERE id = 1"))).await?;

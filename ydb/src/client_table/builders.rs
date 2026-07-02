@@ -18,21 +18,9 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 macro_rules! impl_table_call_builder {
     ($name:ident) => {
         impl<'a> $name<'a> {
-            /// Per-call operation timeout (YDB `OperationParams`).
+            /// Per-call wall-clock limit (YDB `OperationParams` and retry budget for idempotent ops).
             pub fn timeout(mut self, timeout: Duration) -> Self {
                 self.opts.timeout = Some(timeout);
-                self
-            }
-
-            /// Total wall-clock budget for automatic retries on transient errors.
-            pub fn retry_budget(mut self, budget: Duration) -> Self {
-                self.opts.retry_budget = Some(budget);
-                self
-            }
-
-            /// Disable automatic retries for this call.
-            pub fn no_retry(mut self) -> Self {
-                self.opts.no_retry = true;
                 self
             }
         }

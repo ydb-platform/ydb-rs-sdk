@@ -4,14 +4,14 @@ use std::time::Duration;
 
 use ydb::{ClientBuilder, ExecBuilder, QueryRowBuilder, TxMode, YdbError, YdbOrCustomerError, YdbResult};
 
-const EXAMPLE_RETRY: Duration = Duration::from_secs(30);
+const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn idem_exec<'a>(b: ExecBuilder<'a>) -> ExecBuilder<'a> {
-    b.idempotent(true).retry_budget(EXAMPLE_RETRY)
+    b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
 }
 
 fn idem_row<'a>(b: QueryRowBuilder<'a>) -> QueryRowBuilder<'a> {
-    b.idempotent(true).retry_budget(EXAMPLE_RETRY)
+    b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
 }
 
 #[tokio::main]
@@ -69,7 +69,7 @@ async fn main() -> YdbResult<()> {
                 Ok(row.remove_field_by_name("v")?.try_into()?)
             })
             .isolation(mode)
-            .retry_budget(EXAMPLE_RETRY)
+            .timeout(EXAMPLE_TIMEOUT)
             .await
         {
             Ok(v) => v,
