@@ -1,7 +1,7 @@
-use super::QueryTransactionOptions;
+use super::TransactionOptions;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::test_integration_helper::create_client;
-use crate::QueryTxMode;
+use crate::TxMode;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing_test::traced_test;
 
@@ -88,14 +88,11 @@ async fn query_client_implicit_tx_ddl_and_dml() -> YdbResult<()> {
 
 client_mode_select!(
     query_client_serializable_rw_one_shot,
-    QueryTxMode::SerializableReadWrite
+    TxMode::SerializableReadWrite
 );
-client_mode_select!(
-    query_client_snapshot_ro_one_shot,
-    QueryTxMode::SnapshotReadOnly
-);
-client_mode_select!(query_client_stale_ro_one_shot, QueryTxMode::StaleReadOnly);
-client_mode_select!(query_client_online_ro_one_shot, QueryTxMode::OnlineReadOnly);
+client_mode_select!(query_client_snapshot_ro_one_shot, TxMode::SnapshotReadOnly);
+client_mode_select!(query_client_stale_ro_one_shot, TxMode::StaleReadOnly);
+client_mode_select!(query_client_online_ro_one_shot, TxMode::OnlineReadOnly);
 
 #[tokio::test]
 #[traced_test]
@@ -106,7 +103,7 @@ async fn query_client_snapshot_rw_one_shot() -> YdbResult<()> {
 
     match qc
         .query_row("SELECT 42 AS v")
-        .with_tx_mode(QueryTxMode::SnapshotReadWrite)
+        .with_tx_mode(TxMode::SnapshotReadWrite)
         .await
     {
         Ok(mut row) => {
@@ -131,7 +128,7 @@ macro_rules! interactive_mode_select {
             let qc = client
                 .query_client()
                 .clone_with_idempotent_operations(true)
-                .clone_with_transaction_options(QueryTransactionOptions::new().with_mode($mode));
+                .clone_with_transaction_options(TransactionOptions::new().with_mode($mode));
 
             let v: i64 = qc
                 .retry_transaction(async |tx| {
@@ -145,8 +142,8 @@ macro_rules! interactive_mode_select {
     };
 }
 
-interactive_mode_select!(query_tx_serializable_rw, QueryTxMode::SerializableReadWrite);
-interactive_mode_select!(query_tx_snapshot_ro, QueryTxMode::SnapshotReadOnly);
+interactive_mode_select!(query_tx_serializable_rw, TxMode::SerializableReadWrite);
+interactive_mode_select!(query_tx_snapshot_ro, TxMode::SnapshotReadOnly);
 
 #[tokio::test]
 #[traced_test]
@@ -157,7 +154,7 @@ async fn query_tx_snapshot_rw() -> YdbResult<()> {
         .query_client()
         .clone_with_idempotent_operations(true)
         .clone_with_transaction_options(
-            QueryTransactionOptions::new().with_mode(QueryTxMode::SnapshotReadWrite),
+            TransactionOptions::new().with_mode(TxMode::SnapshotReadWrite),
         );
 
     match qc
@@ -192,7 +189,7 @@ async fn query_tx_snapshot_rw_upsert() -> YdbResult<()> {
     .await?;
 
     let mut qc = qc.clone_with_transaction_options(
-        QueryTransactionOptions::new().with_mode(QueryTxMode::SnapshotReadWrite),
+        TransactionOptions::new().with_mode(TxMode::SnapshotReadWrite),
     );
     if let Err(err) = qc
         .retry_transaction(async |tx| {
@@ -232,9 +229,7 @@ async fn query_tx_stale_ro_rejected_in_interactive() {
     let qc = client
         .query_client()
         .clone_with_idempotent_operations(true)
-        .clone_with_transaction_options(
-            QueryTransactionOptions::new().with_mode(QueryTxMode::StaleReadOnly),
-        );
+        .clone_with_transaction_options(TransactionOptions::new().with_mode(TxMode::StaleReadOnly));
 
     let err = qc
         .retry_transaction(async |tx| {
@@ -258,9 +253,7 @@ async fn query_tx_implicit_rejected_in_interactive() {
     let qc = client
         .query_client()
         .clone_with_idempotent_operations(true)
-        .clone_with_transaction_options(
-            QueryTransactionOptions::new().with_mode(QueryTxMode::Implicit),
-        );
+        .clone_with_transaction_options(TransactionOptions::new().with_mode(TxMode::Implicit));
 
     let err = qc
         .retry_transaction(async |tx| {
@@ -271,7 +264,7 @@ async fn query_tx_implicit_rejected_in_interactive() {
         .unwrap_err();
     assert!(
         err.to_string()
-            .contains("Implicit is not available inside QueryTransaction"),
+            .contains("Implicit is not available inside Transaction"),
         "unexpected error: {err}"
     );
 }

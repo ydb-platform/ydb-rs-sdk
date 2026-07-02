@@ -10,7 +10,7 @@ use crate::grpc_wrapper::raw_query_service::fetch_script_results::{
 };
 use crate::grpc_wrapper::raw_query_service::status::check_status;
 use crate::grpc_wrapper::raw_query_service::transaction_control::{
-    tx_settings_for_mode, RawQueryTxMode,
+    tx_settings_for_mode, RawTxMode,
 };
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
@@ -127,7 +127,7 @@ impl RawQueryClient {
     pub async fn begin_transaction(
         &mut self,
         session_id: &str,
-        mode: RawQueryTxMode,
+        mode: RawTxMode,
     ) -> RawResult<String> {
         let response = self
             .service

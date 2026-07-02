@@ -1,7 +1,7 @@
 use std::fmt::Write;
 use std::time::SystemTime;
 
-use ydb::{ydb_struct, Bytes, QueryClient, QueryTxMode, Value, YdbResult};
+use ydb::{ydb_struct, Bytes, QueryClient, TxMode, Value, YdbResult};
 
 use super::data::SampleData;
 
@@ -103,7 +103,7 @@ pub async fn read_series(qc: &mut QueryClient, prefix: &str) -> YdbResult<()> {
 
     let mut stream = qc
         .query(sql)
-        .with_tx_mode(QueryTxMode::SnapshotReadOnly)
+        .with_tx_mode(TxMode::SnapshotReadOnly)
         .idempotent(true)
         .await?;
 

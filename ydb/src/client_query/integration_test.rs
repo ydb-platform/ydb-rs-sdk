@@ -1,4 +1,4 @@
-use super::{QueryTransactionOptions, QueryTxMode};
+use super::{TransactionOptions, TxMode};
 use crate::errors::YdbResult;
 use crate::session_pool::SessionPoolSettings;
 use crate::test_integration_helper::{create_client, create_client_with_session_pool};
@@ -183,7 +183,7 @@ async fn query_client_snapshot_read_only_tx() -> YdbResult<()> {
         .query_client()
         .clone_with_idempotent_operations(true)
         .clone_with_transaction_options(
-            QueryTransactionOptions::new().with_mode(QueryTxMode::SnapshotReadOnly),
+            TransactionOptions::new().with_mode(TxMode::SnapshotReadOnly),
         );
 
     let value: i64 = qc
@@ -303,7 +303,7 @@ async fn query_explicit_begin_via_client_option() -> YdbResult<()> {
     let qc = client
         .query_client()
         .clone_with_idempotent_operations(true)
-        .clone_with_transaction_options(QueryTransactionOptions::new().with_begin());
+        .clone_with_transaction_options(TransactionOptions::new().with_begin());
 
     qc.retry_transaction(async |tx| {
         tx.exec("SELECT 1 AS v").await?;

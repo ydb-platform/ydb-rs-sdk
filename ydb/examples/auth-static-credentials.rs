@@ -1,6 +1,6 @@
 use std::time::Duration;
 use tokio::time::timeout;
-use ydb::{ClientBuilder, Query, StaticCredentials, YdbError, YdbResult};
+use ydb::{ClientBuilder, StaticCredentials, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -23,15 +23,11 @@ async fn main() -> YdbResult<()> {
     };
 
     println!("created\nmake a query...");
-    let product: i32 = client
-        .table_client()
-        .retry_transaction(|mut t| async move {
-            let res = t.query(Query::from("SELECT 14 * 3 AS product")).await?;
-            Ok(res.into_only_row()?.remove_field_by_name("product")?)
-        })
-        .await?
-        .try_into()
-        .unwrap();
+    let mut row = client
+        .query_client()
+        .query_row("SELECT 14 * 3 AS product")
+        .await?;
+    let product: i32 = row.remove_field_by_name("product")?.try_into()?;
 
     println!("product: {product}");
     Ok(())

@@ -1,8 +1,6 @@
 //! Query Service transaction isolation modes (ImplicitTx and explicit BeginTx modes).
 
-use ydb::{
-    ClientBuilder, QueryTransactionOptions, QueryTxMode, YdbError, YdbOrCustomerError, YdbResult,
-};
+use ydb::{ClientBuilder, TransactionOptions, TxMode, YdbError, YdbOrCustomerError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -23,15 +21,12 @@ async fn main() -> YdbResult<()> {
 
     // --- One-shot explicit modes -----------------------------------------------
     for (label, mode) in [
-        ("SerializableRW", QueryTxMode::SerializableReadWrite),
-        ("SnapshotRO", QueryTxMode::SnapshotReadOnly),
-        ("SnapshotRW", QueryTxMode::SnapshotReadWrite),
-        ("StaleRO", QueryTxMode::StaleReadOnly),
-        ("OnlineRO", QueryTxMode::OnlineReadOnly),
-        (
-            "OnlineInconsistentRO",
-            QueryTxMode::OnlineReadOnlyInconsistent,
-        ),
+        ("SerializableRW", TxMode::SerializableReadWrite),
+        ("SnapshotRO", TxMode::SnapshotReadOnly),
+        ("SnapshotRW", TxMode::SnapshotReadWrite),
+        ("StaleRO", TxMode::StaleReadOnly),
+        ("OnlineRO", TxMode::OnlineReadOnly),
+        ("OnlineInconsistentRO", TxMode::OnlineReadOnlyInconsistent),
     ] {
         match qc.query_row("SELECT 42 AS v").with_tx_mode(mode).await {
             Ok(mut row) => {
@@ -39,7 +34,7 @@ async fn main() -> YdbResult<()> {
                 println!("one-shot {label} SELECT → {v}");
             }
             Err(err)
-                if mode == QueryTxMode::SnapshotReadWrite
+                if mode == TxMode::SnapshotReadWrite
                     && err.to_string().contains("Snapshot Isolation") =>
             {
                 println!("one-shot {label} not supported on this cluster, skipped");
@@ -50,12 +45,12 @@ async fn main() -> YdbResult<()> {
 
     // --- Interactive modes (SerializableRW, SnapshotRO, SnapshotRW) ------------
     for (label, mode) in [
-        ("SerializableRW", QueryTxMode::SerializableReadWrite),
-        ("SnapshotRO", QueryTxMode::SnapshotReadOnly),
-        ("SnapshotRW", QueryTxMode::SnapshotReadWrite),
+        ("SerializableRW", TxMode::SerializableReadWrite),
+        ("SnapshotRO", TxMode::SnapshotReadOnly),
+        ("SnapshotRW", TxMode::SnapshotReadWrite),
     ] {
         let with_mode =
-            qc.clone_with_transaction_options(QueryTransactionOptions::new().with_mode(mode));
+            qc.clone_with_transaction_options(TransactionOptions::new().with_mode(mode));
         let v: i64 = match with_mode
             .retry_transaction(async |tx| {
                 let mut row = tx.query_row("SELECT 42 AS v").await?;
@@ -65,7 +60,7 @@ async fn main() -> YdbResult<()> {
         {
             Ok(v) => v,
             Err(err)
-                if mode == QueryTxMode::SnapshotReadWrite
+                if mode == TxMode::SnapshotReadWrite
                     && err.to_string().contains("Snapshot Isolation") =>
             {
                 println!("interactive {label} not supported on this cluster, skipped");
@@ -81,6 +76,6 @@ async fn main() -> YdbResult<()> {
         println!("interactive {label} SELECT → {v}");
     }
 
-    // StaleRO / OnlineRO / ImplicitTx are one-shot only — not valid on QueryTransaction.
+    // StaleRO / OnlineRO / ImplicitTx are one-shot only — not valid on Transaction.
     Ok(())
 }

@@ -5,7 +5,6 @@ members = [
     "ydb-grpc",
     #    "ydb-grpc-helpers",
     "tests/slo/slo-framework",
-    "tests/slo/native/table",
     "tests/slo/native/query",
     "tests/slo/native/topic",
 ]

@@ -39,8 +39,8 @@ use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{
     check_retry_transaction_error, retry_wait, spawn_query_tx_rollback_on_drop, transaction_commit,
-    transaction_ensure_begin, transaction_exec_context, transaction_rollback, ClientExecContext,
-    TransactionExecContext, DEFAULT_QUERY_RETRY_BUDGET,
+    transaction_ensure_begin, transaction_exec_context, transaction_identity, transaction_rollback,
+    ClientExecContext, TransactionExecContext, DEFAULT_QUERY_RETRY_BUDGET,
 };
 
 /// Row-to-struct mapping (the sqlx `FromRow` analogue).
@@ -56,7 +56,7 @@ impl FromYdbRow for Row {
 
 /// Query Service transaction isolation mode.
 ///
-/// | Mode | One-shot [`QueryClient`] | Interactive [`QueryTransaction`] |
+/// | Mode | One-shot [`QueryClient`] | Interactive [`Transaction`] |
 /// |------|--------------------------|----------------------------------|
 /// | [`Implicit`](Self::Implicit) | yes (default) | no |
 /// | [`SerializableReadWrite`](Self::SerializableReadWrite) | yes | yes (default) |
@@ -70,7 +70,7 @@ impl FromYdbRow for Row {
 /// picks isolation from the SQL kind (DDL — non-transactional, `SELECT` — snapshot read-only,
 /// DML — serializable read-write). Override per call with [`CallBuilder::with_tx_mode`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum QueryTxMode {
+pub enum TxMode {
     /// Server-side inference (ImplicitTx / NoTx). One-shot only.
     #[default]
     Implicit,
@@ -84,7 +84,7 @@ pub enum QueryTxMode {
     OnlineReadOnlyInconsistent,
 }
 
-impl QueryTxMode {
+impl TxMode {
     pub(crate) fn supported_in_interactive(self) -> bool {
         matches!(
             self,
@@ -94,42 +94,42 @@ impl QueryTxMode {
 }
 
 #[derive(Clone, Debug)]
-pub struct QueryTransactionOptions {
-    mode: QueryTxMode,
+pub struct TransactionOptions {
+    mode: TxMode,
     /// Call `BeginTransaction` RPC before the first `ExecuteQuery` instead of lazy `BeginTx`.
     begin: bool,
 }
 
-impl Default for QueryTransactionOptions {
+impl Default for TransactionOptions {
     fn default() -> Self {
         Self {
-            mode: QueryTxMode::SerializableReadWrite,
+            mode: TxMode::SerializableReadWrite,
             begin: false,
         }
     }
 }
 
-impl QueryTransactionOptions {
+impl TransactionOptions {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn with_mode(mut self, mode: QueryTxMode) -> Self {
+    pub fn with_mode(mut self, mode: TxMode) -> Self {
         self.mode = mode;
         self
     }
 
-    /// Explicit transaction start: the first operation in [`QueryTransaction`] calls
+    /// Explicit transaction start: the first operation in [`Transaction`] calls
     /// `BeginTransaction` RPC and obtains `tx_id` before any `ExecuteQuery`.
     ///
     /// Default (lazy tx): the first `ExecuteQuery` carries `BeginTx` in `tx_control` without a
-    /// separate RPC — see [`QueryTransaction::begin`] for the same behavior inside the callback.
+    /// separate RPC — see [`Transaction::begin`] for the same behavior inside the callback.
     pub fn with_begin(mut self) -> Self {
         self.begin = true;
         self
     }
 
-    pub(crate) fn mode(&self) -> QueryTxMode {
+    pub(crate) fn mode(&self) -> TxMode {
         self.mode
     }
 
@@ -140,7 +140,7 @@ impl QueryTransactionOptions {
 
 pub struct QueryClient {
     ctx: ClientExecContext,
-    tx_options: QueryTransactionOptions,
+    tx_options: TransactionOptions,
 }
 
 impl Clone for QueryClient {
@@ -168,7 +168,7 @@ impl QueryClient {
                 retry_budget: DEFAULT_QUERY_RETRY_BUDGET,
                 session_pool,
             },
-            tx_options: QueryTransactionOptions::default(),
+            tx_options: TransactionOptions::default(),
         }
     }
 
@@ -182,7 +182,7 @@ impl QueryClient {
         }
     }
 
-    pub fn clone_with_transaction_options(&self, opts: QueryTransactionOptions) -> Self {
+    pub fn clone_with_transaction_options(&self, opts: TransactionOptions) -> Self {
         Self {
             tx_options: opts,
             ..self.clone()
@@ -228,7 +228,7 @@ impl QueryClient {
 
     pub async fn retry_transaction<T>(
         &self,
-        mut callback: impl AsyncFnMut(&mut QueryTransaction) -> YdbResultWithCustomerErr<T>,
+        mut callback: impl AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
     ) -> YdbResultWithCustomerErr<T> {
         let retry_budget = self.ctx.retry_budget;
         let start = Instant::now();
@@ -236,7 +236,7 @@ impl QueryClient {
 
         loop {
             attempt += 1;
-            let mut tx = QueryTransaction::new(
+            let mut tx = Transaction::new(
                 self.ctx.connection_manager.clone(),
                 self.ctx.timeouts,
                 self.ctx.session_pool.clone(),
@@ -312,19 +312,19 @@ enum TxState {
     RolledBack,
 }
 
-pub struct QueryTransaction {
+pub struct Transaction {
     ctx: TransactionExecContext,
     state: TxState,
 }
 
-impl QueryTransaction {
+impl Transaction {
     impl_transaction_query_methods!();
 
     fn new(
         connection_manager: GrpcConnectionManager,
         timeouts: TimeoutSettings,
         session_pool: SessionPool,
-        options: QueryTransactionOptions,
+        options: TransactionOptions,
     ) -> Self {
         Self {
             ctx: transaction_exec_context(connection_manager, timeouts, session_pool, options),
@@ -332,20 +332,28 @@ impl QueryTransaction {
         }
     }
 
-    pub fn mode(&self) -> QueryTxMode {
+    pub fn mode(&self) -> TxMode {
         self.ctx.tx_mode
     }
 
     /// Explicitly open the transaction via `BeginTransaction` RPC.
     ///
     /// By default (lazy tx) the transaction materializes on the first query. Call this when you
-    /// need `tx_id` before any YQL, or configure [`QueryTransactionOptions::with_begin`]
+    /// need `tx_id` before any YQL, or configure [`TransactionOptions::with_begin`]
     /// on the client so the first operation does this automatically.
     pub async fn begin(&mut self) -> YdbResult<()> {
         if self.state != TxState::Active {
             return Err(YdbError::Custom("transaction already finished".to_string()));
         }
         transaction_ensure_begin(&mut self.ctx, false).await
+    }
+
+    /// Session and transaction ids for topic offset updates inside a transaction.
+    pub(crate) async fn identity(&mut self) -> YdbResult<(String, String)> {
+        if self.state != TxState::Active {
+            return Err(YdbError::Custom("transaction already finished".to_string()));
+        }
+        transaction_identity(&mut self.ctx).await
     }
 
     pub async fn rollback(&mut self) -> YdbResult<()> {
@@ -380,7 +388,7 @@ impl QueryTransaction {
     }
 }
 
-impl Drop for QueryTransaction {
+impl Drop for Transaction {
     fn drop(&mut self) {
         if self.state != TxState::Active || self.ctx.finished {
             return;
@@ -391,23 +399,23 @@ impl Drop for QueryTransaction {
     }
 }
 
-impl QueryExecutor for QueryTransaction {
+impl QueryExecutor for Transaction {
     type Scope = builders::Interactive;
 
     fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_, Self::Scope> {
-        QueryTransaction::exec(self, text)
+        Transaction::exec(self, text)
     }
 
     fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_, Self::Scope> {
-        QueryTransaction::query(self, text)
+        Transaction::query(self, text)
     }
 
     fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_, Self::Scope> {
-        QueryTransaction::query_result_set(self, text)
+        Transaction::query_result_set(self, text)
     }
 
     fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row, Self::Scope> {
-        QueryTransaction::query_row(self, text)
+        Transaction::query_row(self, text)
     }
 }
 

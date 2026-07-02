@@ -19,7 +19,7 @@ Rust 1.85.0 or newer
 Add the YDB dependency to your project using `cargo add ydb` or add this your Cargo.toml:
 ```toml
 [dependencies]
-ydb = "0.14.0"
+ydb = "0.15.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -96,7 +96,7 @@ async fn main() -> YdbResult<()> {
 
 Use `.optional()` when zero rows is OK, `.typed::<T>()` to map a row into your struct (see [`query-service-basic`](ydb/examples/query-service-basic.rs)).
 
-For multi-statement atomic work, use [`QueryClient::retry_transaction`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html) with `async |tx: &mut QueryTransaction| { … }` (see [`query-service-transaction`](ydb/examples/query-service-transaction.rs)).
+For multi-statement atomic work, use [`QueryClient::retry_transaction`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html) with `async |tx: &mut Transaction| { … }` (see [`query-service-transaction`](ydb/examples/query-service-transaction.rs)).
 
 ### Try QueryClient locally
 
@@ -116,7 +116,7 @@ Replace `client.table_client()` with `client.query_client()` and simplify call s
 
 | Table API | Query API |
 |-----------|-----------|
-| `retry_execute_scheme_query(sql)` | `qc.exec(sql).await?` |
+| `execute_scheme_query(sql)` | `qc.exec(sql).await?` |
 | `retry_transaction` + one `t.query(...)` | one-shot: `qc.exec(...)` / `qc.query_row(...)` / `qc.query_result_set(...)` |
 | `retry_transaction` + several statements | `qc.retry_transaction` + `tx.exec(...)` (see example below) |
 | `Query::from(sql).with_params(...)` | `qc.exec(sql).params(ydb_params!(...)).await?` or `.param("$name", value)` |

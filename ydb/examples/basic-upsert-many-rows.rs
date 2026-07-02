@@ -1,6 +1,6 @@
 use std::time::Duration;
 use tokio::time::timeout;
-use ydb::{ydb_params, ydb_struct, ClientBuilder, Query, Value, YdbError, YdbResult};
+use ydb::{ydb_params, ydb_struct, ClientBuilder, Value, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -13,16 +13,11 @@ async fn main() -> YdbResult<()> {
         return Err(YdbError::from("Connection timeout"));
     };
 
-    let table_client = client.table_client();
-    let _ = table_client
-        .retry_execute_scheme_query("DROP TABLE test")
-        .await; // ignore drop error
+    let mut query_client = client.query_client();
+    let _ = query_client.exec("DROP TABLE test").await; // ignore drop error
 
-    // create table
-    table_client
-        .retry_execute_scheme_query(
-            "CREATE TABLE test (id Int64 NOT NULL, val Utf8, PRIMARY KEY(id))",
-        )
+    query_client
+        .exec("CREATE TABLE test (id Int64 NOT NULL, val Utf8, PRIMARY KEY(id))")
         .await?;
 
     // Create vec of structs, there values will insert to table
@@ -45,35 +40,23 @@ async fn main() -> YdbResult<()> {
 
     let list = Value::list_from(example, rows)?;
 
-    let query = Query::new(
-        "
+    client
+        .query_client()
+        .exec(
+            "
 UPSERT INTO test
 SELECT * FROM AS_TABLE($list)
 ",
-    )
-    .with_params(ydb_params!("$list" => list));
-
-    table_client
-        .retry_transaction(|t| async {
-            let mut t = t;
-            t.query(query.clone()).await?;
-            t.commit().await?;
-            Ok(())
-        })
+        )
+        .params(ydb_params!("$list" => list))
         .await?;
 
-    let read = table_client
-        .retry_transaction(|t| async {
-            let mut t = t;
-            let res = t
-                .query(Query::new("SELECT * FROM test ORDER BY id"))
-                .await?;
-            Ok(res)
-        })
+    let result_set = client
+        .query_client()
+        .query_result_set("SELECT * FROM test ORDER BY id")
         .await?;
 
-    let read_rows_id: YdbResult<Vec<i64>> = read
-        .into_only_result()?
+    let read_rows_id: YdbResult<Vec<i64>> = result_set
         .rows()
         .map(|mut row| {
             let val = row.remove_field_by_name("id")?;

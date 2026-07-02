@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::errors::{YdbError, YdbResult};
 use crate::result::{ResultSet, Row};
 use crate::types::Value;
-use crate::QueryTxMode;
+use crate::TxMode;
 
 use super::exec::{resolve_commit_tx, CallOptions, ClientExecContext, TransactionExecContext};
 use super::internal::ExecCoreRef;
@@ -24,7 +24,7 @@ pub enum Streamed {}
 
 /// One-shot [`QueryClient`] calls (`exec`, `query_row`, …).
 pub struct ClientOneShot;
-/// Calls inside [`QueryTransaction`] (`retry_transaction` callback).
+/// Calls inside [`Transaction`] (`retry_transaction` callback).
 pub struct Interactive;
 
 pub type ExecBuilder<'a, S = ClientOneShot> = CallBuilder<'a, ExecCall, S>;
@@ -133,23 +133,23 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
 
     /// Set transaction isolation for this call.
     ///
-    /// Default on [`QueryClient`] is [`QueryTxMode::Implicit`] (no `tx_control`; the server
+    /// Default on [`QueryClient`] is [`TxMode::Implicit`] (no `tx_control`; the server
     /// infers isolation from the SQL). Interactive transactions use the mode from
-    /// [`QueryTransactionOptions`] unless overridden here.
+    /// [`TransactionOptions`] unless overridden here.
     ///
-    /// [`QueryTxMode::Implicit`] inside [`QueryTransaction`] returns a runtime error — DDL and
+    /// [`TxMode::Implicit`] inside [`Transaction`] returns a runtime error — DDL and
     /// other non-transactional statements must run on [`QueryClient`], not inside a transaction.
-    pub fn with_tx_mode(mut self, mode: QueryTxMode) -> Self {
+    pub fn with_tx_mode(mut self, mode: TxMode) -> Self {
         self.opts.tx_mode = Some(mode);
         self
     }
 
-    /// Shorthand for [`Self::with_tx_mode`](QueryTxMode::Implicit) (ImplicitTx / NoTx).
+    /// Shorthand for [`Self::with_tx_mode`](TxMode::Implicit) (ImplicitTx / NoTx).
     ///
-    /// [`QueryTxMode::Implicit`] inside [`QueryTransaction`] returns a runtime error — DDL and
+    /// [`TxMode::Implicit`] inside [`Transaction`] returns a runtime error — DDL and
     /// other non-transactional statements must run on [`QueryClient`], not inside a transaction.
     pub fn implicit_tx(self) -> Self {
-        self.with_tx_mode(QueryTxMode::Implicit)
+        self.with_tx_mode(TxMode::Implicit)
     }
 }
 
@@ -259,7 +259,7 @@ impl<'a, S> IntoFuture for CallBuilder<'a, Streamed, S> {
 }
 
 /// Query execution entry points for [`QueryClient`](crate::QueryClient) and
-/// [`QueryTransaction`](crate::QueryTransaction).
+/// [`Transaction`](crate::Transaction).
 ///
 /// One-shot helpers are layered on [`Self::query`]:
 ///

@@ -8,9 +8,8 @@ SLO tests exercise the SDK against a YDB cluster under chaos (node failures, net
 
 ```
 tests/slo/
-  Dockerfile                 # builds slo-native-table / slo-native-query / slo-native-topic binaries
+  Dockerfile                 # builds slo-native-query / slo-native-topic binaries
   slo-framework/             # shared framework (config, metrics, kv workload)
-  native/table/              # TableClient key-value workload (#420)
   native/query/              # QueryClient key-value workload (#453)
   native/topic/              # Topic workload
 ```
@@ -26,25 +25,17 @@ tests/slo/
 The workload runs **setup → run → teardown** in one process (create table, prefill, load, drop table).
 
 ```bash
-cargo build --release -p slo-native-table
-# or
 cargo build --release -p slo-native-query
 # or
 cargo build --release -p slo-native-topic
 
 export YDB_CONNECTION_STRING=grpc://localhost:2136/local
 export WORKLOAD_REF=local
-export WORKLOAD_NAME=native-table
+export WORKLOAD_NAME=native-query
 export WORKLOAD_DURATION=60
 # Optional: omit OTEL_EXPORTER_OTLP_ENDPOINT for local runs without metrics export
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:9090/api/v1/otlp
 
-./target/release/slo-native-table \
-  --read-rps 100 \
-  --write-rps 10 \
-  --prefill-count 1000
-
-# Query Service workload (same flags; set WORKLOAD_NAME=native-query):
 ./target/release/slo-native-query \
   --read-rps 100 \
   --write-rps 10 \
@@ -59,13 +50,6 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:9090/api/v1/otlp
 Or via cargo:
 
 ```bash
-YDB_CONNECTION_STRING=grpc://localhost:2136/local \
-WORKLOAD_REF=local \
-WORKLOAD_NAME=native-table \
-WORKLOAD_DURATION=60 \
-cargo run --release -p slo-native-table -- --read-rps 100 --write-rps 10
-
-# Query Service:
 YDB_CONNECTION_STRING=grpc://localhost:2136/local \
 WORKLOAD_REF=local \
 WORKLOAD_NAME=native-query \
@@ -93,7 +77,7 @@ cargo run --release -p slo-native-topic -- --read-rps 100 --write-rps 10
 | `--min-partition-count` | 6 | Minimum partitions |
 | `--max-partition-count` | 1000 | Maximum partitions |
 
-Table path: `{database}/{WORKLOAD_NAME}/{WORKLOAD_REF}` (e.g. `/local/native-table/local`).
+Table path: `{database}/{WORKLOAD_NAME}/{WORKLOAD_REF}` (e.g. `/local/native-query/local`).
 
 ## Workload behavior
 

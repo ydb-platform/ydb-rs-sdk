@@ -98,7 +98,7 @@ impl QueryStream<'_> {
 /// Drain a [`query`](super::QueryExecutor::query) stream into materialized result sets.
 ///
 /// Used by one-shot builders (`exec`, `query_result_set`, `query_row`) on both
-/// [`QueryClient`](super::QueryClient) and [`QueryTransaction`](super::QueryTransaction).
+/// [`QueryClient`](super::QueryClient) and [`Transaction`](super::Transaction).
 pub(crate) async fn materialize_query(
     core: &mut ExecCoreRef<'_>,
     text: String,
