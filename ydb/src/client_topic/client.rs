@@ -3,6 +3,7 @@ use super::list_types::{Codec, TopicDescription};
 use super::topicwriter::writer_tx_options::{TopicWriterTxOptions, TopicWriterTxOptionsBuilder};
 use crate::client::TimeoutSettings;
 use crate::client_common::TokenCache;
+use crate::client_query::Transaction;
 use crate::client_topic::list_types::{AlterConsumer, Consumer, MeteringMode};
 use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
 use crate::client_topic::topicreader::reader_options::{
@@ -20,7 +21,6 @@ use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsumerRequest;
 use crate::grpc_wrapper::raw_topic_service::describe_topic::RawDescribeTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::drop_topic::RawDropTopicRequest;
-use crate::client_query::Transaction;
 use crate::YdbError::InternalError;
 use crate::{grpc_wrapper, YdbResult};
 use derive_builder::{Builder, UninitializedFieldError};
@@ -258,11 +258,7 @@ impl TopicClient {
     pub async fn create_writer_tx(
         &mut self,
         topic_path: impl Into<String>,
-<<<<<<< HEAD
         tx: &mut Transaction,
-=======
-        tx: &mut QueryTransaction,
->>>>>>> fc57110 (Replace table tx with query tx)
     ) -> YdbResult<TopicWriterTx> {
         let options = TopicWriterTxOptionsBuilder::default()
             .topic_path(topic_path.into())
@@ -273,11 +269,7 @@ impl TopicClient {
     pub async fn create_writer_tx_with_params(
         &mut self,
         writer_tx_options: TopicWriterTxOptions,
-<<<<<<< HEAD
         tx: &mut Transaction,
-=======
-        tx: &mut QueryTransaction,
->>>>>>> fc57110 (Replace table tx with query tx)
     ) -> YdbResult<TopicWriterTx> {
         TopicWriterTx::new(
             writer_tx_options,
