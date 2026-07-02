@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use tokio::sync::futures::Notified;
 use tokio::sync::Notify;
 
 use crate::client_topic::topicreader::messages::{TopicReaderBatch, TopicReaderMessage};
@@ -49,6 +50,7 @@ enum State {
 struct Inner {
     state: Mutex<State>,
     messages_available: Notify,
+    reconnect_notify: Notify,
 }
 
 #[derive(Clone)]
@@ -62,6 +64,7 @@ impl RuntimeHandle {
             inner: Arc::new(Inner {
                 state: Mutex::new(State::Reconnecting),
                 messages_available: Notify::new(),
+                reconnect_notify: Notify::new(),
             }),
         }
     }
@@ -72,6 +75,7 @@ impl RuntimeHandle {
             inner: Arc::new(Inner {
                 state: Mutex::new(State::Active(Active::new(connection))),
                 messages_available: Notify::new(),
+                reconnect_notify: Notify::new(),
             }),
         }
     }
@@ -248,6 +252,13 @@ impl RuntimeHandle {
         Ok(())
     }
 
+    pub(crate) fn force_reconnection(&self, err: YdbError) -> YdbResult<()> {
+        self.enter_reconnecting(err)?;
+        self.inner.reconnect_notify.notify_waiters();
+
+        Ok(())
+    }
+
     pub(crate) fn install_connection(
         &self,
         connection: Connection,
@@ -282,6 +293,10 @@ impl RuntimeHandle {
         pending_commits.fail_all(err);
         self.inner.messages_available.notify_waiters();
         Ok(())
+    }
+
+    pub(crate) fn reconnection_notifier<'a>(&'a self) -> Notified<'a> {
+        self.inner.reconnect_notify.notified()
     }
 
     fn lock_state(&self) -> YdbResult<std::sync::MutexGuard<'_, State>> {

@@ -24,11 +24,12 @@ use crate::grpc_wrapper::raw_topic_service::update_offsets_in_transaction::{
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::{YdbError, YdbResult};
 
+use super::reader_tx::TopicReaderTx;
 use super::reconnector::{Reconnector, ReconnectorTask};
 use super::runtime::RuntimeHandle;
 
 pub struct TopicReader {
-    manager: GrpcConnectionManager,
+    pub(super) manager: GrpcConnectionManager,
     options: TopicReaderOptions,
     reconnect_handle: JoinHandle<YdbResult<()>>,
     runtime: RuntimeHandle,
@@ -88,6 +89,10 @@ impl TopicReader {
         Ok(batch)
     }
 
+    pub async fn tx_reader<'a>(&'a mut self, tx: &mut Transaction) -> YdbResult<TopicReaderTx<'a>> {
+        TopicReaderTx::new(self, tx).await
+    }
+
     /// Sends a commit for the given [`TopicReaderCommitMarker`] to the server.
     ///
     /// Returns as soon as the commit message has been queued for sending; it does
@@ -128,6 +133,14 @@ impl TopicReader {
                 )),
             }
         }
+    }
+
+    pub(super) fn runtime_handle(&self) -> RuntimeHandle {
+        self.runtime.clone()
+    }
+
+    pub(super) fn consumer(&self) -> &str {
+        &self.options.consumer
     }
 
     async fn update_offsets_in_transaction(
