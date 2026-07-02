@@ -8,9 +8,7 @@ use crate::client_topic::list_types::{AlterConsumer, Consumer, MeteringMode};
 use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
 use crate::client_topic::topicreader::reader_options::TopicReaderOptions;
 use crate::client_topic::topicwriter::writer::TopicWriter;
-use crate::client_topic::topicwriter::writer_options::{
-    TopicWriterOptions, TopicWriterOptionsBuilder,
-};
+use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
 use crate::client_topic::topicwriter::writer_tx::TopicWriterTx;
 use crate::errors;
 use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -279,10 +277,7 @@ impl TopicClient {
 
     pub async fn create_writer(&mut self, path: impl Into<String>) -> YdbResult<TopicWriter> {
         TopicWriter::new(
-            TopicWriterOptionsBuilder::default()
-                .topic_path(path.into())
-                .build()
-                .unwrap(),
+            TopicWriterOptions::builder().topic_path(path).build(),
             self.connection_manager.clone(),
             self.executor.clone(),
         )

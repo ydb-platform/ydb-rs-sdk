@@ -30,7 +30,7 @@ pub(crate) struct StreamWriter {
 
 impl StreamWriter {
     pub(crate) async fn new(
-        writer_options: TopicWriterOptions,
+        writer_options: &TopicWriterOptions,
         stream: AsyncGrpcStreamWrapper<
             stream_write_message::FromClient,
             stream_write_message::FromServer,
@@ -52,7 +52,7 @@ impl StreamWriter {
         }
 
         let worker = CompressionWorker::new(
-            writer_options.codec_selector,
+            writer_options.codec_selector.clone(),
             Arc::new(codec_registry),
             executor,
             server_codecs,

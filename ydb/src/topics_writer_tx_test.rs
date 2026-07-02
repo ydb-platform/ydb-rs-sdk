@@ -5,7 +5,7 @@ use tracing_test::traced_test;
 use crate::client_topic::client::CreateTopicOptionsBuilder;
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::test_integration_helper::create_client;
-use crate::{TopicWriterMessageBuilder, YdbResult};
+use crate::{TopicWriterMessage, YdbResult};
 
 #[tokio::test]
 #[traced_test]
@@ -41,11 +41,7 @@ async fn topic_writer_tx_write_and_commit() -> YdbResult<()> {
             let mut tc = topic_client_clone.clone();
             let mut writer = tc.create_writer_tx(topic_path_clone.clone(), tx).await?;
             writer
-                .write(
-                    TopicWriterMessageBuilder::default()
-                        .data(message_clone.clone())
-                        .build()?,
-                )
+                .write(TopicWriterMessage::from_data(message_clone.clone()))
                 .await?;
             writer.stop().await?;
             Ok(true)
@@ -99,11 +95,7 @@ async fn topic_writer_tx_rollback_discards_message() -> YdbResult<()> {
             let mut tc = topic_client_clone.clone();
             let mut writer = tc.create_writer_tx(topic_path_clone.clone(), tx).await?;
             writer
-                .write(
-                    TopicWriterMessageBuilder::default()
-                        .data(b"should be discarded".to_vec())
-                        .build()?,
-                )
+                .write(TopicWriterMessage::from_data(b"should be discarded"))
                 .await?;
             writer.stop().await?;
             tx.rollback().await?;

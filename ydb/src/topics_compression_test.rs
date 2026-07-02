@@ -13,10 +13,9 @@ use crate::test_integration_helper::create_client;
 use crate::test_integration_helper::create_client_with_executor;
 use crate::Executor;
 use crate::TopicWriter;
-use crate::TopicWriterMessage;
 use crate::{
-    Client, Codec, TopicClient, TopicReaderOptions, TopicWriterMessageBuilder,
-    TopicWriterOptionsBuilder, YdbError, YdbResult,
+    Client, Codec, TopicClient, TopicReaderOptions, TopicWriterMessage, TopicWriterOptions,
+    YdbError, YdbResult,
 };
 use tracing::trace;
 
@@ -98,10 +97,7 @@ fn invert(data: &[u8]) -> YdbResult<Vec<u8>> {
 }
 
 fn message(data: impl Into<Vec<u8>>) -> TopicWriterMessage {
-    TopicWriterMessageBuilder::default()
-        .data(data.into())
-        .build()
-        .unwrap()
+    TopicWriterMessage::from_data(data)
 }
 
 async fn timeout<F, T>(future: F) -> YdbResult<T>
@@ -132,26 +128,19 @@ async fn wait_flush_error(writer: &TopicWriter) -> YdbResult<()> {
 async fn roundtrip<W, R>(
     test_name: &str,
     supported_codecs: &[Codec],
-    selection: CodecSelection,
     messages: Vec<Vec<u8>>,
     configure_writer: W,
     make_reader_options: R,
 ) -> YdbResult<()>
 where
-    W: FnOnce(&mut TopicWriterOptionsBuilder),
+    W: FnOnce(String) -> TopicWriterOptions,
     R: FnOnce(String, String) -> TopicReaderOptions,
 {
     let (mut topic_client, topic_path, consumer_name) =
         topic_setup(test_name, supported_codecs).await?;
 
-    let mut writer_opts = TopicWriterOptionsBuilder::default();
-    writer_opts
-        .topic_path(topic_path.clone())
-        .codec_selector(selection);
-    configure_writer(&mut writer_opts);
-
     let writer = topic_client
-        .create_writer_with_params(writer_opts.build()?)
+        .create_writer_with_params(configure_writer(topic_path.clone()))
         .await?;
     trace!("writer created");
 
@@ -250,11 +239,11 @@ async fn codec_fail_fast() -> YdbResult<()> {
 
     let writer = topic_client
         .create_writer_with_params(
-            TopicWriterOptionsBuilder::default()
+            TopicWriterOptions::builder()
                 .topic_path(topic_path.clone())
                 .codec_selector(CodecSelection::Fixed(Codec::INV))
                 .add_encoder(failing_encoder)
-                .build()?,
+                .build(),
         )
         .await?;
     trace!("writer created");
@@ -317,11 +306,11 @@ async fn codec_fail_fast() -> YdbResult<()> {
 
     let writer = topic_client
         .create_writer_with_params(
-            TopicWriterOptionsBuilder::default()
+            TopicWriterOptions::builder()
                 .topic_path(topic_path)
                 .codec_selector(CodecSelection::Fixed(Codec::INV))
                 .add_encoder(encoder(Codec::INV, invert))
-                .build()?,
+                .build(),
         )
         .await?;
 
@@ -352,9 +341,13 @@ async fn codec_gzip_fixed() -> YdbResult<()> {
     roundtrip(
         "codec_gzip_fixed",
         &[],
-        CodecSelection::Fixed(Codec::GZIP),
         messages,
-        |_| {},
+        |topic_path| {
+            TopicWriterOptions::builder()
+                .topic_path(topic_path)
+                .codec_selector(CodecSelection::Fixed(Codec::GZIP))
+                .build()
+        },
         |topic, consumer| {
             TopicReaderOptions::builder()
                 .topic(topic)
@@ -381,7 +374,7 @@ async fn codec_parallelism() -> YdbResult<()> {
 
     let writer = topic_client
         .create_writer_with_params(
-            TopicWriterOptionsBuilder::default()
+            TopicWriterOptions::builder()
                 .topic_path(topic_path.clone())
                 .codec_selector(CodecSelection::Fixed(Codec::PAR))
                 .add_encoder(encoder(Codec::PAR, {
@@ -392,7 +385,7 @@ async fn codec_parallelism() -> YdbResult<()> {
                         Ok(data.into())
                     }
                 }))
-                .build()?,
+                .build(),
         )
         .await?;
     trace!("writer created");
@@ -403,9 +396,7 @@ async fn codec_parallelism() -> YdbResult<()> {
     for i in 0..message_count {
         let data: Vec<u8> = format!("test-message-{i}").into_bytes();
         expected_messages.push(data.clone());
-        writer
-            .write(TopicWriterMessageBuilder::default().data(data).build()?)
-            .await?;
+        writer.write(TopicWriterMessage::from_data(data)).await?;
     }
 
     timeout(writer.flush()).await?;
@@ -454,10 +445,13 @@ async fn codec_auto() -> YdbResult<()> {
     roundtrip(
         "codec_auto",
         &[Codec::RAW, Codec::INV, Codec::GZIP],
-        CodecSelection::Auto,
         messages,
-        |w| {
-            w.add_encoder(encoder(Codec::INV, invert));
+        |topic_path| {
+            TopicWriterOptions::builder()
+                .topic_path(topic_path)
+                .codec_selector(CodecSelection::Auto)
+                .add_encoder(encoder(Codec::INV, invert))
+                .build()
         },
         |topic, consumer| {
             TopicReaderOptions::builder()

@@ -81,18 +81,16 @@ impl TopicWriter {
         let cancellation_token = CancellationToken::new();
         let cancel_on_drop = cancellation_token.clone().drop_guard();
 
-        let retrier = writer_options.retrier.clone();
-
         let (fatal_error_tx, fatal_error_rx) = oneshot::channel();
+        let flush_timeout = writer_options.flush_timeout;
 
         let reconnector = Reconnector::new(ReconnectorParams {
-            writer_options: writer_options.clone(),
+            flush_timeout,
+            writer_options,
             producer_id: producer_id.clone(),
             connection_manager,
             cancellation_token: cancellation_token.clone(),
-            retrier,
             fatal_error_tx,
-            flush_timeout: writer_options.flush_timeout,
             executor,
             tx_identity,
         })

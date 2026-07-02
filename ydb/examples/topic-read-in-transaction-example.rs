@@ -110,7 +110,7 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 use ydb::{
     ClientBuilder, ConsumerBuilder, CreateTopicOptionsBuilder, DescribeTopicOptionsBuilder,
-    TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError, YdbResult,
+    TopicWriterMessage, TopicWriterOptions, YdbError, YdbResult,
 };
 
 /// Sets up the test environment including table and topic creation, and publishes test messages.
@@ -213,11 +213,11 @@ async fn setup_environment(client: &ydb::Client) -> YdbResult<()> {
     // Auto sequence numbers are disabled to ensure deterministic test data
     let writer = topic_client
         .create_writer_with_params(
-            TopicWriterOptionsBuilder::default()
+            TopicWriterOptions::builder()
                 .auto_seq_no(false) // We control sequence numbers for predictable tests
                 .topic_path(topic_path.clone())
                 .producer_id(producer_id.to_string())
-                .build()?,
+                .build(),
         )
         .await?;
 
@@ -231,10 +231,10 @@ async fn setup_environment(client: &ydb::Client) -> YdbResult<()> {
 
     writer
         .write_with_ack(
-            TopicWriterMessageBuilder::default()
-                .seq_no(Some(1))
+            TopicWriterMessage::builder()
+                .seq_no(1)
                 .data("Message 1: Setup environment test".as_bytes().into())
-                .build()?,
+                .build(),
         )
         .await?;
 
@@ -242,10 +242,10 @@ async fn setup_environment(client: &ydb::Client) -> YdbResult<()> {
 
     writer
         .write_with_ack(
-            TopicWriterMessageBuilder::default()
-                .seq_no(Some(2))
+            TopicWriterMessage::builder()
+                .seq_no(2)
                 .data("Message 2: Table and topic ready".as_bytes().into())
-                .build()?,
+                .build(),
         )
         .await?;
 
@@ -253,10 +253,10 @@ async fn setup_environment(client: &ydb::Client) -> YdbResult<()> {
 
     writer
         .write_with_ack(
-            TopicWriterMessageBuilder::default()
-                .seq_no(Some(3))
+            TopicWriterMessage::builder()
+                .seq_no(3)
                 .data("Message 3: Environment setup complete".as_bytes().into())
-                .build()?,
+                .build(),
         )
         .await?;
 

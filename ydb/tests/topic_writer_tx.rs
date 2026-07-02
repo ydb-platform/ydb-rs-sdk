@@ -1,10 +1,7 @@
 mod mock_server;
 
 use std::sync::{Arc, Mutex};
-use ydb::{
-    Client, ClientBuilder, TopicWriterMessage, TopicWriterMessageBuilder,
-    TopicWriterTxOptionsBuilder, YdbResult,
-};
+use ydb::{Client, ClientBuilder, TopicWriterMessage, TopicWriterTxOptionsBuilder, YdbResult};
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage as WriteFromClient;
 use ydb_grpc::ydb_proto::topic::stream_write_message::InitRequest;
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
@@ -158,10 +155,7 @@ fn make_client(server: &MockServer) -> YdbResult<Client> {
 }
 
 fn test_message() -> TopicWriterMessage {
-    TopicWriterMessageBuilder::default()
-        .data(TEST_MESSAGE_DATA.to_vec())
-        .build()
-        .unwrap()
+    TopicWriterMessage::from_data(TEST_MESSAGE_DATA)
 }
 
 #[tokio::test]

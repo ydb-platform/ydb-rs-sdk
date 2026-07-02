@@ -1,19 +1,28 @@
 use std::time::{self, UNIX_EPOCH};
 
-use derive_builder::Builder;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
-use crate::{errors, YdbError};
+use crate::YdbError;
 
-#[derive(Builder)]
-#[builder(build_fn(error = "errors::YdbError"))]
+#[derive(bon::Builder, Debug)]
 pub struct TopicWriterMessage {
-    #[builder(default = "None")]
-    pub(crate) seq_no: Option<i64>,
-    #[builder(default = "time::SystemTime::now()")]
-    pub(crate) created_at: time::SystemTime,
-
+    // required
     pub(crate) data: Vec<u8>,
+
+    // optional metadata
+    pub(crate) seq_no: Option<i64>,
+    #[builder(default = time::SystemTime::now())]
+    pub(crate) created_at: time::SystemTime,
+}
+
+impl TopicWriterMessage {
+    pub fn from_data(data: impl Into<Vec<u8>>) -> Self {
+        Self {
+            seq_no: None,
+            created_at: time::SystemTime::now(),
+            data: data.into(),
+        }
+    }
 }
 
 impl TryFrom<TopicWriterMessage> for MessageData {
