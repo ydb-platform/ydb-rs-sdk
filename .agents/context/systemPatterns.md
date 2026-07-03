@@ -33,6 +33,10 @@ Client
 
 Service clients (`TableClient`, `QueryClient`, …) are lightweight handles cloned from `Client`; they share the same pool, connection manager, and retry budget.
 
+## Table vs Query clients
+
+**By design**, `TableClient` does not run SQL. It covers Table Service RPCs only: schema DDL, describe, `read_rows`, `bulk_upsert` (with automatic retries). All YQL goes through `QueryClient`.
+
 ## Key modules
 
 | Module | Responsibility |
@@ -53,9 +57,19 @@ Service clients (`TableClient`, `QueryClient`, …) are lightweight handles clon
 
 ## Retry and timeout patterns
 
-### Per-call `.timeout()` (no client-level clones)
+### Per-call builders (replaces `clone_with_*`)
 
-Timeouts are set on **operation builders**, not via `clone_with_*` on clients:
+Client-level `clone_with_timeout`, `clone_with_retry`, `clone_with_idempotent`, and per-call `.retry_budget()` were **removed** in 0.16.0. Override defaults on each operation builder:
+
+```rust
+client.query_client()
+    .retry_tx(async |tx| { /* ... */ })
+    .timeout(Duration::from_secs(30))
+    .idempotent(true)
+    .await?;
+```
+
+### Per-call `.timeout()` (wall-clock deadline)
 
 - Table: `table_client.read_rows(...).timeout(d).await`
 - Query one-shot: `query_client.exec("...").timeout(d).await`
@@ -89,7 +103,9 @@ client.query_client()
 
 Implementation: `client_query/retry_tx.rs`, `client_query/mod.rs` (`run_retry_tx`), `client_query/exec.rs` (`retry_until`).
 
-### Driver-wide retry budget
+### Driver-wide retry budget (rate limiter)
+
+**Not a timeout** — limits how many retries per second the driver may attempt cluster-wide, to avoid retry storms when YDB is unhealthy.
 
 One `RetryBudget` per `Client` (default: unlimited, internal `UnlimitedRetryBudget`).
 
