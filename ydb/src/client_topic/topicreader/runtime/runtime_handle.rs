@@ -16,7 +16,7 @@ use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
 use crate::{YdbError, YdbResult};
 
 use super::connection::Connection;
-use super::message_buffer::{BufferedBatch, PartitionSessions};
+use super::message_buffer::{BufferedBatch, PartitionSessions, StopOutcome};
 use super::pending_commits::{CommitAckReceiver, PendingCommits};
 
 const RUNTIME_HANDLE_POISONED: &str = "topic reader runtime handle mutex poisoned";
@@ -128,7 +128,7 @@ impl RuntimeHandle {
 
             RawFromServer::StopPartitionSessionRequest(req) => {
                 let psid = PartitionSessionId::from_raw(req.partition_session_id);
-                let notify = {
+                let outcome: StopOutcome = {
                     let mut state = self.lock_state()?;
                     let State::Active(active) = &mut *state else {
                         return Ok(());
@@ -138,7 +138,7 @@ impl RuntimeHandle {
                         Some(req.committed_offset),
                         &YdbError::custom(format!("partition session {psid} stopped by server")),
                     );
-                    let notify = active.partitions.stop(psid)?;
+                    let outcome = active.partitions.stop(psid, req.committed_offset)?;
                     active
                         .connection
                         .send(RawFromClientOneOf::StopPartitionSessionResponse(
@@ -146,10 +146,15 @@ impl RuntimeHandle {
                                 partition_session_id: psid.as_raw(),
                             },
                         ))?;
-                    notify
+                    outcome
                 };
-                if notify {
+                if outcome.messages_became_available {
                     self.inner.messages_available.notify_one();
+                }
+                if outcome.reconnect_required {
+                    return Err(YdbError::Transport(format!(
+                        "partition session {psid} stopped before terminal offset committed, reconnecting"
+                    )));
                 }
                 Ok(())
             }
@@ -171,13 +176,32 @@ impl RuntimeHandle {
             }
 
             RawFromServer::CommitOffsetResponse(resp) => {
-                let committed_iter = resp.partitions_committed_offsets.into_iter().map(|o| {
-                    (
-                        PartitionSessionId::from_raw(o.partition_session_id),
-                        o.committed_offset,
-                    )
-                });
-                self.ack_commits(committed_iter)
+                let committed_offsets: Vec<(PartitionSessionId, i64)> = resp
+                    .partitions_committed_offsets
+                    .into_iter()
+                    .map(|o| {
+                        (
+                            PartitionSessionId::from_raw(o.partition_session_id),
+                            o.committed_offset,
+                        )
+                    })
+                    .collect();
+                let mut child_unblocked = false;
+                {
+                    let mut state = self.lock_state()?;
+                    if let State::Active(active) = &mut *state {
+                        for &(psid, committed_offset) in &committed_offsets {
+                            child_unblocked |= active
+                                .partitions
+                                .observe_commit_ack(psid, committed_offset)?;
+                        }
+                    }
+                }
+                self.ack_commits(committed_offsets)?;
+                if child_unblocked {
+                    self.inner.messages_available.notify_one();
+                }
+                Ok(())
             }
 
             RawFromServer::InitResponse(_) => {
@@ -219,11 +243,7 @@ impl RuntimeHandle {
             };
 
             if let Some(batch) = batch {
-                let messages_became_available = batch.messages_became_available;
                 self.request_bytes(batch.bytes_to_release, batch.epoch)?;
-                if messages_became_available {
-                    self.inner.messages_available.notify_one();
-                }
                 return Ok(TopicReaderBatch::from_messages(batch.messages));
             }
 
@@ -690,13 +710,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn draining_parent_makes_buffered_child_readable() -> YdbResult<()> {
+    async fn commit_ack_makes_buffered_child_readable() -> YdbResult<()> {
         use crate::client_topic::topicreader::messages::TopicReaderMessage;
+        use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
+            RawCommitOffsetResponse, RawPartitionCommittedOffset,
+        };
 
         let (outgoing_tx, _outgoing_rx) = mpsc::unbounded_channel();
         let runtime = RuntimeHandle::with_connection(Connection::new(outgoing_tx, 1));
 
         runtime.register_starting_partition(psid(1), pid(10))?;
+        // test_message_full produces a message at offset 0 → terminal = 1.
         runtime.push_test_messages(vec![TopicReaderMessage::test_message_full(1, 10, 1, 0)])?;
         runtime.register_ending_partition(psid(1), vec![pid(20)])?;
         runtime.register_starting_partition(psid(2), pid(20))?;
@@ -708,8 +732,18 @@ mod tests {
             psid(1)
         );
 
-        let child = runtime.pop_batch(10).await?;
+        // Parent drained → pending_ending_sessions. Child is blocked until commit ack.
+        // Inject the commit ack to release the child.
+        runtime.handle_from_server(RawFromServer::CommitOffsetResponse(
+            RawCommitOffsetResponse {
+                partitions_committed_offsets: vec![RawPartitionCommittedOffset {
+                    partition_session_id: 1,
+                    committed_offset: 1,
+                }],
+            },
+        ))?;
 
+        let child = runtime.pop_batch(10).await?;
         assert_eq!(
             child.messages[0].get_commit_marker().partition_session_id,
             psid(2)
