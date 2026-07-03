@@ -1,7 +1,19 @@
 //! Vector search with YQL Knn UDFs — mirrors
 //! `ydb/public/sdk/python/examples/vector_search/vector_search.py`.
 
-use ydb::{ydb_struct, Bytes, ClientBuilder, Value, YdbResult};
+use std::time::Duration;
+
+use ydb::{ydb_struct, Bytes, ClientBuilder, ExecBuilder, QueryStreamBuilder, Value, YdbResult};
+
+const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn idem_exec<'a>(b: ExecBuilder<'a>) -> ExecBuilder<'a> {
+    b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
+}
+
+fn idem_query<'a>(b: QueryStreamBuilder<'a>) -> QueryStreamBuilder<'a> {
+    b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
+}
 
 const TABLE_NAME: &str = "ydb_vector_search";
 const INDEX_NAME: &str = "ydb_vector_index";
@@ -16,21 +28,20 @@ fn convert_vector_to_bytes(vector: &[f32]) -> Bytes {
 }
 
 async fn drop_vector_table_if_exists(qc: &mut ydb::QueryClient, table_name: &str) -> YdbResult<()> {
-    qc.exec(format!("DROP TABLE IF EXISTS `{table_name}`"))
-        .await?;
+    idem_exec(qc.exec(format!("DROP TABLE IF EXISTS `{table_name}`"))).await?;
     println!("Vector table dropped");
     Ok(())
 }
 
 async fn create_vector_table(qc: &mut ydb::QueryClient, table_name: &str) -> YdbResult<()> {
-    qc.exec(format!(
+    idem_exec(qc.exec(format!(
         "CREATE TABLE IF NOT EXISTS `{table_name}` (
             id Utf8,
             document Utf8,
             embedding String,
             PRIMARY KEY (id)
         );"
-    ))
+    )))
     .await?;
     println!("Vector table created");
     Ok(())
@@ -73,7 +84,7 @@ async fn insert_items_as_bytes(
         .collect();
     let list = Value::list_from(example, rows)?;
 
-    qc.exec(query).param("$items", list).await?;
+    idem_exec(qc.exec(query).param("$items", list)).await?;
     println!("{} items inserted", items.len());
     Ok(())
 }
@@ -88,7 +99,7 @@ async fn add_vector_index(
     clusters: u32,
 ) -> YdbResult<()> {
     let temp_index_name = format!("{index_name}__temp");
-    qc.exec(format!(
+    idem_exec(qc.exec(format!(
         r#"
         ALTER TABLE `{table_name}`
         ADD INDEX {temp_index_name}
@@ -102,12 +113,12 @@ async fn add_vector_index(
             clusters={clusters}
         );
         "#
-    ))
+    )))
     .await?;
 
-    qc.exec(format!(
+    idem_exec(qc.exec(format!(
         "ALTER TABLE `{table_name}` RENAME INDEX `{temp_index_name}` TO `{index_name}`;"
-    ))
+    )))
     .await?;
 
     println!("Table index {index_name} created.");
@@ -149,10 +160,11 @@ async fn search_items_as_bytes(
         "#
     );
 
-    let mut stream = qc
-        .query(query)
-        .param("$embedding", convert_vector_to_bytes(embedding))
-        .await?;
+    let mut stream = idem_query(
+        qc.query(query)
+            .param("$embedding", convert_vector_to_bytes(embedding)),
+    )
+    .await?;
 
     let mut hits = Vec::new();
     while let Some(result_set) = stream.next_result_set().await? {
@@ -189,7 +201,7 @@ async fn main() -> YdbResult<()> {
     let client = ClientBuilder::new_from_connection_string(connection_string)?.client()?;
     client.wait().await?;
 
-    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let mut qc = client.query_client();
 
     drop_vector_table_if_exists(&mut qc, TABLE_NAME).await?;
     create_vector_table(&mut qc, TABLE_NAME).await?;

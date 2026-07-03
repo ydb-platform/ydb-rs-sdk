@@ -19,12 +19,9 @@ pub struct CoordinationClient {
 }
 
 impl CoordinationClient {
-    pub(crate) fn new(
-        timeouts: TimeoutSettings,
-        connection_manager: GrpcConnectionManager,
-    ) -> Self {
+    pub(crate) fn new(connection_manager: GrpcConnectionManager) -> Self {
         Self {
-            timeouts,
+            timeouts: TimeoutSettings::default(),
             session_seq_no: 0,
             connection_manager,
         }

@@ -3,6 +3,7 @@ use tracing::trace;
 use crate::client::TimeoutSettings;
 use crate::errors::YdbResult;
 use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::retry_budget::RetryControl;
 use crate::session::{NodePinnedTableClient, TableSession};
 
 use super::pool::{spawn_pool_release, SessionPool};
@@ -12,24 +13,28 @@ use super::pool::{spawn_pool_release, SessionPool};
 pub(crate) struct TableSessionPool {
     pool: SessionPool,
     connection_manager: GrpcConnectionManager,
-    timeouts: TimeoutSettings,
+    retry_control: std::sync::Arc<RetryControl>,
 }
 
 impl TableSessionPool {
     pub(crate) fn from_shared(
         pool: SessionPool,
         connection_manager: GrpcConnectionManager,
-        timeouts: TimeoutSettings,
+        retry_control: std::sync::Arc<RetryControl>,
     ) -> Self {
         Self {
             pool,
             connection_manager,
-            timeouts,
+            retry_control,
         }
     }
 
     pub(crate) fn connection_manager(&self) -> &GrpcConnectionManager {
         &self.connection_manager
+    }
+
+    pub(crate) fn retry_control(&self) -> &RetryControl {
+        &self.retry_control
     }
 
     pub(crate) async fn session(&self) -> YdbResult<TableSession> {
@@ -42,7 +47,7 @@ impl TableSessionPool {
         let mut session = TableSession::new(
             session_id,
             NodePinnedTableClient::new(self.connection_manager.clone(), node_uri),
-            self.timeouts,
+            TimeoutSettings::default(),
         );
 
         session.on_drop(Box::new(move |s: &mut TableSession| {
@@ -65,7 +70,6 @@ impl TableSessionPool {
 #[cfg(test)]
 mod test {
     use super::TableSessionPool;
-    use crate::client::TimeoutSettings;
     use crate::errors::YdbResult;
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
@@ -92,12 +96,14 @@ mod test {
         )
     }
 
+    use crate::retry_budget::RetryControl;
+
     #[tokio::test]
     async fn max_active_session() -> YdbResult<()> {
         let pool = TableSessionPool::from_shared(
             bench_pool(),
             bench_connection_manager(),
-            TimeoutSettings::default(),
+            std::sync::Arc::new(RetryControl::default()),
         );
         let first_session = pool.session().await?;
 

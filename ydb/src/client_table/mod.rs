@@ -1,4 +1,5 @@
-use crate::client::TimeoutSettings;
+mod builders;
+pub(crate) mod call_options;
 
 use crate::errors::*;
 use crate::session::TableSession;
@@ -25,7 +26,6 @@ use crate::grpc_wrapper::raw_table_service::rename_tables::{
     RawRenameTableItem, RawRenameTablesRequest,
 };
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
-use crate::retry::{NoRetrier, Retry, RetryParams, TimeoutRetrier};
 use crate::session::CreateTableClient;
 use crate::table_requests::{
     AlterTableRequest, CreateTableRequest, DropTableRequest, ReadRowsRequest,
@@ -34,10 +34,15 @@ use crate::table_requests::{
 use crate::table_service_types::{CopyTableItem, RenameTableItem, TableDescription};
 use crate::types_converters::try_vec_to_list_of_structs;
 use itertools::Itertools;
-use std::future::Future;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
+
+pub use builders::{
+    AlterTableBuilder, BulkUpsertBuilder, CopyTableBuilder, CopyTablesBuilder, CreateTableBuilder,
+    DescribeTableBuilder, DescribeTableOptionsBuilder, DropTableBuilder, ReadRowsBuilder,
+    RenameTableBuilder, RenameTablesBuilder,
+};
+
+use call_options::{resolve_timeouts, retry_table_operation, TableCallOptions};
 
 pub(crate) type TableServiceClientType = TableServiceClient<InterceptedChannel>;
 
@@ -48,229 +53,170 @@ impl WithGrpcMaxMessageSize for TableServiceClientType {
     }
 }
 
-/// Retry options for internal [`TableClient`] operations.
-pub struct RetryOptions {
-    /// Operations under the option is idempotent. Repeat completed operation - safe.
-    idempotent_operation: bool,
-
-    /// Algorithm for retry decision
-    retrier: Option<Arc<Box<dyn Retry>>>,
-}
-
-impl RetryOptions {
-    /// Default option for no retries
-    pub fn new() -> Self {
-        Self {
-            idempotent_operation: false,
-            retrier: None,
-        }
-    }
-
-    /// Operations under the options is safe for complete few times instead of one.
-    #[allow(dead_code)]
-    pub(crate) fn with_idempotent(mut self, idempotent: bool) -> Self {
-        self.idempotent_operation = idempotent;
-        self
-    }
-
-    /// Set retry timeout
-    #[allow(dead_code)]
-    pub(crate) fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.retrier = Some(Arc::new(Box::new(TimeoutRetrier { timeout })));
-        self
-    }
-}
-
-impl Default for RetryOptions {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Client for YDB Table service: DDL via RPC (`CreateTable`, …), sessionless data plane (`ReadRows`, `BulkUpsert`), describe.
 ///
 /// Ad-hoc DDL YQL (`CREATE TABLE` / `DROP TABLE` as text) belongs to [`crate::QueryClient::exec`] with [`crate::TxMode::Implicit`].
 /// YQL execution, transactions, explain, and streaming reads also belong to [`crate::QueryClient`].
+///
+/// Per-call timeouts are set on operation builders, e.g.
+/// `table_client.read_rows(path, keys, None).timeout(Duration::from_secs(1)).await`.
 #[derive(Clone)]
 pub struct TableClient {
     session_pool: TableSessionPool,
-    retrier: Arc<Box<dyn Retry>>,
-    idempotent_operation: bool,
-    timeouts: TimeoutSettings,
 }
 
 impl TableClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
-        timeouts: TimeoutSettings,
         session_pool: SessionPool,
+        retry_control: std::sync::Arc<crate::retry_budget::RetryControl>,
     ) -> Self {
         Self {
-            session_pool: TableSessionPool::from_shared(session_pool, connection_manager, timeouts),
-            retrier: Arc::new(Box::<TimeoutRetrier>::default()),
-            idempotent_operation: false,
-            timeouts,
+            session_pool: TableSessionPool::from_shared(
+                session_pool,
+                connection_manager,
+                retry_control,
+            ),
         }
     }
 
-    pub fn clone_with_timeouts(&self, timeouts: TimeoutSettings) -> Self {
-        Self {
-            timeouts,
-            ..self.clone()
-        }
+    pub(crate) async fn create_session_with_opts(
+        &self,
+        opts: &TableCallOptions,
+    ) -> YdbResult<TableSession> {
+        let timeouts = resolve_timeouts(opts);
+        Ok(self.session_pool.session().await?.with_timeouts(timeouts))
     }
 
-    #[allow(dead_code)]
-    pub fn clone_with_retry_timeout(&self, timeout: Duration) -> Self {
-        Self {
-            retrier: Arc::new(Box::new(TimeoutRetrier { timeout })),
-            ..self.clone()
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn clone_with_no_retry(&self) -> Self {
-        Self {
-            retrier: Arc::new(Box::new(NoRetrier {})),
-            ..self.clone()
-        }
-    }
-
-    pub(crate) async fn create_session(&self) -> YdbResult<TableSession> {
-        Ok(self
-            .session_pool
-            .session()
-            .await?
-            .with_timeouts(self.timeouts))
-    }
-
-    async fn sessionless_table_client(&self) -> YdbResult<RawTableClient> {
+    async fn sessionless_table_client(&self, opts: &TableCallOptions) -> YdbResult<RawTableClient> {
         self.session_pool
             .connection_manager()
-            .create_table_client(self.timeouts)
+            .create_table_client(resolve_timeouts(opts))
             .await
     }
 
-    async fn bulk_upsert_once(&self, table_path: String, rows: Value) -> YdbResult<()> {
+    async fn bulk_upsert_once(
+        &self,
+        table_path: String,
+        rows: Value,
+        opts: &TableCallOptions,
+    ) -> YdbResult<()> {
         let raw_rows: crate::grpc_wrapper::raw_table_service::value::RawTypedValue =
             rows.try_into().map_err(YdbError::from)?;
-        let mut client = self.sessionless_table_client().await?;
+        let mut client = self.sessionless_table_client(opts).await?;
         client
             .bulk_upsert(RawBulkUpsertRequest {
                 table: table_path,
                 rows: raw_rows.into(),
-                operation_params: self.timeouts.operation_params(),
+                operation_params: resolve_timeouts(opts).operation_params(),
             })
             .await
             .map_err(YdbError::from)?;
         Ok(())
     }
 
-    async fn read_rows_once(&self, request: RawReadRowsRequest) -> YdbResult<crate::ResultSet> {
-        let mut client = self.sessionless_table_client().await?;
+    async fn read_rows_once(
+        &self,
+        request: RawReadRowsRequest,
+        opts: &TableCallOptions,
+    ) -> YdbResult<crate::ResultSet> {
+        let mut client = self.sessionless_table_client(opts).await?;
         let raw_response = client.read_rows(request).await.map_err(YdbError::from)?;
         raw_response.result_set.try_into()
     }
 
-    async fn retry_idempotent<CallbackFuture, CallbackResult>(
-        &self,
-        callback: impl Fn() -> CallbackFuture,
-    ) -> YdbResult<CallbackResult>
-    where
-        CallbackFuture: Future<Output = YdbResult<CallbackResult>>,
-    {
-        Self {
-            idempotent_operation: true,
-            ..self.clone()
-        }
-        .retry_operation(callback)
-        .await
-    }
-
-    async fn retry_operation<CallbackFuture, CallbackResult>(
-        &self,
-        callback: impl Fn() -> CallbackFuture,
-    ) -> YdbResult<CallbackResult>
-    where
-        CallbackFuture: Future<Output = YdbResult<CallbackResult>>,
-    {
-        let mut attempt: usize = 0;
-        let start = Instant::now();
-        loop {
-            attempt += 1;
-            let last_err = match callback().await {
-                Ok(res) => return Ok(res),
-                Err(err) => match (err.need_retry(), self.idempotent_operation) {
-                    (NeedRetry::True, _) => err,
-                    (NeedRetry::IdempotentOnly, true) => err,
-                    _ => return Err(err),
-                },
-            };
-
-            let now = std::time::Instant::now();
-            let retry_decision = self.retrier.wait_duration(RetryParams {
-                attempt,
-                time_from_start: now.duration_since(start),
-            });
-            if !retry_decision.allow_retry {
-                return Err(last_err);
-            }
-            tokio::time::sleep(retry_decision.wait_timeout).await;
-        }
-    }
-
     /// Read rows by primary key without opening a session (go-sdk: `table.Client.ReadRows`).
     ///
-    /// `request.keys` must be a list of [`Value::Struct`] primary-key values.
+    /// `keys` must be a list of [`Value::Struct`] primary-key values.
     /// Returns an empty result set when `keys` is empty.
-    pub async fn read_rows_request(&self, request: ReadRowsRequest) -> YdbResult<crate::ResultSet> {
-        if request.keys.is_empty() {
-            return Ok(crate::ResultSet::default());
-        }
-
-        let raw = request.clone().into_raw(String::new())?;
-        self.retry_idempotent(|| async { self.read_rows_once(raw.clone()).await })
-            .await
-    }
-
-    /// From table with given path `table_path` request rows by primary keys `keys`, which must be
-    /// vector of [`Value::Struct`]. If any key does not meet requirement, error will be returned.
-    ///
-    /// If `columns` is `None`, all columns of requested rows will be returned. Otherwise, only
-    /// `columns` will be returned.
-    pub async fn read_rows(
+    pub fn read_rows(
         &self,
         table_path: impl Into<String>,
         keys: Vec<Value>,
         columns: Option<Vec<String>>,
+    ) -> ReadRowsBuilder<'_> {
+        ReadRowsBuilder {
+            client: self,
+            table_path: table_path.into(),
+            keys,
+            columns,
+            opts: TableCallOptions::default(),
+        }
+    }
+
+    pub(crate) async fn read_rows_call(
+        &self,
+        table_path: String,
+        keys: Vec<Value>,
+        columns: Option<Vec<String>>,
+        opts: TableCallOptions,
     ) -> YdbResult<crate::ResultSet> {
+        if keys.is_empty() {
+            return Ok(crate::ResultSet::default());
+        }
+
         let mut request = ReadRowsRequest::new(table_path).with_keys(keys);
         if let Some(columns) = columns {
             request.columns = columns;
         }
-        self.read_rows_request(request).await
+        let raw = request.into_raw(String::new())?;
+        retry_table_operation(self.session_pool.retry_control(), &opts, true, || async {
+            self.read_rows_once(raw.clone(), &opts).await
+        })
+        .await
     }
 
     /// Bulk upsert rows without opening a session (go-sdk: `table.Client.BulkUpsert`).
-    pub async fn bulk_upsert(
+    pub fn bulk_upsert(
         &self,
         table_path: impl Into<String>,
         rows: Vec<Value>,
+    ) -> BulkUpsertBuilder<'_> {
+        BulkUpsertBuilder {
+            client: self,
+            table_path: table_path.into(),
+            rows,
+            opts: TableCallOptions::default(),
+        }
+    }
+
+    pub(crate) async fn bulk_upsert_call(
+        &self,
+        table_path: String,
+        rows: Vec<Value>,
+        opts: TableCallOptions,
     ) -> YdbResult<()> {
         let Some(value) = try_vec_to_list_of_structs(rows)? else {
             return Ok(());
         };
-        let table_path = table_path.into();
-        self.retry_idempotent(|| async {
-            self.bulk_upsert_once(table_path.clone(), value.clone())
+        retry_table_operation(self.session_pool.retry_control(), &opts, true, || async {
+            self.bulk_upsert_once(table_path.clone(), value.clone(), &opts)
                 .await
         })
         .await
     }
 
-    pub async fn copy_table(&self, source_path: String, destination_path: String) -> YdbResult<()> {
-        self.retry_operation(|| async {
-            let mut session = self.create_session().await?;
+    pub fn copy_table(
+        &self,
+        source_path: String,
+        destination_path: String,
+    ) -> CopyTableBuilder<'_> {
+        CopyTableBuilder {
+            client: self,
+            source_path,
+            destination_path,
+            opts: TableCallOptions::default(),
+        }
+    }
+
+    pub(crate) async fn copy_table_call(
+        &self,
+        source_path: String,
+        destination_path: String,
+        opts: TableCallOptions,
+    ) -> YdbResult<()> {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
+            let mut session = self.create_session_with_opts(&opts).await?;
             let session_id = session.id.clone();
             let operation_params = session.operation_params();
             session
@@ -289,9 +235,21 @@ impl TableClient {
         .await
     }
 
-    pub async fn copy_tables(&self, tables: Vec<CopyTableItem>) -> YdbResult<()> {
-        self.retry_operation(|| async {
-            let mut session = self.create_session().await?;
+    pub fn copy_tables(&self, tables: Vec<CopyTableItem>) -> CopyTablesBuilder<'_> {
+        CopyTablesBuilder {
+            client: self,
+            tables,
+            opts: TableCallOptions::default(),
+        }
+    }
+
+    pub(crate) async fn copy_tables_call(
+        &self,
+        tables: Vec<CopyTableItem>,
+        opts: TableCallOptions,
+    ) -> YdbResult<()> {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
+            let mut session = self.create_session_with_opts(&opts).await?;
             let session_id = session.id.clone();
             let operation_params = session.operation_params();
             session
@@ -309,14 +267,30 @@ impl TableClient {
         .await
     }
 
-    pub async fn rename_table(
+    pub fn rename_table(
         &self,
         source_path: String,
         destination_path: String,
         replace_destination: bool,
+    ) -> RenameTableBuilder<'_> {
+        RenameTableBuilder {
+            client: self,
+            source_path,
+            destination_path,
+            replace_destination,
+            opts: TableCallOptions::default(),
+        }
+    }
+
+    pub(crate) async fn rename_table_call(
+        &self,
+        source_path: String,
+        destination_path: String,
+        replace_destination: bool,
+        opts: TableCallOptions,
     ) -> YdbResult<()> {
-        self.retry_operation(|| async {
-            let mut session = self.create_session().await?;
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
+            let mut session = self.create_session_with_opts(&opts).await?;
             let session_id = session.id.clone();
             let operation_params = session.operation_params();
             session
@@ -338,9 +312,21 @@ impl TableClient {
         .await
     }
 
-    pub async fn rename_tables(&self, tables: Vec<RenameTableItem>) -> YdbResult<()> {
-        self.retry_operation(|| async {
-            let mut session = self.create_session().await?;
+    pub fn rename_tables(&self, tables: Vec<RenameTableItem>) -> RenameTablesBuilder<'_> {
+        RenameTablesBuilder {
+            client: self,
+            tables,
+            opts: TableCallOptions::default(),
+        }
+    }
+
+    pub(crate) async fn rename_tables_call(
+        &self,
+        tables: Vec<RenameTableItem>,
+        opts: TableCallOptions,
+    ) -> YdbResult<()> {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
+            let mut session = self.create_session_with_opts(&opts).await?;
             let session_id = session.id.clone();
             let operation_params = session.operation_params();
             session
@@ -358,9 +344,21 @@ impl TableClient {
         .await
     }
 
-    pub async fn describe_table(&self, path: String) -> YdbResult<TableDescription> {
-        self.retry_operation(|| async {
-            let mut session = self.create_session().await?;
+    pub fn describe_table(&self, path: String) -> DescribeTableBuilder<'_> {
+        DescribeTableBuilder {
+            client: self,
+            path,
+            opts: TableCallOptions::default(),
+        }
+    }
+
+    pub(crate) async fn describe_table_call(
+        &self,
+        path: String,
+        opts: TableCallOptions,
+    ) -> YdbResult<TableDescription> {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
+            let mut session = self.create_session_with_opts(&opts).await?;
             let session_id = session.id.clone();
             let operation_params = session.operation_params();
             let raw = session
@@ -380,9 +378,21 @@ impl TableClient {
     }
 
     /// Create a table via `CreateTable` RPC.
-    pub async fn create_table(&self, request: CreateTableRequest) -> YdbResult<()> {
-        self.retry_operation(|| async {
-            let mut session = self.create_session().await?;
+    pub fn create_table(&self, request: CreateTableRequest) -> CreateTableBuilder<'_> {
+        CreateTableBuilder {
+            client: self,
+            request,
+            opts: TableCallOptions::default(),
+        }
+    }
+
+    pub(crate) async fn create_table_call(
+        &self,
+        request: CreateTableRequest,
+        opts: TableCallOptions,
+    ) -> YdbResult<()> {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
+            let mut session = self.create_session_with_opts(&opts).await?;
             let raw = request
                 .clone()
                 .into_raw(session.id.clone(), session.operation_params())?;
@@ -394,9 +404,21 @@ impl TableClient {
     }
 
     /// Drop a table via `DropTable` RPC.
-    pub async fn drop_table(&self, request: DropTableRequest) -> YdbResult<()> {
-        self.retry_operation(|| async {
-            let mut session = self.create_session().await?;
+    pub fn drop_table(&self, request: DropTableRequest) -> DropTableBuilder<'_> {
+        DropTableBuilder {
+            client: self,
+            request,
+            opts: TableCallOptions::default(),
+        }
+    }
+
+    pub(crate) async fn drop_table_call(
+        &self,
+        request: DropTableRequest,
+        opts: TableCallOptions,
+    ) -> YdbResult<()> {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
+            let mut session = self.create_session_with_opts(&opts).await?;
             let req = RawDropTableRequest {
                 session_id: session.id.clone(),
                 path: request.path.clone(),
@@ -410,9 +432,21 @@ impl TableClient {
     }
 
     /// Alter a table via `AlterTable` RPC (columns, attributes, etc.).
-    pub async fn alter_table(&self, request: AlterTableRequest) -> YdbResult<()> {
-        self.retry_operation(|| async {
-            let mut session = self.create_session().await?;
+    pub fn alter_table(&self, request: AlterTableRequest) -> AlterTableBuilder<'_> {
+        AlterTableBuilder {
+            client: self,
+            request,
+            opts: TableCallOptions::default(),
+        }
+    }
+
+    pub(crate) async fn alter_table_call(
+        &self,
+        request: AlterTableRequest,
+        opts: TableCallOptions,
+    ) -> YdbResult<()> {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
+            let mut session = self.create_session_with_opts(&opts).await?;
             let raw = request
                 .clone()
                 .into_raw(session.id.clone(), session.operation_params())?;
@@ -424,9 +458,19 @@ impl TableClient {
     }
 
     /// Describe cluster-wide table option presets.
-    pub async fn describe_table_options(&self) -> YdbResult<TableOptionsDescription> {
-        self.retry_operation(|| async {
-            let mut session = self.create_session().await?;
+    pub fn describe_table_options(&self) -> DescribeTableOptionsBuilder<'_> {
+        DescribeTableOptionsBuilder {
+            client: self,
+            opts: TableCallOptions::default(),
+        }
+    }
+
+    pub(crate) async fn describe_table_options_call(
+        &self,
+        opts: TableCallOptions,
+    ) -> YdbResult<TableOptionsDescription> {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
+            let mut session = self.create_session_with_opts(&opts).await?;
             let req = RawDescribeTableOptionsRequest {
                 operation_params: session.operation_params(),
             };

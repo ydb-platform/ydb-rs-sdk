@@ -15,12 +15,9 @@ pub struct SchemeClient {
 }
 
 impl SchemeClient {
-    pub(crate) fn new(
-        timeouts: TimeoutSettings,
-        connection_manager: GrpcConnectionManager,
-    ) -> Self {
+    pub(crate) fn new(connection_manager: GrpcConnectionManager) -> Self {
         Self {
-            timeouts,
+            timeouts: TimeoutSettings::default(),
             connection_manager,
         }
     }

@@ -224,9 +224,23 @@ impl AlterTableRequest {
         self
     }
 
-    /// Set or update a table attribute. Use an empty value to drop an attribute (server-side rule).
+    /// Set or update a table attribute (go-sdk: `options.WithAlterAttribute`).
+    ///
+    /// To remove an attribute, use [`Self::drop_attribute`] or pass an empty `value`
+    /// (server drops keys with blank values in `alter_attributes`).
     pub fn alter_attribute(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.alter_attributes.insert(key.into(), value.into());
+        self
+    }
+
+    /// Add a table attribute (go-sdk: `options.WithAddAttribute`).
+    pub fn add_attribute(self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.alter_attribute(key, value)
+    }
+
+    /// Drop a table attribute (go-sdk: `options.WithDropAttribute`).
+    pub fn drop_attribute(mut self, key: impl Into<String>) -> Self {
+        self.alter_attributes.insert(key.into(), String::new());
         self
     }
 }
@@ -298,3 +312,21 @@ impl From<crate::grpc_wrapper::raw_table_service::describe_table_options::RawDes
 }
 
 use itertools::Itertools;
+
+#[cfg(test)]
+mod tests {
+    use super::AlterTableRequest;
+
+    #[test]
+    fn drop_attribute_sets_empty_value_for_server() {
+        let req = AlterTableRequest::new("t").drop_attribute("baz");
+        assert_eq!(req.alter_attributes.get("baz"), Some(&String::new()));
+    }
+
+    #[test]
+    fn add_attribute_same_as_alter_attribute() {
+        let add = AlterTableRequest::new("t").add_attribute("foo", "bar");
+        let alter = AlterTableRequest::new("t").alter_attribute("foo", "bar");
+        assert_eq!(add.alter_attributes, alter.alter_attributes);
+    }
+}

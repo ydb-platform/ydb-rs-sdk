@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::client::TimeoutSettings;
+use crate::client_table::call_options::TableCallOptions;
 use crate::session_pool::SessionPoolSettings;
 use crate::test_helpers::test_client_builder;
 use crate::test_integration_helper::create_client_with_session_pool;
@@ -83,7 +83,10 @@ async fn table_and_query_clients_share_driver_session_pool() {
     assert_eq!(stats.in_use, 0);
     assert_eq!(stats.idle, 1);
 
-    let _table_session = table_client.create_session().await.expect("table session");
+    let _table_session = table_client
+        .create_session_with_opts(&TableCallOptions::default())
+        .await
+        .expect("table session");
     let stats = client.session_pool_stats();
     assert_eq!(stats.in_use, 1);
     assert_eq!(stats.idle, 0);
@@ -115,15 +118,11 @@ async fn create_client_with_short_pool_acquire_timeout(
     let client = test_client_builder()
         .with_executor(Arc::new(crate::test_integration_helper::InplaceExecutor))
         .client()
-        .expect("client builder")
-        .with_timeouts(TimeoutSettings {
-            operation_timeout: Duration::from_millis(300),
-            ..TimeoutSettings::default()
-        });
+        .expect("client builder");
     client.wait().await.expect("discovery");
     Arc::new(
         client
-            .with_session_pool(settings)
+            .with_session_pool(settings.with_acquire_timeout(Duration::from_millis(300)))
             .await
             .expect("session pool"),
     )
@@ -138,7 +137,7 @@ async fn driver_session_pool_acquire_times_out_when_exhausted() {
 
     let _table_session = client
         .table_client()
-        .create_session()
+        .create_session_with_opts(&TableCallOptions::default())
         .await
         .expect("hold pool slot");
     assert_eq!(client.session_pool_stats().in_use, 1);
@@ -173,7 +172,11 @@ async fn query_and_table_clients_share_pool_under_parallel_load() {
                     .await
                     .map(|_| ())
             } else {
-                client.table_client().create_session().await.map(|_| ())
+                client
+                    .table_client()
+                    .create_session_with_opts(&TableCallOptions::default())
+                    .await
+                    .map(|_| ())
             }
         }));
     }

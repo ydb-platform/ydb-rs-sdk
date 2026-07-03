@@ -7,9 +7,7 @@ use tracing::trace;
 use tracing_test::traced_test;
 
 use crate::errors::{YdbError, YdbResult};
-use crate::table_requests::{
-    AlterTableRequest, CreateTableRequest, DropTableRequest, ReadRowsRequest, TableColumn,
-};
+use crate::table_requests::{AlterTableRequest, CreateTableRequest, DropTableRequest, TableColumn};
 use crate::table_service_types::{CopyTableItem, IndexType, StoreType};
 use crate::test_integration_helper::create_client;
 use crate::types::Value;
@@ -456,9 +454,10 @@ async fn bulk_upsert_rpc() -> YdbResult<()> {
         .await?;
 
     let result = table_client
-        .read_rows_request(
-            ReadRowsRequest::new(table_path.clone())
-                .with_keys(vec![ydb_struct!("id" => 1_i64), ydb_struct!("id" => 2_i64)]),
+        .read_rows(
+            table_path.clone(),
+            vec![ydb_struct!("id" => 1_i64), ydb_struct!("id" => 2_i64)],
+            None,
         )
         .await?;
 
@@ -599,6 +598,32 @@ async fn table_attributes_rpc() -> YdbResult<()> {
         desc.attributes.get("owner").map(String::as_str),
         Some("updated")
     );
+
+    table_client
+        .alter_table(AlterTableRequest::new(table_path.clone()).add_attribute("foo", "bar"))
+        .await?;
+
+    let desc = table_client.describe_table(table_path.clone()).await?;
+    assert_eq!(desc.attributes.get("foo").map(String::as_str), Some("bar"));
+    assert_eq!(
+        desc.attributes.get("owner").map(String::as_str),
+        Some("updated")
+    );
+
+    table_client
+        .alter_table(AlterTableRequest::new(table_path.clone()).drop_attribute("owner"))
+        .await?;
+
+    let desc = table_client.describe_table(table_path.clone()).await?;
+    assert!(!desc.attributes.contains_key("owner"));
+    assert_eq!(desc.attributes.get("foo").map(String::as_str), Some("bar"));
+
+    table_client
+        .alter_table(AlterTableRequest::new(table_path.clone()).drop_attribute("foo"))
+        .await?;
+
+    let desc = table_client.describe_table(table_path.clone()).await?;
+    assert!(desc.attributes.is_empty());
 
     table_client
         .drop_table(DropTableRequest::new(table_path))

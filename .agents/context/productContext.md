@@ -10,7 +10,7 @@
 
 | Need | SDK surface |
 |------|-------------|
-| Run YQL queries and transactions | `Client::table_client()`, `retry_transaction`, `Query` |
+| Run YQL queries and transactions | `Client::table_client()`, `retry_tx`, `Query` |
 | Browse database directory / schema | `Client::scheme_client()` |
 | Produce/consume topic messages | `Client::topic_client()` — reader/writer APIs |
 | Distributed locks / semaphores | `Client::coordination_client()` |

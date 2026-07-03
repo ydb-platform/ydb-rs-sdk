@@ -9,6 +9,15 @@ pub(crate) struct RawOperationParams {
 }
 
 impl RawOperationParams {
+    pub(crate) fn sync_unlimited() -> Self {
+        Self {
+            operation_mode: OperationMode::Sync,
+            operation_timeout: None,
+            cancel_after: None,
+            labels: Default::default(),
+        }
+    }
+
     pub fn new_with_timeouts(
         operation_timeout: std::time::Duration,
         cancel_after: std::time::Duration,
@@ -30,6 +39,15 @@ impl RawOperationParams {
             operation_mode: OperationMode::_Async,
             operation_timeout: Some(operation_timeout.into()),
             cancel_after: Some(cancel_after.into()),
+            labels: Default::default(),
+        }
+    }
+
+    pub(crate) fn for_execute_script_unlimited() -> Self {
+        Self {
+            operation_mode: OperationMode::_Async,
+            operation_timeout: None,
+            cancel_after: None,
             labels: Default::default(),
         }
     }
