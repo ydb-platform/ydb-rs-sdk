@@ -18,9 +18,18 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 macro_rules! impl_table_call_builder {
     ($name:ident) => {
         impl<'a> $name<'a> {
-            /// Per-call wall-clock limit (YDB `OperationParams` and retry budget for idempotent ops).
+            /// Per-call wall-clock limit (YDB `OperationParams` and retry budget).
             pub fn timeout(mut self, timeout: Duration) -> Self {
                 self.opts.timeout = Some(timeout);
+                self
+            }
+
+            /// When `true`, also retry errors that are safe only for idempotent operations.
+            ///
+            /// Default depends on the operation: `true` for `read_rows` and `bulk_upsert`,
+            /// `false` for DDL and describe calls.
+            pub fn idempotent(mut self, idempotent: bool) -> Self {
+                self.opts.idempotent = Some(idempotent);
                 self
             }
         }

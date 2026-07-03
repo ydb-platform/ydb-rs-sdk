@@ -6,14 +6,15 @@
 
 ## Goals
 
-- Provide an idiomatic, async Rust client for YDB table, scheme, topic, coordination, and discovery APIs.
+- Provide an idiomatic, async Rust client for YDB table, query, scheme, topic, coordination, and discovery APIs.
 - Handle production concerns: connection pooling, load balancing, retries, credentials, TLS.
 - Stay compatible with YDB server protobuf/gRPC contracts via the `ydb-grpc` crate.
-- Maintain semver for published crates; MSRV **1.82**.
+- Maintain semver for published crates; MSRV **1.85**.
 
 ## Non-goals
 
 - `ydb-grpc` is an internal building block — not a public-facing API for application developers.
+- **SQL/YQL execution via the table client** — use `QueryClient` instead (see `productContext.md`).
 - This repo does not host the YDB server, documentation site, or non-Rust SDKs.
 
 ## Key constraints

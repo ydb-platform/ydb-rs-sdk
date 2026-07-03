@@ -42,8 +42,7 @@ Agent: "Method M failed, so I implemented alternative N instead."
 
 ## Context updates
 
-- **`activeContext.md`** — branch-only scratch pad. Revert to the placeholder before merge; never land session notes on `master`.
-- **`progress.md`** — update in the PR that delivers completed work.
-- Stable files (`systemPatterns.md`, …) — only when architecture, tooling, or scope actually changed.
+- **`activeContext.md`** / **`progress.md`** — placeholders on `master`; revert to placeholder before merge (no durable content).
+- Stable files (`productContext.md`, `systemPatterns.md`, `techContext.md`, `projectBrief.md`) — update in the PR that delivers the work when architecture, API, tooling, or scope changed.
 
 Add rules to `AGENTS.md` only after repeated agent mistakes — incremental, not upfront.
