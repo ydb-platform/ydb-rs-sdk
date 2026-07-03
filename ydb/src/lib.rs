@@ -100,7 +100,7 @@ mod test_integration_helper;
 pub(crate) mod topics_compression_test;
 #[cfg(test)]
 pub(crate) mod topics_test;
-pub(crate) mod traces;
+pub mod traces;
 mod trait_operation;
 pub(crate) mod transaction;
 mod types;
