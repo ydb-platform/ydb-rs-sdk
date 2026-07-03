@@ -1,24 +1,28 @@
 use std::sync::{Arc, Mutex};
 
+use itertools::Itertools;
 use tokio::sync::Notify;
+use tracing::debug;
 
 use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
-use crate::client_topic::topicreader::messages::{TopicReaderBatch, TopicReaderMessage};
+use crate::client_topic::topicreader::messages::TopicReaderBatch;
+use crate::client_topic::topicreader::partition_state::PartitionSession;
 use crate::client_topic::topicreader::reader::TopicReaderCommitMarker;
 use crate::grpc_wrapper::raw_topic_service::common::partition::RawOffsetsRange;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
-    PartitionCommitOffset, RawCommitOffsetRequest, RawFromClientOneOf, RawReadRequest,
+    PartitionCommitOffset, RawCommitOffsetRequest, RawFromClientOneOf, RawFromServer,
+    RawReadRequest, RawStartPartitionSessionResponse, RawStopPartitionSessionResponse,
 };
 use crate::{YdbError, YdbResult};
 
 use super::connection::Connection;
-use super::message_buffer::{BufferedBatch, MessageBuffer};
+use super::message_buffer::{BufferedBatch, PartitionSessions};
 use super::pending_commits::{CommitAckReceiver, PendingCommits};
 
 const RUNTIME_HANDLE_POISONED: &str = "topic reader runtime handle mutex poisoned";
 
 struct Active {
-    buffer: MessageBuffer,
+    partitions: PartitionSessions,
     pending_commits: PendingCommits,
     connection: Connection,
 }
@@ -26,18 +30,14 @@ struct Active {
 impl Active {
     fn new(connection: Connection) -> Self {
         Self {
-            buffer: MessageBuffer::default(),
+            partitions: PartitionSessions::default(),
             pending_commits: PendingCommits::default(),
             connection,
         }
     }
 
-    fn push_batch(&mut self, messages: Vec<TopicReaderMessage>) -> YdbResult<bool> {
-        self.buffer.push_batch(messages)
-    }
-
     fn pop_batch(&mut self, cap: usize) -> YdbResult<Option<BufferedBatch>> {
-        self.buffer.pop_batch(cap)
+        self.partitions.pop_batch(cap)
     }
 }
 
@@ -50,6 +50,7 @@ enum State {
 struct Inner {
     state: Mutex<State>,
     messages_available: Notify,
+    reader_id: usize,
 }
 
 #[derive(Clone)]
@@ -58,11 +59,12 @@ pub(crate) struct RuntimeHandle {
 }
 
 impl RuntimeHandle {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(reader_id: usize) -> Self {
         Self {
             inner: Arc::new(Inner {
                 state: Mutex::new(State::Reconnecting),
                 messages_available: Notify::new(),
+                reader_id,
             }),
         }
     }
@@ -73,25 +75,124 @@ impl RuntimeHandle {
             inner: Arc::new(Inner {
                 state: Mutex::new(State::Active(Active::new(connection))),
                 messages_available: Notify::new(),
+                reader_id: 0,
             }),
         }
     }
 
-    pub(crate) fn push_batch(&self, messages: Vec<TopicReaderMessage>) -> YdbResult<()> {
-        let pushed = {
-            let mut state = self.lock_state()?;
-            match &mut *state {
-                State::Reconnecting => false,
-                State::Active(active) => active.push_batch(messages)?,
-                State::Failed(err) => return Err(err.clone()),
+    pub(crate) fn handle_from_server(&self, msg: RawFromServer) -> YdbResult<()> {
+        match msg {
+            RawFromServer::ReadResponse(resp) => {
+                let mut pushed = false;
+                {
+                    let mut state = self.lock_state()?;
+                    let State::Active(active) = &mut *state else {
+                        return Ok(());
+                    };
+                    let reader_id = self.inner.reader_id;
+                    let epoch = active.connection.epoch();
+
+                    for partition_data in resp.partition_data {
+                        let psid =
+                            PartitionSessionId::from_raw(partition_data.partition_session_id);
+                        for batch in partition_data.batches {
+                            pushed |= active
+                                .partitions
+                                .push_raw_batch(batch, psid, reader_id, epoch)?;
+                        }
+                    }
+                }
+                if pushed {
+                    self.inner.messages_available.notify_one();
+                }
+                Ok(())
             }
-        };
 
-        if pushed {
-            self.inner.messages_available.notify_one();
+            RawFromServer::StartPartitionSessionRequest(req) => {
+                let mut state = self.lock_state()?;
+                let State::Active(active) = &mut *state else {
+                    return Ok(());
+                };
+                let session = PartitionSession::from(req);
+                let psid = session.partition_session_id;
+                active.partitions.start(session)?;
+                active
+                    .connection
+                    .send(RawFromClientOneOf::StartPartitionSessionResponse(
+                        RawStartPartitionSessionResponse {
+                            partition_session_id: psid.as_raw(),
+                        },
+                    ))?;
+                Ok(())
+            }
+
+            RawFromServer::StopPartitionSessionRequest(req) => {
+                let psid = PartitionSessionId::from_raw(req.partition_session_id);
+                let notify = {
+                    let mut state = self.lock_state()?;
+                    let State::Active(active) = &mut *state else {
+                        return Ok(());
+                    };
+                    active.pending_commits.stop(
+                        psid,
+                        Some(req.committed_offset),
+                        &YdbError::custom(format!("partition session {psid} stopped by server")),
+                    );
+                    let notify = active.partitions.stop(psid)?;
+                    active
+                        .connection
+                        .send(RawFromClientOneOf::StopPartitionSessionResponse(
+                            RawStopPartitionSessionResponse {
+                                partition_session_id: psid.as_raw(),
+                            },
+                        ))?;
+                    notify
+                };
+                if notify {
+                    self.inner.messages_available.notify_one();
+                }
+                Ok(())
+            }
+
+            RawFromServer::EndPartitionSession(end) => {
+                let psid = PartitionSessionId::from_raw(end.partition_session_id);
+                let child_ids = end
+                    .child_partition_ids
+                    .into_iter()
+                    .map(PartitionId::from_raw)
+                    .collect_vec();
+
+                let mut state = self.lock_state()?;
+                let State::Active(active) = &mut *state else {
+                    return Ok(());
+                };
+                active.partitions.end(psid, child_ids)?;
+                Ok(())
+            }
+
+            RawFromServer::CommitOffsetResponse(resp) => {
+                let committed_iter = resp.partitions_committed_offsets.into_iter().map(|o| {
+                    (
+                        PartitionSessionId::from_raw(o.partition_session_id),
+                        o.committed_offset,
+                    )
+                });
+                self.ack_commits(committed_iter)
+            }
+
+            RawFromServer::InitResponse(_) => {
+                debug!("topic reader initialized");
+                Ok(())
+            }
+            RawFromServer::UpdateTokenResponse(_) => {
+                debug!("topic reader received update token response");
+                Ok(())
+            }
+            RawFromServer::UnsupportedMessage(m) => {
+                debug!("topic reader received unsupported message: {m}");
+                Ok(())
+            }
         }
-
-        Ok(())
     }
 
     pub(crate) async fn pop_batch(&self, cap: usize) -> YdbResult<TopicReaderBatch> {
@@ -118,78 +219,16 @@ impl RuntimeHandle {
             };
 
             if let Some(batch) = batch {
+                let messages_became_available = batch.messages_became_available;
                 self.request_bytes(batch.bytes_to_release, batch.epoch)?;
+                if messages_became_available {
+                    self.inner.messages_available.notify_one();
+                }
                 return Ok(TopicReaderBatch::from_messages(batch.messages));
             }
 
             notified.await;
         }
-    }
-
-    pub(crate) fn register_starting_partition(
-        &self,
-        session_id: PartitionSessionId,
-        partition_id: PartitionId,
-    ) -> YdbResult<()> {
-        let mut state = self.lock_state()?;
-
-        match &mut *state {
-            State::Active(active) => {
-                active.buffer.register_starting(session_id, partition_id)?;
-            }
-            State::Reconnecting => {}
-            State::Failed(err) => return Err(err.clone()),
-        }
-
-        Ok(())
-    }
-
-    pub(crate) fn register_stopping_partition(
-        &self,
-        session_id: PartitionSessionId,
-        partition_id: PartitionId,
-        committed_offset: Option<i64>,
-        reason: &YdbError,
-    ) -> YdbResult<()> {
-        let notify = {
-            let mut state = self.lock_state()?;
-            match &mut *state {
-                State::Active(active) => {
-                    active
-                        .pending_commits
-                        .stop(session_id, committed_offset, reason);
-                    active.buffer.register_stopping(session_id, partition_id)?
-                }
-                State::Reconnecting => false,
-                State::Failed(err) => return Err(err.clone()),
-            }
-        };
-
-        if notify {
-            self.inner.messages_available.notify_one();
-        }
-
-        Ok(())
-    }
-
-    pub(crate) fn register_ending_partition(
-        &self,
-        session_id: PartitionSessionId,
-        child_partition_ids: Vec<PartitionId>,
-    ) -> YdbResult<()> {
-        let mut state = self.lock_state()?;
-
-        match &mut *state {
-            State::Active(active) => {
-                active
-                    .buffer
-                    .register_ending(session_id, child_partition_ids)?;
-            }
-            State::Reconnecting => {}
-            State::Failed(err) => return Err(err.clone()),
-        }
-
-        Ok(())
     }
 
     pub(crate) fn commit(
@@ -209,7 +248,7 @@ impl RuntimeHandle {
                 }
 
                 if !active
-                    .buffer
+                    .partitions
                     .has_session(commit_marker.partition_session_id)
                 {
                     return Err(YdbError::custom(format!(
@@ -348,6 +387,94 @@ impl RuntimeHandle {
 }
 
 #[cfg(test)]
+impl RuntimeHandle {
+    pub(crate) fn push_test_messages(
+        &self,
+        messages: Vec<crate::client_topic::topicreader::messages::TopicReaderMessage>,
+    ) -> YdbResult<()> {
+        let Some(first) = messages.first() else {
+            return Ok(());
+        };
+        let partition_session_id = first.commit_marker.partition_session_id;
+        let epoch = first.commit_marker.epoch;
+        let batch = crate::grpc_wrapper::raw_topic_service::stream_read::messages::RawBatch {
+            producer_id: String::new(),
+            write_session_meta: std::collections::HashMap::new(),
+            codec: crate::grpc_wrapper::raw_topic_service::common::codecs::RawCodec {
+                code: i32::from(ydb_grpc::ydb_proto::topic::Codec::Raw),
+            },
+            written_at: crate::grpc_wrapper::raw_common_types::Timestamp::from(
+                std::time::UNIX_EPOCH,
+            ),
+            message_data: messages
+                .into_iter()
+                .map(|message| {
+                    crate::grpc_wrapper::raw_topic_service::stream_read::messages::RawMessageData {
+                        offset: message.offset,
+                        seq_no: message.seq_no,
+                        created_at: message.created_at.map(Into::into),
+                        uncompressed_size: message.uncompressed_size,
+                        data: Vec::new(),
+                        read_session_size_bytes: message.bytes_to_release,
+                    }
+                })
+                .collect(),
+        };
+
+        let pushed = {
+            let mut state = self.lock_state()?;
+            match &mut *state {
+                State::Reconnecting => false,
+                State::Active(active) => {
+                    active
+                        .partitions
+                        .push_raw_batch(batch, partition_session_id, 0, epoch)?
+                }
+                State::Failed(err) => return Err(err.clone()),
+            }
+        };
+        if pushed {
+            self.inner.messages_available.notify_one();
+        }
+        Ok(())
+    }
+
+    pub(crate) fn register_starting_partition(
+        &self,
+        session_id: PartitionSessionId,
+        partition_id: PartitionId,
+    ) -> YdbResult<()> {
+        let session = PartitionSession {
+            partition_session_id: session_id,
+            partition_id,
+            topic: String::new(),
+            next_commit_offset_start: 0,
+        };
+        let mut state = self.lock_state()?;
+        match &mut *state {
+            State::Active(active) => active.partitions.start(session)?,
+            State::Reconnecting => {}
+            State::Failed(err) => return Err(err.clone()),
+        }
+        Ok(())
+    }
+
+    pub(crate) fn register_ending_partition(
+        &self,
+        session_id: PartitionSessionId,
+        child_partition_ids: Vec<PartitionId>,
+    ) -> YdbResult<()> {
+        let mut state = self.lock_state()?;
+        match &mut *state {
+            State::Active(active) => active.partitions.end(session_id, child_partition_ids)?,
+            State::Reconnecting => {}
+            State::Failed(err) => return Err(err.clone()),
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use tokio::sync::mpsc;
 
@@ -441,7 +568,7 @@ mod tests {
 
     #[test]
     fn reconnecting_runtime_installs_first_connection() {
-        let runtime = RuntimeHandle::new();
+        let runtime = RuntimeHandle::new(0);
         assert!(runtime.commit(commit_marker(psid(10), pid(20), 0)).is_err());
 
         let (outgoing_tx, _outgoing_rx) = mpsc::unbounded_channel();
@@ -468,7 +595,7 @@ mod tests {
             .register_starting_partition(psid(1), pid(10))
             .expect("start should succeed");
         runtime
-            .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 0, 10)])
+            .push_test_messages(vec![TopicReaderMessage::test_message_full(1, 10, 0, 10)])
             .expect("push should succeed");
         runtime
             .enter_reconnecting(YdbError::Transport("test reconnect".to_string()))
@@ -485,7 +612,7 @@ mod tests {
             .register_starting_partition(psid(1), pid(10))
             .expect("start should succeed");
         runtime
-            .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 1, 20)])
+            .push_test_messages(vec![TopicReaderMessage::test_message_full(1, 10, 1, 20)])
             .expect("push should succeed");
 
         let batch = runtime.pop_batch(10).await.expect("pop should succeed");
@@ -530,7 +657,7 @@ mod tests {
             .register_starting_partition(psid(1), pid(10))
             .expect("start should succeed");
         runtime
-            .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 1, 15)])
+            .push_test_messages(vec![TopicReaderMessage::test_message_full(1, 10, 1, 15)])
             .expect("push should succeed");
 
         runtime.pop_batch(10).await.expect("pop should succeed");
@@ -555,7 +682,7 @@ mod tests {
             .register_starting_partition(psid(1), pid(10))
             .expect("start should succeed");
         runtime
-            .push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 1, 15)])
+            .push_test_messages(vec![TopicReaderMessage::test_message_full(1, 10, 1, 15)])
             .expect("push should succeed");
 
         let batch = runtime.pop_batch(10).await.expect("pop should succeed");
@@ -563,19 +690,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stopping_parent_notifies_waiting_reader_when_child_unblocks() -> YdbResult<()> {
-        use std::time::Duration;
-
+    async fn draining_parent_makes_buffered_child_readable() -> YdbResult<()> {
         use crate::client_topic::topicreader::messages::TopicReaderMessage;
 
         let (outgoing_tx, _outgoing_rx) = mpsc::unbounded_channel();
         let runtime = RuntimeHandle::with_connection(Connection::new(outgoing_tx, 1));
 
         runtime.register_starting_partition(psid(1), pid(10))?;
-        runtime.push_batch(vec![TopicReaderMessage::test_message_full(1, 10, 1, 0)])?;
+        runtime.push_test_messages(vec![TopicReaderMessage::test_message_full(1, 10, 1, 0)])?;
         runtime.register_ending_partition(psid(1), vec![pid(20)])?;
         runtime.register_starting_partition(psid(2), pid(20))?;
-        runtime.push_batch(vec![TopicReaderMessage::test_message_full(2, 20, 1, 0)])?;
+        runtime.push_test_messages(vec![TopicReaderMessage::test_message_full(2, 20, 1, 0)])?;
 
         let parent = runtime.pop_batch(10).await?;
         assert_eq!(
@@ -583,19 +708,7 @@ mod tests {
             psid(1)
         );
 
-        let waiting_runtime = runtime.clone();
-        let waiting_pop = tokio::spawn(async move { waiting_runtime.pop_batch(10).await });
-        tokio::task::yield_now().await;
-
-        // The child message is already buffered, so no push_batch notification will happen.
-        // Parent stop must notify the waiter when it unblocks the child.
-        runtime.register_stopping_partition(psid(1), pid(10), None, &YdbError::custom("stop"))?;
-
-        let child = tokio::time::timeout(Duration::from_millis(100), waiting_pop)
-            .await
-            .expect("child pop should be notified after parent stop")
-            .expect("child pop task should not panic")
-            .expect("child pop should succeed");
+        let child = runtime.pop_batch(10).await?;
 
         assert_eq!(
             child.messages[0].get_commit_marker().partition_session_id,

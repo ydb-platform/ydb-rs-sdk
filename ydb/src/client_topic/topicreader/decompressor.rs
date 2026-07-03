@@ -10,17 +10,19 @@ use tracing::debug;
 
 use crate::client_topic::compression::{
     CodecRegistry, CompressionDecoder, Executor, OrderedTaskQueue, TaskResultRx,
-    MAX_MESSAGES_PER_CHUNK, OUTPUT_BACKLOG_PER_TASK,
+    MAX_MESSAGES_PER_CHUNK,
 };
 use crate::client_topic::list_types::Codec;
-use crate::{TopicReaderMessage, YdbError, YdbResult};
+use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
+    RawBatch, RawFromServer, RawPartitionData, RawReadResponse,
+};
+use crate::{YdbError, YdbResult};
 
-use super::messages::{ForwardEvent, ReaderEvent};
 use super::reconnector;
 use super::runtime::RuntimeHandle;
 use super::task_supervisor::wait_child_tasks;
 
-type EventRx = mpsc::UnboundedReceiver<ReaderEvent>;
+type EventRx = mpsc::UnboundedReceiver<RawFromServer>;
 
 pub(super) struct Decompressor {
     codec_registry: Arc<CodecRegistry>,
@@ -60,7 +62,8 @@ impl Decompressor {
         } = self;
 
         let parallelism = executor.available_parallelism();
-        let output_backlog = parallelism.saturating_mul(OUTPUT_BACKLOG_PER_TASK);
+        let output_backlog =
+            parallelism.saturating_mul(crate::client_topic::compression::OUTPUT_BACKLOG_PER_TASK);
         let (queue, results_rx) = OrderedTaskQueue::new(executor, parallelism, output_backlog);
         let decompressor_cancellation = cancellation.child_token();
 
@@ -83,7 +86,7 @@ impl Decompressor {
 
 async fn schedule_loop(
     rx: EventRx,
-    queue: OrderedTaskQueue<ForwardEvent>,
+    queue: OrderedTaskQueue<RawFromServer>,
     codec_registry: Arc<CodecRegistry>,
     parallelism: NonZeroUsize,
     cancellation: CancellationToken,
@@ -102,63 +105,51 @@ async fn schedule_loop(
 
 async fn schedule_events(
     mut rx: EventRx,
-    queue: OrderedTaskQueue<ForwardEvent>,
+    queue: OrderedTaskQueue<RawFromServer>,
     codec_registry: Arc<CodecRegistry>,
     parallelism: NonZeroUsize,
 ) -> YdbResult<Infallible> {
     loop {
-        let Some(event) = rx.recv().await else {
+        let Some(msg) = rx.recv().await else {
             return Err(YdbError::Transport(
                 "decompressor input channel closed".into(),
             ));
         };
 
-        match event {
-            ReaderEvent::Messages { messages, codec } => {
-                let decoder: Option<Arc<dyn CompressionDecoder>> = if codec == Codec::RAW {
-                    None
-                } else {
-                    Some(codec_registry.get_decoder(codec).ok_or_else(|| {
-                        YdbError::custom(format!("no decoder found for codec {}", codec.code))
-                    })?)
-                };
-
-                let chunk_size =
-                    (messages.len() / parallelism.get()).clamp(1, MAX_MESSAGES_PER_CHUNK);
-                let mut iter = messages.into_iter();
-                loop {
-                    let chunk: Vec<TopicReaderMessage> = iter.by_ref().take(chunk_size).collect();
-                    if chunk.is_empty() {
-                        break;
-                    }
-                    let dec = decoder.clone();
+        match msg {
+            RawFromServer::ReadResponse(resp) => {
+                for (psid, batch) in split_into_batches(resp, parallelism) {
+                    let codec: Codec = batch.codec.into();
+                    let decoder: Option<Arc<dyn CompressionDecoder>> = if codec == Codec::RAW {
+                        None
+                    } else {
+                        Some(codec_registry.get_decoder(codec).ok_or_else(|| {
+                            YdbError::custom(format!("no decoder found for codec {}", codec.code))
+                        })?)
+                    };
                     queue
                         .submit(Box::new(move || {
-                            decompress_batch(chunk, dec).map(ForwardEvent::Messages)
+                            let batch = decompress_batch(batch, decoder)?;
+                            Ok(RawFromServer::ReadResponse(RawReadResponse {
+                                bytes_size: batch.get_read_session_size(),
+                                partition_data: vec![RawPartitionData {
+                                    partition_session_id: psid,
+                                    batches: [batch].into(),
+                                }],
+                            }))
                         }))
                         .await;
                 }
             }
-
-            ReaderEvent::EndPartitionSession {
-                session_id,
-                child_partition_ids,
-            } => {
-                queue
-                    .submit(Box::new(move || {
-                        Ok(ForwardEvent::EndPartitionSession {
-                            session_id,
-                            child_partition_ids,
-                        })
-                    }))
-                    .await;
+            other => {
+                queue.submit(Box::new(move || Ok(other))).await;
             }
         }
     }
 }
 
 async fn forward_loop(
-    results_rx: TaskResultRx<ForwardEvent>,
+    results_rx: TaskResultRx<RawFromServer>,
     runtime: RuntimeHandle,
     cancellation: CancellationToken,
 ) -> YdbResult<()> {
@@ -175,7 +166,7 @@ async fn forward_loop(
 }
 
 async fn forward_events(
-    mut results_rx: TaskResultRx<ForwardEvent>,
+    mut results_rx: TaskResultRx<RawFromServer>,
     runtime: RuntimeHandle,
 ) -> YdbResult<Infallible> {
     loop {
@@ -184,44 +175,71 @@ async fn forward_events(
                 "decompressor results channel closed".into(),
             ));
         };
-        let event = result_rx
+        let msg = result_rx
             .await
             .unwrap_or_else(|_| Err(YdbError::custom("executor decompression task panicked")))?;
 
-        match event {
-            ForwardEvent::Messages(messages) => {
-                runtime.push_batch(messages)?;
-            }
-            ForwardEvent::EndPartitionSession {
-                session_id,
-                child_partition_ids,
-            } => {
-                runtime.register_ending_partition(session_id, child_partition_ids)?;
-            }
-        }
+        runtime.handle_from_server(msg)?;
     }
 }
 
+fn split_into_batches(resp: RawReadResponse, parallelism: NonZeroUsize) -> Vec<(i64, RawBatch)> {
+    let total_messages: usize = resp
+        .partition_data
+        .iter()
+        .flat_map(|pd| pd.batches.iter())
+        .map(|b| b.message_data.len())
+        .sum();
+
+    let chunk_size = (total_messages / parallelism.get()).clamp(1, MAX_MESSAGES_PER_CHUNK);
+
+    let mut batches = Vec::new();
+    for partition_data in resp.partition_data {
+        let psid = partition_data.partition_session_id;
+        for batch in partition_data.batches {
+            let RawBatch {
+                producer_id,
+                write_session_meta,
+                codec,
+                written_at,
+                message_data,
+            } = batch;
+            let mut iter = message_data.into_iter();
+            loop {
+                let chunk: Vec<_> = iter.by_ref().take(chunk_size).collect();
+                if chunk.is_empty() {
+                    break;
+                }
+                batches.push((
+                    psid,
+                    RawBatch {
+                        producer_id: producer_id.clone(),
+                        write_session_meta: write_session_meta.clone(),
+                        codec,
+                        written_at: written_at.clone(),
+                        message_data: chunk,
+                    },
+                ));
+            }
+        }
+    }
+    batches
+}
+
 fn decompress_batch(
-    mut batch: Vec<TopicReaderMessage>,
+    mut batch: RawBatch,
     decoder: Option<Arc<dyn CompressionDecoder>>,
-) -> YdbResult<Vec<TopicReaderMessage>> {
+) -> YdbResult<RawBatch> {
     let Some(decoder) = decoder else {
         return Ok(batch);
     };
-
-    for message in batch.iter_mut() {
-        let Some(raw_data) = message.raw_data.as_ref() else {
-            continue;
-        };
-
-        message.raw_data = Some(decoder.decode(raw_data.as_slice()).map_err(|err| {
+    for message in &mut batch.message_data {
+        message.data = decoder.decode(&message.data).map_err(|err| {
             YdbError::custom(format!(
-                "{decoder:?} failed to decode: {err}, message seq_no: {}, message offset: {}",
-                message.seq_no, message.offset,
+                "{decoder:?} failed to decode: {err}, offset: {}",
+                message.offset
             ))
-        })?);
+        })?;
     }
-
     Ok(batch)
 }

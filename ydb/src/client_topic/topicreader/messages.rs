@@ -1,29 +1,11 @@
+#[cfg(test)]
 use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
 use crate::client_topic::topicreader::partition_state::PartitionSession;
 use crate::client_topic::topicreader::reader::TopicReaderCommitMarker;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::RawBatch;
-use crate::{Codec, YdbResult};
+use crate::YdbResult;
 use std::time;
 use std::time::SystemTime;
-
-pub(super) enum ReaderEvent {
-    Messages {
-        messages: Vec<TopicReaderMessage>,
-        codec: Codec,
-    },
-    EndPartitionSession {
-        session_id: PartitionSessionId,
-        child_partition_ids: Vec<PartitionId>,
-    },
-}
-
-pub(super) enum ForwardEvent {
-    Messages(Vec<TopicReaderMessage>),
-    EndPartitionSession {
-        session_id: PartitionSessionId,
-        child_partition_ids: Vec<PartitionId>,
-    },
-}
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 #[derive(Debug)]
@@ -222,6 +204,7 @@ pub struct PartitionSessionKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
     use crate::client_topic::topicreader::partition_state::PartitionSession;
     use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{RawBatch, RawMessageData};
     use std::time::SystemTime;

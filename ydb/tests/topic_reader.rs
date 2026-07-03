@@ -265,6 +265,20 @@ impl Driver {
             child_partition_ids,
         )))
     }
+
+    fn send_read_response_for(
+        &self,
+        partition_session_id: i64,
+        offset: i64,
+        payload: impl Into<Vec<u8>>,
+    ) {
+        self.send(Reply::Topic(builders::read_response(
+            self.state.current_stream_id(),
+            partition_session_id,
+            offset,
+            payload,
+        )))
+    }
 }
 
 async fn make_reader_with_batch_size(
@@ -613,20 +627,17 @@ topic_test!(
             "parent must come first"
         );
 
-        // After draining parent, drain_ending removes the block on child_pid. Child session
-        // is not yet known to the buffer (no push_batch for session 2 yet), so child is not
-        // added to RR here. When child data arrives, push_batch adds it to RR and notifies.
+        // Parent has drained, so the child can become readable without waiting for Stop.
         let sid = driver.state.current_stream_id();
-        let (b2_result, ()) = tokio::join!(reader.read_batch(), async {
-            tokio::task::yield_now().await;
-            driver.send(Reply::Topic(builders::read_response(
-                sid,
-                PARTITION_SESSION_ID_2,
-                0,
-                b"child-message",
-            )));
-        });
-        assert_eq!(b2_result?.messages[0].get_partition_id(), 1);
+        driver.send(Reply::Topic(builders::read_response(
+            sid,
+            PARTITION_SESSION_ID_2,
+            0,
+            b"child-message",
+        )));
+
+        let b2 = reader.read_batch().await?;
+        assert_eq!(b2.messages[0].get_partition_id(), 1);
         Ok(())
     }
 );
@@ -703,9 +714,10 @@ topic_test!(
             /* graceful */ false,
             /* committed_offset */ 0,
         )));
-        driver.state.wait_stops(1).await;
-
+        // The stop is queued in the decompressor behind the in-flight RACE_CODEC task.
+        // Release the decoder first so the queue can drain and the stop can be processed.
         release_tx.send(()).expect("release decoder");
+        driver.state.wait_stops(1).await;
 
         let result =
             tokio::time::timeout(std::time::Duration::from_millis(500), reader.read_batch()).await;
@@ -760,14 +772,19 @@ topic_test!(
         driver.send_end_partition_session(PARTITION_SESSION_ID, vec![PARTITION_ID_2]);
         entered_rx.await.expect("decoder entered");
 
-        // grpc_streamer's receive loop runs independently and calls
-        // register_starting_partition(child) directly, before forward_loop has processed
-        // EndPartitionSession. With the bug, child enters round-robin unguarded.
-        driver
-            .start_session(PARTITION_SESSION_ID_2, PARTITION_ID_2)
-            .await;
-
+        // In the fixed pipeline every message goes through the OrderedTaskQueue, so
+        // StartPartitionSession is guaranteed to be processed after EndPartitionSession.
+        // Queue start + child data while the decoder still holds the semaphore, then
+        // release — all queued messages drain in submission order.
+        let partitions_target = driver.state.partitions_ready.load(Ordering::SeqCst) + 1;
         let sid = driver.state.current_stream_id();
+        driver.send(Reply::Topic(builders::start_partition_session_request(
+            sid,
+            PARTITION_SESSION_ID_2,
+            TOPIC_PATH,
+            PARTITION_ID_2,
+            0,
+        )));
         driver.send(Reply::Topic(builders::read_response(
             sid,
             PARTITION_SESSION_ID_2,
@@ -776,6 +793,7 @@ topic_test!(
         )));
 
         release_tx.send(()).expect("release decoder");
+        driver.state.wait_partitions(partitions_target).await;
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // Correct: parent0 → parent1 → child
@@ -793,6 +811,135 @@ topic_test!(
             0,
             "parent must be fully drained before child is served"
         );
+
+        Ok(())
+    }
+);
+
+// ─── Partition lifecycle ordering guarantees ─────────────────────────────────
+
+// Child partition with a single parent: the child must not be readable
+// before the parent queue is drained, but StopPartitionSessionRequest is not
+// required after EndPartitionSession.
+topic_test!(
+    child_becomes_readable_after_parent_drains_without_stop,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader(&driver.server).await?;
+        driver.state.wait_partitions(1).await;
+
+        // Send parent message and End before reading anything.
+        // When End is processed the parent queue is non-empty → block registered.
+        driver.send_read_response(0, b"parent");
+        driver.send_end_partition_session(PARTITION_SESSION_ID, vec![PARTITION_ID_2]);
+
+        // Child start is enqueued after End; by the time the response arrives,
+        // the child session has one parent block.
+        driver
+            .start_session(PARTITION_SESSION_ID_2, PARTITION_ID_2)
+            .await;
+        driver.send_read_response_for(PARTITION_SESSION_ID_2, 0, b"child");
+
+        // Drain the parent message.
+        let parent = reader.read_batch().await?;
+        assert_eq!(parent.messages[0].get_partition_id(), 0);
+
+        let child =
+            tokio::time::timeout(std::time::Duration::from_millis(500), reader.read_batch())
+                .await
+                .expect("child must become readable after parent drains")
+                .expect("read must succeed");
+        assert_eq!(child.messages[0].get_partition_id(), PARTITION_ID_2);
+
+        Ok(())
+    }
+);
+
+// Child declared by two parents (partition split): the child must remain
+// blocked until every declaring parent queue is drained.
+topic_test!(
+    two_parents_child_blocked_until_both_drain,
+    timeout_secs = 5,
+    {
+        const CHILD_SESSION_ID: i64 = 3;
+        const CHILD_PARTITION_ID: i64 = 2;
+
+        let driver = Driver::start().await;
+        let mut reader = make_reader(&driver.server).await?;
+        driver.state.wait_partitions(1).await;
+        driver
+            .start_session(PARTITION_SESSION_ID_2, PARTITION_ID_2)
+            .await;
+
+        // Enqueue messages for both parents before reading anything so both queues are
+        // non-empty when their respective End messages are processed.
+        driver.send_read_response_for(PARTITION_SESSION_ID, 0, b"p1");
+        driver.send_read_response_for(PARTITION_SESSION_ID_2, 0, b"p2");
+        driver.send_end_partition_session(PARTITION_SESSION_ID, vec![CHILD_PARTITION_ID]);
+        driver.send_end_partition_session(PARTITION_SESSION_ID_2, vec![CHILD_PARTITION_ID]);
+
+        // Child starts with two parent blocks after both Ends are processed.
+        driver
+            .start_session(CHILD_SESSION_ID, CHILD_PARTITION_ID)
+            .await;
+        driver.send_read_response_for(CHILD_SESSION_ID, 0, b"child");
+
+        // Drain both parent messages (order may vary).
+        let b1 = reader.read_batch().await?;
+        let b2 = reader.read_batch().await?;
+        let parent_pids = [
+            b1.messages[0].get_partition_id(),
+            b2.messages[0].get_partition_id(),
+        ];
+        assert!(
+            parent_pids.contains(&0) && parent_pids.contains(&PARTITION_ID_2),
+            "expected both parent partitions, got {parent_pids:?}"
+        );
+
+        let child =
+            tokio::time::timeout(std::time::Duration::from_millis(500), reader.read_batch())
+                .await
+                .expect("child must become readable after both parents drain")
+                .expect("read must succeed");
+        assert_eq!(
+            child.messages[0].get_partition_id(),
+            CHILD_PARTITION_ID,
+            "first batch after unblocking must be the child message"
+        );
+
+        Ok(())
+    }
+);
+
+// End on an already-drained parent must not register a block on the child.
+// Invariant: only non-empty parent queues impose ordering on their children.
+topic_test!(
+    end_on_drained_parent_child_starts_active,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader(&driver.server).await?;
+        driver.state.wait_partitions(1).await;
+
+        // Read and drain the only parent message before End is sent.
+        deliver_and_read(&driver, &mut reader, 0, b"parent").await?;
+
+        // End arrives with an empty parent queue → no block registered on child.
+        driver.send_end_partition_session(PARTITION_SESSION_ID, vec![PARTITION_ID_2]);
+        driver
+            .start_session(PARTITION_SESSION_ID_2, PARTITION_ID_2)
+            .await;
+
+        // Child should already be Active; its message must be available immediately.
+        driver.send_read_response_for(PARTITION_SESSION_ID_2, 0, b"child");
+
+        let child =
+            tokio::time::timeout(std::time::Duration::from_millis(500), reader.read_batch())
+                .await
+                .expect("child must be readable immediately when parent queue was empty at End")
+                .expect("read must succeed");
+        assert_eq!(child.messages[0].get_partition_id(), PARTITION_ID_2);
 
         Ok(())
     }
