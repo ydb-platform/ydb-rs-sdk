@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use crate::client::TimeoutSettings;
 use crate::errors::{NeedRetry, YdbResult};
 use crate::retry::{IndefiniteRetrier, Retry, RetryParams, TimeoutRetrier};
+use crate::retry_budget::{acquire_retry_budget, RetryControl, RetryPauseError};
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TableCallOptions {
@@ -18,6 +19,7 @@ pub(crate) fn resolve_timeouts(opts: &TableCallOptions) -> TimeoutSettings {
 }
 
 pub(crate) async fn retry_table_operation<CallbackFuture, CallbackResult>(
+    retry_control: &RetryControl,
     opts: &TableCallOptions,
     idempotent: bool,
     callback: impl Fn() -> CallbackFuture,
@@ -32,6 +34,7 @@ where
     let mut attempt: usize = 0;
     let start = Instant::now();
     loop {
+        retry_control.metrics().record_attempt();
         attempt += 1;
         let last_err = match callback().await {
             Ok(res) => return Ok(res),
@@ -51,5 +54,11 @@ where
             return Err(last_err);
         }
         tokio::time::sleep(retry_decision.wait_timeout).await;
+        match acquire_retry_budget(retry_control, start, opts.timeout).await {
+            Ok(()) => {}
+            Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
+                return Err(last_err);
+            }
+        }
     }
 }

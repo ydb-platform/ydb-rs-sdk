@@ -1,6 +1,3 @@
-use std::time::Duration;
-
-use rand::Rng;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::errors::{YdbError, YdbResult};
@@ -13,18 +10,23 @@ use super::builders::{
     ForgetOperationBuilder, GetOperationBuilder, ListOperationsBuilder, OperationCallOptions,
 };
 use super::types::{ListOperationsRequest, ListOperationsResult, OperationInfo};
-
-const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
-const MAX_RETRY_BACKOFF_MILLISECONDS: u64 = 1_000;
+use crate::retry_budget::RetryControl;
 
 #[derive(Clone)]
 pub struct OperationClient {
     connection_manager: GrpcConnectionManager,
+    retry_control: std::sync::Arc<RetryControl>,
 }
 
 impl OperationClient {
-    pub(crate) fn new(connection_manager: GrpcConnectionManager) -> Self {
-        Self { connection_manager }
+    pub(crate) fn new(
+        connection_manager: GrpcConnectionManager,
+        retry_control: std::sync::Arc<RetryControl>,
+    ) -> Self {
+        Self {
+            connection_manager,
+            retry_control,
+        }
     }
 
     pub fn get_operation(&self, id: impl Into<String>) -> GetOperationBuilder<'_> {
@@ -40,7 +42,7 @@ impl OperationClient {
         id: String,
         opts: OperationCallOptions,
     ) -> YdbResult<OperationInfo> {
-        retry_operation_call(&opts, || async {
+        retry_operation_call(&self.retry_control, &opts, || async {
             let mut client = self.raw_client().await?;
             let op = client.get_operation(&id).await.map_err(YdbError::from)?;
             Ok(raw_to_operation_info(op))
@@ -66,7 +68,7 @@ impl OperationClient {
             page_size: request.page_size,
             page_token: request.page_token,
         };
-        retry_operation_call(&opts, || async {
+        retry_operation_call(&self.retry_control, &opts, || async {
             let mut client = self.raw_client().await?;
             let result = client
                 .list_operations(raw_req.clone())
@@ -94,7 +96,7 @@ impl OperationClient {
         id: String,
         opts: OperationCallOptions,
     ) -> YdbResult<()> {
-        retry_operation_call(&opts, || async {
+        retry_operation_call(&self.retry_control, &opts, || async {
             let mut client = self.raw_client().await?;
             match client.forget_operation(&id).await.map_err(YdbError::from) {
                 Ok(()) => Ok(()),
@@ -122,7 +124,7 @@ impl OperationClient {
         id: String,
         opts: OperationCallOptions,
     ) -> YdbResult<()> {
-        retry_operation_call(&opts, || async {
+        retry_operation_call(&self.retry_control, &opts, || async {
             let mut client = self.raw_client().await?;
             client.cancel_operation(&id).await.map_err(YdbError::from)?;
             Ok(())
@@ -134,46 +136,5 @@ impl OperationClient {
         self.connection_manager
             .get_auth_service(RawOperationClient::new)
             .await
-    }
-}
-
-pub(crate) fn retry_wait(
-    attempt: usize,
-    time_from_start: Duration,
-    limit: Option<Duration>,
-) -> Option<Duration> {
-    let wait = if attempt > 0 {
-        let exp_shift = (attempt - 1).min(63) as u32;
-        let base_ms = INITIAL_RETRY_BACKOFF_MILLISECONDS
-            .saturating_mul(1u64 << exp_shift)
-            .min(MAX_RETRY_BACKOFF_MILLISECONDS);
-        let base = Duration::from_millis(base_ms);
-        let half = base / 2;
-        if half.is_zero() {
-            base
-        } else {
-            half + Duration::from_millis(rand::thread_rng().gen_range(0..=half.as_millis() as u64))
-        }
-    } else {
-        Duration::ZERO
-    };
-    match limit {
-        None => Some(wait),
-        Some(budget) if time_from_start >= budget => None,
-        Some(budget) if time_from_start + wait < budget => Some(wait),
-        Some(_) => None,
-    }
-}
-
-#[cfg(test)]
-mod unit_tests {
-    use super::*;
-
-    #[test]
-    fn retry_wait_bounded_by_budget() {
-        let budget = Duration::from_millis(100);
-        assert!(retry_wait(1, Duration::ZERO, Some(budget)).is_some());
-        assert!(retry_wait(10, budget, Some(budget)).is_none());
-        assert!(retry_wait(1, Duration::ZERO, None).is_some());
     }
 }

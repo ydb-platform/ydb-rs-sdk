@@ -212,7 +212,7 @@ async fn client_fetch_script_results(
     opts: CallOptions,
 ) -> YdbResult<FetchScriptResult> {
     // FetchScriptResults is always safe to retry (aligned with Go SDK).
-    run_with_retry(&opts, true, || {
+    run_with_retry(&ctx.retry_control, &opts, true, || {
         client_fetch_script_results_once(
             ctx,
             &operation_id,

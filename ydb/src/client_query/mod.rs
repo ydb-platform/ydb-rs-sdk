@@ -29,7 +29,6 @@ use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
 
 use futures_util::FutureExt;
-use tokio::time::sleep;
 
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr};
 use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -156,11 +155,13 @@ impl QueryClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
         session_pool: SessionPool,
+        retry_control: std::sync::Arc<crate::retry_budget::RetryControl>,
     ) -> Self {
         Self {
             ctx: ClientExecContext {
                 connection_manager,
                 session_pool,
+                retry_control,
             },
         }
     }
@@ -191,13 +192,15 @@ impl QueryClient {
     where
         F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
     {
-        use exec::{check_retry_tx_error, retry_wait};
+        use crate::retry_budget::{pause_before_retry, RetryPauseError};
+        use exec::check_retry_tx_error;
 
         let start = Instant::now();
         let absolute_deadline = wall_timeout.map(|d| start + d);
         let mut attempt = 0;
 
         loop {
+            self.ctx.retry_control.metrics().record_attempt();
             attempt += 1;
             let mut tx = Transaction::new(
                 self.ctx.connection_manager.clone(),
@@ -238,10 +241,11 @@ impl QueryClient {
             if !check_retry_tx_error(&err, idempotent) {
                 return Err(err);
             }
-            match retry_wait(attempt, start.elapsed(), wall_timeout) {
-                Some(wait) if wait > Duration::ZERO => sleep(wait).await,
-                Some(_) => {}
-                None => return Err(err),
+            match pause_before_retry(&self.ctx.retry_control, attempt, start, wall_timeout).await {
+                Ok(()) => {}
+                Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
+                    return Err(err);
+                }
             }
         }
     }

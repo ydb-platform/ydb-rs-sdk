@@ -78,6 +78,7 @@ async fn bad_session_marks_table_session_non_poolable() {
     use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+    use crate::retry_budget::RetryControl;
     use crate::session_pool::TableSessionPool;
     use http::Uri;
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
@@ -93,6 +94,7 @@ async fn bad_session_marks_table_session_non_poolable() {
             None,
             DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
         ),
+        std::sync::Arc::new(RetryControl::default()),
     );
 
     let mut session = pool.session().await.expect("lease table session");

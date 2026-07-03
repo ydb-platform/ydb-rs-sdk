@@ -3,11 +3,11 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use http::Uri;
-use rand::Rng;
-use tokio::time::{sleep, timeout};
+use tokio::time::timeout;
 
 use crate::errors::{NeedRetry, YdbError, YdbOrCustomerError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::retry_budget::{pause_before_retry, RetryControl, RetryPauseError};
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryRequest;
 use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
@@ -46,9 +46,6 @@ pub(crate) fn finish_pooled_query_stream(stream: &mut ExecuteQueryStream) {
     stream.finish_session_guard::<PooledQuerySessionGuard>(|guard| guard.finish_rpc());
 }
 
-const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
-const MAX_RETRY_BACKOFF_MILLISECONDS: u64 = 1_000;
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CallOptions {
     pub timeout: Option<Duration>,
@@ -67,6 +64,7 @@ pub(crate) struct CallOptions {
 pub(crate) struct ClientExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub session_pool: SessionPool,
+    pub retry_control: std::sync::Arc<RetryControl>,
 }
 
 pub(crate) struct TransactionExecContext {
@@ -130,6 +128,7 @@ where
 }
 
 pub(crate) async fn run_with_retry<T, F, Fut>(
+    retry_control: &RetryControl,
     opts: &CallOptions,
     idempotent: bool,
     attempt_fn: F,
@@ -138,7 +137,7 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = YdbResult<T>>,
 {
-    retry_until(idempotent, opts.timeout, attempt_fn).await
+    retry_until(retry_control, idempotent, opts.timeout, attempt_fn).await
 }
 
 async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQueryClient> {
@@ -259,6 +258,7 @@ pub(crate) fn resolve_commit_tx(core: &super::internal::ExecCoreRef, opts: &Call
 }
 
 async fn retry_until<T, F, Fut>(
+    retry_control: &RetryControl,
     idempotent: bool,
     limit: Option<Duration>,
     mut attempt_fn: F,
@@ -270,6 +270,7 @@ where
     let start = Instant::now();
     let mut attempt = 0usize;
     loop {
+        retry_control.metrics().record_attempt();
         attempt += 1;
         match attempt_fn().await {
             Ok(value) => return Ok(value),
@@ -277,10 +278,11 @@ where
                 if !should_retry_ydb_error(idempotent, &err) {
                     return Err(err);
                 }
-                match retry_wait(attempt, start.elapsed(), limit) {
-                    Some(wait) if wait > Duration::ZERO => sleep(wait).await,
-                    Some(_) => {}
-                    None => return Err(err),
+                match pause_before_retry(retry_control, attempt, start, limit).await {
+                    Ok(()) => {}
+                    Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
+                        return Err(err);
+                    }
                 }
             }
         }
@@ -393,7 +395,7 @@ pub(crate) async fn client_begin_stream(
     concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
     let idempotent = resolve_idempotent(&opts);
-    retry_until(idempotent, opts.timeout, || {
+    retry_until(&ctx.retry_control, idempotent, opts.timeout, || {
         client_begin_stream_once(ctx, &text, &params, &opts, concurrent_result_sets)
     })
     .await
@@ -729,37 +731,6 @@ pub(crate) fn check_retry_tx_error(err: &YdbOrCustomerError, idempotent: bool) -
     }
 }
 
-/// Sleep duration before the next retry attempt, or `None` when a timeout limit is exhausted.
-///
-/// `limit: None` — retry indefinitely (only non-retryable errors stop the loop).
-pub(crate) fn retry_wait(
-    attempt: usize,
-    time_from_start: Duration,
-    limit: Option<Duration>,
-) -> Option<Duration> {
-    let wait = if attempt > 0 {
-        let exp_shift = (attempt - 1).min(63) as u32;
-        let base_ms = INITIAL_RETRY_BACKOFF_MILLISECONDS
-            .saturating_mul(1u64 << exp_shift)
-            .min(MAX_RETRY_BACKOFF_MILLISECONDS);
-        let base = Duration::from_millis(base_ms);
-        let half = base / 2;
-        if half.is_zero() {
-            base
-        } else {
-            half + Duration::from_millis(rand::thread_rng().gen_range(0..=half.as_millis() as u64))
-        }
-    } else {
-        Duration::ZERO
-    };
-    match limit {
-        None => Some(wait),
-        Some(budget) if time_from_start >= budget => None,
-        Some(budget) if time_from_start + wait < budget => Some(wait),
-        Some(_) => None,
-    }
-}
-
 #[cfg(test)]
 pub(super) fn build_client_execute_request_for_test(
     opts: &CallOptions,
@@ -780,6 +751,7 @@ pub(super) fn build_client_execute_request_for_test(
 mod unit_tests {
     use super::*;
     use crate::errors::{YdbError, YdbOrCustomerError};
+    use crate::retry_budget::retry_wait;
 
     #[test]
     fn retry_helpers_and_wait() {

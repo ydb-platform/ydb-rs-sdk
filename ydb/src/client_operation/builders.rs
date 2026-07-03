@@ -3,9 +3,10 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use crate::errors::{NeedRetry, YdbResult};
+use crate::retry_budget::{pause_before_retry, RetryControl, RetryPauseError};
 use crate::grpc_wrapper::raw_operation_service::types::{RawListOperationsResult, RawOperation};
 
-use super::client::{retry_wait, OperationClient};
+use super::client::{OperationClient};
 use super::types::{ListOperationsRequest, ListOperationsResult, OperationInfo};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -92,6 +93,7 @@ impl_operation_call_builder!(ForgetOperationBuilder);
 impl_operation_call_builder!(CancelOperationBuilder);
 
 pub(crate) async fn retry_operation_call<T, F, Fut>(
+    retry_control: &RetryControl,
     opts: &OperationCallOptions,
     mut attempt_fn: F,
 ) -> YdbResult<T>
@@ -102,28 +104,27 @@ where
     let limit = opts.timeout;
     let start = std::time::Instant::now();
     let mut attempt = 0usize;
-    let run = async {
-        loop {
-            attempt += 1;
-            match attempt_fn().await {
-                Ok(value) => return Ok(value),
-                Err(err) => {
-                    if !matches!(
-                        err.need_retry(),
-                        NeedRetry::True | NeedRetry::IdempotentOnly
-                    ) {
+    loop {
+        retry_control.metrics().record_attempt();
+        attempt += 1;
+        match attempt_fn().await {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                if !matches!(
+                    err.need_retry(),
+                    NeedRetry::True | NeedRetry::IdempotentOnly
+                ) {
+                    return Err(err);
+                }
+                match pause_before_retry(retry_control, attempt, start, limit).await {
+                    Ok(()) => {}
+                    Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
                         return Err(err);
-                    }
-                    match retry_wait(attempt, start.elapsed(), limit) {
-                        Some(wait) if wait > Duration::ZERO => tokio::time::sleep(wait).await,
-                        Some(_) => {}
-                        None => return Err(err),
                     }
                 }
             }
         }
-    };
-    run.await
+    }
 }
 
 pub(crate) fn raw_to_operation_info(raw: RawOperation) -> OperationInfo {

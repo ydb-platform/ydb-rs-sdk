@@ -69,9 +69,14 @@ impl TableClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
         session_pool: SessionPool,
+        retry_control: std::sync::Arc<crate::retry_budget::RetryControl>,
     ) -> Self {
         Self {
-            session_pool: TableSessionPool::from_shared(session_pool, connection_manager),
+            session_pool: TableSessionPool::from_shared(
+                session_pool,
+                connection_manager,
+                retry_control,
+            ),
         }
     }
 
@@ -155,7 +160,7 @@ impl TableClient {
             request.columns = columns;
         }
         let raw = request.into_raw(String::new())?;
-        retry_table_operation(&opts, true, || async {
+        retry_table_operation(self.session_pool.retry_control(), &opts, true, || async {
             self.read_rows_once(raw.clone(), &opts).await
         })
         .await
@@ -184,7 +189,7 @@ impl TableClient {
         let Some(value) = try_vec_to_list_of_structs(rows)? else {
             return Ok(());
         };
-        retry_table_operation(&opts, true, || async {
+        retry_table_operation(self.session_pool.retry_control(), &opts, true, || async {
             self.bulk_upsert_once(table_path.clone(), value.clone(), &opts)
                 .await
         })
@@ -210,7 +215,7 @@ impl TableClient {
         destination_path: String,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
-        retry_table_operation(&opts, false, || async {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
             let mut session = self.create_session_with_opts(&opts).await?;
             let session_id = session.id.clone();
             let operation_params = session.operation_params();
@@ -243,7 +248,7 @@ impl TableClient {
         tables: Vec<CopyTableItem>,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
-        retry_table_operation(&opts, false, || async {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
             let mut session = self.create_session_with_opts(&opts).await?;
             let session_id = session.id.clone();
             let operation_params = session.operation_params();
@@ -284,7 +289,7 @@ impl TableClient {
         replace_destination: bool,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
-        retry_table_operation(&opts, false, || async {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
             let mut session = self.create_session_with_opts(&opts).await?;
             let session_id = session.id.clone();
             let operation_params = session.operation_params();
@@ -320,7 +325,7 @@ impl TableClient {
         tables: Vec<RenameTableItem>,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
-        retry_table_operation(&opts, false, || async {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
             let mut session = self.create_session_with_opts(&opts).await?;
             let session_id = session.id.clone();
             let operation_params = session.operation_params();
@@ -352,7 +357,7 @@ impl TableClient {
         path: String,
         opts: TableCallOptions,
     ) -> YdbResult<TableDescription> {
-        retry_table_operation(&opts, false, || async {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
             let mut session = self.create_session_with_opts(&opts).await?;
             let session_id = session.id.clone();
             let operation_params = session.operation_params();
@@ -386,7 +391,7 @@ impl TableClient {
         request: CreateTableRequest,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
-        retry_table_operation(&opts, false, || async {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
             let mut session = self.create_session_with_opts(&opts).await?;
             let raw = request
                 .clone()
@@ -412,7 +417,7 @@ impl TableClient {
         request: DropTableRequest,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
-        retry_table_operation(&opts, false, || async {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
             let mut session = self.create_session_with_opts(&opts).await?;
             let req = RawDropTableRequest {
                 session_id: session.id.clone(),
@@ -440,7 +445,7 @@ impl TableClient {
         request: AlterTableRequest,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
-        retry_table_operation(&opts, false, || async {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
             let mut session = self.create_session_with_opts(&opts).await?;
             let raw = request
                 .clone()
@@ -464,7 +469,7 @@ impl TableClient {
         &self,
         opts: TableCallOptions,
     ) -> YdbResult<TableOptionsDescription> {
-        retry_table_operation(&opts, false, || async {
+        retry_table_operation(self.session_pool.retry_control(), &opts, false, || async {
             let mut session = self.create_session_with_opts(&opts).await?;
             let req = RawDescribeTableOptionsRequest {
                 operation_params: session.operation_params(),
