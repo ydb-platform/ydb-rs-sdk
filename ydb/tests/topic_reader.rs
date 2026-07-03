@@ -717,3 +717,83 @@ topic_test!(
         Ok(())
     }
 );
+
+topic_test!(
+    child_partition_served_early_when_start_races_end_through_decompressor,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let decoder = GatedDecoder {
+            codec: RACE_CODEC,
+            entered: std::sync::Mutex::new(Some(entered_tx)),
+            release: std::sync::Mutex::new(Some(release_rx)),
+        };
+
+        let client = ClientBuilder::new_from_connection_string(format!(
+            "{}{DATABASE}?use_discovery=false",
+            driver.server.endpoint()
+        ))?
+        .with_executor(Arc::new(BlockingExecutor))
+        .client()?;
+        let mut reader = client
+            .topic_client()
+            .create_reader_with_params(
+                TopicReaderOptionsBuilder::default()
+                    .consumer(CONSUMER.to_string())
+                    .topic(TOPIC_PATH.into())
+                    .batch_size(1)
+                    .add_decoder(decoder)
+                    .build()?,
+            )
+            .await?;
+        driver.state.wait_partitions(1).await;
+
+        // First parent message uses RACE_CODEC so GatedDecoder blocks the blocking-pool
+        // task and holds the semaphore. The second parent message and EndPartitionSession
+        // queue behind the semaphore, so forward_loop cannot call
+        // register_ending_partition until after the gate opens.
+        driver.send_read_response_with_codec(0, 7, b"parent0", RACE_CODEC);
+        driver.send_read_response(1, b"parent1");
+        driver.send_end_partition_session(PARTITION_SESSION_ID, vec![PARTITION_ID_2]);
+        entered_rx.await.expect("decoder entered");
+
+        // grpc_streamer's receive loop runs independently and calls
+        // register_starting_partition(child) directly, before forward_loop has processed
+        // EndPartitionSession. With the bug, child enters round-robin unguarded.
+        driver
+            .start_session(PARTITION_SESSION_ID_2, PARTITION_ID_2)
+            .await;
+
+        let sid = driver.state.current_stream_id();
+        driver.send(Reply::Topic(builders::read_response(
+            sid,
+            PARTITION_SESSION_ID_2,
+            0,
+            b"child",
+        )));
+
+        release_tx.send(()).expect("release decoder");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // Correct: parent0 → parent1 → child
+        // Bug:     parent0 → child   → parent1  (child interleaved via premature round-robin entry)
+        let b1 = reader.read_batch().await?;
+        let b2 = reader.read_batch().await?;
+
+        assert_eq!(
+            b1.messages[0].get_partition_id(),
+            0,
+            "first batch must be from parent"
+        );
+        assert_eq!(
+            b2.messages[0].get_partition_id(),
+            0,
+            "parent must be fully drained before child is served"
+        );
+
+        Ok(())
+    }
+);
