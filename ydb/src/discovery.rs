@@ -270,6 +270,8 @@ struct DiscoverySharedState {
     connection_manager: GrpcConnectionManager,
     discovery_uri: Uri,
 
+    discovery_lock: tokio::sync::Mutex<()>,
+
     /// Watch sender for the discovery state changes.
     ///
     /// Initially contains `None`. Contains `Some(Err(err))` if
@@ -295,11 +297,14 @@ impl DiscoverySharedState {
             connection_manager,
             discovery_uri: http::Uri::from_str(endpoint)?,
             state_sender,
+            discovery_lock: tokio::sync::Mutex::new(()),
         })
     }
 
     #[tracing::instrument(skip(self))]
     async fn discovery_now(&self) -> YdbResult<()> {
+        let lock = self.discovery_lock.lock().await;
+
         let discovery_result = self.discovery_now_impl().await.map(Arc::new);
 
         let result = discovery_result
@@ -320,6 +325,8 @@ impl DiscoverySharedState {
                 false
             }
         });
+
+        drop(lock);
 
         result
     }
