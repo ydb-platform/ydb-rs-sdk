@@ -51,7 +51,7 @@ where
         };
 
         let now = Instant::now();
-        let retry_decision = retrier.wait_duration(RetryParams {
+        let retry_decision = retrier.retry_decision(RetryParams {
             attempt,
             time_from_start: now.duration_since(start),
         });

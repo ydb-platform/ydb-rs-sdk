@@ -24,6 +24,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::time::timeout;
+use tokio_stream::wrappers::WatchStream;
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
 
@@ -94,7 +95,7 @@ async fn update_load_balancer_test() -> YdbResult<()> {
 
     tokio::spawn(async move {
         trace!("updater start");
-        update_load_balancer(shared_lb, receiver).await;
+        update_load_balancer(shared_lb, WatchStream::new(receiver).boxed()).await;
         trace!("updater finished");
         updater_finished_sender.send(()).unwrap();
     });
@@ -542,7 +543,9 @@ async fn nearest_dc_balancer_integration() -> YdbResult<()> {
     let (state_sender, state_reciever) =
         watch::channel::<Arc<DiscoveryState>>(Arc::new(DiscoveryState::default()));
 
-    tokio::spawn(async move { update_load_balancer(self_updater, state_reciever).await });
+    tokio::spawn(async move {
+        update_load_balancer(self_updater, WatchStream::new(state_reciever).boxed()).await
+    });
 
     match sh.endpoint(Table) {
         Ok(_) => unreachable!(),
