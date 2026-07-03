@@ -27,7 +27,23 @@
 | `TableClient` | DDL (`create_table`, `alter_table`, …), `describe_table`, `read_rows`, `bulk_upsert` | Arbitrary SQL/YQL |
 | `QueryClient` | YQL (`exec`, `query_row`, streams), `retry_tx`, `execute_script` | Table DDL (use table client) |
 
-Both share one **session pool** on the driver (`Client::with_session_pool`). Automatic retries apply on both; per-call options (`.timeout()`, `.idempotent()`) are set on builders, not via `clone_with_*`.
+Both share one **session pool** on the driver (`Client::with_session_pool`). Automatic retries apply on both; per-call `.timeout()` and `.idempotent()` are set on builders, not via `clone_with_*`.
+
+**Table idempotency defaults** (overridable via `.idempotent(bool)`): `read_rows` and `bulk_upsert` default to `true`; DDL and describe default to `false`.
+
+## Current API coverage
+
+- **Table** (feature-complete for known scope): DDL, describe, `read_rows`, `bulk_upsert` — no SQL.
+- **Query** (feature-complete for known scope): one-shot YQL, `retry_tx`, execute-script + fetch results.
+- **Operation**: get/list/forget/cancel long-running server work (e.g. index build, backup).
+- **Scheme**: directory listing, path operations.
+- **Topics**: reader/writer; internal optimizations ongoing.
+- **Coordination**: distributed semaphores (integration-tested).
+- **Discovery**, **auth**, **TLS**: production-ready baseline.
+- **Retries**: per-call `.timeout()` / `.idempotent()`; driver-wide `RetryBudget` rate limiter.
+- **Resilience**: SLO/chaos workloads (`tests/slo/`, CI label `SLO`) — good client survival under cluster failures.
+
+Report missing table/query features via GitHub Issues.
 
 ## Developer experience goals
 
@@ -45,6 +61,15 @@ Both share one **session pool** on the driver (`Client::with_session_pool`). Aut
 - `#[non_exhaustive]` on many public enums; optional `force-exhaustive-all` feature for compile-time exhaustiveness checks.
 - Breaking changes increment `0.X` per project policy (see root `README.md`).
 
+### ydb 0.16.0 highlights (#516)
+
+- Table vs Query split: table = DDL + read_rows + bulk_upsert; SQL via Query Service.
+- Removed per-client `clone_with_*` and mistaken per-call `.retry_budget()` (was timeout-like).
+- Per-call `.timeout()` on table/query/operation builders; `.idempotent()` on table and query builders; `retry_transaction` → `retry_tx`.
+- Driver-wide `RetryBudget` (rate limiter): `clone_with_retry_budget`, `ClientBuilder::with_retry_budget`, `retry_metrics()`.
+- Operation client for long-running async server operations.
+- Table `add_attribute` / `drop_attribute` (#410).
+
 ### RetryBudget vs `.timeout()` (do not confuse)
 
 | Mechanism | What it limits | Where to set |
@@ -53,6 +78,12 @@ Both share one **session pool** on the driver (`Client::with_session_pool`). Aut
 | `RetryBudget` | **Rate** of retry attempts across the driver (anti-DDOS under failures) | `ClientBuilder::with_retry_budget` or `clone_with_retry_budget` |
 
 Older per-call `.retry_budget()` on builders was removed — it duplicated timeout semantics incorrectly. See [ydb-go-sdk `retry/budget`](https://github.com/ydb-platform/ydb-go-sdk/tree/master/retry/budget) for the theory.
+
+## Known gaps
+
+- Cross-SDK parity with Go/Java SDKs is tracked issue-by-issue.
+- `ydb-grpc-helpers` is commented out of the workspace — status unclear for new contributors.
+- **Topic client**: active internal work; reader/writer reconnect retries use separate `Retry`, not driver `RetryBudget`.
 
 ## Related resources
 

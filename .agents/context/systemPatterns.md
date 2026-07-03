@@ -45,7 +45,7 @@ Service clients (`TableClient`, `QueryClient`, …) are lightweight handles clon
 | `client.rs` | `Client`, `clone_with_retry_budget`, `retry_metrics`, factory methods |
 | `retry_budget.rs` | `RetryBudget` trait, `LimitedRetryBudget`, `PercentOfRpsRetryBudget`, `PercentRetryBudget` |
 | `client_query/` | Query Service: one-shot exec, `retry_tx`, scripts, transaction types |
-| `client_table/` | Table Service: builders with per-call `.timeout()`, session-backed RPCs |
+| `client_table/` | Table Service: builders with per-call `.timeout()` / `.idempotent()`, session-backed RPCs |
 | `client_operation/` | Operation Service: get/list/forget/cancel with retries |
 | `session_pool/` | Shared session pool for table + query (`SessionPool`, `TableSessionPool`) |
 | `grpc_connection_manager.rs` | Auth + discovery interceptors, channel lookup |
@@ -65,6 +65,12 @@ Client-level `clone_with_timeout`, `clone_with_retry`, `clone_with_idempotent`, 
 client.query_client()
     .retry_tx(async |tx| { /* ... */ })
     .timeout(Duration::from_secs(30))
+    .idempotent(true)
+    .await?;
+
+table_client
+    .read_rows(path, keys, None)
+    .timeout(Duration::from_secs(5))
     .idempotent(true)
     .await?;
 ```
@@ -121,7 +127,7 @@ Topic reader/writer reconnectors use separate `Retry` in their options — not t
 
 ### Table retries
 
-`client_table/call_options.rs` — `retry_table_operation` uses `Retry` trait (`IndefiniteRetrier` / `TimeoutRetrier`) plus driver budget acquire after backoff.
+`client_table/call_options.rs` — `retry_table_operation` uses `Retry` trait (`IndefiniteRetrier` / `TimeoutRetrier`) plus driver budget acquire after backoff. Per-call `.idempotent()` overrides operation defaults (`true` for `read_rows`/`bulk_upsert`, `false` for DDL/describe).
 
 ### Query retries
 
@@ -139,7 +145,7 @@ Files like `client_table_test_integration.rs`, `client_query/integration_test.rs
 
 ### Builder pattern
 
-`ClientBuilder`, per-call operation builders (`.timeout()`), topic reader/writer options, `retry_tx` builder, and several config types use builders or `derive_builder`.
+`ClientBuilder`, per-call operation builders (`.timeout()`, `.idempotent()`), topic reader/writer options, `retry_tx` builder, and several config types use builders or `derive_builder`.
 
 ## Adding a new API
 

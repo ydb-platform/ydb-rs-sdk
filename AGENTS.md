@@ -17,7 +17,7 @@ Project knowledge lives in [`.agents/context/`](.agents/context/). Coding rules 
    - scope / goals → [`projectBrief.md`](.agents/context/projectBrief.md)
 3. Quick lookup: [`README.md`](README.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), [docs.rs/ydb](https://docs.rs/ydb)
 
-**After significant work** — update `progress.md` and stable context files when the work itself merges. Do **not** merge changes to `activeContext.md` (branch-only scratch pad — see file header).
+**After significant work** — update stable context files (`systemPatterns.md`, `productContext.md`, `techContext.md`, `projectBrief.md`) when the work merges. Do **not** merge changes to `activeContext.md` or `progress.md` (placeholders — see file headers).
 
 On **"update memory bank"** — review all core files in [`.agents/context/README.md`](.agents/context/README.md).
 
@@ -41,7 +41,7 @@ On **"update memory bank"** — review all core files in [`.agents/context/READM
 - Comments, doc comments, error messages, logs: **English**.
 - Match style in the touched module; do not reformat unrelated code.
 - Do **not** change `Cargo.toml` / `Cargo.lock` unless the task requires it.
-- MSRV is not pinned in policy, but CI runs on Rust 1.82 and 1.91 — newer features are fine if they compile there.
+- MSRV is **1.85** (`rust-version` in workspace `Cargo.toml`); CI runs on Rust 1.85 and 1.91.
 - Integration tests are `#[ignore]`; need `YDB_CONNECTION_STRING` and `--include-ignored`.
 - `ydb-grpc` is generated; clippy excludes it. Do not bump crate versions unless asked.
 - Non-trivial changes: discuss in a GitHub issue first ([`CONTRIBUTING.md`](CONTRIBUTING.md)).
@@ -58,7 +58,5 @@ cargo test --workspace
 ```
 
 Fix all clippy warnings (`-D warnings`); do not rely on `cargo test` alone. `ydb-grpc` is excluded from clippy (generated code).
-
-Also: update `progress.md` only when the delivered work merges.
 
 Ask the user before dependency upgrades, MSRV changes, or public API design choices.

@@ -25,7 +25,7 @@ When two pull in opposite directions, the higher one wins.
 ## Rust edition / version
 
 - MSRV is not pinned in policy: feel free to use recent language and `std` features when they meaningfully simplify the code.
-- CI compiles against Rust 1.82 and 1.91; if you use a newer feature, make sure it compiles on the latest of those — otherwise raise the question.
+- CI compiles against Rust 1.85 and 1.91; if you use a newer feature, make sure it compiles on the latest of those — otherwise raise the question.
 
 ## Visibility
 

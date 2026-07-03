@@ -10,6 +10,11 @@ use crate::retry_budget::{acquire_retry_budget, RetryControl, RetryPauseError};
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TableCallOptions {
     pub timeout: Option<Duration>,
+    pub idempotent: Option<bool>,
+}
+
+pub(crate) fn resolve_idempotent(opts: &TableCallOptions, default: bool) -> bool {
+    opts.idempotent.unwrap_or(default)
 }
 
 pub(crate) fn resolve_timeouts(opts: &TableCallOptions) -> TimeoutSettings {
