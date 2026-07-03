@@ -3,10 +3,10 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use crate::errors::{NeedRetry, YdbResult};
-use crate::retry_budget::{pause_before_retry, RetryControl, RetryPauseError};
 use crate::grpc_wrapper::raw_operation_service::types::{RawListOperationsResult, RawOperation};
+use crate::retry_budget::{pause_before_retry, RetryControl, RetryPauseError};
 
-use super::client::{OperationClient};
+use super::client::OperationClient;
 use super::types::{ListOperationsRequest, ListOperationsResult, OperationInfo};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;

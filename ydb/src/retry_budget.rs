@@ -47,9 +47,9 @@ pub trait RetryBudget: Send + Sync {
     async fn acquire(&self, deadline: Option<Instant>) -> Result<(), RetryBudgetError>;
 }
 
-/// No-op budget: retries are never throttled by the driver.
+/// No-op budget used when the driver has no explicit retry budget.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct UnlimitedRetryBudget;
+pub(crate) struct UnlimitedRetryBudget;
 
 #[async_trait]
 impl RetryBudget for UnlimitedRetryBudget {
@@ -185,7 +185,6 @@ impl Default for RetryMetrics {
 }
 
 impl RetryMetrics {
-
     pub(crate) fn record_attempt(&self) {
         self.maybe_roll_window();
         self.total_ops.fetch_add(1, Ordering::Relaxed);
@@ -322,7 +321,10 @@ impl RetryControl {
         }
     }
 
-    pub(crate) fn with_shared_metrics(budget: Arc<dyn RetryBudget>, metrics: Arc<RetryMetrics>) -> Self {
+    pub(crate) fn with_shared_metrics(
+        budget: Arc<dyn RetryBudget>,
+        metrics: Arc<RetryMetrics>,
+    ) -> Self {
         Self { budget, metrics }
     }
 
@@ -416,7 +418,6 @@ pub(crate) async fn pause_before_retry(
     }
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {

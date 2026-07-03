@@ -145,7 +145,7 @@ pub use client::{Client, SessionPoolSettings, SessionPoolStats};
 
 pub use retry_budget::{
     LimitedRetryBudget, PercentOfRpsRetryBudget, PercentRetryBudget, RetryBudget, RetryBudgetError,
-    RetryMetrics, UnlimitedRetryBudget,
+    RetryMetrics,
 };
 
 // full enum pub types
@@ -156,8 +156,8 @@ pub use client_query::{
     CallBuilder, ClientOneShot, ExecBuilder, ExecCall, ExecuteScriptBuilder,
     ExecuteScriptOperation, FetchScriptResult, FetchScriptResultsBuilder, FromYdbRow, Interactive,
     OneResultSet, OneRow, OptionalRow, OptionalRowBuilder, QueryClient, QueryExecutor,
-    QueryRowBuilder, QueryStats, QueryStream, QueryStreamBuilder, ResultSetBuilder,
-    RetryTxBuilder, Streamed, Transaction, TransactionOptions, TxMode,
+    QueryRowBuilder, QueryStats, QueryStream, QueryStreamBuilder, ResultSetBuilder, RetryTxBuilder,
+    Streamed, Transaction, TransactionOptions, TxMode,
 };
 
 // full enum pub types

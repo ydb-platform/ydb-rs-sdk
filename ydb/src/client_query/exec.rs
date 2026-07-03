@@ -7,13 +7,13 @@ use tokio::time::timeout;
 
 use crate::errors::{NeedRetry, YdbError, YdbOrCustomerError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::retry_budget::{pause_before_retry, RetryControl, RetryPauseError};
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryRequest;
 use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::grpc_wrapper::raw_query_service::transaction_control::{
     begin_tx_control, tx_id_control, RawTxMode,
 };
+use crate::retry_budget::{pause_before_retry, RetryControl, RetryPauseError};
 use crate::types::Value;
 use crate::{TransactionOptions, TxMode};
 
@@ -493,16 +493,14 @@ pub(crate) async fn transaction_ensure_begin(
     }
     let session_id = tx_session_id(tx)?.to_string();
     let mut client = query_client_from_tx(tx).await?;
-    let tx_id = maybe_with_operation_timeout(
-        resolve_effective_timeout(tx.retry_deadline, None),
-        async {
+    let tx_id =
+        maybe_with_operation_timeout(resolve_effective_timeout(tx.retry_deadline, None), async {
             client
                 .begin_transaction(&session_id, tx_mode_to_raw(tx.tx_mode)?)
                 .await
                 .map_err(Into::into)
-        },
-    )
-    .await?;
+        })
+        .await?;
     apply_stream_tx_id(tx, Some(tx_id));
     Ok(())
 }
@@ -544,24 +542,25 @@ pub(crate) async fn transaction_begin_stream(
     let effective_timeout = resolve_effective_timeout(tx.retry_deadline, opts.timeout);
     let result: YdbResult<ExecuteQueryStream> =
         maybe_with_operation_timeout(effective_timeout, async {
-        ensure_tx_session(tx).await?;
-        if let Some(lease) = &mut tx.pooled_lease {
-            lease.begin_use();
-        }
-        if tx.begin {
-            transaction_ensure_begin(tx, true).await?;
-        }
-        let (mut client, req) =
-            transaction_execute_request(tx, text, params, &opts, concurrent_result_sets).await?;
-        let stream = client.execute_query(req).await.map_err(YdbError::from)?;
-        let mut stream = ExecuteQueryStream::new(stream);
-        stream.prime_first_part().await?;
-        if let Some(id) = stream.take_captured_tx_id() {
-            apply_stream_tx_id(tx, Some(id));
-        }
-        Ok(stream)
-    })
-    .await;
+            ensure_tx_session(tx).await?;
+            if let Some(lease) = &mut tx.pooled_lease {
+                lease.begin_use();
+            }
+            if tx.begin {
+                transaction_ensure_begin(tx, true).await?;
+            }
+            let (mut client, req) =
+                transaction_execute_request(tx, text, params, &opts, concurrent_result_sets)
+                    .await?;
+            let stream = client.execute_query(req).await.map_err(YdbError::from)?;
+            let mut stream = ExecuteQueryStream::new(stream);
+            stream.prime_first_part().await?;
+            if let Some(id) = stream.take_captured_tx_id() {
+                apply_stream_tx_id(tx, Some(id));
+            }
+            Ok(stream)
+        })
+        .await;
     if let Err(err) = &result {
         transaction_mark_invalidated_on_query_error(tx, err);
         if let Some(lease) = &mut tx.pooled_lease {
@@ -585,16 +584,14 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
     let tx_id = tx.tx_id.take().expect("checked Some");
     let session_id = tx_session_id(tx)?.to_string();
     let mut client = query_client_from_tx(tx).await?;
-    let result = maybe_with_operation_timeout(
-        resolve_effective_timeout(tx.retry_deadline, None),
-        async {
+    let result =
+        maybe_with_operation_timeout(resolve_effective_timeout(tx.retry_deadline, None), async {
             client
                 .commit_transaction(&session_id, &tx_id)
                 .await
                 .map_err(Into::into)
-        },
-    )
-    .await;
+        })
+        .await;
     release_tx_session_handling_error(tx, result.as_ref().err()).await;
     tx.finished = true;
     // Do not retry commit: a transport timeout may mean the commit succeeded server-side.
