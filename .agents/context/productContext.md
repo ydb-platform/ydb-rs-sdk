@@ -13,7 +13,7 @@
 | Run YQL via Query Service | `Client::query_client()` — `exec`, `query_row`, `retry_tx` |
 | Table DDL / point reads / bulk upsert | `Client::table_client()` |
 | Browse database directory / schema | `Client::scheme_client()` |
-| Long-running server operations | `Client::operation_client()` — poll index builds, backups, etc. (`get_operation`, `list_operations`, `forget`) |
+| Long-running server operations | `Client::operation_client()` — poll index builds, backups, etc. (`get_operation`, `list_operations`, `forget_operation`, `cancel_operation`) |
 | Produce/consume topic messages | `Client::topic_client()` — reader/writer APIs |
 | Distributed locks / semaphores | `Client::coordination_client()` |
 | Auth (static token, JWT, metadata) | `ClientBuilder::with_credentials`, credential types in `credentials.rs` |
