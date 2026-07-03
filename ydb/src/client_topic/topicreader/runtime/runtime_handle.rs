@@ -10,8 +10,10 @@ use crate::client_topic::topicreader::partition_state::PartitionSession;
 use crate::client_topic::topicreader::reader::TopicReaderCommitMarker;
 use crate::grpc_wrapper::raw_topic_service::common::partition::RawOffsetsRange;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
-    PartitionCommitOffset, RawCommitOffsetRequest, RawFromClientOneOf, RawFromServer,
-    RawReadRequest, RawStartPartitionSessionResponse, RawStopPartitionSessionResponse,
+    PartitionCommitOffset, RawCommitOffsetRequest, RawCommitOffsetResponse, RawEndPartitionSession,
+    RawFromClientOneOf, RawFromServer, RawReadRequest, RawReadResponse,
+    RawStartPartitionSessionRequest, RawStartPartitionSessionResponse,
+    RawStopPartitionSessionRequest, RawStopPartitionSessionResponse,
 };
 use crate::{YdbError, YdbResult};
 
@@ -82,128 +84,15 @@ impl RuntimeHandle {
 
     pub(crate) fn handle_from_server(&self, msg: RawFromServer) -> YdbResult<()> {
         match msg {
-            RawFromServer::ReadResponse(resp) => {
-                let mut pushed = false;
-                {
-                    let mut state = self.lock_state()?;
-                    let State::Active(active) = &mut *state else {
-                        return Ok(());
-                    };
-                    let reader_id = self.inner.reader_id;
-                    let epoch = active.connection.epoch();
-
-                    for partition_data in resp.partition_data {
-                        let psid =
-                            PartitionSessionId::from_raw(partition_data.partition_session_id);
-                        for batch in partition_data.batches {
-                            pushed |= active
-                                .partitions
-                                .push_raw_batch(batch, psid, reader_id, epoch)?;
-                        }
-                    }
-                }
-                if pushed {
-                    self.inner.messages_available.notify_one();
-                }
-                Ok(())
-            }
-
+            RawFromServer::ReadResponse(resp) => self.handle_read_response(resp),
             RawFromServer::StartPartitionSessionRequest(req) => {
-                let mut state = self.lock_state()?;
-                let State::Active(active) = &mut *state else {
-                    return Ok(());
-                };
-                let session = PartitionSession::from(req);
-                let psid = session.partition_session_id;
-                active.partitions.start(session)?;
-                active
-                    .connection
-                    .send(RawFromClientOneOf::StartPartitionSessionResponse(
-                        RawStartPartitionSessionResponse {
-                            partition_session_id: psid.as_raw(),
-                        },
-                    ))?;
-                Ok(())
+                self.handle_start_partition_session(req)
             }
-
             RawFromServer::StopPartitionSessionRequest(req) => {
-                let psid = PartitionSessionId::from_raw(req.partition_session_id);
-                let outcome: StopOutcome = {
-                    let mut state = self.lock_state()?;
-                    let State::Active(active) = &mut *state else {
-                        return Ok(());
-                    };
-                    active.pending_commits.stop(
-                        psid,
-                        Some(req.committed_offset),
-                        &YdbError::custom(format!("partition session {psid} stopped by server")),
-                    );
-                    let outcome = active.partitions.stop(psid, req.committed_offset)?;
-                    active
-                        .connection
-                        .send(RawFromClientOneOf::StopPartitionSessionResponse(
-                            RawStopPartitionSessionResponse {
-                                partition_session_id: psid.as_raw(),
-                            },
-                        ))?;
-                    outcome
-                };
-                if outcome.messages_became_available {
-                    self.inner.messages_available.notify_one();
-                }
-                if outcome.reconnect_required {
-                    return Err(YdbError::Transport(format!(
-                        "partition session {psid} stopped before terminal offset committed, reconnecting"
-                    )));
-                }
-                Ok(())
+                self.handle_stop_partition_session(req)
             }
-
-            RawFromServer::EndPartitionSession(end) => {
-                let psid = PartitionSessionId::from_raw(end.partition_session_id);
-                let child_ids = end
-                    .child_partition_ids
-                    .into_iter()
-                    .map(PartitionId::from_raw)
-                    .collect_vec();
-
-                let mut state = self.lock_state()?;
-                let State::Active(active) = &mut *state else {
-                    return Ok(());
-                };
-                active.partitions.end(psid, child_ids)?;
-                Ok(())
-            }
-
-            RawFromServer::CommitOffsetResponse(resp) => {
-                let committed_offsets: Vec<(PartitionSessionId, i64)> = resp
-                    .partitions_committed_offsets
-                    .into_iter()
-                    .map(|o| {
-                        (
-                            PartitionSessionId::from_raw(o.partition_session_id),
-                            o.committed_offset,
-                        )
-                    })
-                    .collect();
-                let mut child_unblocked = false;
-                {
-                    let mut state = self.lock_state()?;
-                    if let State::Active(active) = &mut *state {
-                        for &(psid, committed_offset) in &committed_offsets {
-                            child_unblocked |= active
-                                .partitions
-                                .observe_commit_ack(psid, committed_offset)?;
-                        }
-                    }
-                }
-                self.ack_commits(committed_offsets)?;
-                if child_unblocked {
-                    self.inner.messages_available.notify_one();
-                }
-                Ok(())
-            }
-
+            RawFromServer::EndPartitionSession(end) => self.handle_end_partition_session(end),
+            RawFromServer::CommitOffsetResponse(resp) => self.handle_commit_offset_response(resp),
             RawFromServer::InitResponse(_) => {
                 debug!("topic reader initialized");
                 Ok(())
@@ -217,6 +106,130 @@ impl RuntimeHandle {
                 Ok(())
             }
         }
+    }
+
+    fn handle_read_response(&self, resp: RawReadResponse) -> YdbResult<()> {
+        let mut pushed = false;
+        {
+            let mut state = self.lock_state()?;
+            let State::Active(active) = &mut *state else {
+                return Ok(());
+            };
+            let reader_id = self.inner.reader_id;
+            let epoch = active.connection.epoch();
+
+            for partition_data in resp.partition_data {
+                let psid = PartitionSessionId::from_raw(partition_data.partition_session_id);
+                for batch in partition_data.batches {
+                    pushed |= active
+                        .partitions
+                        .push_raw_batch(batch, psid, reader_id, epoch)?;
+                }
+            }
+        }
+        if pushed {
+            self.inner.messages_available.notify_one();
+        }
+        Ok(())
+    }
+
+    fn handle_start_partition_session(
+        &self,
+        req: RawStartPartitionSessionRequest,
+    ) -> YdbResult<()> {
+        let mut state = self.lock_state()?;
+        let State::Active(active) = &mut *state else {
+            return Ok(());
+        };
+        let session = PartitionSession::from(req);
+        let psid = session.partition_session_id;
+        active.partitions.start(session)?;
+        active
+            .connection
+            .send(RawFromClientOneOf::StartPartitionSessionResponse(
+                RawStartPartitionSessionResponse {
+                    partition_session_id: psid.as_raw(),
+                },
+            ))?;
+        Ok(())
+    }
+
+    fn handle_stop_partition_session(&self, req: RawStopPartitionSessionRequest) -> YdbResult<()> {
+        let psid = PartitionSessionId::from_raw(req.partition_session_id);
+        let outcome: StopOutcome = {
+            let mut state = self.lock_state()?;
+            let State::Active(active) = &mut *state else {
+                return Ok(());
+            };
+            active.pending_commits.stop(
+                psid,
+                Some(req.committed_offset),
+                &YdbError::custom(format!("partition session {psid} stopped by server")),
+            );
+            let outcome = active.partitions.stop(psid, req.committed_offset)?;
+            active
+                .connection
+                .send(RawFromClientOneOf::StopPartitionSessionResponse(
+                    RawStopPartitionSessionResponse {
+                        partition_session_id: psid.as_raw(),
+                    },
+                ))?;
+            outcome
+        };
+        if outcome.messages_became_available {
+            self.inner.messages_available.notify_one();
+        }
+        if outcome.reconnect_required {
+            return Err(YdbError::Transport(format!(
+                "partition session {psid} stopped before terminal offset committed, reconnecting"
+            )));
+        }
+        Ok(())
+    }
+
+    fn handle_end_partition_session(&self, end: RawEndPartitionSession) -> YdbResult<()> {
+        let psid = PartitionSessionId::from_raw(end.partition_session_id);
+        let child_ids = end
+            .child_partition_ids
+            .into_iter()
+            .map(PartitionId::from_raw)
+            .collect_vec();
+
+        let mut state = self.lock_state()?;
+        let State::Active(active) = &mut *state else {
+            return Ok(());
+        };
+        active.partitions.end(psid, child_ids)?;
+        Ok(())
+    }
+
+    fn handle_commit_offset_response(&self, resp: RawCommitOffsetResponse) -> YdbResult<()> {
+        let committed_offsets: Vec<(PartitionSessionId, i64)> = resp
+            .partitions_committed_offsets
+            .into_iter()
+            .map(|o| {
+                (
+                    PartitionSessionId::from_raw(o.partition_session_id),
+                    o.committed_offset,
+                )
+            })
+            .collect();
+        let mut child_unblocked = false;
+        {
+            let mut state = self.lock_state()?;
+            if let State::Active(active) = &mut *state {
+                for &(psid, committed_offset) in &committed_offsets {
+                    child_unblocked |= active
+                        .partitions
+                        .observe_commit_ack(psid, committed_offset)?;
+                }
+            }
+        }
+        self.ack_commits(committed_offsets)?;
+        if child_unblocked {
+            self.inner.messages_available.notify_one();
+        }
+        Ok(())
     }
 
     pub(crate) async fn pop_batch(&self, cap: usize) -> YdbResult<TopicReaderBatch> {
