@@ -912,6 +912,41 @@ topic_test!(
     }
 );
 
+// Committing the last batch of an ending (but not yet stopped) partition session
+// must succeed. Bug: pop_batch() calls stop() when the queue drains on an Ending
+// session, removing the session before the user can commit, so commit() returns
+// "commit for stopped partition session".
+topic_test!(
+    commit_last_batch_of_ending_parent_must_succeed,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader(&driver.server).await?;
+        driver.state.wait_partitions(1).await;
+
+        driver.send_read_response(0, b"final");
+        driver.send_end_partition_session(PARTITION_SESSION_ID, vec![PARTITION_ID_2]);
+        // start_session waits for StartPartitionSessionResponse, which the runtime
+        // sends only after processing Start. Start arrives after End in the ordered
+        // queue, so by the time this returns, End has been processed and the parent
+        // session has lifecycle=Ending. This guarantees pop_batch() sees the Ending
+        // state and triggers the auto-stop path.
+        driver
+            .start_session(PARTITION_SESSION_ID_2, PARTITION_ID_2)
+            .await;
+
+        let batch = reader.read_batch().await?;
+        assert_eq!(batch.messages[0].get_partition_id(), 0);
+        let marker = batch.get_commit_marker();
+
+        reader
+            .commit(marker)
+            .expect("commit of ending parent's last batch must succeed");
+
+        Ok(())
+    }
+);
+
 // End on an already-drained parent must not register a block on the child.
 // Invariant: only non-empty parent queues impose ordering on their children.
 topic_test!(
