@@ -312,19 +312,15 @@ impl DiscoverySharedState {
             .map(|_| ())
             .map_err(YdbError::clone);
 
-        self.state_sender.send_if_modified(move |state| {
-            let is_retriable_error = match &discovery_result {
-                Ok(_) => false,
-                Err(err) => err.need_retry() != NeedRetry::False,
-            };
-
-            if !is_retriable_error && (state.is_none() || discovery_result.is_ok()) {
-                *state = Some(discovery_result);
-                true
-            } else {
-                false
-            }
-        });
+        self.state_sender
+            .send_if_modified(move |state| match (&state, &discovery_result) {
+                (_, Err(err)) if err.need_retry() != NeedRetry::False => false,
+                (Some(_), Err(_)) => false,
+                (None, _) | (Some(_), Ok(_)) => {
+                    *state = Some(discovery_result);
+                    true
+                }
+            });
 
         drop(lock);
 
