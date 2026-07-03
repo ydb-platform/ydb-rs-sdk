@@ -134,7 +134,7 @@ macro_rules! interactive_mode_select {
             let qc = client.query_client();
 
             let v: i64 = qc
-                .retry_transaction(async |tx| {
+                .retry_tx(async |tx| {
                     let mut row = tx.query_row("SELECT 42 AS v").await?;
                     Ok(row.remove_field_by_name("v")?.try_into()?)
                 })
@@ -158,7 +158,7 @@ async fn query_tx_snapshot_rw() -> YdbResult<()> {
     let qc = client.query_client();
 
     match qc
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             let mut row = tx.query_row("SELECT 42 AS v").await?;
             let v: i64 = row.remove_field_by_name("v")?.try_into()?;
             Ok(v)
@@ -191,7 +191,7 @@ async fn query_tx_snapshot_rw_upsert() -> YdbResult<()> {
     .await?;
 
     if let Err(err) = qc
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             tx.exec(format!(
                 "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
             ))
@@ -228,7 +228,7 @@ async fn query_tx_stale_ro_rejected_in_interactive() {
     let qc = client.query_client();
 
     let err = qc
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             tx.query_row("SELECT 1 AS v").await?;
             Ok(())
         })
@@ -251,7 +251,7 @@ async fn query_tx_implicit_rejected_in_interactive() {
     let qc = client.query_client();
 
     let err = qc
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             tx.query_row("SELECT 1 AS v").await?;
             Ok(())
         })

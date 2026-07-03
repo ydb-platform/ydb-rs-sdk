@@ -1,11 +1,11 @@
 //! Query Service public facade (<https://github.com/ydb-platform/ydb-rs-sdk/issues/207>).
 //!
-//! Requires Rust 1.85+ (`AsyncFnMut` in [`QueryClient::retry_transaction`]).
+//! Requires Rust 1.85+ (`AsyncFnMut` in [`QueryClient::retry_tx`]).
 
 mod builders;
 mod exec;
 mod internal;
-mod retry_transaction;
+mod retry_tx;
 mod script;
 mod stream_facade;
 
@@ -169,91 +169,80 @@ impl QueryClient {
     ///
     /// ```ignore
     /// client.query_client()
-    ///     .retry_transaction(async |tx| { ... })
+    ///     .retry_tx(async |tx| { ... })
     ///     .isolation(TxMode::SerializableReadWrite)
     ///     .timeout(Duration::from_secs(30))
     ///     .await?;
     /// ```
-    pub fn retry_transaction<F, T>(&self, callback: F) -> RetryTransactionBuilder<'_, F, T>
+    pub fn retry_tx<F, T>(&self, callback: F) -> RetryTxBuilder<'_, F, T>
     where
         F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
     {
-        RetryTransactionBuilder::new(self, callback)
+        RetryTxBuilder::new(self, callback)
     }
 
-    pub(crate) async fn run_retry_transaction<F, T>(
+    pub(crate) async fn run_retry_tx<F, T>(
         &self,
         mut callback: F,
         options: TransactionOptions,
         wall_timeout: Option<Duration>,
+        idempotent: bool,
     ) -> YdbResultWithCustomerErr<T>
     where
         F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
     {
-        use exec::{check_retry_transaction_error, retry_wait};
-        use tokio::time::timeout;
+        use exec::{check_retry_tx_error, retry_wait};
 
-        let run = async {
-            let retry_limit = wall_timeout.unwrap_or(Duration::ZERO);
-            let start = Instant::now();
-            let mut attempt = 0;
+        let start = Instant::now();
+        let absolute_deadline = wall_timeout.map(|d| start + d);
+        let mut attempt = 0;
 
-            loop {
-                attempt += 1;
-                let mut tx = Transaction::new(
-                    self.ctx.connection_manager.clone(),
-                    self.ctx.session_pool.clone(),
-                    options.clone(),
-                );
+        loop {
+            attempt += 1;
+            let mut tx = Transaction::new(
+                self.ctx.connection_manager.clone(),
+                self.ctx.session_pool.clone(),
+                options.clone(),
+                absolute_deadline,
+            );
 
-                let callback_result = AssertUnwindSafe(callback(&mut tx)).catch_unwind().await;
+            let callback_result = AssertUnwindSafe(callback(&mut tx)).catch_unwind().await;
 
-                let err = match callback_result {
-                    Ok(Ok(value)) => {
-                        if tx.state == TxState::RolledBack {
-                            return Ok(value);
-                        }
-                        if tx.ctx.finished {
-                            tx.state = TxState::Committed;
-                            return Ok(value);
-                        }
-                        return match tx.commit().await {
-                            Ok(()) => Ok(value),
-                            Err(e) => Err(YdbOrCustomerError::YDB(e)),
-                        };
+            let err = match callback_result {
+                Ok(Ok(value)) => {
+                    if tx.state == TxState::RolledBack {
+                        return Ok(value);
                     }
-                    Ok(Err(err)) => {
-                        tx.rollback_quiet().await;
-                        err
+                    if tx.ctx.finished {
+                        tx.state = TxState::Committed;
+                        return Ok(value);
                     }
-                    Err(panic_payload) => {
-                        tx.rollback_quiet().await;
-                        YdbOrCustomerError::YDB(YdbError::Custom(format!(
-                            "query transaction callback panicked: {}",
-                            panic_message(panic_payload)
-                        )))
-                    }
-                };
-
-                if !check_retry_transaction_error(&err) {
-                    return Err(err);
+                    return match tx.commit().await {
+                        Ok(()) => Ok(value),
+                        Err(e) => Err(YdbOrCustomerError::YDB(e)),
+                    };
                 }
-                match retry_wait(attempt, start.elapsed(), retry_limit) {
-                    Some(wait) if wait > Duration::ZERO => sleep(wait).await,
-                    Some(_) => {}
-                    None => return Err(err),
+                Ok(Err(err)) => {
+                    tx.rollback_quiet().await;
+                    err
                 }
+                Err(panic_payload) => {
+                    tx.rollback_quiet().await;
+                    YdbOrCustomerError::YDB(YdbError::Custom(format!(
+                        "query transaction callback panicked: {}",
+                        panic_message(panic_payload)
+                    )))
+                }
+            };
+
+            if !check_retry_tx_error(&err, idempotent) {
+                return Err(err);
             }
-        };
-
-        match wall_timeout {
-            Some(limit) => match timeout(limit, run).await {
-                Ok(result) => result,
-                Err(_) => Err(YdbOrCustomerError::YDB(YdbError::Transport(format!(
-                    "retry_transaction timed out after {limit:?}"
-                )))),
-            },
-            None => run.await,
+            match retry_wait(attempt, start.elapsed(), wall_timeout) {
+                Some(wait) if wait > Duration::ZERO => sleep(wait).await,
+                Some(_) => {}
+                None => return Err(err),
+            }
         }
     }
 
@@ -312,9 +301,15 @@ impl Transaction {
         connection_manager: GrpcConnectionManager,
         session_pool: SessionPool,
         options: TransactionOptions,
+        retry_deadline: Option<Instant>,
     ) -> Self {
         Self {
-            ctx: transaction_exec_context(connection_manager, session_pool, options),
+            ctx: transaction_exec_context(
+                connection_manager,
+                session_pool,
+                options,
+                retry_deadline,
+            ),
             state: TxState::Active,
         }
     }
@@ -411,7 +406,7 @@ pub use builders::{
     OptionalRow, OptionalRowBuilder, QueryExecutor, QueryRowBuilder, QueryStreamBuilder,
     ResultSetBuilder, Streamed,
 };
-pub use retry_transaction::RetryTransactionBuilder;
+pub use retry_tx::RetryTxBuilder;
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};
 pub use stream_facade::{QueryStats, QueryStream};

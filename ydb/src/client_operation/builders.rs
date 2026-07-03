@@ -2,9 +2,7 @@ use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 use std::time::Duration;
 
-use tokio::time::timeout;
-
-use crate::errors::{NeedRetry, YdbError, YdbResult};
+use crate::errors::{NeedRetry, YdbResult};
 use crate::grpc_wrapper::raw_operation_service::types::{RawListOperationsResult, RawOperation};
 
 use super::client::{retry_wait, OperationClient};
@@ -101,7 +99,7 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = YdbResult<T>>,
 {
-    let limit = opts.timeout.unwrap_or(Duration::ZERO);
+    let limit = opts.timeout;
     let start = std::time::Instant::now();
     let mut attempt = 0usize;
     let run = async {
@@ -125,15 +123,7 @@ where
             }
         }
     };
-    match opts.timeout {
-        Some(duration) => match timeout(duration, run).await {
-            Ok(result) => result,
-            Err(_) => Err(YdbError::Transport(format!(
-                "operation service rpc timed out after {duration:?}"
-            ))),
-        },
-        None => run.await,
-    }
+    run.await
 }
 
 pub(crate) fn raw_to_operation_info(raw: RawOperation) -> OperationInfo {

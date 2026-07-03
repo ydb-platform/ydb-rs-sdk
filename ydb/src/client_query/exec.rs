@@ -79,14 +79,26 @@ pub(crate) struct TransactionExecContext {
     pub query_node: Option<Uri>,
     pub tx_id: Option<String>,
     pub finished: bool,
+    /// Absolute deadline from [`QueryClient::retry_tx`] `.timeout()`, propagated to every RPC in the callback.
+    pub retry_deadline: Option<Instant>,
 }
 
 fn resolve_idempotent(opts: &CallOptions) -> bool {
     opts.idempotent.unwrap_or(false)
 }
 
-pub(crate) fn resolve_retry_limit(opts: &CallOptions) -> Duration {
-    opts.timeout.unwrap_or(Duration::ZERO)
+/// Per-call timeout capped by the parent [`retry_tx`](crate::QueryClient::retry_tx) deadline when set.
+pub(crate) fn resolve_effective_timeout(
+    deadline: Option<Instant>,
+    call_timeout: Option<Duration>,
+) -> Option<Duration> {
+    let remaining = deadline.and_then(|d| d.checked_duration_since(Instant::now()));
+    match (call_timeout, remaining) {
+        (None, None) => None,
+        (Some(c), None) => Some(c),
+        (None, Some(r)) => Some(r),
+        (Some(c), Some(r)) => Some(c.min(r)),
+    }
 }
 
 pub(crate) async fn maybe_with_operation_timeout<T, F>(
@@ -126,12 +138,7 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = YdbResult<T>>,
 {
-    let limit = opts.timeout;
-    let run = retry_with_budget(idempotent, resolve_retry_limit(opts), attempt_fn);
-    match limit {
-        Some(duration) => with_operation_timeout(duration, run).await,
-        None => run.await,
-    }
+    retry_until(idempotent, opts.timeout, attempt_fn).await
 }
 
 async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQueryClient> {
@@ -251,9 +258,9 @@ pub(crate) fn resolve_commit_tx(core: &super::internal::ExecCoreRef, opts: &Call
     }
 }
 
-async fn retry_with_budget<T, F, Fut>(
+async fn retry_until<T, F, Fut>(
     idempotent: bool,
-    retry_budget: Duration,
+    limit: Option<Duration>,
     mut attempt_fn: F,
 ) -> YdbResult<T>
 where
@@ -270,7 +277,7 @@ where
                 if !should_retry_ydb_error(idempotent, &err) {
                     return Err(err);
                 }
-                match retry_wait(attempt, start.elapsed(), retry_budget) {
+                match retry_wait(attempt, start.elapsed(), limit) {
                     Some(wait) if wait > Duration::ZERO => sleep(wait).await,
                     Some(_) => {}
                     None => return Err(err),
@@ -386,14 +393,10 @@ pub(crate) async fn client_begin_stream(
     concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
     let idempotent = resolve_idempotent(&opts);
-    let limit = opts.timeout;
-    let run = retry_with_budget(idempotent, resolve_retry_limit(&opts), || {
+    retry_until(idempotent, opts.timeout, || {
         client_begin_stream_once(ctx, &text, &params, &opts, concurrent_result_sets)
-    });
-    match limit {
-        Some(duration) => with_operation_timeout(duration, run).await,
-        None => run.await,
-    }
+    })
+    .await
 }
 
 /// Interactive transactions need a stable attached session from the driver pool.
@@ -488,12 +491,15 @@ pub(crate) async fn transaction_ensure_begin(
     }
     let session_id = tx_session_id(tx)?.to_string();
     let mut client = query_client_from_tx(tx).await?;
-    let tx_id = maybe_with_operation_timeout(None, async {
-        client
-            .begin_transaction(&session_id, tx_mode_to_raw(tx.tx_mode)?)
-            .await
-            .map_err(Into::into)
-    })
+    let tx_id = maybe_with_operation_timeout(
+        resolve_effective_timeout(tx.retry_deadline, None),
+        async {
+            client
+                .begin_transaction(&session_id, tx_mode_to_raw(tx.tx_mode)?)
+                .await
+                .map_err(Into::into)
+        },
+    )
     .await?;
     apply_stream_tx_id(tx, Some(tx_id));
     Ok(())
@@ -533,7 +539,9 @@ pub(crate) async fn transaction_begin_stream(
             "transaction already finished (committed or rolled back)".to_string(),
         ));
     }
-    let result: YdbResult<ExecuteQueryStream> = maybe_with_operation_timeout(opts.timeout, async {
+    let effective_timeout = resolve_effective_timeout(tx.retry_deadline, opts.timeout);
+    let result: YdbResult<ExecuteQueryStream> =
+        maybe_with_operation_timeout(effective_timeout, async {
         ensure_tx_session(tx).await?;
         if let Some(lease) = &mut tx.pooled_lease {
             lease.begin_use();
@@ -575,12 +583,15 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
     let tx_id = tx.tx_id.take().expect("checked Some");
     let session_id = tx_session_id(tx)?.to_string();
     let mut client = query_client_from_tx(tx).await?;
-    let result = maybe_with_operation_timeout(None, async {
-        client
-            .commit_transaction(&session_id, &tx_id)
-            .await
-            .map_err(Into::into)
-    })
+    let result = maybe_with_operation_timeout(
+        resolve_effective_timeout(tx.retry_deadline, None),
+        async {
+            client
+                .commit_transaction(&session_id, &tx_id)
+                .await
+                .map_err(Into::into)
+        },
+    )
     .await;
     release_tx_session_handling_error(tx, result.as_ref().err()).await;
     tx.finished = true;
@@ -597,12 +608,15 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
         let tx_id = tx.tx_id.take().expect("checked Some");
         if let Ok(session_id) = tx_session_id(tx) {
             if let Ok(mut client) = query_client_from_tx(tx).await {
-                let rollback_result = maybe_with_operation_timeout(None, async {
-                    client
-                        .rollback_transaction(session_id, &tx_id)
-                        .await
-                        .map_err(Into::into)
-                })
+                let rollback_result = maybe_with_operation_timeout(
+                    resolve_effective_timeout(tx.retry_deadline, None),
+                    async {
+                        client
+                            .rollback_transaction(session_id, &tx_id)
+                            .await
+                            .map_err(Into::into)
+                    },
+                )
                 .await;
                 if let Err(err) = rollback_result {
                     rollback_err = Some(err);
@@ -668,6 +682,7 @@ pub(crate) fn transaction_exec_context(
     connection_manager: GrpcConnectionManager,
     session_pool: SessionPool,
     options: TransactionOptions,
+    retry_deadline: Option<Instant>,
 ) -> TransactionExecContext {
     TransactionExecContext {
         connection_manager,
@@ -678,6 +693,7 @@ pub(crate) fn transaction_exec_context(
         query_node: None,
         tx_id: None,
         finished: false,
+        retry_deadline,
     }
 }
 
@@ -698,13 +714,6 @@ pub(crate) fn apply_stream_tx_id(tx: &mut TransactionExecContext, tx_id: Option<
     tx.tx_id = Some(id);
 }
 
-pub(crate) fn check_retry_transaction_error(err: &YdbOrCustomerError) -> bool {
-    match err {
-        YdbOrCustomerError::Customer(_) => false,
-        YdbOrCustomerError::YDB(err) => !matches!(err.need_retry(), NeedRetry::False),
-    }
-}
-
 pub(crate) fn should_retry_ydb_error(idempotent: bool, err: &YdbError) -> bool {
     match err.need_retry() {
         NeedRetry::True => true,
@@ -713,15 +722,21 @@ pub(crate) fn should_retry_ydb_error(idempotent: bool, err: &YdbError) -> bool {
     }
 }
 
-/// Sleep duration before the next retry attempt, or `None` when the retry budget is exhausted.
+pub(crate) fn check_retry_tx_error(err: &YdbOrCustomerError, idempotent: bool) -> bool {
+    match err {
+        YdbOrCustomerError::Customer(_) => false,
+        YdbOrCustomerError::YDB(err) => should_retry_ydb_error(idempotent, err),
+    }
+}
+
+/// Sleep duration before the next retry attempt, or `None` when a timeout limit is exhausted.
+///
+/// `limit: None` — retry indefinitely (only non-retryable errors stop the loop).
 pub(crate) fn retry_wait(
     attempt: usize,
     time_from_start: Duration,
-    retry_budget: Duration,
+    limit: Option<Duration>,
 ) -> Option<Duration> {
-    if time_from_start >= retry_budget {
-        return None;
-    }
     let wait = if attempt > 0 {
         let exp_shift = (attempt - 1).min(63) as u32;
         let base_ms = INITIAL_RETRY_BACKOFF_MILLISECONDS
@@ -737,10 +752,11 @@ pub(crate) fn retry_wait(
     } else {
         Duration::ZERO
     };
-    if time_from_start + wait < retry_budget {
-        Some(wait)
-    } else {
-        None
+    match limit {
+        None => Some(wait),
+        Some(budget) if time_from_start >= budget => None,
+        Some(budget) if time_from_start + wait < budget => Some(wait),
+        Some(_) => None,
     }
 }
 
@@ -768,7 +784,7 @@ mod unit_tests {
     #[test]
     fn retry_helpers_and_wait() {
         let transport = YdbOrCustomerError::YDB(YdbError::Transport("timeout".into()));
-        assert!(check_retry_transaction_error(&transport));
+        assert!(check_retry_tx_error(&transport, true));
         assert!(should_retry_ydb_error(
             true,
             &YdbError::Transport("timeout".into())
@@ -777,16 +793,19 @@ mod unit_tests {
             false,
             &YdbError::Transport("timeout".into())
         ));
-        assert!(!check_retry_transaction_error(
-            &YdbOrCustomerError::from_mess("customer")
+        assert!(!check_retry_tx_error(
+            &YdbOrCustomerError::from_mess("customer"),
+            true
         ));
 
+        assert!(retry_wait(1, Duration::ZERO, None).is_some());
+
         let budget = Duration::from_millis(100);
-        let wait1 = retry_wait(1, Duration::ZERO, budget).expect("wait");
+        let wait1 = retry_wait(1, Duration::ZERO, Some(budget)).expect("wait");
         assert!(wait1 > Duration::ZERO);
-        let wait2 = retry_wait(2, Duration::ZERO, budget).expect("wait");
+        let wait2 = retry_wait(2, Duration::ZERO, Some(budget)).expect("wait");
         assert!(wait2 >= wait1);
-        assert!(retry_wait(10, budget, budget).is_none());
+        assert!(retry_wait(10, budget, Some(budget)).is_none());
     }
 
     #[tokio::test]
@@ -812,6 +831,7 @@ mod unit_tests {
             ),
             SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
             TransactionOptions::default(),
+            None,
         );
         ctx.tx_id = Some("tx-1".into());
         ctx.finished = true;

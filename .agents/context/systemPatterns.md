@@ -35,7 +35,7 @@ Client
 | `connection_pool.rs` | Channel lifecycle, endpoint selection |
 | `load_balancer/` | `RandomBalancer`, `StaticBalancer`, `NearestDcBalancer` |
 | `session_pool.rs` | YDB session acquisition for table API |
-| `client_table.rs` | High-level table client, `retry_transaction` |
+| `client_table.rs` | High-level table client, `retry_tx` |
 | `grpc_wrapper/` | Thin wrappers around tonic services; auth interceptors |
 | `errors.rs` | `YdbError`, status code mapping, retry classification |
 | `types.rs` | YDB value types, conversions |

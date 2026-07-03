@@ -11,22 +11,24 @@ use super::QueryClient;
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
-/// Builder for [`QueryClient::retry_transaction`].
-pub struct RetryTransactionBuilder<'a, F, T> {
+/// Builder for [`QueryClient::retry_tx`].
+pub struct RetryTxBuilder<'a, F, T> {
     client: &'a QueryClient,
     callback: F,
     options: TransactionOptions,
     timeout: Option<Duration>,
+    idempotent: bool,
     _phantom: PhantomData<fn() -> T>,
 }
 
-impl<'a, F, T> RetryTransactionBuilder<'a, F, T> {
+impl<'a, F, T> RetryTxBuilder<'a, F, T> {
     pub(crate) fn new(client: &'a QueryClient, callback: F) -> Self {
         Self {
             client,
             callback,
             options: TransactionOptions::default(),
             timeout: None,
+            idempotent: false,
             _phantom: PhantomData,
         }
     }
@@ -48,14 +50,20 @@ impl<'a, F, T> RetryTransactionBuilder<'a, F, T> {
         self
     }
 
-    /// Max wall-clock time for the whole `retry_transaction` call (all attempts and backoff).
+    /// Also retry errors that require idempotency (see [`crate::CallBuilder::idempotent`]).
+    pub fn idempotent(mut self, idempotent: bool) -> Self {
+        self.idempotent = idempotent;
+        self
+    }
+
+    /// Wall-clock limit for the whole `retry_tx` call (all attempts, backoff, and in-callback RPCs).
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
     }
 }
 
-impl<'a, F, T> IntoFuture for RetryTransactionBuilder<'a, F, T>
+impl<'a, F, T> IntoFuture for RetryTxBuilder<'a, F, T>
 where
     F: AsyncFnMut(&mut super::Transaction) -> YdbResultWithCustomerErr<T>,
     F: 'a,
@@ -65,9 +73,11 @@ where
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(
-            self.client
-                .run_retry_transaction(self.callback, self.options, self.timeout),
-        )
+        Box::pin(self.client.run_retry_tx(
+            self.callback,
+            self.options,
+            self.timeout,
+            self.idempotent,
+        ))
     }
 }

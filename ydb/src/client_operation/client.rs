@@ -140,11 +140,8 @@ impl OperationClient {
 pub(crate) fn retry_wait(
     attempt: usize,
     time_from_start: Duration,
-    retry_budget: Duration,
+    limit: Option<Duration>,
 ) -> Option<Duration> {
-    if time_from_start >= retry_budget {
-        return None;
-    }
     let wait = if attempt > 0 {
         let exp_shift = (attempt - 1).min(63) as u32;
         let base_ms = INITIAL_RETRY_BACKOFF_MILLISECONDS
@@ -160,10 +157,11 @@ pub(crate) fn retry_wait(
     } else {
         Duration::ZERO
     };
-    if time_from_start + wait < retry_budget {
-        Some(wait)
-    } else {
-        None
+    match limit {
+        None => Some(wait),
+        Some(budget) if time_from_start >= budget => None,
+        Some(budget) if time_from_start + wait < budget => Some(wait),
+        Some(_) => None,
     }
 }
 
@@ -174,7 +172,8 @@ mod unit_tests {
     #[test]
     fn retry_wait_bounded_by_budget() {
         let budget = Duration::from_millis(100);
-        assert!(retry_wait(1, Duration::ZERO, budget).is_some());
-        assert!(retry_wait(10, budget, budget).is_none());
+        assert!(retry_wait(1, Duration::ZERO, Some(budget)).is_some());
+        assert!(retry_wait(10, budget, Some(budget)).is_none());
+        assert!(retry_wait(1, Duration::ZERO, None).is_some());
     }
 }

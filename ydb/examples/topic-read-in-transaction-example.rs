@@ -344,12 +344,12 @@ async fn main() -> YdbResult<()> {
         iteration += 1;
         println!("Iteration {iteration}: Starting transaction...");
 
-        // Use retry_transaction to handle each batch in its own transaction
+        // Use retry_tx to handle each batch in its own transaction
         // This provides automatic retry with exponential backoff for transient failures
         // IMPORTANT: The code inside this block can be executed MULTIPLE TIMES if retries occur!
         // Our approach prevents multiply side effects (like duplicate prints) during retries
         let result = query_client
-            .retry_transaction(async |tx| {
+            .retry_tx(async |tx| {
                 let mut reader_guard = reader_mutex.lock().await;
 
                 let batch_result =
@@ -447,7 +447,7 @@ async fn main() -> YdbResult<()> {
     // 3. Makes the code more testable and modular
     // 4. Reduces transaction retry overhead
     let table_data = query_client
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             let mut stream = tx
                 .query(
                     "SELECT topic, partition, offset, body

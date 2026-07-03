@@ -1,4 +1,4 @@
-//! `retry_transaction` with `AsyncFnMut(&mut Transaction)` on implicit sessions.
+//! `retry_tx` with `AsyncFnMut(&mut Transaction)` on implicit sessions.
 
 use std::time::Duration;
 
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // on `tx`: rust-analyzer does not yet reliably infer `async ||`
         // closure parameter types from the `AsyncFnMut` bound (the compiler
         // infers it fine without this).
-        .retry_transaction(async |tx: &mut Transaction| {
+        .retry_tx(async |tx: &mut Transaction| {
             attempts += 1; // mutable capture: AsyncFnMut allows it
             for id in 0..10_i64 {
                 tx.exec(upsert)
@@ -76,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A business outcome, not a failure: finish the transaction explicitly
     // and return a value. No commit, no retry, no Err.
     let outcome = qc
-        .retry_transaction(async |tx: &mut Transaction| {
+        .retry_tx(async |tx: &mut Transaction| {
             let mut row = tx
                 .query_row("SELECT balance FROM accounts WHERE id = $id")
                 .param("$id", 1_i64)
@@ -103,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- 3. Customer errors are never retried -------------------------------
     let res: YdbResultWithCustomerErr<()> = qc
-        .retry_transaction(async |tx: &mut Transaction| {
+        .retry_tx(async |tx: &mut Transaction| {
             tx.exec("DELETE FROM test").await?;
             Err(YdbOrCustomerError::from_err(std::io::Error::other(
                 "business rule violated",
@@ -115,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- 5. Lazy tx vs explicit begin ---------------------------------------
     // Default (lazy): the first ExecuteQuery opens the transaction (BeginTx in tx_control).
-    qc.retry_transaction(async |tx: &mut Transaction| {
+    qc.retry_tx(async |tx: &mut Transaction| {
         tx.exec("SELECT 1").await?;
         Ok(())
     })
@@ -123,7 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     // Explicit BeginTransaction RPC before any YQL:
-    qc.retry_transaction(async |tx: &mut Transaction| {
+    qc.retry_tx(async |tx: &mut Transaction| {
         tx.begin().await?;
         tx.exec("SELECT 1").await?;
         Ok(())
@@ -131,8 +131,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .timeout(EXAMPLE_TIMEOUT)
     .await?;
 
-    // Or configure explicit begin per retry_transaction call:
-    qc.retry_transaction(async |tx: &mut Transaction| {
+    // Or configure explicit begin per retry_tx call:
+    qc.retry_tx(async |tx: &mut Transaction| {
         tx.exec("SELECT 1").await?; // BeginTransaction RPC runs before this query
         Ok(())
     })
@@ -147,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )))
     .await?;
 
-    qc.retry_transaction(async |tx: &mut Transaction| {
+    qc.retry_tx(async |tx: &mut Transaction| {
         tx.exec(format!("UPSERT INTO {table} (id, val) VALUES ($id, $val)"))
             .param("$id", 1_i64)
             .param("$val", 100_i64)
@@ -157,7 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(())
     })
     .timeout(EXAMPLE_TIMEOUT)
-    .await?; // retry_transaction commit is a no-op
+    .await?; // retry_tx commit is a no-op
 
     let mut row = idem_row(qc.query_row(format!("SELECT val FROM {table} WHERE id = 1"))).await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
@@ -169,14 +169,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //    stream borrows the transaction and cannot outlive the callback:
     //
     //     let stream = qc
-    //         .retry_transaction(async |tx| Ok(tx.query("SELECT 1").await?))
+    //         .retry_tx(async |tx| Ok(tx.query("SELECT 1").await?))
     //         .await?;
     //     // error: lifetime may not live long enough
     //
     // b) Moving a captured value into the attempt (would break attempt #2):
     //
     //     let sql = String::from("SELECT 1");
-    //     qc.retry_transaction(async |tx| {
+    //     qc.retry_tx(async |tx| {
     //         tx.exec(sql).await?; // error[E0507]: cannot move out of `sql`,
     //         Ok(())               // which is behind a mutable reference
     //     })

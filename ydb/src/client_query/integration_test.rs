@@ -94,7 +94,7 @@ async fn query_client_multi_result_set() -> YdbResult<()> {
     let qc = client.query_client();
 
     let set_count = qc
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             let mut stream = tx.query("SELECT 42 AS a; SELECT 1 AS b, 2 AS c;").await?;
             let mut count = 0usize;
             while stream.next_result_set().await?.is_some() {
@@ -113,7 +113,7 @@ async fn query_client_multi_result_set() -> YdbResult<()> {
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
-async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
+async fn query_client_retry_tx_upsert() -> YdbResult<()> {
     let client = create_client().await?;
     let mut qc = client.query_client();
     let table_name = unique_table_name("query_client_test_upsert");
@@ -126,7 +126,7 @@ async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
 
     let upsert = format!("UPSERT INTO {table_name} (id, val) VALUES ($id, $val)");
 
-    qc.retry_transaction(async |tx| {
+    qc.retry_tx(async |tx| {
         for id in 0..3_i64 {
             tx.exec(&upsert)
                 .param("$id", id)
@@ -186,7 +186,7 @@ async fn query_client_snapshot_read_only_tx() -> YdbResult<()> {
     let qc = client.query_client();
 
     let value: i64 = qc
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             let mut row = tx.query_row("SELECT 42 AS v").await?;
             Ok(row.remove_field_by_name("v")?.try_into()?)
         })
@@ -212,7 +212,7 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
     )))
     .await?;
 
-    qc.retry_transaction(async |tx| {
+    qc.retry_tx(async |tx| {
         assert!(
             tx.tx_id_for_test().is_none(),
             "lazy transaction must not have tx_id before the first query"
@@ -257,7 +257,7 @@ async fn query_lazy_tx_commit_without_queries() -> YdbResult<()> {
     let qc = client.query_client();
 
     let value = qc
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             assert!(tx.tx_id_for_test().is_none());
             Ok(7_i32)
         })
@@ -275,7 +275,7 @@ async fn query_explicit_begin_via_begin() -> YdbResult<()> {
     let client = create_client().await?;
     let qc = client.query_client();
 
-    qc.retry_transaction(async |tx| {
+    qc.retry_tx(async |tx| {
         assert!(
             tx.tx_id_for_test().is_none(),
             "lazy transaction must not have tx_id before begin()"
@@ -304,7 +304,7 @@ async fn query_explicit_begin_via_client_option() -> YdbResult<()> {
     let client = create_client().await?;
     let qc = client.query_client();
 
-    qc.retry_transaction(async |tx| {
+    qc.retry_tx(async |tx| {
         tx.exec("SELECT 1 AS v").await?;
         assert!(
             tx.tx_id_for_test().is_some_and(|id| !id.is_empty()),
@@ -333,7 +333,7 @@ async fn query_with_commit_on_last_query() -> YdbResult<()> {
     )))
     .await?;
 
-    qc.retry_transaction(async |tx| {
+    qc.retry_tx(async |tx| {
         tx.exec(format!(
             "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
         ))

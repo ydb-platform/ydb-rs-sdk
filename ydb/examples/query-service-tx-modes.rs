@@ -66,7 +66,7 @@ async fn main() -> YdbResult<()> {
         ("SnapshotRW", TxMode::SnapshotReadWrite),
     ] {
         let v: i64 = match qc
-            .retry_transaction(async |tx| {
+            .retry_tx(async |tx| {
                 let mut row = tx.query_row("SELECT 42 AS v").await?;
                 Ok(row.remove_field_by_name("v")?.try_into()?)
             })

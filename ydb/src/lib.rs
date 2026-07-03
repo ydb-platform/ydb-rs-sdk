@@ -151,7 +151,7 @@ pub use client_query::{
     ExecuteScriptOperation, FetchScriptResult, FetchScriptResultsBuilder, FromYdbRow, Interactive,
     OneResultSet, OneRow, OptionalRow, OptionalRowBuilder, QueryClient, QueryExecutor,
     QueryRowBuilder, QueryStats, QueryStream, QueryStreamBuilder, ResultSetBuilder,
-    RetryTransactionBuilder, Streamed, Transaction, TransactionOptions, TxMode,
+    RetryTxBuilder, Streamed, Transaction, TransactionOptions, TxMode,
 };
 
 // full enum pub types
