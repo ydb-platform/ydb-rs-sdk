@@ -21,7 +21,7 @@ ClientBuilder
             ├── scheme_client()   # directory listing, describe path
             ├── topic_client()    # readers/writers
             ├── coordination_client()
-            └── operation_client()  # long-running operations (get/list/forget)
+            └── operation_client()  # long-running operations (get/list/forget/cancel)
 
 Client
     ├── SessionPool               # shared CreateSession + AttachSession (table + query)
