@@ -82,7 +82,8 @@ When two pull in opposite directions, the higher one wins.
 
 Apply when the code path actually matters (hot loops, reader/writer pipelines, connection pool). Don't preemptively complicate cold paths.
 
-- Retries and timeouts are **deadline-based**: use `tokio::time::timeout`; cleanup happens via `Drop`. Do not introduce `max_retries` knobs.
+- Retries and timeouts are **deadline-based**: use `tokio::time::timeout` and per-call `.timeout()` on builders; do not introduce `max_retries` knobs.
+- **Driver retry budget** (`retry_budget.rs`): second+ retry attempts call `RetryBudget::acquire(deadline)`; when exhausted, wait for quota or until the call deadline. Topic reconnectors use their own `Retry` — not the driver budget.
 - CPU-heavy work (compression, hashing of large payloads) runs on a worker pool / `spawn_blocking` — never on the async task that owns the request.
 - Cap parallel-work chunks by message count, not only by byte size, so one large batch can't pin a worker.
 - In hot paths: no avoidable `String` allocations where `&str` / `bytes::Bytes` works; reserve `Vec`/`HashMap` capacity when the size is known; pre-resolve name → index in setup so the inner loop indexes.

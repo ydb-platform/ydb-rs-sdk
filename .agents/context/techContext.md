@@ -5,7 +5,7 @@
 | Item | Value |
 |------|-------|
 | Edition | 2021 |
-| MSRV | 1.82 (`rust-version` in workspace `Cargo.toml`) |
+| MSRV | 1.85 (`rust-version` in `ydb/Cargo.toml`; Query `retry_tx` needs `AsyncFnMut`) |
 | CI Rust versions | 1.82 (tests), 1.91.0 (tests + lint) |
 | Async runtime | Tokio 1.x |
 | gRPC | tonic 0.14, prost 0.14, pbjson 0.8 |
