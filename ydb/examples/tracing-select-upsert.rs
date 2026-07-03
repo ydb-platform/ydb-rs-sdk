@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tokio::time::timeout;
 use tracing::instrument;
+use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
 
@@ -145,7 +146,8 @@ pub async fn main() -> YdbResult<()> {
     let fmt = tracing_subscriber::fmt::layer()
         .with_thread_names(true)
         .with_file(true)
-        .with_line_number(true);
+        .with_line_number(true)
+        .with_span_events(FmtSpan::FULL);
 
     // build OTEL tracer provider
     //

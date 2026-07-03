@@ -12,6 +12,7 @@ use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
 use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+use crate::traces::span_names::{DRIVER, YDB};
 use crate::{Client, Credentials};
 use http::Uri;
 use once_cell::sync::Lazy;
@@ -19,6 +20,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tracing::instrument;
 
 type ParamHandler = fn(&str, ClientBuilder) -> YdbResult<ClientBuilder>;
 
@@ -257,7 +259,15 @@ impl ClientBuilder {
         }
         Ok(client_builder)
     }
-
+    #[instrument(
+        name = DRIVER,
+        skip_all,
+        fields(
+            db.system.name = YDB,
+            db.namespace = %self.database,
+        ),
+        err
+    )]
     pub fn client(self) -> YdbResult<Client> {
         let db_cred = DBCredentials {
             token_cache: TokenCache::new(self.credentials.clone())?,

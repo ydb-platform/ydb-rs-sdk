@@ -8,7 +8,10 @@ use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::load_balancer::SharedLoadBalancer;
 use crate::session_pool::{default_session_pool_settings, SessionPool};
-use crate::traces::span_names::DRIVER_INITIALIZE;
+use crate::traces::span_names::{
+    DRIVER_COORDINATION_CLIENT, DRIVER_INITIALIZE, DRIVER_OPERATION_CLIENT, DRIVER_QUERY_CLIENT,
+    DRIVER_SCHEME_CLIENT, DRIVER_TABLE_CLIENT, DRIVER_TOPIC_CLIENT, YDB,
+};
 use crate::waiter::Waiter;
 
 pub use crate::session_pool::{SessionPoolSettings, SessionPoolStats};
@@ -98,6 +101,14 @@ impl Client {
     }
 
     /// Create instance of client for table service
+    #[instrument(
+        name = DRIVER_TABLE_CLIENT,
+        skip_all,
+        fields(
+            db.system.name = YDB,
+            db.namespace = %self.credentials.database,
+        ),
+    )]
     pub fn table_client(&self) -> TableClient {
         TableClient::new(
             self.connection_manager.clone(),
@@ -107,6 +118,14 @@ impl Client {
     }
 
     /// Create instance of client for query service.
+    #[instrument(
+        name = DRIVER_QUERY_CLIENT,
+        skip_all,
+        fields(
+            db.system.name = YDB,
+            db.namespace = %self.credentials.database,
+        ),
+    )]
     pub fn query_client(&self) -> QueryClient {
         QueryClient::new(
             self.connection_manager.clone(),
@@ -116,11 +135,27 @@ impl Client {
     }
 
     /// Create instance of client for directory service
+    #[instrument(
+        name = DRIVER_SCHEME_CLIENT,
+        skip_all,
+        fields(
+            db.system.name = YDB,
+            db.namespace = %self.credentials.database,
+        ),
+    )]
     pub fn scheme_client(&self) -> SchemeClient {
         SchemeClient::new(self.timeouts, self.connection_manager.clone())
     }
 
     /// Create instance of client for topic service
+    #[instrument(
+        name = DRIVER_TOPIC_CLIENT,
+        skip_all,
+        fields(
+            db.system.name = YDB,
+            db.namespace = %self.credentials.database,
+        ),
+    )]
     pub fn topic_client(&self) -> TopicClient {
         TopicClient::new(
             self.timeouts,
@@ -131,11 +166,27 @@ impl Client {
     }
 
     /// Create instance of client for coordination service
+    #[instrument(
+        name = DRIVER_COORDINATION_CLIENT,
+        skip_all,
+        fields(
+            db.system.name = YDB,
+            db.namespace = %self.credentials.database,
+        ),
+    )]
     pub fn coordination_client(&self) -> CoordinationClient {
         CoordinationClient::new(self.timeouts, self.connection_manager.clone())
     }
 
     /// Create instance of client for operation service (list/get/forget long-running operations).
+    #[instrument(
+        name = DRIVER_OPERATION_CLIENT,
+        skip_all,
+        fields(
+            db.system.name = YDB,
+            db.namespace = %self.credentials.database,
+        ),
+    )]
     pub fn operation_client(&self) -> OperationClient {
         OperationClient::new(self.timeouts, self.connection_manager.clone())
     }
@@ -156,7 +207,7 @@ impl Client {
         name = DRIVER_INITIALIZE,
         skip_all,
         fields(
-            db.system.name = "ydb",
+            db.system.name = YDB,
             db.namespace = %self.credentials.database,
         ),
         err
