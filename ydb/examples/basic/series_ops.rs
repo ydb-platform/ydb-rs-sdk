@@ -1,9 +1,21 @@
 use std::fmt::Write;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
-use ydb::{ydb_struct, Bytes, QueryClient, TxMode, Value, YdbResult};
+use ydb::{
+    ydb_struct, Bytes, ExecBuilder, QueryClient, QueryStreamBuilder, TxMode, Value, YdbResult,
+};
 
 use super::data::SampleData;
+
+const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn idem_exec<'a>(b: ExecBuilder<'a>) -> ExecBuilder<'a> {
+    b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
+}
+
+fn idem_query<'a>(b: QueryStreamBuilder<'a>) -> QueryStreamBuilder<'a> {
+    b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
+}
 
 fn table_path(prefix: &str, name: &str) -> String {
     format!("`{prefix}/{name}`")
@@ -11,15 +23,14 @@ fn table_path(prefix: &str, name: &str) -> String {
 
 pub async fn drop_tables(qc: &mut QueryClient, prefix: &str) -> YdbResult<()> {
     for name in ["episodes", "seasons", "series"] {
-        let _ = qc
-            .exec(format!("DROP TABLE IF EXISTS {}", table_path(prefix, name)))
-            .await;
+        let _ =
+            idem_exec(qc.exec(format!("DROP TABLE IF EXISTS {}", table_path(prefix, name)))).await;
     }
     Ok(())
 }
 
 pub async fn create_tables(qc: &mut QueryClient, prefix: &str) -> YdbResult<()> {
-    qc.exec(format!(
+    idem_exec(qc.exec(format!(
         "CREATE TABLE IF NOT EXISTS {} (
             series_id Bytes,
             title Utf8,
@@ -29,10 +40,10 @@ pub async fn create_tables(qc: &mut QueryClient, prefix: &str) -> YdbResult<()> 
             PRIMARY KEY(series_id)
         )",
         table_path(prefix, "series")
-    ))
+    )))
     .await?;
 
-    qc.exec(format!(
+    idem_exec(qc.exec(format!(
         "CREATE TABLE IF NOT EXISTS {} (
             series_id Bytes,
             season_id Bytes,
@@ -42,10 +53,10 @@ pub async fn create_tables(qc: &mut QueryClient, prefix: &str) -> YdbResult<()> 
             PRIMARY KEY(series_id, season_id)
         )",
         table_path(prefix, "seasons")
-    ))
+    )))
     .await?;
 
-    qc.exec(format!(
+    idem_exec(qc.exec(format!(
         "CREATE TABLE IF NOT EXISTS {} (
             series_id Bytes,
             season_id Bytes,
@@ -55,7 +66,7 @@ pub async fn create_tables(qc: &mut QueryClient, prefix: &str) -> YdbResult<()> 
             PRIMARY KEY(series_id, season_id, episode_id)
         )",
         table_path(prefix, "episodes")
-    ))
+    )))
     .await?;
 
     Ok(())
@@ -63,33 +74,39 @@ pub async fn create_tables(qc: &mut QueryClient, prefix: &str) -> YdbResult<()> 
 
 pub async fn fill_tables(qc: &mut QueryClient, prefix: &str, data: SampleData) -> YdbResult<()> {
     let series_list = Value::list_from(data.series_example, data.series)?;
-    qc.exec(format!(
-        "REPLACE INTO {}
+    idem_exec(
+        qc.exec(format!(
+            "REPLACE INTO {}
         SELECT series_id, title, series_info, release_date, comment
         FROM AS_TABLE($seriesData);",
-        table_path(prefix, "series")
-    ))
-    .param("$seriesData", series_list)
+            table_path(prefix, "series")
+        ))
+        .param("$seriesData", series_list),
+    )
     .await?;
 
     let seasons_list = Value::list_from(data.seasons_example, data.seasons)?;
-    qc.exec(format!(
-        "REPLACE INTO {}
+    idem_exec(
+        qc.exec(format!(
+            "REPLACE INTO {}
         SELECT series_id, season_id, title, first_aired, last_aired
         FROM AS_TABLE($seasonsData);",
-        table_path(prefix, "seasons")
-    ))
-    .param("$seasonsData", seasons_list)
+            table_path(prefix, "seasons")
+        ))
+        .param("$seasonsData", seasons_list),
+    )
     .await?;
 
     let episodes_list = Value::list_from(data.episodes_example, data.episodes)?;
-    qc.exec(format!(
-        "REPLACE INTO {}
+    idem_exec(
+        qc.exec(format!(
+            "REPLACE INTO {}
         SELECT series_id, season_id, episode_id, title, air_date
         FROM AS_TABLE($episodesData);",
-        table_path(prefix, "episodes")
-    ))
-    .param("$episodesData", episodes_list)
+            table_path(prefix, "episodes")
+        ))
+        .param("$episodesData", episodes_list),
+    )
     .await?;
 
     Ok(())
@@ -101,11 +118,7 @@ pub async fn read_series(qc: &mut QueryClient, prefix: &str) -> YdbResult<()> {
         table_path(prefix, "series")
     );
 
-    let mut stream = qc
-        .query(sql)
-        .with_tx_mode(TxMode::SnapshotReadOnly)
-        .idempotent(true)
-        .await?;
+    let mut stream = idem_query(qc.query(sql).with_tx_mode(TxMode::SnapshotReadOnly)).await?;
 
     while let Some(result_set) = stream.next_result_set().await? {
         for mut row in result_set {

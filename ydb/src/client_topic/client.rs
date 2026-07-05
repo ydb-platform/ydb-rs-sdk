@@ -128,13 +128,12 @@ pub struct TopicClient {
 
 impl TopicClient {
     pub(crate) fn new(
-        timeouts: TimeoutSettings,
         connection_manager: GrpcConnectionManager,
         token_cache: TokenCache,
         executor: Arc<dyn Executor>,
     ) -> Self {
         Self {
-            timeouts,
+            timeouts: TimeoutSettings::default(),
             connection_manager,
             token_cache,
             executor,

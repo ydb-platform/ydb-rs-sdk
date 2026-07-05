@@ -733,7 +733,7 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
 
     client
         .query_client()
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             let mut reader_guard = reader_mutex.lock().await;
             let mut local_received_messages = Vec::new();
             let mut message_counter = 0;

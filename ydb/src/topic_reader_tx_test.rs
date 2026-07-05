@@ -187,7 +187,7 @@ async fn query_topic_reader_tx_commit_advances_offset() -> YdbResult<()> {
     let query_client = client.query_client();
 
     query_client
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             tx.begin().await?;
             let mut reader_tx = reader.tx_reader(tx).await?;
             let mut observed = Vec::new();
@@ -240,7 +240,7 @@ async fn query_topic_reader_tx_callback_error_redelivers_messages() -> YdbResult
     let query_client = client.query_client();
 
     let result: YdbResultWithCustomerErr<()> = query_client
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             tx.begin().await?;
             let mut reader_tx = reader.tx_reader(tx).await?;
             let mut observed = Vec::new();
@@ -294,7 +294,7 @@ async fn query_topic_reader_tx_explicit_rollback_redelivers_messages() -> YdbRes
     let query_client = client.query_client();
 
     query_client
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             tx.begin().await?;
             let mut reader_tx = reader.tx_reader(tx).await?;
             let mut observed = Vec::new();
@@ -353,7 +353,7 @@ async fn query_topic_reader_tx_rewrap_same_reader_same_tx_commits_all_offsets() 
     let query_client = client.query_client();
 
     query_client
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             tx.begin().await?;
 
             let mut observed = Vec::new();

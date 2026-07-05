@@ -1,5 +1,4 @@
 use crate::client::Client;
-use crate::client::TimeoutSettings;
 use crate::errors::{YdbError, YdbResult};
 use crate::session_pool::SessionPoolSettings;
 use crate::test_helpers::test_custom_ca_client_builder;
@@ -57,10 +56,7 @@ pub(crate) async fn create_client_with_session_pool(
 ) -> YdbResult<Arc<Client>> {
     let client = test_client_builder()
         .with_executor(Arc::new(InplaceExecutor))
-        .client()?
-        .with_timeouts(TimeoutSettings {
-            operation_timeout: std::time::Duration::from_secs(60),
-        });
+        .client()?;
     client.wait().await?;
     Ok(Arc::new(client.with_session_pool(settings).await?))
 }
@@ -69,10 +65,7 @@ async fn connect(executor: Arc<dyn Executor>) -> YdbResult<Arc<Client>> {
     let client = test_client_builder()
         .with_executor(executor)
         .client()
-        .unwrap()
-        .with_timeouts(TimeoutSettings {
-            operation_timeout: std::time::Duration::from_secs(60),
-        });
+        .unwrap();
 
     trace!("start wait");
     client.wait().await.unwrap();
@@ -89,12 +82,7 @@ pub(crate) async fn create_password_client() -> YdbResult<Arc<Client>> {
 
 #[tracing::instrument]
 pub(crate) async fn create_custom_ca_client() -> YdbResult<Arc<Client>> {
-    let client = test_custom_ca_client_builder()
-        .client()
-        .unwrap()
-        .with_timeouts(TimeoutSettings {
-            operation_timeout: std::time::Duration::from_secs(60),
-        });
+    let client = test_custom_ca_client_builder().client().unwrap();
     trace!("start wait");
     client.wait().await.unwrap();
     Ok(Arc::new(client))

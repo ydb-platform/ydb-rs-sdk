@@ -1,11 +1,12 @@
 //! Query Service public facade (<https://github.com/ydb-platform/ydb-rs-sdk/issues/207>).
 //!
-//! Requires Rust 1.85+ (`AsyncFnMut` in [`QueryClient::retry_transaction`]).
+//! Requires Rust 1.85+ (`AsyncFnMut` in [`QueryClient::retry_tx`]).
 
 mod builders;
 mod exec;
 pub(crate) mod hooks;
 mod internal;
+mod retry_tx;
 mod script;
 mod stream_facade;
 
@@ -30,9 +31,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::FutureExt;
 use http::Uri;
-use tokio::time::sleep;
 
-use crate::client::TimeoutSettings;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::result::Row;
@@ -40,9 +39,9 @@ use crate::result::Row;
 use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{
-    check_retry_transaction_error, retry_wait, spawn_query_tx_rollback_on_drop, transaction_commit,
-    transaction_ensure_begin, transaction_exec_context, transaction_identity, transaction_rollback,
-    ClientExecContext, TransactionExecContext, DEFAULT_QUERY_RETRY_BUDGET,
+    spawn_query_tx_rollback_on_drop, transaction_commit, transaction_ensure_begin,
+    transaction_exec_context, transaction_identity, transaction_rollback, ClientExecContext,
+    TransactionExecContext,
 };
 use hooks::{QueryTxCommitStatus, QueryTxHook};
 
@@ -143,14 +142,12 @@ impl TransactionOptions {
 
 pub struct QueryClient {
     ctx: ClientExecContext,
-    tx_options: TransactionOptions,
 }
 
 impl Clone for QueryClient {
     fn clone(&self) -> Self {
         Self {
             ctx: self.ctx.clone(),
-            tx_options: self.tx_options.clone(),
         }
     }
 }
@@ -160,90 +157,59 @@ impl QueryClient {
 
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
-        timeouts: TimeoutSettings,
         session_pool: SessionPool,
+        retry_control: std::sync::Arc<crate::retry_budget::RetryControl>,
     ) -> Self {
         Self {
             ctx: ClientExecContext {
                 connection_manager,
-                timeouts,
-                idempotent_operation: false,
-                retry_budget: DEFAULT_QUERY_RETRY_BUDGET,
                 session_pool,
+                retry_control,
             },
-            tx_options: TransactionOptions::default(),
         }
     }
 
-    pub fn clone_with_idempotent_operations(&self, idempotent: bool) -> Self {
-        Self {
-            ctx: ClientExecContext {
-                idempotent_operation: idempotent,
-                ..self.ctx.clone()
-            },
-            tx_options: self.tx_options.clone(),
-        }
+    /// Run a callback inside a retried interactive transaction.
+    ///
+    /// ```ignore
+    /// client.query_client()
+    ///     .retry_tx(async |tx| { ... })
+    ///     .isolation(TxMode::SerializableReadWrite)
+    ///     .timeout(Duration::from_secs(30))
+    ///     .await?;
+    /// ```
+    pub fn retry_tx<F, T>(&self, callback: F) -> RetryTxBuilder<'_, F, T>
+    where
+        F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
+    {
+        RetryTxBuilder::new(self, callback)
     }
 
-    pub fn clone_with_transaction_options(&self, opts: TransactionOptions) -> Self {
-        Self {
-            tx_options: opts,
-            ..self.clone()
-        }
-    }
-
-    /// Total wall-clock budget for automatic retries on idempotent operations
-    /// (aligned with [`crate::TableClient::clone_with_retry_timeout`]).
-    pub fn clone_with_retry_timeout(&self, timeout: Duration) -> Self {
-        Self {
-            ctx: ClientExecContext {
-                retry_budget: timeout,
-                ..self.ctx.clone()
-            },
-            tx_options: self.tx_options.clone(),
-        }
-    }
-
-    pub fn clone_with_no_retry(&self) -> Self {
-        Self {
-            ctx: ClientExecContext {
-                retry_budget: Duration::ZERO,
-                ..self.ctx.clone()
-            },
-            tx_options: self.tx_options.clone(),
-        }
-    }
-
-    /// Start a long-running script operation. Poll completion via
-    /// [`crate::OperationClient::get_operation`], then read rows with
-    /// [`Self::fetch_script_results`].
-    pub fn execute_script(&self, text: impl Into<String>) -> script::ExecuteScriptBuilder<'_> {
-        script::ExecuteScriptBuilder::new(&self.ctx, text.into())
-    }
-
-    /// Fetch a page of script results for a completed operation.
-    pub fn fetch_script_results(
+    pub(crate) async fn run_retry_tx<F, T>(
         &self,
-        operation_id: impl Into<String>,
-    ) -> script::FetchScriptResultsBuilder<'_> {
-        script::FetchScriptResultsBuilder::new(&self.ctx, operation_id.into())
-    }
+        mut callback: F,
+        options: TransactionOptions,
+        wall_timeout: Option<Duration>,
+        idempotent: bool,
+    ) -> YdbResultWithCustomerErr<T>
+    where
+        F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
+    {
+        use crate::retry_budget::{pause_before_retry, RetryPauseError};
+        use exec::check_retry_tx_error;
 
-    pub async fn retry_transaction<T>(
-        &self,
-        mut callback: impl AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
-    ) -> YdbResultWithCustomerErr<T> {
-        let retry_budget = self.ctx.retry_budget;
         let start = Instant::now();
+        let absolute_deadline = wall_timeout.map(|d| start + d);
         let mut attempt = 0;
 
         loop {
+            self.ctx.retry_control.metrics().record_attempt();
             attempt += 1;
             let mut tx = Transaction::new(
                 self.ctx.connection_manager.clone(),
-                self.ctx.timeouts,
                 self.ctx.session_pool.clone(),
-                self.tx_options.clone(),
+                options.clone(),
+                absolute_deadline,
             );
 
             let callback_result = AssertUnwindSafe(callback(&mut tx)).catch_unwind().await;
@@ -288,15 +254,31 @@ impl QueryClient {
                 }
             };
 
-            if !check_retry_transaction_error(&err) {
+            if !check_retry_tx_error(&err, idempotent) {
                 return Err(err);
             }
-            match retry_wait(attempt, start.elapsed(), retry_budget) {
-                Some(wait) if wait > Duration::ZERO => sleep(wait).await,
-                Some(_) => {}
-                None => return Err(err),
+            match pause_before_retry(&self.ctx.retry_control, attempt, start, wall_timeout).await {
+                Ok(()) => {}
+                Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
+                    return Err(err);
+                }
             }
         }
+    }
+
+    /// Start a long-running script operation. Poll completion via
+    /// [`crate::OperationClient::get_operation`], then read rows with
+    /// [`Self::fetch_script_results`].
+    pub fn execute_script(&self, text: impl Into<String>) -> script::ExecuteScriptBuilder<'_> {
+        script::ExecuteScriptBuilder::new(&self.ctx, text.into())
+    }
+
+    /// Fetch a page of script results for a completed operation.
+    pub fn fetch_script_results(
+        &self,
+        operation_id: impl Into<String>,
+    ) -> script::FetchScriptResultsBuilder<'_> {
+        script::FetchScriptResultsBuilder::new(&self.ctx, operation_id.into())
     }
 }
 
@@ -338,12 +320,17 @@ impl Transaction {
 
     fn new(
         connection_manager: GrpcConnectionManager,
-        timeouts: TimeoutSettings,
         session_pool: SessionPool,
         options: TransactionOptions,
+        retry_deadline: Option<Instant>,
     ) -> Self {
         Self {
-            ctx: transaction_exec_context(connection_manager, timeouts, session_pool, options),
+            ctx: transaction_exec_context(
+                connection_manager,
+                session_pool,
+                options,
+                retry_deadline,
+            ),
             state: TxState::Active,
             hooks: Vec::new(),
         }
@@ -486,6 +473,7 @@ pub use builders::{
     OptionalRow, OptionalRowBuilder, QueryExecutor, QueryRowBuilder, QueryStreamBuilder,
     ResultSetBuilder, Streamed,
 };
+pub use retry_tx::RetryTxBuilder;
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};
 pub use stream_facade::{QueryStats, QueryStream};

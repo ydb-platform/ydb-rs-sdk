@@ -19,6 +19,7 @@ use crate::client_topic::client::TopicClient;
 use crate::client_topic::compression::{default_executor, Executor};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
+use crate::retry_budget::{RetryControl, RetryMetrics};
 use tracing::trace;
 
 /// YDB client.
@@ -30,10 +31,10 @@ pub struct Client {
     credentials: DBCredentials,
     load_balancer: SharedLoadBalancer,
     discovery: Arc<Box<dyn Discovery>>,
-    timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
     executor: Arc<dyn Executor>,
     session_pool: SessionPool,
+    retry_control: Arc<RetryControl>,
 }
 
 impl Client {
@@ -43,6 +44,7 @@ impl Client {
         connection_manager: GrpcConnectionManager,
         load_balancer: SharedLoadBalancer,
         executor: Option<Arc<dyn Executor>>,
+        retry_control: Arc<RetryControl>,
     ) -> YdbResult<Self> {
         let executor = match executor {
             Some(e) => e,
@@ -51,7 +53,6 @@ impl Client {
 
         let session_pool = SessionPool::new_explicit_sync(
             connection_manager.clone(),
-            TimeoutSettings::default(),
             discovery.clone(),
             default_session_pool_settings(),
         );
@@ -60,23 +61,48 @@ impl Client {
             credentials,
             load_balancer,
             discovery,
-            timeouts: TimeoutSettings::default(),
             connection_manager,
             executor,
             session_pool,
+            retry_control,
         })
+    }
+
+    /// Return a child driver that shares sessions and connections but uses a different retry budget.
+    ///
+    /// All service clients created from the returned [`Client`] consult `budget` before each retry
+    /// (table, query one-shot, [`crate::QueryClient::retry_tx`], operation service, and similar).
+    pub fn clone_with_retry_budget(
+        &self,
+        budget: Arc<dyn crate::retry_budget::RetryBudget>,
+    ) -> Self {
+        let retry_control = Arc::new(RetryControl::with_shared_metrics(
+            budget,
+            self.retry_control.metrics(),
+        ));
+        Self {
+            credentials: self.credentials.clone(),
+            load_balancer: self.load_balancer.clone(),
+            discovery: self.discovery.clone(),
+            connection_manager: self.connection_manager.clone(),
+            executor: self.executor.clone(),
+            session_pool: self.session_pool.clone(),
+            retry_control,
+        }
+    }
+
+    /// Sliding-window request counters for [`PercentOfRpsRetryBudget`].
+    pub fn retry_metrics(&self) -> Arc<RetryMetrics> {
+        self.retry_control.metrics()
     }
 
     /// Replace the driver session pool (CreateSession + AttachSession) and optionally warm it up.
     ///
     /// Table and query clients created from this driver share the same pool.
     ///
-    /// Pool acquire timeout is taken from [`Self::timeouts`] at creation time, and updated
-    /// when [`Self::with_timeouts`] is called later.
     pub async fn with_session_pool(self, settings: SessionPoolSettings) -> YdbResult<Self> {
         let session_pool = SessionPool::new_explicit(
             self.connection_manager.clone(),
-            self.timeouts,
             self.discovery.clone(),
             settings,
         )
@@ -100,8 +126,8 @@ impl Client {
     pub fn table_client(&self) -> TableClient {
         TableClient::new(
             self.connection_manager.clone(),
-            self.timeouts,
             self.session_pool.clone(),
+            self.retry_control.clone(),
         )
     }
 
@@ -109,20 +135,19 @@ impl Client {
     pub fn query_client(&self) -> QueryClient {
         QueryClient::new(
             self.connection_manager.clone(),
-            self.timeouts,
             self.session_pool.clone(),
+            self.retry_control.clone(),
         )
     }
 
     /// Create instance of client for directory service
     pub fn scheme_client(&self) -> SchemeClient {
-        SchemeClient::new(self.timeouts, self.connection_manager.clone())
+        SchemeClient::new(self.connection_manager.clone())
     }
 
     /// Create instance of client for topic service
     pub fn topic_client(&self) -> TopicClient {
         TopicClient::new(
-            self.timeouts,
             self.connection_manager.clone(),
             self.credentials.token_cache.clone(),
             self.executor.clone(),
@@ -131,20 +156,12 @@ impl Client {
 
     /// Create instance of client for coordination service
     pub fn coordination_client(&self) -> CoordinationClient {
-        CoordinationClient::new(self.timeouts, self.connection_manager.clone())
+        CoordinationClient::new(self.connection_manager.clone())
     }
 
     /// Create instance of client for operation service (list/get/forget long-running operations).
     pub fn operation_client(&self) -> OperationClient {
-        OperationClient::new(self.timeouts, self.connection_manager.clone())
-    }
-
-    /// Update operation timeouts on the driver and the session pool acquire timeout.
-    pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {
-        self.timeouts = timeouts;
-        self.session_pool
-            .set_acquire_timeout(timeouts.operation_timeout);
-        self
+        OperationClient::new(self.connection_manager.clone(), self.retry_control.clone())
     }
 
     /// Wait initialization completed
@@ -170,21 +187,26 @@ impl Client {
     }
 }
 
-const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(600);
+const DEFAULT_OPERATION_TIMEOUT: Option<Duration> = None;
 
-#[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 #[derive(Copy, Clone, Debug)]
-pub struct TimeoutSettings {
-    pub operation_timeout: Duration,
+pub(crate) struct TimeoutSettings {
+    pub operation_timeout: Option<Duration>,
 }
 
 impl TimeoutSettings {
     pub(crate) fn operation_params(&self) -> RawOperationParams {
-        RawOperationParams::new_with_timeouts(self.operation_timeout, self.operation_timeout)
+        match self.operation_timeout {
+            Some(timeout) => RawOperationParams::new_with_timeouts(timeout, timeout),
+            None => RawOperationParams::sync_unlimited(),
+        }
     }
 
     pub(crate) fn execute_script_operation_params(&self) -> RawOperationParams {
-        RawOperationParams::for_execute_script(self.operation_timeout, self.operation_timeout)
+        match self.operation_timeout {
+            Some(timeout) => RawOperationParams::for_execute_script(timeout, timeout),
+            None => RawOperationParams::for_execute_script_unlimited(),
+        }
     }
 }
 

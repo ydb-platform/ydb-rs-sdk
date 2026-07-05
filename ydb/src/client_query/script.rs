@@ -3,6 +3,7 @@ use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 use std::time::Duration;
 
+use crate::client::TimeoutSettings;
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::execute_script::RawExecuteScriptRequest;
@@ -10,9 +11,7 @@ use crate::grpc_wrapper::raw_query_service::fetch_script_results::RawFetchScript
 use crate::result::ResultSet;
 use crate::types::Value;
 
-use super::exec::{
-    call_operation_timeout, run_with_retry, with_operation_timeout, CallOptions, ClientExecContext,
-};
+use super::exec::{maybe_with_operation_timeout, run_with_retry, CallOptions, ClientExecContext};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -168,19 +167,22 @@ async fn client_execute_script_once(
     opts: &CallOptions,
     results_ttl: Duration,
 ) -> YdbResult<ExecuteScriptOperation> {
+    let timeout = opts.timeout;
     let req = RawExecuteScriptRequest {
         yql_text: text.to_string(),
         parameters: params.clone(),
         results_ttl,
-        operation_params: ctx.timeouts.execute_script_operation_params(),
+        operation_params: TimeoutSettings {
+            operation_timeout: timeout,
+        }
+        .execute_script_operation_params(),
         collect_stats: false,
     };
-    let timeout_duration = call_operation_timeout(opts, &ctx.timeouts);
     let mut client = ctx
         .connection_manager
         .get_auth_service(RawQueryClient::new)
         .await?;
-    let (id, consumed_units) = match with_operation_timeout(timeout_duration, async {
+    let (id, consumed_units) = match maybe_with_operation_timeout(timeout, async {
         client.execute_script(req).await.map_err(YdbError::from)
     })
     .await
@@ -189,7 +191,7 @@ async fn client_execute_script_once(
         Err(err) => {
             if matches!(&err, YdbError::Transport(msg) if msg.contains("timed out")) {
                 tracing::warn!(
-                    ?timeout_duration,
+                    ?timeout,
                     "execute_script timed out waiting for RPC response; \
                      a server-side operation may still be running until cancel_after"
                 );
@@ -210,7 +212,7 @@ async fn client_fetch_script_results(
     opts: CallOptions,
 ) -> YdbResult<FetchScriptResult> {
     // FetchScriptResults is always safe to retry (aligned with Go SDK).
-    run_with_retry(ctx, true, || {
+    run_with_retry(&ctx.retry_control, &opts, true, || {
         client_fetch_script_results_once(
             ctx,
             &operation_id,
@@ -229,7 +231,7 @@ async fn client_fetch_script_results_once(
     result_set_index: i64,
     fetch_token: &str,
     rows_limit: i64,
-    opts: &CallOptions,
+    _opts: &CallOptions,
 ) -> YdbResult<FetchScriptResult> {
     let req = RawFetchScriptResultsRequest {
         operation_id: operation_id.to_string(),
@@ -237,18 +239,14 @@ async fn client_fetch_script_results_once(
         fetch_token: fetch_token.to_string(),
         rows_limit,
     };
-    let timeout_duration = call_operation_timeout(opts, &ctx.timeouts);
     let mut client = ctx
         .connection_manager
         .get_auth_service(RawQueryClient::new)
         .await?;
-    let (index, raw_set, next_token) = with_operation_timeout(timeout_duration, async {
-        client
-            .fetch_script_results(req)
-            .await
-            .map_err(YdbError::from)
-    })
-    .await?;
+    let (index, raw_set, next_token) = client
+        .fetch_script_results(req)
+        .await
+        .map_err(YdbError::from)?;
 
     Ok(FetchScriptResult {
         result_set_index: index,

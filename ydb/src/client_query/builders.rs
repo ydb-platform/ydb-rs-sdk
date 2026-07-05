@@ -24,7 +24,7 @@ pub enum Streamed {}
 
 /// One-shot [`QueryClient`] calls (`exec`, `query_row`, …).
 pub struct ClientOneShot;
-/// Calls inside [`Transaction`] (`retry_transaction` callback).
+/// Calls inside [`Transaction`] (`retry_tx` callback).
 pub struct Interactive;
 
 pub type ExecBuilder<'a, S = ClientOneShot> = CallBuilder<'a, ExecCall, S>;
@@ -97,11 +97,15 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
         self
     }
 
-    /// Per-call operation timeout.
+    /// Wall-clock limit for the call. Retries transient errors until this deadline when
+    /// combined with [`.idempotent(true)`](Self::idempotent). Without `.timeout()`, retries
+    /// continue until a non-retryable error.
     ///
-    /// For one-shot calls (`exec`, `query_row`, …) this limits the full RPC.
-    /// For [`QueryStream`](Self) the timeout applies only while opening the gRPC
-    /// stream; iterating result sets is not bounded by this value.
+    /// For [`QueryStream`](Self) the timeout bounds opening the gRPC stream and any retries;
+    /// iterating result sets is not bounded by this value.
+    ///
+    /// Inside [`retry_tx`](crate::QueryClient::retry_tx), per-call `.timeout()` is capped by
+    /// the remaining `retry_tx` deadline.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.opts.timeout = Some(timeout);
         self

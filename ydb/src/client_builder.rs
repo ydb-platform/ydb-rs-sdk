@@ -12,6 +12,7 @@ use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
 use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+use crate::retry_budget::{RetryBudget, RetryControl};
 use crate::{Client, Credentials};
 use http::Uri;
 use once_cell::sync::Lazy;
@@ -239,6 +240,7 @@ pub struct ClientBuilder {
     pub cert_path: Option<String>,
     grpc_max_message_size: usize,
     executor: Option<Arc<dyn Executor>>,
+    retry_budget: Option<Arc<dyn RetryBudget>>,
 }
 
 impl ClientBuilder {
@@ -305,12 +307,18 @@ impl ClientBuilder {
             self.grpc_max_message_size,
         );
 
+        let retry_control = match self.retry_budget {
+            Some(budget) => Arc::new(RetryControl::new(budget)),
+            None => Arc::new(RetryControl::default()),
+        };
+
         Client::new(
             db_cred,
             discovery,
             connection_manager,
             load_balancer,
             self.executor,
+            retry_control,
         )
     }
 
@@ -362,6 +370,12 @@ impl ClientBuilder {
         self
     }
 
+    /// Set the driver-wide retry budget consulted by all SDK retriers.
+    pub fn with_retry_budget(mut self, budget: Arc<dyn RetryBudget>) -> Self {
+        self.retry_budget = Some(budget);
+        self
+    }
+
     fn new() -> Self {
         Self {
             credentials: credencials_ref(AccessTokenCredentials::from("")),
@@ -373,6 +387,7 @@ impl ClientBuilder {
             cert_path: None,
             grpc_max_message_size: DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
             executor: None,
+            retry_budget: None,
         }
     }
 

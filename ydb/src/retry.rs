@@ -73,15 +73,3 @@ impl Retry for IndefiniteRetrier {
         }
     }
 }
-
-pub(crate) struct NoRetrier {}
-
-impl Retry for NoRetrier {
-    #[instrument(skip_all)]
-    fn wait_duration(&self, _: RetryParams) -> RetryDecision {
-        RetryDecision {
-            allow_retry: false,
-            wait_timeout: Duration::default(),
-        }
-    }
-}

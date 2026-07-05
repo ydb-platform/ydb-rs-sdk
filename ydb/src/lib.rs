@@ -59,6 +59,7 @@ mod pub_traits;
 pub(crate) mod query;
 pub(crate) mod result;
 mod retry;
+mod retry_budget;
 mod session;
 mod session_pool;
 mod sugar;
@@ -143,7 +144,12 @@ pub use client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
 };
 // full enum pub types
-pub use client::{Client, SessionPoolSettings, SessionPoolStats, TimeoutSettings};
+pub use client::{Client, SessionPoolSettings, SessionPoolStats};
+
+pub use retry_budget::{
+    LimitedRetryBudget, PercentOfRpsRetryBudget, PercentRetryBudget, RetryBudget, RetryBudgetError,
+    RetryMetrics,
+};
 
 // full enum pub types
 pub use client_builder::ClientBuilder;
@@ -153,12 +159,12 @@ pub use client_query::{
     CallBuilder, ClientOneShot, ExecBuilder, ExecCall, ExecuteScriptBuilder,
     ExecuteScriptOperation, FetchScriptResult, FetchScriptResultsBuilder, FromYdbRow, Interactive,
     OneResultSet, OneRow, OptionalRow, OptionalRowBuilder, QueryClient, QueryExecutor,
-    QueryRowBuilder, QueryStats, QueryStream, QueryStreamBuilder, ResultSetBuilder, Streamed,
-    Transaction, TransactionOptions, TxMode,
+    QueryRowBuilder, QueryStats, QueryStream, QueryStreamBuilder, ResultSetBuilder, RetryTxBuilder,
+    Streamed, Transaction, TransactionOptions, TxMode,
 };
 
 // full enum pub types
-pub use client_table::{RetryOptions, TableClient};
+pub use client_table::TableClient;
 
 // full enum pub types
 pub use table_service_types::{

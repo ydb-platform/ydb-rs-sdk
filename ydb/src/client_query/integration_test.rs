@@ -1,4 +1,4 @@
-use super::{TransactionOptions, TxMode};
+use super::TxMode;
 use crate::errors::YdbResult;
 use crate::session_pool::SessionPoolSettings;
 use crate::test_integration_helper::{create_client, create_client_with_session_pool};
@@ -7,6 +7,14 @@ use crate::ydb_struct;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 use tracing_test::traced_test;
+
+const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+macro_rules! idem {
+    ($builder:expr) => {
+        $builder.idempotent(true).timeout(TEST_TIMEOUT)
+    };
+}
 
 fn unique_table_name(prefix: &str) -> String {
     format!(
@@ -23,9 +31,9 @@ fn unique_table_name(prefix: &str) -> String {
 #[ignore] // need YDB access
 async fn query_client_select_one() -> YdbResult<()> {
     let client = create_client().await?;
-    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let mut qc = client.query_client();
 
-    let mut row = qc.query_row("SELECT 1 + 1 AS sum").await?;
+    let mut row = idem!(qc.query_row("SELECT 1 + 1 AS sum")).await?;
     let sum: i64 = row.remove_field_by_name("sum")?.try_into()?;
     assert_eq!(sum, 2);
     Ok(())
@@ -36,15 +44,15 @@ async fn query_client_select_one() -> YdbResult<()> {
 #[ignore] // need YDB access
 async fn query_client_exec_ddl() -> YdbResult<()> {
     let client = create_client().await?;
-    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let mut qc = client.query_client();
     let table_name = unique_table_name("query_client_test_exec_ddl");
 
-    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
-    qc.exec(format!(
+    let _ = idem!(qc.exec(format!("DROP TABLE IF EXISTS {table_name}"))).await;
+    idem!(qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Utf8, PRIMARY KEY(id))"
-    ))
+    )))
     .await?;
-    qc.exec(format!("DROP TABLE {table_name}")).await?;
+    idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;
     Ok(())
 }
 
@@ -53,29 +61,28 @@ async fn query_client_exec_ddl() -> YdbResult<()> {
 #[ignore] // need YDB access
 async fn query_client_autocommit_by_default() -> YdbResult<()> {
     let client = create_client().await?;
-    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let mut qc = client.query_client();
     let table_name = unique_table_name("query_client_with_commit");
 
-    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
-    qc.exec(format!(
+    let _ = idem!(qc.exec(format!("DROP TABLE IF EXISTS {table_name}"))).await;
+    idem!(qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
-    ))
+    )))
     .await?;
 
-    qc.exec(format!(
-        "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
-    ))
-    .param("$id", 1_i64)
-    .param("$val", 77_i64)
+    idem!(qc
+        .exec(format!(
+            "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
+        ))
+        .param("$id", 1_i64)
+        .param("$val", 77_i64))
     .await?;
 
-    let mut row = qc
-        .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
-        .await?;
+    let mut row = idem!(qc.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     assert_eq!(val, Some(77));
 
-    qc.exec(format!("DROP TABLE {table_name}")).await?;
+    idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;
     Ok(())
 }
 
@@ -84,10 +91,10 @@ async fn query_client_autocommit_by_default() -> YdbResult<()> {
 #[ignore] // need YDB access
 async fn query_client_multi_result_set() -> YdbResult<()> {
     let client = create_client().await?;
-    let qc = client.query_client().clone_with_idempotent_operations(true);
+    let qc = client.query_client();
 
     let set_count = qc
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             let mut stream = tx.query("SELECT 42 AS a; SELECT 1 AS b, 2 AS c;").await?;
             let mut count = 0usize;
             while stream.next_result_set().await?.is_some() {
@@ -96,6 +103,7 @@ async fn query_client_multi_result_set() -> YdbResult<()> {
             stream.close().await?;
             Ok(count)
         })
+        .timeout(TEST_TIMEOUT)
         .await?;
 
     assert_eq!(set_count, 2);
@@ -105,20 +113,20 @@ async fn query_client_multi_result_set() -> YdbResult<()> {
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
-async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
+async fn query_client_retry_tx_upsert() -> YdbResult<()> {
     let client = create_client().await?;
-    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let mut qc = client.query_client();
     let table_name = unique_table_name("query_client_test_upsert");
 
-    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
-    qc.exec(format!(
+    let _ = idem!(qc.exec(format!("DROP TABLE IF EXISTS {table_name}"))).await;
+    idem!(qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Utf8, PRIMARY KEY(id))"
-    ))
+    )))
     .await?;
 
     let upsert = format!("UPSERT INTO {table_name} (id, val) VALUES ($id, $val)");
 
-    qc.retry_transaction(async |tx| {
+    qc.retry_tx(async |tx| {
         for id in 0..3_i64 {
             tx.exec(&upsert)
                 .param("$id", id)
@@ -127,15 +135,14 @@ async fn query_client_retry_transaction_upsert() -> YdbResult<()> {
         }
         Ok(())
     })
+    .timeout(TEST_TIMEOUT)
     .await?;
 
-    let mut row = qc
-        .query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))
-        .await?;
+    let mut row = idem!(qc.query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))).await?;
     let cnt: u64 = row.remove_field_by_name("cnt")?.try_into()?;
     assert_eq!(cnt, 3);
 
-    qc.exec(format!("DROP TABLE {table_name}")).await?;
+    idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;
     Ok(())
 }
 
@@ -146,9 +153,9 @@ async fn query_client_pooled_session_select() -> YdbResult<()> {
     let client =
         create_client_with_session_pool(SessionPoolSettings::new().with_limit(4).with_warm_up(1))
             .await?;
-    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let mut qc = client.query_client();
 
-    let mut row = qc.query_row("SELECT 1 + 1 AS sum").await?;
+    let mut row = idem!(qc.query_row("SELECT 1 + 1 AS sum")).await?;
     let sum: i64 = row.remove_field_by_name("sum")?.try_into()?;
     assert_eq!(sum, 2);
     Ok(())
@@ -159,12 +166,9 @@ async fn query_client_pooled_session_select() -> YdbResult<()> {
 #[ignore] // need YDB access
 async fn query_client_implicit_session_select() -> YdbResult<()> {
     let client = create_client_with_session_pool(SessionPoolSettings::new().with_limit(1)).await?;
-    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let mut qc = client.query_client();
 
-    let mut row = qc
-        .query_row("SELECT 1 + 1 AS sum")
-        .with_implicit_session()
-        .await?;
+    let mut row = idem!(qc.query_row("SELECT 1 + 1 AS sum").with_implicit_session()).await?;
     let sum: i64 = row.remove_field_by_name("sum")?.try_into()?;
     assert_eq!(sum, 2);
 
@@ -179,18 +183,15 @@ async fn query_client_implicit_session_select() -> YdbResult<()> {
 #[ignore] // need YDB access
 async fn query_client_snapshot_read_only_tx() -> YdbResult<()> {
     let client = create_client().await?;
-    let qc = client
-        .query_client()
-        .clone_with_idempotent_operations(true)
-        .clone_with_transaction_options(
-            TransactionOptions::new().with_mode(TxMode::SnapshotReadOnly),
-        );
+    let qc = client.query_client();
 
     let value: i64 = qc
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             let mut row = tx.query_row("SELECT 42 AS v").await?;
             Ok(row.remove_field_by_name("v")?.try_into()?)
         })
+        .isolation(TxMode::SnapshotReadOnly)
+        .timeout(TEST_TIMEOUT)
         .await?;
 
     assert_eq!(value, 42);
@@ -202,16 +203,16 @@ async fn query_client_snapshot_read_only_tx() -> YdbResult<()> {
 #[ignore] // need YDB access
 async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
     let client = create_client().await?;
-    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let mut qc = client.query_client();
     let table_name = unique_table_name("query_lazy_tx");
 
-    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
-    qc.exec(format!(
+    let _ = idem!(qc.exec(format!("DROP TABLE IF EXISTS {table_name}"))).await;
+    idem!(qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
-    ))
+    )))
     .await?;
 
-    qc.retry_transaction(async |tx| {
+    qc.retry_tx(async |tx| {
         assert!(
             tx.tx_id_for_test().is_none(),
             "lazy transaction must not have tx_id before the first query"
@@ -237,15 +238,14 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
 
         Ok(())
     })
+    .timeout(TEST_TIMEOUT)
     .await?;
 
-    let mut row = qc
-        .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
-        .await?;
+    let mut row = idem!(qc.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     assert_eq!(val, Some(42));
 
-    qc.exec(format!("DROP TABLE {table_name}")).await?;
+    idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;
     Ok(())
 }
 
@@ -254,13 +254,14 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
 #[ignore] // need YDB access
 async fn query_lazy_tx_commit_without_queries() -> YdbResult<()> {
     let client = create_client().await?;
-    let qc = client.query_client().clone_with_idempotent_operations(true);
+    let qc = client.query_client();
 
     let value = qc
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             assert!(tx.tx_id_for_test().is_none());
             Ok(7_i32)
         })
+        .timeout(TEST_TIMEOUT)
         .await?;
 
     assert_eq!(value, 7);
@@ -272,9 +273,9 @@ async fn query_lazy_tx_commit_without_queries() -> YdbResult<()> {
 #[ignore] // need YDB access
 async fn query_explicit_begin_via_begin() -> YdbResult<()> {
     let client = create_client().await?;
-    let qc = client.query_client().clone_with_idempotent_operations(true);
+    let qc = client.query_client();
 
-    qc.retry_transaction(async |tx| {
+    qc.retry_tx(async |tx| {
         assert!(
             tx.tx_id_for_test().is_none(),
             "lazy transaction must not have tx_id before begin()"
@@ -290,6 +291,7 @@ async fn query_explicit_begin_via_begin() -> YdbResult<()> {
         assert_eq!(v, 1);
         Ok(())
     })
+    .timeout(TEST_TIMEOUT)
     .await?;
 
     Ok(())
@@ -300,12 +302,9 @@ async fn query_explicit_begin_via_begin() -> YdbResult<()> {
 #[ignore] // need YDB access
 async fn query_explicit_begin_via_client_option() -> YdbResult<()> {
     let client = create_client().await?;
-    let qc = client
-        .query_client()
-        .clone_with_idempotent_operations(true)
-        .clone_with_transaction_options(TransactionOptions::new().with_begin());
+    let qc = client.query_client();
 
-    qc.retry_transaction(async |tx| {
+    qc.retry_tx(async |tx| {
         tx.exec("SELECT 1 AS v").await?;
         assert!(
             tx.tx_id_for_test().is_some_and(|id| !id.is_empty()),
@@ -313,6 +312,8 @@ async fn query_explicit_begin_via_client_option() -> YdbResult<()> {
         );
         Ok(())
     })
+    .with_begin()
+    .timeout(TEST_TIMEOUT)
     .await?;
 
     Ok(())
@@ -323,16 +324,16 @@ async fn query_explicit_begin_via_client_option() -> YdbResult<()> {
 #[ignore] // need YDB access
 async fn query_with_commit_on_last_query() -> YdbResult<()> {
     let client = create_client().await?;
-    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let mut qc = client.query_client();
     let table_name = unique_table_name("query_with_commit");
 
-    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
-    qc.exec(format!(
+    let _ = idem!(qc.exec(format!("DROP TABLE IF EXISTS {table_name}"))).await;
+    idem!(qc.exec(format!(
         "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
-    ))
+    )))
     .await?;
 
-    qc.retry_transaction(async |tx| {
+    qc.retry_tx(async |tx| {
         tx.exec(format!(
             "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
         ))
@@ -352,15 +353,14 @@ async fn query_with_commit_on_last_query() -> YdbResult<()> {
 
         Ok(())
     })
+    .timeout(TEST_TIMEOUT)
     .await?;
 
-    let mut row = qc
-        .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
-        .await?;
+    let mut row = idem!(qc.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     assert_eq!(val, Some(99));
 
-    qc.exec(format!("DROP TABLE {table_name}")).await?;
+    idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;
     Ok(())
 }
 
@@ -369,7 +369,7 @@ async fn query_with_commit_on_last_query() -> YdbResult<()> {
 #[ignore] // need YDB access
 async fn query_execute_script() -> YdbResult<()> {
     let client = create_client().await?;
-    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let mut qc = client.query_client();
     let op_client = client.operation_client();
     let table_name = unique_table_name("query_execute_script");
 
@@ -379,10 +379,10 @@ async fn query_execute_script() -> YdbResult<()> {
 
     assert_eq!(UPSERT_ROWS_COUNT % BATCH_SIZE, 0);
 
-    let _ = qc.exec(format!("DROP TABLE IF EXISTS {table_name}")).await;
-    qc.exec(format!(
+    let _ = idem!(qc.exec(format!("DROP TABLE IF EXISTS {table_name}"))).await;
+    idem!(qc.exec(format!(
         "CREATE TABLE {table_name} (val Int64, PRIMARY KEY (val))"
-    ))
+    )))
     .await?;
 
     let upsert_query = format!("UPSERT INTO {table_name} SELECT val FROM AS_TABLE($values);");
@@ -394,26 +394,23 @@ async fn query_execute_script() -> YdbResult<()> {
         let example = ydb_struct!("val" => 0_i32);
         let values: Vec<Value> = (from..to).map(|j| ydb_struct!("val" => j)).collect();
         let list = Value::list_from(example, values)?;
-        qc.exec(&upsert_query).param("$values", list).await?;
+        idem!(qc.exec(&upsert_query).param("$values", list)).await?;
         upserted += (to - from) as u32;
     }
     assert_eq!(upserted, UPSERT_ROWS_COUNT as u32);
 
-    let mut row = qc
-        .query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))
-        .await?;
+    let mut row = idem!(qc.query_row(format!("SELECT COUNT(*) AS cnt FROM {table_name}"))).await?;
     let rows_from_db: Option<u64> = row.remove_field_by_name("cnt")?.try_into()?;
     assert_eq!(rows_from_db.unwrap_or(0), UPSERT_ROWS_COUNT as u64);
 
-    let mut row = qc
-        .query_row(format!("SELECT SUM(val) AS s FROM {table_name}"))
-        .await?;
+    let mut row = idem!(qc.query_row(format!("SELECT SUM(val) AS s FROM {table_name}"))).await?;
     let checksum_from_db: Option<i64> = row.remove_field_by_name("s")?.try_into()?;
     assert_eq!(checksum_from_db.unwrap_or(0) as u64, EXPECTED_CHECKSUM);
 
     let op = qc
         .execute_script(format!("SELECT val FROM {table_name};"))
         .results_ttl(Duration::from_secs(3600))
+        .timeout(TEST_TIMEOUT)
         .await?;
 
     let poll_deadline = Instant::now() + Duration::from_secs(120);
@@ -439,6 +436,7 @@ async fn query_execute_script() -> YdbResult<()> {
             .result_set_index(0)
             .rows_limit(1000)
             .fetch_token(&next_token)
+            .timeout(TEST_TIMEOUT)
             .await?;
         next_token = page.next_fetch_token;
         assert_eq!(page.result_set_index, 0);
@@ -458,6 +456,6 @@ async fn query_execute_script() -> YdbResult<()> {
     assert_eq!(checksum, EXPECTED_CHECKSUM);
 
     op_client.forget_operation(&op.id).await?;
-    qc.exec(format!("DROP TABLE {table_name}")).await?;
+    idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;
     Ok(())
 }
