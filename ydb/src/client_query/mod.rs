@@ -255,6 +255,8 @@ impl QueryClient {
                         return Ok(value);
                     }
                     if tx.ctx.finished {
+                        // TODO: fix finished transaction handling:
+                        // https://github.com/ydb-platform/ydb-rs-sdk/issues/521
                         tx.state = TxState::Committed;
                         tx.notify_hooks(QueryTxCommitStatus::Committed);
                         return Ok(value);
@@ -267,7 +269,6 @@ impl QueryClient {
                         // Commit outcome is ambiguous on transport errors; never retry.
                         Err(e) => {
                             tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                            tx.state = TxState::RolledBack;
                             Err(YdbOrCustomerError::YDB(e))
                         }
                     };
