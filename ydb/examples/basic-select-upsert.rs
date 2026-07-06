@@ -20,7 +20,7 @@ async fn main() -> YdbResult<()> {
         .await?;
 
     // fill with data
-    qc.retry_transaction(async |tx| {
+    qc.retry_tx(async |tx| {
         for i in 1..100 {
             tx.exec("UPSERT INTO test (id, val) VALUES ($id, $val)")
                 .param("$id", i as i64)

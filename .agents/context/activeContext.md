@@ -17,5 +17,5 @@ _(empty on master — use only on a local/feature branch; do not commit branch n
 | What | Where |
 |------|-------|
 | Architecture, tooling, scope | stable files: `systemPatterns.md`, `techContext.md`, `projectBrief.md`, … |
-| Completed milestones | `progress.md` — update in the same PR that delivers the work |
+| Completed milestones | `productContext.md` (releases), `systemPatterns.md` (architecture) |
 | Coding rules | `AGENTS.md` → `.agents/rules/` |

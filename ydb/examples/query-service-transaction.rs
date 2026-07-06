@@ -1,9 +1,21 @@
-//! `retry_transaction` with `AsyncFnMut(&mut Transaction)` on implicit sessions.
+//! `retry_tx` with `AsyncFnMut(&mut Transaction)` on implicit sessions.
+
+use std::time::Duration;
 
 use ydb::{
-    ClientBuilder, QueryExecutor, Transaction, TransactionOptions, YdbOrCustomerError, YdbResult,
-    YdbResultWithCustomerErr,
+    ClientBuilder, ExecBuilder, QueryExecutor, QueryRowBuilder, Transaction, YdbOrCustomerError,
+    YdbResult, YdbResultWithCustomerErr,
 };
+
+const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn idem_exec<'a>(b: ExecBuilder<'a>) -> ExecBuilder<'a> {
+    b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
+}
+
+fn idem_row<'a>(b: QueryRowBuilder<'a>) -> QueryRowBuilder<'a> {
+    b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
+}
 
 enum Withdraw {
     Done { remaining: i64 },
@@ -24,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.client()?;
     client.wait().await?;
 
-    let mut qc = client.query_client().clone_with_idempotent_operations(true);
+    let mut qc = client.query_client();
 
     // --- 1. Borrowing the environment across attempts ----------------------
     // The query text lives outside the callback and is reused on every
@@ -38,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // on `tx`: rust-analyzer does not yet reliably infer `async ||`
         // closure parameter types from the `AsyncFnMut` bound (the compiler
         // infers it fine without this).
-        .retry_transaction(async |tx: &mut Transaction| {
+        .retry_tx(async |tx: &mut Transaction| {
             attempts += 1; // mutable capture: AsyncFnMut allows it
             for id in 0..10_i64 {
                 tx.exec(upsert)
@@ -49,20 +61,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let sum = fetch_total(tx).await?; // generic over QueryExecutor
             Ok(sum) // Ok => commit; Err => rollback + retry
         })
+        .timeout(EXAMPLE_TIMEOUT)
         .await?;
     println!("total = {total} after {attempts} attempt(s)");
 
     // --- 2. Rollback without an error ---------------------------------------
     // Requires `accounts` table; create minimal schema for the example.
-    qc.exec("CREATE TABLE IF NOT EXISTS accounts (id Int64, balance Int64, PRIMARY KEY(id))")
-        .await?;
-    qc.exec("UPSERT INTO accounts (id, balance) VALUES (1, 500)")
-        .await?;
+    idem_exec(
+        qc.exec("CREATE TABLE IF NOT EXISTS accounts (id Int64, balance Int64, PRIMARY KEY(id))"),
+    )
+    .await?;
+    idem_exec(qc.exec("UPSERT INTO accounts (id, balance) VALUES (1, 500)")).await?;
 
     // A business outcome, not a failure: finish the transaction explicitly
     // and return a value. No commit, no retry, no Err.
     let outcome = qc
-        .retry_transaction(async |tx: &mut Transaction| {
+        .retry_tx(async |tx: &mut Transaction| {
             let mut row = tx
                 .query_row("SELECT balance FROM accounts WHERE id = $id")
                 .param("$id", 1_i64)
@@ -80,6 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 remaining: balance - 100,
             })
         })
+        .timeout(EXAMPLE_TIMEOUT)
         .await?;
     match outcome {
         Withdraw::Done { remaining } => println!("done, remaining = {remaining}"),
@@ -88,48 +103,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- 3. Customer errors are never retried -------------------------------
     let res: YdbResultWithCustomerErr<()> = qc
-        .retry_transaction(async |tx: &mut Transaction| {
+        .retry_tx(async |tx: &mut Transaction| {
             tx.exec("DELETE FROM test").await?;
             Err(YdbOrCustomerError::from_err(std::io::Error::other(
                 "business rule violated",
             )))
         })
+        .timeout(EXAMPLE_TIMEOUT)
         .await;
     println!("customer error passed through: {}", res.is_err());
 
     // --- 5. Lazy tx vs explicit begin ---------------------------------------
     // Default (lazy): the first ExecuteQuery opens the transaction (BeginTx in tx_control).
-    qc.retry_transaction(async |tx: &mut Transaction| {
+    qc.retry_tx(async |tx: &mut Transaction| {
         tx.exec("SELECT 1").await?;
         Ok(())
     })
+    .timeout(EXAMPLE_TIMEOUT)
     .await?;
 
     // Explicit BeginTransaction RPC before any YQL:
-    qc.retry_transaction(async |tx: &mut Transaction| {
+    qc.retry_tx(async |tx: &mut Transaction| {
         tx.begin().await?;
         tx.exec("SELECT 1").await?;
         Ok(())
     })
+    .timeout(EXAMPLE_TIMEOUT)
     .await?;
 
-    // Or configure explicit begin on the client for every retry_transaction:
-    let with_begin_qc = qc.clone_with_transaction_options(TransactionOptions::new().with_begin());
-    with_begin_qc
-        .retry_transaction(async |tx: &mut Transaction| {
-            tx.exec("SELECT 1").await?; // BeginTransaction RPC runs before this query
-            Ok(())
-        })
-        .await?;
+    // Or configure explicit begin per retry_tx call:
+    qc.retry_tx(async |tx: &mut Transaction| {
+        tx.exec("SELECT 1").await?; // BeginTransaction RPC runs before this query
+        Ok(())
+    })
+    .with_begin()
+    .timeout(EXAMPLE_TIMEOUT)
+    .await?;
 
     // --- 6. Commit with the last query (with_commit) ------------------------
     let table = "query_example_with_commit";
-    qc.exec(format!(
+    idem_exec(qc.exec(format!(
         "CREATE TABLE IF NOT EXISTS {table} (id Int64, val Int64, PRIMARY KEY(id))"
-    ))
+    )))
     .await?;
 
-    qc.retry_transaction(async |tx: &mut Transaction| {
+    qc.retry_tx(async |tx: &mut Transaction| {
         tx.exec(format!("UPSERT INTO {table} (id, val) VALUES ($id, $val)"))
             .param("$id", 1_i64)
             .param("$val", 100_i64)
@@ -138,11 +156,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Transaction is already committed; further queries in this callback would fail.
         Ok(())
     })
-    .await?; // retry_transaction commit is a no-op
+    .timeout(EXAMPLE_TIMEOUT)
+    .await?; // retry_tx commit is a no-op
 
-    let mut row = qc
-        .query_row(format!("SELECT val FROM {table} WHERE id = 1"))
-        .await?;
+    let mut row = idem_row(qc.query_row(format!("SELECT val FROM {table} WHERE id = 1"))).await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
     println!("with_commit persisted val = {:?}", val);
 
@@ -152,14 +169,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //    stream borrows the transaction and cannot outlive the callback:
     //
     //     let stream = qc
-    //         .retry_transaction(async |tx| Ok(tx.query("SELECT 1").await?))
+    //         .retry_tx(async |tx| Ok(tx.query("SELECT 1").await?))
     //         .await?;
     //     // error: lifetime may not live long enough
     //
     // b) Moving a captured value into the attempt (would break attempt #2):
     //
     //     let sql = String::from("SELECT 1");
-    //     qc.retry_transaction(async |tx| {
+    //     qc.retry_tx(async |tx| {
     //         tx.exec(sql).await?; // error[E0507]: cannot move out of `sql`,
     //         Ok(())               // which is behind a mutable reference
     //     })

@@ -14,10 +14,10 @@ ydb-rs-sdk/
 │   ├── README.md                   layout of context / rules
 │   ├── context/                    ← you are here
 │   │   ├── README.md               entry point, reading/update strategy
-│   │   ├── activeContext.md        branch-only scratch pad (policy placeholder on master)
-│   │   ├── progress.md             evolving: completed milestones
+│   │   ├── activeContext.md        branch-only scratch pad (no merge)
+│   │   ├── progress.md             placeholder on master (no merge)
 │   │   ├── projectBrief.md         stable: scope, goals, constraints
-│   │   ├── productContext.md       stable: users, API surface, feature parity
+│   │   ├── productContext.md       stable: users, API surface, coverage, releases
 │   │   ├── systemPatterns.md       evolving: workspace layout, module patterns
 │   │   └── techContext.md          evolving: CI, MSRV, local YDB, build commands
 │   └── rules/                      coding standards (on demand via AGENTS.md)
@@ -34,11 +34,11 @@ ydb-rs-sdk/
 
 | File | Stability | Read when |
 |------|-----------|-----------|
-| [`activeContext.md`](activeContext.md) | **Branch-only** | Policy placeholder on `master`; optional scratch pad on a feature branch — **never merge edits** |
-| [`progress.md`](progress.md) | Evolving | Completed milestones — update in the PR that delivers the work |
+| [`activeContext.md`](activeContext.md) | **No merge** | Branch-only scratch pad; placeholder on `master` |
+| [`progress.md`](progress.md) | **No merge** | Placeholder on `master`; routing table only |
 | [`systemPatterns.md`](systemPatterns.md) | Evolving | Architecture, new modules, API layering |
 | [`techContext.md`](techContext.md) | Evolving | CI, MSRV, local YDB, build commands |
-| [`productContext.md`](productContext.md) | Stable | Public API, users, feature parity |
+| [`productContext.md`](productContext.md) | Stable | Public API, users, coverage, releases, gaps |
 | [`projectBrief.md`](projectBrief.md) | Stable | Scope, goals, constraints |
 
 ## Reading strategy
@@ -49,11 +49,11 @@ Code patterns:  .agents/rules/ via AGENTS.md router (on demand)
 Full review:    all files (on "update memory bank" or major onboarding)
 ```
 
-Avoid loading all six core files at session start — it wastes context tokens without improving outcomes.
+Avoid loading all core files at session start — it wastes context tokens without improving outcomes.
 
 ## Update triggers
 
-1. Feature/fix ready for PR → `progress.md` (if milestone); revert `activeContext.md` to placeholder
+1. Feature/fix ready for PR → `productContext.md` / `systemPatterns.md` / `techContext.md`; revert `activeContext.md` and `progress.md` to placeholders
 2. Architecture or CI changed → `systemPatterns.md` or `techContext.md`
 3. Scope changed → `projectBrief.md` or `productContext.md`
 4. User says **"update memory bank"** → review every core file
