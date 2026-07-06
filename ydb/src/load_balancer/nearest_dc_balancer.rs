@@ -232,7 +232,7 @@ impl NearestDCBalancer {
         }
     }
 
-    pub(super) fn extract_nodes(from_state: &Arc<DiscoveryState>) -> YdbResult<&Vec<NodeInfo>> {
+    pub(super) fn extract_nodes(from_state: &Arc<DiscoveryState>) -> YdbResult<&[NodeInfo]> {
         let nodes = from_state.get_all_nodes();
         match nodes {
             None => Err(YdbError::Custom(

@@ -59,11 +59,11 @@ impl DiscoveryState {
         }
     }
 
-    pub(crate) fn get_nodes(&self, _service: &Service) -> Option<&Vec<NodeInfo>> {
+    pub(crate) fn get_nodes(&self, _service: &Service) -> Option<&[NodeInfo]> {
         Some(&self.nodes)
     }
 
-    pub(crate) fn get_all_nodes(&self) -> Option<&Vec<NodeInfo>> {
+    pub(crate) fn get_all_nodes(&self) -> Option<&[NodeInfo]> {
         Some(&self.nodes)
     }
 
