@@ -10,6 +10,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 use ydb_grpc::ydb_proto::topic::stream_write_message::WriteRequest;
+use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
 use crate::client_topic::compression::{CodecRegistry, CompressionWorker, Executor};
 use crate::client_topic::list_types::Codec;
@@ -38,6 +39,7 @@ impl StreamWriter {
         error_tx: oneshot::Sender<YdbError>,
         server_codecs: Vec<Codec>,
         executor: Arc<dyn Executor>,
+        tx_identity: Option<TransactionIdentity>,
     ) -> YdbResult<Self> {
         let cancellation_token = CancellationToken::new();
 
@@ -79,6 +81,7 @@ impl StreamWriter {
             shared_error_tx.clone(),
             compressed_rx,
             request_stream,
+            tx_identity,
         ));
 
         tasks.spawn(StreamWriter::receive_messages_loop(
@@ -127,13 +130,15 @@ impl StreamWriter {
         error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
         mut compressed_rx: mpsc::UnboundedReceiver<YdbResult<WriteRequest>>,
         request_stream: mpsc::UnboundedSender<stream_write_message::FromClient>,
+        tx_identity: Option<TransactionIdentity>,
     ) {
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => { return; }
                 next = compressed_rx.recv() => {
                     let Some(chunk_result) = next else { return; };
-                    let result = chunk_result.and_then(|write_request| {
+                    let result = chunk_result.and_then(|mut write_request| {
+                        write_request.tx = tx_identity.clone();
                         if write_request.messages.is_empty() {
                             return Ok(());
                         }

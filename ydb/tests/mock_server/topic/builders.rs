@@ -4,7 +4,7 @@ use ydb_grpc::google_proto_workaround::protobuf::Timestamp;
 use ydb_grpc::ydb_proto::operations::Operation;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 use ydb_grpc::ydb_proto::topic;
-use ydb_grpc::ydb_proto::topic::stream_read_message;
+use ydb_grpc::ydb_proto::topic::{stream_read_message, stream_write_message};
 
 // --- StreamRead messages (server → client over the bidi stream) ---
 
@@ -205,6 +205,99 @@ fn stream_read(stream_id: u64, msg: stream_read_message::from_server::ServerMess
     TopicReply::StreamRead {
         stream_id,
         msg: stream_read_message::FromServer {
+            status: StatusCode::Success as i32,
+            issues: Vec::new(),
+            server_message: Some(msg),
+        },
+    }
+}
+
+// --- StreamWrite messages (server → client over the bidi stream) ---
+
+pub fn write_init_response(
+    stream_id: u64,
+    session_id: impl Into<String>,
+    partition_id: i64,
+) -> TopicReply {
+    stream_write(
+        stream_id,
+        stream_write_message::from_server::ServerMessage::InitResponse(
+            stream_write_message::InitResponse {
+                last_seq_no: 0,
+                session_id: session_id.into(),
+                partition_id,
+                supported_codecs: None,
+            },
+        ),
+    )
+}
+
+pub fn write_ack_written_in_tx(stream_id: u64, seq_no: i64) -> TopicReply {
+    use stream_write_message::write_response::write_ack;
+    stream_write(
+        stream_id,
+        stream_write_message::from_server::ServerMessage::WriteResponse(
+            stream_write_message::WriteResponse {
+                acks: vec![stream_write_message::write_response::WriteAck {
+                    seq_no,
+                    message_write_status: Some(write_ack::MessageWriteStatus::WrittenInTx(
+                        write_ack::WrittenInTx {},
+                    )),
+                }],
+                partition_id: 0,
+                write_statistics: None,
+            },
+        ),
+    )
+}
+
+pub fn write_ack_written(stream_id: u64, seq_no: i64, offset: i64) -> TopicReply {
+    use stream_write_message::write_response::write_ack;
+    stream_write(
+        stream_id,
+        stream_write_message::from_server::ServerMessage::WriteResponse(
+            stream_write_message::WriteResponse {
+                acks: vec![stream_write_message::write_response::WriteAck {
+                    seq_no,
+                    message_write_status: Some(write_ack::MessageWriteStatus::Written(
+                        write_ack::Written { offset },
+                    )),
+                }],
+                partition_id: 0,
+                write_statistics: None,
+            },
+        ),
+    )
+}
+
+pub fn write_ack_skipped_already_written(stream_id: u64, seq_no: i64) -> TopicReply {
+    use stream_write_message::write_response::write_ack;
+    stream_write(
+        stream_id,
+        stream_write_message::from_server::ServerMessage::WriteResponse(
+            stream_write_message::WriteResponse {
+                acks: vec![stream_write_message::write_response::WriteAck {
+                    seq_no,
+                    message_write_status: Some(write_ack::MessageWriteStatus::Skipped(
+                        write_ack::Skipped {
+                            reason: write_ack::skipped::Reason::AlreadyWritten as i32,
+                        },
+                    )),
+                }],
+                partition_id: 0,
+                write_statistics: None,
+            },
+        ),
+    )
+}
+
+fn stream_write(
+    stream_id: u64,
+    msg: stream_write_message::from_server::ServerMessage,
+) -> TopicReply {
+    TopicReply::StreamWrite {
+        stream_id,
+        msg: stream_write_message::FromServer {
             status: StatusCode::Success as i32,
             issues: Vec::new(),
             server_message: Some(msg),
