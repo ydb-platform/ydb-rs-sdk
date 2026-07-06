@@ -20,7 +20,7 @@ pub(crate) struct DiscoveryPessimizationInterceptor {
 }
 
 impl DiscoveryPessimizationInterceptor {
-    pub fn new(discovery: Arc<Box<dyn Discovery>>) -> Self {
+    pub fn new(discovery: Arc<dyn Discovery>) -> Self {
         let (channel_error_sender, channel_error_receiver) = mpsc::unbounded_channel();
         tokio::spawn(async move {
             Self::node_pessimization_loop(discovery, channel_error_receiver).await;
@@ -31,7 +31,7 @@ impl DiscoveryPessimizationInterceptor {
     }
 
     async fn node_pessimization_loop(
-        discovery: Arc<Box<dyn Discovery>>,
+        discovery: Arc<dyn Discovery>,
         mut errors: UnboundedReceiver<ChannelErrorInfo>,
     ) {
         loop {

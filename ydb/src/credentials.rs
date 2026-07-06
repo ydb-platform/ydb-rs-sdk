@@ -41,10 +41,10 @@ pub type StaticCredentialsAuth = StaticCredentials;
 #[deprecated(note = "use MetadataUrlCredentials instead")]
 pub type YandexMetadata = MetadataUrlCredentials;
 
-pub(crate) type CredentialsRef = Arc<Box<dyn Credentials>>;
+pub(crate) type CredentialsRef = Arc<dyn Credentials>;
 
 pub(crate) fn credencials_ref<T: 'static + Credentials>(cred: T) -> CredentialsRef {
-    Arc::new(Box::new(cred))
+    Arc::new(cred)
 }
 
 /// Get token of service account of instance

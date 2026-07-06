@@ -18,7 +18,7 @@ pub enum YdbOrCustomerError {
     YDB(YdbError),
 
     /// Wrap for customer error
-    Customer(Arc<Box<dyn std::error::Error + Send + Sync>>),
+    Customer(Arc<dyn std::error::Error + Send + Sync>),
 }
 
 impl YdbOrCustomerError {

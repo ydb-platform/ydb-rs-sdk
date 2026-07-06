@@ -129,7 +129,7 @@ pub(crate) trait GrpcInterceptor: Send + Sync {
 
 #[derive(Clone)]
 pub(crate) struct MultiInterceptor {
-    interceptors: Vec<Arc<Box<dyn GrpcInterceptor>>>,
+    interceptors: Vec<Arc<dyn GrpcInterceptor>>,
 }
 
 impl MultiInterceptor {
@@ -141,8 +141,8 @@ impl MultiInterceptor {
 
     pub fn with_interceptor<T: GrpcInterceptor + 'static>(mut self, interceptor: T) -> Self {
         let boxed_interceptor: Box<dyn GrpcInterceptor> = Box::new(interceptor);
-        let arc_boxed_interceptor = Arc::new(boxed_interceptor);
-        self.interceptors.push(arc_boxed_interceptor);
+        let arc_interceptor = Arc::from(boxed_interceptor);
+        self.interceptors.push(arc_interceptor);
         self
     }
 }
