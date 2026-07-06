@@ -19,7 +19,7 @@ use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
 use crate::{YdbError, YdbResult};
 
 use super::connection::Connection;
-use super::message_buffer::{BufferedBatch, PartitionSessions, StopOutcome};
+use super::message_buffer::{BufferedBatch, PartitionActions, PartitionSessions};
 use super::pending_commits::{CommitAckReceiver, PendingCommits};
 
 const RUNTIME_HANDLE_POISONED: &str = "topic reader runtime handle mutex poisoned";
@@ -113,7 +113,7 @@ impl RuntimeHandle {
     }
 
     fn handle_read_response(&self, resp: RawReadResponse) -> YdbResult<()> {
-        let mut pushed = false;
+        let mut actions = PartitionActions::default();
         {
             let mut state = self.lock_state()?;
             let State::Active(active) = &mut *state else {
@@ -125,15 +125,15 @@ impl RuntimeHandle {
             for partition_data in resp.partition_data {
                 let psid = PartitionSessionId::from_raw(partition_data.partition_session_id);
                 for batch in partition_data.batches {
-                    pushed |= active
-                        .partitions
-                        .push_raw_batch(batch, psid, reader_id, epoch)?;
+                    actions.merge(
+                        active
+                            .partitions
+                            .push_raw_batch(batch, psid, reader_id, epoch)?,
+                    );
                 }
             }
         }
-        if pushed {
-            self.inner.messages_available.notify_one();
-        }
+        self.wake_reader_if_requested(&actions);
         Ok(())
     }
 
@@ -160,17 +160,17 @@ impl RuntimeHandle {
 
     fn handle_stop_partition_session(&self, req: RawStopPartitionSessionRequest) -> YdbResult<()> {
         let psid = PartitionSessionId::from_raw(req.partition_session_id);
-        let outcome: StopOutcome = {
+        let actions = {
             let mut state = self.lock_state()?;
             let State::Active(active) = &mut *state else {
                 return Ok(());
             };
+            let actions = active.partitions.stop(psid, req.committed_offset)?;
             active.pending_commits.stop(
                 psid,
                 Some(req.committed_offset),
                 &YdbError::custom(format!("partition session {psid} stopped by server")),
             );
-            let outcome = active.partitions.stop(psid, req.committed_offset)?;
             active
                 .connection
                 .send(RawFromClientOneOf::StopPartitionSessionResponse(
@@ -178,16 +178,9 @@ impl RuntimeHandle {
                         partition_session_id: psid.as_raw(),
                     },
                 ))?;
-            outcome
+            actions
         };
-        if outcome.messages_became_available {
-            self.inner.messages_available.notify_one();
-        }
-        if outcome.reconnect_required {
-            return Err(YdbError::Transport(format!(
-                "partition session {psid} stopped before terminal offset committed, reconnecting"
-            )));
-        }
+        self.wake_reader_if_requested(&actions);
         Ok(())
     }
 
@@ -199,12 +192,22 @@ impl RuntimeHandle {
             .map(PartitionId::from_raw)
             .collect_vec();
 
-        let mut state = self.lock_state()?;
-        let State::Active(active) = &mut *state else {
-            return Ok(());
+        let actions = {
+            let mut state = self.lock_state()?;
+            let State::Active(active) = &mut *state else {
+                return Ok(());
+            };
+            active.partitions.end(psid, child_ids)?
         };
-        active.partitions.end(psid, child_ids)?;
+
+        self.wake_reader_if_requested(&actions);
         Ok(())
+    }
+
+    fn wake_reader_if_requested(&self, actions: &PartitionActions) {
+        if actions.wake_reader {
+            self.inner.messages_available.notify_one();
+        }
     }
 
     fn handle_commit_offset_response(&self, resp: RawCommitOffsetResponse) -> YdbResult<()> {
@@ -218,21 +221,17 @@ impl RuntimeHandle {
                 )
             })
             .collect();
-        let mut child_unblocked = false;
         {
             let mut state = self.lock_state()?;
             if let State::Active(active) = &mut *state {
                 for &(psid, committed_offset) in &committed_offsets {
-                    child_unblocked |= active
+                    active
                         .partitions
                         .observe_commit_ack(psid, committed_offset)?;
                 }
             }
         }
         self.ack_commits(committed_offsets)?;
-        if child_unblocked {
-            self.inner.messages_available.notify_one();
-        }
         Ok(())
     }
 
@@ -498,10 +497,10 @@ impl RuntimeHandle {
                 .collect(),
         };
 
-        let pushed = {
+        let actions = {
             let mut state = self.lock_state()?;
             match &mut *state {
-                State::Reconnecting => false,
+                State::Reconnecting => PartitionActions::default(),
                 State::Active(active) => {
                     active
                         .partitions
@@ -510,9 +509,7 @@ impl RuntimeHandle {
                 State::Failed(err) => return Err(err.clone()),
             }
         };
-        if pushed {
-            self.inner.messages_available.notify_one();
-        }
+        self.wake_reader_if_requested(&actions);
         Ok(())
     }
 
@@ -541,12 +538,16 @@ impl RuntimeHandle {
         session_id: PartitionSessionId,
         child_partition_ids: Vec<PartitionId>,
     ) -> YdbResult<()> {
-        let mut state = self.lock_state()?;
-        match &mut *state {
-            State::Active(active) => active.partitions.end(session_id, child_partition_ids)?,
-            State::Reconnecting => {}
-            State::Failed(err) => return Err(err.clone()),
-        }
+        let actions = {
+            let mut state = self.lock_state()?;
+            match &mut *state {
+                State::Active(active) => active.partitions.end(session_id, child_partition_ids)?,
+                State::Reconnecting => PartitionActions::default(),
+                State::Failed(err) => return Err(err.clone()),
+            }
+        };
+
+        self.wake_reader_if_requested(&actions);
         Ok(())
     }
 }
@@ -767,11 +768,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn commit_ack_makes_buffered_child_readable() -> YdbResult<()> {
+    async fn parent_drain_makes_buffered_child_readable_before_commit_ack() -> YdbResult<()> {
         use crate::client_topic::topicreader::messages::TopicReaderMessage;
-        use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
-            RawCommitOffsetResponse, RawPartitionCommittedOffset,
-        };
 
         let (outgoing_tx, _outgoing_rx) = mpsc::unbounded_channel();
         let runtime = RuntimeHandle::with_connection(Connection::new(outgoing_tx, 1));
@@ -788,17 +786,6 @@ mod tests {
             parent.messages[0].get_commit_marker().partition_session_id,
             psid(1)
         );
-
-        // Parent drained → pending_ending_sessions. Child is blocked until commit ack.
-        // Inject the commit ack to release the child.
-        runtime.handle_from_server(RawFromServer::CommitOffsetResponse(
-            RawCommitOffsetResponse {
-                partitions_committed_offsets: vec![RawPartitionCommittedOffset {
-                    partition_session_id: 1,
-                    committed_offset: 1,
-                }],
-            },
-        ))?;
 
         let child = runtime.pop_batch(10).await?;
         assert_eq!(

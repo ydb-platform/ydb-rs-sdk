@@ -18,14 +18,14 @@ pub(super) struct BufferedBatch {
 enum PartitionLifecycle {
     Reading,
     Ending {
-        children_to_unblock: Vec<PartitionId>,
+        children_to_unblock: Option<Vec<PartitionId>>,
     },
 }
 
 struct PartitionEntry {
     session: PartitionSession,
     queue: VecDeque<TopicReaderMessage>,
-    /// Number of parent sessions whose terminal offsets must be committed before this partition can be read.
+    /// Number of parent sessions that must end and drain before this partition can be read.
     blocked_by: usize,
     lifecycle: PartitionLifecycle,
     /// Highest `committed_offset` received from the server for this session. Initialized to the
@@ -33,17 +33,134 @@ struct PartitionEntry {
     last_acked_offset: i64,
 }
 
-/// Tracks a parent session whose queue was fully drained but whose messages have not yet been
-/// committed. Children are released only after `observe_commit_ack` confirms the terminal offset.
-struct PendingEnding {
-    /// The `next_commit_offset_start` captured when the queue drained — i.e. last_offset + 1.
-    terminal_commit_offset: i64,
-    child_partition_ids: Vec<PartitionId>,
+struct ParentBlockRelease {
+    unblocked: bool,
+    wake_reader: bool,
 }
 
-pub(super) struct StopOutcome {
-    pub(super) messages_became_available: bool,
-    pub(super) reconnect_required: bool,
+impl PartitionEntry {
+    fn new(session: PartitionSession, blocked_by: usize) -> Self {
+        let last_acked_offset = session.next_commit_offset_start;
+        Self {
+            session,
+            queue: VecDeque::new(),
+            blocked_by,
+            lifecycle: PartitionLifecycle::Reading,
+            last_acked_offset,
+        }
+    }
+
+    fn terminal_offset(&self) -> i64 {
+        self.session.next_commit_offset_start
+    }
+
+    fn is_ending(&self) -> bool {
+        matches!(&self.lifecycle, PartitionLifecycle::Ending { .. })
+    }
+
+    fn can_accept_messages(&self) -> bool {
+        matches!(&self.lifecycle, PartitionLifecycle::Reading)
+    }
+
+    fn begin_ending(
+        &mut self,
+        psid: PartitionSessionId,
+        child_pids: Vec<PartitionId>,
+    ) -> YdbResult<bool> {
+        match &self.lifecycle {
+            PartitionLifecycle::Reading => {
+                let queue_empty = self.queue.is_empty();
+                self.lifecycle = PartitionLifecycle::Ending {
+                    children_to_unblock: Some(child_pids),
+                };
+                Ok(queue_empty)
+            }
+            PartitionLifecycle::Ending { .. } => Err(YdbError::custom(format!(
+                "topic reader duplicate end partition session {psid}"
+            ))),
+        }
+    }
+
+    fn take_children_to_unblock(&mut self) -> Option<Vec<PartitionId>> {
+        match &mut self.lifecycle {
+            PartitionLifecycle::Reading => None,
+            PartitionLifecycle::Ending {
+                children_to_unblock,
+            } => children_to_unblock.take(),
+        }
+    }
+
+    fn observe_ack(&mut self, committed_offset: i64) {
+        if committed_offset > self.last_acked_offset {
+            self.last_acked_offset = committed_offset;
+        }
+    }
+
+    fn stopped_before_terminal_commit(&self, committed_offset: i64) -> bool {
+        self.is_ending() && committed_offset < self.terminal_offset()
+    }
+
+    fn can_close(&self) -> bool {
+        self.queue.is_empty()
+            && self.last_acked_offset >= self.terminal_offset()
+            && matches!(
+                &self.lifecycle,
+                PartitionLifecycle::Ending {
+                    children_to_unblock: None,
+                }
+            )
+    }
+
+    fn release_parent_block(
+        &mut self,
+        child_psid: PartitionSessionId,
+        child_pid: PartitionId,
+        parent_psid: PartitionSessionId,
+    ) -> YdbResult<ParentBlockRelease> {
+        self.blocked_by = self.blocked_by.checked_sub(1).ok_or_else(|| {
+            YdbError::custom(format!(
+                "topic reader child session {child_psid} (partition {child_pid}) block count underflow when parent {parent_psid} finished"
+            ))
+        })?;
+
+        let unblocked = self.blocked_by == 0;
+        Ok(ParentBlockRelease {
+            unblocked,
+            wake_reader: unblocked && !self.queue.is_empty(),
+        })
+    }
+
+    fn add_parent_block(
+        &mut self,
+        child_psid: PartitionSessionId,
+        child_pid: PartitionId,
+        parent_psid: PartitionSessionId,
+    ) -> YdbResult<()> {
+        if self.blocked_by == 0 {
+            return Err(YdbError::Transport(format!(
+                "partition session {parent_psid} ended after child partition {child_pid} session {child_psid} became readable, reconnecting"
+            )));
+        }
+
+        self.blocked_by = self.blocked_by.checked_add(1).ok_or_else(|| {
+            YdbError::custom(format!(
+                "topic reader child session {child_psid} (partition {child_pid}) block count overflow when parent {parent_psid} ended"
+            ))
+        })?;
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub(super) struct PartitionActions {
+    /// A state transition made at least one queued partition readable.
+    pub(super) wake_reader: bool,
+}
+
+impl PartitionActions {
+    pub(super) fn merge(&mut self, other: Self) {
+        self.wake_reader |= other.wake_reader;
+    }
 }
 
 /// Unified per-connection state for all partition sessions.
@@ -53,14 +170,14 @@ pub(super) struct StopOutcome {
 ///
 /// # Child-readability invariant
 ///
-/// A child partition enters the round-robin **only** after every declaring parent's messages
-/// are committed and acknowledged (`CommitOffsetResponse.committed_offset >= terminal`).
-/// This matches the YDB server's own guarantee: it notifies children only when all parent
-/// data is durably committed (`ReadingFinished && CommittedOffset == EndOffset`).
+/// A child partition enters the round-robin after every declaring parent has ended and all
+/// locally buffered parent messages have been delivered to the user. The parent session itself
+/// remains in `entries` until the terminal commit offset is observed, so the user can still
+/// commit the last delivered batch and get a clear error after the partition is fully closed.
 ///
 /// Three valid paths to child unblocking:
-/// 1. Normal: `End` received → queue drains → `CommitOffsetResponse` >= terminal.
-/// 2. Safe stop: `StopPartitionSessionRequest.committed_offset` >= terminal.
+/// 1. Normal: `End` received → queue drains.
+/// 2. Safe stop: `StopPartitionSessionRequest` for an ended parent releases any remaining blocks.
 /// 3. Reconnect: stale dependency graphs are discarded; the server re-assigns partitions
 ///    from committed state on the new stream.
 #[derive(Default)]
@@ -74,19 +191,15 @@ pub(super) struct PartitionSessions {
     /// Once a child starts, the count moves into its `PartitionEntry::blocked_by`.
     pending_child_blocks: HashMap<PartitionId, usize>,
 
-    /// Sessions whose queues drained while `Ending` and are now awaiting a commit ack at or
-    /// beyond their terminal offset before children can be released.
-    pending_ending_sessions: HashMap<PartitionSessionId, PendingEnding>,
-
     /// Round-robin schedule over partition sessions that are readable.
-    /// Blocked child sessions are excluded until all their parent terminal offsets are committed.
+    /// Blocked child sessions are excluded until all parent sessions have ended and drained.
     round_robin: RoundRobin,
 }
 
 impl PartitionSessions {
     /// Registers a new partition session. If the partition ID is registered as a pending
     /// child block, the session starts blocked and is kept out of the
-    /// round-robin until its parent terminal offsets are committed.
+    /// round-robin until its parent sessions have ended and drained.
     pub(super) fn start(&mut self, session: PartitionSession) -> YdbResult<()> {
         let psid = session.partition_session_id;
         let pid = session.partition_id;
@@ -108,73 +221,46 @@ impl PartitionSessions {
             self.round_robin.push(psid);
         }
 
-        let initial_offset = session.next_commit_offset_start;
-        let entry = PartitionEntry {
-            session,
-            queue: VecDeque::new(),
-            blocked_by,
-            lifecycle: PartitionLifecycle::Reading,
-            last_acked_offset: initial_offset,
-        };
-
         self.partition_to_session.insert(pid, psid);
-        self.entries.insert(psid, entry);
+        self.entries
+            .insert(psid, PartitionEntry::new(session, blocked_by));
         Ok(())
     }
 
     /// Removes the partition session, releasing any child blocks it held.
     ///
-    /// `committed_offset` is the server-reported acked offset at stop time, used to decide
-    /// whether children can be released (>= terminal) or reconnect is required (< terminal).
+    /// `committed_offset` is the server-reported acked offset at stop time. For an ending
+    /// partition, a stop before the terminal offset is observed drops the current stream.
     pub(super) fn stop(
         &mut self,
         psid: PartitionSessionId,
         committed_offset: i64,
-    ) -> YdbResult<StopOutcome> {
-        // A drained-but-uncommitted parent lives in pending_ending_sessions, not entries.
-        if let Some(pending) = self.pending_ending_sessions.get(&psid) {
-            return if committed_offset >= pending.terminal_commit_offset {
-                let messages_became_available = self.finish_parent_once(psid)?;
-                Ok(StopOutcome {
-                    messages_became_available,
-                    reconnect_required: false,
-                })
-            } else {
-                self.pending_ending_sessions.remove(&psid);
-                Ok(StopOutcome {
-                    messages_became_available: false,
-                    reconnect_required: true,
-                })
-            };
+    ) -> YdbResult<PartitionActions> {
+        if self
+            .entry_mut(psid, "stop")?
+            .stopped_before_terminal_commit(committed_offset)
+        {
+            return Err(YdbError::Transport(format!(
+                "partition session {psid} stopped before terminal offset committed, reconnecting"
+            )));
         }
 
-        let entry = self.remove_entry(psid, "stop")?;
-        let terminal_commit_offset = entry.session.next_commit_offset_start;
+        let actions = self.release_children_if_ending(psid)?;
+        self.remove_entry(psid, "stop")?;
 
-        match entry.lifecycle {
-            PartitionLifecycle::Reading => Ok(StopOutcome {
-                messages_became_available: false,
-                reconnect_required: false,
-            }),
-            PartitionLifecycle::Ending {
-                children_to_unblock,
-            } => {
-                if committed_offset >= terminal_commit_offset {
-                    let messages_became_available =
-                        self.release_child_blocks(psid, children_to_unblock)?;
-                    Ok(StopOutcome {
-                        messages_became_available,
-                        reconnect_required: false,
-                    })
-                } else {
-                    // Children remain blocked; reconnect will clear the stale state.
-                    Ok(StopOutcome {
-                        messages_became_available: false,
-                        reconnect_required: true,
-                    })
-                }
-            }
-        }
+        Ok(actions)
+    }
+
+    fn entry_mut(
+        &mut self,
+        psid: PartitionSessionId,
+        action: &str,
+    ) -> YdbResult<&mut PartitionEntry> {
+        self.entries.get_mut(&psid).ok_or_else(|| {
+            YdbError::custom(format!(
+                "topic reader {action} for unknown partition session {psid}"
+            ))
+        })
     }
 
     fn remove_entry(
@@ -206,8 +292,8 @@ impl PartitionSessions {
         &mut self,
         psid: PartitionSessionId,
         children_to_unblock: Vec<PartitionId>,
-    ) -> YdbResult<bool> {
-        let mut messages_became_available = false;
+    ) -> YdbResult<PartitionActions> {
+        let mut actions = PartitionActions::default();
         for child_pid in children_to_unblock {
             if let Some(&child_psid) = self.partition_to_session.get(&child_pid) {
                 let Some(child_entry) = self.entries.get_mut(&child_psid) else {
@@ -216,16 +302,11 @@ impl PartitionSessions {
                     )));
                 };
 
-                child_entry.blocked_by = child_entry.blocked_by.checked_sub(1).ok_or_else(|| {
-                    YdbError::custom(format!(
-                        "topic reader child session {child_psid} (partition {child_pid}) block count underflow when parent {psid} finished"
-                    ))
-                })?;
-
-                if child_entry.blocked_by == 0 {
-                    messages_became_available |= !child_entry.queue.is_empty();
+                let release = child_entry.release_parent_block(child_psid, child_pid, psid)?;
+                if release.unblocked {
                     self.round_robin.push(child_psid);
                 }
+                actions.wake_reader |= release.wake_reader;
             } else {
                 // Child has not started yet: decrement pending block count.
                 if let Some(count) = self.pending_child_blocks.get_mut(&child_pid) {
@@ -242,131 +323,114 @@ impl PartitionSessions {
             }
         }
 
-        Ok(messages_became_available)
+        Ok(actions)
     }
 
-    /// Moves an `Ending` parent whose queue just drained into `pending_ending_sessions`.
-    /// Children are NOT released here; they wait for a commit ack via `observe_commit_ack`.
-    fn drain_ending_parent(&mut self, psid: PartitionSessionId) -> YdbResult<()> {
-        let entry = self.remove_entry(psid, "drain ending parent")?;
-        let terminal_commit_offset = entry.session.next_commit_offset_start;
-        let child_partition_ids = match entry.lifecycle {
-            PartitionLifecycle::Ending {
-                children_to_unblock,
-            } => children_to_unblock,
-            PartitionLifecycle::Reading => {
-                return Err(YdbError::custom(format!(
-                    "topic reader drain_ending_parent called for non-ending session {psid}"
-                )));
-            }
+    fn release_children_if_ending(
+        &mut self,
+        psid: PartitionSessionId,
+    ) -> YdbResult<PartitionActions> {
+        let Some(children_to_unblock) = self
+            .entry_mut(psid, "release children")?
+            .take_children_to_unblock()
+        else {
+            return Ok(PartitionActions::default());
         };
-        self.pending_ending_sessions.insert(
-            psid,
-            PendingEnding {
-                terminal_commit_offset,
-                child_partition_ids,
-            },
-        );
+
+        self.release_child_blocks(psid, children_to_unblock)
+    }
+
+    fn register_child_block(
+        &mut self,
+        parent_psid: PartitionSessionId,
+        child_pid: PartitionId,
+    ) -> YdbResult<PartitionActions> {
+        let Some(&child_psid) = self.partition_to_session.get(&child_pid) else {
+            *self.pending_child_blocks.entry(child_pid).or_insert(0) += 1;
+            return Ok(PartitionActions::default());
+        };
+
+        let Some(child_entry) = self.entries.get_mut(&child_psid) else {
+            return Err(YdbError::custom(format!(
+                "topic reader child session {child_psid} (partition {child_pid}) has no entry"
+            )));
+        };
+
+        child_entry.add_parent_block(child_psid, child_pid, parent_psid)?;
+        self.round_robin.remove(child_psid);
+        Ok(PartitionActions::default())
+    }
+
+    fn remove_if_fully_closed(&mut self, psid: PartitionSessionId) -> YdbResult<()> {
+        let Some(entry) = self.entries.get(&psid) else {
+            return Ok(());
+        };
+
+        if entry.can_close() {
+            self.remove_entry(psid, "close ending partition")?;
+        }
         Ok(())
     }
 
-    /// The sole release point for child blocks — all three valid unblocking paths lead here.
-    fn finish_parent_once(&mut self, psid: PartitionSessionId) -> YdbResult<bool> {
-        let Some(pending) = self.pending_ending_sessions.remove(&psid) else {
-            return Ok(false);
-        };
-        self.release_child_blocks(psid, pending.child_partition_ids)
+    fn on_parent_drained(&mut self, psid: PartitionSessionId) -> YdbResult<PartitionActions> {
+        self.round_robin.remove(psid);
+        let actions = self.release_children_if_ending(psid)?;
+        self.remove_if_fully_closed(psid)?;
+        Ok(actions)
     }
 
-    /// Called on every `CommitOffsetResponse` entry. Triggers child release when the
-    /// committed offset covers the terminal offset of a pending-ending parent.
-    /// Also tracks the ack watermark for live entries so `end()` can fast-path when
-    /// all messages are already committed at the time `End` arrives.
+    /// Called on every `CommitOffsetResponse` entry. Tracks the ack watermark for live entries
+    /// and closes an ended, drained parent once its terminal offset is observed.
     pub(super) fn observe_commit_ack(
         &mut self,
         psid: PartitionSessionId,
         committed_offset: i64,
-    ) -> YdbResult<bool> {
+    ) -> YdbResult<()> {
         if let Some(entry) = self.entries.get_mut(&psid) {
-            if committed_offset > entry.last_acked_offset {
-                entry.last_acked_offset = committed_offset;
-            }
+            entry.observe_ack(committed_offset);
         }
-        if self
-            .pending_ending_sessions
-            .get(&psid)
-            .is_some_and(|p| committed_offset >= p.terminal_commit_offset)
-        {
-            return self.finish_parent_once(psid);
-        }
-        Ok(false)
+        self.remove_if_fully_closed(psid)?;
+        Ok(())
     }
 
     /// Records that the parent session is ending and registers its child partitions.
     ///
-    /// If the parent queue is empty **and** all messages are already acked (`last_acked_offset >=
-    /// terminal`), children can start unblocked and the session is removed immediately. If the
-    /// queue is empty but messages have been popped without being acked yet, the session moves to
-    /// `pending_ending_sessions` and children wait for a commit ack — same path as when
-    /// `pop_batch` drains a non-empty Ending session. If the parent is already in `Ending` state,
-    /// that is a protocol error.
+    /// If the parent queue is empty, child blocks are released immediately. The parent entry
+    /// remains alive until the terminal offset is committed and observed. If the parent is
+    /// already in `Ending` state, that is a protocol error.
     pub(super) fn end(
         &mut self,
         psid: PartitionSessionId,
         child_pids: Vec<PartitionId>,
-    ) -> YdbResult<()> {
-        let Some(entry) = self.entries.get_mut(&psid) else {
-            return Err(YdbError::custom(format!(
-                "topic reader end for unknown partition session {psid}"
-            )));
-        };
+    ) -> YdbResult<PartitionActions> {
+        let queue_empty = self
+            .entry_mut(psid, "end")?
+            .begin_ending(psid, child_pids.clone())?;
 
-        match entry.lifecycle {
-            PartitionLifecycle::Reading => {}
-            PartitionLifecycle::Ending { .. } => {
-                return Err(YdbError::custom(format!(
-                    "topic reader duplicate end partition session {psid}"
-                )));
-            }
-        }
+        let mut actions = PartitionActions::default();
 
-        let queue_empty = entry.queue.is_empty();
-        let terminal = entry.session.next_commit_offset_start;
-        let last_acked = entry.last_acked_offset;
-
-        if queue_empty && terminal <= last_acked {
-            // Queue already drained and all messages are acked — remove immediately.
-            self.remove_entry(psid, "empty ending partition")?;
-            return Ok(());
-        }
-
-        // Register child blocks, then transition lifecycle.
+        // Register child blocks after the ending transition succeeds.
         for &pid in &child_pids {
-            *self.pending_child_blocks.entry(pid).or_insert(0) += 1;
+            actions.merge(self.register_child_block(psid, pid)?);
         }
-        entry.lifecycle = PartitionLifecycle::Ending {
-            children_to_unblock: child_pids,
-        };
 
         if queue_empty {
-            // Queue drained but messages not yet acked — move to pending_ending_sessions.
-            self.drain_ending_parent(psid)?;
+            actions.merge(self.on_parent_drained(psid)?);
         }
-
-        Ok(())
+        Ok(actions)
     }
 
     /// Builds messages from a raw decompressed batch and enqueues them.
-    /// Returns `Ok(true)` if any messages were added.
+    /// Returns whether the newly added messages are readable now.
     pub(super) fn push_raw_batch(
         &mut self,
         batch: RawBatch,
         psid: PartitionSessionId,
         reader_id: usize,
         epoch: usize,
-    ) -> YdbResult<bool> {
+    ) -> YdbResult<PartitionActions> {
         if batch.message_data.is_empty() {
-            return Ok(false);
+            return Ok(PartitionActions::default());
         }
 
         let batch_bytes = batch.get_read_session_size();
@@ -377,12 +441,13 @@ impl PartitionSessions {
             )));
         };
 
-        if matches!(&entry.lifecycle, PartitionLifecycle::Ending { .. }) {
+        if !entry.can_accept_messages() {
             return Err(YdbError::custom(format!(
                 "topic reader received messages for ended partition session {psid}"
             )));
         }
 
+        let wake_reader = entry.blocked_by == 0;
         let tb = TopicReaderBatch::new(batch, &mut entry.session, reader_id, epoch);
         let mut messages = tb.messages;
         if let Some(last) = messages.last_mut() {
@@ -390,7 +455,7 @@ impl PartitionSessions {
         }
         entry.queue.extend(messages);
 
-        Ok(true)
+        Ok(PartitionActions { wake_reader })
     }
 
     pub(super) fn pop_batch(&mut self, cap: usize) -> YdbResult<Option<BufferedBatch>> {
@@ -413,10 +478,10 @@ impl PartitionSessions {
             let epoch = out[0].commit_marker.epoch;
             let bytes: i64 = out.iter().map(|m| m.bytes_to_release).sum();
 
-            if entry.queue.is_empty()
-                && matches!(entry.lifecycle, PartitionLifecycle::Ending { .. })
-            {
-                self.drain_ending_parent(psid)?;
+            let parent_drained = entry.queue.is_empty() && entry.is_ending();
+
+            if parent_drained {
+                self.on_parent_drained(psid)?;
             }
 
             return Ok(Some(BufferedBatch {
@@ -430,7 +495,7 @@ impl PartitionSessions {
     }
 
     pub(super) fn has_session(&self, psid: PartitionSessionId) -> bool {
-        self.entries.contains_key(&psid) || self.pending_ending_sessions.contains_key(&psid)
+        self.entries.contains_key(&psid)
     }
 }
 
@@ -511,7 +576,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_child_blocked_until_both_parents_commit() {
+    fn merge_child_blocked_until_both_parents_drain() {
         let mut ps = PartitionSessions::default();
 
         // Parent 1 (session 1, partition 10): 5 messages, terminal offset = 5.
@@ -530,7 +595,7 @@ mod tests {
 
         assert!(
             !ps.round_robin.contains(psid(3)),
-            "child must be blocked before either parent commits"
+            "child must be blocked before either parent drains"
         );
 
         // Drain all 6 parent messages two-at-a-time; child must stay blocked throughout.
@@ -545,7 +610,7 @@ mod tests {
             assert_ne!(
                 b.messages[0].commit_marker.partition_session_id,
                 psid(3),
-                "child must not be served before both parents commit"
+                "child must not be served before both parents drain"
             );
             assert!(b.messages.len() <= 2, "cap=2 must be respected");
             parent_msgs_seen += b.messages.len();
@@ -558,22 +623,9 @@ mod tests {
         // ceil(5/2) + ceil(1/2) = 3 + 1 = 4 pops.
         assert_eq!(pops, 4);
 
-        // After drain, child is still blocked — commit acks have not arrived yet.
-        assert!(
-            !ps.round_robin.contains(psid(3)),
-            "child must still be blocked after drain, awaiting commit acks"
-        );
-
-        // Simulate commit acks for both parents.
-        ps.observe_commit_ack(psid(1), 5).unwrap();
-        assert!(
-            !ps.round_robin.contains(psid(3)),
-            "child still blocked after first parent ack"
-        );
-        ps.observe_commit_ack(psid(2), 1).unwrap();
         assert!(
             ps.round_robin.contains(psid(3)),
-            "child must unblock after all parents ack"
+            "child must unblock after both parents drain"
         );
 
         let b = ps.pop_batch(2).unwrap().unwrap();
@@ -583,6 +635,67 @@ mod tests {
             ps.pop_batch(2).unwrap().is_none(),
             "buffer must be empty after child drains"
         );
+    }
+
+    #[test]
+    fn later_parent_end_adds_block_to_existing_blocked_child() {
+        let mut ps = PartitionSessions::default();
+
+        ps.start(session(1, 10)).unwrap();
+        ps.start(session(2, 20)).unwrap();
+        push_messages(&mut ps, 1, [(0, 0)]);
+        push_messages(&mut ps, 2, [(0, 0)]);
+
+        ps.end(psid(1), vec![pid(30)]).unwrap();
+        ps.start(session(3, 30)).unwrap();
+        push_messages(&mut ps, 3, [(0, 0)]);
+
+        ps.end(psid(2), vec![pid(30)]).unwrap();
+        assert!(
+            !ps.round_robin.contains(psid(3)),
+            "child must still be blocked after later parent declares it"
+        );
+
+        let first_parent = ps.pop_batch(10).unwrap().unwrap();
+        assert_ne!(
+            first_parent.messages[0].commit_marker.partition_session_id,
+            psid(3)
+        );
+        assert!(
+            !ps.round_robin.contains(psid(3)),
+            "child must stay blocked until both parents drain"
+        );
+
+        let second_parent = ps.pop_batch(10).unwrap().unwrap();
+        assert_ne!(
+            second_parent.messages[0].commit_marker.partition_session_id,
+            psid(3)
+        );
+        assert!(
+            ps.round_robin.contains(psid(3)),
+            "child must unblock after the later parent drains"
+        );
+
+        let child = ps.pop_batch(10).unwrap().unwrap();
+        assert_eq!(
+            child.messages[0].commit_marker.partition_session_id,
+            psid(3)
+        );
+    }
+
+    #[test]
+    fn later_parent_end_for_readable_child_requires_reconnect() {
+        let mut ps = PartitionSessions::default();
+
+        ps.start(session(1, 10)).unwrap();
+        ps.start(session(2, 20)).unwrap();
+        push_messages(&mut ps, 2, [(0, 0)]);
+        assert!(
+            ps.round_robin.contains(psid(2)),
+            "child is readable before the late dependency appears"
+        );
+
+        assert!(ps.end(psid(1), vec![pid(20)]).is_err());
     }
 
     #[test]
@@ -631,33 +744,26 @@ mod tests {
     }
 
     #[test]
-    fn child_unblocked_via_pending_when_start_comes_after_parent_commit() {
+    fn child_unblocked_via_pending_when_start_comes_after_parent_drain() {
         // End arrives before child starts: block lives in pending_child_blocks.
         let mut ps = PartitionSessions::default();
         ps.start(session(1, 10)).unwrap();
         push_messages(&mut ps, 1, [(0, 0)]);
         ps.end(psid(1), vec![pid(20)]).unwrap();
 
-        // Child has NOT started yet. Parent drains into pending_ending_sessions.
+        // Child has NOT started yet. Parent drain clears the pending child block.
         ps.pop_batch(10).unwrap().unwrap();
 
-        // Child starts but is still blocked (pending_child_blocks not cleared at drain time).
+        // Child starts after the parent drained, so it is immediately readable.
         ps.start(session(2, 20)).unwrap();
         assert!(
-            !ps.round_robin.contains(psid(2)),
-            "child must be blocked until commit ack arrives"
-        );
-
-        // Commit ack covers the terminal offset (offset 0 → terminal = 1).
-        ps.observe_commit_ack(psid(1), 1).unwrap();
-        assert!(
             ps.round_robin.contains(psid(2)),
-            "child must enter round-robin after commit ack"
+            "child must enter round-robin after parent drain"
         );
     }
 
     #[test]
-    fn committing_parent_unblocks_child_without_stop() {
+    fn draining_parent_unblocks_child_without_stop() {
         let mut ps = PartitionSessions::default();
         ps.start(session(1, 10)).unwrap();
         push_messages(&mut ps, 1, [(0, 0)]);
@@ -670,18 +776,11 @@ mod tests {
             "child must stay blocked while parent still has messages"
         );
 
-        // Parent drains into pending_ending_sessions; child waits for a commit ack.
+        // Parent drain releases the child before commit ack.
         ps.pop_batch(10).unwrap().unwrap();
         assert!(
-            !ps.round_robin.contains(psid(2)),
-            "child must stay blocked after drain, awaiting commit ack"
-        );
-
-        // Commit ack arrives for the terminal offset.
-        ps.observe_commit_ack(psid(1), 1).unwrap();
-        assert!(
             ps.round_robin.contains(psid(2)),
-            "child must enter round-robin after commit ack"
+            "child must enter round-robin after parent drain"
         );
     }
 
@@ -732,7 +831,7 @@ mod tests {
     }
 
     #[test]
-    fn end_on_drained_uncommitted_parent_blocks_child_until_ack() {
+    fn end_on_drained_uncommitted_parent_unblocks_child_but_keeps_parent_alive() {
         let mut ps = PartitionSessions::default();
         ps.start(session(1, 10)).unwrap();
         push_messages(&mut ps, 1, [(0, 0)]);
@@ -743,23 +842,23 @@ mod tests {
         // End arrives with an empty queue and unacked messages.
         ps.end(psid(1), vec![pid(20)]).unwrap();
 
-        // Child starts — must be blocked.
+        // Child starts after the parent drained, so it is immediately readable.
         ps.start(session(2, 20)).unwrap();
         assert!(
-            !ps.round_robin.contains(psid(2)),
-            "child must be blocked until parent acked"
+            ps.round_robin.contains(psid(2)),
+            "child must be unblocked after parent drain"
         );
 
         // has_session must still return true so commit() can validate the marker.
         assert!(ps.has_session(psid(1)));
 
-        // Ack below terminal — still blocked.
+        // Ack below terminal — parent stays alive.
         ps.observe_commit_ack(psid(1), 0).unwrap();
-        assert!(!ps.round_robin.contains(psid(2)));
+        assert!(ps.has_session(psid(1)));
 
-        // Ack at terminal — child unblocked.
+        // Ack at terminal — parent is closed.
         ps.observe_commit_ack(psid(1), 1).unwrap();
-        assert!(ps.round_robin.contains(psid(2)));
+        assert!(!ps.has_session(psid(1)));
     }
 
     #[test]
@@ -801,13 +900,8 @@ mod tests {
         assert!(!ps.round_robin.contains(psid(2)));
         assert!(!ps.round_robin.contains(psid(3)));
 
-        // Drain parent 1 into pending_ending_sessions.
+        // Drain parent 1. psid(2) becomes readable, but psid(3) is still blocked by psid(2).
         ps.pop_batch(10).unwrap().unwrap();
-        // psid(2) still blocked until commit ack.
-        assert!(!ps.round_robin.contains(psid(2)));
-        assert!(!ps.round_robin.contains(psid(3)));
-
-        ps.observe_commit_ack(psid(1), 1).unwrap();
         assert!(ps.round_robin.contains(psid(2)));
         assert!(!ps.round_robin.contains(psid(3)));
 
@@ -817,9 +911,7 @@ mod tests {
             psid(2)
         );
 
-        // Drain parent 2 (which is now the child from above) into pending_ending_sessions.
-        assert!(!ps.round_robin.contains(psid(3)));
-        ps.observe_commit_ack(psid(2), 1).unwrap();
+        // Drain parent 2 (which is now the child from above).
         assert!(ps.round_robin.contains(psid(3)));
 
         let grandchild = ps.pop_batch(10).unwrap().unwrap();
@@ -829,7 +921,7 @@ mod tests {
         );
     }
 
-    // --- New tests for commit-time unblocking behavior ---
+    // --- Tests for drain-time unblocking and commit-time closing behavior ---
 
     #[test]
     fn stop_ending_parent_before_commit_triggers_reconnect() {
@@ -842,9 +934,7 @@ mod tests {
         push_messages(&mut ps, 2, [(0, 0)]);
 
         // Stop arrives with committed_offset = 0 < terminal (1).
-        let outcome = ps.stop(psid(1), 0).unwrap();
-        assert!(outcome.reconnect_required);
-        assert!(!outcome.messages_became_available);
+        assert!(ps.stop(psid(1), 0).is_err());
         assert!(
             !ps.round_robin.contains(psid(2)),
             "child must stay blocked when reconnect is required"
@@ -852,7 +942,7 @@ mod tests {
     }
 
     #[test]
-    fn stop_pending_ending_parent_before_commit_triggers_reconnect() {
+    fn stop_drained_ending_parent_before_commit_triggers_reconnect() {
         let mut ps = PartitionSessions::default();
         ps.start(session(1, 10)).unwrap();
         push_messages(&mut ps, 1, [(0, 0)]);
@@ -861,18 +951,17 @@ mod tests {
         ps.start(session(2, 20)).unwrap();
         push_messages(&mut ps, 2, [(0, 0)]);
 
-        // Drain parent → PendingEnding.
+        // Drain parent. Child is already unblocked, but the parent is still alive for commits.
         ps.pop_batch(10).unwrap().unwrap();
-        assert!(!ps.round_robin.contains(psid(2)));
+        assert!(ps.round_robin.contains(psid(2)));
+        assert!(ps.has_session(psid(1)));
 
         // Stop arrives with committed_offset = 0 < terminal (1).
-        let outcome = ps.stop(psid(1), 0).unwrap();
-        assert!(outcome.reconnect_required);
-        assert!(!ps.round_robin.contains(psid(2)));
+        assert!(ps.stop(psid(1), 0).is_err());
     }
 
     #[test]
-    fn stop_pending_ending_parent_after_commit_releases_child() {
+    fn stop_drained_ending_parent_after_commit_closes_parent() {
         let mut ps = PartitionSessions::default();
         ps.start(session(1, 10)).unwrap();
         push_messages(&mut ps, 1, [(0, 0)]);
@@ -881,21 +970,18 @@ mod tests {
         ps.start(session(2, 20)).unwrap();
         push_messages(&mut ps, 2, [(0, 0)]);
 
-        // Drain parent → PendingEnding.
+        // Drain parent. Child is already unblocked, but the parent is still alive for commits.
         ps.pop_batch(10).unwrap().unwrap();
-        assert!(!ps.round_robin.contains(psid(2)));
+        assert!(ps.round_robin.contains(psid(2)));
+        assert!(ps.has_session(psid(1)));
 
         // Stop arrives with committed_offset = 1 >= terminal (1).
-        let outcome = ps.stop(psid(1), 1).unwrap();
-        assert!(!outcome.reconnect_required);
-        assert!(
-            ps.round_robin.contains(psid(2)),
-            "child must be unblocked when stop carries sufficient committed offset"
-        );
+        ps.stop(psid(1), 1).unwrap();
+        assert!(!ps.has_session(psid(1)));
     }
 
     #[test]
-    fn commit_ack_unblocks_child_after_drain() {
+    fn commit_ack_closes_parent_after_drain() {
         let mut ps = PartitionSessions::default();
         ps.start(session(1, 10)).unwrap();
         push_messages(&mut ps, 1, [(0, 0)]);
@@ -906,17 +992,18 @@ mod tests {
 
         assert!(!ps.round_robin.contains(psid(2)));
         ps.pop_batch(10).unwrap().unwrap();
-        // Child still blocked after drain.
-        assert!(!ps.round_robin.contains(psid(2)));
+        assert!(
+            ps.round_robin.contains(psid(2)),
+            "child must unblock after parent drain"
+        );
+        assert!(ps.has_session(psid(1)));
 
-        // Ack below terminal — still blocked.
-        let unblocked = ps.observe_commit_ack(psid(1), 0).unwrap();
-        assert!(!unblocked);
-        assert!(!ps.round_robin.contains(psid(2)));
+        // Ack below terminal — parent stays alive.
+        ps.observe_commit_ack(psid(1), 0).unwrap();
+        assert!(ps.has_session(psid(1)));
 
-        // Ack at terminal — child enters round-robin.
-        let unblocked = ps.observe_commit_ack(psid(1), 1).unwrap();
-        assert!(unblocked);
-        assert!(ps.round_robin.contains(psid(2)));
+        // Ack at terminal — parent closes.
+        ps.observe_commit_ack(psid(1), 1).unwrap();
+        assert!(!ps.has_session(psid(1)));
     }
 }

@@ -606,7 +606,7 @@ topic_test!(round_robin_interleaves_two_partitions, timeout_secs = 2, {
 });
 
 topic_test!(
-    end_partition_session_child_blocked_until_parent_committed,
+    end_partition_session_child_blocked_until_parent_drained,
     timeout_secs = 5,
     {
         let driver = Driver::start().await;
@@ -627,13 +627,6 @@ topic_test!(
             "parent must come first"
         );
 
-        // Child stays blocked until the parent's messages are committed and acked.
-        reader
-            .commit(b1.get_commit_marker())
-            .expect("commit must succeed");
-        driver.state.wait_commits(1).await;
-        driver.send_commit_offset_response(1); // offset 0 + 1 = terminal 1
-
         let sid = driver.state.current_stream_id();
         driver.send(Reply::Topic(builders::read_response(
             sid,
@@ -644,6 +637,10 @@ topic_test!(
 
         let b2 = reader.read_batch().await?;
         assert_eq!(b2.messages[0].get_partition_id(), 1);
+
+        reader
+            .commit(b1.get_commit_marker())
+            .expect("commit after child read must still succeed");
         Ok(())
     }
 );
@@ -815,7 +812,7 @@ topic_test!(
         assert_eq!(
             b2.messages[0].get_partition_id(),
             0,
-            "parent must be fully committed before child is served"
+            "parent must be fully drained before child is served"
         );
 
         Ok(())
@@ -825,10 +822,10 @@ topic_test!(
 // ─── Partition lifecycle ordering guarantees ─────────────────────────────────
 
 // Child partition with a single parent: the child must not be readable before
-// the parent's messages are committed and acked, but StopPartitionSessionRequest
-// is not required after EndPartitionSession.
+// the parent's messages are drained, but StopPartitionSessionRequest is not
+// required after EndPartitionSession.
 topic_test!(
-    child_becomes_readable_after_parent_commits_without_stop,
+    child_becomes_readable_after_parent_drains_without_stop,
     timeout_secs = 5,
     {
         let driver = Driver::start().await;
@@ -851,28 +848,25 @@ topic_test!(
         let parent = reader.read_batch().await?;
         assert_eq!(parent.messages[0].get_partition_id(), 0);
 
-        // Child stays blocked until the parent commit is acked.
-        reader
-            .commit(parent.get_commit_marker())
-            .expect("commit must succeed");
-        driver.state.wait_commits(1).await;
-        driver.send_commit_offset_response(1); // offset 0 + 1 = terminal 1
-
         let child =
             tokio::time::timeout(std::time::Duration::from_millis(500), reader.read_batch())
                 .await
-                .expect("child must become readable after parent commit is acked")
+                .expect("child must become readable after parent drains")
                 .expect("read must succeed");
         assert_eq!(child.messages[0].get_partition_id(), PARTITION_ID_2);
+
+        reader
+            .commit(parent.get_commit_marker())
+            .expect("commit after child read must still succeed");
 
         Ok(())
     }
 );
 
 // Child declared by two parents (partition split): the child must remain
-// blocked until every declaring parent's messages are committed and acked.
+// blocked until every declaring parent's messages are drained.
 topic_test!(
-    two_parents_child_blocked_until_both_commit,
+    two_parents_child_blocked_until_both_drain,
     timeout_secs = 5,
     {
         const CHILD_SESSION_ID: i64 = 3;
@@ -910,31 +904,10 @@ topic_test!(
             "expected both parent partitions, got {parent_pids:?}"
         );
 
-        // Both parents must be committed and acked before the child unblocks.
-        reader
-            .commit(b1.get_commit_marker())
-            .expect("commit b1 must succeed");
-        reader
-            .commit(b2.get_commit_marker())
-            .expect("commit b2 must succeed");
-        driver.state.wait_commits(2).await;
-        let sid = driver.state.current_stream_id();
-        // Each parent had one message at offset 0 → terminal offset = 1 for both.
-        driver.send(Reply::Topic(builders::commit_offset_response(
-            sid,
-            PARTITION_SESSION_ID,
-            1,
-        )));
-        driver.send(Reply::Topic(builders::commit_offset_response(
-            sid,
-            PARTITION_SESSION_ID_2,
-            1,
-        )));
-
         let child =
             tokio::time::timeout(std::time::Duration::from_millis(500), reader.read_batch())
                 .await
-                .expect("child must become readable after both parents commit")
+                .expect("child must become readable after both parents drain")
                 .expect("read must succeed");
         assert_eq!(
             child.messages[0].get_partition_id(),
@@ -942,13 +915,20 @@ topic_test!(
             "first batch after unblocking must be the child message"
         );
 
+        reader
+            .commit(b1.get_commit_marker())
+            .expect("commit b1 after child read must succeed");
+        reader
+            .commit(b2.get_commit_marker())
+            .expect("commit b2 after child read must succeed");
+
         Ok(())
     }
 );
 
 // Committing the last batch of an ending (but not yet stopped) partition session
-// must succeed. The parent is moved to pending-ending storage after its queue
-// drains, but commit validation must still accept its marker.
+// must succeed. The parent remains in PartitionSessions after its queue drains
+// until the terminal commit ack is observed.
 topic_test!(
     commit_last_batch_of_ending_parent_must_succeed,
     timeout_secs = 5,
@@ -962,8 +942,8 @@ topic_test!(
         // start_session waits for StartPartitionSessionResponse, which the runtime
         // sends only after processing Start. Start arrives after End in the ordered
         // queue, so by the time this returns, End has been processed and the parent
-        // session has lifecycle=Ending. This guarantees pop_batch() moves it into
-        // pending-ending storage after returning the final parent message.
+        // session has lifecycle=Ending. This guarantees pop_batch() drains the
+        // ending parent before the commit below.
         driver
             .start_session(PARTITION_SESSION_ID_2, PARTITION_ID_2)
             .await;
@@ -980,8 +960,7 @@ topic_test!(
     }
 );
 
-// End on a parent whose messages are already committed must not register a block on the
-// child. The fast path fires when `last_acked_offset >= terminal` at End time.
+// End on a parent whose messages are already committed must not keep a block on the child.
 topic_test!(
     end_on_drained_parent_child_starts_active,
     timeout_secs = 5,
@@ -1013,7 +992,7 @@ topic_test!(
         let child =
             tokio::time::timeout(std::time::Duration::from_millis(500), reader.read_batch())
                 .await
-                .expect("child must be readable immediately when parent committed before End")
+                .expect("child must be readable immediately when parent was committed before End")
                 .expect("read must succeed");
         assert_eq!(child.messages[0].get_partition_id(), PARTITION_ID_2);
 
