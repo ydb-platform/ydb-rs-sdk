@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use http::Uri;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tracing::{trace, warn};
+use tracing::{instrument, trace, warn};
 
 use crate::discovery::Discovery;
 use crate::errors::{YdbError, YdbResult};
@@ -205,6 +205,7 @@ impl SessionPoolLease {
         }
     }
 
+    #[instrument(name = "ydb.SessionPool.ReturnSession", skip_all, fields(db.system.name = "ydb"))]
     pub async fn return_to_pool(mut self) {
         self.end_use();
         self.returned = true;
@@ -324,6 +325,7 @@ impl SessionPool {
         Self { inner }
     }
 
+    #[instrument(name = "ydb.SessionPool.Initialize", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn new_explicit(
         connection_manager: GrpcConnectionManager,
         discovery: Arc<dyn Discovery>,
@@ -344,6 +346,7 @@ impl SessionPool {
         self.inner.stats()
     }
 
+    #[instrument(name = "ydb.SessionPool.AcquireSession", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn acquire_explicit(&self) -> YdbResult<SessionPoolLease> {
         let permit = self.inner.acquire_permit().await?;
 
@@ -522,6 +525,7 @@ impl SessionPoolInner {
         self.create_explicit_session_inner().await
     }
 
+    #[instrument(name = "ydb.CreateSession", skip_all, fields(db.system.name = "ydb"), err)]
     async fn create_explicit_session_inner(&self) -> YdbResult<ExplicitIdleItem> {
         #[cfg(test)]
         if self.bench_mode {

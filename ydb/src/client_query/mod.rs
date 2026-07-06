@@ -31,6 +31,8 @@ use std::time::{Duration, Instant};
 
 use futures_util::FutureExt;
 use http::Uri;
+use tracing::Instrument;
+use tracing::instrument;
 
 use crate::client_query::exec::TxState;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr};
@@ -195,6 +197,7 @@ impl QueryClient {
         RetryTxBuilder::new(self, callback)
     }
 
+    #[instrument(name = "ydb.RunWithRetryTx", skip_all, fields(db.system.name = "ydb", ydb.Query.idempotent = idempotent), err)]
     pub(crate) async fn run_retry_tx<F, T>(
         &self,
         mut callback: F,
@@ -215,66 +218,86 @@ impl QueryClient {
         loop {
             self.ctx.retry_control.metrics().record_attempt();
             attempt += 1;
-            let mut tx = Transaction::new(
-                self.ctx.connection_manager.clone(),
-                self.ctx.session_pool.clone(),
-                options.clone(),
-                absolute_deadline,
-            );
 
-            let callback_result = AssertUnwindSafe(callback(&mut tx)).catch_unwind().await;
+            let result = async {
+                let mut tx = Transaction::new(
+                    self.ctx.connection_manager.clone(),
+                    self.ctx.session_pool.clone(),
+                    options.clone(),
+                    absolute_deadline,
+                );
 
-            let err = match callback_result {
-                Ok(Ok(value)) => match resolve_post_callback_action(&tx.ctx.state) {
-                    PostCallbackAction::Return(status) => {
-                        tx.notify_hooks(status);
-                        return Ok(value);
-                    }
-                    PostCallbackAction::Commit => {
-                        return match tx.commit().await {
-                            Ok(()) => {
-                                tx.notify_hooks(QueryTxCommitStatus::Committed);
-                                Ok(value)
-                            }
-                            // Commit outcome is ambiguous on transport errors; never retry.
-                            Err(e) => {
-                                tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                                Err(YdbOrCustomerError::YDB(e))
-                            }
-                        };
-                    }
-                    PostCallbackAction::Retry(err) => {
+                let callback_result = AssertUnwindSafe(callback(&mut tx)).catch_unwind().await;
+
+                let err = match callback_result {
+                    Ok(Ok(value)) => match resolve_post_callback_action(&tx.ctx.state) {
+                        PostCallbackAction::Return(status) => {
+                            tx.notify_hooks(status);
+                            return Ok(value);
+                        }
+                        PostCallbackAction::Commit => {
+                            return match tx.commit().await {
+                                Ok(()) => {
+                                    tx.notify_hooks(QueryTxCommitStatus::Committed);
+                                    Ok(value)
+                                }
+                                // Commit outcome is ambiguous on transport errors; never retry.
+                                Err(e) => {
+                                    tx.notify_hooks(QueryTxCommitStatus::Aborted);
+                                    Err(YdbOrCustomerError::YDB(e))
+                                }
+                            };
+                        }
+                        PostCallbackAction::Retry(err) => {
+                            tx.notify_hooks(QueryTxCommitStatus::Aborted);
+                            err
+                        }
+                        PostCallbackAction::Fail(err) => {
+                            tx.notify_hooks(QueryTxCommitStatus::Aborted);
+                            return Err(err);
+                        }
+                    },
+                    Ok(Err(err)) => {
+                        tx.rollback_quiet().await;
                         tx.notify_hooks(QueryTxCommitStatus::Aborted);
                         err
                     }
-                    PostCallbackAction::Fail(err) => {
+                    Err(panic_payload) => {
+                        tx.rollback_quiet().await;
                         tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                        return Err(err);
+                        YdbOrCustomerError::YDB(YdbError::Custom(format!(
+                            "query transaction callback panicked: {}",
+                            panic_message(panic_payload)
+                        )))
                     }
-                },
-                Ok(Err(err)) => {
-                    tx.rollback_quiet().await;
-                    tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                    err
-                }
-                Err(panic_payload) => {
-                    tx.rollback_quiet().await;
-                    tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                    YdbOrCustomerError::YDB(YdbError::Custom(format!(
-                        "query transaction callback panicked: {}",
-                        panic_message(panic_payload)
-                    )))
-                }
-            };
+                };
 
-            if !check_retry_tx_error(&err, idempotent) {
-                return Err(err);
-            }
-            match pause_before_retry(&self.ctx.retry_control, attempt, start, wall_timeout).await {
-                Ok(()) => {}
-                Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
+                if !check_retry_tx_error(&err, idempotent) {
                     return Err(err);
                 }
+                match pause_before_retry(&self.ctx.retry_control, attempt, start, wall_timeout)
+                    .await
+                {
+                    Ok(()) => {}
+                    Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
+                        return Err(err);
+                    }
+                }
+                Ok(None)
+            }
+            .instrument(
+                tracing::info_span!(
+                    "ydb.Try",
+                    ydb.retry.attempt = attempt,
+                    ydb.retry.backoff_ms = tracing::field::Empty,
+                    db.system.name = "ydb",
+                )
+                .or_current(),
+            )
+            .await?;
+
+            if let Some(value) = result {
+                return Ok(value);
             }
         }
     }

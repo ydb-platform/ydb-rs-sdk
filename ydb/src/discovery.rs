@@ -304,7 +304,7 @@ impl DiscoverySharedState {
         })
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(name = "ydb.Discovery.DiscoveryNow", skip_all, err)]
     async fn discovery_now(&self) -> YdbResult<()> {
         let lock = self.discovery_lock.lock().await;
 
@@ -343,8 +343,24 @@ impl DiscoverySharedState {
             .list_endpoints(self.connection_manager.database().to_owned())
             .await?;
         let new_endpoints = Self::list_endpoints_to_node_infos(res)?;
+        self.set_discovery_state(
+            self.discovery_state.write().unwrap(),
+            Arc::new(DiscoveryState::new(start, new_endpoints)),
+        );
 
-        Ok(DiscoveryState::new(start, new_endpoints))
+        // lock until exit
+        drop(discovery_lock);
+        Ok(())
+    }
+
+    fn set_discovery_state(
+        &self,
+        mut locked_state: RwLockWriteGuard<Arc<DiscoveryState>>,
+        new_state: Arc<DiscoveryState>,
+    ) {
+        *locked_state = new_state.clone();
+        let _ = self.sender.send(new_state);
+        let _ = self.state_received_sender.send(true);
     }
 
     #[tracing::instrument(skip(state))]
