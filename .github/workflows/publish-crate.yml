@@ -1,8 +1,8 @@
 name: Publish rust crate to crates.io
 env:
   CARGO_TERM_COLOR: always
-  # MSRV. Keep in sync with [workspace.package].rust-version in Cargo.toml.
-  RUST_VERSION_MSRV: "1.88"
+  # Pinned modern Rust version for crates.io publishing.
+  RUST_VERSION_MODERN: "1.96"
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 on:
@@ -46,7 +46,7 @@ jobs:
       - name: Install fixed rust version
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: ${{env.RUST_VERSION_MSRV}}
+          toolchain: ${{env.RUST_VERSION_MODERN}}
 
       - name: Checkout
         uses: actions/checkout@v2

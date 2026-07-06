@@ -12,15 +12,15 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
-  # MSRV. Keep in sync with [workspace.package].rust-version in Cargo.toml.
-  RUST_VERSION_MSRV: "1.88"
+  # Pinned modern Rust version for formatter and Clippy coverage.
+  RUST_VERSION_MODERN: "1.96"
 
 jobs:
   check-code-style:
     strategy:
       fail-fast: false
       matrix:
-        rust_version: ["RUST_VERSION_MSRV"]
+        rust_version: ["RUST_VERSION_MODERN"]
 
     runs-on: ubuntu-24.04
 

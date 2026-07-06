@@ -13,15 +13,15 @@ env:
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
   # MSRV. Keep in sync with [workspace.package].rust-version in Cargo.toml.
   RUST_VERSION_MSRV: "1.88"
-  # Current stable Rust channel used for compatibility coverage.
-  RUST_VERSION_STABLE: stable
+  # Pinned modern Rust version used for forward compatibility coverage.
+  RUST_VERSION_MODERN: "1.96"
 
 jobs:
   tests:
     strategy:
       fail-fast: false
       matrix:
-        rust_version: [ "RUST_VERSION_MSRV", "RUST_VERSION_STABLE" ]
+        rust_version: [ "RUST_VERSION_MSRV", "RUST_VERSION_MODERN" ]
 
     services:
       ydb:
