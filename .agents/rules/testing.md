@@ -31,7 +31,7 @@ cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnin
 cargo test --workspace
 ```
 
-CI also runs `cargo test --workspace -- --include-ignored` against `ydbplatform/local-ydb:nightly` on Rust 1.85 and 1.91.0.
+CI also runs `cargo test --workspace --doc` and `cargo test --workspace -- --include-ignored` against `ydbplatform/local-ydb:nightly` on Rust 1.88 and stable.
 
 ## What a test should assert
 

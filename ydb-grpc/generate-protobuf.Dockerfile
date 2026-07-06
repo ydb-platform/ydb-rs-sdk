@@ -1,4 +1,4 @@
-FROM rust:1.85.0-slim-bookworm
+FROM rust:1.88.0-slim-bookworm
 
 ARG PROTOC_VERSION=33.2
 

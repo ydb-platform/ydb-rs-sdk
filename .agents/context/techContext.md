@@ -5,8 +5,8 @@
 | Item | Value |
 |------|-------|
 | Edition | 2021 |
-| MSRV | 1.85 (`rust-version` in workspace `Cargo.toml`; Query `retry_tx` needs `AsyncFnMut`) |
-| CI Rust versions | 1.85 (tests), 1.91.0 (tests + lint) |
+| MSRV | 1.88 (`rust-version` in workspace `Cargo.toml`; Query `retry_tx` needs `AsyncFnMut`) |
+| CI Rust versions | 1.88 (fmt + lint + tests), stable (tests) |
 | Async runtime | Tokio 1.x |
 | gRPC | tonic 0.14, prost 0.14, pbjson 0.8 |
 | TLS | rustls via tonic features (`tls-ring`, `tls-native-roots`) |
@@ -36,8 +36,8 @@ CI uses `ydbplatform/local-ydb:nightly` (see `rust-tests.yml`); image tag may di
 
 | Workflow | Trigger | What it runs |
 |----------|---------|--------------|
-| `linter.yaml` | push/PR to `master` | `cargo fmt --check`, `cargo clippy` |
-| `rust-tests.yml` | push/PR + nightly cron | `cargo test --include-ignored` against `local-ydb:nightly` |
+| `linter.yaml` | push/PR to `master` | `cargo fmt --check`, `cargo clippy` on MSRV |
+| `rust-tests.yml` | push/PR + nightly cron | `cargo test --workspace --doc`, `cargo test --include-ignored` against `local-ydb:nightly` on MSRV and stable |
 | `publish-crate.yml` | manual dispatch | version bump + crates.io publish |
 | `slo.yml` | PR label `SLO` + manual dispatch | SLO tests via `ydb-slo-action` v2 (Docker workload, chaos, baseline comparison); see `tests/slo/README.md` |
 | `slo-report.yml` | after `SLO` workflow | Publishes SLO report to PR comment |
@@ -45,6 +45,8 @@ CI uses `ydbplatform/local-ydb:nightly` (see `rust-tests.yml`); image tag may di
 ## Workspace dependency policy
 
 Shared versions for `prost`, `tonic`, `pbjson` are declared in the root `Cargo.toml` under `[workspace.dependencies]`. Member crates reference them with `workspace = true`.
+
+MSRV-sensitive Clippy checks are enabled in root `[workspace.lints.clippy]` via `incompatible_msrv = "warn"`. Clippy derives the MSRV from each package's `rust-version`, inherited from root `[workspace.package]`; CI promotes warnings to errors with `-D warnings`.
 
 Do not run `cargo update` or bump dependency versions unless the task requires it.
 

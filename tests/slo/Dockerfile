@@ -1,4 +1,4 @@
-FROM rust:1.91-bookworm AS build
+FROM rust:bookworm AS build
 ARG PKG_NAME=slo-native-query
 COPY . /src
 WORKDIR /src

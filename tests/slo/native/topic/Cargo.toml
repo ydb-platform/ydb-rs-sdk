@@ -3,7 +3,7 @@ publish = false
 name = "slo-native-topic"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version.workspace = true
 
 [[bin]]
 name = "slo-native-topic"

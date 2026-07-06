@@ -41,7 +41,7 @@ On **"update memory bank"** — review all core files in [`.agents/context/READM
 - Comments, doc comments, error messages, logs: **English**.
 - Match style in the touched module; do not reformat unrelated code.
 - Do **not** change `Cargo.toml` / `Cargo.lock` unless the task requires it.
-- MSRV is **1.85** (`rust-version` in workspace `Cargo.toml`); CI runs on Rust 1.85 and 1.91.
+- MSRV is 1.88; CI runs on Rust 1.88 and stable — newer features are fine if they compile there.
 - Integration tests are `#[ignore]`; need `YDB_CONNECTION_STRING` and `--include-ignored`.
 - `ydb-grpc` is generated; clippy excludes it. Do not bump crate versions unless asked.
 - Non-trivial changes: discuss in a GitHub issue first ([`CONTRIBUTING.md`](CONTRIBUTING.md)).

@@ -24,8 +24,8 @@ When two pull in opposite directions, the higher one wins.
 
 ## Rust edition / version
 
-- MSRV is not pinned in policy: feel free to use recent language and `std` features when they meaningfully simplify the code.
-- CI compiles against Rust 1.85 and 1.91; if you use a newer feature, make sure it compiles on the latest of those — otherwise raise the question.
+- MSRV is 1.88, inherited from root workspace `Cargo.toml`; feel free to use recent language and `std` features when they meaningfully simplify the code.
+- CI compiles against Rust 1.88 and stable. Root `[workspace.lints.clippy]` warns on `incompatible_msrv`, and CI promotes warnings to errors with `-D warnings`; if a newer feature is worth an MSRV bump, raise it with repo owners first.
 
 ## Visibility
 

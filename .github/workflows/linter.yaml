@@ -12,14 +12,15 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
-  RUST_VERSION_NEW: "1.91.0"
+  # MSRV. Keep in sync with [workspace.package].rust-version in Cargo.toml.
+  RUST_VERSION_MSRV: "1.88"
 
 jobs:
   check-code-style:
     strategy:
       fail-fast: false
       matrix:
-        rust_version: ["RUST_VERSION_NEW"]
+        rust_version: ["RUST_VERSION_MSRV"]
 
     runs-on: ubuntu-24.04
 
@@ -46,7 +47,7 @@ jobs:
         rustc --version
         cargo --version
         echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
-        echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
+        echo "version=$(rustc --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
 
     - name: Rust cache
       uses: Swatinem/rust-cache@v2
@@ -66,11 +67,6 @@ jobs:
         git diff --exit-code
 
   check-grpc-build:
-    strategy:
-      fail-fast: false
-      matrix:
-        rust_version: ["RUST_VERSION_NEW"]
-
     runs-on: ubuntu-24.04
 
     steps:
