@@ -187,23 +187,35 @@ impl Reconnector {
                 "topic reader connected"
             );
 
-            match Self::run_connection(&attempt_ctx, tasks).await {
-                Err(err) if is_retriable(&err) => {
-                    warn!(
-                        error = %err,
+            tokio::select! {
+                _ = runtime.reconnection_notifier() => {
+                    info!(
                         reader_id = attempt_ctx.reader_id,
                         epoch = attempt_ctx.epoch,
-                        "topic reader connection failed, will reconnect"
+                        "topic reader forced reconnect requested"
                     );
-                    runtime.enter_reconnecting(YdbError::Transport(format!(
-                        "topic reader reconnect, dropping connection epoch {}: {err}",
-                        attempt_ctx.epoch
-                    )))?;
                 }
 
-                Err(err) => {
-                    error!(error = %err, "non-retriable error, exiting");
-                    return Err(err);
+                err = Self::run_connection(&attempt_ctx, tasks) => {
+                    match err {
+                        Err(err) if is_retriable(&err) => {
+                            warn!(
+                                error = %err,
+                                reader_id = attempt_ctx.reader_id,
+                                epoch = attempt_ctx.epoch,
+                                "topic reader connection failed, will reconnect"
+                            );
+                            runtime.enter_reconnecting(YdbError::Transport(format!(
+                                "topic reader reconnect, dropping connection epoch {}: {err}",
+                                attempt_ctx.epoch
+                            )))?;
+                        }
+
+                        Err(err) => {
+                            error!(error = %err, "non-retriable error, exiting");
+                            return Err(err);
+                        }
+                    }
                 }
             }
 

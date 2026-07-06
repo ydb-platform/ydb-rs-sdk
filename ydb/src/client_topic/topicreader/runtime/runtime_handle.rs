@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use tokio::sync::futures::Notified;
 use tokio::sync::Notify;
 
 use crate::client_topic::topicreader::messages::{TopicReaderBatch, TopicReaderMessage};
@@ -49,6 +50,7 @@ enum State {
 struct Inner {
     state: Mutex<State>,
     messages_available: Notify,
+    reconnect_notify: Notify,
 }
 
 #[derive(Clone)]
@@ -62,6 +64,7 @@ impl RuntimeHandle {
             inner: Arc::new(Inner {
                 state: Mutex::new(State::Reconnecting),
                 messages_available: Notify::new(),
+                reconnect_notify: Notify::new(),
             }),
         }
     }
@@ -72,6 +75,7 @@ impl RuntimeHandle {
             inner: Arc::new(Inner {
                 state: Mutex::new(State::Active(Active::new(connection))),
                 messages_available: Notify::new(),
+                reconnect_notify: Notify::new(),
             }),
         }
     }
@@ -230,22 +234,58 @@ impl RuntimeHandle {
         Ok(())
     }
 
+    /// Switches the reader runtime to reconnecting state.
+    ///
+    /// This is used by the reconnector itself after the current stream fails. It fails all pending
+    /// commits from the active connection and wakes readers waiting for buffered messages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime has already failed permanently.
     pub(crate) fn enter_reconnecting(&self, err: YdbError) -> YdbResult<()> {
+        self.enter_reconnecting_inner(err)?;
+        Ok(())
+    }
+
+    /// Requests the reconnector to drop the current stream and establish a new one.
+    ///
+    /// The request is idempotent while a reconnect is already in progress. A notification is sent
+    /// only when this call changes the runtime from active to reconnecting, so duplicate callers do
+    /// not leave stale reconnect permits.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the runtime has already failed permanently.
+    pub(crate) fn force_reconnection(&self, err: YdbError) -> YdbResult<()> {
+        let changed = self.enter_reconnecting_inner(err)?;
+        if changed {
+            self.inner.reconnect_notify.notify_one();
+        }
+
+        Ok(())
+    }
+
+    fn enter_reconnecting_inner(&self, err: YdbError) -> YdbResult<bool> {
         let mut pending_commits = PendingCommits::default();
-        {
+        let changed = {
             let mut state = self.lock_state()?;
             match &mut *state {
                 State::Active(active) => {
                     std::mem::swap(&mut pending_commits, &mut active.pending_commits);
+                    *state = State::Reconnecting;
+                    true
                 }
-                State::Reconnecting => {}
+                State::Reconnecting => false,
                 State::Failed(err) => return Err(err.clone()),
             }
-            *state = State::Reconnecting;
+        };
+
+        if changed {
+            pending_commits.fail_all(&err);
         }
-        pending_commits.fail_all(&err);
         self.inner.messages_available.notify_waiters();
-        Ok(())
+
+        Ok(changed)
     }
 
     pub(crate) fn install_connection(
@@ -282,6 +322,10 @@ impl RuntimeHandle {
         pending_commits.fail_all(err);
         self.inner.messages_available.notify_waiters();
         Ok(())
+    }
+
+    pub(crate) fn reconnection_notifier<'a>(&'a self) -> Notified<'a> {
+        self.inner.reconnect_notify.notified()
     }
 
     fn lock_state(&self) -> YdbResult<std::sync::MutexGuard<'_, State>> {
