@@ -291,7 +291,7 @@ async fn happy_path_reports_committed() -> YdbResult<()> {
         .query_client()
         .retry_tx(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
-            Ok::<(), YdbOrCustomerError>(())
+            Ok(())
         })
         .await;
 
@@ -315,7 +315,7 @@ async fn commit_rpc_failure_is_reported_and_not_retried() -> YdbResult<()> {
         .query_client()
         .retry_tx(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
-            Ok::<(), YdbOrCustomerError>(())
+            Ok(())
         })
         .await;
 
@@ -345,7 +345,7 @@ async fn commit_via_query_reports_committed() -> YdbResult<()> {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')")
                 .with_commit(true)
                 .await?;
-            Ok::<(), YdbOrCustomerError>(())
+            Ok(())
         })
         .await;
 
@@ -373,7 +373,7 @@ async fn invalidating_error_propagated_is_retried_until_success() -> YdbResult<(
         .query_client()
         .retry_tx(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
-            Ok::<(), YdbOrCustomerError>(())
+            Ok(())
         })
         .await;
 
@@ -413,7 +413,7 @@ async fn swallowed_invalidating_error_must_not_report_committed() -> YdbResult<(
             // exact swallow-and-continue path from the issue's repro.
             let _ = conflict;
 
-            Ok::<(), YdbOrCustomerError>(())
+            Ok(())
         })
         .await;
 
@@ -461,7 +461,7 @@ async fn transient_error_propagated_rolls_back_and_retries() -> YdbResult<()> {
         .retry_tx(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
             tx.exec("UPSERT INTO t (id, val) VALUES (2, 'y')").await?;
-            Ok::<(), YdbOrCustomerError>(())
+            Ok(())
         })
         .await;
 
@@ -496,7 +496,7 @@ async fn transient_error_swallowed_falls_through_to_real_commit() -> YdbResult<(
             let transient = tx.exec("UPSERT INTO t (id, val) VALUES (2, 'y')").await;
             let _ = transient; // swallowed
 
-            Ok::<(), YdbOrCustomerError>(())
+            Ok(())
         })
         .await;
 
@@ -528,7 +528,7 @@ async fn explicit_rollback_reports_ok_with_real_rollback_rpc() -> YdbResult<()> 
         .retry_tx(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
             tx.rollback().await?;
-            Ok::<(), YdbOrCustomerError>(())
+            Ok(())
         })
         .await;
 
@@ -559,7 +559,7 @@ async fn rollback_rpc_failure_propagated_is_retried_until_rollback_succeeds() ->
         .retry_tx(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
             tx.rollback().await?;
-            Ok::<(), YdbOrCustomerError>(())
+            Ok(())
         })
         .await;
 
@@ -594,13 +594,10 @@ async fn swallowed_rollback_failure_must_not_report_committed() -> YdbResult<()>
         .query_client()
         .retry_tx(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+            let _ = tx.rollback().await;
+            let _ = tx.rollback().await;
 
-            // The application decides not to commit, but the RollbackTransaction RPC
-            // itself fails — outcome on the server is unknown, not "committed".
-            let rollback_result = tx.rollback().await;
-            let _ = rollback_result; // swallowed, same shape as the issue's repro
-
-            Ok::<(), YdbOrCustomerError>(())
+            Ok(())
         })
         .await;
 
