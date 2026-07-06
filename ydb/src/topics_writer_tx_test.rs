@@ -37,7 +37,7 @@ async fn topic_writer_tx_write_and_commit() -> YdbResult<()> {
 
     client
         .query_client()
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             let mut tc = topic_client_clone.clone();
             let mut writer = tc.create_writer_tx(topic_path_clone.clone(), tx).await?;
             writer
@@ -95,7 +95,7 @@ async fn topic_writer_tx_rollback_discards_message() -> YdbResult<()> {
 
     client
         .query_client()
-        .retry_transaction(async |tx| {
+        .retry_tx(async |tx| {
             let mut tc = topic_client_clone.clone();
             let mut writer = tc.create_writer_tx(topic_path_clone.clone(), tx).await?;
             writer
