@@ -1,11 +1,13 @@
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_response;
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
+#[derive(Debug)]
 pub struct MessageWriteInfo {
     pub offset: i64,
 }
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
+#[derive(Debug)]
 pub enum MessageSkipReason {
     Unspecified,
     AlreadyWritten,
@@ -13,9 +15,11 @@ pub enum MessageSkipReason {
 }
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
+#[derive(Debug)]
 pub struct MessageWriteInTxInfo {}
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
+#[derive(Debug)]
 pub enum MessageWriteStatus {
     Written(MessageWriteInfo),
     Skipped(MessageSkipReason),

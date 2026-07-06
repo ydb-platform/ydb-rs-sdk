@@ -22,6 +22,7 @@ use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
 use crate::retry::{Retry, RetryParams};
 use crate::{YdbError, YdbResult};
+use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
 pub(crate) struct ReconnectorParams {
     pub(crate) writer_options: TopicWriterOptions,
@@ -32,6 +33,7 @@ pub(crate) struct ReconnectorParams {
     pub(crate) fatal_error_tx: oneshot::Sender<YdbError>,
     pub(crate) flush_timeout: Duration,
     pub(crate) executor: Arc<dyn Executor>,
+    pub(crate) tx_identity: Option<TransactionIdentity>,
 }
 
 #[derive(Clone)]
@@ -83,6 +85,7 @@ impl Reconnector {
                 producer_id: params.producer_id,
                 queue: queue.clone(),
                 executor: params.executor,
+                tx_identity: params.tx_identity,
             },
             params.fatal_error_tx,
             init_tx,
@@ -214,6 +217,7 @@ struct ReconnectionHelper {
     cancellation_token: CancellationToken,
     producer_id: String,
     executor: Arc<dyn Executor>,
+    tx_identity: Option<TransactionIdentity>,
 }
 
 enum WaitBeforeReconnectResult {
@@ -245,6 +249,7 @@ impl ReconnectionHelper {
                 error_sender,
                 server_codecs,
                 self.executor.clone(),
+                self.tx_identity.clone(),
             )
             .await?,
             connection_info: init_response,

@@ -86,6 +86,8 @@ pub(crate) mod topic_reader_tx_test;
 pub(crate) mod topics_compression_test;
 #[cfg(test)]
 pub(crate) mod topics_test;
+#[cfg(test)]
+pub(crate) mod topics_writer_tx_test;
 mod trace_helpers;
 mod trait_operation;
 mod types;
@@ -142,6 +144,10 @@ pub use client_topic::compression::{CompressionDecoder, CompressionEncoder, Exec
 pub use client_topic::topicwriter::writer::TopicWriter;
 pub use client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
+};
+pub use client_topic::topicwriter::writer_tx::TopicWriterTx;
+pub use client_topic::topicwriter::writer_tx_options::{
+    TopicWriterTxOptions, TopicWriterTxOptionsBuilder,
 };
 // full enum pub types
 pub use client::{Client, SessionPoolSettings, SessionPoolStats};
