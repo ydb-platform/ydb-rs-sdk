@@ -5,7 +5,7 @@ use std::task::{Context, Poll};
 
 use tokio::sync::{oneshot, RwLock};
 use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
+use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::trace;
 
 use crate::client_topic::compression::Executor;
@@ -15,6 +15,7 @@ use crate::client_topic::topicwriter::reconnector::{Reconnector, ReconnectorPara
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::{YdbError, YdbResult};
+use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
 /// TopicWriter is currently in development.
 /// It is mostly usable, but has some unimplemented features.
@@ -22,6 +23,7 @@ pub struct TopicWriter {
     fatal_error: Arc<RwLock<Option<YdbError>>>,
     wait_for_fatal_error_handle: JoinHandle<()>,
     reconnector: Reconnector,
+    _cancel_on_drop: DropGuard,
 }
 
 pub struct AckFuture {
@@ -47,12 +49,37 @@ impl TopicWriter {
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
     ) -> YdbResult<Self> {
+        Self::new_inner(writer_options, connection_manager, executor, None).await
+    }
+
+    pub(crate) async fn with_tx_identity(
+        writer_options: TopicWriterOptions,
+        connection_manager: GrpcConnectionManager,
+        executor: Arc<dyn Executor>,
+        tx_identity: TransactionIdentity,
+    ) -> YdbResult<Self> {
+        Self::new_inner(
+            writer_options,
+            connection_manager,
+            executor,
+            Some(tx_identity),
+        )
+        .await
+    }
+
+    async fn new_inner(
+        writer_options: TopicWriterOptions,
+        connection_manager: GrpcConnectionManager,
+        executor: Arc<dyn Executor>,
+        tx_identity: Option<TransactionIdentity>,
+    ) -> YdbResult<Self> {
         let producer_id = writer_options
             .producer_id
             .clone()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         let cancellation_token = CancellationToken::new();
+        let cancel_on_drop = cancellation_token.clone().drop_guard();
 
         let retrier = writer_options.retrier.clone();
 
@@ -67,12 +94,13 @@ impl TopicWriter {
             fatal_error_tx,
             flush_timeout: writer_options.flush_timeout,
             executor,
+            tx_identity,
         })
         .await?;
 
         let fatal_error = Arc::new(RwLock::new(None));
         let wait_for_fatal_error_handle = tokio::spawn(TopicWriter::wait_for_fatal_error(
-            cancellation_token.clone(),
+            cancellation_token,
             fatal_error_rx,
             fatal_error.clone(),
         ));
@@ -81,6 +109,7 @@ impl TopicWriter {
             fatal_error,
             wait_for_fatal_error_handle,
             reconnector,
+            _cancel_on_drop: cancel_on_drop,
         })
     }
 

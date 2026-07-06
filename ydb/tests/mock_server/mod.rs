@@ -1,5 +1,6 @@
-#![allow(dead_code)]
+#![allow(dead_code, unused_imports)]
 
+pub mod query;
 pub mod scheme;
 pub mod topic;
 
