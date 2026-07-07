@@ -14,6 +14,9 @@ mod stream_facade;
 mod integration_test;
 
 #[cfg(test)]
+mod query_hooks_integration_test;
+
+#[cfg(test)]
 mod session_pool_integration_test;
 
 #[cfg(test)]
