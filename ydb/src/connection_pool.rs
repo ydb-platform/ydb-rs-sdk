@@ -45,11 +45,11 @@ impl<C: ConnectionState> ConnectionPool<C> {
     pub(crate) async fn connection(&mut self, uri: &Uri) -> YdbResult<Channel> {
         let mut entry = self.connections.entry(uri.clone());
 
-        let tls_config = self.tls_config.as_ref();
-
         let state = match entry {
             Entry::Occupied(ref mut entry) => entry.get_mut(),
-            Entry::Vacant(entry) => entry.insert(C::init(uri.to_owned(), tls_config)?),
+            Entry::Vacant(entry) => {
+                entry.insert(C::init(uri.to_owned(), self.tls_config.as_ref())?)
+            }
         };
 
         state.channel().await
