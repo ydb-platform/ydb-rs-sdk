@@ -5,7 +5,7 @@ use crate::grpc_wrapper::raw_coordination_service::config::RawCoordinationNodeCo
 use crate::grpc_wrapper::raw_coordination_service::create_node::RawCreateNodeRequest;
 use crate::grpc_wrapper::raw_coordination_service::describe_node::RawDescribeNodeRequest;
 use crate::grpc_wrapper::raw_coordination_service::drop_node::RawDropNodeRequest;
-use crate::{grpc_wrapper, CoordinationSession, SessionOptions, YdbResult};
+use crate::{CoordinationSession, SessionOptions, YdbResult, grpc_wrapper};
 
 use super::list_types::{NodeConfig, NodeDescription};
 

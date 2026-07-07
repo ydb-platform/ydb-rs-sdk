@@ -57,11 +57,12 @@ impl TokenCache {
 
     fn renew_token_blocking(self) {
         let renew_arc = self.0.read().unwrap().token_renewing.clone();
-        let _renew_lock = if let Ok(lock) = renew_arc.try_lock() {
-            lock
-        } else {
-            // other renew in process
-            return;
+        let _renew_lock = match renew_arc.try_lock() {
+            Ok(lock) => lock,
+            _ => {
+                // other renew in process
+                return;
+            }
         };
 
         let cred = { self.0.write().unwrap().credentials.clone() };

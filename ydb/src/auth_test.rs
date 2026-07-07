@@ -3,8 +3,8 @@ use tracing::trace;
 use tracing_test::traced_test;
 
 use crate::{
-    credentials::StaticCredentials, pub_traits::Credentials, test_helpers::CONNECTION_STRING,
-    test_integration_helper::create_password_client, YdbResult,
+    YdbResult, credentials::StaticCredentials, pub_traits::Credentials,
+    test_helpers::CONNECTION_STRING, test_integration_helper::create_password_client,
 };
 
 #[test]

@@ -7,11 +7,11 @@ use crate::client_topic::client::DescribeConsumerOptionsBuilder;
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use crate::test_helpers::CONNECTION_STRING;
-use crate::test_integration_helper::{create_client, TcpForwardProxy};
+use crate::test_integration_helper::{TcpForwardProxy, create_client};
 use crate::{
-    client_topic::client::{AlterTopicOptionsBuilder, CreateTopicOptionsBuilder},
     ClientBuilder, Codec, DescribeTopicOptionsBuilder, PartitioningStrategy, StaticDiscovery,
     TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError, YdbResult,
+    client_topic::client::{AlterTopicOptionsBuilder, CreateTopicOptionsBuilder},
 };
 use tracing::{debug, info, trace, warn};
 use ydb_grpc::ydb_proto::topic::stream_read_message;
@@ -40,15 +40,19 @@ async fn create_delete_topic_test() -> YdbResult<()> {
         .await?;
     let directories_after_topic_creation =
         scheme_client.list_directory(database_path.clone()).await?;
-    assert!(directories_after_topic_creation
-        .iter()
-        .any(|d| d.name == topic_name));
+    assert!(
+        directories_after_topic_creation
+            .iter()
+            .any(|d| d.name == topic_name)
+    );
 
     topic_client.drop_topic(topic_path).await?;
     let directories_after_topic_droppage = scheme_client.list_directory(database_path).await?;
-    assert!(!directories_after_topic_droppage
-        .iter()
-        .any(|d| d.name == topic_name));
+    assert!(
+        !directories_after_topic_droppage
+            .iter()
+            .any(|d| d.name == topic_name)
+    );
 
     Ok(())
 }
@@ -102,9 +106,11 @@ async fn describe_topic_test() -> YdbResult<()> {
         .await?;
     let directories_after_topic_creation =
         scheme_client.list_directory(database_path.clone()).await?;
-    assert!(directories_after_topic_creation
-        .iter()
-        .any(|d| d.name == topic_name));
+    assert!(
+        directories_after_topic_creation
+            .iter()
+            .any(|d| d.name == topic_name)
+    );
 
     let topic_description = topic_client
         .describe_topic(
@@ -181,9 +187,11 @@ async fn alter_topic_test() -> YdbResult<()> {
         .await?;
     let directories_after_topic_creation =
         scheme_client.list_directory(database_path.clone()).await?;
-    assert!(directories_after_topic_creation
-        .iter()
-        .any(|d| d.name == topic_name));
+    assert!(
+        directories_after_topic_creation
+            .iter()
+            .any(|d| d.name == topic_name)
+    );
 
     let topic_description = topic_client
         .describe_topic(
@@ -272,9 +280,11 @@ async fn send_message_test() -> YdbResult<()> {
         .create_topic(
             topic_path.clone(),
             CreateTopicOptionsBuilder::default()
-                .consumers(vec![ConsumerBuilder::default()
-                    .name(consumer_name.clone())
-                    .build()?])
+                .consumers(vec![
+                    ConsumerBuilder::default()
+                        .name(consumer_name.clone())
+                        .build()?,
+                ])
                 .build()?,
         )
         .await?;
@@ -524,9 +534,11 @@ async fn read_topic_message() -> YdbResult<()> {
         .create_topic(
             topic_path.clone(),
             CreateTopicOptionsBuilder::default()
-                .consumers(vec![ConsumerBuilder::default()
-                    .name(consumer_name.clone())
-                    .build()?])
+                .consumers(vec![
+                    ConsumerBuilder::default()
+                        .name(consumer_name.clone())
+                        .build()?,
+                ])
                 .build()?,
         )
         .await?;
@@ -667,9 +679,11 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
         .create_topic(
             topic_path.clone(),
             CreateTopicOptionsBuilder::default()
-                .consumers(vec![ConsumerBuilder::default()
-                    .name(consumer_name.clone())
-                    .build()?])
+                .consumers(vec![
+                    ConsumerBuilder::default()
+                        .name(consumer_name.clone())
+                        .build()?,
+                ])
                 .build()?,
         )
         .await?;
@@ -857,9 +871,11 @@ async fn write_to_specific_partition() -> YdbResult<()> {
             topic_path.clone(),
             CreateTopicOptionsBuilder::default()
                 .min_active_partitions(2)
-                .consumers(vec![ConsumerBuilder::default()
-                    .name(consumer_name.clone())
-                    .build()?])
+                .consumers(vec![
+                    ConsumerBuilder::default()
+                        .name(consumer_name.clone())
+                        .build()?,
+                ])
                 .build()?,
         )
         .await?;
@@ -968,9 +984,11 @@ async fn read_batch_merges_and_respects_hard_limit() -> YdbResult<()> {
                 topic_path.clone(),
                 CreateTopicOptionsBuilder::default()
                     .min_active_partitions(1)
-                    .consumers(vec![ConsumerBuilder::default()
-                        .name(consumer_name.clone())
-                        .build()?])
+                    .consumers(vec![
+                        ConsumerBuilder::default()
+                            .name(consumer_name.clone())
+                            .build()?,
+                    ])
                     .build()?,
             )
             .await?;
@@ -1079,9 +1097,11 @@ async fn topic_writer_reconnects() -> YdbResult<()> {
         .create_topic(
             topic_path.clone(),
             CreateTopicOptionsBuilder::default()
-                .consumers(vec![ConsumerBuilder::default()
-                    .name(consumer_name.clone())
-                    .build()?])
+                .consumers(vec![
+                    ConsumerBuilder::default()
+                        .name(consumer_name.clone())
+                        .build()?,
+                ])
                 .build()?,
         )
         .await?;

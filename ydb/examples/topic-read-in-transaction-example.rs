@@ -194,9 +194,11 @@ async fn setup_environment(client: &ydb::Client) -> YdbResult<()> {
         .create_topic(
             topic_path.clone(),
             CreateTopicOptionsBuilder::default()
-                .consumers(vec![ConsumerBuilder::default()
-                    .name(consumer_name.to_string())
-                    .build()?])
+                .consumers(vec![
+                    ConsumerBuilder::default()
+                        .name(consumer_name.to_string())
+                        .build()?,
+                ])
                 .build()?,
         )
         .await?;
@@ -284,10 +286,11 @@ async fn main() -> YdbResult<()> {
         ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.client()?;
 
     // Wait for connection with timeout to fail fast if database is unavailable
-    if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
-        res?
-    } else {
-        return Err(YdbError::from("Connection timeout"));
+    match timeout(Duration::from_secs(3), client.wait()).await {
+        Ok(res) => res?,
+        _ => {
+            return Err(YdbError::from("Connection timeout"));
+        }
     };
 
     println!("Connected to database successfully");
@@ -483,9 +486,15 @@ async fn main() -> YdbResult<()> {
             // Display table contents outside transaction
             // This demonstrates the best practice of separating data retrieval from presentation
             println!("Table contents:");
-            println!("+-----------------------+-----------+--------+--------------------------------------------------+");
-            println!("| Topic                 | Partition | Offset | Body                                             |");
-            println!("+-----------------------+-----------+--------+--------------------------------------------------+");
+            println!(
+                "+-----------------------+-----------+--------+--------------------------------------------------+"
+            );
+            println!(
+                "| Topic                 | Partition | Offset | Body                                             |"
+            );
+            println!(
+                "+-----------------------+-----------+--------+--------------------------------------------------+"
+            );
 
             for row in &rows {
                 // Display full content without truncation to show complete information
@@ -495,7 +504,9 @@ async fn main() -> YdbResult<()> {
                 );
             }
 
-            println!("+-----------------------+-----------+--------+--------------------------------------------------+");
+            println!(
+                "+-----------------------+-----------+--------+--------------------------------------------------+"
+            );
             println!("Total messages in table: {}", rows.len());
 
             // The table now contains all successfully processed messages

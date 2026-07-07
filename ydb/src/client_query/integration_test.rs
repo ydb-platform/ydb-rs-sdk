@@ -11,7 +11,7 @@ use tracing_test::traced_test;
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 macro_rules! idem {
-    ($builder:expr) => {
+    ($builder:expr_2021) => {
         $builder.idempotent(true).timeout(TEST_TIMEOUT)
     };
 }
@@ -70,12 +70,13 @@ async fn query_client_autocommit_by_default() -> YdbResult<()> {
     )))
     .await?;
 
-    idem!(qc
-        .exec(format!(
+    idem!(
+        qc.exec(format!(
             "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
         ))
         .param("$id", 1_i64)
-        .param("$val", 77_i64))
+        .param("$val", 77_i64)
+    )
     .await?;
 
     let mut row = idem!(qc.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;

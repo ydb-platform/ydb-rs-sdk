@@ -1,6 +1,6 @@
+use crate::SchemeEntry;
 use crate::grpc_wrapper::raw_errors::RawError;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-use crate::SchemeEntry;
 
 use super::list_directory_types::from_grpc_to_scheme_entry;
 

@@ -225,7 +225,7 @@ impl TryFrom<Value> for HashMap<String, Value> {
             _ => {
                 return Err(YdbError::from_str(format!(
                     "failed convert {kind_name} to HashMap"
-                )))
+                )));
             }
         };
         Ok(value_struct.into())

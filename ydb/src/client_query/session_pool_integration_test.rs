@@ -1,10 +1,10 @@
 use std::time::{Duration, Instant};
 
+use crate::Client;
 use crate::client_table::call_options::TableCallOptions;
 use crate::session_pool::SessionPoolSettings;
 use crate::test_helpers::test_client_builder;
 use crate::test_integration_helper::create_client_with_session_pool;
-use crate::Client;
 use std::sync::Arc;
 
 async fn wait_for_idle_sessions(client: &Client, expected_idle: usize) {

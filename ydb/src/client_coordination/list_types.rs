@@ -4,7 +4,7 @@ use crate::grpc_wrapper::raw_coordination_service::config::{
     RawConsistencyMode, RawCoordinationNodeConfig, RawRateLimiterCountersMode,
 };
 use crate::grpc_wrapper::raw_coordination_service::describe_node::RawDescribeNodeResult;
-use crate::{errors, SchemeEntry};
+use crate::{SchemeEntry, errors};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ConsistencyMode {

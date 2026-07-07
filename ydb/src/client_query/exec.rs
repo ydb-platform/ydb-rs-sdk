@@ -11,13 +11,13 @@ use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryRequest;
 use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::grpc_wrapper::raw_query_service::transaction_control::{
-    begin_tx_control, tx_id_control, RawTxMode,
+    RawTxMode, begin_tx_control, tx_id_control,
 };
-use crate::retry_budget::{pause_before_retry, RetryControl, RetryPauseError};
+use crate::retry_budget::{RetryControl, RetryPauseError, pause_before_retry};
 use crate::types::Value;
 use crate::{TransactionOptions, TxMode};
 
-use crate::session_pool::{spawn_pool_release, SessionPool, SessionPoolLease};
+use crate::session_pool::{SessionPool, SessionPoolLease, spawn_pool_release};
 
 /// Tracks in-flight ExecuteQuery RPC on a pooled session held by [`ExecuteQueryStream`].
 struct PooledQuerySessionGuard {
@@ -189,13 +189,13 @@ fn reject_per_call_tx_mode_override(
     tx: &TransactionExecContext,
     opts: &CallOptions,
 ) -> YdbResult<()> {
-    if let Some(override_mode) = opts.tx_mode {
-        if override_mode != tx.tx_mode {
-            return Err(YdbError::Custom(format!(
-                "per-call tx_mode {:?} does not match transaction mode {:?}",
-                override_mode, tx.tx_mode
-            )));
-        }
+    if let Some(override_mode) = opts.tx_mode
+        && override_mode != tx.tx_mode
+    {
+        return Err(YdbError::Custom(format!(
+            "per-call tx_mode {:?} does not match transaction mode {:?}",
+            override_mode, tx.tx_mode
+        )));
     }
     Ok(())
 }
@@ -446,10 +446,10 @@ async fn release_tx_session_handling_error(
     tx: &mut TransactionExecContext,
     err: Option<&YdbError>,
 ) {
-    if let Some(err) = err {
-        if let Some(lease) = &mut tx.pooled_lease {
-            lease.handle_pool_error(err);
-        }
+    if let Some(err) = err
+        && let Some(lease) = &mut tx.pooled_lease
+    {
+        lease.handle_pool_error(err);
     }
     release_tx_session(tx).await;
 }
@@ -605,21 +605,21 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
     let mut rollback_err: Option<YdbError> = None;
     if tx.tx_id.as_ref().is_some_and(|id| !id.is_empty()) && tx.pooled_lease.is_some() {
         let tx_id = tx.tx_id.take().expect("checked Some");
-        if let Ok(session_id) = tx_session_id(tx) {
-            if let Ok(mut client) = query_client_from_tx(tx).await {
-                let rollback_result = maybe_with_operation_timeout(
-                    resolve_effective_timeout(tx.retry_deadline, None),
-                    async {
-                        client
-                            .rollback_transaction(session_id, &tx_id)
-                            .await
-                            .map_err(Into::into)
-                    },
-                )
-                .await;
-                if let Err(err) = rollback_result {
-                    rollback_err = Some(err);
-                }
+        if let Ok(session_id) = tx_session_id(tx)
+            && let Ok(mut client) = query_client_from_tx(tx).await
+        {
+            let rollback_result = maybe_with_operation_timeout(
+                resolve_effective_timeout(tx.retry_deadline, None),
+                async {
+                    client
+                        .rollback_transaction(session_id, &tx_id)
+                        .await
+                        .map_err(Into::into)
+                },
+            )
+            .await;
+            if let Err(err) = rollback_result {
+                rollback_err = Some(err);
             }
         }
     } else {

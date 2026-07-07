@@ -3,8 +3,8 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock, RwLockWriteGuard, Weak};
 
 use async_trait::async_trait;
-use http::uri::Authority;
 use http::Uri;
+use http::uri::Authority;
 
 use crate::errors::YdbResult;
 
@@ -14,7 +14,7 @@ use derivative::Derivative;
 use itertools::Itertools;
 use std::time::Duration;
 use tokio::sync::watch::Receiver;
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{Mutex, watch};
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
 

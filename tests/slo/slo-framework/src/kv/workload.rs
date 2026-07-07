@@ -4,11 +4,11 @@ use rand::Rng;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+use crate::Framework;
 use crate::framework::Workload;
 use crate::generator::Generator;
 use crate::helpers::{new_rate_limiter, run_workers};
 use crate::metrics::{OPERATION_READ, OPERATION_WRITE};
-use crate::Framework;
 
 use super::{Database, Params};
 
@@ -34,14 +34,14 @@ impl<D: Database + 'static> Workload for KvWorkload<D> {
         self.db.create_table().await?;
         self.fw.logger.printf("create table ok");
 
-        let gen = Generator::new(0);
+        let r#gen = Generator::new(0);
         let mut tasks = JoinSet::new();
         for _ in 0..self.params.prefill_count {
             if ctx.is_cancelled() {
                 return Err("setup cancelled".to_string());
             }
             let db = self.db.clone();
-            let row = gen.generate();
+            let row = r#gen.generate();
             tasks.spawn(async move { db.write(row).await.map(|_| ()) });
         }
 
@@ -113,14 +113,14 @@ impl<D: Database + 'static> Workload for KvWorkload<D> {
                 run_workers(&ctx, write_workers, write_limiter, move || {
                     let worker_ctx = worker_ctx.clone();
                     let db = db.clone();
-                    let gen = run_gen.clone();
+                    let r#gen = run_gen.clone();
                     let metrics = fw.metrics.clone();
                     let logger = fw.logger.clone();
                     async move {
                         if worker_ctx.is_cancelled() {
                             return;
                         }
-                        let row = gen.generate();
+                        let row = r#gen.generate();
                         let span = metrics.start(OPERATION_WRITE);
                         let result = tokio::time::timeout(write_timeout, db.write(row)).await;
                         match result {
