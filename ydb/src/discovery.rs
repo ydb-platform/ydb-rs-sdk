@@ -346,24 +346,24 @@ impl DiscoverySharedState {
 
     #[tracing::instrument(skip(state))]
     async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
-        loop {
-            let Some(state) = state.upgrade() else {
-                break;
-            };
-
+        'worker: loop {
             let mut attempt = 0;
             let retrier = IndefiniteRetrier;
             let discovery_start = Instant::now();
 
-            loop {
-                trace_span!("rekby-discovery", attempt = attempt);
+            'retry: loop {
+                let Some(state) = state.upgrade() else {
+                    break 'worker;
+                };
+
+                trace!("discovery attempt {attempt}");
                 let res = state.discovery_now().await;
                 attempt += 1;
 
-                trace!("rekby-res: {:?}", res);
+                trace!("discovery result: {:?}", res);
 
                 if res.is_ok() {
-                    break;
+                    break 'retry;
                 }
 
                 let decision = retrier.retry_decision(RetryParams {
@@ -372,7 +372,7 @@ impl DiscoverySharedState {
                 });
 
                 if !decision.wait().await {
-                    break;
+                    break 'retry;
                 }
             }
 
