@@ -143,14 +143,15 @@ impl Queue {
     }
 
     pub(crate) async fn flush(&self) -> YdbResult<()> {
-        let flush_result_rx = {
+        let mut flush_result_rx = {
             let mut inner = self.inner.lock().await;
             inner.reception_queue.init_flush()?
         };
 
-        self.wait_for_messages_to_be_acknowledged().await;
-
-        flush_result_rx.await?
+        tokio::select! {
+            result = &mut flush_result_rx => result?,
+            _ = self.wait_for_messages_to_be_acknowledged() => flush_result_rx.await?,
+        }
     }
 }
 
