@@ -24,7 +24,7 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use crate::grpc_wrapper::raw_discovery_client::{EndpointInfo, GrpcDiscoveryClient};
 use crate::grpc_wrapper::raw_services::Service;
-use tracing::{trace, trace_span};
+use tracing::trace;
 
 /// Current discovery state
 #[derive(Clone, Debug, PartialEq)]
