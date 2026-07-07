@@ -7,6 +7,6 @@ pub(crate) enum QueryTxCommitStatus {
     Aborted,
 }
 
-pub(crate) trait QueryTxHook: Send {
+pub(crate) trait QueryTxHook: Send + Sync + 'static {
     fn after_commit(&mut self, status: QueryTxCommitStatus);
 }

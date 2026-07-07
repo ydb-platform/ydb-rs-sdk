@@ -19,6 +19,8 @@ use crate::{TransactionOptions, TxMode};
 
 use crate::session_pool::{spawn_pool_release, SessionPool, SessionPoolLease};
 
+use super::hooks::QueryTxHook;
+
 /// Tracks in-flight ExecuteQuery RPC on a pooled session held by [`ExecuteQueryStream`].
 struct PooledQuerySessionGuard {
     lease: SessionPoolLease,
@@ -77,6 +79,7 @@ pub(crate) struct TransactionExecContext {
     pub query_node: Option<Uri>,
     pub tx_id: Option<String>,
     pub finished: bool,
+    pub hooks: Vec<Box<dyn QueryTxHook>>,
     /// Absolute deadline from [`QueryClient::retry_tx`] `.timeout()`, propagated to every RPC in the callback.
     pub retry_deadline: Option<Instant>,
 }
@@ -692,6 +695,7 @@ pub(crate) fn transaction_exec_context(
         query_node: None,
         tx_id: None,
         finished: false,
+        hooks: Vec::new(),
         retry_deadline,
     }
 }
