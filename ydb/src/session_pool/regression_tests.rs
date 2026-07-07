@@ -1,7 +1,7 @@
 //! Regression tests for session-pool corner cases found during PR #501 / native-table SLO work.
 
 use super::pool::{SessionPool, SessionPoolSettings};
-use crate::errors::YdbError;
+use crate::{errors::YdbError, GrpcOptions};
 
 #[tokio::test]
 async fn warm_up_partial_keeps_successful_sessions() {
@@ -75,7 +75,6 @@ async fn acquire_skips_invalidated_idle_session() {
 #[tokio::test]
 async fn bad_session_marks_table_session_non_poolable() {
     use crate::grpc_connection_manager::GrpcConnectionManager;
-    use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
     use crate::retry_budget::RetryControl;
@@ -91,8 +90,7 @@ async fn bad_session_marks_table_session_non_poolable() {
             ))),
             "bench".to_string(),
             MultiInterceptor::new(),
-            None,
-            DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+            GrpcOptions::default(),
         ),
         std::sync::Arc::new(RetryControl::default()),
     );

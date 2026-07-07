@@ -72,10 +72,10 @@ mod test {
     use super::TableSessionPool;
     use crate::errors::YdbResult;
     use crate::grpc_connection_manager::GrpcConnectionManager;
-    use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
     use crate::session_pool::{SessionPool, SessionPoolSettings};
+    use crate::GrpcOptions;
     use http::Uri;
     use std::time::Duration;
     use tokio::sync::oneshot;
@@ -91,8 +91,7 @@ mod test {
             ))),
             "bench".to_string(),
             MultiInterceptor::new(),
-            None,
-            DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+            GrpcOptions::default(),
         )
     }
 

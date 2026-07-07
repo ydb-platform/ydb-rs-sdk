@@ -11,11 +11,10 @@ use crate::grpc_connection_manager::{
     DiscoveryConnectionManager, GrpcConnectionManager, NoBalancer,
 };
 use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
-use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::SharedLoadBalancer;
 use crate::retry_budget::{RetryBudget, RetryControl};
-use crate::{Client, Credentials};
+use crate::{Client, Credentials, GrpcOptions, HasGrpcOptions};
 use http::Uri;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -152,21 +151,14 @@ fn token_static_password(uri: &str, mut client_builder: ClientBuilder) -> YdbRes
 
     let endpoint: Uri = Uri::from_str(client_builder.endpoint.as_str())?;
 
-    let creds = match client_builder.cert_path.as_ref() {
-        Some(path) => StaticCredentials::new_with_ca(
-            username,
-            password,
-            endpoint,
-            client_builder.database.clone(),
-            path.clone(),
-        ),
-        None => StaticCredentials::new(
-            username,
-            password,
-            endpoint,
-            client_builder.database.clone(),
-        ),
-    };
+    let creds = StaticCredentials::new(
+        username,
+        password,
+        endpoint,
+        client_builder.database.clone(),
+    )
+    .with_grpc_opts(|_| client_builder.grpc_opts.clone());
+
     client_builder.credentials = credencials_ref(creds);
 
     Ok(client_builder)
@@ -240,7 +232,7 @@ pub struct ClientBuilder {
     discovery: Option<Box<dyn Discovery>>,
     discovery_enabled: bool,
     pub cert_path: Option<String>,
-    grpc_max_message_size: usize,
+    grpc_opts: GrpcOptions,
     executor: Option<Arc<dyn Executor>>,
     retry_budget: Option<Arc<dyn RetryBudget>>,
 }
@@ -275,8 +267,7 @@ impl ClientBuilder {
             NoBalancer,
             db_cred.database.clone(),
             interceptor.clone(),
-            self.cert_path.clone(),
-            self.grpc_max_message_size,
+            self.grpc_opts.clone(),
         );
 
         let discovery: Box<dyn Discovery> = match self.discovery {
@@ -302,8 +293,7 @@ impl ClientBuilder {
             load_balancer.clone(),
             db_cred.database.clone(),
             interceptor,
-            self.cert_path,
-            self.grpc_max_message_size,
+            self.grpc_opts.clone(),
         );
 
         let retry_control = match self.retry_budget {
@@ -353,15 +343,6 @@ impl ClientBuilder {
         self
     }
 
-    /// Set the maximum encoded/decoded gRPC message size in bytes.
-    ///
-    /// Applies to every gRPC service client used by this `Client`
-    /// (both encoding and decoding directions).
-    pub fn with_grpc_max_message_size(mut self, bytes: usize) -> Self {
-        self.grpc_max_message_size = bytes;
-        self
-    }
-
     /// Set the executor used for topic compression / decompression work.
     /// If unset, `default_executor()` is used.
     pub fn with_executor(mut self, executor: Arc<dyn Executor>) -> Self {
@@ -384,7 +365,7 @@ impl ClientBuilder {
             discovery: None,
             discovery_enabled: true,
             cert_path: None,
-            grpc_max_message_size: DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+            grpc_opts: GrpcOptions::default(),
             executor: None,
             retry_budget: None,
         }
@@ -401,6 +382,16 @@ impl ClientBuilder {
         );
         self.database = url.path().to_string();
         Ok(())
+    }
+}
+
+impl HasGrpcOptions for ClientBuilder {
+    fn grpc_opts(&self) -> &GrpcOptions {
+        &self.grpc_opts
+    }
+
+    fn grpc_opts_mut(&mut self) -> &mut GrpcOptions {
+        &mut self.grpc_opts
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::{YdbError, YdbResult};
+use crate::{GrpcOptions, YdbError, YdbResult};
 use derivative::Derivative;
 use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesUnordered;
@@ -7,36 +7,31 @@ use http::uri::Scheme;
 use http::Uri;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
-use std::path::Path;
 use std::sync::{Arc, RwLock};
 use std::task::Poll;
-use std::time::Duration;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
+use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tracing::trace;
 
 #[derive(Debug)]
 pub(crate) struct ConnectionPool<C: Connection> {
     connections: RwLock<HashMap<Uri, Arc<C>>>,
-    tls_config: Option<Arc<ClientTlsConfig>>,
+    opts: GrpcOptions,
+}
+
+impl<C: Connection> Default for ConnectionPool<C> {
+    fn default() -> Self {
+        Self {
+            connections: Default::default(),
+            opts: Default::default(),
+        }
+    }
 }
 
 impl<C: Connection> ConnectionPool<C> {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(opts: GrpcOptions) -> Self {
         Self {
             connections: HashMap::new().into(),
-            tls_config: None,
-        }
-    }
-
-    pub(crate) fn load_certificate(self, path: impl AsRef<Path>) -> Self {
-        let pem = std::fs::read_to_string(path).unwrap();
-        trace!("loaded cert: {}", pem);
-        let ca = Certificate::from_pem(pem);
-        let config = ClientTlsConfig::new().ca_certificate(ca);
-
-        Self {
-            tls_config: Some(config.into()),
-            ..self
+            opts,
         }
     }
 
@@ -46,7 +41,7 @@ impl<C: Connection> ConnectionPool<C> {
         if let Some(connection) = connection {
             connection.channel().await
         } else {
-            let (channel, connection) = C::init(uri.to_owned(), self.tls_config.as_ref()).await?;
+            let (channel, connection) = C::init(uri.to_owned(), self.opts.clone()).await?;
             self.connections
                 .write()?
                 .insert(uri.clone(), Arc::new(connection));
@@ -57,10 +52,7 @@ impl<C: Connection> ConnectionPool<C> {
 }
 
 pub trait Connection: Sized {
-    async fn init(
-        uri: Uri,
-        tls_config: Option<&Arc<ClientTlsConfig>>,
-    ) -> YdbResult<(Channel, Self)>;
+    async fn init(uri: Uri, opts: GrpcOptions) -> YdbResult<(Channel, Self)>;
     async fn channel(&self) -> YdbResult<Channel>;
 }
 
@@ -71,12 +63,9 @@ pub(crate) struct Simple {
 }
 
 impl Connection for Simple {
-    async fn init(
-        uri: Uri,
-        tls_config: Option<&Arc<ClientTlsConfig>>,
-    ) -> YdbResult<(Channel, Self)> {
+    async fn init(uri: Uri, opts: GrpcOptions) -> YdbResult<(Channel, Self)> {
         let uri = normalize_uri_scheme(uri)?;
-        let channel = endpoint(uri, None, tls_config.map(Arc::as_ref))?.connect_lazy();
+        let channel = endpoint(uri, None, &opts)?.connect_lazy();
 
         Ok((channel.clone(), Self { channel }))
     }
@@ -93,7 +82,7 @@ impl Connection for Simple {
 #[derive(Debug)]
 pub(crate) struct RacyRoundRobin {
     uri: Uri,
-    tls_config: Option<Arc<ClientTlsConfig>>,
+    opts: GrpcOptions,
 
     state: tokio::sync::Mutex<RacyRoundRobinState>,
 }
@@ -114,21 +103,18 @@ struct RacyRoundRobinState {
 type ConnectionFuture = BoxFuture<'static, (YdbResult<Channel>, IpAddr)>;
 
 impl Connection for RacyRoundRobin {
-    async fn init(
-        uri: Uri,
-        tls_config: Option<&Arc<ClientTlsConfig>>,
-    ) -> YdbResult<(Channel, Self)> {
+    async fn init(uri: Uri, opts: GrpcOptions) -> YdbResult<(Channel, Self)> {
         let uri = normalize_uri_scheme(uri)?;
         let addrs = Self::resolve(&uri).await?;
 
         let (connections, first_connection, first_connection_addr) =
-            Self::init(uri.clone(), tls_config, &addrs).await?;
+            Self::init(uri.clone(), &opts, &addrs).await?;
 
         Ok((
             first_connection.clone(),
             Self {
                 uri,
-                tls_config: tls_config.cloned(),
+                opts,
                 state: RacyRoundRobinState {
                     addrs,
                     connections,
@@ -148,7 +134,7 @@ impl Connection for RacyRoundRobin {
 
         if state.addrs != addrs {
             let (connections, first_connection, first_connection_addr) =
-                Self::init(self.uri.clone(), self.tls_config.as_ref(), &addrs).await?;
+                Self::init(self.uri.clone(), &self.opts, &addrs).await?;
 
             *state = RacyRoundRobinState {
                 addrs,
@@ -181,14 +167,14 @@ impl RacyRoundRobin {
 
     async fn init(
         uri: Uri,
-        tls_config: Option<&Arc<ClientTlsConfig>>,
+        opts: &GrpcOptions,
         addrs: &HashSet<IpAddr>,
     ) -> YdbResult<(VecDeque<ConnectionFuture>, Channel, IpAddr)> {
         let mut first_err = None;
 
         let mut connections = addrs
             .iter()
-            .map(|&addr| Self::try_connect(uri.clone(), tls_config.cloned(), addr))
+            .map(|&addr| Self::try_connect(uri.clone(), opts.clone(), addr))
             .collect::<FuturesUnordered<_>>();
 
         let mut reconnections = VecDeque::new();
@@ -203,11 +189,7 @@ impl RacyRoundRobin {
                 // Remember failed connections, ignore errors, but save the first one
                 Err(err) => {
                     trace!("connection to {addr} has failed");
-                    reconnections.push_back(Self::try_connect(
-                        uri.clone(),
-                        tls_config.cloned(),
-                        addr,
-                    ));
+                    reconnections.push_back(Self::try_connect(uri.clone(), opts.clone(), addr));
                     if first_err.is_none() {
                         first_err = Some(err);
                     }
@@ -224,11 +206,7 @@ impl RacyRoundRobin {
         }
     }
 
-    fn try_connect(
-        uri: Uri,
-        tls_config: Option<Arc<ClientTlsConfig>>,
-        addr: IpAddr,
-    ) -> ConnectionFuture {
+    fn try_connect(uri: Uri, opts: GrpcOptions, addr: IpAddr) -> ConnectionFuture {
         async move {
             // Connect to URI with replaced origin
             // to specify address
@@ -243,7 +221,7 @@ impl RacyRoundRobin {
             );
             let resolved_uri = Uri::from_parts(uri_parts)?;
 
-            endpoint(resolved_uri, Some(&uri), tls_config.as_deref())?
+            endpoint(resolved_uri, Some(&uri), &opts)?
                 .origin(uri)
                 .connect()
                 .await
@@ -273,7 +251,7 @@ impl RacyRoundRobin {
                     trace!("failed to connect to {addr}: {err}, trying next");
                     state.polled_connections.push_back(Self::try_connect(
                         self.uri.clone(),
-                        self.tls_config.clone(),
+                        self.opts.clone(),
                         addr,
                     ));
                 }
@@ -292,16 +270,15 @@ impl RacyRoundRobin {
     }
 }
 
-pub fn endpoint(
-    uri: Uri,
-    original_uri: Option<&Uri>,
-    tls_config: Option<&ClientTlsConfig>,
-) -> YdbResult<Endpoint> {
+pub fn endpoint(uri: Uri, original_uri: Option<&Uri>, opts: &GrpcOptions) -> YdbResult<Endpoint> {
     let need_tls = uri.scheme() == Some(&Scheme::HTTPS);
     trace!("scheme is {:?}", uri.scheme());
 
-    let mut endpoint =
-        Endpoint::from(uri.clone()).http2_keep_alive_interval(Duration::from_secs(10));
+    let mut endpoint = Endpoint::from(uri.clone());
+
+    if let Some(inverval) = opts.keepalive_interval {
+        endpoint = endpoint.http2_keep_alive_interval(inverval);
+    }
 
     if need_tls {
         let domain = original_uri
@@ -309,7 +286,13 @@ pub fn endpoint(
             .host()
             .ok_or_else(|| YdbError::EndpointHasNoHost(uri.clone()))?;
 
-        endpoint = configure_tls_endpoint(endpoint, domain, tls_config.cloned())?;
+        endpoint = configure_tls_endpoint(
+            endpoint,
+            domain,
+            opts.tls_config.clone().map(|tls_config| {
+                Arc::try_unwrap(tls_config).unwrap_or_else(|arc| arc.as_ref().clone())
+            }),
+        )?;
     }
 
     Ok(endpoint)

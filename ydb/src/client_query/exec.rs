@@ -749,6 +749,7 @@ mod unit_tests {
     use super::*;
     use crate::errors::{YdbError, YdbOrCustomerError};
     use crate::retry_budget::retry_wait;
+    use crate::GrpcOptions;
 
     #[test]
     fn retry_helpers_and_wait() {
@@ -781,7 +782,6 @@ mod unit_tests {
     async fn transaction_rollback_is_nop_when_finished() {
         use crate::client_query::TransactionOptions;
         use crate::grpc_connection_manager::GrpcConnectionManager;
-        use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
         use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
         use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
         use crate::session_pool::{SessionPool, SessionPoolSettings};
@@ -795,8 +795,7 @@ mod unit_tests {
                 ))),
                 "bench".to_string(),
                 MultiInterceptor::new(),
-                None,
-                DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+                GrpcOptions::default(),
             ),
             SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
             TransactionOptions::default(),

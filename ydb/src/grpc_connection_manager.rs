@@ -5,7 +5,7 @@ use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
-use crate::YdbResult;
+use crate::{GrpcOptions, YdbResult};
 use derivative::Derivative;
 use http::Uri;
 
@@ -24,7 +24,7 @@ pub(crate) struct GrpcConnectionManagerGeneric<B, C: Connection> {
     #[derivative(Debug = "ignore")]
     interceptor: MultiInterceptor,
     database: String,
-    grpc_max_message_size: usize,
+    opts: GrpcOptions,
 }
 
 impl<B, C: Connection> GrpcConnectionManagerGeneric<B, C> {
@@ -32,20 +32,16 @@ impl<B, C: Connection> GrpcConnectionManagerGeneric<B, C> {
         balancer: B,
         database: String,
         interceptor: MultiInterceptor,
-        cert_path: Option<String>,
-        grpc_max_message_size: usize,
+        opts: GrpcOptions,
     ) -> Self {
-        let mut cp = ConnectionPool::new();
-        if let Some(cert_path) = cert_path {
-            cp = cp.load_certificate(cert_path);
-        }
+        let cp = ConnectionPool::new(opts.clone());
 
         Self {
             balancer,
             connections_pool: cp.into(),
             interceptor,
             database,
-            grpc_max_message_size,
+            opts,
         }
     }
 
@@ -74,7 +70,7 @@ impl<B, C: Connection> GrpcConnectionManagerGeneric<B, C> {
         let channel = self.connections_pool.connection(uri).await?;
 
         let intercepted_channel = InterceptedChannel::new(channel, self.interceptor.clone());
-        Ok(new(intercepted_channel).with_grpc_max_message_size(self.grpc_max_message_size))
+        Ok(new(intercepted_channel).with_grpc_max_message_size(self.opts.max_message_size))
     }
 
     pub(crate) fn endpoint(&self, service: Service) -> YdbResult<Uri>

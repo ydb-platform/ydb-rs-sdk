@@ -53,6 +53,7 @@ pub(crate) mod discovery;
 mod errors;
 mod grpc;
 pub(crate) mod grpc_connection_manager;
+mod grpc_options;
 mod grpc_wrapper;
 mod load_balancer;
 mod pub_traits;
@@ -159,6 +160,7 @@ pub use retry_budget::{
 
 // full enum pub types
 pub use client_builder::ClientBuilder;
+pub use grpc_options::{GrpcOptions, HasGrpcOptions};
 
 // full enum pub types
 pub use client_query::{

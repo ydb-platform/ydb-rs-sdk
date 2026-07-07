@@ -392,6 +392,7 @@ mod test {
     use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::test_helpers::test_client_builder;
+    use crate::GrpcOptions;
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -413,8 +414,7 @@ mod test {
             NoBalancer,
             cred.database,
             interceptor,
-            None,
-            crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+            GrpcOptions::default(),
         );
 
         let discovery_shared =
