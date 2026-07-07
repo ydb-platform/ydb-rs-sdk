@@ -1,34 +1,51 @@
-use crate::connection_pool::ConnectionPool;
+use std::sync::Arc;
+
+use crate::connection_pool::{ConnectionPool, ConnectionState, RacyRoundRobin, Simple};
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::YdbResult;
+use derivative::Derivative;
 use http::Uri;
 
-pub(crate) type GrpcConnectionManager = GrpcConnectionManagerGeneric<SharedLoadBalancer>;
+pub(crate) type GrpcConnectionManager = GrpcConnectionManagerGeneric<SharedLoadBalancer, Simple>;
+pub(crate) type DiscoveryConnectionManager =
+    GrpcConnectionManagerGeneric<NoBalancer, RacyRoundRobin>;
 
-#[derive(Clone)]
-pub(crate) struct GrpcConnectionManagerGeneric<TBalancer: LoadBalancer> {
-    state: State<TBalancer>,
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NoBalancer;
+
+#[derive(Derivative)]
+#[derivative(Clone(bound = "B: Clone"), Debug)]
+pub(crate) struct GrpcConnectionManagerGeneric<B, CS: ConnectionState> {
+    balancer: B,
+    connections_pool: Arc<tokio::sync::Mutex<ConnectionPool<CS>>>,
+    #[derivative(Debug = "ignore")]
+    interceptor: MultiInterceptor,
+    database: String,
+    grpc_max_message_size: usize,
 }
 
-impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
+impl<B, CS: ConnectionState> GrpcConnectionManagerGeneric<B, CS> {
     pub(crate) fn new(
-        balancer: TBalancer,
+        balancer: B,
         database: String,
         interceptor: MultiInterceptor,
         cert_path: Option<String>,
         grpc_max_message_size: usize,
     ) -> Self {
-        GrpcConnectionManagerGeneric {
-            state: State::new(
-                balancer,
-                database,
-                interceptor,
-                cert_path,
-                grpc_max_message_size,
-            ),
+        let mut cp = ConnectionPool::new();
+        if let Some(cert_path) = cert_path {
+            cp = cp.load_certificate(cert_path);
+        }
+
+        Self {
+            balancer,
+            connections_pool: Arc::new(cp.into()),
+            interceptor,
+            database,
+            grpc_max_message_size,
         }
     }
 
@@ -38,11 +55,11 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
     >(
         &self,
         new: F,
-    ) -> YdbResult<T> {
-        let uri = self
-            .state
-            .balancer
-            .endpoint(T::get_grpc_discovery_service())?;
+    ) -> YdbResult<T>
+    where
+        B: LoadBalancer,
+    {
+        let uri = self.balancer.endpoint(T::get_grpc_discovery_service())?;
         self.get_auth_service_to_node(new, &uri).await
     }
 
@@ -54,49 +71,20 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
         new: F,
         uri: &Uri,
     ) -> YdbResult<T> {
-        let channel = self.state.connections_pool.connection(uri).await?;
+        let channel = self.connections_pool.lock().await.connection(uri).await?;
 
-        let intercepted_channel = InterceptedChannel::new(channel, self.state.interceptor.clone());
-        Ok(new(intercepted_channel).with_grpc_max_message_size(self.state.grpc_max_message_size))
+        let intercepted_channel = InterceptedChannel::new(channel, self.interceptor.clone());
+        Ok(new(intercepted_channel).with_grpc_max_message_size(self.grpc_max_message_size))
     }
 
-    pub(crate) fn endpoint(&self, service: Service) -> YdbResult<Uri> {
-        self.state.balancer.endpoint(service)
+    pub(crate) fn endpoint(&self, service: Service) -> YdbResult<Uri>
+    where
+        B: LoadBalancer,
+    {
+        self.balancer.endpoint(service)
     }
 
     pub(crate) fn database(&self) -> &String {
-        &self.state.database
-    }
-}
-
-#[derive(Clone)]
-struct State<TBalancer: LoadBalancer> {
-    balancer: TBalancer,
-    connections_pool: ConnectionPool,
-    interceptor: MultiInterceptor,
-    database: String,
-    grpc_max_message_size: usize,
-}
-
-impl<TBalancer: LoadBalancer> State<TBalancer> {
-    fn new(
-        balancer: TBalancer,
-        database: String,
-        interceptor: MultiInterceptor,
-        cert_path: Option<String>,
-        grpc_max_message_size: usize,
-    ) -> Self {
-        let mut cp = ConnectionPool::new();
-        if let Some(cert_path) = cert_path {
-            cp = cp.load_certificate(cert_path);
-        }
-
-        State {
-            balancer,
-            connections_pool: cp,
-            interceptor,
-            database,
-            grpc_max_message_size,
-        }
+        &self.database
     }
 }

@@ -1,7 +1,7 @@
 use crate::client::TimeoutSettings;
 use crate::errors::{YdbError, YdbResult};
-use derivative::Derivative;
 
+use derivative::Derivative;
 use http::Uri;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;

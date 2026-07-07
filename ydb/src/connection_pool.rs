@@ -1,91 +1,257 @@
 use crate::{YdbError, YdbResult};
+use derivative::Derivative;
+use futures_util::future::BoxFuture;
+use futures_util::stream::FuturesUnordered;
+use futures_util::{future, FutureExt, StreamExt};
 use http::uri::Scheme;
 use http::Uri;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, VecDeque};
+use std::iter;
+use std::net::IpAddr;
+use std::path::Path;
+use std::sync::Arc;
+use std::task::Poll;
+use std::time::Duration;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use tracing::trace;
 
-#[derive(Clone)]
-pub(crate) struct ConnectionPool {
-    state: Arc<Mutex<ConnectionPoolState>>,
-    tls_config: Arc<Option<ClientTlsConfig>>,
+#[derive(Debug)]
+pub(crate) struct ConnectionPool<C: ConnectionState> {
+    connections: HashMap<Uri, C>,
+    tls_config: Option<Arc<ClientTlsConfig>>,
 }
 
-impl ConnectionPool {
+impl<C: ConnectionState> ConnectionPool<C> {
     pub(crate) fn new() -> Self {
         Self {
-            state: Arc::new(Mutex::new(ConnectionPoolState::new())),
-            tls_config: None.into(),
+            connections: HashMap::new(),
+            tls_config: None,
         }
     }
 
-    pub(crate) fn load_certificate(self, path: String) -> Self {
+    pub(crate) fn load_certificate(self, path: impl AsRef<Path>) -> Self {
         let pem = std::fs::read_to_string(path).unwrap();
         trace!("loaded cert: {}", pem);
         let ca = Certificate::from_pem(pem);
         let config = ClientTlsConfig::new().ca_certificate(ca);
+
         Self {
-            tls_config: Some(config).into(),
+            tls_config: Some(config.into()),
             ..self
         }
     }
 
-    pub(crate) async fn connection(&self, uri: &Uri) -> YdbResult<Channel> {
-        let now = Instant::now();
-        let mut lock = self.state.lock().unwrap();
-        if let Some(ci) = lock.connections.get_mut(uri) {
-            ci.last_usage = now;
-            return Ok(ci.channel.clone());
+    pub(crate) async fn connection(&mut self, uri: &Uri) -> YdbResult<Channel> {
+        let mut entry = self.connections.entry(uri.clone());
+
+        let tls_config = self.tls_config.as_ref();
+
+        let state = match entry {
+            Entry::Occupied(ref mut entry) => entry.get_mut(),
+            Entry::Vacant(entry) => entry.insert(C::init(uri, tls_config)?),
         };
 
-        // TODO: replace lazy connection to real, without global block
-        let channel = connect_lazy(uri.clone(), &self.tls_config)?;
-        let ci = ConnectionInfo {
-            last_usage: now,
-            channel: channel.clone(),
-        };
-        lock.connections.insert(uri.clone(), ci);
-        Ok(channel)
+        state.channel(uri, tls_config).await
     }
 }
 
-struct ConnectionPoolState {
-    connections: HashMap<Uri, ConnectionInfo>,
+pub trait ConnectionState: Sized {
+    fn init(uri: &Uri, tls_config: Option<&Arc<ClientTlsConfig>>) -> YdbResult<Self>;
+    async fn channel(
+        &mut self,
+        uri: &Uri,
+        tls_config: Option<&Arc<ClientTlsConfig>>,
+    ) -> YdbResult<Channel>;
 }
 
-impl ConnectionPoolState {
-    fn new() -> Self {
-        Self {
-            connections: HashMap::new(),
+/// Connection state that is just a lazy channel.
+#[derive(Debug)]
+pub(crate) struct Simple {
+    channel: Channel,
+}
+
+impl ConnectionState for Simple {
+    fn init(uri: &Uri, tls_config: Option<&Arc<ClientTlsConfig>>) -> YdbResult<Self> {
+        let uri = normalize_uri_scheme(uri.clone())?;
+        let channel = endpoint(uri, tls_config.map(Arc::as_ref))?.connect_lazy();
+
+        Ok(Self { channel })
+    }
+
+    async fn channel(
+        &mut self,
+        _uri: &Uri,
+        _tls_config: Option<&Arc<ClientTlsConfig>>,
+    ) -> YdbResult<Channel> {
+        Ok(self.channel.clone())
+    }
+}
+
+/// Connection state that tries to
+/// connect to all addresses for a given
+/// URI and then does round-robin on
+/// successful connections.
+#[derive(Derivative)]
+#[derivative(Debug)]
+pub(crate) struct RacyRoundRobin {
+    addrs: Vec<IpAddr>,
+    #[derivative(Debug = "ignore")]
+    connections: VecDeque<BoxFuture<'static, (YdbResult<Channel>, IpAddr)>>,
+}
+
+impl ConnectionState for RacyRoundRobin {
+    fn init(_uri: &Uri, _tls_config: Option<&Arc<ClientTlsConfig>>) -> YdbResult<Self> {
+        // There are initially no connections,
+        // so they will be reinitialized
+        Ok(Self {
+            addrs: vec![],
+            connections: VecDeque::new(),
+        })
+    }
+
+    async fn channel(
+        &mut self,
+        uri: &Uri,
+        tls_config: Option<&Arc<ClientTlsConfig>>,
+    ) -> YdbResult<Channel> {
+        let host = uri
+            .host()
+            .ok_or_else(|| YdbError::EndpointHasNoHost(uri.clone()))?;
+
+        let addrs = tokio::net::lookup_host(&(host, 0))
+            .await?
+            .map(|addr| addr.ip())
+            .collect::<Vec<_>>();
+
+        if addrs.is_empty() {
+            return Err(YdbError::from_str("domain somehow has zero addresses"));
+        }
+
+        if self.addrs != addrs || self.connections.is_empty() {
+            self.reinit(uri.clone(), tls_config, addrs).await
+        } else {
+            self.connect_next().await
         }
     }
 }
 
-struct ConnectionInfo {
-    last_usage: Instant,
-    channel: Channel,
-}
+impl RacyRoundRobin {
+    async fn reinit(
+        &mut self,
+        uri: Uri,
+        tls_config: Option<&Arc<ClientTlsConfig>>,
+        addrs: Vec<IpAddr>,
+    ) -> YdbResult<Channel> {
+        self.addrs = addrs;
 
-pub fn connect_lazy(uri: Uri, tls_config: &Option<ClientTlsConfig>) -> YdbResult<Channel> {
-    let uri = normalize_uri_scheme(uri)?;
+        let uri = normalize_uri_scheme(uri)?;
+        let port = uri.port().map(u16::from);
 
-    let tls = uri.scheme() == Some(&Scheme::HTTPS);
-    trace!("scheme is {:?}", uri.scheme());
+        let mut first_err = None;
 
-    let mut endpoint = Endpoint::from(uri.clone());
+        let mut channels = self
+            .addrs
+            .iter()
+            .map(|&addr| {
+                let uri = uri.clone();
+                let tls_config = tls_config.cloned();
 
-    if tls {
-        let domain = uri.host().ok_or_else(|| {
-            YdbError::Custom("URI must have a host for TLS connections".to_string())
-        })?;
+                async move {
+                    // Connect to URI with replaced origin
+                    // to specify address
+                    let mut uri_parts = uri.clone().into_parts();
+                    uri_parts.authority = Some(
+                        if let Some(port) = port {
+                            format!("{addr}:{port}")
+                        } else {
+                            addr.to_string()
+                        }
+                        .parse()?,
+                    );
+                    let resolved_uri = Uri::from_parts(uri_parts)?;
 
-        endpoint = configure_tls_endpoint(endpoint, domain, tls_config)?;
+                    endpoint(resolved_uri, tls_config.as_deref())?
+                        .origin(uri)
+                        .connect()
+                        .await
+                        .map_err(YdbError::from)
+                }
+                .map(move |res| (res, addr))
+                .boxed()
+            })
+            .collect::<FuturesUnordered<_>>();
+
+        // Wait for the first successful connection
+        loop {
+            let Some((first_result, addr)) = channels.next().await else {
+                // All connections have failed.
+                return Err(first_err.expect("at least one future must be failed with an error"));
+            };
+
+            match first_result {
+                // Drop failed connections, ignore errors, but save the first one
+                Err(err) => {
+                    trace!("connection to {addr} has failed");
+                    if first_err.is_none() {
+                        first_err = Some(err);
+                    }
+                }
+                Ok(channel) => {
+                    trace!("connection to {addr} has succeeded");
+                    self.connections = VecDeque::from_iter(channels.into_iter().chain(iter::once(
+                        future::ready((Ok(channel.clone()), addr)).boxed(),
+                    )));
+                    break Ok(channel);
+                }
+            }
+        }
     }
 
-    endpoint = endpoint.http2_keep_alive_interval(Duration::from_secs(10));
-    Ok(endpoint.connect_lazy())
+    async fn connect_next(&mut self) -> YdbResult<Channel> {
+        // At least the initially chosen connection is alive,
+        // so the loop will terminate
+        loop {
+            let mut next_channel = self
+                .connections
+                .pop_front()
+                .expect("at least the initially chosen connection is alive");
+
+            match futures_util::poll!(&mut next_channel) {
+                // Connection is ready
+                Poll::Ready((Ok(channel), addr)) => {
+                    trace!("choosing connection to {addr}");
+                    self.connections
+                        .push_back(future::ready((Ok(channel.clone()), addr)).boxed());
+                    return Ok(channel);
+                }
+                // Connection has failed
+                Poll::Ready((Err(err), addr)) => {
+                    trace!("failed to connect to {addr}: {err}")
+                }
+                // Still connecting
+                Poll::Pending => self.connections.push_back(next_channel),
+            }
+        }
+    }
+}
+
+pub fn endpoint(uri: Uri, tls_config: Option<&ClientTlsConfig>) -> YdbResult<Endpoint> {
+    let need_tls = uri.scheme() == Some(&Scheme::HTTPS);
+    trace!("scheme is {:?}", uri.scheme());
+
+    let mut endpoint =
+        Endpoint::from(uri.clone()).http2_keep_alive_interval(Duration::from_secs(10));
+
+    if need_tls {
+        let domain = uri
+            .host()
+            .ok_or_else(|| YdbError::EndpointHasNoHost(uri.clone()))?;
+
+        endpoint = configure_tls_endpoint(endpoint, domain, tls_config.cloned())?;
+    }
+
+    Ok(endpoint)
 }
 
 pub(crate) fn normalize_uri_scheme(uri: Uri) -> YdbResult<Uri> {
@@ -104,17 +270,11 @@ pub(crate) fn normalize_uri_scheme(uri: Uri) -> YdbResult<Uri> {
 pub fn configure_tls_endpoint(
     endpoint: Endpoint,
     domain: &str,
-    tls_config: &Option<ClientTlsConfig>,
+    tls_config: Option<ClientTlsConfig>,
 ) -> YdbResult<Endpoint> {
-    let config = match tls_config {
-        Some(config) => config.clone(),
-        None => {
-            // When no custom CA is provided, use system root certificates.
-            ClientTlsConfig::new()
-                .domain_name(domain.to_string())
-                .with_native_roots()
-        }
-    };
-
-    Ok(endpoint.tls_config(config)?)
+    Ok(endpoint.tls_config(tls_config.unwrap_or_else(|| {
+        ClientTlsConfig::new()
+            .domain_name(domain.to_owned())
+            .with_native_roots()
+    }))?)
 }
