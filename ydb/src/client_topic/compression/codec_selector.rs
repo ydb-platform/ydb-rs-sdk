@@ -91,16 +91,14 @@ fn build_fixed_selector(
 
         if !explicitly_allowed && !custom_slot_available {
             return Err(YdbError::custom(format!(
-                "codec {:?} is not supported by the topic (supported_codecs: {:?})",
-                codec, server_codecs
+                "codec {codec:?} is not supported by the topic (supported_codecs: {server_codecs:?})"
             )));
         }
     }
 
     if registry.get_encoder(codec).is_none() {
         return Err(YdbError::custom(format!(
-            "codec {:?} is not registered in the codec registry",
-            codec
+            "codec {codec:?} is not registered in the codec registry"
         )));
     }
 

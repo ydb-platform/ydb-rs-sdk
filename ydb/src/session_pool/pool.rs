@@ -414,8 +414,7 @@ impl SessionPoolInner {
                 .await
                 .map_err(|_| {
                     YdbError::Transport(format!(
-                        "acquire session from pool timed out after {:?}",
-                        acquire_timeout
+                        "acquire session from pool timed out after {acquire_timeout:?}"
                     ))
                 })?
         };

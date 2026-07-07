@@ -11,15 +11,17 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
-  RUST_VERSION_OLD: "1.85"
-  RUST_VERSION_NEW: "1.91.0"
+  # MSRV. Keep in sync with [workspace.package].rust-version in Cargo.toml.
+  RUST_VERSION_MSRV: "1.88"
+  # Pinned modern Rust version used for forward compatibility coverage.
+  RUST_VERSION_MODERN: "1.96"
 
 jobs:
   tests:
     strategy:
       fail-fast: false
       matrix:
-        rust_version: [ "RUST_VERSION_OLD", "RUST_VERSION_NEW" ]
+        rust_version: [ "RUST_VERSION_MSRV", "RUST_VERSION_MODERN" ]
 
     services:
       ydb:
@@ -57,13 +59,16 @@ jobs:
         rustc --version
         cargo --version
         echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
-        echo "::set-output name=version::$(rustc --version | cut -d ' ' -f 2)"
+        echo "version=$(rustc --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
 
     - name: Rust cache
       uses: Swatinem/rust-cache@v2
 
     - name: Install cargo-llvm-cov
       uses: taiki-e/install-action@cargo-llvm-cov
+
+    - name: Rustdoc examples check
+      run: cargo test --workspace --doc
 
     - name: Run tests with coverage
       env:
