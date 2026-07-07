@@ -1,17 +1,12 @@
+#[cfg(test)]
+use crate::client_topic::topicreader::ids::PartitionId;
+use crate::client_topic::topicreader::ids::PartitionSessionId;
 use crate::client_topic::topicreader::partition_state::PartitionSession;
 use crate::client_topic::topicreader::reader::TopicReaderCommitMarker;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::RawBatch;
-use crate::{Codec, YdbResult};
+use crate::YdbResult;
 use std::time;
 use std::time::SystemTime;
-
-/// Internal pre-decompression batch carried from `grpc_stream` to `decompressor`.
-/// Each `MessageBatch` is one `RawBatch`'s worth of messages plus the codec they
-/// were compressed with.
-pub(super) struct MessageBatch {
-    pub(super) messages: Vec<TopicReaderMessage>,
-    pub(super) codec: Codec,
-}
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 #[derive(Debug)]
@@ -92,7 +87,7 @@ impl TopicReaderBatch {
     }
 
     pub fn partition_id(&self) -> i64 {
-        self.commit_marker.partition_id
+        self.commit_marker.partition_id.into_raw()
     }
 
     pub fn offset(&self) -> i64 {
@@ -160,7 +155,7 @@ impl TopicReaderMessage {
     }
 
     pub fn get_partition_id(&self) -> i64 {
-        self.commit_marker.partition_id
+        self.commit_marker.partition_id.into_raw()
     }
 
     pub fn partition_session_key(&self) -> PartitionSessionKey {
@@ -178,8 +173,8 @@ impl TopicReaderMessage {
             producer_id: String::new(),
             raw_data: Some(vec![]),
             commit_marker: TopicReaderCommitMarker {
-                partition_session_id: 1,
-                partition_id: 1,
+                partition_session_id: PartitionSessionId::from_raw(10),
+                partition_id: PartitionId::from_raw(20),
                 start_offset: 0,
                 end_offset: 1,
                 topic: "test".into(),
@@ -189,7 +184,7 @@ impl TopicReaderMessage {
             partition_session_key: PartitionSessionKey {
                 reader_id: 0,
                 epoch,
-                partition_session_id: 1,
+                partition_session_id: PartitionSessionId::from_raw(10),
             },
         }
     }
@@ -199,7 +194,7 @@ impl TopicReaderMessage {
 pub struct PartitionSessionKey {
     reader_id: usize,
     epoch: usize,
-    partition_session_id: i64,
+    partition_session_id: PartitionSessionId,
 }
 
 #[cfg(test)]
@@ -212,8 +207,8 @@ mod tests {
     #[test]
     fn topic_reader_batch_new() {
         let mut partition_session = PartitionSession {
-            partition_session_id: 123,
-            partition_id: 456,
+            partition_session_id: PartitionSessionId::from_raw(123),
+            partition_id: PartitionId::from_raw(456),
             topic: "test-topic".to_string(),
             next_commit_offset_start: 100,
         };
@@ -237,16 +232,16 @@ mod tests {
 
         let commit_marker = batch.get_commit_marker();
         assert_eq!(commit_marker.topic, "test-topic");
-        assert_eq!(commit_marker.partition_session_id, 123);
-        assert_eq!(commit_marker.partition_id, 456);
+        assert_eq!(commit_marker.partition_session_id.into_raw(), 123);
+        assert_eq!(commit_marker.partition_id.into_raw(), 456);
         assert_eq!(commit_marker.start_offset, 100);
         assert_eq!(commit_marker.end_offset, 101);
 
         assert_eq!(batch.messages.len(), 1);
         let message_commit_marker = batch.messages[0].get_commit_marker();
         assert_eq!(message_commit_marker.topic, "test-topic");
-        assert_eq!(message_commit_marker.partition_session_id, 123);
-        assert_eq!(message_commit_marker.partition_id, 456);
+        assert_eq!(message_commit_marker.partition_session_id.into_raw(), 123);
+        assert_eq!(message_commit_marker.partition_id.into_raw(), 456);
         assert_eq!(message_commit_marker.start_offset, 100);
         assert_eq!(message_commit_marker.end_offset, 101);
     }
@@ -254,8 +249,8 @@ mod tests {
     #[test]
     fn bytes_to_release_default_zero() {
         let mut partition_session = PartitionSession {
-            partition_session_id: 1,
-            partition_id: 2,
+            partition_session_id: PartitionSessionId::from_raw(1),
+            partition_id: PartitionId::from_raw(2),
             topic: "t".to_string(),
             next_commit_offset_start: 0,
         };
@@ -290,8 +285,8 @@ mod tests {
     #[test]
     fn from_messages_commit_marker_spans_first_to_last() {
         let mut partition_session = PartitionSession {
-            partition_session_id: 7,
-            partition_id: 42,
+            partition_session_id: PartitionSessionId::from_raw(7),
+            partition_id: PartitionId::from_raw(42),
             topic: "t-from-messages".to_string(),
             next_commit_offset_start: 100,
         };
@@ -317,8 +312,8 @@ mod tests {
         let m = rebuilt.get_commit_marker();
         assert_eq!(rebuilt.messages.len(), 3);
         assert_eq!(m.topic, "t-from-messages");
-        assert_eq!(m.partition_session_id, 7);
-        assert_eq!(m.partition_id, 42);
+        assert_eq!(m.partition_session_id.into_raw(), 7);
+        assert_eq!(m.partition_id.into_raw(), 42);
         assert_eq!(m.start_offset, 100);
         assert_eq!(m.end_offset, 103);
 
