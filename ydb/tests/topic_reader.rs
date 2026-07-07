@@ -7,13 +7,59 @@ use std::sync::Arc;
 use std::task::Poll;
 use tokio::sync::Notify;
 use ydb::{
-    ClientBuilder, Codec, TopicReader, TopicReaderBatch, TopicReaderCommitMarker, YdbResult,
+    ClientBuilder, Codec, CompressionDecoder, Executor, TopicReader, TopicReaderBatch,
+    TopicReaderCommitMarker, TopicReaderOptionsBuilder, YdbResult,
 };
 use ydb_grpc::ydb_proto::topic::stream_read_message::from_client::ClientMessage as ReadFromClient;
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply};
 use crate::mock_server::server::MockServer;
 use crate::mock_server::topic::{builders, TopicIncoming};
+
+struct BlockingExecutor;
+
+impl Executor for BlockingExecutor {
+    fn available_parallelism(&self) -> std::num::NonZeroUsize {
+        const { std::num::NonZeroUsize::new(1).unwrap() }
+    }
+
+    fn spawn(&self, task: Box<dyn FnOnce() + Send + 'static>) {
+        tokio::task::spawn_blocking(task);
+    }
+}
+
+#[derive(Debug)]
+struct GatedDecoder {
+    codec: Codec,
+    entered: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    release: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+}
+
+impl CompressionDecoder for GatedDecoder {
+    fn decode(&self, data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error + 'static>> {
+        if let Some(tx) = self
+            .entered
+            .lock()
+            .expect("gated decoder entered mutex poisoned")
+            .take()
+        {
+            let _ = tx.send(());
+        }
+        if let Some(rx) = self
+            .release
+            .lock()
+            .expect("gated decoder release mutex poisoned")
+            .take()
+        {
+            let _ = rx.recv();
+        }
+        Ok(data.to_vec())
+    }
+
+    fn codec(&self) -> Codec {
+        self.codec
+    }
+}
 
 macro_rules! topic_test {
     ($name:ident, timeout_secs = $secs:literal, $body:block) => {
@@ -31,13 +77,17 @@ const DATABASE: &str = "/local";
 const TOPIC_PATH: &str = "/local/topic";
 const CONSUMER: &str = "consumer";
 const PARTITION_SESSION_ID: i64 = 1;
+const PARTITION_SESSION_ID_2: i64 = 2;
 const UNKNOWN_CODEC: Codec = Codec { code: 10001 };
+const RACE_CODEC: Codec = Codec { code: 10002 };
 
 #[derive(Default)]
 struct ServerState {
     partition_ready: Notify,
     commits_seen: AtomicUsize,
     commits_changed: Notify,
+    stops_seen: AtomicUsize,
+    stops_changed: Notify,
     stream_id: Arc<std::sync::Mutex<u64>>,
 }
 
@@ -48,6 +98,18 @@ impl ServerState {
             tokio::pin!(notified);
             notified.as_mut().enable();
             if self.commits_seen.load(Ordering::SeqCst) >= target {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    async fn wait_stops(&self, target: usize) {
+        loop {
+            let notified = self.stops_changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.stops_seen.load(Ordering::SeqCst) >= target {
                 return;
             }
             notified.await;
@@ -77,6 +139,10 @@ impl Handler for Counter {
                 ReadFromClient::CommitOffsetRequest(_) => {
                     self.state.commits_seen.fetch_add(1, Ordering::SeqCst);
                     self.state.commits_changed.notify_waiters();
+                }
+                ReadFromClient::StopPartitionSessionResponse(_) => {
+                    self.state.stops_seen.fetch_add(1, Ordering::SeqCst);
+                    self.state.stops_changed.notify_waiters();
                 }
                 _ => {}
             }
@@ -110,9 +176,18 @@ impl Driver {
     }
 
     fn send_read_response(&self, offset: i64, payload: impl Into<Vec<u8>>) {
+        self.send_read_response_for(PARTITION_SESSION_ID, offset, payload);
+    }
+
+    fn send_read_response_for(
+        &self,
+        partition_session_id: i64,
+        offset: i64,
+        payload: impl Into<Vec<u8>>,
+    ) {
         self.send(Reply::Topic(builders::read_response(
             self.state.current_stream_id(),
-            PARTITION_SESSION_ID,
+            partition_session_id,
             offset,
             payload,
         )))
@@ -142,9 +217,37 @@ impl Driver {
             committed_offset,
         )))
     }
+
+    fn send_stop_partition_session_request(&self, committed_offset: i64) {
+        self.send(Reply::Topic(builders::stop_partition_session_request(
+            self.state.current_stream_id(),
+            PARTITION_SESSION_ID,
+            /* graceful */ false,
+            committed_offset,
+        )))
+    }
+
+    async fn start_session(&self, partition_session_id: i64, partition_id: i64) {
+        let notified = self.state.partition_ready.notified();
+        self.send(Reply::Topic(builders::start_partition_session_request(
+            self.state.current_stream_id(),
+            partition_session_id,
+            TOPIC_PATH,
+            partition_id,
+            0,
+        )));
+        notified.await;
+    }
 }
 
 async fn make_reader(server: &MockServer) -> YdbResult<TopicReader> {
+    make_reader_with_batch_size(server, 1000).await
+}
+
+async fn make_reader_with_batch_size(
+    server: &MockServer,
+    batch_size: usize,
+) -> YdbResult<TopicReader> {
     let client = ClientBuilder::new_from_connection_string(format!(
         "{}{DATABASE}?use_discovery=false",
         server.endpoint()
@@ -153,7 +256,13 @@ async fn make_reader(server: &MockServer) -> YdbResult<TopicReader> {
 
     client
         .topic_client()
-        .create_reader(CONSUMER.to_string(), TOPIC_PATH.to_string())
+        .create_reader_with_params(
+            TopicReaderOptionsBuilder::default()
+                .consumer(CONSUMER.to_string())
+                .topic(TOPIC_PATH.to_string().into())
+                .batch_size(batch_size)
+                .build()?,
+        )
         .await
 }
 
@@ -223,6 +332,133 @@ topic_test!(unknown_codec_fails_reader, timeout_secs = 1, {
 
     Ok(())
 });
+
+topic_test!(round_robin_interleaves_two_partitions, timeout_secs = 2, {
+    let driver = Driver::start().await;
+    let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
+    driver.state.partition_ready.notified().await;
+    driver.start_session(PARTITION_SESSION_ID_2, 1).await;
+
+    let stream_id = driver.state.current_stream_id();
+    driver.send(Reply::Topic(builders::read_response_batch_with_codec(
+        stream_id,
+        PARTITION_SESSION_ID,
+        vec![(0, 8, b"p0-first".to_vec()), (1, 9, b"p0-second".to_vec())],
+        Codec::RAW,
+    )));
+    driver.send_read_response_for(PARTITION_SESSION_ID_2, 0, b"p1-only");
+
+    let first = reader.read_batch().await?;
+    let second = reader.read_batch().await?;
+    let third = reader.read_batch().await?;
+
+    assert_eq!(first.messages[0].get_partition_id(), 0);
+    assert_eq!(
+        second.messages[0].get_partition_id(),
+        1,
+        "round-robin must switch partitions before returning to the first partition"
+    );
+    assert_eq!(third.messages[0].get_partition_id(), 0);
+
+    Ok(())
+});
+
+topic_test!(commit_after_partition_stop_must_fail, timeout_secs = 5, {
+    let driver = Driver::start().await;
+    let mut reader = make_reader(&driver.server).await?;
+    driver.state.partition_ready.notified().await;
+
+    let marker = deliver_and_read(&driver, &mut reader, 0, b"first").await?;
+
+    driver.send_stop_partition_session_request(0);
+    driver.state.wait_stops(1).await;
+
+    assert!(
+        reader.commit(marker).is_err(),
+        "commit on stopped partition session must return Err"
+    );
+
+    Ok(())
+});
+
+topic_test!(
+    read_batch_after_partition_stop_skips_stopped_session,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader(&driver.server).await?;
+        driver.state.partition_ready.notified().await;
+
+        driver.send_read_response(0, b"buffered");
+        tokio::task::yield_now().await;
+
+        driver.send_stop_partition_session_request(0);
+        driver.state.wait_stops(1).await;
+
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(300), reader.read_batch()).await;
+
+        if let Ok(Ok(batch)) = result {
+            panic!(
+                "read_batch returned {} message(s) from a stopped partition session",
+                batch.messages.len()
+            );
+        }
+
+        Ok(())
+    }
+);
+
+topic_test!(
+    stop_during_in_flight_decompression_must_not_kill_reader,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let decoder = GatedDecoder {
+            codec: RACE_CODEC,
+            entered: std::sync::Mutex::new(Some(entered_tx)),
+            release: std::sync::Mutex::new(Some(release_rx)),
+        };
+
+        let client = ClientBuilder::new_from_connection_string(format!(
+            "{}{DATABASE}?use_discovery=false",
+            driver.server.endpoint()
+        ))?
+        .with_executor(Arc::new(BlockingExecutor))
+        .client()?;
+        let mut reader = client
+            .topic_client()
+            .create_reader_with_params(
+                TopicReaderOptionsBuilder::default()
+                    .consumer(CONSUMER.to_string())
+                    .topic(TOPIC_PATH.into())
+                    .add_decoder(decoder)
+                    .build()?,
+            )
+            .await?;
+        driver.state.partition_ready.notified().await;
+
+        let payload = b"payload";
+        driver.send_read_response_with_codec(0, payload.len() as i64, payload.to_vec(), RACE_CODEC);
+        entered_rx.await.expect("decoder entered");
+
+        driver.send_stop_partition_session_request(0);
+        release_tx.send(()).expect("release decoder");
+        driver.state.wait_stops(1).await;
+
+        let result =
+            tokio::time::timeout(std::time::Duration::from_millis(500), reader.read_batch()).await;
+
+        if let Ok(Err(err)) = result {
+            panic!("reader failed permanently after a benign stop-vs-in-flight race: {err}");
+        }
+
+        Ok(())
+    }
+);
 
 topic_test!(commits_message_after_server_ack, timeout_secs = 2, {
     let driver = Driver::start().await;
