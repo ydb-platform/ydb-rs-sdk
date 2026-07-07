@@ -515,6 +515,13 @@ pub(crate) async fn transaction_finish_committed_via_query(tx: &mut TransactionE
     release_tx_session(tx).await;
 }
 
+pub(crate) async fn transaction_before_commit(tx: &mut TransactionExecContext) -> YdbResult<()> {
+    for hook in &mut tx.hooks {
+        hook.before_commit().await?;
+    }
+    Ok(())
+}
+
 /// Server ended the transaction after a definitive operation error on a query.
 pub(crate) fn transaction_mark_invalidated_on_query_error(
     tx: &mut TransactionExecContext,
@@ -551,6 +558,9 @@ pub(crate) async fn transaction_begin_stream(
             }
             if tx.begin {
                 transaction_ensure_begin(tx, true).await?;
+            }
+            if opts.commit_tx.unwrap_or(false) {
+                transaction_before_commit(tx).await?;
             }
             let (mut client, req) =
                 transaction_execute_request(tx, text, params, &opts, concurrent_result_sets)

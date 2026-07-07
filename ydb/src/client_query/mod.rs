@@ -39,9 +39,9 @@ use crate::result::Row;
 use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{
-    spawn_query_tx_rollback_on_drop, transaction_commit, transaction_ensure_begin,
-    transaction_exec_context, transaction_identity, transaction_rollback, ClientExecContext,
-    TransactionExecContext,
+    spawn_query_tx_rollback_on_drop, transaction_before_commit, transaction_commit,
+    transaction_ensure_begin, transaction_exec_context, transaction_identity, transaction_rollback,
+    ClientExecContext, TransactionExecContext,
 };
 use hooks::{QueryTxCommitStatus, QueryTxHook};
 
@@ -385,6 +385,11 @@ impl Transaction {
         if self.ctx.finished {
             self.state = TxState::Committed;
             return Ok(());
+        }
+        if let Err(err) = transaction_before_commit(&mut self.ctx).await {
+            let _ = transaction_rollback(&mut self.ctx).await;
+            self.state = TxState::RolledBack;
+            return Err(err);
         }
         transaction_commit(&mut self.ctx).await?;
         self.state = TxState::Committed;
