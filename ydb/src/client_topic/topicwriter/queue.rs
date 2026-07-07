@@ -537,4 +537,28 @@ mod tests {
             .expect("flush task must complete")
             .is_err());
     }
+
+    #[tokio::test]
+    async fn flush_returns_error_when_reception_tickets_fail_during_wait() {
+        let q = Arc::new(Queue::new());
+        q.add_message(create_message(1, vec![]), None)
+            .await
+            .unwrap();
+        let messages = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        assert_eq!(messages.len(), 1);
+
+        let q_flush = Arc::clone(&q);
+        let flush_handle = tokio::spawn(async move { q_flush.flush().await });
+        tokio::task::yield_now().await;
+
+        q.notify_reception_tickets(YdbError::custom("fatal writer error"))
+            .await;
+
+        let result = timeout(Duration::from_millis(100), flush_handle)
+            .await
+            .expect("flush must finish after reception tickets fail")
+            .expect("flush task must not panic");
+
+        assert!(result.is_err());
+    }
 }
