@@ -161,7 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut row = idem_row(qc.query_row(format!("SELECT val FROM {table} WHERE id = 1"))).await?;
     let val: Option<i64> = row.remove_field_by_name("val")?.try_into()?;
-    println!("with_commit persisted val = {:?}", val);
+    println!("with_commit persisted val = {val:?}");
 
     // --- 7. What does NOT compile (by design) -------------------------------
     //

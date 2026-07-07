@@ -93,7 +93,7 @@ No `max_retries` — deadline-based only (see `AGENTS.md`).
 
 ### `retry_tx` (Query Service interactive transactions)
 
-`QueryClient::retry_tx(callback)` returns a builder (requires Rust 1.85+, `AsyncFnMut`):
+`QueryClient::retry_tx(callback)` returns a builder (requires Rust 1.88+, `AsyncFnMut`):
 
 ```rust
 client.query_client()

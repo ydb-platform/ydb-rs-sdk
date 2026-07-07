@@ -1,4 +1,5 @@
-FROM rust:1.85.0-slim-bookworm
+# Protobuf generation stays on the declared MSRV.
+FROM rust:1.88.0-slim-bookworm
 
 ARG PROTOC_VERSION=33.2
 
