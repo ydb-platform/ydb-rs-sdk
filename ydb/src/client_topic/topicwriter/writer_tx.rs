@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
+use crate::client_query::hooks::{QueryTxCommitStatus, QueryTxHook};
 use crate::client_query::Transaction;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
@@ -19,7 +20,20 @@ use super::writer_tx_options::TopicWriterTxOptions;
 /// Messages written through this writer are attached to the transaction and become visible
 /// only after the transaction is committed.
 pub struct TopicWriterTx {
-    inner: TopicWriter,
+    inner: Arc<TopicWriter>,
+}
+
+struct WriterTxHook {
+    writer: Arc<TopicWriter>,
+}
+
+#[async_trait::async_trait]
+impl QueryTxHook for WriterTxHook {
+    async fn before_commit(&mut self) -> YdbResult<()> {
+        self.writer.flush().await
+    }
+
+    fn after_commit(&mut self, _status: QueryTxCommitStatus) {}
 }
 
 impl TopicWriterTx {
@@ -40,9 +54,14 @@ impl TopicWriterTx {
         // options construction and conversion.
         let options = options.try_into_non_tx_options()?;
 
-        let inner =
+        let writer =
             TopicWriter::with_tx_identity(options, connection_manager, executor, tx_identity)
                 .await?;
+
+        let inner = Arc::new(writer);
+        tx.register_hook(WriterTxHook {
+            writer: inner.clone(),
+        });
 
         Ok(Self { inner })
     }
@@ -62,23 +81,6 @@ impl TopicWriterTx {
     /// completes, the SDK cannot tell whether YDB attached the message to the transaction.
     /// Roll the transaction back if that ambiguity is not acceptable.
     pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
-        match self.inner.write_with_ack(message).await? {
-            MessageWriteStatus::WrittenInTx(_) => Ok(()),
-
-            MessageWriteStatus::Skipped(MessageSkipReason::AlreadyWritten) => Ok(()),
-
-            other_message_status => Err(YdbError::custom(format!(
-                "expected WrittenInTx or AlreadyWritten ack from server, got: {other_message_status:?}"
-            ))),
-        }
-    }
-
-    /// Shuts down the writer and waits for its background tasks to finish.
-    ///
-    /// Calling `stop` is the explicit way to finish using the writer before committing or
-    /// rolling back the transaction. Dropping the writer cancels its background work, but
-    /// does not report shutdown errors.
-    pub async fn stop(self) -> YdbResult<()> {
-        self.inner.stop().await
+        self.inner.write(message).await
     }
 }
