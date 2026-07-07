@@ -171,12 +171,22 @@ impl QueryClient {
 
     /// Run a callback inside a retried interactive transaction.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # use ydb::{AccessTokenCredentials, ClientBuilder, TxMode, YdbResultWithCustomerErr};
+    /// #
+    /// # #[tokio::main]
+    /// # async fn main() -> YdbResultWithCustomerErr<()> {
+    /// # let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
+    /// #     .with_credentials(AccessTokenCredentials::from("token"))
+    /// #     .client()?;
     /// client.query_client()
-    ///     .retry_tx(async |tx| { ... })
+    ///     .retry_tx(async |_tx| Ok(()))
     ///     .isolation(TxMode::SerializableReadWrite)
     ///     .timeout(Duration::from_secs(30))
     ///     .await?;
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn retry_tx<F, T>(&self, callback: F) -> RetryTxBuilder<'_, F, T>
     where

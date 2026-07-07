@@ -33,13 +33,12 @@ impl YdbDecimal {
     pub fn try_new(value: decimal_rs::Decimal, precision: u32, scale: u32) -> YdbResult<Self> {
         let scale_i16: i16 = scale
             .try_into()
-            .map_err(|_| YdbError::Convert(format!("scale {} does not fit into i16", scale)))?;
+            .map_err(|_| YdbError::Convert(format!("scale {scale} does not fit into i16")))?;
         let current_scale = value.scale();
         let adjusted = if current_scale != scale_i16 {
             if scale_i16 < current_scale {
                 return Err(YdbError::Convert(format!(
-                    "cannot decrease decimal scale from {} to {}",
-                    current_scale, scale
+                    "cannot decrease decimal scale from {current_scale} to {scale}"
                 )));
             }
             value.normalize_to_scale(scale_i16)
@@ -50,8 +49,7 @@ impl YdbDecimal {
         let digit_count = adjusted.precision() as u32;
         if digit_count > precision {
             return Err(YdbError::Convert(format!(
-                "decimal value has {} digits, which exceeds precision {}",
-                digit_count, precision
+                "decimal value has {digit_count} digits, which exceeds precision {precision}"
             )));
         }
 

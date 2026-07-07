@@ -204,8 +204,8 @@ async fn setup_topic(
     codecs: &[Codec],
     client: Arc<Client>,
 ) -> YdbResult<(TopicClient, String, String)> {
-    let topic_path = format!("{}/{}", client.database(), name);
-    let consumer_name = format!("test-consumer-{}", name);
+    let topic_path = format!("{}/{name}", client.database());
+    let consumer_name = format!("test-consumer-{name}");
 
     let mut topic_client = client.topic_client();
 
