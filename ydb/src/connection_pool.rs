@@ -49,20 +49,16 @@ impl<C: ConnectionState> ConnectionPool<C> {
 
         let state = match entry {
             Entry::Occupied(ref mut entry) => entry.get_mut(),
-            Entry::Vacant(entry) => entry.insert(C::init(uri, tls_config)?),
+            Entry::Vacant(entry) => entry.insert(C::init(uri.to_owned(), tls_config)?),
         };
 
-        state.channel(uri, tls_config).await
+        state.channel().await
     }
 }
 
 pub trait ConnectionState: Sized {
-    fn init(uri: &Uri, tls_config: Option<&Arc<ClientTlsConfig>>) -> YdbResult<Self>;
-    async fn channel(
-        &mut self,
-        uri: &Uri,
-        tls_config: Option<&Arc<ClientTlsConfig>>,
-    ) -> YdbResult<Channel>;
+    fn init(uri: Uri, tls_config: Option<&Arc<ClientTlsConfig>>) -> YdbResult<Self>;
+    async fn channel(&mut self) -> YdbResult<Channel>;
 }
 
 /// Connection state that is just a lazy channel.
@@ -72,18 +68,14 @@ pub(crate) struct Simple {
 }
 
 impl ConnectionState for Simple {
-    fn init(uri: &Uri, tls_config: Option<&Arc<ClientTlsConfig>>) -> YdbResult<Self> {
-        let uri = normalize_uri_scheme(uri.clone())?;
+    fn init(uri: Uri, tls_config: Option<&Arc<ClientTlsConfig>>) -> YdbResult<Self> {
+        let uri = normalize_uri_scheme(uri)?;
         let channel = endpoint(uri, tls_config.map(Arc::as_ref))?.connect_lazy();
 
         Ok(Self { channel })
     }
 
-    async fn channel(
-        &mut self,
-        _uri: &Uri,
-        _tls_config: Option<&Arc<ClientTlsConfig>>,
-    ) -> YdbResult<Channel> {
+    async fn channel(&mut self) -> YdbResult<Channel> {
         Ok(self.channel.clone())
     }
 }
@@ -95,29 +87,30 @@ impl ConnectionState for Simple {
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub(crate) struct RacyRoundRobin {
+    uri: Uri,
+    tls_config: Option<Arc<ClientTlsConfig>>,
     addrs: Vec<IpAddr>,
     #[derivative(Debug = "ignore")]
     connections: VecDeque<BoxFuture<'static, (YdbResult<Channel>, IpAddr)>>,
 }
 
 impl ConnectionState for RacyRoundRobin {
-    fn init(_uri: &Uri, _tls_config: Option<&Arc<ClientTlsConfig>>) -> YdbResult<Self> {
+    fn init(uri: Uri, tls_config: Option<&Arc<ClientTlsConfig>>) -> YdbResult<Self> {
         // There are initially no connections,
         // so they will be reinitialized
         Ok(Self {
+            uri: normalize_uri_scheme(uri)?,
+            tls_config: tls_config.cloned(),
             addrs: vec![],
             connections: VecDeque::new(),
         })
     }
 
-    async fn channel(
-        &mut self,
-        uri: &Uri,
-        tls_config: Option<&Arc<ClientTlsConfig>>,
-    ) -> YdbResult<Channel> {
-        let host = uri
+    async fn channel(&mut self) -> YdbResult<Channel> {
+        let host = self
+            .uri
             .host()
-            .ok_or_else(|| YdbError::EndpointHasNoHost(uri.clone()))?;
+            .ok_or_else(|| YdbError::EndpointHasNoHost(self.uri.clone()))?;
 
         let addrs = tokio::net::lookup_host(&(host, 0))
             .await?
@@ -129,7 +122,9 @@ impl ConnectionState for RacyRoundRobin {
         }
 
         if self.addrs != addrs || self.connections.is_empty() {
-            self.reinit(uri.clone(), tls_config, addrs).await
+            self.addrs = addrs;
+            self.connections.clear();
+            self.reinit().await
         } else {
             self.connect_next().await
         }
@@ -137,50 +132,16 @@ impl ConnectionState for RacyRoundRobin {
 }
 
 impl RacyRoundRobin {
-    async fn reinit(
-        &mut self,
-        uri: Uri,
-        tls_config: Option<&Arc<ClientTlsConfig>>,
-        addrs: Vec<IpAddr>,
-    ) -> YdbResult<Channel> {
-        self.addrs = addrs;
-
-        let uri = normalize_uri_scheme(uri)?;
-        let port = uri.port().map(u16::from);
-
+    async fn reinit(&mut self) -> YdbResult<Channel> {
         let mut first_err = None;
 
         let mut channels = self
             .addrs
             .iter()
-            .map(|&addr| {
-                let uri = uri.clone();
-                let tls_config = tls_config.cloned();
-
-                async move {
-                    // Connect to URI with replaced origin
-                    // to specify address
-                    let mut uri_parts = uri.clone().into_parts();
-                    uri_parts.authority = Some(
-                        if let Some(port) = port {
-                            format!("{addr}:{port}")
-                        } else {
-                            addr.to_string()
-                        }
-                        .parse()?,
-                    );
-                    let resolved_uri = Uri::from_parts(uri_parts)?;
-
-                    endpoint(resolved_uri, tls_config.as_deref())?
-                        .origin(uri)
-                        .connect()
-                        .await
-                        .map_err(YdbError::from)
-                }
-                .map(move |res| (res, addr))
-                .boxed()
-            })
+            .map(|&addr| self.try_connect(addr))
             .collect::<FuturesUnordered<_>>();
+
+        let mut failed_addrs = Vec::new();
 
         // Wait for the first successful connection
         loop {
@@ -193,19 +154,53 @@ impl RacyRoundRobin {
                 // Drop failed connections, ignore errors, but save the first one
                 Err(err) => {
                     trace!("connection to {addr} has failed");
+                    failed_addrs.push(addr);
                     if first_err.is_none() {
                         first_err = Some(err);
                     }
                 }
                 Ok(channel) => {
                     trace!("connection to {addr} has succeeded");
-                    self.connections = VecDeque::from_iter(channels.into_iter().chain(iter::once(
-                        future::ready((Ok(channel.clone()), addr)).boxed(),
-                    )));
+                    self.connections = VecDeque::from_iter(
+                        channels
+                            .into_iter()
+                            .chain(failed_addrs.into_iter().map(|addr| self.try_connect(addr)))
+                            .chain(iter::once(
+                                future::ready((Ok(channel.clone()), addr)).boxed(),
+                            )),
+                    );
                     break Ok(channel);
                 }
             }
         }
+    }
+
+    fn try_connect(&self, addr: IpAddr) -> BoxFuture<'static, (YdbResult<Channel>, IpAddr)> {
+        let uri = self.uri.clone();
+        let tls_config = self.tls_config.clone();
+
+        async move {
+            // Connect to URI with replaced origin
+            // to specify address
+            let mut uri_parts = uri.clone().into_parts();
+            uri_parts.authority = Some(
+                if let Some(port) = uri.port() {
+                    format!("{addr}:{port}")
+                } else {
+                    addr.to_string()
+                }
+                .parse()?,
+            );
+            let resolved_uri = Uri::from_parts(uri_parts)?;
+
+            endpoint(resolved_uri, tls_config.as_deref())?
+                .origin(uri)
+                .connect()
+                .await
+                .map_err(YdbError::from)
+        }
+        .map(move |res| (res, addr))
+        .boxed()
     }
 
     async fn connect_next(&mut self) -> YdbResult<Channel> {
@@ -227,7 +222,8 @@ impl RacyRoundRobin {
                 }
                 // Connection has failed
                 Poll::Ready((Err(err), addr)) => {
-                    trace!("failed to connect to {addr}: {err}")
+                    trace!("failed to connect to {addr}: {err}");
+                    self.connections.push_back(self.try_connect(addr));
                 }
                 // Still connecting
                 Poll::Pending => self.connections.push_back(next_channel),
