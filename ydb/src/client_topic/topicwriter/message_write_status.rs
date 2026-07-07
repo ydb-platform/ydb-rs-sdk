@@ -1,5 +1,7 @@
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_response;
 
+use crate::{YdbError, YdbResult};
+
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 #[derive(Debug)]
 pub struct MessageWriteInfo {
@@ -30,6 +32,25 @@ pub enum MessageWriteStatus {
 pub(crate) struct WriteAck {
     pub seq_no: i64,
     pub status: MessageWriteStatus,
+}
+
+pub(crate) type MessageWriteStatusValidator =
+    fn(MessageWriteStatus) -> YdbResult<MessageWriteStatus>;
+
+pub(crate) fn accept_any_write_status(status: MessageWriteStatus) -> YdbResult<MessageWriteStatus> {
+    Ok(status)
+}
+
+pub(crate) fn expect_transactional_write_status(
+    status: MessageWriteStatus,
+) -> YdbResult<MessageWriteStatus> {
+    match status {
+        MessageWriteStatus::WrittenInTx(_) => Ok(status),
+        MessageWriteStatus::Skipped(MessageSkipReason::AlreadyWritten) => Ok(status),
+        other_status => Err(YdbError::custom(format!(
+            "expected WrittenInTx or AlreadyWritten ack from server, got: {other_status:?}"
+        ))),
+    }
 }
 
 impl From<i32> for MessageSkipReason {

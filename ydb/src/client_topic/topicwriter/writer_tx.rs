@@ -6,12 +6,9 @@ use crate::client_query::hooks::{QueryTxCommitStatus, QueryTxHook};
 use crate::client_query::Transaction;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
-use crate::client_topic::topicwriter::message_write_status::{
-    MessageSkipReason, MessageWriteStatus,
-};
 use crate::client_topic::topicwriter::writer::TopicWriter;
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::{YdbError, YdbResult};
+use crate::YdbResult;
 
 use super::writer_tx_options::TopicWriterTxOptions;
 
@@ -66,20 +63,10 @@ impl TopicWriterTx {
         Ok(Self { inner })
     }
 
-    /// Writes a message and waits for the server acknowledgement.
-    ///
-    /// Returns `Ok(())` when YDB acknowledges the message as `WrittenInTx`. A
-    /// `Skipped(AlreadyWritten)` acknowledgement is also treated as success, because it
-    /// means the server deduplicated the write by sequence number.
+    /// Enqueues a message for transactional write.
     ///
     /// No topic offset is returned. Transactional topic writes are published, and receive
     /// their final offsets, only when the transaction commits.
-    ///
-    /// # Cancel safety
-    ///
-    /// This method is not cancel safe. If the returned future is dropped before it
-    /// completes, the SDK cannot tell whether YDB attached the message to the transaction.
-    /// Roll the transaction back if that ambiguity is not acceptable.
     pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
         self.inner.write(message).await
     }

@@ -18,27 +18,26 @@ impl ReceptionTicket {
         Self { seq_no, ack_sender }
     }
 
-    pub(crate) fn get_seq_no(&self) -> i64 {
+    pub(crate) fn seq_no(&self) -> i64 {
         self.seq_no
     }
 
-    pub(crate) fn send_confirmation_if_needed(self, write_status: MessageWriteStatus) {
+    pub(crate) fn send_result_if_needed(self, write_result: YdbResult<MessageWriteStatus>) {
         if let Some(sender) = self.ack_sender {
-            // drop is workaround for old rust: destructive assignment was unstable until 1.59
-            // E0658
-            drop(sender.send(Ok(write_status)));
+            let _ = sender.send(write_result);
         }
     }
 
     pub(crate) fn send_error_if_needed(self, error: YdbError) {
         if let Some(sender) = self.ack_sender {
-            drop(sender.send(Err(error)));
+            let _ = sender.send(Err(error));
         }
     }
 }
 
 pub(crate) struct ReceptionQueue {
     ticket_queue: VecDeque<ReceptionTicket>,
+    unobserved_ack_error: Option<YdbError>,
 
     // Pending flush() calls waiting for all tickets up to `threshold_seq_no` to be popped.
     // Multiple concurrent flush() calls are supported, each with its own sender.
@@ -47,54 +46,65 @@ pub(crate) struct ReceptionQueue {
 
 struct PendingFlush {
     threshold_seq_no: i64,
-    notifier: oneshot::Sender<()>,
+    notifier: oneshot::Sender<YdbResult<()>>,
+    first_ack_error: Option<YdbError>,
 }
 
 impl ReceptionQueue {
     pub(crate) fn new() -> Self {
         Self {
             ticket_queue: VecDeque::new(),
+            unobserved_ack_error: None,
             pending_flushes: Vec::new(),
         }
     }
 
-    pub(crate) fn init_flush(&mut self) -> YdbResult<oneshot::Receiver<()>> {
-        let (tx, rx): (oneshot::Sender<()>, oneshot::Receiver<()>) = oneshot::channel();
+    pub(crate) fn init_flush(&mut self) -> YdbResult<oneshot::Receiver<YdbResult<()>>> {
+        let (tx, rx) = oneshot::channel();
+        let first_ack_error = self.unobserved_ack_error.take();
         let Some(last_ticket) = self.ticket_queue.back() else {
-            tx.send(())
+            let result = first_ack_error.map_or(Ok(()), Err);
+            tx.send(result)
                 .map_err(|_| YdbError::custom("init_flush: channel unexpectedly closed"))?;
             return Ok(rx);
         };
         self.pending_flushes.push(PendingFlush {
-            threshold_seq_no: last_ticket.get_seq_no(),
+            threshold_seq_no: last_ticket.seq_no(),
             notifier: tx,
+            first_ack_error,
         });
         Ok(rx)
     }
 
     pub(crate) fn peek_ticket_seq_no(&self) -> Option<i64> {
-        self.ticket_queue.front().map(ReceptionTicket::get_seq_no)
+        self.ticket_queue.front().map(ReceptionTicket::seq_no)
     }
 
-    pub(crate) fn try_get_ticket(&mut self) -> YdbResult<Option<ReceptionTicket>> {
-        let maybe_ticket = self.ticket_queue.pop_front();
-        if let Some(ticket) = maybe_ticket.as_ref() {
-            self.notify_flushes_up_to(ticket.get_seq_no());
-        } else {
-            // Queue is empty: every pending flush is satisfied.
-            self.notify_flushes_up_to(i64::MAX);
+    pub(crate) fn pop_ticket(&mut self) -> Option<ReceptionTicket> {
+        self.ticket_queue.pop_front()
+    }
+
+    pub(crate) fn notify_ticket_processed(&mut self, seq_no: i64, error: Option<YdbError>) {
+        let mut error_observed_by_pending_flush = false;
+        let completed = self.pending_flushes.extract_if(.., |flush| {
+            if let Some(error) = &error {
+                if seq_no <= flush.threshold_seq_no {
+                    error_observed_by_pending_flush = true;
+                    flush.first_ack_error.get_or_insert_with(|| error.clone());
+                }
+            }
+            flush.threshold_seq_no <= seq_no
+        });
+
+        for pending in completed {
+            let _ = pending
+                .notifier
+                .send(pending.first_ack_error.map_or(Ok(()), Err));
         }
-        Ok(maybe_ticket)
-    }
 
-    fn notify_flushes_up_to(&mut self, acked_seq_no: i64) {
-        let mut i = 0;
-        while i < self.pending_flushes.len() {
-            if self.pending_flushes[i].threshold_seq_no <= acked_seq_no {
-                let pending = self.pending_flushes.swap_remove(i);
-                let _ = pending.notifier.send(());
-            } else {
-                i += 1;
+        if let Some(error) = error {
+            if !error_observed_by_pending_flush && self.unobserved_ack_error.is_none() {
+                self.unobserved_ack_error = Some(error);
             }
         }
     }
@@ -107,8 +117,8 @@ impl ReceptionQueue {
         while let Some(ticket) = self.ticket_queue.pop_front() {
             ticket.send_error_if_needed(error.clone());
         }
-        // Drop pending flush notifiers: receivers will observe RecvError and translate it
-        // to a flush failure on the calling side.
-        self.pending_flushes.clear();
+        for pending in self.pending_flushes.drain(..) {
+            let _ = pending.notifier.send(Err(error.clone()));
+        }
     }
 }
