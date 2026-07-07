@@ -151,7 +151,7 @@ impl RacyRoundRobin {
             };
 
             match first_result {
-                // Drop failed connections, ignore errors, but save the first one
+                // Remember failed connections, ignore errors, but save the first one
                 Err(err) => {
                     trace!("connection to {addr} has failed");
                     failed_addrs.push(addr);
@@ -162,9 +162,12 @@ impl RacyRoundRobin {
                 Ok(channel) => {
                     trace!("connection to {addr} has succeeded");
                     self.connections = VecDeque::from_iter(
+                        // First, try ongoing connections
                         channels
                             .into_iter()
+                            // Then retry failed connections
                             .chain(failed_addrs.into_iter().map(|addr| self.try_connect(addr)))
+                            // Then use already succeeded connection
                             .chain(iter::once(
                                 future::ready((Ok(channel.clone()), addr)).boxed(),
                             )),
