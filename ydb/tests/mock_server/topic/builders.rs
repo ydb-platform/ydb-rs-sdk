@@ -173,6 +173,23 @@ pub fn stop_partition_session_request(
     )
 }
 
+pub fn end_partition_session(
+    stream_id: u64,
+    partition_session_id: i64,
+    child_partition_ids: Vec<i64>,
+) -> TopicReply {
+    stream_read(
+        stream_id,
+        stream_read_message::from_server::ServerMessage::EndPartitionSession(
+            stream_read_message::EndPartitionSession {
+                partition_session_id,
+                child_partition_ids,
+                adjacent_partition_ids: Vec::new(),
+            },
+        ),
+    )
+}
+
 pub fn empty_with_status(stream_id: u64, status: StatusCode) -> TopicReply {
     TopicReply::StreamRead {
         stream_id,
