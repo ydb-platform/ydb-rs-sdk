@@ -292,7 +292,7 @@ impl DiscoverySharedState {
             .await?;
 
         let res = discovery_client
-            .list_endpoints(self.connection_manager.database().clone())
+            .list_endpoints(self.connection_manager.database().to_owned())
             .await?;
         let new_endpoints = Self::list_endpoints_to_node_infos(res)?;
         self.set_discovery_state(

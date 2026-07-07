@@ -64,7 +64,7 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
         self.state.balancer.endpoint(service)
     }
 
-    pub(crate) fn database(&self) -> &String {
+    pub(crate) fn database(&self) -> &str {
         &self.state.database
     }
 }
