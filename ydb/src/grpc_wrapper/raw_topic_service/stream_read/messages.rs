@@ -1,3 +1,4 @@
+use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
 use crate::YdbStatusError;
 use crate::grpc_wrapper::grpc::proto_issues_to_ydb_issues;
 use crate::grpc_wrapper::raw_common_types::{Duration, Timestamp};
@@ -65,6 +66,7 @@ pub(crate) enum RawFromServer {
     CommitOffsetResponse(RawCommitOffsetResponse),
     StartPartitionSessionRequest(RawStartPartitionSessionRequest),
     StopPartitionSessionRequest(RawStopPartitionSessionRequest),
+    EndPartitionSession(RawEndPartitionSession),
     UpdateTokenResponse(RawUpdateTokenResponse),
     UnsupportedMessage(String),
 }
@@ -104,6 +106,9 @@ impl TryFrom<stream_read_message::FromServer> for RawFromServer {
             stream_read_message::from_server::ServerMessage::StopPartitionSessionRequest(
                 stop_partition_session_request,
             ) => RawFromServer::StopPartitionSessionRequest(stop_partition_session_request.into()),
+            stream_read_message::from_server::ServerMessage::EndPartitionSession(end) => {
+                RawFromServer::EndPartitionSession(end.into())
+            }
             stream_read_message::from_server::ServerMessage::UpdateTokenResponse(
                 update_token_response,
             ) => RawFromServer::UpdateTokenResponse(update_token_response.into()),
@@ -137,7 +142,7 @@ impl From<RawInitRequest> for stream_read_message::InitRequest {
             consumer: value.consumer,
             reader_name: value.reader_name,
             direct_read: false,
-            auto_partitioning_support: false,
+            auto_partitioning_support: true,
             ..Default::default()
         }
     }
@@ -145,7 +150,7 @@ impl From<RawInitRequest> for stream_read_message::InitRequest {
 
 pub(crate) struct RawTopicReadSettings {
     pub path: String,
-    pub partition_ids: Vec<i64>,
+    pub partition_ids: Vec<PartitionId>,
     pub max_lag: Option<Duration>,
     pub read_from: Option<Timestamp>,
 }
@@ -154,7 +159,11 @@ impl From<RawTopicReadSettings> for stream_read_message::init_request::TopicRead
     fn from(value: RawTopicReadSettings) -> Self {
         stream_read_message::init_request::TopicReadSettings {
             path: value.path,
-            partition_ids: value.partition_ids,
+            partition_ids: value
+                .partition_ids
+                .into_iter()
+                .map(PartitionId::into_raw)
+                .collect(),
             max_lag: value.max_lag.map(|val| val.into()),
             read_from: value.read_from.map(|val| val.into()),
         }
@@ -227,7 +236,7 @@ impl From<stream_read_message::ReadResponse> for RawReadResponse {
 
 #[derive(Debug)]
 pub(crate) struct RawPartitionCommittedOffset {
-    pub partition_session_id: i64,
+    pub partition_session_id: PartitionSessionId,
     pub committed_offset: i64,
 }
 
@@ -236,7 +245,7 @@ impl From<stream_read_message::commit_offset_response::PartitionCommittedOffset>
 {
     fn from(value: stream_read_message::commit_offset_response::PartitionCommittedOffset) -> Self {
         Self {
-            partition_session_id: value.partition_session_id,
+            partition_session_id: PartitionSessionId::from_raw(value.partition_session_id),
             committed_offset: value.committed_offset,
         }
     }
@@ -261,14 +270,14 @@ impl From<stream_read_message::CommitOffsetResponse> for RawCommitOffsetResponse
 
 #[derive(Debug)]
 pub(crate) struct RawPartitionData {
-    pub partition_session_id: i64,
+    pub partition_session_id: PartitionSessionId,
     pub batches: VecDeque<RawBatch>,
 }
 
 impl From<stream_read_message::read_response::PartitionData> for RawPartitionData {
     fn from(value: stream_read_message::read_response::PartitionData) -> Self {
         RawPartitionData {
-            partition_session_id: value.partition_session_id,
+            partition_session_id: PartitionSessionId::from_raw(value.partition_session_id),
             batches: value.batches.into_iter().map(|x| x.into()).collect(),
         }
     }
@@ -309,7 +318,7 @@ impl From<stream_read_message::read_response::Batch> for RawBatch {
 
 #[derive(Debug)]
 pub(crate) struct RawBatchWithId {
-    pub partition_session_id: i64,
+    pub partition_session_id: PartitionSessionId,
     pub batch: RawBatch,
     pub read_session_size_bytes: i64,
 }
@@ -351,7 +360,7 @@ impl From<RawCommitOffsetRequest> for stream_read_message::CommitOffsetRequest {
 }
 
 pub(crate) struct PartitionCommitOffset {
-    pub partition_session_id: i64,
+    pub partition_session_id: PartitionSessionId,
     pub offsets: Vec<RawOffsetsRange>,
 }
 
@@ -360,7 +369,7 @@ impl From<PartitionCommitOffset>
 {
     fn from(value: PartitionCommitOffset) -> Self {
         stream_read_message::commit_offset_request::PartitionCommitOffset {
-            partition_session_id: value.partition_session_id,
+            partition_session_id: value.partition_session_id.into_raw(),
             offsets: value.offsets.into_iter().map(|x| x.into()).collect(),
         }
     }
@@ -376,9 +385,9 @@ impl From<stream_read_message::StartPartitionSessionRequest> for RawStartPartiti
         RawStartPartitionSessionRequest {
             partition_session: value.partition_session.map_or(
                 RawPartitionSession {
-                    partition_session_id: 0,
+                    partition_session_id: PartitionSessionId::from_raw(0),
                     path: "".to_string(),
-                    partition_id: 0,
+                    partition_id: PartitionId::from_raw(0),
                 },
                 |x| x.into(),
             ),
@@ -388,29 +397,29 @@ impl From<stream_read_message::StartPartitionSessionRequest> for RawStartPartiti
 }
 
 pub(crate) struct RawPartitionSession {
-    pub partition_session_id: i64,
+    pub partition_session_id: PartitionSessionId,
     pub path: String,
-    pub partition_id: i64,
+    pub partition_id: PartitionId,
 }
 
 impl From<stream_read_message::PartitionSession> for RawPartitionSession {
     fn from(value: stream_read_message::PartitionSession) -> Self {
         RawPartitionSession {
-            partition_session_id: value.partition_session_id,
+            partition_session_id: PartitionSessionId::from_raw(value.partition_session_id),
             path: value.path,
-            partition_id: value.partition_id,
+            partition_id: PartitionId::from_raw(value.partition_id),
         }
     }
 }
 
 pub(crate) struct RawStartPartitionSessionResponse {
-    pub partition_session_id: i64,
+    pub partition_session_id: PartitionSessionId,
 }
 
 impl From<RawStartPartitionSessionResponse> for stream_read_message::StartPartitionSessionResponse {
     fn from(value: RawStartPartitionSessionResponse) -> Self {
         stream_read_message::StartPartitionSessionResponse {
-            partition_session_id: value.partition_session_id,
+            partition_session_id: value.partition_session_id.into_raw(),
             read_offset: None,
             commit_offset: None,
         }
@@ -418,7 +427,7 @@ impl From<RawStartPartitionSessionResponse> for stream_read_message::StartPartit
 }
 
 pub(crate) struct RawStopPartitionSessionRequest {
-    pub partition_session_id: i64,
+    pub partition_session_id: PartitionSessionId,
     pub graceful: bool,
     pub committed_offset: i64,
 }
@@ -426,21 +435,39 @@ pub(crate) struct RawStopPartitionSessionRequest {
 impl From<stream_read_message::StopPartitionSessionRequest> for RawStopPartitionSessionRequest {
     fn from(value: stream_read_message::StopPartitionSessionRequest) -> Self {
         RawStopPartitionSessionRequest {
-            partition_session_id: value.partition_session_id,
+            partition_session_id: PartitionSessionId::from_raw(value.partition_session_id),
             graceful: value.graceful,
             committed_offset: value.committed_offset,
         }
     }
 }
 
+pub(crate) struct RawEndPartitionSession {
+    pub partition_session_id: PartitionSessionId,
+    pub child_partition_ids: Vec<PartitionId>,
+}
+
+impl From<stream_read_message::EndPartitionSession> for RawEndPartitionSession {
+    fn from(value: stream_read_message::EndPartitionSession) -> Self {
+        Self {
+            partition_session_id: PartitionSessionId::from_raw(value.partition_session_id),
+            child_partition_ids: value
+                .child_partition_ids
+                .into_iter()
+                .map(PartitionId::from_raw)
+                .collect(),
+        }
+    }
+}
+
 pub(crate) struct RawStopPartitionSessionResponse {
-    pub partition_session_id: i64,
+    pub partition_session_id: PartitionSessionId,
 }
 
 impl From<RawStopPartitionSessionResponse> for stream_read_message::StopPartitionSessionResponse {
     fn from(value: RawStopPartitionSessionResponse) -> Self {
         stream_read_message::StopPartitionSessionResponse {
-            partition_session_id: value.partition_session_id,
+            partition_session_id: value.partition_session_id.into_raw(),
             graceful: false,
         }
     }

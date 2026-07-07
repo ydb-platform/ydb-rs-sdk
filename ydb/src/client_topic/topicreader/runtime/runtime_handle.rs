@@ -4,7 +4,6 @@ use tokio::sync::Notify;
 use tokio::sync::futures::Notified;
 use tracing::{debug, warn};
 
-use crate::client_topic::topicreader::ids::PartitionSessionId;
 use crate::client_topic::topicreader::messages::TopicReaderBatch;
 #[cfg(test)]
 use crate::client_topic::topicreader::messages::TopicReaderMessage;
@@ -12,15 +11,15 @@ use crate::client_topic::topicreader::partition_state::PartitionSession;
 use crate::client_topic::topicreader::reader::TopicReaderCommitMarker;
 use crate::grpc_wrapper::raw_topic_service::common::partition::RawOffsetsRange;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
-    PartitionCommitOffset, RawCommitOffsetRequest, RawCommitOffsetResponse, RawFromClientOneOf,
-    RawFromServer, RawReadRequest, RawReadResponse, RawStartPartitionSessionRequest,
-    RawStartPartitionSessionResponse, RawStopPartitionSessionRequest,
-    RawStopPartitionSessionResponse,
+    PartitionCommitOffset, RawCommitOffsetRequest, RawCommitOffsetResponse, RawEndPartitionSession,
+    RawFromClientOneOf, RawFromServer, RawReadRequest, RawReadResponse,
+    RawStartPartitionSessionRequest, RawStartPartitionSessionResponse,
+    RawStopPartitionSessionRequest, RawStopPartitionSessionResponse,
 };
 use crate::{YdbError, YdbResult};
 
 use super::connection::Connection;
-use super::message_buffer::{BufferedBatch, MessageBuffer};
+use super::message_buffer::{BufferActions, MessageBuffer, PopBatchResult};
 use super::pending_commits::{CommitAckReceiver, PendingCommits};
 
 const RUNTIME_HANDLE_POISONED: &str = "topic reader runtime handle mutex poisoned";
@@ -45,7 +44,7 @@ impl Active {
         self.buffer.push_batch(messages);
     }
 
-    fn pop_batch(&mut self, cap: usize) -> YdbResult<Option<BufferedBatch>> {
+    fn pop_batch(&mut self, cap: usize) -> YdbResult<PopBatchResult> {
         self.buffer.pop_batch(cap)
     }
 }
@@ -102,6 +101,7 @@ impl RuntimeHandle {
             RawFromServer::StopPartitionSessionRequest(req) => {
                 self.handle_stop_partition_session(req)
             }
+            RawFromServer::EndPartitionSession(req) => self.handle_end_partition_session(req),
             RawFromServer::InitResponse(_) => {
                 debug!("topic reader initialized");
                 Ok(())
@@ -118,7 +118,7 @@ impl RuntimeHandle {
     }
 
     fn handle_read_response(&self, resp: RawReadResponse) -> YdbResult<()> {
-        let mut pushed = false;
+        let mut actions = BufferActions::default();
         {
             let mut state = self.lock_state()?;
             let State::Active(active) = &mut *state else {
@@ -128,39 +128,38 @@ impl RuntimeHandle {
             let epoch = active.connection.epoch();
 
             for partition_data in resp.partition_data {
-                let partition_session_id =
-                    PartitionSessionId::from_raw(partition_data.partition_session_id);
+                let partition_session_id = partition_data.partition_session_id;
                 for batch in partition_data.batches {
-                    let added = active.buffer.push_raw_batch(
+                    let pushed = active.buffer.push_raw_batch(
                         batch,
                         partition_session_id,
                         reader_id,
                         epoch,
                     )?;
-                    if !added {
-                        warn!(
-                            %partition_session_id,
-                            "topic reader received read response for unknown partition session"
-                        );
+                    match pushed {
+                        Some(batch_actions) => actions.merge(batch_actions),
+                        None => {
+                            warn!(
+                                %partition_session_id,
+                                "topic reader received read response for unknown partition session"
+                            );
+                        }
                     }
-                    pushed |= added;
                 }
             }
         }
 
-        if pushed {
+        if actions.messages_became_available {
             self.inner.messages_available.notify_one();
         }
         Ok(())
     }
 
     fn handle_commit_offset_response(&self, resp: RawCommitOffsetResponse) -> YdbResult<()> {
-        let committed_offsets = resp.partitions_committed_offsets.into_iter().map(|offset| {
-            (
-                PartitionSessionId::from_raw(offset.partition_session_id),
-                offset.committed_offset,
-            )
-        });
+        let committed_offsets = resp
+            .partitions_committed_offsets
+            .into_iter()
+            .map(|offset| (offset.partition_session_id, offset.committed_offset));
 
         let mut state = self.lock_state()?;
         match &mut *state {
@@ -187,7 +186,7 @@ impl RuntimeHandle {
             .connection
             .send(RawFromClientOneOf::StartPartitionSessionResponse(
                 RawStartPartitionSessionResponse {
-                    partition_session_id: partition_session_id.into_raw(),
+                    partition_session_id,
                 },
             ))?;
         Ok(())
@@ -199,7 +198,6 @@ impl RuntimeHandle {
             graceful,
             committed_offset,
         } = req;
-        let partition_session_id = PartitionSessionId::from_raw(partition_session_id);
 
         debug!(
             %partition_session_id,
@@ -211,11 +209,18 @@ impl RuntimeHandle {
             return Ok(());
         };
 
-        if !active.buffer.stop(partition_session_id) {
-            warn!(
-                %partition_session_id,
-                "topic reader received stop for unknown partition session"
-            );
+        match active.buffer.stop(partition_session_id)? {
+            Some(actions) => {
+                if actions.messages_became_available {
+                    self.inner.messages_available.notify_one();
+                }
+            }
+            None => {
+                warn!(
+                    %partition_session_id,
+                    "topic reader received stop for unknown partition session"
+                );
+            }
         }
 
         active.pending_commits.stop(
@@ -229,9 +234,24 @@ impl RuntimeHandle {
             .connection
             .send(RawFromClientOneOf::StopPartitionSessionResponse(
                 RawStopPartitionSessionResponse {
-                    partition_session_id: partition_session_id.into_raw(),
+                    partition_session_id,
                 },
             ))?;
+        Ok(())
+    }
+
+    fn handle_end_partition_session(&self, req: RawEndPartitionSession) -> YdbResult<()> {
+        let mut state = self.lock_state()?;
+        let State::Active(active) = &mut *state else {
+            return Ok(());
+        };
+
+        let actions = active
+            .buffer
+            .end(req.partition_session_id, req.child_partition_ids)?;
+        if actions.messages_became_available {
+            self.inner.messages_available.notify_one();
+        }
         Ok(())
     }
 
@@ -274,7 +294,13 @@ impl RuntimeHandle {
                 let mut guard = self.lock_state()?;
                 match &mut *guard {
                     State::Reconnecting => None,
-                    State::Active(active) => active.pop_batch(cap)?,
+                    State::Active(active) => {
+                        let result = active.pop_batch(cap)?;
+                        if result.actions.messages_became_available {
+                            self.inner.messages_available.notify_one();
+                        }
+                        result.batch
+                    }
                     State::Failed(err) => return Err(err.clone()),
                 }
             };
@@ -320,7 +346,7 @@ impl RuntimeHandle {
                 let commit_message =
                     RawFromClientOneOf::CommitOffsetRequest(RawCommitOffsetRequest {
                         commit_offsets: vec![PartitionCommitOffset {
-                            partition_session_id: commit_marker.partition_session_id.into_raw(),
+                            partition_session_id: commit_marker.partition_session_id,
                             offsets: vec![RawOffsetsRange {
                                 start: commit_marker.start_offset,
                                 end: commit_marker.end_offset,
@@ -475,6 +501,7 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
+    use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
     use crate::client_topic::topicreader::messages::TopicReaderMessage;
     use crate::grpc_wrapper::raw_topic_service::stream_read::messages::RawReadRequest;
 
@@ -609,7 +636,7 @@ mod tests {
         };
 
         assert_eq!(request.commit_offsets.len(), 1);
-        assert_eq!(request.commit_offsets[0].partition_session_id, 10);
+        assert_eq!(request.commit_offsets[0].partition_session_id, psid(10));
         assert_eq!(request.commit_offsets[0].offsets.len(), 1);
         assert_eq!(request.commit_offsets[0].offsets[0].start, 30);
         assert_eq!(request.commit_offsets[0].offsets[0].end, 40);
@@ -663,10 +690,18 @@ mod tests {
             .expect("test session should be activated");
     }
 
+    fn psid(value: i64) -> PartitionSessionId {
+        PartitionSessionId::from_raw(value)
+    }
+
+    fn pid(value: i64) -> PartitionId {
+        PartitionId::from_raw(value)
+    }
+
     fn commit_marker(epoch: usize) -> TopicReaderCommitMarker {
         TopicReaderCommitMarker {
-            partition_session_id: PartitionSessionId::from_raw(10),
-            partition_id: crate::client_topic::topicreader::ids::PartitionId::from_raw(20),
+            partition_session_id: psid(10),
+            partition_id: pid(20),
             start_offset: 30,
             end_offset: 40,
             topic: "test-topic".to_string(),

@@ -212,7 +212,12 @@ impl TopicSelector {
     pub(crate) fn into_raw_topic_read_setting(self) -> RawTopicReadSettings {
         RawTopicReadSettings {
             path: self.path,
-            partition_ids: self.partition_ids.unwrap_or_default(),
+            partition_ids: self
+                .partition_ids
+                .unwrap_or_default()
+                .into_iter()
+                .map(PartitionId::from_raw)
+                .collect(),
             read_from: self.read_from.map(|time| time.into()),
             max_lag: None,
         }
