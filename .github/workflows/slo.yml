@@ -137,6 +137,8 @@ jobs:
           rm -rf "$GITHUB_WORKSPACE/baseline/tests/slo/slo-framework"
           cp -r "$GITHUB_WORKSPACE/current/tests/slo/slo-framework" \
             "$GITHUB_WORKSPACE/baseline/tests/slo/slo-framework"
+          cp "$GITHUB_WORKSPACE/current/tests/slo/Dockerfile" \
+            "$GITHUB_WORKSPACE/baseline/tests/slo/Dockerfile"
 
           bash "$SCRIPT" \
             --context "$GITHUB_WORKSPACE/baseline" \

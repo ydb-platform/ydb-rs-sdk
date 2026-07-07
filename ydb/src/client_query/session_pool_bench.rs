@@ -27,7 +27,9 @@ fn new_bench_pool() -> SessionPool {
 }
 
 async fn bench_pool_once(pool: &SessionPool, ops: &AtomicU64) {
-    let force_delete = ops.fetch_add(1, Ordering::Relaxed) % BENCH_DELETE_PROBABILITY == 0;
+    let force_delete = ops
+        .fetch_add(1, Ordering::Relaxed)
+        .is_multiple_of(BENCH_DELETE_PROBABILITY);
     let mut lease = pool
         .acquire_explicit()
         .await
@@ -55,7 +57,7 @@ fn report_bench_latency(label: &str, samples: &mut [Duration]) {
     let mean = total / n as u32;
     let p50 = percentile(samples, 50.0);
     let p99 = percentile(samples, 99.0);
-    eprintln!("{label}: n={n} mean={:?} p50={:?} p99={:?}", mean, p50, p99);
+    eprintln!("{label}: n={n} mean={mean:?} p50={p50:?} p99={p99:?}");
 }
 
 async fn benchmark_pool_with_concurrency(goroutines: usize) {

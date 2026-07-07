@@ -57,7 +57,7 @@ Report missing table/query features via GitHub Issues.
 
 - Published on crates.io as `ydb` (**0.16.0** ships the table/query refactor and breaking API cleanup).
 - **Pre-1.0 policy**: breaking changes to awkward or misleading API are acceptable before `1.0.0` — prefer fixing design early over carrying compatibility debt.
-- MSRV **1.85** (Query `retry_tx` uses `AsyncFnMut`).
+- MSRV **1.88** (Query `retry_tx` uses `AsyncFnMut`).
 - `#[non_exhaustive]` on many public enums; optional `force-exhaustive-all` feature for compile-time exhaustiveness checks.
 - Breaking changes increment `0.X` per project policy (see root `README.md`).
 

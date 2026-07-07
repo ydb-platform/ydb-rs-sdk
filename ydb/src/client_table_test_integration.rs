@@ -411,7 +411,7 @@ async fn describe_table() -> YdbResult<()> {
             }
             _ => panic!("Expected Optional<Decimal>"),
         },
-        Err(e) => panic!("Type conversion failed: {:?}", e),
+        Err(e) => panic!("Type conversion failed: {e:?}"),
         _ => panic!("Expected Ok(Optional<Decimal>)"),
     }
 

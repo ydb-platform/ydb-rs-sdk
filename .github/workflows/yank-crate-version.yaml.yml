@@ -1,7 +1,8 @@
 name: Yank published crate from crates.io
 env:
   CARGO_TERM_COLOR: always
-  RUST_VERSION: 1.91.0
+  # Pinned modern Rust version for crates.io operations.
+  RUST_VERSION_MODERN: "1.96"
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 on:
@@ -31,7 +32,7 @@ jobs:
       - name: Install fixed rust version
         uses: dtolnay/rust-toolchain@v1
         with:
-          toolchain: ${{env.RUST_VERSION}}
+          toolchain: ${{env.RUST_VERSION_MODERN}}
 
       - name: Yank crate version
         run: |

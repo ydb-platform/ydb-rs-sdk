@@ -179,7 +179,7 @@ impl RawType {
                     RawError::custom(format!("scale {} does not fit into i16", dec.scale))
                 })?;
                 let inner = decimal_rs::Decimal::from_parts(0, scale_i16, false).map_err(|e| {
-                    RawError::custom(format!("failed to create decimal example: {}", e))
+                    RawError::custom(format!("failed to create decimal example: {e}"))
                 })?;
                 Value::Decimal(YdbDecimal::new_unchecked(inner, dec.precision, dec.scale))
             }

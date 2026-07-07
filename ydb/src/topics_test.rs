@@ -910,10 +910,7 @@ async fn write_to_specific_partition() -> YdbResult<()> {
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while observed.len() < 2 {
         if std::time::Instant::now() > deadline {
-            panic!(
-                "timeout waiting for messages from both partitions, observed: {:?}",
-                observed
-            );
+            panic!("timeout waiting for messages from both partitions, observed: {observed:?}");
         }
         let batch = reader.read_batch().await?;
         for mut msg in batch.messages {
@@ -928,14 +925,12 @@ async fn write_to_specific_partition() -> YdbResult<()> {
     assert_eq!(
         observed.get("msg-for-partition-0").copied(),
         Some(0),
-        "message targeted to partition 0 must be read from partition 0, observed: {:?}",
-        observed
+        "message targeted to partition 0 must be read from partition 0, observed: {observed:?}",
     );
     assert_eq!(
         observed.get("msg-for-partition-1").copied(),
         Some(1),
-        "message targeted to partition 1 must be read from partition 1, observed: {:?}",
-        observed
+        "message targeted to partition 1 must be read from partition 1, observed: {observed:?}",
     );
 
     Ok(())

@@ -93,7 +93,7 @@ async fn cancel_unknown_operation_id_errors() -> YdbResult<()> {
         crate::errors::YdbError::YdbStatusError(status) => {
             assert_ne!(status.operation_status, StatusCode::Success as i32);
         }
-        other => panic!("expected YdbStatusError, got {:?}", other),
+        other => panic!("expected YdbStatusError, got {other:?}"),
     }
 
     Ok(())

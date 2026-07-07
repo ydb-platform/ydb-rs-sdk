@@ -3,25 +3,25 @@
 //! # Example
 //!
 //! ```no_run
-//! # use ydb::{ClientBuilder, Query, StaticToken, YdbResult};
+//! # use ydb::{AccessTokenCredentials, ClientBuilder, YdbResult};
 //! #
 //! # #[tokio::main]
 //! # async fn main() -> YdbResult<()> {
 //!
 //!  // create driver
 //!  let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
-//!     .with_credentials(StaticToken::from("asd"))
+//!     .with_credentials(AccessTokenCredentials::from("asd"))
 //!     .client()?;
 //!
 //!  // wait until driver background initialization finish
 //!  client.wait().await?;
 //!
 //!  // read query result via Query API
-//!  let sum: i32 = client
+//!  let mut row = client
 //!     .query_client()
-//!     .query_row("SELECT 1 + 1 AS sum", &())
-//!     .await?
-//!     .ok_or_else(|| ydb::YdbError::custom("no row"))?;
+//!     .query_row("SELECT 1 + 1 AS sum")
+//!     .await?;
+//!  let sum: i32 = row.remove_field_by_name("sum")?.try_into()?;
 //!
 //!  // it will print "sum: 2"
 //!  println!("sum: {}", sum);
