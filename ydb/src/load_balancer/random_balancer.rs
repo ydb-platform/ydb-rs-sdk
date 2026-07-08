@@ -3,8 +3,8 @@ use std::sync::Arc;
 use http::Uri;
 
 use crate::{
-    grpc_wrapper::raw_services::Service, waiter::WaiterImpl, DiscoveryState, Waiter, YdbError,
-    YdbResult,
+    DiscoveryState, Waiter, YdbError, YdbResult, grpc_wrapper::raw_services::Service,
+    waiter::WaiterImpl,
 };
 
 use super::LoadBalancer;

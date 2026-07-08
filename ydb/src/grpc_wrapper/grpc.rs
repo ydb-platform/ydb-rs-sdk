@@ -1,6 +1,6 @@
+use crate::YdbIssue;
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::trait_operation::{Operation, YdbGrpcStatus};
-use crate::YdbIssue;
 use ydb_grpc::ydb_proto::issue::IssueMessage;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 

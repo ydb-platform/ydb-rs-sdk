@@ -4,10 +4,10 @@ use tracing::trace;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    YdbResult,
     grpc_wrapper::raw_coordination_service::session::release_semaphore::{
         RawReleaseSemaphoreRequest, RawReleaseSemaphoreResult,
     },
-    YdbResult,
 };
 
 use super::controller::RequestController;
@@ -57,10 +57,10 @@ impl Lease {
             .await?;
 
         let result = rx.recv().await;
-        if let Some(answer) = result {
-            if answer.released {
-                trace!("semaphore {} released", semaphore_name);
-            }
+        if let Some(answer) = result
+            && answer.released
+        {
+            trace!("semaphore {} released", semaphore_name);
         }
         Ok(())
     }

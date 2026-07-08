@@ -1,11 +1,11 @@
 use std::{
     collections::HashMap,
-    sync::{atomic, Arc},
+    sync::{Arc, atomic},
 };
 use tracing::log::trace;
 
-use tokio::sync::{mpsc, Mutex};
-use ydb_grpc::ydb_proto::coordination::{session_request, SessionRequest};
+use tokio::sync::{Mutex, mpsc};
+use ydb_grpc::ydb_proto::coordination::{SessionRequest, session_request};
 
 use crate::{YdbError, YdbResult};
 

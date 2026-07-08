@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use crate::client::TimeoutSettings;
 use crate::errors::{NeedRetry, YdbResult};
 use crate::retry::{IndefiniteRetrier, Retry, RetryParams, TimeoutRetrier};
-use crate::retry_budget::{acquire_retry_budget, RetryControl, RetryPauseError};
+use crate::retry_budget::{RetryControl, RetryPauseError, acquire_retry_budget};
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TableCallOptions {

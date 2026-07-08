@@ -1,9 +1,9 @@
+use crate::Executor;
 use crate::client::Client;
 use crate::errors::{YdbError, YdbResult};
 use crate::session_pool::SessionPoolSettings;
 use crate::test_helpers::test_custom_ca_client_builder;
 use crate::test_helpers::{test_client_builder, test_with_password_builder};
-use crate::Executor;
 use async_once::AsyncOnce;
 use lazy_static::lazy_static;
 use std::net::SocketAddr;
