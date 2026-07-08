@@ -1,6 +1,6 @@
-use ydb_grpc::ydb_proto::topic::stream_write_message::from_server::ServerMessage;
-use ydb_grpc::ydb_proto::topic::stream_write_message::FromServer;
 use ydb_grpc::ydb_proto::topic::UpdateTokenResponse;
+use ydb_grpc::ydb_proto::topic::stream_write_message::FromServer;
+use ydb_grpc::ydb_proto::topic::stream_write_message::from_server::ServerMessage;
 use ydb_grpc::ydb_proto::{status_ids::StatusCode, topic::stream_write_message::WriteResponse};
 
 use crate::grpc_wrapper::{

@@ -1,6 +1,7 @@
 use super::compression::Executor;
 use super::list_types::{Codec, TopicDescription};
 use super::topicwriter::writer_tx_options::{TopicWriterTxOptions, TopicWriterTxOptionsBuilder};
+use crate::YdbError::InternalError;
 use crate::client::TimeoutSettings;
 use crate::client_common::TokenCache;
 use crate::client_query::Transaction;
@@ -17,8 +18,7 @@ use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsumerRequest;
 use crate::grpc_wrapper::raw_topic_service::describe_topic::RawDescribeTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::drop_topic::RawDropTopicRequest;
-use crate::YdbError::InternalError;
-use crate::{grpc_wrapper, YdbResult};
+use crate::{YdbResult, grpc_wrapper};
 use derive_builder::{Builder, UninitializedFieldError};
 use std::collections::HashMap;
 use std::sync::Arc;

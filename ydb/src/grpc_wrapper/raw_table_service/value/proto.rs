@@ -1,11 +1,11 @@
 use crate::grpc_wrapper::raw_errors::RawError;
-use crate::grpc_wrapper::raw_table_service::value::r#type::{decode_err, RawType};
+use crate::grpc_wrapper::raw_table_service::value::r#type::{RawType, decode_err};
 use crate::grpc_wrapper::raw_table_service::value::{
     RawColumn, RawResultSet, RawTypedValue, RawValue, RawValuePair,
 };
 use itertools::Itertools;
-use ydb_grpc::ydb_proto::value::Value as Primitive;
 use ydb_grpc::ydb_proto::Value as ProtoValue;
+use ydb_grpc::ydb_proto::value::Value as Primitive;
 
 impl TryFrom<ProtoValue> for RawValue {
     type Error = RawError;

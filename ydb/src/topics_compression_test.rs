@@ -5,17 +5,17 @@ use std::sync::{Arc, Barrier};
 use std::time::Duration;
 use tracing_test::traced_test;
 
+use crate::Executor;
+use crate::TopicWriter;
+use crate::TopicWriterMessage;
 use crate::client_topic::client::CreateTopicOptionsBuilder;
 use crate::client_topic::compression::RayonExecutor;
 use crate::client_topic::compression::{CodecSelection, CompressionDecoder, CompressionEncoder};
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::test_integration_helper::create_client;
 use crate::test_integration_helper::create_client_with_executor;
-use crate::Executor;
-use crate::TopicWriter;
 use crate::{
-    Client, Codec, TopicClient, TopicReaderOptions, TopicWriterMessage, TopicWriterOptions,
-    YdbError, YdbResult,
+    Client, Codec, TopicClient, TopicReaderOptions, TopicWriterOptions, YdbError, YdbResult,
 };
 use tracing::trace;
 
@@ -202,9 +202,11 @@ async fn setup_topic(
         builder.supported_codecs(codecs.to_vec());
     }
 
-    builder.consumers(vec![ConsumerBuilder::default()
-        .name(consumer_name.clone())
-        .build()?]);
+    builder.consumers(vec![
+        ConsumerBuilder::default()
+            .name(consumer_name.clone())
+            .build()?,
+    ]);
 
     topic_client
         .create_topic(topic_path.clone(), builder.build()?)

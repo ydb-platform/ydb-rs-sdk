@@ -50,6 +50,7 @@ impl fmt::Debug for QueryIncoming {
 }
 
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum QueryReply {
     AttachSession {
         stream_id: u64,

@@ -3,12 +3,12 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::framework::Workload;
-use crate::helpers::{new_rate_limiter, run_workers_for, timeout_or_cancel, TimeoutOutcome};
-use crate::metrics::{OPERATION_MESSAGE_RTT, OPERATION_READ, OPERATION_WRITE};
 use crate::Framework;
+use crate::framework::Workload;
+use crate::helpers::{TimeoutOutcome, new_rate_limiter, run_workers_for, timeout_or_cancel};
+use crate::metrics::{OPERATION_MESSAGE_RTT, OPERATION_READ, OPERATION_WRITE};
 
-use super::{verification, Params, TopicService};
+use super::{Params, TopicService, verification};
 
 pub struct TopicWorkload<T: TopicService> {
     fw: Arc<Framework>,

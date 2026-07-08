@@ -1,16 +1,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{trace, warn};
 
+use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 use ydb_grpc::ydb_proto::topic::stream_write_message;
+use ydb_grpc::ydb_proto::topic::stream_write_message::WriteRequest;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
-use ydb_grpc::ydb_proto::topic::stream_write_message::WriteRequest;
-use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
 use crate::client_topic::compression::{CodecRegistry, CompressionWorker, Executor};
 use crate::client_topic::list_types::Codec;

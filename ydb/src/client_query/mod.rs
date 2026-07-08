@@ -39,9 +39,8 @@ use crate::result::Row;
 use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{
-    spawn_query_tx_rollback_on_drop, transaction_commit, transaction_ensure_begin,
-    transaction_exec_context, transaction_identity, transaction_rollback, ClientExecContext,
-    TransactionExecContext,
+    ClientExecContext, TransactionExecContext, spawn_query_tx_rollback_on_drop, transaction_commit,
+    transaction_ensure_begin, transaction_exec_context, transaction_identity, transaction_rollback,
 };
 use hooks::{QueryTxCommitStatus, QueryTxHook};
 
@@ -205,7 +204,7 @@ impl QueryClient {
     where
         F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
     {
-        use crate::retry_budget::{pause_before_retry, RetryPauseError};
+        use crate::retry_budget::{RetryPauseError, pause_before_retry};
         use exec::check_retry_tx_error;
 
         let start = Instant::now();
@@ -529,9 +528,11 @@ mod unit_tests {
         assert!(exactly_one_set(vec![int64_set(vec![1])]).is_ok());
         assert!(exactly_one_set(vec![int64_set(vec![1]), int64_set(vec![2])]).is_err());
 
-        assert!(take_single_row(int64_set(vec![]))
-            .expect("empty rows")
-            .is_none());
+        assert!(
+            take_single_row(int64_set(vec![]))
+                .expect("empty rows")
+                .is_none()
+        );
         assert!(take_single_row(int64_set(vec![1, 2])).is_err());
     }
 }

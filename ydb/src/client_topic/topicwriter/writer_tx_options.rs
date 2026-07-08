@@ -4,7 +4,7 @@ use derive_builder::Builder;
 
 use crate::client_topic::compression::{CodecSelection, CompressionEncoder};
 use crate::retry::NoRetrier;
-use crate::{errors, TopicWriterOptions};
+use crate::{TopicWriterOptions, errors};
 
 #[derive(Builder, Clone)]
 #[builder(build_fn(error = "errors::YdbError"))]

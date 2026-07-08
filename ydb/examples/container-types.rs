@@ -1,17 +1,18 @@
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time::timeout;
-use ydb::{ydb_params, ClientBuilder, Value, YdbError, YdbResult};
+use ydb::{ClientBuilder, Value, YdbError, YdbResult, ydb_params};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
     let client =
         ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.client()?;
 
-    if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
-        res?
-    } else {
-        return Err(YdbError::from("Connection timeout"));
+    match timeout(Duration::from_secs(3), client.wait()).await {
+        Ok(res) => res?,
+        _ => {
+            return Err(YdbError::from("Connection timeout"));
+        }
     };
 
     let mut qc = client.query_client();

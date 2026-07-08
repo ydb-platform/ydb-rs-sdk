@@ -1,10 +1,10 @@
+use crate::Discovery;
 use crate::grpc_wrapper::runtime_interceptors::{
     ChannelResponse, GrpcInterceptor, InterceptorError, InterceptorRequest, InterceptorResult,
     RequestMetadata,
 };
-use crate::Discovery;
-use http::uri::PathAndQuery;
 use http::Uri;
+use http::uri::PathAndQuery;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
@@ -20,7 +20,7 @@ pub(crate) struct DiscoveryPessimizationInterceptor {
 }
 
 impl DiscoveryPessimizationInterceptor {
-    pub fn new(discovery: Arc<Box<dyn Discovery>>) -> Self {
+    pub fn new(discovery: Arc<dyn Discovery>) -> Self {
         let (channel_error_sender, channel_error_receiver) = mpsc::unbounded_channel();
         tokio::spawn(async move {
             Self::node_pessimization_loop(discovery, channel_error_receiver).await;
@@ -31,14 +31,15 @@ impl DiscoveryPessimizationInterceptor {
     }
 
     async fn node_pessimization_loop(
-        discovery: Arc<Box<dyn Discovery>>,
+        discovery: Arc<dyn Discovery>,
         mut errors: UnboundedReceiver<ChannelErrorInfo>,
     ) {
         loop {
-            if let Some(err) = errors.recv().await {
-                discovery.pessimization(&err.endpoint)
-            } else {
-                return;
+            match errors.recv().await {
+                Some(err) => discovery.pessimization(&err.endpoint),
+                _ => {
+                    return;
+                }
             };
         }
     }
@@ -76,11 +77,7 @@ impl GrpcInterceptor for DiscoveryPessimizationInterceptor {
             })?;
 
             fn result_to_str(res: Result<(), SendError<ChannelErrorInfo>>) -> &'static str {
-                if res.is_ok() {
-                    "OK"
-                } else {
-                    "receiver closed"
-                }
+                if res.is_ok() { "OK" } else { "receiver closed" }
             }
 
             let send_result = self.sender.send(ChannelErrorInfo {

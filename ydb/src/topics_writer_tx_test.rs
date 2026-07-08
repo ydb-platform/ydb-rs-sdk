@@ -22,9 +22,11 @@ async fn topic_writer_tx_write_and_commit() -> YdbResult<()> {
         .create_topic(
             topic_path.clone(),
             CreateTopicOptionsBuilder::default()
-                .consumers(vec![ConsumerBuilder::default()
-                    .name(consumer_name.to_string())
-                    .build()?])
+                .consumers(vec![
+                    ConsumerBuilder::default()
+                        .name(consumer_name.to_string())
+                        .build()?,
+                ])
                 .build()?,
         )
         .await?;
@@ -79,9 +81,11 @@ async fn topic_writer_tx_rollback_discards_message() -> YdbResult<()> {
         .create_topic(
             topic_path.clone(),
             CreateTopicOptionsBuilder::default()
-                .consumers(vec![ConsumerBuilder::default()
-                    .name(consumer_name.to_string())
-                    .build()?])
+                .consumers(vec![
+                    ConsumerBuilder::default()
+                        .name(consumer_name.to_string())
+                        .build()?,
+                ])
                 .build()?,
         )
         .await?;

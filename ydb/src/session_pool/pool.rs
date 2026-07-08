@@ -282,7 +282,7 @@ struct SessionPoolInner {
 impl SessionPool {
     pub fn new_explicit_sync(
         connection_manager: GrpcConnectionManager,
-        discovery: Arc<Box<dyn Discovery>>,
+        discovery: Arc<dyn Discovery>,
         settings: SessionPoolSettings,
     ) -> Self {
         let settings = normalize_pool_settings(settings);
@@ -326,7 +326,7 @@ impl SessionPool {
 
     pub async fn new_explicit(
         connection_manager: GrpcConnectionManager,
-        discovery: Arc<Box<dyn Discovery>>,
+        discovery: Arc<dyn Discovery>,
         settings: SessionPoolSettings,
     ) -> YdbResult<Self> {
         let settings = normalize_pool_settings(settings);
