@@ -6,8 +6,8 @@ use crate::grpc_wrapper::raw_operation_service::client::RawOperationClient;
 use crate::grpc_wrapper::raw_operation_service::types::RawListOperationsRequest;
 
 use super::builders::{
-    raw_to_list_result, raw_to_operation_info, retry_operation_call, CancelOperationBuilder,
-    ForgetOperationBuilder, GetOperationBuilder, ListOperationsBuilder, OperationCallOptions,
+    CancelOperationBuilder, ForgetOperationBuilder, GetOperationBuilder, ListOperationsBuilder,
+    OperationCallOptions, raw_to_list_result, raw_to_operation_info, retry_operation_call,
 };
 use super::types::{ListOperationsRequest, ListOperationsResult, OperationInfo};
 use crate::retry_budget::RetryControl;

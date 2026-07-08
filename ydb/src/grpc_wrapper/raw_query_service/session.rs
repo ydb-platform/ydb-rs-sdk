@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use http::Uri;
@@ -11,8 +11,8 @@ use tracing::warn;
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::status::check_status;
-use ydb_grpc::ydb_proto::query::session_state::SessionHint;
 use ydb_grpc::ydb_proto::query::SessionState;
+use ydb_grpc::ydb_proto::query::session_state::SessionHint;
 
 /// Explicit Query Service session: CreateSession + AttachSession stream kept alive.
 #[derive(Clone)]

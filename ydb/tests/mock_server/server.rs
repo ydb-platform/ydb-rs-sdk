@@ -5,7 +5,7 @@ use super::{
     },
     query::{MockQueryService, QueryDefaultHandler, QueryReply, QueryTx},
     topic::{
-        default::TopicDefaultHandler, handler::TopicTx, sender::WriteStreamSender, MockTopicService,
+        MockTopicService, default::TopicDefaultHandler, handler::TopicTx, sender::WriteStreamSender,
     },
 };
 use futures_util::stream;

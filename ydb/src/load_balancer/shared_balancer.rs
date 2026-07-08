@@ -2,9 +2,9 @@ use std::sync::{Arc, RwLock};
 
 use http::Uri;
 
-use crate::{grpc_wrapper::raw_services::Service, Discovery, DiscoveryState, Waiter, YdbResult};
+use crate::{Discovery, DiscoveryState, Waiter, YdbResult, grpc_wrapper::raw_services::Service};
 
-use super::{random_balancer::RandomLoadBalancer, update_load_balancer, LoadBalancer};
+use super::{LoadBalancer, random_balancer::RandomLoadBalancer, update_load_balancer};
 
 #[derive(Clone)]
 pub(crate) struct SharedLoadBalancer {

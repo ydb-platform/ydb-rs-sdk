@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryRequest;
 
-use super::exec::{build_client_execute_request_for_test, CallOptions};
+use super::exec::{CallOptions, build_client_execute_request_for_test};
 
 #[test]
 fn new_execute_request_defaults_concurrent_result_sets_to_false() {

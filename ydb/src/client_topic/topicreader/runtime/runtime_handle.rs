@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::futures::Notified;
 use tokio::sync::Notify;
+use tokio::sync::futures::Notified;
 
 use crate::client_topic::topicreader::messages::{TopicReaderBatch, TopicReaderMessage};
 use crate::client_topic::topicreader::reader::TopicReaderCommitMarker;
@@ -399,12 +399,14 @@ mod tests {
             .expect("fail should succeed");
 
         let (next_outgoing_tx, _next_outgoing_rx) = mpsc::unbounded_channel();
-        assert!(runtime
-            .install_connection(
-                Connection::new(next_outgoing_tx, 1),
-                YdbError::custom("reconnect")
-            )
-            .is_err());
+        assert!(
+            runtime
+                .install_connection(
+                    Connection::new(next_outgoing_tx, 1),
+                    YdbError::custom("reconnect")
+                )
+                .is_err()
+        );
         assert!(runtime.commit(commit_marker(1)).is_err());
     }
 

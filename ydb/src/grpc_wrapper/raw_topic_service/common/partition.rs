@@ -4,8 +4,8 @@ use crate::grpc_wrapper::{
     raw_errors::RawError,
 };
 use ydb_grpc::ydb_proto::topic::{
-    describe_consumer_result, describe_topic_result, OffsetsRange, PartitionLocation,
-    PartitionStats,
+    OffsetsRange, PartitionLocation, PartitionStats, describe_consumer_result,
+    describe_topic_result,
 };
 
 // Represents range [start, end).

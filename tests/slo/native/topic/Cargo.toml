@@ -2,7 +2,7 @@
 publish = false
 name = "slo-native-topic"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 rust-version.workspace = true
 
 [[bin]]

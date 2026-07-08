@@ -4,11 +4,11 @@ use tokio::task::JoinHandle;
 use tracing_test::traced_test;
 
 use crate::{
+    AcquireOptionsBuilder, CoordinationSession, SessionOptionsBuilder, YdbResult,
     client_coordination::list_types::{
         ConsistencyMode, NodeConfigBuilder, RateLimiterCountersMode,
     },
     test_integration_helper::create_client,
-    AcquireOptionsBuilder, CoordinationSession, SessionOptionsBuilder, YdbResult,
 };
 
 #[tokio::test]

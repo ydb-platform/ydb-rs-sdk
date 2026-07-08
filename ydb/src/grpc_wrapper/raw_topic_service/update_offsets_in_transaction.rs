@@ -2,8 +2,8 @@ use crate::grpc_wrapper::raw_topic_service::common::partition::RawOffsetsRange;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use ydb_grpc::ydb_proto::operations::OperationParams;
 use ydb_grpc::ydb_proto::topic::{
-    update_offsets_in_transaction_request::{topic_offsets::PartitionOffsets, TopicOffsets},
     TransactionIdentity, UpdateOffsetsInTransactionRequest,
+    update_offsets_in_transaction_request::{TopicOffsets, topic_offsets::PartitionOffsets},
 };
 
 /// Raw wrapper for TransactionIdentity

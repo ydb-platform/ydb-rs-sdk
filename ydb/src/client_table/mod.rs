@@ -15,7 +15,7 @@ use crate::grpc_wrapper::raw_table_service::copy_table::{
     RawCopyTableRequest, RawCopyTablesRequest,
 };
 use crate::grpc_wrapper::raw_table_service::describe_table::{
-    table_description_from_raw, RawDescribeTableRequest,
+    RawDescribeTableRequest, table_description_from_raw,
 };
 use crate::grpc_wrapper::raw_table_service::describe_table_options::{
     RawDescribeTableOptionsRequest, RawDescribeTableOptionsResult,
@@ -42,7 +42,7 @@ pub use builders::{
     RenameTableBuilder, RenameTablesBuilder,
 };
 
-use call_options::{resolve_idempotent, resolve_timeouts, retry_table_operation, TableCallOptions};
+use call_options::{TableCallOptions, resolve_idempotent, resolve_timeouts, retry_table_operation};
 
 pub(crate) type TableServiceClientType = TableServiceClient<InterceptedChannel>;
 

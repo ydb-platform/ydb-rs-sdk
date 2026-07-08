@@ -8,8 +8,8 @@ use crate::grpc_wrapper::raw_table_service::value::{
 };
 use crate::types::Value;
 use ydb_grpc::ydb_proto::query::{
-    execute_query_request, ExecMode, ExecuteQueryRequest, ExecuteQueryResponsePart, QueryContent,
-    SchemaInclusionMode, StatsMode, Syntax,
+    ExecMode, ExecuteQueryRequest, ExecuteQueryResponsePart, QueryContent, SchemaInclusionMode,
+    StatsMode, Syntax, execute_query_request,
 };
 use ydb_grpc::ydb_proto::result_set::Format;
 

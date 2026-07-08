@@ -10,10 +10,11 @@ async fn main() -> YdbResult<()> {
     let client =
         ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.client()?;
 
-    if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
-        res?
-    } else {
-        return Err(YdbError::from("Connection timeout"));
+    match timeout(Duration::from_secs(3), client.wait()).await {
+        Ok(res) => res?,
+        _ => {
+            return Err(YdbError::from("Connection timeout"));
+        }
     };
 
     let mut topic_client = client.topic_client();
