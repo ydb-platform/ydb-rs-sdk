@@ -1,5 +1,5 @@
-use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
 use crate::YdbStatusError;
+use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
 use crate::grpc_wrapper::grpc::proto_issues_to_ydb_issues;
 use crate::grpc_wrapper::raw_common_types::{Duration, Timestamp};
 use crate::grpc_wrapper::raw_errors::RawError;
@@ -445,6 +445,7 @@ impl From<stream_read_message::StopPartitionSessionRequest> for RawStopPartition
 pub(crate) struct RawEndPartitionSession {
     pub partition_session_id: PartitionSessionId,
     pub child_partition_ids: Vec<PartitionId>,
+    pub adjacent_partition_ids: Vec<PartitionId>,
 }
 
 impl From<stream_read_message::EndPartitionSession> for RawEndPartitionSession {
@@ -453,6 +454,11 @@ impl From<stream_read_message::EndPartitionSession> for RawEndPartitionSession {
             partition_session_id: PartitionSessionId::from_raw(value.partition_session_id),
             child_partition_ids: value
                 .child_partition_ids
+                .into_iter()
+                .map(PartitionId::from_raw)
+                .collect(),
+            adjacent_partition_ids: value
+                .adjacent_partition_ids
                 .into_iter()
                 .map(PartitionId::from_raw)
                 .collect(),

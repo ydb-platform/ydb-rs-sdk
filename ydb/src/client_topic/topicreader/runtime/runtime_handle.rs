@@ -19,7 +19,7 @@ use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
 use crate::{YdbError, YdbResult};
 
 use super::connection::Connection;
-use super::message_buffer::{BufferActions, MessageBuffer, PopBatchResult};
+use super::message_buffer::{BufferedBatch, MessageBuffer};
 use super::pending_commits::{CommitAckReceiver, PendingCommits};
 
 const RUNTIME_HANDLE_POISONED: &str = "topic reader runtime handle mutex poisoned";
@@ -44,7 +44,7 @@ impl Active {
         self.buffer.push_batch(messages);
     }
 
-    fn pop_batch(&mut self, cap: usize) -> YdbResult<PopBatchResult> {
+    fn pop_batch(&mut self, cap: usize) -> YdbResult<Option<BufferedBatch>> {
         self.buffer.pop_batch(cap)
     }
 }
@@ -118,8 +118,9 @@ impl RuntimeHandle {
     }
 
     fn handle_read_response(&self, resp: RawReadResponse) -> YdbResult<()> {
-        let mut actions = BufferActions::default();
-        {
+        let (messages_queued, bytes_to_release, epoch) = {
+            let mut messages_queued = false;
+            let mut bytes_to_release = 0;
             let mut state = self.lock_state()?;
             let State::Active(active) = &mut *state else {
                 return Ok(());
@@ -130,26 +131,39 @@ impl RuntimeHandle {
             for partition_data in resp.partition_data {
                 let partition_session_id = partition_data.partition_session_id;
                 for batch in partition_data.batches {
-                    let pushed = active.buffer.push_raw_batch(
+                    if !active.buffer.is_active_session(partition_session_id) {
+                        bytes_to_release += batch.get_read_session_size();
+                        debug!(
+                            %partition_session_id,
+                            "topic reader received read response for unknown partition session"
+                        );
+                        continue;
+                    }
+
+                    if active.buffer.is_input_closed(partition_session_id) {
+                        bytes_to_release += batch.get_read_session_size();
+                        debug!(
+                            %partition_session_id,
+                            "topic reader received read response for closed partition session"
+                        );
+                        continue;
+                    }
+
+                    messages_queued |= active.buffer.push_raw_batch(
                         batch,
                         partition_session_id,
                         reader_id,
                         epoch,
                     )?;
-                    match pushed {
-                        Some(batch_actions) => actions.merge(batch_actions),
-                        None => {
-                            warn!(
-                                %partition_session_id,
-                                "topic reader received read response for unknown partition session"
-                            );
-                        }
-                    }
                 }
             }
-        }
 
-        if actions.messages_became_available {
+            (messages_queued, bytes_to_release, epoch)
+        };
+
+        self.request_bytes(bytes_to_release, epoch)?;
+
+        if messages_queued {
             self.inner.messages_available.notify_one();
         }
         Ok(())
@@ -204,54 +218,81 @@ impl RuntimeHandle {
             graceful, committed_offset, "topic reader received stop partition session request"
         );
 
-        let mut state = self.lock_state()?;
-        let State::Active(active) = &mut *state else {
-            return Ok(());
-        };
+        let mut stop_error: Option<YdbError> = None;
+        {
+            let mut state = self.lock_state()?;
+            let State::Active(active) = &mut *state else {
+                return Ok(());
+            };
 
-        match active.buffer.stop(partition_session_id)? {
-            Some(actions) => {
-                if actions.messages_became_available {
-                    self.inner.messages_available.notify_one();
-                }
-            }
-            None => {
-                warn!(
+            if active.buffer.is_active_session(partition_session_id) {
+                stop_error = active.buffer.stop(partition_session_id).err().map(|err| {
+                    warn!(
+                        %partition_session_id,
+                        error = %err,
+                        "topic reader failed to stop partition session in buffer, still sending response"
+                    );
+                    err
+                });
+                active.pending_commits.stop(
+                    partition_session_id,
+                    Some(committed_offset),
+                    &YdbError::custom(format!(
+                        "partition session {partition_session_id} stopped by server"
+                    )),
+                );
+            } else {
+                debug!(
                     %partition_session_id,
-                    "topic reader received stop for unknown partition session"
+                    committed_offset,
+                    "topic reader stop partition session request for inactive session"
                 );
             }
+
+            active
+                .connection
+                .send(RawFromClientOneOf::StopPartitionSessionResponse(
+                    RawStopPartitionSessionResponse {
+                        partition_session_id,
+                    },
+                ))?;
         }
 
-        active.pending_commits.stop(
-            partition_session_id,
-            Some(committed_offset),
-            &YdbError::custom(format!(
-                "partition session {partition_session_id} stopped by server"
-            )),
-        );
-        active
-            .connection
-            .send(RawFromClientOneOf::StopPartitionSessionResponse(
-                RawStopPartitionSessionResponse {
-                    partition_session_id,
-                },
-            ))?;
+        if let Some(err) = stop_error {
+            return Err(err);
+        }
+
         Ok(())
     }
 
     fn handle_end_partition_session(&self, req: RawEndPartitionSession) -> YdbResult<()> {
-        let mut state = self.lock_state()?;
-        let State::Active(active) = &mut *state else {
-            return Ok(());
+        let partition_session_id = req.partition_session_id;
+
+        {
+            let mut state = self.lock_state()?;
+            let State::Active(active) = &mut *state else {
+                return Ok(());
+            };
+
+            if !active.buffer.is_active_session(partition_session_id) {
+                debug!(
+                    %partition_session_id,
+                    "topic reader received end partition session request for unknown session"
+                );
+                return Ok(());
+            }
+
+            if active.buffer.is_input_closed(partition_session_id) {
+                debug!(
+                    %partition_session_id,
+                    "topic reader received duplicate end partition session request"
+                );
+                return Ok(());
+            }
+
+            active.buffer.end(req)?;
         };
 
-        let actions = active
-            .buffer
-            .end(req.partition_session_id, req.child_partition_ids)?;
-        if actions.messages_became_available {
-            self.inner.messages_available.notify_one();
-        }
         Ok(())
     }
 
@@ -294,13 +335,7 @@ impl RuntimeHandle {
                 let mut guard = self.lock_state()?;
                 match &mut *guard {
                     State::Reconnecting => None,
-                    State::Active(active) => {
-                        let result = active.pop_batch(cap)?;
-                        if result.actions.messages_became_available {
-                            self.inner.messages_available.notify_one();
-                        }
-                        result.batch
-                    }
+                    State::Active(active) => active.pop_batch(cap)?,
                     State::Failed(err) => return Err(err.clone()),
                 }
             };
@@ -498,12 +533,20 @@ impl RuntimeHandle {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{HashMap, VecDeque};
+    use std::time::UNIX_EPOCH;
+
     use tokio::sync::mpsc;
+    use ydb_grpc::ydb_proto::topic::Codec;
 
     use super::*;
     use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
     use crate::client_topic::topicreader::messages::TopicReaderMessage;
-    use crate::grpc_wrapper::raw_topic_service::stream_read::messages::RawReadRequest;
+    use crate::grpc_wrapper::raw_common_types::Timestamp;
+    use crate::grpc_wrapper::raw_topic_service::common::codecs::RawCodec;
+    use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
+        RawBatch, RawMessageData, RawPartitionData, RawReadRequest, RawStopPartitionSessionRequest,
+    };
 
     #[test]
     fn commit_rejects_stale_epoch() {
@@ -619,6 +662,154 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_stop_partition_session_sends_multiple_responses() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
+        let runtime = RuntimeHandle::with_connection(Connection::new(outgoing_tx, 0));
+        activate_test_session(&runtime, 0);
+
+        let make_req = || RawStopPartitionSessionRequest {
+            partition_session_id: psid(10),
+            graceful: false,
+            committed_offset: 5,
+        };
+
+        runtime
+            .handle_from_server(RawFromServer::StopPartitionSessionRequest(make_req()))
+            .expect("first stop should be handled");
+        runtime
+            .handle_from_server(RawFromServer::StopPartitionSessionRequest(make_req()))
+            .expect("second stop should be handled");
+
+        let first = outgoing_rx
+            .try_recv()
+            .expect("first stop response should be sent");
+        let RawFromClientOneOf::StopPartitionSessionResponse(first_response) = first else {
+            panic!("expected stop partition session response");
+        };
+        assert_eq!(first_response.partition_session_id, psid(10));
+
+        let second = outgoing_rx
+            .try_recv()
+            .expect("second stop response should be sent");
+        let RawFromClientOneOf::StopPartitionSessionResponse(second_response) = second else {
+            panic!("expected second stop partition session response");
+        };
+        assert_eq!(second_response.partition_session_id, psid(10));
+        assert!(outgoing_rx.try_recv().is_err());
+
+        assert!(runtime.commit(commit_marker(0)).is_err());
+    }
+
+    #[test]
+    fn stop_partition_session_response_is_sent_when_buffer_stop_fails() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
+        let runtime = RuntimeHandle::with_connection(Connection::new(outgoing_tx, 0));
+        activate_test_session(&runtime, 0);
+
+        {
+            let mut state = runtime.lock_state().expect("runtime state should lock");
+            let State::Active(active) = &mut *state else {
+                panic!("runtime should be active");
+            };
+            // Corrupt mapping so stop() returns an internal consistency error.
+            active.buffer.replace_partition_mapping(pid(20), psid(20));
+        }
+
+        let req = RawStopPartitionSessionRequest {
+            partition_session_id: psid(10),
+            graceful: false,
+            committed_offset: 5,
+        };
+        assert!(
+            runtime
+                .handle_from_server(RawFromServer::StopPartitionSessionRequest(req))
+                .is_err()
+        );
+        let response = outgoing_rx
+            .try_recv()
+            .expect("stop response should still be sent");
+        let RawFromClientOneOf::StopPartitionSessionResponse(response) = response else {
+            panic!("expected stop partition session response");
+        };
+        assert_eq!(response.partition_session_id, psid(10));
+    }
+
+    #[test]
+    fn end_partition_session_is_ignored_for_unknown_and_duplicates() {
+        let runtime =
+            RuntimeHandle::with_connection(Connection::new(mpsc::unbounded_channel().0, 0));
+        activate_test_session(&runtime, 0);
+
+        let unknown = RawEndPartitionSession {
+            partition_session_id: psid(99),
+            child_partition_ids: Vec::new(),
+            adjacent_partition_ids: Vec::new(),
+        };
+
+        runtime
+            .handle_from_server(RawFromServer::EndPartitionSession(unknown))
+            .expect("unknown end should be tolerated");
+        runtime
+            .handle_from_server(RawFromServer::EndPartitionSession(RawEndPartitionSession {
+                partition_session_id: psid(10),
+                child_partition_ids: Vec::new(),
+                adjacent_partition_ids: Vec::new(),
+            }))
+            .expect("first end should be processed");
+        runtime
+            .handle_from_server(RawFromServer::EndPartitionSession(RawEndPartitionSession {
+                partition_session_id: psid(10),
+                child_partition_ids: Vec::new(),
+                adjacent_partition_ids: Vec::new(),
+            }))
+            .expect("duplicate end should be tolerated");
+    }
+
+    #[test]
+    fn read_response_for_closed_session_releases_bytes() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
+        let runtime = RuntimeHandle::with_connection(Connection::new(outgoing_tx, 0));
+        activate_test_session(&runtime, 0);
+
+        runtime
+            .handle_from_server(RawFromServer::EndPartitionSession(RawEndPartitionSession {
+                partition_session_id: psid(10),
+                child_partition_ids: Vec::new(),
+                adjacent_partition_ids: Vec::new(),
+            }))
+            .expect("end partition session should be handled");
+
+        runtime
+            .handle_from_server(RawFromServer::ReadResponse(raw_read_response(psid(10), 17)))
+            .expect("late read response should be handled");
+
+        assert!(matches!(
+            outgoing_rx.try_recv(),
+            Ok(RawFromClientOneOf::ReadRequest(RawReadRequest {
+                bytes_size: 17
+            }))
+        ));
+    }
+
+    #[test]
+    fn read_response_for_unknown_session_releases_bytes() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
+        let runtime = RuntimeHandle::with_connection(Connection::new(outgoing_tx, 0));
+        activate_test_session(&runtime, 0);
+
+        runtime
+            .handle_from_server(RawFromServer::ReadResponse(raw_read_response(psid(99), 23)))
+            .expect("unknown session read response should be handled");
+
+        assert!(matches!(
+            outgoing_rx.try_recv(),
+            Ok(RawFromClientOneOf::ReadRequest(RawReadRequest {
+                bytes_size: 23
+            }))
+        ));
+    }
+
+    #[test]
     fn commit_registers_ack_and_sends_commit_request() {
         let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
         let runtime = RuntimeHandle::with_connection(Connection::new(outgoing_tx, 1));
@@ -696,6 +887,38 @@ mod tests {
 
     fn pid(value: i64) -> PartitionId {
         PartitionId::from_raw(value)
+    }
+
+    fn raw_read_response(
+        partition_session_id: PartitionSessionId,
+        read_session_size_bytes: i64,
+    ) -> RawReadResponse {
+        RawReadResponse {
+            bytes_size: read_session_size_bytes,
+            partition_data: vec![RawPartitionData {
+                partition_session_id,
+                batches: VecDeque::from([raw_batch(read_session_size_bytes)]),
+            }],
+        }
+    }
+
+    fn raw_batch(read_session_size_bytes: i64) -> RawBatch {
+        RawBatch {
+            producer_id: String::new(),
+            write_session_meta: HashMap::new(),
+            codec: RawCodec {
+                code: i32::from(Codec::Raw),
+            },
+            written_at: Timestamp::from(UNIX_EPOCH),
+            message_data: vec![RawMessageData {
+                offset: 0,
+                seq_no: 0,
+                created_at: None,
+                uncompressed_size: 0,
+                data: Vec::new(),
+                read_session_size_bytes,
+            }],
+        }
     }
 
     fn commit_marker(epoch: usize) -> TopicReaderCommitMarker {

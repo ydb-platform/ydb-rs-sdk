@@ -178,13 +178,27 @@ pub fn end_partition_session(
     partition_session_id: i64,
     child_partition_ids: Vec<i64>,
 ) -> TopicReply {
+    end_partition_session_with_adjacent(
+        stream_id,
+        partition_session_id,
+        child_partition_ids,
+        Vec::new(),
+    )
+}
+
+pub fn end_partition_session_with_adjacent(
+    stream_id: u64,
+    partition_session_id: i64,
+    child_partition_ids: Vec<i64>,
+    adjacent_partition_ids: Vec<i64>,
+) -> TopicReply {
     stream_read(
         stream_id,
         stream_read_message::from_server::ServerMessage::EndPartitionSession(
             stream_read_message::EndPartitionSession {
                 partition_session_id,
                 child_partition_ids,
-                adjacent_partition_ids: Vec::new(),
+                adjacent_partition_ids,
             },
         ),
     )

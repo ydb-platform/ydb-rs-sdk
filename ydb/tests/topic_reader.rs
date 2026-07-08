@@ -378,7 +378,6 @@ topic_test!(
         let driver = Driver::start().await;
         let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
         driver.state.partition_ready.notified().await;
-        driver.start_session(PARTITION_SESSION_ID_2, 1).await;
 
         driver.send(Reply::Topic(builders::read_response_batch_with_codec(
             driver.state.current_stream_id(),
@@ -389,8 +388,9 @@ topic_test!(
             ],
             Codec::RAW,
         )));
-        driver.send_read_response_for(PARTITION_SESSION_ID_2, 0, b"child");
         driver.send_end_partition_session(PARTITION_SESSION_ID, vec![1]);
+        driver.start_session(PARTITION_SESSION_ID_2, 1).await;
+        driver.send_read_response_for(PARTITION_SESSION_ID_2, 0, b"child");
 
         let first = reader.read_batch().await?;
         let second = reader.read_batch().await?;
@@ -430,6 +430,140 @@ topic_test!(
             1,
             "child partition must wait for parent to drain even when child starts after EndPartition"
         );
+
+        Ok(())
+    }
+);
+
+topic_test!(
+    duplicate_or_unknown_end_partition_does_not_fail_reader,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
+        driver.state.partition_ready.notified().await;
+
+        let stream_id = driver.state.current_stream_id();
+        driver.send(Reply::Topic(builders::end_partition_session(
+            stream_id,
+            99,
+            Vec::new(),
+        )));
+        driver.send_read_response(0, b"parent");
+        driver.send(Reply::Topic(builders::end_partition_session(
+            stream_id,
+            PARTITION_SESSION_ID,
+            vec![1],
+        )));
+        driver.send(Reply::Topic(builders::end_partition_session(
+            stream_id,
+            PARTITION_SESSION_ID,
+            vec![1],
+        )));
+
+        driver.start_session(PARTITION_SESSION_ID_2, 1).await;
+        driver.send_read_response_for(PARTITION_SESSION_ID_2, 0, b"child");
+
+        let first = reader.read_batch().await?;
+        let second = reader.read_batch().await?;
+
+        assert_eq!(first.messages[0].get_partition_id(), 0);
+        assert_eq!(
+            second.messages[0].get_partition_id(),
+            1,
+            "child partition must still be delivered when duplicate/unknown end is tolerated"
+        );
+
+        Ok(())
+    }
+);
+
+topic_test!(
+    read_response_for_stopped_partition_is_ignored,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
+        driver.state.partition_ready.notified().await;
+
+        driver.send_read_response(0, b"parent");
+        assert_single_message_batch(reader.read_batch().await?, 0, b"parent").await?;
+
+        driver.send_stop_partition_session_request(0);
+        driver.state.wait_stops(1).await;
+        driver.send_read_response_for(PARTITION_SESSION_ID, 1, b"late");
+
+        driver.start_session(PARTITION_SESSION_ID_2, 1).await;
+        driver.send_read_response_for(PARTITION_SESSION_ID_2, 0, b"child");
+
+        let batch = reader.read_batch().await?;
+        assert_eq!(batch.messages[0].get_partition_id(), 1);
+
+        Ok(())
+    }
+);
+
+topic_test!(
+    read_response_for_ended_partition_is_ignored,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
+        driver.state.partition_ready.notified().await;
+
+        driver.send_end_partition_session(PARTITION_SESSION_ID, vec![1]);
+        driver.start_session(PARTITION_SESSION_ID_2, 1).await;
+        driver.send_read_response_for(PARTITION_SESSION_ID, 1, b"late");
+        driver.send_read_response_for(PARTITION_SESSION_ID_2, 0, b"child");
+
+        let mut batch = reader.read_batch().await?;
+        assert_eq!(batch.messages[0].offset, 0);
+        assert_eq!(batch.messages[0].get_partition_id(), 1);
+        assert_eq!(
+            batch.messages[0].read_and_take().await?.as_deref(),
+            Some(b"child".as_ref())
+        );
+
+        Ok(())
+    }
+);
+
+topic_test!(
+    end_partition_order_prioritizes_multiple_ended_sessions_before_child,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
+        driver.state.partition_ready.notified().await;
+        driver.start_session(PARTITION_SESSION_ID_2, 1).await;
+
+        let stream_id = driver.state.current_stream_id();
+        driver.send(Reply::Topic(builders::read_response_batch_with_codec(
+            stream_id,
+            PARTITION_SESSION_ID,
+            vec![(0, 8, b"parent-a".to_vec())],
+            Codec::RAW,
+        )));
+        driver.send(Reply::Topic(builders::read_response_batch_with_codec(
+            stream_id,
+            PARTITION_SESSION_ID_2,
+            vec![(0, 8, b"parent-b".to_vec())],
+            Codec::RAW,
+        )));
+
+        driver.send_end_partition_session(PARTITION_SESSION_ID, vec![2]);
+        driver.send_end_partition_session(PARTITION_SESSION_ID_2, vec![2]);
+
+        driver.start_session(3, 2).await;
+        driver.send_read_response_for(3, 0, b"child");
+
+        let first = reader.read_batch().await?;
+        let second = reader.read_batch().await?;
+        let third = reader.read_batch().await?;
+
+        assert_eq!(first.messages[0].get_partition_id(), 0);
+        assert_eq!(second.messages[0].get_partition_id(), 1);
+        assert_eq!(third.messages[0].get_partition_id(), 2);
 
         Ok(())
     }
