@@ -18,7 +18,7 @@ use crate::traces::helpers::ensure_len_string;
 
 use crate::types::Value;
 use crate::{TransactionOptions, TxMode};
-use tracing::{Instrument, instrument};
+use tracing::instrument;
 
 use crate::session_pool::{SessionPool, SessionPoolLease, spawn_pool_release};
 
@@ -280,7 +280,50 @@ pub(crate) fn resolve_commit_tx(core: &super::internal::ExecCoreRef, opts: &Call
     }
 }
 
-#[instrument(name = "ydb.RunWithRetry", skip_all, fields(db.system.name = "ydb", ydb.Query.idempotent = idempotent), err)]
+#[instrument(name = "ydb.Try", skip_all, fields(
+    ydb.retry.attempt = attempt,
+    ydb.retry.backoff_ms = tracing::field::Empty,
+    db.system.name = "ydb",
+), err)]
+async fn retry_until_loop_body<T, F, Fut>(
+    attempt_fn: &mut F,
+    retry_control: &RetryControl,
+    idempotent: bool,
+    attempt: usize,
+    start: Instant,
+    limit: Option<Duration>,
+) -> YdbResult<Option<T>>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = YdbResult<T>>,
+{
+    #[instrument(name = "ydb.Try.Attempt", skip_all, fields(db.system.name = "ydb"), err)]
+    async fn retry_until_loop_attempt<T, F, Fut>(attempt_fn: &mut F) -> YdbResult<T>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = YdbResult<T>>,
+    {
+        attempt_fn().await
+    }
+
+    match retry_until_loop_attempt(attempt_fn).await {
+        Ok(value) => Ok(Some(value)),
+        Err(err) => {
+            if !should_retry_ydb_error(idempotent, &err) {
+                return Err(err);
+            }
+            match pause_before_retry(retry_control, attempt, start, limit).await {
+                Ok(()) => {}
+                Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
+                    return Err(err);
+                }
+            }
+            Ok(None)
+        }
+    }
+}
+
+#[instrument(name = "ydb.Query.RetryUntil", skip_all, fields(db.system.name = "ydb", ydb.Query.idempotent = idempotent), err)]
 async fn retry_until<T, F, Fut>(
     retry_control: &RetryControl,
     idempotent: bool,
@@ -296,40 +339,17 @@ where
     loop {
         retry_control.metrics().record_attempt();
         attempt += 1;
-        let result = async {
-            match attempt_fn()
-                .instrument(
-                    tracing::info_span!("ydb.Try.Attempt", db.system.name = "ydb").or_current(),
-                )
-                .await
-            {
-                Ok(value) => Ok(Some(value)),
-                Err(err) => {
-                    if !should_retry_ydb_error(idempotent, &err) {
-                        return Err(err);
-                    }
-                    match pause_before_retry(retry_control, attempt, start, limit).await {
-                        Ok(()) => {}
-                        Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
-                            return Err(err);
-                        }
-                    }
-                    Ok(None)
-                }
-            }
-        }
-        .instrument(
-            tracing::info_span!(
-                "ydb.Try",
-                ydb.retry.attempt = attempt,
-                ydb.retry.backoff_ms = tracing::field::Empty,
-                db.system.name = "ydb",
-            )
-            .or_current(),
-        )
-        .await?;
 
-        if let Some(value) = result {
+        if let Some(value) = retry_until_loop_body(
+            &mut attempt_fn,
+            retry_control,
+            idempotent,
+            attempt,
+            start,
+            limit,
+        )
+        .await?
+        {
             return Ok(value);
         }
     }
@@ -526,7 +546,7 @@ async fn transaction_execute_request(
 }
 
 /// Open the transaction via `BeginTransaction` RPC (explicit begin).
-#[instrument(name = "ydb.BeginTransaction", skip_all, fields(db.system.name = "ydb", ydb.tx.mode = ?tx.tx_mode, ydb.session.id = tracing::field::Empty), err)]
+#[instrument(name = "ydb.Query.TransactionEnsureBegin", skip_all, fields(db.system.name = "ydb", ydb.tx.mode = ?tx.tx_mode, ydb.session.id = tracing::field::Empty), err)]
 pub(crate) async fn transaction_ensure_begin(
     tx: &mut TransactionExecContext,
     session_ready: bool,
@@ -576,7 +596,7 @@ pub(crate) fn transaction_mark_invalidated_on_query_error(
     }
 }
 
-#[instrument(name = "ydb.BeginTransaction", skip_all, fields(db.system.name = "ydb", ydb.tx.mode = ?tx.tx_mode, ydb.session.id = tracing::field::Empty), err)]
+#[instrument(name = "ydb.Query.TransactionBeginStream", skip_all, fields(db.system.name = "ydb", ydb.tx.mode = ?tx.tx_mode, ydb.session.id = tracing::field::Empty), err)]
 pub(crate) async fn transaction_begin_stream(
     tx: &mut TransactionExecContext,
     text: String,

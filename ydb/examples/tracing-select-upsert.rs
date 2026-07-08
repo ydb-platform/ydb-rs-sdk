@@ -9,7 +9,6 @@ use tokio::time::timeout;
 use tracing::instrument;
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::filter::Targets;
-use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
 
@@ -128,15 +127,14 @@ pub async fn main() -> YdbResult<()> {
 
     // This helps in filtering out some traces from SDK (e.g. session pool subcrate traces)
     let target_filter = Targets::new()
-        .with_default(LevelFilter::INFO)
+        .with_default(LevelFilter::TRACE)
         .without_session_pool()
         .without_connection_pool();
 
     let fmt = tracing_subscriber::fmt::layer()
         .with_thread_names(true)
         .with_file(true)
-        .with_line_number(true)
-        .with_span_events(FmtSpan::FULL);
+        .with_line_number(true);
 
     let provider = build_tracer_provider();
     let otel_layer = tracing_opentelemetry::layer().with_tracer(provider.tracer("tracing"));

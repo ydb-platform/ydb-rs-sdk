@@ -19,16 +19,6 @@ impl CopyTableItem {
     }
 }
 
-impl std::fmt::Display for CopyTableItem {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} -> {}",
-            self.inner.source_path, self.inner.destination_path
-        )
-    }
-}
-
 impl From<CopyTableItem> for RawCopyTableItem {
     fn from(value: CopyTableItem) -> Self {
         value.inner

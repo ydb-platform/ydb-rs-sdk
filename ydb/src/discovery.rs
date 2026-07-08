@@ -10,6 +10,13 @@ use futures_util::StreamExt;
 use futures_util::stream::{self, BoxStream};
 use http::Uri;
 use http::uri::Authority;
+
+use crate::YdbError;
+use crate::errors::YdbResult;
+
+use crate::waiter::Waiter;
+
+use derivative::Derivative;
 use itertools::Itertools;
 use tokio::sync::watch;
 use tokio_stream::wrappers::WatchStream;
