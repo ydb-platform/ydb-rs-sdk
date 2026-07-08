@@ -27,7 +27,11 @@ async fn main() -> YdbResult<()> {
         .await?;
 
     writer
-        .write(TopicWriterMessage::from_data("Sent from Rust SDK"))
+        .write(
+            TopicWriterMessage::builder()
+                .data("Sent from Rust SDK".as_bytes().to_vec())
+                .build(),
+        )
         .await?;
 
     writer.stop().await?;

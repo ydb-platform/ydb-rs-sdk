@@ -20,7 +20,7 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
-use crate::retry::RetryParams;
+use crate::retry::{Retry, RetryParams};
 use crate::{YdbError, YdbResult};
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
@@ -29,6 +29,7 @@ pub(crate) struct ReconnectorParams {
     pub(crate) producer_id: String,
     pub(crate) connection_manager: GrpcConnectionManager,
     pub(crate) cancellation_token: CancellationToken,
+    pub(crate) retrier: Arc<dyn Retry>,
     pub(crate) fatal_error_tx: oneshot::Sender<YdbError>,
     pub(crate) flush_timeout: Duration,
     pub(crate) executor: Arc<dyn Executor>,
@@ -78,6 +79,7 @@ impl Reconnector {
         let reconnect_loop = Reconnector::start_reconnection_loop(
             ReconnectionHelper {
                 connection_manager: params.connection_manager,
+                retrier: params.retrier,
                 cancellation_token: cancellation_token.clone(),
                 writer_options: params.writer_options,
                 producer_id: params.producer_id,
@@ -211,6 +213,7 @@ struct ReconnectionHelper {
     queue: Queue,
     writer_options: TopicWriterOptions,
     connection_manager: GrpcConnectionManager,
+    retrier: Arc<dyn Retry>,
     cancellation_token: CancellationToken,
     producer_id: String,
     executor: Arc<dyn Executor>,
@@ -240,7 +243,7 @@ impl ReconnectionHelper {
 
         Ok(RecreateStreamWriterResult {
             stream_writer: StreamWriter::new(
-                &self.writer_options,
+                self.writer_options.clone(),
                 stream,
                 self.queue.clone(),
                 error_sender,
@@ -302,7 +305,7 @@ impl ReconnectionHelper {
         attempt: usize,
         time_from_start: Duration,
     ) -> Option<Duration> {
-        let decision = self.writer_options.retrier.wait_duration(RetryParams {
+        let decision = self.retrier.wait_duration(RetryParams {
             attempt,
             time_from_start,
         });

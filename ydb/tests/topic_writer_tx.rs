@@ -155,7 +155,9 @@ fn make_client(server: &MockServer) -> YdbResult<Client> {
 }
 
 fn test_message() -> TopicWriterMessage {
-    TopicWriterMessage::from_data(TEST_MESSAGE_DATA)
+    TopicWriterMessage::builder()
+        .data(TEST_MESSAGE_DATA.to_vec())
+        .build()
 }
 
 #[tokio::test]

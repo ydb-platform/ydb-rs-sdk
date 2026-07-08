@@ -6,7 +6,7 @@ use crate::client_topic::compression::{CodecSelection, CompressionEncoder};
 use crate::client_topic::topicwriter::partitioning::PartitioningStrategy;
 use crate::retry::{IndefiniteRetrier, Retry};
 
-#[derive(bon::Builder)]
+#[derive(bon::Builder, Clone)]
 pub struct TopicWriterOptions {
     // `field` attrs must come first (bon constraint)
     #[builder(field)]
@@ -36,8 +36,8 @@ pub struct TopicWriterOptions {
     #[builder(default = Duration::from_secs(3))]
     pub(crate) flush_timeout: Duration,
 
-    #[builder(default = Box::new(IndefiniteRetrier {}), setters(vis = "pub(crate)"))]
-    pub(crate) retrier: Box<dyn Retry>,
+    #[builder(default = Arc::new(IndefiniteRetrier {}), setters(vis = "pub(crate)"))]
+    pub(crate) retrier: Arc<dyn Retry>,
 }
 
 impl<S: topic_writer_options_builder::State> TopicWriterOptionsBuilder<S> {

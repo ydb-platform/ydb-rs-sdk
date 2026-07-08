@@ -43,7 +43,11 @@ async fn topic_writer_tx_write_and_commit() -> YdbResult<()> {
             let mut tc = topic_client_clone.clone();
             let mut writer = tc.create_writer_tx(topic_path_clone.clone(), tx).await?;
             writer
-                .write(TopicWriterMessage::from_data(message_clone.clone()))
+                .write(
+                    TopicWriterMessage::builder()
+                        .data(message_clone.clone())
+                        .build(),
+                )
                 .await?;
             writer.stop().await?;
             Ok(true)
@@ -99,7 +103,11 @@ async fn topic_writer_tx_rollback_discards_message() -> YdbResult<()> {
             let mut tc = topic_client_clone.clone();
             let mut writer = tc.create_writer_tx(topic_path_clone.clone(), tx).await?;
             writer
-                .write(TopicWriterMessage::from_data(b"should be discarded"))
+                .write(
+                    TopicWriterMessage::builder()
+                        .data(b"should be discarded".to_vec())
+                        .build(),
+                )
                 .await?;
             writer.stop().await?;
             tx.rollback().await?;

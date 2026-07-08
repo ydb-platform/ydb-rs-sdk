@@ -97,7 +97,7 @@ fn invert(data: &[u8]) -> YdbResult<Vec<u8>> {
 }
 
 fn message(data: impl Into<Vec<u8>>) -> TopicWriterMessage {
-    TopicWriterMessage::from_data(data)
+    TopicWriterMessage::builder().data(data.into()).build()
 }
 
 async fn timeout<F, T>(future: F) -> YdbResult<T>
@@ -398,7 +398,9 @@ async fn codec_parallelism() -> YdbResult<()> {
     for i in 0..message_count {
         let data: Vec<u8> = format!("test-message-{i}").into_bytes();
         expected_messages.push(data.clone());
-        writer.write(TopicWriterMessage::from_data(data)).await?;
+        writer
+            .write(TopicWriterMessage::builder().data(data).build())
+            .await?;
     }
 
     timeout(writer.flush()).await?;

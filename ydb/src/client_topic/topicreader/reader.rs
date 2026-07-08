@@ -28,8 +28,7 @@ use super::runtime::RuntimeHandle;
 
 pub struct TopicReader {
     pub(super) manager: GrpcConnectionManager,
-    batch_size: usize,
-    consumer: String,
+    options: TopicReaderOptions,
     reconnect_handle: JoinHandle<YdbResult<()>>,
     runtime: RuntimeHandle,
     cancellation: CancellationToken,
@@ -49,15 +48,13 @@ impl TopicReader {
         compression_executor: Arc<dyn Executor>,
     ) -> YdbResult<Self> {
         let cancellation = CancellationToken::new();
-        let batch_size = options.batch_size;
-        let consumer = options.consumer.clone();
         let ReconnectorTask {
             join_handle,
             runtime,
             cancellation_token,
         } = Reconnector::new(
             manager.clone(),
-            options,
+            options.clone(),
             token_cache,
             compression_executor,
             cancellation,
@@ -67,8 +64,7 @@ impl TopicReader {
 
         Ok(Self {
             manager,
-            batch_size,
-            consumer,
+            options,
             reconnect_handle: join_handle,
             runtime,
             cancellation: cancellation_token,
@@ -76,7 +72,7 @@ impl TopicReader {
     }
 
     pub async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
-        self.runtime.pop_batch(self.batch_size).await
+        self.runtime.pop_batch(self.options.batch_size).await
     }
 
     /// Read a batch and register consumer offsets via [`UpdateOffsetsInTransaction`]
@@ -142,7 +138,7 @@ impl TopicReader {
     }
 
     pub(super) fn consumer(&self) -> &str {
-        &self.consumer
+        &self.options.consumer
     }
 
     async fn update_offsets_in_transaction(
@@ -172,7 +168,7 @@ impl TopicReader {
                     }],
                 }],
             }],
-            consumer: self.consumer.clone(),
+            consumer: self.options.consumer.clone(),
         };
 
         let mut topic_service = self.manager.get_auth_service(RawTopicClient::new).await?;
@@ -189,7 +185,7 @@ impl Drop for TopicReader {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct TopicSelectors(pub Vec<TopicSelector>);
 
 impl TopicSelectors {
@@ -202,7 +198,7 @@ impl TopicSelectors {
 }
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
-#[derive(bon::Builder, Clone, Debug)]
+#[derive(bon::Builder, Clone)]
 pub struct TopicSelector {
     #[builder(into)]
     pub path: String,

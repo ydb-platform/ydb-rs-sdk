@@ -336,7 +336,11 @@ async fn send_message_test() -> YdbResult<()> {
         .await?;
 
     writer
-        .write_with_ack(TopicWriterMessage::from_data("test-3"))
+        .write_with_ack(
+            TopicWriterMessage::builder()
+                .data("test-3".as_bytes().to_vec())
+                .build(),
+        )
         .await?;
     trace!("sent message test-3");
     writer.stop().await?;
@@ -902,7 +906,11 @@ async fn write_to_specific_partition() -> YdbResult<()> {
             .await?;
 
         writer
-            .write_with_ack(TopicWriterMessage::from_data(payload.clone().into_bytes()))
+            .write_with_ack(
+                TopicWriterMessage::builder()
+                    .data(payload.clone().into_bytes())
+                    .build(),
+            )
             .await?;
         writer.stop().await?;
         debug!("wrote {} and stopped writer", payload);
@@ -998,9 +1006,11 @@ async fn read_batch_merges_and_respects_hard_limit() -> YdbResult<()> {
             .await?;
         for i in 0..TOTAL {
             writer
-                .write(TopicWriterMessage::from_data(
-                    format!("msg-{i}").into_bytes(),
-                ))
+                .write(
+                    TopicWriterMessage::builder()
+                        .data(format!("msg-{i}").into_bytes())
+                        .build(),
+                )
                 .await?;
         }
         writer.stop().await?;
@@ -1129,7 +1139,7 @@ async fn topic_writer_reconnects() -> YdbResult<()> {
 
     for payload in payloads.iter().take(MSGS_BEFORE_OUTAGE) {
         writer
-            .write_with_ack(TopicWriterMessage::from_data(payload.clone()))
+            .write_with_ack(TopicWriterMessage::builder().data(payload.clone()).build())
             .await?;
     }
 
@@ -1145,7 +1155,7 @@ async fn topic_writer_reconnects() -> YdbResult<()> {
             .take(MSGS_AFTER_OUTAGE)
         {
             writer
-                .write_with_ack(TopicWriterMessage::from_data(payload.clone()))
+                .write_with_ack(TopicWriterMessage::builder().data(payload.clone()).build())
                 .await?;
         }
         YdbResult::Ok(())

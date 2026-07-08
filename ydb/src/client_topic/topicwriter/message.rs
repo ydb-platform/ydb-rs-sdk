@@ -4,7 +4,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData
 
 use crate::YdbError;
 
-#[derive(bon::Builder, Debug)]
+#[derive(bon::Builder)]
 pub struct TopicWriterMessage {
     // required
     pub(crate) data: Vec<u8>,
@@ -13,16 +13,6 @@ pub struct TopicWriterMessage {
     pub(crate) seq_no: Option<i64>,
     #[builder(default = time::SystemTime::now())]
     pub(crate) created_at: time::SystemTime,
-}
-
-impl TopicWriterMessage {
-    pub fn from_data(data: impl Into<Vec<u8>>) -> Self {
-        Self {
-            seq_no: None,
-            created_at: time::SystemTime::now(),
-            data: data.into(),
-        }
-    }
 }
 
 impl TryFrom<TopicWriterMessage> for MessageData {

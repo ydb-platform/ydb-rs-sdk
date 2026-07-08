@@ -3,7 +3,7 @@ use crate::client_topic::topicreader::reader::TopicSelectors;
 use crate::retry::{IndefiniteRetrier, Retry};
 use std::sync::Arc;
 
-#[derive(bon::Builder)]
+#[derive(bon::Builder, Clone)]
 pub struct TopicReaderOptions {
     // `field` attrs must come first (bon constraint)
     #[builder(field)]
@@ -19,8 +19,8 @@ pub struct TopicReaderOptions {
     #[builder(default = 1000)]
     pub(crate) batch_size: usize,
 
-    #[builder(default = Box::new(IndefiniteRetrier {}), setters(vis = "pub(crate)"))]
-    pub(crate) retrier: Box<dyn Retry>,
+    #[builder(default = Arc::new(IndefiniteRetrier {}), setters(vis = "pub(crate)"))]
+    pub(crate) retrier: Arc<dyn Retry>,
 }
 
 impl<S: topic_reader_options_builder::State> TopicReaderOptionsBuilder<S> {

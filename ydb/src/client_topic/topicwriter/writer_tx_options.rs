@@ -36,7 +36,7 @@ impl TopicWriterTxOptions {
             // Writers in transaction should have empty producer_id!
             .producer_id("".to_string())
             // Current WriterTx should not reconnect
-            .retrier(Box::new(NoRetrier {}))
+            .retrier(Arc::new(NoRetrier {}))
             .codec_selector(self.codec_selector)
             .build();
 
