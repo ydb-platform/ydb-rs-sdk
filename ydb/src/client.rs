@@ -30,7 +30,7 @@ use tracing::trace;
 pub struct Client {
     credentials: DBCredentials,
     load_balancer: SharedLoadBalancer,
-    discovery: Arc<Box<dyn Discovery>>,
+    discovery: Arc<dyn Discovery>,
     connection_manager: GrpcConnectionManager,
     executor: Arc<dyn Executor>,
     session_pool: SessionPool,
@@ -40,7 +40,7 @@ pub struct Client {
 impl Client {
     pub(crate) fn new(
         credentials: DBCredentials,
-        discovery: Arc<Box<dyn Discovery>>,
+        discovery: Arc<dyn Discovery>,
         connection_manager: GrpcConnectionManager,
         load_balancer: SharedLoadBalancer,
         executor: Option<Arc<dyn Executor>>,

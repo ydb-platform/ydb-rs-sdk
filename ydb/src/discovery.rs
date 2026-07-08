@@ -59,11 +59,11 @@ impl DiscoveryState {
         }
     }
 
-    pub(crate) fn get_nodes(&self, _service: &Service) -> Option<&Vec<NodeInfo>> {
+    pub(crate) fn get_nodes(&self, _service: &Service) -> Option<&[NodeInfo]> {
         Some(&self.nodes)
     }
 
-    pub(crate) fn get_all_nodes(&self) -> Option<&Vec<NodeInfo>> {
+    pub(crate) fn get_all_nodes(&self) -> Option<&[NodeInfo]> {
         Some(&self.nodes)
     }
 
@@ -292,7 +292,7 @@ impl DiscoverySharedState {
             .await?;
 
         let res = discovery_client
-            .list_endpoints(self.connection_manager.database().clone())
+            .list_endpoints(self.connection_manager.database().to_owned())
             .await?;
         let new_endpoints = Self::list_endpoints_to_node_infos(res)?;
         self.set_discovery_state(

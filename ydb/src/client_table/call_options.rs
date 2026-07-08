@@ -32,9 +32,9 @@ pub(crate) async fn retry_table_operation<CallbackFuture, CallbackResult>(
 where
     CallbackFuture: Future<Output = YdbResult<CallbackResult>>,
 {
-    let retrier: Arc<Box<dyn Retry>> = match opts.timeout {
-        None => Arc::new(Box::new(IndefiniteRetrier {})),
-        Some(timeout) => Arc::new(Box::new(TimeoutRetrier { timeout })),
+    let retrier: Arc<dyn Retry> = match opts.timeout {
+        None => Arc::new(IndefiniteRetrier {}),
+        Some(timeout) => Arc::new(TimeoutRetrier { timeout }),
     };
     let mut attempt: usize = 0;
     let start = Instant::now();

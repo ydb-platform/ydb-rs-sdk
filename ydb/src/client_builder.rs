@@ -293,12 +293,12 @@ impl ClientBuilder {
             )?),
         };
 
-        let discovery = Arc::new(discovery);
+        let discovery = Arc::<dyn Discovery>::from(discovery);
 
         let interceptor =
             interceptor.with_interceptor(DiscoveryPessimizationInterceptor::new(discovery.clone()));
 
-        let load_balancer = SharedLoadBalancer::new(discovery.as_ref().as_ref());
+        let load_balancer = SharedLoadBalancer::new(discovery.as_ref());
         let connection_manager = GrpcConnectionManager::new(
             load_balancer.clone(),
             db_cred.database.clone(),
