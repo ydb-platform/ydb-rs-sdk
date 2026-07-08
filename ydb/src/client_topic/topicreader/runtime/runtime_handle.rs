@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::Notify;
-use tracing::{debug, warn};
 use tokio::sync::futures::Notified;
+use tracing::{debug, warn};
 
 use crate::client_topic::topicreader::ids::PartitionSessionId;
 use crate::client_topic::topicreader::messages::TopicReaderBatch;

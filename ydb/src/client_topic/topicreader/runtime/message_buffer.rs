@@ -220,9 +220,11 @@ mod tests {
     fn unknown_session_batch_is_ignored() {
         let mut buffer = MessageBuffer::default();
 
-        assert!(!buffer
-            .push_raw_batch(raw_batch([(0, 1)]), PartitionSessionId::from_raw(1), 0, 0)
-            .unwrap());
+        assert!(
+            !buffer
+                .push_raw_batch(raw_batch([(0, 1)]), PartitionSessionId::from_raw(1), 0, 0)
+                .unwrap()
+        );
         assert!(buffer.pop_batch(1).unwrap().is_none());
     }
 }
