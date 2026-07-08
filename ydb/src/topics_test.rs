@@ -10,7 +10,7 @@ use crate::test_helpers::CONNECTION_STRING;
 use crate::test_integration_helper::{TcpForwardProxy, create_client};
 use crate::{
     ClientBuilder, Codec, DescribeTopicOptionsBuilder, PartitioningStrategy, StaticDiscovery,
-    TopicWriterMessageBuilder, TopicWriterOptionsBuilder, YdbError, YdbResult,
+    TopicWriterMessage, TopicWriterOptions, YdbError, YdbResult,
     client_topic::client::{AlterTopicOptionsBuilder, CreateTopicOptionsBuilder},
 };
 use tracing::{debug, info, trace, warn};
@@ -294,31 +294,31 @@ async fn send_message_test() -> YdbResult<()> {
     // manual seq
     let writer_manual = topic_client
         .create_writer_with_params(
-            TopicWriterOptionsBuilder::default()
+            TopicWriterOptions::builder()
                 .auto_seq_no(false)
                 .topic_path(topic_path.clone())
                 .producer_id(producer_id.clone())
-                .build()?,
+                .build(),
         )
         .await?;
     trace!("first writer created");
 
     writer_manual
         .write(
-            TopicWriterMessageBuilder::default()
-                .seq_no(Some(200))
+            TopicWriterMessage::builder()
+                .seq_no(200)
                 .data("test-1".as_bytes().into())
-                .build()?,
+                .build(),
         )
         .await?;
     trace!("sent message test-1");
 
     writer_manual
         .write_with_ack(
-            TopicWriterMessageBuilder::default()
-                .seq_no(Some(300))
+            TopicWriterMessage::builder()
+                .seq_no(300)
                 .data("test-2".as_bytes().into())
-                .build()?,
+                .build(),
         )
         .await?;
     trace!("sent message test-2");
@@ -327,19 +327,19 @@ async fn send_message_test() -> YdbResult<()> {
     // auto-seq
     let writer = topic_client
         .create_writer_with_params(
-            TopicWriterOptionsBuilder::default()
+            TopicWriterOptions::builder()
                 .auto_seq_no(true)
                 .topic_path(topic_path.clone())
                 .producer_id(producer_id)
-                .build()?,
+                .build(),
         )
         .await?;
 
     writer
         .write_with_ack(
-            TopicWriterMessageBuilder::default()
-                .data("test-3".as_bytes().into())
-                .build()?,
+            TopicWriterMessage::builder()
+                .data("test-3".as_bytes().to_vec())
+                .build(),
         )
         .await?;
     trace!("sent message test-3");
@@ -548,21 +548,21 @@ async fn read_topic_message() -> YdbResult<()> {
     // manual seq
     let writer_manual = topic_client
         .create_writer_with_params(
-            TopicWriterOptionsBuilder::default()
+            TopicWriterOptions::builder()
                 .auto_seq_no(false)
                 .topic_path(topic_path.clone())
                 .producer_id(producer_id.clone())
-                .build()?,
+                .build(),
         )
         .await?;
     debug!("first writer created");
 
     writer_manual
         .write(
-            TopicWriterMessageBuilder::default()
-                .seq_no(Some(200))
+            TopicWriterMessage::builder()
+                .seq_no(200)
                 .data("test-1".as_bytes().into())
-                .build()?,
+                .build(),
         )
         .await?;
     debug!("sent message");
@@ -692,11 +692,11 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
 
     let writer_manual = topic_client
         .create_writer_with_params(
-            TopicWriterOptionsBuilder::default()
+            TopicWriterOptions::builder()
                 .auto_seq_no(false)
                 .topic_path(topic_path.clone())
                 .producer_id(producer_id.clone())
-                .build()?,
+                .build(),
         )
         .await?;
     debug!("writer created");
@@ -710,10 +710,10 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
     for (seq_no, content) in &expected_messages {
         writer_manual
             .write_with_ack(
-                TopicWriterMessageBuilder::default()
-                    .seq_no(Some(*seq_no))
+                TopicWriterMessage::builder()
+                    .seq_no(*seq_no)
                     .data(content.as_bytes().into())
-                    .build()?,
+                    .build(),
             )
             .await?;
         debug!("sent message with seq_no: {}, content: {}", seq_no, content);
@@ -897,19 +897,19 @@ async fn write_to_specific_partition() -> YdbResult<()> {
         let payload = format!("msg-for-partition-{target_partition}");
         let writer = topic_client
             .create_writer_with_params(
-                TopicWriterOptionsBuilder::default()
+                TopicWriterOptions::builder()
                     .topic_path(topic_path.clone())
                     .producer_id(format!("producer-p{target_partition}"))
                     .partitioning(PartitioningStrategy::PartitionId(target_partition))
-                    .build()?,
+                    .build(),
             )
             .await?;
 
         writer
             .write_with_ack(
-                TopicWriterMessageBuilder::default()
+                TopicWriterMessage::builder()
                     .data(payload.clone().into_bytes())
-                    .build()?,
+                    .build(),
             )
             .await?;
         writer.stop().await?;
@@ -956,7 +956,7 @@ async fn write_to_specific_partition() -> YdbResult<()> {
 #[traced_test]
 #[ignore] // need YDB access
 async fn read_batch_merges_and_respects_hard_limit() -> YdbResult<()> {
-    use crate::TopicReaderOptionsBuilder;
+    use crate::TopicReaderOptions;
 
     timeout(Duration::from_secs(10), async {
         let client = create_client().await?;
@@ -998,28 +998,28 @@ async fn read_batch_merges_and_respects_hard_limit() -> YdbResult<()> {
 
         let writer = topic_client
             .create_writer_with_params(
-                TopicWriterOptionsBuilder::default()
+                TopicWriterOptions::builder()
                     .topic_path(topic_path.clone())
                     .producer_id(producer_id.clone())
-                    .build()?,
+                    .build(),
             )
             .await?;
         for i in 0..TOTAL {
             writer
                 .write(
-                    TopicWriterMessageBuilder::default()
+                    TopicWriterMessage::builder()
                         .data(format!("msg-{i}").into_bytes())
-                        .build()?,
+                        .build(),
                 )
                 .await?;
         }
         writer.stop().await?;
 
-        let options = TopicReaderOptionsBuilder::default()
+        let options = TopicReaderOptions::builder()
             .consumer(consumer_name.clone())
-            .topic(topic_path.clone().into())
+            .topic(topic_path.clone())
             .batch_size(BATCH_SIZE)
-            .build()?;
+            .build();
 
         let mut reader = topic_client.create_reader_with_params(options).await?;
 
@@ -1130,20 +1130,16 @@ async fn topic_writer_reconnects() -> YdbResult<()> {
     let mut proxied_topic_client = proxied_client.topic_client();
     let writer = proxied_topic_client
         .create_writer_with_params(
-            TopicWriterOptionsBuilder::default()
+            TopicWriterOptions::builder()
                 .topic_path(topic_path.clone())
                 .producer_id(producer_id.clone())
-                .build()?,
+                .build(),
         )
         .await?;
 
     for payload in payloads.iter().take(MSGS_BEFORE_OUTAGE) {
         writer
-            .write_with_ack(
-                TopicWriterMessageBuilder::default()
-                    .data(payload.clone())
-                    .build()?,
-            )
+            .write_with_ack(TopicWriterMessage::builder().data(payload.clone()).build())
             .await?;
     }
 
@@ -1159,11 +1155,7 @@ async fn topic_writer_reconnects() -> YdbResult<()> {
             .take(MSGS_AFTER_OUTAGE)
         {
             writer
-                .write_with_ack(
-                    TopicWriterMessageBuilder::default()
-                        .data(payload.clone())
-                        .build()?,
-                )
+                .write_with_ack(TopicWriterMessage::builder().data(payload.clone()).build())
                 .await?;
         }
         YdbResult::Ok(())
