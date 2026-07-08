@@ -76,10 +76,10 @@ impl Config {
 fn database_from_connection_string(connection_string: &str) -> Option<String> {
     if let Some(query) = connection_string.split('?').nth(1) {
         for part in query.split('&') {
-            if let Some(db) = part.strip_prefix("database=") {
-                if !db.is_empty() {
-                    return Some(db.to_string());
-                }
+            if let Some(db) = part.strip_prefix("database=")
+                && !db.is_empty()
+            {
+                return Some(db.to_string());
             }
         }
     }

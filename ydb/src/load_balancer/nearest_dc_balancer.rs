@@ -22,13 +22,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::{
+    DiscoveryState, Waiter, YdbError, YdbResult,
     discovery::NodeInfo,
     grpc_wrapper::raw_services::Service,
     waiter::{AllWaiter, WaiterImpl},
-    DiscoveryState, Waiter, YdbError, YdbResult,
 };
 
-use super::{random_balancer::RandomLoadBalancer, LoadBalancer};
+use super::{LoadBalancer, random_balancer::RandomLoadBalancer};
 pub(crate) struct BalancerConfig {
     pub(super) fallback_strategy: FallbackStrategy,
 }

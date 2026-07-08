@@ -1,13 +1,13 @@
 use super::*;
 use super::{
+    LoadBalancer, MockLoadBalancer, SharedLoadBalancer,
     nearest_dc_balancer::{BalancerConfig, FallbackStrategy, NearestDCBalancer},
     random_balancer::RandomLoadBalancer,
-    LoadBalancer, MockLoadBalancer, SharedLoadBalancer,
 };
+use crate::YdbResult;
 use crate::discovery::NodeInfo;
 use crate::grpc_wrapper::raw_services::Service::Table;
 use crate::waiter::WaiterImpl;
-use crate::YdbResult;
 use http::Uri;
 use itertools::Itertools;
 use mockall::predicate;
@@ -429,12 +429,14 @@ async fn adjusting_dc() -> YdbResult<()> {
                 ),
             ),
     );
-    assert!(balancer_state
-        .read()
-        .unwrap()
-        .borrow()
-        .preferred_endpoints
-        .is_empty());
+    assert!(
+        balancer_state
+            .read()
+            .unwrap()
+            .borrow()
+            .preferred_endpoints
+            .is_empty()
+    );
     let _ = state_sender.send(updated_state);
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_true!(timeout(Duration::from_secs(3), waiter.wait()).await.is_ok()); // should not wait

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::{oneshot, Mutex, Notify, RwLock};
-use tokio::time::{sleep_until, Instant};
+use tokio::sync::{Mutex, Notify, RwLock, oneshot};
+use tokio::time::{Instant, sleep_until};
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
 use crate::client_topic::topicwriter::message_queue::{

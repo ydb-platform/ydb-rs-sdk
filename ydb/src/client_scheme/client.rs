@@ -6,7 +6,7 @@ use crate::grpc_wrapper::raw_scheme_client::client::{
 };
 use crate::grpc_wrapper::raw_scheme_client::describe_path_types::RawDescribePathRequest;
 use crate::grpc_wrapper::raw_scheme_client::list_directory_types::RawListDirectoryRequest;
-use crate::{grpc_wrapper, YdbResult};
+use crate::{YdbResult, grpc_wrapper};
 
 #[derive(Clone)]
 pub struct SchemeClient {

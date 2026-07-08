@@ -3,7 +3,7 @@ use std::sync::Arc;
 use http::Uri;
 use tokio::sync::watch::Receiver;
 
-use crate::{grpc_wrapper::raw_services::Service, DiscoveryState, Waiter, YdbResult};
+use crate::{DiscoveryState, Waiter, YdbResult, grpc_wrapper::raw_services::Service};
 
 #[cfg(test)]
 pub mod balancer_test;

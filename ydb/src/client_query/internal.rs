@@ -5,8 +5,8 @@ use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::types::Value;
 
 use super::exec::{
-    client_begin_stream, transaction_begin_stream, CallOptions, ClientExecContext,
-    TransactionExecContext,
+    CallOptions, ClientExecContext, TransactionExecContext, client_begin_stream,
+    transaction_begin_stream,
 };
 
 pub(crate) enum ExecCoreRef<'a> {

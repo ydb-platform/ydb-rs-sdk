@@ -1,5 +1,5 @@
-use crate::client_topic::compression::builtin_codecs::*;
 use crate::Codec;
+use crate::client_topic::compression::builtin_codecs::*;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;

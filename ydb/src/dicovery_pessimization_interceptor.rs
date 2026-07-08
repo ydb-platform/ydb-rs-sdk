@@ -1,10 +1,10 @@
+use crate::Discovery;
 use crate::grpc_wrapper::runtime_interceptors::{
     ChannelResponse, GrpcInterceptor, InterceptorError, InterceptorRequest, InterceptorResult,
     RequestMetadata,
 };
-use crate::Discovery;
-use http::uri::PathAndQuery;
 use http::Uri;
+use http::uri::PathAndQuery;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
@@ -35,10 +35,11 @@ impl DiscoveryPessimizationInterceptor {
         mut errors: UnboundedReceiver<ChannelErrorInfo>,
     ) {
         loop {
-            if let Some(err) = errors.recv().await {
-                discovery.pessimization(&err.endpoint)
-            } else {
-                return;
+            match errors.recv().await {
+                Some(err) => discovery.pessimization(&err.endpoint),
+                _ => {
+                    return;
+                }
             };
         }
     }
@@ -76,11 +77,7 @@ impl GrpcInterceptor for DiscoveryPessimizationInterceptor {
             })?;
 
             fn result_to_str(res: Result<(), SendError<ChannelErrorInfo>>) -> &'static str {
-                if res.is_ok() {
-                    "OK"
-                } else {
-                    "receiver closed"
-                }
+                if res.is_ok() { "OK" } else { "receiver closed" }
             }
 
             let send_result = self.sender.send(ChannelErrorInfo {

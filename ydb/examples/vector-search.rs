@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use ydb::{ydb_struct, Bytes, ClientBuilder, ExecBuilder, QueryStreamBuilder, Value, YdbResult};
+use ydb::{Bytes, ClientBuilder, ExecBuilder, QueryStreamBuilder, Value, YdbResult, ydb_struct};
 
 const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
 

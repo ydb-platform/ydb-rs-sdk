@@ -3,7 +3,7 @@ use std::time::{self, UNIX_EPOCH};
 use derive_builder::Builder;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
-use crate::{errors, YdbError};
+use crate::{YdbError, errors};
 
 #[derive(Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]

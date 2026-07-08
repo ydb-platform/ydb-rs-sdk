@@ -1,13 +1,13 @@
+use crate::TxMode;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::test_integration_helper::create_client;
-use crate::TxMode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing_test::traced_test;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 macro_rules! idem {
-    ($builder:expr) => {
+    ($builder:expr_2021) => {
         $builder.idempotent(true).timeout(TEST_TIMEOUT)
     };
 }
@@ -34,7 +34,7 @@ fn is_snapshot_rw_unsupported(err: &impl std::fmt::Display) -> bool {
 }
 
 macro_rules! client_mode_select {
-    ($name:ident, $mode:expr) => {
+    ($name:ident, $mode:expr_2021) => {
         #[tokio::test]
         #[traced_test]
         #[ignore] // need YDB access
@@ -76,12 +76,13 @@ async fn query_client_implicit_tx_ddl_and_dml() -> YdbResult<()> {
         "CREATE TABLE {table_name} (id Int64, val Int64, PRIMARY KEY(id))"
     )))
     .await?;
-    idem!(qc
-        .exec(format!(
+    idem!(
+        qc.exec(format!(
             "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
         ))
         .param("$id", 1_i64)
-        .param("$val", 7_i64))
+        .param("$val", 7_i64)
+    )
     .await?;
 
     let mut row = idem!(qc.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))).await?;
@@ -107,9 +108,10 @@ async fn query_client_snapshot_rw_one_shot() -> YdbResult<()> {
     let client = create_client().await?;
     let mut qc = client.query_client();
 
-    match idem!(qc
-        .query_row("SELECT 42 AS v")
-        .with_tx_mode(TxMode::SnapshotReadWrite))
+    match idem!(
+        qc.query_row("SELECT 42 AS v")
+            .with_tx_mode(TxMode::SnapshotReadWrite)
+    )
     .await
     {
         Ok(mut row) => {
@@ -125,7 +127,7 @@ async fn query_client_snapshot_rw_one_shot() -> YdbResult<()> {
 }
 
 macro_rules! interactive_mode_select {
-    ($name:ident, $mode:expr) => {
+    ($name:ident, $mode:expr_2021) => {
         #[tokio::test]
         #[traced_test]
         #[ignore] // need YDB access
