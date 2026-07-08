@@ -87,11 +87,11 @@ impl ReceptionQueue {
     pub(crate) fn notify_ticket_processed(&mut self, seq_no: i64, error: Option<YdbError>) {
         let mut error_observed_by_pending_flush = false;
         let completed = self.pending_flushes.extract_if(.., |flush| {
-            if let Some(error) = &error {
-                if seq_no <= flush.threshold_seq_no {
-                    error_observed_by_pending_flush = true;
-                    flush.first_ack_error.get_or_insert_with(|| error.clone());
-                }
+            if let Some(error) = &error
+                && seq_no <= flush.threshold_seq_no
+            {
+                error_observed_by_pending_flush = true;
+                flush.first_ack_error.get_or_insert_with(|| error.clone());
             }
             flush.threshold_seq_no <= seq_no
         });
@@ -102,10 +102,11 @@ impl ReceptionQueue {
                 .send(pending.first_ack_error.map_or(Ok(()), Err));
         }
 
-        if let Some(error) = error {
-            if !error_observed_by_pending_flush && self.unobserved_ack_error.is_none() {
-                self.unobserved_ack_error = Some(error);
-            }
+        if let Some(error) = error
+            && !error_observed_by_pending_flush
+            && self.unobserved_ack_error.is_none()
+        {
+            self.unobserved_ack_error = Some(error);
         }
     }
 
