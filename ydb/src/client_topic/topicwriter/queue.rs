@@ -533,10 +533,12 @@ mod tests {
 
         q.acknowledge_message(write_ack(1)).await.unwrap();
 
-        assert!(flush_handle
-            .await
-            .expect("flush task must complete")
-            .is_err());
+        assert!(
+            flush_handle
+                .await
+                .expect("flush task must complete")
+                .is_err()
+        );
     }
 
     #[tokio::test]

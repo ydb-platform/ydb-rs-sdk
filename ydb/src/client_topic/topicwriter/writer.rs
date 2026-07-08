@@ -11,7 +11,7 @@ use tracing::trace;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_write_status::{
-    accept_any_write_status, expect_transactional_write_status, MessageWriteStatus,
+    MessageWriteStatus, accept_any_write_status, expect_transactional_write_status,
 };
 use crate::client_topic::topicwriter::reconnector::{Reconnector, ReconnectorParams};
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;

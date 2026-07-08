@@ -35,6 +35,7 @@ use std::time::{Duration, Instant};
 use futures_util::FutureExt;
 use http::Uri;
 
+use crate::client_query::exec::transaction_before_commit;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::result::Row;

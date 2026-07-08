@@ -1,14 +1,14 @@
 use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::time::Duration;
 
 use tracing_test::traced_test;
 
 use super::{
-    hooks::{QueryTxCommitStatus, QueryTxHook},
     Transaction,
+    hooks::{QueryTxCommitStatus, QueryTxHook},
 };
 use crate::errors::{YdbError, YdbResult, YdbResultWithCustomerErr};
 use crate::test_integration_helper::create_client;
