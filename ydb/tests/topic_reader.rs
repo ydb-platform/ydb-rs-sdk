@@ -1,9 +1,9 @@
 mod mock_server;
 
-use flate2::{write::GzEncoder, Compression};
+use flate2::{Compression, write::GzEncoder};
 use std::io::Write;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::Poll;
 use tokio::sync::Notify;
 use ydb::{
@@ -14,7 +14,7 @@ use ydb_grpc::ydb_proto::topic::stream_read_message::from_client::ClientMessage 
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply};
 use crate::mock_server::server::MockServer;
-use crate::mock_server::topic::{builders, TopicIncoming};
+use crate::mock_server::topic::{TopicIncoming, builders};
 
 struct BlockingExecutor;
 

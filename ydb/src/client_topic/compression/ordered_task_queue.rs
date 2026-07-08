@@ -1,5 +1,5 @@
-use crate::client_topic::compression::executor::Executor;
 use crate::YdbResult;
+use crate::client_topic::compression::executor::Executor;
 use std::{num::NonZeroUsize, sync::Arc};
 use tokio::sync::{mpsc, oneshot};
 use tracing::error;

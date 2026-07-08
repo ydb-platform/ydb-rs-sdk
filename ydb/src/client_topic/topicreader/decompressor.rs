@@ -10,8 +10,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::client_topic::compression::{
-    CodecRegistry, CompressionDecoder, Executor, OrderedTaskQueue, TaskResultRx,
-    MAX_MESSAGES_PER_CHUNK, OUTPUT_BACKLOG_PER_TASK,
+    CodecRegistry, CompressionDecoder, Executor, MAX_MESSAGES_PER_CHUNK, OUTPUT_BACKLOG_PER_TASK,
+    OrderedTaskQueue, TaskResultRx,
 };
 use crate::client_topic::list_types::Codec;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{

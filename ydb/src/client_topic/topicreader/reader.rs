@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use futures_util::Future;
@@ -121,7 +121,7 @@ impl TopicReader {
     pub fn commit_with_ack(
         &mut self,
         commit_marker: TopicReaderCommitMarker,
-    ) -> impl Future<Output = YdbResult<()>> {
+    ) -> impl Future<Output = YdbResult<()>> + use<> {
         let ack = self.runtime.commit(commit_marker);
 
         async {

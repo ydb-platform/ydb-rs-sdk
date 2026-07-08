@@ -1,6 +1,6 @@
 use crate::{YdbError, YdbResult};
-use http::uri::Scheme;
 use http::Uri;
+use http::uri::Scheme;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

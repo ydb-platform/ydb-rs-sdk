@@ -8,6 +8,7 @@ use tracing::debug;
 use ydb_grpc::ydb_proto::topic::stream_read_message::{FromClient, FromServer};
 
 use crate::{
+    TopicReaderOptions, YdbError, YdbResult,
     grpc_connection_manager::GrpcConnectionManager,
     grpc_wrapper::{
         grpc_stream_wrapper::AsyncGrpcStreamWrapper,
@@ -18,7 +19,6 @@ use crate::{
             },
         },
     },
-    TopicReaderOptions, YdbError, YdbResult,
 };
 
 use super::reconnector;

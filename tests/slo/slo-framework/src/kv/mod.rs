@@ -1,13 +1,13 @@
 mod params;
 mod workload;
 
-pub use params::{parse_params, Params};
+pub use params::{Params, parse_params};
 pub use workload::KvWorkload;
 
 use async_trait::async_trait;
 
-use crate::row::TestRow;
 use crate::RowID;
+use crate::row::TestRow;
 
 #[async_trait]
 pub trait Database: Send + Sync {

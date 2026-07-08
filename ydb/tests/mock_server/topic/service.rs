@@ -1,8 +1,8 @@
+use super::TopicReply;
 use super::handler::{TopicIncoming, TopicRx};
 use super::sender::{ReadStreamCommand, ReadStreamSender, WriteStreamCommand, WriteStreamSender};
-use super::TopicReply;
 use crate::mock_server::handler::{FromServiceToServerTx, Incoming};
-use futures_util::{stream, Stream, StreamExt};
+use futures_util::{Stream, StreamExt, stream};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio_stream::wrappers::UnboundedReceiverStream;

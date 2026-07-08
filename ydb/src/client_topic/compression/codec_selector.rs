@@ -188,11 +188,11 @@ async fn measure_codecs(
     let mut best_size = usize::MAX;
 
     while let Some(result) = pending.next().await {
-        if let Ok(Some((codec, size))) = result {
-            if size < best_size {
-                best_size = size;
-                best_codec = codec;
-            }
+        if let Ok(Some((codec, size))) = result
+            && size < best_size
+        {
+            best_size = size;
+            best_codec = codec;
         }
     }
 
