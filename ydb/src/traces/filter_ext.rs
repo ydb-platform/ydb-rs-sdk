@@ -1,6 +1,6 @@
 use tracing::level_filters::LevelFilter;
-use tracing_subscriber::filter::Targets;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::Targets;
 
 /// Extension trait for [`EnvFilter`] that silences verbose logs from HTTP/gRPC
 /// dependency crates (hyper, tonic, h2, reqwest, tower).

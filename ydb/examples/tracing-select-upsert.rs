@@ -1,9 +1,9 @@
 #![recursion_limit = "256"]
-use opentelemetry::trace::TracerProvider;
 use opentelemetry::KeyValue;
+use opentelemetry::trace::TracerProvider;
 use opentelemetry_otlp::WithExportConfig;
-use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
 use opentelemetry_sdk::Resource;
+use opentelemetry_sdk::trace::{Sampler, SdkTracerProvider};
 use std::time::Duration;
 use tokio::time::timeout;
 use tracing::instrument;
@@ -11,7 +11,7 @@ use tracing::level_filters::LevelFilter;
 use tracing_subscriber::filter::Targets;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
 
 use ydb::traces::filter_ext::{EnvFilterExt, TargetFilterExt};
 use ydb::{ClientBuilder, Row, YdbError, YdbResult};

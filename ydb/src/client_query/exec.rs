@@ -18,7 +18,7 @@ use crate::traces::helpers::ensure_len_string;
 
 use crate::types::Value;
 use crate::{TransactionOptions, TxMode};
-use tracing::{instrument, Instrument};
+use tracing::{Instrument, instrument};
 
 use crate::session_pool::{SessionPool, SessionPoolLease, spawn_pool_release};
 
@@ -671,11 +671,11 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
     if tx.tx_id.as_ref().is_some_and(|id| !id.is_empty()) && tx.pooled_lease.is_some() {
         let tx_id = tx.tx_id.take().expect("checked Some");
         if let Ok(session_id) = tx_session_id(tx)
+            && let Ok(mut client) = query_client_from_tx(tx).await
+        {
             tracing::Span::current()
                 .record("ydb.session.id", session_id)
                 .record("ydb.tx.id", &tx_id);
-            && let Ok(mut client) = query_client_from_tx(tx).await
-        {
             let rollback_result = maybe_with_operation_timeout(
                 resolve_effective_timeout(tx.retry_deadline, None),
                 async {
