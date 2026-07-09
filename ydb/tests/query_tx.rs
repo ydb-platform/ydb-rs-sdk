@@ -28,7 +28,7 @@ use ydb_grpc::ydb_proto::query::{
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply};
-use crate::mock_server::query::{QueryIncoming, QueryReply, QUERY_TX_ID};
+use crate::mock_server::query::{QUERY_TX_ID, QueryIncoming, QueryReply};
 use crate::mock_server::server::MockServer;
 
 const DATABASE: &str = "/local";

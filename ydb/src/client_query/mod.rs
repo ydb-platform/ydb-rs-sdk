@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 use futures_util::FutureExt;
 use http::Uri;
 
+use crate::client_query::exec::TxState;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::result::Row;
