@@ -10,17 +10,10 @@ use futures_util::StreamExt;
 use futures_util::stream::{self, BoxStream};
 use http::Uri;
 use http::uri::Authority;
-
-use crate::YdbError;
-use crate::errors::YdbResult;
-
-use crate::waiter::Waiter;
-
-use derivative::Derivative;
 use itertools::Itertools;
 use tokio::sync::watch;
 use tokio_stream::wrappers::WatchStream;
-use tracing::trace;
+use tracing::{instrument, trace};
 
 use crate::YdbError;
 use crate::errors::{NeedRetry, YdbResult};
@@ -350,28 +343,23 @@ impl DiscoverySharedState {
             .list_endpoints(self.connection_manager.database().to_owned())
             .await?;
         let new_endpoints = Self::list_endpoints_to_node_infos(res)?;
-        self.set_discovery_state(
-            self.discovery_state.write().unwrap(),
-            Arc::new(DiscoveryState::new(start, new_endpoints)),
-        );
 
-        // lock until exit
-        drop(discovery_lock);
-        Ok(())
-    }
-
-    fn set_discovery_state(
-        &self,
-        mut locked_state: RwLockWriteGuard<Arc<DiscoveryState>>,
-        new_state: Arc<DiscoveryState>,
-    ) {
-        *locked_state = new_state.clone();
-        let _ = self.sender.send(new_state);
-        let _ = self.state_received_sender.send(true);
+        Ok(DiscoveryState::new(start, new_endpoints))
     }
 
     #[tracing::instrument(skip(state))]
     async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
+        #[instrument(name = "ydb.Discovery.Timer", skip_all, fields(db.system.name = "ydb", discovery_uri = %state.discovery_uri), err)]
+        async fn discovery_once(
+            state: Arc<DiscoverySharedState>,
+            attempt: usize,
+        ) -> Result<(), YdbError> {
+            trace!("discovery attempt {attempt}");
+            let res = state.discovery_now().await;
+            trace!("discovery result: {:?}", res);
+            res
+        }
+
         'worker: loop {
             let mut attempt = 0;
             let retrier = IndefiniteRetrier;
@@ -382,11 +370,8 @@ impl DiscoverySharedState {
                     break 'worker;
                 };
 
-                trace!("discovery attempt {attempt}");
-                let res = state.discovery_now().await;
+                let res = discovery_once(state, attempt).await;
                 attempt += 1;
-
-                trace!("discovery result: {:?}", res);
 
                 if res.is_ok() {
                     break 'attempt;
