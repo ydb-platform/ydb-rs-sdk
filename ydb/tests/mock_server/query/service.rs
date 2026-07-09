@@ -1,7 +1,7 @@
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use futures_util::{stream, Stream, StreamExt};
+use futures_util::{Stream, StreamExt, stream};
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use ydb_grpc::ydb_proto::operations::Operation;
@@ -83,7 +83,7 @@ impl MockQueryService {
         &self,
         incoming: QueryIncoming,
         rx: oneshot::Receiver<Result<tonic::Response<T>, tonic::Status>>,
-    ) -> impl std::future::Future<Output = Result<tonic::Response<T>, tonic::Status>> {
+    ) -> impl std::future::Future<Output = Result<tonic::Response<T>, tonic::Status>> + use<T> {
         let _ = self.to_server.send(Incoming::Query(incoming));
         async move {
             rx.await

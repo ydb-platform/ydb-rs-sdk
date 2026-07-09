@@ -1,30 +1,29 @@
 use std::collections::HashSet;
+use std::future;
 use std::str::FromStr;
 use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use futures_util::stream::BoxStream;
-use futures_util::{future, stream, StreamExt};
-use http::uri::Authority;
+use derivative::Derivative;
+use futures_util::StreamExt;
+use futures_util::stream::{self, BoxStream};
 use http::Uri;
+use http::uri::Authority;
+use itertools::Itertools;
+use tokio::sync::watch;
 use tokio_stream::wrappers::WatchStream;
+use tracing::trace;
 
-use crate::errors::{NeedRetry, YdbResult};
 use crate::YdbError;
-
+use crate::errors::{NeedRetry, YdbResult};
+use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::grpc_wrapper::{
+    raw_discovery_client::{EndpointInfo, GrpcDiscoveryClient},
+    raw_services::Service,
+};
 use crate::retry::{IndefiniteRetrier, Retry, RetryParams};
 use crate::waiter::Waiter;
-
-use derivative::Derivative;
-use itertools::Itertools;
-use std::time::{Duration, Instant};
-use tokio::sync::watch;
-
-use crate::grpc_connection_manager::GrpcConnectionManager;
-
-use crate::grpc_wrapper::raw_discovery_client::{EndpointInfo, GrpcDiscoveryClient};
-use crate::grpc_wrapper::raw_services::Service;
-use tracing::trace;
 
 /// Current discovery state
 #[derive(Clone, Debug, PartialEq)]
@@ -63,11 +62,11 @@ impl DiscoveryState {
         }
     }
 
-    pub(crate) fn get_nodes(&self, _service: &Service) -> Option<&Vec<NodeInfo>> {
+    pub(crate) fn get_nodes(&self, _service: &Service) -> Option<&[NodeInfo]> {
         Some(&self.nodes)
     }
 
-    pub(crate) fn get_all_nodes(&self) -> Option<&Vec<NodeInfo>> {
+    pub(crate) fn get_all_nodes(&self) -> Option<&[NodeInfo]> {
         Some(&self.nodes)
     }
 
@@ -337,7 +336,7 @@ impl DiscoverySharedState {
             .await?;
 
         let res = discovery_client
-            .list_endpoints(self.connection_manager.database().clone())
+            .list_endpoints(self.connection_manager.database().to_owned())
             .await?;
         let new_endpoints = Self::list_endpoints_to_node_infos(res)?;
 
@@ -529,14 +528,15 @@ mod test {
         // wait two updates
         for _ in 0..2 {
             rx.changed().await.unwrap();
-            assert!(!rx
-                .borrow()
-                .as_ref()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .nodes
-                .is_empty());
+            assert!(
+                !rx.borrow()
+                    .as_ref()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .nodes
+                    .is_empty()
+            );
         }
 
         Ok(())

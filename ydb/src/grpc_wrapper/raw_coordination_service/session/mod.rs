@@ -1,7 +1,7 @@
 use ydb_grpc::ydb_proto::coordination::session_response::{
     AcquireSemaphorePending, DescribeSemaphoreChanged, PingPong, SessionStarted, SessionStopped,
 };
-use ydb_grpc::ydb_proto::coordination::{session_response, SessionResponse};
+use ydb_grpc::ydb_proto::coordination::{SessionResponse, session_response};
 
 pub(crate) mod acquire_semaphore;
 pub(crate) mod create_semaphore;
@@ -10,11 +10,11 @@ pub(crate) mod describe_semaphore;
 pub(crate) mod release_semaphore;
 pub(crate) mod update_semaphore;
 
+use crate::YdbStatusError;
 use crate::grpc_wrapper::{
     grpc::proto_issues_to_ydb_issues,
     raw_errors::{RawError, RawResult},
 };
-use crate::YdbStatusError;
 
 use self::acquire_semaphore::RawAcquireSemaphoreResult;
 use self::create_semaphore::RawCreateSemaphoreResult;

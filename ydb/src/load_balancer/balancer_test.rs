@@ -1,13 +1,13 @@
 use super::*;
 use super::{
+    LoadBalancer, MockLoadBalancer, SharedLoadBalancer,
     nearest_dc_balancer::{BalancerConfig, FallbackStrategy, NearestDCBalancer},
     random_balancer::RandomLoadBalancer,
-    LoadBalancer, MockLoadBalancer, SharedLoadBalancer,
 };
+use crate::YdbResult;
 use crate::discovery::NodeInfo;
 use crate::grpc_wrapper::raw_services::Service::Table;
 use crate::waiter::WaiterImpl;
-use crate::YdbResult;
 use http::Uri;
 use itertools::Itertools;
 use mockall::predicate;
@@ -16,6 +16,7 @@ use ntest::assert_true;
 use num::One;
 use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::iter;
 use std::str::FromStr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Relaxed;
@@ -242,11 +243,9 @@ async fn detect_fastest_addr_just_some() -> YdbResult<()> {
     ];
 
     for _ in 0..100 {
-        let addr = NearestDCBalancer::find_fastest_address(
-            nodes.iter().collect_vec(),
-            Duration::from_secs(PING_TIMEOUT_SECS),
-        )
-        .await?;
+        let addr =
+            NearestDCBalancer::find_fastest_address(&nodes, Duration::from_secs(PING_TIMEOUT_SECS))
+                .await?;
         assert!(nodes.contains(&addr))
     }
 
@@ -276,11 +275,9 @@ async fn detect_fastest_addr_with_fault() -> YdbResult<()> {
     drop(l1);
 
     for _ in 0..100 {
-        let addr = NearestDCBalancer::find_fastest_address(
-            nodes.iter().collect_vec(),
-            Duration::from_secs(PING_TIMEOUT_SECS),
-        )
-        .await?;
+        let addr =
+            NearestDCBalancer::find_fastest_address(&nodes, Duration::from_secs(PING_TIMEOUT_SECS))
+                .await?;
         assert!(nodes.contains(&addr) && addr != l1_addr.to_string())
     }
 
@@ -311,11 +308,9 @@ async fn detect_fastest_addr_one_alive() -> YdbResult<()> {
     drop(l2);
 
     for _ in 0..100 {
-        let addr = NearestDCBalancer::find_fastest_address(
-            nodes.iter().collect_vec(),
-            Duration::from_secs(PING_TIMEOUT_SECS),
-        )
-        .await?;
+        let addr =
+            NearestDCBalancer::find_fastest_address(&nodes, Duration::from_secs(PING_TIMEOUT_SECS))
+                .await?;
         assert!(addr == l3_addr.to_string())
     }
 
@@ -346,9 +341,7 @@ async fn detect_fastest_addr_timeout() -> YdbResult<()> {
     drop(l2);
     drop(l3);
 
-    let result =
-        NearestDCBalancer::find_fastest_address(nodes.iter().collect_vec(), Duration::from_secs(3))
-            .await;
+    let result = NearestDCBalancer::find_fastest_address(&nodes, Duration::from_secs(3)).await;
     match result {
         Ok(_) => unreachable!(),
         Err(err) => {
@@ -363,7 +356,9 @@ async fn detect_fastest_addr_timeout() -> YdbResult<()> {
 
 #[tokio::test]
 async fn no_addr_timeout() -> YdbResult<()> {
-    let result = NearestDCBalancer::find_fastest_address(Vec::new(), Duration::from_secs(3)).await;
+    let result =
+        NearestDCBalancer::find_fastest_address(iter::empty::<String>(), Duration::from_secs(3))
+            .await;
     match result {
         Ok(_) => unreachable!(),
         Err(err) => {
@@ -435,12 +430,14 @@ async fn adjusting_dc() -> YdbResult<()> {
                 ),
             ),
     );
-    assert!(balancer_state
-        .read()
-        .unwrap()
-        .borrow()
-        .preferred_endpoints
-        .is_empty());
+    assert!(
+        balancer_state
+            .read()
+            .unwrap()
+            .borrow()
+            .preferred_endpoints
+            .is_empty()
+    );
     let _ = state_sender.send(updated_state);
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_true!(timeout(Duration::from_secs(3), waiter.wait()).await.is_ok()); // should not wait

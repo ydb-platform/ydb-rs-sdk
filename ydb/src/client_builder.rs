@@ -1,8 +1,8 @@
 use crate::client_common::{DBCredentials, TokenCache};
 use crate::client_topic::compression::Executor;
 use crate::credentials::{
-    credencials_ref, AccessTokenCredentials, CredentialsRef, GCEMetadata,
-    ServiceAccountCredentials, StaticCredentials,
+    AccessTokenCredentials, CredentialsRef, GCEMetadata, ServiceAccountCredentials,
+    StaticCredentials, credencials_ref,
 };
 use crate::dicovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
 use crate::discovery::{Discovery, StaticDiscovery, TimerDiscovery};
@@ -104,7 +104,7 @@ fn token_metadata(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
             _ => {
                 return Err(YdbError::Custom(format!(
                     "unknown metadata format: '{value}'"
-                )))
+                )));
             }
         }
     }
@@ -222,7 +222,7 @@ fn use_discovery(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Clie
             other => {
                 return Err(YdbError::Custom(format!(
                     "unknown value for use_discovery: '{other}', expected true/false"
-                )))
+                )));
             }
         }
         break;
@@ -292,12 +292,12 @@ impl ClientBuilder {
             )?),
         };
 
-        let discovery = Arc::new(discovery);
+        let discovery = Arc::<dyn Discovery>::from(discovery);
 
         let interceptor =
             interceptor.with_interceptor(DiscoveryPessimizationInterceptor::new(discovery.clone()));
 
-        let load_balancer = SharedLoadBalancer::new(discovery.as_ref().as_ref());
+        let load_balancer = SharedLoadBalancer::new(discovery.as_ref());
         let connection_manager = GrpcConnectionManager::new(
             load_balancer.clone(),
             db_cred.database.clone(),

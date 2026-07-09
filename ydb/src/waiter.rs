@@ -1,6 +1,6 @@
 use crate::{YdbError, YdbResult};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::watch;
 
 #[async_trait::async_trait]

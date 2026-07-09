@@ -1,9 +1,9 @@
+use crate::YdbResult;
 use crate::connection_pool::ConnectionPool;
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
-use crate::YdbResult;
 use http::Uri;
 
 pub(crate) type GrpcConnectionManager = GrpcConnectionManagerGeneric<SharedLoadBalancer>;
@@ -64,7 +64,7 @@ impl<TBalancer: LoadBalancer> GrpcConnectionManagerGeneric<TBalancer> {
         self.state.balancer.endpoint(service)
     }
 
-    pub(crate) fn database(&self) -> &String {
+    pub(crate) fn database(&self) -> &str {
         &self.state.database
     }
 }

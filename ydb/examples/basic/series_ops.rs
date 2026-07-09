@@ -2,7 +2,7 @@ use std::fmt::Write;
 use std::time::{Duration, SystemTime};
 
 use ydb::{
-    ydb_struct, Bytes, ExecBuilder, QueryClient, QueryStreamBuilder, TxMode, Value, YdbResult,
+    Bytes, ExecBuilder, QueryClient, QueryStreamBuilder, TxMode, Value, YdbResult, ydb_struct,
 };
 
 use super::data::SampleData;

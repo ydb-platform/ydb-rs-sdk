@@ -129,7 +129,7 @@ pub use client_topic::topicreader::messages::{
 };
 // full enum pub types
 pub use client_topic::topicreader::reader::{
-    TopicReader, TopicReaderCommitMarker, TopicSelector, TopicSelectors,
+    TopicReader, TopicReaderCommitMarker, TopicSelector, TopicSelectorBuilder, TopicSelectors,
 };
 pub use client_topic::topicreader::reader_options::{
     TopicReaderOptions, TopicReaderOptionsBuilder,

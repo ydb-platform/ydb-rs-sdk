@@ -2,7 +2,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 

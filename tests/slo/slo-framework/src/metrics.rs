@@ -3,12 +3,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use hdrhistogram::Histogram;
-use opentelemetry::metrics::{Counter, Gauge, MeterProvider as _, UpDownCounter};
 use opentelemetry::KeyValue;
+use opentelemetry::metrics::{Counter, Gauge, MeterProvider as _, UpDownCounter};
 use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Temporality};
 use opentelemetry_sdk::runtime;
-use opentelemetry_sdk::Resource;
 
 use crate::config::Config;
 
@@ -302,10 +302,10 @@ impl Span {
         }
 
         if let Some(err_msg) = err {
-            if err_msg.contains("timeout") || err_msg.contains("deadline") {
-                if let Some(counter) = &self.metrics.inner.timeouts_total {
-                    counter.add(1, &attrs);
-                }
+            if (err_msg.contains("timeout") || err_msg.contains("deadline"))
+                && let Some(counter) = &self.metrics.inner.timeouts_total
+            {
+                counter.add(1, &attrs);
             }
             if let Some(counter) = &self.metrics.inner.errors_total {
                 let mut error_attrs = attrs;

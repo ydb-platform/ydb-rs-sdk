@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::errors::{NeedRetry, YdbResult};
 use crate::grpc_wrapper::raw_operation_service::types::{RawListOperationsResult, RawOperation};
-use crate::retry_budget::{pause_before_retry, RetryControl, RetryPauseError};
+use crate::retry_budget::{RetryControl, RetryPauseError, pause_before_retry};
 
 use super::client::OperationClient;
 use super::types::{ListOperationsRequest, ListOperationsResult, OperationInfo};

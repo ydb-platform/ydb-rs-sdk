@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use ydb::{ydb_params, ClientBuilder, FromYdbRow, Row, YdbResult};
+use ydb::{ClientBuilder, FromYdbRow, Row, YdbResult, ydb_params};
 
 #[derive(Debug)]
 struct CounterRow {
