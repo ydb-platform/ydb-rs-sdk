@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use futures_util::{stream::BoxStream, StreamExt};
+use futures_util::{StreamExt, stream::BoxStream};
 use http::Uri;
 
 use crate::{DiscoveryState, Waiter, YdbResult, grpc_wrapper::raw_services::Service};
