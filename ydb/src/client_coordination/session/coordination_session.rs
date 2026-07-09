@@ -8,17 +8,20 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
 use ydb_grpc::ydb_proto::coordination::{
+    SessionRequest, SessionResponse,
     session_request::{self, SessionStart},
     session_response::SessionStarted,
-    SessionRequest, SessionResponse,
 };
 
 use crate::{
+    AcquireOptions, AcquireOptionsBuilder, DescribeOptions, DescribeOptionsBuilder, SessionOptions,
+    YdbError, YdbResult,
     grpc_connection_manager::GrpcConnectionManager,
     grpc_wrapper::{
         self,
         grpc_stream_wrapper::AsyncGrpcStreamWrapper,
         raw_coordination_service::session::{
+            RawSessionResponse,
             acquire_semaphore::{RawAcquireSemaphoreRequest, RawAcquireSemaphoreResult},
             create_semaphore::{RawCreateSemaphoreRequest, RawCreateSemaphoreResult},
             delete_semaphore::{RawDeleteSemaphoreRequest, RawDeleteSemaphoreResult},
@@ -27,11 +30,8 @@ use crate::{
             },
             release_semaphore::RawReleaseSemaphoreResult,
             update_semaphore::{RawUpdateSemaphoreRequest, RawUpdateSemaphoreResult},
-            RawSessionResponse,
         },
     },
-    AcquireOptions, AcquireOptionsBuilder, DescribeOptions, DescribeOptionsBuilder, SessionOptions,
-    YdbError, YdbResult,
 };
 
 use super::{controller::RequestController, lease::Lease};

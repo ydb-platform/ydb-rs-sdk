@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::{oneshot, watch, Mutex};
+use tokio::sync::{Mutex, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -146,8 +146,8 @@ impl Reconnector {
         if self.auto_seq_no {
             if message.seq_no.is_some() {
                 return Err(YdbError::custom(
-                        "explicitly specifying message.seq_no is only allowed if auto_seq_no is disabled",
-                    ));
+                    "explicitly specifying message.seq_no is only allowed if auto_seq_no is disabled",
+                ));
             }
             let last_seq_no_assigned = state_guard.connection_info.last_seq_no_assigned;
             message.seq_no = Some(last_seq_no_assigned + 1);
@@ -305,7 +305,7 @@ impl ReconnectionHelper {
         attempt: usize,
         time_from_start: Duration,
     ) -> Option<Duration> {
-        let decision = self.retrier.wait_duration(RetryParams {
+        let decision = self.retrier.retry_decision(RetryParams {
             attempt,
             time_from_start,
         });
@@ -429,10 +429,10 @@ impl ReconnectionLoop {
         }
 
         // Wait ending old stream writer before recreating
-        if let Some(old) = self.stream_writer.take() {
-            if let Err(err) = old.stop().await {
-                return ReconnectionLoopStatus::HandleError(err);
-            }
+        if let Some(old) = self.stream_writer.take()
+            && let Err(err) = old.stop().await
+        {
+            return ReconnectionLoopStatus::HandleError(err);
         }
 
         let (error_sender, error_receiver) = oneshot::channel();

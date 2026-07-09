@@ -22,13 +22,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::{
+    DiscoveryState, Waiter, YdbError, YdbResult,
     discovery::NodeInfo,
     grpc_wrapper::raw_services::Service,
     waiter::{AllWaiter, WaiterImpl},
-    DiscoveryState, Waiter, YdbError, YdbResult,
 };
 
-use super::{random_balancer::RandomLoadBalancer, LoadBalancer};
+use super::{LoadBalancer, random_balancer::RandomLoadBalancer};
 pub(crate) struct BalancerConfig {
     pub(super) fallback_strategy: FallbackStrategy,
 }
@@ -232,7 +232,7 @@ impl NearestDCBalancer {
         }
     }
 
-    pub(super) fn extract_nodes(from_state: &Arc<DiscoveryState>) -> YdbResult<&Vec<NodeInfo>> {
+    pub(super) fn extract_nodes(from_state: &Arc<DiscoveryState>) -> YdbResult<&[NodeInfo]> {
         let nodes = from_state.get_all_nodes();
         match nodes {
             None => Err(YdbError::Custom(
@@ -272,9 +272,7 @@ impl NearestDCBalancer {
             ));
         }
         let addrs = addr_to_node.keys();
-        match Self::find_fastest_address(addrs.collect(), Duration::from_secs(PING_TIMEOUT_SECS))
-            .await
-        {
+        match Self::find_fastest_address(addrs, Duration::from_secs(PING_TIMEOUT_SECS)).await {
             Ok(fastest_address) => Ok(addr_to_node[&fastest_address].location.clone()),
             Err(err) => {
                 error!("could not find fastest address:{}", err);
@@ -310,17 +308,21 @@ impl NearestDCBalancer {
         addr_to_node
     }
 
-    pub(super) async fn find_fastest_address(
-        addrs: Vec<&String>,
-        timeout: Duration,
-    ) -> YdbResult<String> {
+    pub(super) async fn find_fastest_address<I, S>(addrs: I, timeout: Duration) -> YdbResult<String>
+    where
+        I: IntoIterator<Item = S>,
+        I::IntoIter: ExactSizeIterator,
+        S: AsRef<str>,
+    {
+        let addrs = addrs.into_iter();
+
         // Cancellation flow: timeout -> address collector -> address producers
         let interrupt_via_timeout = CancellationToken::new();
         let interrupt_collector_future = interrupt_via_timeout.child_token();
         let stop_measure = interrupt_collector_future.child_token();
 
         let (start_measure, _) = broadcast::channel::<()>(1);
-        let buffer_cap = if addrs.is_empty() { 1 } else { addrs.len() };
+        let buffer_cap = if addrs.len() == 0 { 1 } else { addrs.len() };
         let (addr_sender, mut addr_reciever) = mpsc::channel::<String>(buffer_cap);
         let mut nursery = JoinSet::new();
 
@@ -328,7 +330,7 @@ impl NearestDCBalancer {
             let (mut wait_for_start, stop_measure, addr, addr_sender) = (
                 start_measure.subscribe(),
                 stop_measure.clone(),
-                addr.clone(),
+                addr.as_ref().to_owned(),
                 addr_sender.clone(),
             );
 

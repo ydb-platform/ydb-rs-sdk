@@ -1,7 +1,7 @@
+use crate::YdbIssue;
 use crate::grpc::proto_issues_to_ydb_issues;
 use crate::grpc_wrapper::raw_errors::RawError;
 use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawTypedValue};
-use crate::YdbIssue;
 use ydb_grpc::ydb_proto::{
     status_ids::StatusCode,
     table::{KeyRange, ReadTableRequest, ReadTableResponse},

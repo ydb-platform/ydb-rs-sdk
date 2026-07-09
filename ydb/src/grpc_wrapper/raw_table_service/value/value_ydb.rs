@@ -13,9 +13,9 @@ use crate::grpc_wrapper::raw_table_service::value::r#type::{RawType, StructMembe
 use crate::grpc_wrapper::raw_table_service::value::{RawTypedValue, RawValue};
 use crate::types::YdbDecimal;
 use crate::types::{
-    signed_days_to_system_time, signed_micros_to_system_time, signed_secs_to_system_time,
-    system_time_to_signed_days, system_time_to_signed_micros, system_time_to_signed_secs,
-    SECONDS_PER_DAY,
+    SECONDS_PER_DAY, signed_days_to_system_time, signed_micros_to_system_time,
+    signed_secs_to_system_time, system_time_to_signed_days, system_time_to_signed_micros,
+    system_time_to_signed_secs,
 };
 use crate::{Bytes, SignedInterval, Value};
 
@@ -360,7 +360,7 @@ impl TryFrom<RawTypedValue> for Value {
                     Err(err) => {
                         return Err(RawError::custom(format!(
                             "can't create optional value from rawtype: {err}"
-                        )))
+                        )));
                     }
                 }
             }
@@ -389,7 +389,7 @@ impl TryFrom<RawTypedValue> for Value {
                     Err(err) => {
                         return Err(RawError::custom(format!(
                             "can't create list value from rawtype: {err}"
-                        )))
+                        )));
                     }
                 }
             }

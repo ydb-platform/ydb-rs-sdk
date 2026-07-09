@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use crate::client::TimeoutSettings;
 use crate::errors::{NeedRetry, YdbResult};
 use crate::retry::{IndefiniteRetrier, Retry, RetryParams, TimeoutRetrier};
-use crate::retry_budget::{acquire_retry_budget, RetryControl, RetryPauseError};
+use crate::retry_budget::{RetryControl, RetryPauseError, acquire_retry_budget};
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TableCallOptions {
@@ -32,9 +32,9 @@ pub(crate) async fn retry_table_operation<CallbackFuture, CallbackResult>(
 where
     CallbackFuture: Future<Output = YdbResult<CallbackResult>>,
 {
-    let retrier: Arc<Box<dyn Retry>> = match opts.timeout {
-        None => Arc::new(Box::new(IndefiniteRetrier {})),
-        Some(timeout) => Arc::new(Box::new(TimeoutRetrier { timeout })),
+    let retrier: Arc<dyn Retry> = match opts.timeout {
+        None => Arc::new(IndefiniteRetrier {}),
+        Some(timeout) => Arc::new(TimeoutRetrier { timeout }),
     };
     let mut attempt: usize = 0;
     let start = Instant::now();
@@ -51,7 +51,7 @@ where
         };
 
         let now = Instant::now();
-        let retry_decision = retrier.wait_duration(RetryParams {
+        let retry_decision = retrier.retry_decision(RetryParams {
             attempt,
             time_from_start: now.duration_since(start),
         });

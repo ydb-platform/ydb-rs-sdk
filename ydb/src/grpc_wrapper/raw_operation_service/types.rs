@@ -1,5 +1,5 @@
-use crate::grpc_wrapper::grpc::proto_issues_to_ydb_issues;
 use crate::YdbIssue;
+use crate::grpc_wrapper::grpc::proto_issues_to_ydb_issues;
 use ydb_grpc::ydb_proto::operations::Operation;
 
 #[derive(Debug, Clone)]

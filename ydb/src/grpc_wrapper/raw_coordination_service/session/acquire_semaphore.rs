@@ -6,9 +6,9 @@ use ydb_grpc::ydb_proto::{
 };
 
 use crate::{
+    YdbStatusError,
     client_coordination::session::controller::IdentifiedMessage,
     grpc_wrapper::{grpc::proto_issues_to_ydb_issues, raw_errors::RawError},
-    YdbStatusError,
 };
 
 #[derive(Debug)]

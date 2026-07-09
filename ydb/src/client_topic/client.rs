@@ -1,18 +1,15 @@
 use super::compression::Executor;
 use super::list_types::{Codec, TopicDescription};
 use super::topicwriter::writer_tx_options::{TopicWriterTxOptions, TopicWriterTxOptionsBuilder};
+use crate::YdbError::InternalError;
 use crate::client::TimeoutSettings;
 use crate::client_common::TokenCache;
 use crate::client_query::Transaction;
 use crate::client_topic::list_types::{AlterConsumer, Consumer, MeteringMode};
 use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
-use crate::client_topic::topicreader::reader_options::{
-    TopicReaderOptions, TopicReaderOptionsBuilder,
-};
+use crate::client_topic::topicreader::reader_options::TopicReaderOptions;
 use crate::client_topic::topicwriter::writer::TopicWriter;
-use crate::client_topic::topicwriter::writer_options::{
-    TopicWriterOptions, TopicWriterOptionsBuilder,
-};
+use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
 use crate::client_topic::topicwriter::writer_tx::TopicWriterTx;
 use crate::errors;
 use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -21,8 +18,7 @@ use crate::grpc_wrapper::raw_topic_service::create_topic::RawCreateTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsumerRequest;
 use crate::grpc_wrapper::raw_topic_service::describe_topic::RawDescribeTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::drop_topic::RawDropTopicRequest;
-use crate::YdbError::InternalError;
-use crate::{grpc_wrapper, YdbResult};
+use crate::{YdbResult, grpc_wrapper};
 use derive_builder::{Builder, UninitializedFieldError};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -216,10 +212,10 @@ impl TopicClient {
         consumer: impl Into<String>,
         topic: impl Into<TopicSelectors>,
     ) -> YdbResult<TopicReader> {
-        let options = TopicReaderOptionsBuilder::default()
-            .consumer(consumer.into())
-            .topic(topic.into())
-            .build()?;
+        let options = TopicReaderOptions::builder()
+            .consumer(consumer)
+            .topic(topic)
+            .build();
         TopicReader::new(
             options,
             self.connection_manager.clone(),
@@ -281,10 +277,7 @@ impl TopicClient {
 
     pub async fn create_writer(&mut self, path: impl Into<String>) -> YdbResult<TopicWriter> {
         TopicWriter::new(
-            TopicWriterOptionsBuilder::default()
-                .topic_path(path.into())
-                .build()
-                .unwrap(),
+            TopicWriterOptions::builder().topic_path(path).build(),
             self.connection_manager.clone(),
             self.executor.clone(),
         )

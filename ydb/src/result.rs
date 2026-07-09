@@ -16,7 +16,7 @@ pub struct ResultSet {
 
 impl ResultSet {
     #[allow(dead_code)]
-    pub(crate) fn columns(&self) -> &Vec<crate::types::Column> {
+    pub(crate) fn columns(&self) -> &[crate::types::Column] {
         &self.columns
     }
 
