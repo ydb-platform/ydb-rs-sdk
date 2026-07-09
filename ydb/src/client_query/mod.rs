@@ -210,7 +210,7 @@ impl QueryClient {
         &self,
         callback: &mut F,
         mut tx: Transaction,
-        attempt: u32,
+        attempt: usize,
         start: Instant,
         wall_timeout: Option<Duration>,
         idempotent: bool,
@@ -238,13 +238,13 @@ impl QueryClient {
             Ok(Ok(value)) => match resolve_post_callback_action(&tx.ctx.state) {
                 PostCallbackAction::Return(status) => {
                     tx.notify_hooks(status);
-                    return Ok(value);
+                    return Ok(Some(value));
                 }
                 PostCallbackAction::Commit => {
                     return match tx.commit().await {
                         Ok(()) => {
                             tx.notify_hooks(QueryTxCommitStatus::Committed);
-                            Ok(value)
+                            Ok(Some(value))
                         }
                         // Commit outcome is ambiguous on transport errors; never retry.
                         Err(e) => {
@@ -280,14 +280,7 @@ impl QueryClient {
         if !check_retry_tx_error(&err, idempotent) {
             return Err(err);
         }
-        match pause_before_retry(
-            &self.ctx.retry_control,
-            attempt as usize,
-            start,
-            wall_timeout,
-        )
-        .await
-        {
+        match pause_before_retry(&self.ctx.retry_control, attempt, start, wall_timeout).await {
             Ok(()) => {}
             Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
                 return Err(err);
