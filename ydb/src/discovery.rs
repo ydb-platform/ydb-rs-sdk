@@ -351,7 +351,7 @@ impl DiscoverySharedState {
             let retrier = IndefiniteRetrier;
             let discovery_start = Instant::now();
 
-            'retry: loop {
+            'attempt: loop {
                 let Some(state) = state.upgrade() else {
                     break 'worker;
                 };
@@ -363,7 +363,7 @@ impl DiscoverySharedState {
                 trace!("discovery result: {:?}", res);
 
                 if res.is_ok() {
-                    break 'retry;
+                    break 'attempt;
                 }
 
                 let decision = retrier.retry_decision(RetryParams {
@@ -372,7 +372,7 @@ impl DiscoverySharedState {
                 });
 
                 if !decision.wait().await {
-                    break 'retry;
+                    break 'attempt;
                 }
             }
 
