@@ -40,8 +40,18 @@ impl PartitionEntry {
         matches!(self.input, InputState::Closed)
     }
 
-    fn close_input(&mut self) {
-        self.input = InputState::Closed;
+    fn close_input(&mut self) -> YdbResult<()> {
+        let psid = self.session.partition_session_id;
+
+        match self.input {
+            InputState::Open => {
+                self.input = InputState::Closed;
+                Ok(())
+            }
+            InputState::Closed => Err(YdbError::custom(format!(
+                "topic reader close session: session {psid} already closed"
+            ))),
+        }
     }
 
     /// Removes up to `cap` messages from the front of the queue.
@@ -146,18 +156,9 @@ impl MessageBuffer {
             ..
         } = end_partition;
 
-        let Some(entry) = self.entries.get_mut(&partition_session_id) else {
-            return Err(YdbError::custom(format!(
-                "topic reader end partition session for unknown partition session {partition_session_id}"
-            )));
-        };
-        if entry.is_closed() {
-            return Err(YdbError::custom(format!(
-                "topic reader end partition session for already closed partition session {partition_session_id}"
-            )));
-        }
+        let entry = self.entry_mut(partition_session_id, "end partition session")?;
 
-        entry.close_input();
+        entry.close_input()?;
         let has_buffered_messages = !entry.queue.is_empty();
 
         self.round_robin.remove(partition_session_id);
@@ -205,15 +206,12 @@ impl MessageBuffer {
         }
 
         let batch_bytes = batch.get_read_session_size();
-        let Some(entry) = self.entries.get_mut(&partition_session_id) else {
-            return Err(YdbError::custom(format!(
-                "topic reader received messages for unknown partition session {partition_session_id}"
-            )));
-        };
+
+        let entry = self.entry_mut(partition_session_id, "push batch")?;
 
         if entry.is_closed() {
             return Err(YdbError::custom(format!(
-                "topic reader received messages for closed partition session {partition_session_id}"
+                "topic reader push batch: partition session {partition_session_id} is closed"
             )));
         }
 
@@ -223,6 +221,7 @@ impl MessageBuffer {
             last.bytes_to_release = batch_bytes;
         }
         entry.queue.extend(messages);
+
         Ok(true)
     }
 
@@ -261,9 +260,10 @@ impl MessageBuffer {
         }
 
         if let Some(result) = self.pop_priority_batch(cap)? {
-            return Ok(Some(result));
+            Ok(Some(result))
+        } else {
+            self.pop_round_robin_batch(cap)
         }
-        self.pop_round_robin_batch(cap)
     }
 
     fn pop_priority_batch(&mut self, cap: usize) -> YdbResult<Option<BufferedBatch>> {
