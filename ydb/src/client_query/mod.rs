@@ -225,12 +225,12 @@ impl QueryClient {
             let callback_result = AssertUnwindSafe(callback(&mut tx)).catch_unwind().await;
 
             let err = match callback_result {
-                Ok(Ok(value)) => match resolve_success_outcome(&tx.ctx.state) {
-                    SuccessOutcome::Done(status) => {
+                Ok(Ok(value)) => match resolve_post_callback_action(&tx.ctx.state) {
+                    PostCallbackAction::Return(status) => {
                         tx.notify_hooks(status);
                         return Ok(value);
                     }
-                    SuccessOutcome::NeedsCommit => {
+                    PostCallbackAction::Commit => {
                         return match tx.commit().await {
                             Ok(()) => {
                                 tx.notify_hooks(QueryTxCommitStatus::Committed);
@@ -243,11 +243,11 @@ impl QueryClient {
                             }
                         };
                     }
-                    SuccessOutcome::FailedRetryable(err) => {
+                    PostCallbackAction::Retry(err) => {
                         tx.notify_hooks(QueryTxCommitStatus::Aborted);
                         err
                     }
-                    SuccessOutcome::FailedTerminal(err) => {
+                    PostCallbackAction::Fail(err) => {
                         tx.notify_hooks(QueryTxCommitStatus::Aborted);
                         return Err(err);
                     }
@@ -295,24 +295,22 @@ impl QueryClient {
     }
 }
 
-enum SuccessOutcome {
-    Done(QueryTxCommitStatus),
-    NeedsCommit,
-    FailedRetryable(YdbOrCustomerError),
-    FailedTerminal(YdbOrCustomerError),
+enum PostCallbackAction {
+    Return(QueryTxCommitStatus),
+    Commit,
+    Retry(YdbOrCustomerError),
+    Fail(YdbOrCustomerError),
 }
 
-fn resolve_success_outcome(state: &TxState) -> SuccessOutcome {
+fn resolve_post_callback_action(state: &TxState) -> PostCallbackAction {
     match state {
-        TxState::RolledBack => SuccessOutcome::Done(QueryTxCommitStatus::Aborted),
-        TxState::Committed => SuccessOutcome::Done(QueryTxCommitStatus::Committed),
+        TxState::RolledBack => PostCallbackAction::Return(QueryTxCommitStatus::Aborted),
+        TxState::Committed => PostCallbackAction::Return(QueryTxCommitStatus::Committed),
         TxState::Invalidated(err) => {
-            SuccessOutcome::FailedRetryable(YdbOrCustomerError::YDB(err.clone()))
+            PostCallbackAction::Retry(YdbOrCustomerError::YDB(err.clone()))
         }
-        TxState::Ambiguous(err) => {
-            SuccessOutcome::FailedTerminal(YdbOrCustomerError::YDB(err.clone()))
-        }
-        TxState::Active => SuccessOutcome::NeedsCommit,
+        TxState::Ambiguous(err) => PostCallbackAction::Fail(YdbOrCustomerError::YDB(err.clone())),
+        TxState::Active => PostCallbackAction::Commit,
     }
 }
 
@@ -544,8 +542,8 @@ mod unit_tests {
     fn invalidated_state_fails_instead_of_committing() {
         let state = TxState::Invalidated(YdbError::Custom("server aborted".into()));
         assert!(matches!(
-            resolve_success_outcome(&state),
-            SuccessOutcome::FailedRetryable(_)
+            resolve_post_callback_action(&state),
+            PostCallbackAction::Retry(_)
         ));
     }
 
@@ -553,28 +551,28 @@ mod unit_tests {
     fn ambiguous_state_fails_instead_of_committing() {
         let state = TxState::Ambiguous(YdbError::Custom("rollback rpc failed".into()));
         assert!(matches!(
-            resolve_success_outcome(&state),
-            SuccessOutcome::FailedTerminal(_)
+            resolve_post_callback_action(&state),
+            PostCallbackAction::Fail(_)
         ));
     }
 
     #[test]
     fn committed_and_rolled_back_states_are_done_not_failed() {
         assert!(matches!(
-            resolve_success_outcome(&TxState::Committed),
-            SuccessOutcome::Done(QueryTxCommitStatus::Committed)
+            resolve_post_callback_action(&TxState::Committed),
+            PostCallbackAction::Return(QueryTxCommitStatus::Committed)
         ));
         assert!(matches!(
-            resolve_success_outcome(&TxState::RolledBack),
-            SuccessOutcome::Done(QueryTxCommitStatus::Aborted)
+            resolve_post_callback_action(&TxState::RolledBack),
+            PostCallbackAction::Return(QueryTxCommitStatus::Aborted)
         ));
     }
 
     #[test]
     fn active_state_needs_a_real_commit() {
         assert!(matches!(
-            resolve_success_outcome(&TxState::Active),
-            SuccessOutcome::NeedsCommit
+            resolve_post_callback_action(&TxState::Active),
+            PostCallbackAction::Commit
         ));
     }
 }
