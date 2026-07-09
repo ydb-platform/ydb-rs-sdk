@@ -1,6 +1,6 @@
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use rand::prelude::StdRng;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rand::Rng;
+use rand::prelude::StdRng;
 use rand_core::{OsRng, RngCore, SeedableRng};
 use std::sync::{Arc, Mutex};
 
@@ -32,7 +32,7 @@ impl Generator {
         };
 
         let mut rng = self.rng.lock().unwrap();
-        let payload_double = rng.gen::<f64>();
+        let payload_double = rng.r#gen::<f64>();
         let payload_timestamp = std::time::SystemTime::now();
         let payload_str = gen_payload_string(&mut rng);
 

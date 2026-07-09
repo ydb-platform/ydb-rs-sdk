@@ -1,7 +1,7 @@
 use ydb_grpc::ydb_proto::query::{
-    transaction_control, transaction_settings, OnlineModeSettings, SerializableModeSettings,
-    SnapshotModeSettings, SnapshotRwModeSettings, StaleModeSettings, TransactionControl,
-    TransactionSettings,
+    OnlineModeSettings, SerializableModeSettings, SnapshotModeSettings, SnapshotRwModeSettings,
+    StaleModeSettings, TransactionControl, TransactionSettings, transaction_control,
+    transaction_settings,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

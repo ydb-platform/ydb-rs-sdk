@@ -7,7 +7,7 @@ use crate::client_table::TableClient;
 use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::load_balancer::SharedLoadBalancer;
-use crate::session_pool::{default_session_pool_settings, SessionPool};
+use crate::session_pool::{SessionPool, default_session_pool_settings};
 use crate::waiter::Waiter;
 
 pub use crate::session_pool::{SessionPoolSettings, SessionPoolStats};
@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::client_topic::client::TopicClient;
-use crate::client_topic::compression::{default_executor, Executor};
+use crate::client_topic::compression::{Executor, default_executor};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::retry_budget::{RetryControl, RetryMetrics};
@@ -30,7 +30,7 @@ use tracing::trace;
 pub struct Client {
     credentials: DBCredentials,
     load_balancer: SharedLoadBalancer,
-    discovery: Arc<Box<dyn Discovery>>,
+    discovery: Arc<dyn Discovery>,
     connection_manager: GrpcConnectionManager,
     executor: Arc<dyn Executor>,
     session_pool: SessionPool,
@@ -40,7 +40,7 @@ pub struct Client {
 impl Client {
     pub(crate) fn new(
         credentials: DBCredentials,
-        discovery: Arc<Box<dyn Discovery>>,
+        discovery: Arc<dyn Discovery>,
         connection_manager: GrpcConnectionManager,
         load_balancer: SharedLoadBalancer,
         executor: Option<Arc<dyn Executor>>,

@@ -9,7 +9,7 @@ use crate::pub_traits::{Credentials, TokenInfo};
 use chrono::DateTime;
 use http::Uri;
 
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -41,10 +41,10 @@ pub type StaticCredentialsAuth = StaticCredentials;
 #[deprecated(note = "use MetadataUrlCredentials instead")]
 pub type YandexMetadata = MetadataUrlCredentials;
 
-pub(crate) type CredentialsRef = Arc<Box<dyn Credentials>>;
+pub(crate) type CredentialsRef = Arc<dyn Credentials>;
 
 pub(crate) fn credencials_ref<T: 'static + Credentials>(cred: T) -> CredentialsRef {
-    Arc::new(Box::new(cred))
+    Arc::new(cred)
 }
 
 /// Get token of service account of instance
@@ -145,19 +145,19 @@ fn get_credentials_from_env() -> YdbResult<Box<dyn Credentials>> {
         return Ok(Box::new(ServiceAccountCredentials::from_file(file_creds)?));
     }
 
-    if let Ok(v) = env::var(YDB_ANONYMOUS_CREDENTIALS) {
-        if v == "1" {
-            return Ok(Box::new(
-                // anonymous credentials is empty token
-                AnonymousCredentials::new(),
-            ));
-        }
+    if let Ok(v) = env::var(YDB_ANONYMOUS_CREDENTIALS)
+        && v == "1"
+    {
+        return Ok(Box::new(
+            // anonymous credentials is empty token
+            AnonymousCredentials::new(),
+        ));
     }
 
-    if let Ok(v) = env::var(YDB_METADATA_CREDENTIALS) {
-        if v == "1" {
-            return Ok(Box::new(MetadataUrlCredentials::new()));
-        }
+    if let Ok(v) = env::var(YDB_METADATA_CREDENTIALS)
+        && v == "1"
+    {
+        return Ok(Box::new(MetadataUrlCredentials::new()));
     }
 
     if let Ok(token) = env::var(YDB_ACCESS_TOKEN_CREDENTIALS) {

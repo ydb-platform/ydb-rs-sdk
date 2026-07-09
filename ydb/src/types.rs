@@ -1,8 +1,8 @@
 use crate::errors::{YdbError, YdbResult};
 use std::collections::HashMap;
 
-use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
 use crate::grpc_wrapper::raw_table_service::value::RawColumn;
+use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::num::TryFromIntError;
@@ -272,7 +272,13 @@ impl ValueStruct {
         values: Vec<Value>,
     ) -> YdbResult<Self> {
         if fields_name.len() != values.len() {
-            return Err(YdbError::Custom(format!("different len fields_name and values. fields_name len: {}, values len: {}. fields_name: {:?}, values: {:?}", fields_name.len(), values.len(), fields_name, values)));
+            return Err(YdbError::Custom(format!(
+                "different len fields_name and values. fields_name len: {}, values len: {}. fields_name: {:?}, values: {:?}",
+                fields_name.len(),
+                values.len(),
+                fields_name,
+                values
+            )));
         };
 
         Ok(ValueStruct {
@@ -459,19 +465,21 @@ impl Value {
     pub fn list_from(example_value: Value, values: Vec<Value>) -> YdbResult<Self> {
         for (index, value) in values.iter().enumerate() {
             if std::mem::discriminant(&example_value) != std::mem::discriminant(value) {
-                return Err(YdbError::Custom(format!("failed list_from: type and value has different enum-types. index: {index}, type: '{example_value:?}', value: '{value:?}'")));
+                return Err(YdbError::Custom(format!(
+                    "failed list_from: type and value has different enum-types. index: {index}, type: '{example_value:?}', value: '{value:?}'"
+                )));
             }
         }
 
         if let Value::Struct(example_value_struct) = &example_value {
             for (i, value) in values.iter().enumerate() {
-                if let Value::Struct(value_struct) = &value {
-                    if value_struct.fields_name != example_value_struct.fields_name {
-                        return Err(YdbError::Custom(format!(
-                                "failed list_from: fields of value struct with index `{i}`: '{:?}' is not equal to fields of example value struct: '{:?}'",
-                                value_struct.fields_name, example_value_struct.fields_name
-                            )));
-                    }
+                if let Value::Struct(value_struct) = &value
+                    && value_struct.fields_name != example_value_struct.fields_name
+                {
+                    return Err(YdbError::Custom(format!(
+                        "failed list_from: fields of value struct with index `{i}`: '{:?}' is not equal to fields of example value struct: '{:?}'",
+                        value_struct.fields_name, example_value_struct.fields_name
+                    )));
                 }
             }
         }
@@ -483,10 +491,12 @@ impl Value {
     }
 
     pub(crate) fn optional_from(t: Value, value: Option<Value>) -> YdbResult<Self> {
-        if let Some(value) = &value {
-            if std::mem::discriminant(&t) != std::mem::discriminant(value) {
-                return Err(YdbError::Custom(format!("failed optional_from: type and value has different enum-types. type: '{t:?}', value: '{value:?}'")));
-            }
+        if let Some(value) = &value
+            && std::mem::discriminant(&t) != std::mem::discriminant(value)
+        {
+            return Err(YdbError::Custom(format!(
+                "failed optional_from: type and value has different enum-types. type: '{t:?}', value: '{value:?}'"
+            )));
         }
         Ok(Value::Optional(Box::new(ValueOptional { t, value })))
     }

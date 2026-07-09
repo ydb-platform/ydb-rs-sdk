@@ -9,10 +9,10 @@ mod row;
 pub mod topic;
 
 pub use config::Config;
-pub use framework::{run, Framework, Workload};
+pub use framework::{Framework, Workload, run};
 pub use generator::Generator;
 pub use kv::{Database, KvWorkload};
 pub use logger::Logger;
 pub use metrics::Metrics;
-pub use row::{test_row_from_row, RowID, TestRow};
+pub use row::{RowID, TestRow, test_row_from_row};
 pub use topic::{TopicService, TopicWorkload};

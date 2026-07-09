@@ -16,10 +16,11 @@ async fn main() -> YdbResult<()> {
             ))
             .client()?;
 
-    if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
-        res?
-    } else {
-        return Err(YdbError::from("Connection timeout"));
+    match timeout(Duration::from_secs(3), client.wait()).await {
+        Ok(res) => res?,
+        _ => {
+            return Err(YdbError::from("Connection timeout"));
+        }
     };
 
     println!("created\nmake a query...");

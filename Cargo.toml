@@ -10,6 +10,7 @@ members = [
 ]
 
 [workspace.package]
+edition = "2024"
 rust-version = "1.88"
 
 [workspace.lints.rust]
@@ -18,7 +19,6 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 dbg_macro = "warn"
 incompatible_msrv = "warn"
-large_enum_variant = "allow"
 
 [workspace.dependencies]
 # Versions of those crates should match, that's why all of them are here.

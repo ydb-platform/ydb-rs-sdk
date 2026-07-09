@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
+use futures_util::{StreamExt, stream::BoxStream};
 use http::Uri;
-use tokio::sync::watch::Receiver;
 
-use crate::{grpc_wrapper::raw_services::Service, DiscoveryState, Waiter, YdbResult};
+use crate::{DiscoveryState, Waiter, YdbResult, grpc_wrapper::raw_services::Service};
 
 #[cfg(test)]
 pub mod balancer_test;
@@ -31,14 +31,9 @@ impl Waiter for MockLoadBalancer {
 
 pub(crate) async fn update_load_balancer(
     mut lb: impl LoadBalancer,
-    mut receiver: Receiver<Arc<DiscoveryState>>,
+    mut receiver: BoxStream<'static, Arc<DiscoveryState>>,
 ) {
-    loop {
-        // clone for prevent block send side while update current lb
-        let state = receiver.borrow_and_update().clone();
+    while let Some(state) = receiver.next().await {
         let _ = lb.set_discovery_state(&state);
-        if receiver.changed().await.is_err() {
-            break;
-        }
     }
 }

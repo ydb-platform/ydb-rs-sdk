@@ -2,7 +2,7 @@ use crate::grpc_wrapper::{
     raw_errors::{RawError, RawResult},
     raw_topic_service::{
         common::codecs::RawSupportedCodecs,
-        stream_write::{init::RawInitResponse, RawServerMessage},
+        stream_write::{RawServerMessage, init::RawInitResponse},
     },
 };
 

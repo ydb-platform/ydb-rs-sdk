@@ -10,8 +10,8 @@ use crate::table_requests::{
 use crate::table_service_types::{CopyTableItem, RenameTableItem, TableDescription};
 use crate::types::Value;
 
-use super::call_options::TableCallOptions;
 use super::TableClient;
+use super::call_options::TableCallOptions;
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 

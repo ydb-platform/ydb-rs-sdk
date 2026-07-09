@@ -2,9 +2,9 @@ use std::sync::{Arc, RwLock};
 
 use http::Uri;
 
-use crate::{grpc_wrapper::raw_services::Service, Discovery, DiscoveryState, Waiter, YdbResult};
+use crate::{Discovery, DiscoveryState, Waiter, YdbResult, grpc_wrapper::raw_services::Service};
 
-use super::{random_balancer::RandomLoadBalancer, update_load_balancer, LoadBalancer};
+use super::{LoadBalancer, random_balancer::RandomLoadBalancer, update_load_balancer};
 
 #[derive(Clone)]
 pub(crate) struct SharedLoadBalancer {
@@ -29,7 +29,9 @@ impl SharedLoadBalancer {
         let mut shared_lb = Self::new_with_balancer(load_balancer);
         let shared_lb_updater = shared_lb.clone();
         let discovery_receiver = discovery.subscribe();
-        let _ = shared_lb.set_discovery_state(&discovery.state());
+        if let Some(state) = discovery.try_state() {
+            let _ = shared_lb.set_discovery_state(&state);
+        }
         tokio::spawn(
             async move { update_load_balancer(shared_lb_updater, discovery_receiver).await },
         );
