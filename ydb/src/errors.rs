@@ -66,6 +66,7 @@ impl From<YdbError> for YdbOrCustomerError {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum NeedRetry {
     True,           // operation guarantee to not completed, error is temporary, need retry
     IdempotentOnly, // operation in unknown state - it may be completed or not, error temporary. Operation may be auto retry for idempotent operations only.
