@@ -16,7 +16,7 @@ use tracing::trace;
 
 #[derive(Debug)]
 pub(crate) struct ConnectionPool<C: ConnectionState> {
-    connections: RwLock<HashMap<Uri, Arc<tokio::sync::Mutex<C>>>>,
+    connections: RwLock<HashMap<Uri, Arc<C>>>,
     tls_config: Option<Arc<ClientTlsConfig>>,
 }
 
@@ -49,12 +49,12 @@ impl<C: ConnectionState> ConnectionPool<C> {
         }
 
         if let Some(connection) = connection {
-            connection.lock().await.channel().await
+            connection.channel().await
         } else {
             let (channel, connection) = C::init(uri.to_owned(), self.tls_config.as_ref()).await?;
             self.connections
                 .write()?
-                .insert(uri.clone(), Arc::new(tokio::sync::Mutex::new(connection)));
+                .insert(uri.clone(), Arc::new(connection));
 
             Ok(channel)
         }
@@ -66,7 +66,7 @@ pub trait ConnectionState: Sized {
         uri: Uri,
         tls_config: Option<&Arc<ClientTlsConfig>>,
     ) -> YdbResult<(Channel, Self)>;
-    async fn channel(&mut self) -> YdbResult<Channel>;
+    async fn channel(&self) -> YdbResult<Channel>;
 }
 
 /// Connection state that is just a lazy channel.
@@ -86,7 +86,7 @@ impl ConnectionState for Simple {
         Ok((channel.clone(), Self { channel }))
     }
 
-    async fn channel(&mut self) -> YdbResult<Channel> {
+    async fn channel(&self) -> YdbResult<Channel> {
         Ok(self.channel.clone())
     }
 }
@@ -95,11 +95,17 @@ impl ConnectionState for Simple {
 /// connect to all addresses for a given
 /// URI and then does round-robin on
 /// successful connections.
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Debug)]
 pub(crate) struct RacyRoundRobin {
     uri: Uri,
     tls_config: Option<Arc<ClientTlsConfig>>,
+
+    state: tokio::sync::Mutex<RacyRoundRobinState>,
+}
+
+#[derive(Derivative)]
+#[derivative(Debug)]
+struct RacyRoundRobinState {
     addrs: HashSet<IpAddr>,
 
     #[derivative(Debug = "ignore")]
@@ -128,22 +134,38 @@ impl ConnectionState for RacyRoundRobin {
             Self {
                 uri,
                 tls_config: tls_config.cloned(),
-                addrs,
-                connections,
-                first_connection,
-                first_connection_addr,
-                polled_connections: VecDeque::new(),
+                state: RacyRoundRobinState {
+                    addrs,
+                    connections,
+                    first_connection,
+                    first_connection_addr,
+                    polled_connections: VecDeque::new(),
+                }
+                .into(),
             },
         ))
     }
 
-    async fn channel(&mut self) -> YdbResult<Channel> {
+    async fn channel(&self) -> YdbResult<Channel> {
         let addrs = Self::resolve(&self.uri).await?;
 
-        if self.addrs != addrs {
-            self.reinit(addrs).await
+        let mut state = self.state.lock().await;
+
+        if state.addrs != addrs {
+            let (connections, first_connection, first_connection_addr) =
+                Self::init(self.uri.clone(), self.tls_config.as_ref(), &addrs).await?;
+
+            *state = RacyRoundRobinState {
+                addrs,
+                connections,
+                first_connection: first_connection.clone(),
+                first_connection_addr,
+                polled_connections: VecDeque::new(),
+            };
+
+            Ok(first_connection)
         } else {
-            Ok(self.connect_next().await)
+            Ok(future::poll_fn(|cx| Poll::Ready(self.connect_next(&mut state, cx))).await)
         }
     }
 }
@@ -207,19 +229,6 @@ impl RacyRoundRobin {
         }
     }
 
-    async fn reinit(&mut self, addrs: HashSet<IpAddr>) -> YdbResult<Channel> {
-        let (connections, first_connection, first_connection_addr) =
-            Self::init(self.uri.clone(), self.tls_config.as_ref(), &addrs).await?;
-
-        self.addrs = addrs;
-        self.connections = connections;
-        self.polled_connections.clear();
-        self.first_connection = first_connection.clone();
-        self.first_connection_addr = first_connection_addr;
-
-        Ok(first_connection)
-    }
-
     fn try_connect(
         uri: Uri,
         tls_config: Option<Arc<ClientTlsConfig>>,
@@ -249,40 +258,42 @@ impl RacyRoundRobin {
         .boxed()
     }
 
-    async fn connect_next(&mut self) -> Channel {
-        // At least the initially chosen connection is alive,
-        // so the loop will terminate
-        let (channel, addr) = loop {
-            if let Some(mut connection) = self.connections.pop_front() {
-                match futures_util::poll!(&mut connection) {
-                    // Connection is ready
-                    Poll::Ready((Ok(channel), addr)) => {
-                        trace!("choosing connection to {addr}");
-                        self.polled_connections
-                            .push_back(future::ready((Ok(channel.clone()), addr)).boxed());
-                        break (channel, addr);
-                    }
-                    // Connection has failed
-                    Poll::Ready((Err(err), addr)) => {
-                        trace!("failed to connect to {addr}: {err}");
-                        self.polled_connections.push_back(Self::try_connect(
-                            self.uri.clone(),
-                            self.tls_config.clone(),
-                            addr,
-                        ));
-                    }
-                    // Still connecting
-                    Poll::Pending => self.polled_connections.push_back(connection),
+    fn connect_next(
+        &self,
+        state: &mut RacyRoundRobinState,
+        cx: &mut std::task::Context<'_>,
+    ) -> Channel {
+        while let Some(mut connection) = state.connections.pop_front() {
+            match connection.poll_unpin(cx) {
+                // Connection is ready
+                Poll::Ready((Ok(channel), addr)) => {
+                    trace!("choosing connection to {addr}");
+                    state
+                        .polled_connections
+                        .push_back(future::ready((Ok(channel.clone()), addr)).boxed());
+                    return channel;
                 }
-            } else {
-                self.connections = std::mem::take(&mut self.polled_connections);
+                // Connection has failed
+                Poll::Ready((Err(err), addr)) => {
+                    trace!("failed to connect to {addr}: {err}, trying next");
+                    state.polled_connections.push_back(Self::try_connect(
+                        self.uri.clone(),
+                        self.tls_config.clone(),
+                        addr,
+                    ));
+                }
+                // Still connecting
+                Poll::Pending => state.polled_connections.push_back(connection),
+            }
+        }
 
-                break (self.first_connection.clone(), self.first_connection_addr);
-            };
-        };
-        trace!("choosing to connect to {addr}");
+        state.connections = std::mem::take(&mut state.polled_connections);
+        trace!(
+            "choosing to connect to {}, round-robin cycle finished",
+            state.first_connection_addr
+        );
 
-        channel
+        state.first_connection.clone()
     }
 }
 
