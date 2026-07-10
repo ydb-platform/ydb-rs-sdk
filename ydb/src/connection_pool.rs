@@ -117,10 +117,6 @@ impl ConnectionState for RacyRoundRobin {
             .map(|addr| addr.ip())
             .collect::<Vec<_>>();
 
-        if addrs.is_empty() {
-            return Err(YdbError::from_str("domain somehow has zero addresses"));
-        }
-
         if self.addrs != addrs || self.connections.is_empty() {
             self.addrs = addrs;
             self.connections.clear();
@@ -147,7 +143,8 @@ impl RacyRoundRobin {
         loop {
             let Some((first_result, addr)) = channels.next().await else {
                 // All connections have failed.
-                return Err(first_err.expect("at least one future must be failed with an error"));
+                return Err(first_err
+                    .unwrap_or_else(|| YdbError::from_str("domain somehow has zero addresses")));
             };
 
             match first_result {
