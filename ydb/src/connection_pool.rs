@@ -15,12 +15,12 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use tracing::trace;
 
 #[derive(Debug)]
-pub(crate) struct ConnectionPool<C: ConnectionState> {
+pub(crate) struct ConnectionPool<C: Connection> {
     connections: RwLock<HashMap<Uri, Arc<C>>>,
     tls_config: Option<Arc<ClientTlsConfig>>,
 }
 
-impl<C: ConnectionState> ConnectionPool<C> {
+impl<C: Connection> ConnectionPool<C> {
     pub(crate) fn new() -> Self {
         Self {
             connections: HashMap::new().into(),
@@ -61,7 +61,7 @@ impl<C: ConnectionState> ConnectionPool<C> {
     }
 }
 
-pub trait ConnectionState: Sized {
+pub trait Connection: Sized {
     async fn init(
         uri: Uri,
         tls_config: Option<&Arc<ClientTlsConfig>>,
@@ -75,7 +75,7 @@ pub(crate) struct Simple {
     channel: Channel,
 }
 
-impl ConnectionState for Simple {
+impl Connection for Simple {
     async fn init(
         uri: Uri,
         tls_config: Option<&Arc<ClientTlsConfig>>,
@@ -118,7 +118,7 @@ struct RacyRoundRobinState {
 
 type ConnectionFuture = BoxFuture<'static, (YdbResult<Channel>, IpAddr)>;
 
-impl ConnectionState for RacyRoundRobin {
+impl Connection for RacyRoundRobin {
     async fn init(
         uri: Uri,
         tls_config: Option<&Arc<ClientTlsConfig>>,

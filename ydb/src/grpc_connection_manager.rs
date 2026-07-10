@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::connection_pool::{ConnectionPool, ConnectionState, RacyRoundRobin, Simple};
+use crate::connection_pool::{Connection, ConnectionPool, RacyRoundRobin, Simple};
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
@@ -17,17 +17,17 @@ pub(crate) type DiscoveryConnectionManager =
 pub(crate) struct NoBalancer;
 
 #[derive(Derivative)]
-#[derivative(Clone(bound = "Balancer: Clone"), Debug)]
-pub(crate) struct GrpcConnectionManagerGeneric<Balancer, CS: ConnectionState> {
-    balancer: Balancer,
-    connections_pool: Arc<ConnectionPool<CS>>,
+#[derivative(Clone(bound = "B: Clone"), Debug)]
+pub(crate) struct GrpcConnectionManagerGeneric<B, C: Connection> {
+    balancer: B,
+    connections_pool: Arc<ConnectionPool<C>>,
     #[derivative(Debug = "ignore")]
     interceptor: MultiInterceptor,
     database: String,
     grpc_max_message_size: usize,
 }
 
-impl<B, CS: ConnectionState> GrpcConnectionManagerGeneric<B, CS> {
+impl<B, C: Connection> GrpcConnectionManagerGeneric<B, C> {
     pub(crate) fn new(
         balancer: B,
         database: String,
