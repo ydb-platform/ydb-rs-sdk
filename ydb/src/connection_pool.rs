@@ -70,7 +70,7 @@ pub(crate) struct Simple {
 impl ConnectionState for Simple {
     fn init(uri: Uri, tls_config: Option<&Arc<ClientTlsConfig>>) -> YdbResult<Self> {
         let uri = normalize_uri_scheme(uri)?;
-        let channel = endpoint(uri, tls_config.map(Arc::as_ref))?.connect_lazy();
+        let channel = endpoint(uri, None, tls_config.map(Arc::as_ref))?.connect_lazy();
 
         Ok(Self { channel })
     }
@@ -193,7 +193,7 @@ impl RacyRoundRobin {
             );
             let resolved_uri = Uri::from_parts(uri_parts)?;
 
-            endpoint(resolved_uri, tls_config.as_deref())?
+            endpoint(resolved_uri, Some(&uri), tls_config.as_deref())?
                 .origin(uri)
                 .connect()
                 .await
@@ -232,7 +232,11 @@ impl RacyRoundRobin {
     }
 }
 
-pub fn endpoint(uri: Uri, tls_config: Option<&ClientTlsConfig>) -> YdbResult<Endpoint> {
+pub fn endpoint(
+    uri: Uri,
+    original_uri: Option<&Uri>,
+    tls_config: Option<&ClientTlsConfig>,
+) -> YdbResult<Endpoint> {
     let need_tls = uri.scheme() == Some(&Scheme::HTTPS);
     trace!("scheme is {:?}", uri.scheme());
 
@@ -240,7 +244,8 @@ pub fn endpoint(uri: Uri, tls_config: Option<&ClientTlsConfig>) -> YdbResult<End
         Endpoint::from(uri.clone()).http2_keep_alive_interval(Duration::from_secs(10));
 
     if need_tls {
-        let domain = uri
+        let domain = original_uri
+            .unwrap_or(&uri)
             .host()
             .ok_or_else(|| YdbError::EndpointHasNoHost(uri.clone()))?;
 
