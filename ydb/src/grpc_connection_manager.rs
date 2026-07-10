@@ -17,10 +17,10 @@ pub(crate) type DiscoveryConnectionManager =
 pub(crate) struct NoBalancer;
 
 #[derive(Derivative)]
-#[derivative(Clone(bound = "B: Clone"), Debug)]
-pub(crate) struct GrpcConnectionManagerGeneric<B, CS: ConnectionState> {
-    balancer: B,
-    connections_pool: Arc<tokio::sync::Mutex<ConnectionPool<CS>>>,
+#[derivative(Clone(bound = "Balancer: Clone"), Debug)]
+pub(crate) struct GrpcConnectionManagerGeneric<Balancer, CS: ConnectionState> {
+    balancer: Balancer,
+    connections_pool: Arc<ConnectionPool<CS>>,
     #[derivative(Debug = "ignore")]
     interceptor: MultiInterceptor,
     database: String,
@@ -42,7 +42,7 @@ impl<B, CS: ConnectionState> GrpcConnectionManagerGeneric<B, CS> {
 
         Self {
             balancer,
-            connections_pool: Arc::new(cp.into()),
+            connections_pool: cp.into(),
             interceptor,
             database,
             grpc_max_message_size,
@@ -71,7 +71,7 @@ impl<B, CS: ConnectionState> GrpcConnectionManagerGeneric<B, CS> {
         new: F,
         uri: &Uri,
     ) -> YdbResult<T> {
-        let channel = self.connections_pool.lock().await.connection(uri).await?;
+        let channel = self.connections_pool.connection(uri).await?;
 
         let intercepted_channel = InterceptedChannel::new(channel, self.interceptor.clone());
         Ok(new(intercepted_channel).with_grpc_max_message_size(self.grpc_max_message_size))

@@ -8,7 +8,7 @@ use http::Uri;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::task::Poll;
 use std::time::Duration;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
@@ -16,14 +16,14 @@ use tracing::trace;
 
 #[derive(Debug)]
 pub(crate) struct ConnectionPool<C: ConnectionState> {
-    connections: HashMap<Uri, C>,
+    connections: RwLock<HashMap<Uri, Arc<tokio::sync::Mutex<C>>>>,
     tls_config: Option<Arc<ClientTlsConfig>>,
 }
 
 impl<C: ConnectionState> ConnectionPool<C> {
     pub(crate) fn new() -> Self {
         Self {
-            connections: HashMap::new(),
+            connections: HashMap::new().into(),
             tls_config: None,
         }
     }
@@ -40,12 +40,21 @@ impl<C: ConnectionState> ConnectionPool<C> {
         }
     }
 
-    pub(crate) async fn connection(&mut self, uri: &Uri) -> YdbResult<Channel> {
-        if let Some(connection) = self.connections.get_mut(uri) {
-            connection.channel().await
+    pub(crate) async fn connection(&self, uri: &Uri) -> YdbResult<Channel> {
+        let connection;
+
+        {
+            let read = self.connections.read().map_err(YdbError::from)?;
+            connection = read.get(uri).cloned();
+        }
+
+        if let Some(connection) = connection {
+            connection.lock().await.channel().await
         } else {
             let (channel, connection) = C::init(uri.to_owned(), self.tls_config.as_ref()).await?;
-            self.connections.insert(uri.clone(), connection);
+            self.connections
+                .write()?
+                .insert(uri.clone(), Arc::new(tokio::sync::Mutex::new(connection)));
 
             Ok(channel)
         }
@@ -244,8 +253,8 @@ impl RacyRoundRobin {
         // At least the initially chosen connection is alive,
         // so the loop will terminate
         let (channel, addr) = loop {
-            match self.connections.pop_front() {
-                Some(mut connection) => match futures_util::poll!(&mut connection) {
+            if let Some(mut connection) = self.connections.pop_front() {
+                match futures_util::poll!(&mut connection) {
                     // Connection is ready
                     Poll::Ready((Ok(channel), addr)) => {
                         trace!("choosing connection to {addr}");
@@ -264,12 +273,11 @@ impl RacyRoundRobin {
                     }
                     // Still connecting
                     Poll::Pending => self.polled_connections.push_back(connection),
-                },
-                None => {
-                    self.connections = std::mem::take(&mut self.polled_connections);
-
-                    break (self.first_connection.clone(), self.first_connection_addr);
                 }
+            } else {
+                self.connections = std::mem::take(&mut self.polled_connections);
+
+                break (self.first_connection.clone(), self.first_connection_addr);
             };
         };
         trace!("choosing to connect to {addr}");
