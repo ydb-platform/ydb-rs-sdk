@@ -122,7 +122,7 @@ impl ConnectionState for RacyRoundRobin {
             self.connections.clear();
             self.reinit().await
         } else {
-            self.connect_next().await
+            Ok(self.connect_next().await)
         }
     }
 }
@@ -203,7 +203,7 @@ impl RacyRoundRobin {
         .boxed()
     }
 
-    async fn connect_next(&mut self) -> YdbResult<Channel> {
+    async fn connect_next(&mut self) -> Channel {
         // At least the initially chosen connection is alive,
         // so the loop will terminate
         loop {
@@ -218,7 +218,7 @@ impl RacyRoundRobin {
                     trace!("choosing connection to {addr}");
                     self.connections
                         .push_back(future::ready((Ok(channel.clone()), addr)).boxed());
-                    return Ok(channel);
+                    return channel;
                 }
                 // Connection has failed
                 Poll::Ready((Err(err), addr)) => {
