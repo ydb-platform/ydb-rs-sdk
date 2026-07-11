@@ -6,7 +6,7 @@ use tokio_util::sync::CancellationToken;
 use crate::Framework;
 use crate::framework::Workload;
 use crate::helpers::{TimeoutOutcome, new_rate_limiter, run_workers_for, timeout_or_cancel};
-use crate::metrics::{OPERATION_MESSAGE_RTT, OPERATION_READ, OPERATION_WRITE};
+use crate::metrics::{OPERATION_READ, OPERATION_WRITE};
 
 use super::{Params, TopicService, verification};
 
@@ -206,8 +206,6 @@ async fn process_batch(
     offset_order: &verification::OffsetOrder,
     batch: &mut ydb::TopicReaderBatch,
 ) -> Result<(), String> {
-    let now = std::time::SystemTime::now();
-
     for message in batch.messages.iter_mut() {
         let payload = message
             .read_and_take()
@@ -225,27 +223,25 @@ async fn process_batch(
 
         messages_order.insert(message)?;
         offset_order.ack_message(message)?;
-        log_message_rtt_latency(fw, message, now)?;
+        record_topic_e2e_latency(fw, message)?;
     }
 
     Ok(())
 }
 
-fn log_message_rtt_latency(
+fn record_topic_e2e_latency(
     fw: &Framework,
     message: &ydb::TopicReaderMessage,
-    now: std::time::SystemTime,
 ) -> Result<(), String> {
     let created_at = message
         .created_at
         .ok_or_else(|| "message has no timestamp".to_string())?;
 
-    let latency = now
+    let latency = std::time::SystemTime::now()
         .duration_since(created_at)
         .map_err(|e| format!("message timestamp in the future: {e}"))?;
 
-    fw.metrics
-        .record_latency_with_operation(OPERATION_MESSAGE_RTT, latency);
+    fw.metrics.record_topic_e2e_latency(latency);
 
     Ok(())
 }

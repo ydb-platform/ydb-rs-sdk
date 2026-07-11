@@ -19,7 +19,6 @@ const HDR_SIGNIFICANT_DIGITS: u8 = 5;
 pub type OperationType = &'static str;
 pub const OPERATION_READ: OperationType = "read";
 pub const OPERATION_WRITE: OperationType = "write";
-pub const OPERATION_MESSAGE_RTT: OperationType = "message_rtt";
 
 const STATUS_SUCCESS: &str = "success";
 const STATUS_FAILURE: &str = "failure";
@@ -33,6 +32,7 @@ struct MetricsInner {
     ref_name: String,
     provider: Option<SdkMeterProvider>,
     latency: Arc<Mutex<LatencyHistogram>>,
+    topic_e2e_latency: Arc<Mutex<LatencyHistogram>>,
     operations_total: Option<Counter<u64>>,
     retry_attempts_total: Option<Counter<u64>>,
     retry_attempts: Option<Gauge<u64>>,
@@ -88,6 +88,7 @@ pub struct Span {
 impl Metrics {
     pub fn new(cfg: &Config) -> Result<Self, String> {
         let latency = Arc::new(Mutex::new(LatencyHistogram::new()));
+        let topic_e2e_latency = Arc::new(Mutex::new(LatencyHistogram::new()));
         let ref_name = cfg.ref_name.clone();
         let label = cfg.label.clone();
 
@@ -97,6 +98,7 @@ impl Metrics {
                     ref_name,
                     provider: None,
                     latency,
+                    topic_e2e_latency,
                     operations_total: None,
                     retry_attempts_total: None,
                     retry_attempts: None,
@@ -168,11 +170,48 @@ impl Metrics {
             })
             .build();
 
+        let topic_e2e_latency_p50 = topic_e2e_latency.clone();
+        let _topic_e2e_latency_p50 = meter
+            .f64_observable_gauge("sdk.topic.e2e.latency.p50.seconds")
+            .with_description("50th percentile topic end-to-end latency in seconds")
+            .with_unit("s")
+            .with_callback(move |observer| {
+                for (attrs_key, vals) in topic_e2e_latency_p50.lock().unwrap().percentiles() {
+                    observer.observe(vals[0], &attrs_from_key(attrs_key));
+                }
+            })
+            .build();
+
+        let topic_e2e_latency_p95 = topic_e2e_latency.clone();
+        let _topic_e2e_latency_p95 = meter
+            .f64_observable_gauge("sdk.topic.e2e.latency.p95.seconds")
+            .with_description("95th percentile topic end-to-end latency in seconds")
+            .with_unit("s")
+            .with_callback(move |observer| {
+                for (attrs_key, vals) in topic_e2e_latency_p95.lock().unwrap().percentiles() {
+                    observer.observe(vals[1], &attrs_from_key(attrs_key));
+                }
+            })
+            .build();
+
+        let topic_e2e_latency_p99 = topic_e2e_latency.clone();
+        let _topic_e2e_latency_p99 = meter
+            .f64_observable_gauge("sdk.topic.e2e.latency.p99.seconds")
+            .with_description("99th percentile topic end-to-end latency in seconds")
+            .with_unit("s")
+            .with_callback(move |observer| {
+                for (attrs_key, vals) in topic_e2e_latency_p99.lock().unwrap().percentiles() {
+                    observer.observe(vals[2], &attrs_from_key(attrs_key));
+                }
+            })
+            .build();
+
         Ok(Self {
             inner: Arc::new(MetricsInner {
                 ref_name,
                 provider: Some(provider),
                 latency,
+                topic_e2e_latency,
                 operations_total: Some(
                     meter
                         .u64_counter("sdk.operations.total")
@@ -225,13 +264,13 @@ impl Metrics {
             .record(latency.as_micros() as u64, attrs_key);
     }
 
-    pub fn record_latency_with_operation(&self, operation_type: OperationType, latency: Duration) {
-        let attrs_key = format!(
-            "ref={};operation_type={};operation_status={}",
-            self.inner.ref_name, operation_type, STATUS_SUCCESS
-        );
-
-        self.record_latency_with_attrs_key(attrs_key, latency);
+    pub fn record_topic_e2e_latency(&self, latency: Duration) {
+        let attrs_key = format!("ref={}", self.inner.ref_name);
+        self.inner
+            .topic_e2e_latency
+            .lock()
+            .unwrap()
+            .record(latency.as_micros() as u64, attrs_key);
     }
 
     pub fn start(&self, operation_type: OperationType) -> Span {
