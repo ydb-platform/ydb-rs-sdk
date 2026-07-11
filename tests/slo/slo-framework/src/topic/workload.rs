@@ -58,8 +58,8 @@ impl<T: TopicService + 'static> Workload for TopicWorkload<T> {
             ctx.clone(),
             self.fw.clone(),
             readers,
-            self.params.read_rps,
-            self.params.read_timeout,
+            self.params.delivery_timeout,
+            self.params.commit_timeout,
             self.params.commit_delay,
         );
 
@@ -108,8 +108,8 @@ fn spawn_writer_workers(
                 let message = ydb::TopicWriterMessage::builder().data(payload).build();
 
                 let span = fw.metrics.start(OPERATION_WRITE);
-                match timeout_or_cancel(&ctx, timeout, writer.write(message)).await {
-                    TimeoutOutcome::Completed(Ok(())) => span.finish(None, 1),
+                match timeout_or_cancel(&ctx, timeout, writer.write_with_ack(message)).await {
+                    TimeoutOutcome::Completed(Ok(_)) => span.finish(None, 1),
                     TimeoutOutcome::Completed(Err(err)) => {
                         let msg = err.to_string();
                         span.finish(Some(&msg), 1);
@@ -133,71 +133,105 @@ fn spawn_reader_workers(
     ctx: CancellationToken,
     fw: Arc<Framework>,
     readers: Vec<ydb::TopicReader>,
-    rps: u32,
-    timeout: Duration,
+    delivery_timeout: Duration,
+    commit_timeout: Duration,
     commit_delay: Duration,
 ) -> tokio::task::JoinHandle<()> {
-    let limiter = Arc::new(new_rate_limiter(rps));
     let messages_order = Arc::new(verification::MessagesOrder::default());
     let offsets_order = Arc::new(verification::OffsetOrder::default());
 
-    tokio::spawn(run_workers_for(readers.into_iter().map(move |reader| {
-        let ctx = ctx.clone();
-        let fw = fw.clone();
-        let limiter = limiter.clone();
+    tokio::spawn(run_workers_for(readers.into_iter().map(
+        move |mut reader| {
+            let ctx = ctx.clone();
+            let fw = fw.clone();
 
-        let reader = Arc::new(tokio::sync::Mutex::new(reader));
-        let messages_order = messages_order.clone();
-        let offset_order = offsets_order.clone();
+            let messages_order = messages_order.clone();
+            let offset_order = offsets_order.clone();
 
-        move || async move {
-            while !ctx.is_cancelled() {
-                if let Err(wait) = limiter.try_wait() {
-                    tokio::time::sleep(wait).await;
-                    continue;
-                }
-
-                let span = fw.metrics.start(OPERATION_READ);
-
-                match timeout_or_cancel(&ctx, timeout, reader.lock().await.read_batch()).await {
-                    TimeoutOutcome::Completed(Ok(mut batch)) => {
-                        if let Err(err) =
-                            process_batch(&fw, &messages_order, &offset_order, &mut batch).await
-                        {
-                            fw.logger.errorf(format!("invariant violated: {err}"));
-                            span.finish(Some(&err), 1);
+            move || async move {
+                while !ctx.is_cancelled() {
+                    let delivery_span = fw.metrics.start(OPERATION_READ);
+                    let mut batch = match timeout_or_cancel(
+                        &ctx,
+                        delivery_timeout,
+                        reader.read_batch(),
+                    )
+                    .await
+                    {
+                        TimeoutOutcome::Completed(Ok(batch)) => batch,
+                        TimeoutOutcome::Completed(Err(err)) => {
+                            let msg = err.to_string();
+                            delivery_span.finish(Some(&msg), 1);
+                            fw.logger.errorf(format!("read failed: {msg}"));
                             continue;
                         }
+                        TimeoutOutcome::TimedOut => {
+                            delivery_span.finish(Some("message delivery timeout"), 1);
+                            fw.logger.errorf("read failed: message delivery timeout");
+                            continue;
+                        }
+                        TimeoutOutcome::Cancelled => {
+                            delivery_span.cancel();
+                            break;
+                        }
+                    };
 
-                        spawn_commit(
-                            fw.clone(),
-                            reader.clone(),
-                            offset_order.clone(),
-                            batch.partition_id(),
-                            batch.offset(),
-                            batch.get_commit_marker(),
-                            commit_delay,
-                        );
+                    if let Err(err) =
+                        process_batch(&fw, &messages_order, &offset_order, &mut batch).await
+                    {
+                        delivery_span.finish(Some(&err), 1);
+                        fw.logger.errorf(format!("invariant violated: {err}"));
+                        continue;
+                    }
 
-                        span.finish(None, 1)
+                    // A delivered batch is not a completed read operation until
+                    // its offset commit is acknowledged. The commit span below
+                    // records that single successful operation.
+                    delivery_span.cancel();
+
+                    // This simulates application processing and is intentionally
+                    // outside the SDK commit latency and deadline.
+                    tokio::select! {
+                        biased;
+                        _ = ctx.cancelled() => break,
+                        _ = tokio::time::sleep(commit_delay) => {}
                     }
-                    TimeoutOutcome::Completed(Err(err)) => {
-                        let msg = err.to_string();
-                        span.finish(Some(&msg), 1);
-                        fw.logger.errorf(format!("read failed: {msg}"));
-                    }
-                    TimeoutOutcome::TimedOut => {
-                        span.finish(Some("read timeout"), 1);
-                        fw.logger.errorf("read failed: timeout");
-                    }
-                    TimeoutOutcome::Cancelled => {
-                        span.cancel();
-                        break;
+
+                    let partition_id = batch.partition_id();
+                    let end_offset = batch.offset();
+                    let commit_marker = batch.get_commit_marker();
+                    let span = fw.metrics.start(OPERATION_READ);
+
+                    match timeout_or_cancel(
+                        &ctx,
+                        commit_timeout,
+                        reader.commit_with_ack(commit_marker),
+                    )
+                    .await
+                    {
+                        TimeoutOutcome::Completed(Ok(())) => {
+                            offset_order.insert(partition_id, end_offset);
+                            span.finish(None, 1);
+                        }
+                        TimeoutOutcome::Completed(Err(err)) => {
+                            let msg = err.to_string();
+                            span.finish(Some(&msg), 1);
+                            fw.logger
+                                .errorf(format!("commit acknowledgement failed: {msg}"));
+                        }
+                        TimeoutOutcome::TimedOut => {
+                            span.finish(Some("commit acknowledgement timeout"), 1);
+                            fw.logger.errorf("commit acknowledgement failed: timeout");
+                        }
+                        TimeoutOutcome::Cancelled => {
+                            span.cancel();
+                            break;
+                        }
                     }
                 }
             }
-        }
-    })))
+        },
+    )))
 }
 
 async fn process_batch(
@@ -244,26 +278,4 @@ fn record_topic_e2e_latency(
     fw.metrics.record_topic_e2e_latency(latency);
 
     Ok(())
-}
-
-fn spawn_commit(
-    fw: Arc<Framework>,
-    reader: Arc<tokio::sync::Mutex<ydb::TopicReader>>,
-    offset_order: Arc<verification::OffsetOrder>,
-
-    partition_id: i64,
-    offset: i64,
-
-    commit_marker: ydb::TopicReaderCommitMarker,
-    commit_delay: Duration,
-) {
-    tokio::spawn(async move {
-        tokio::time::sleep(commit_delay).await;
-        let handle = reader.lock().await.commit_with_ack(commit_marker);
-
-        match handle.await {
-            Ok(()) => offset_order.insert(partition_id, offset),
-            Err(err) => fw.logger.printf(format!("commit not acked: {err}")),
-        }
-    });
 }
