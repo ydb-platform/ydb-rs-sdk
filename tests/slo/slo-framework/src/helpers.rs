@@ -15,8 +15,9 @@ impl RateLimiter {
         // Holding the FIFO mutex while sleeping queues every caller behind one
         // timer instead of waking all workers to race for the same permit.
         let mut next = self.next.lock().await;
-        sleep_until((*next).max(Instant::now())).await;
-        *next = Instant::now() + self.interval;
+        let scheduled = (*next).max(Instant::now());
+        sleep_until(scheduled).await;
+        *next = scheduled + self.interval;
     }
 }
 
