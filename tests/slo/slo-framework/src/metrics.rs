@@ -28,7 +28,8 @@ pub struct Metrics {
 
 struct MetricsInner {
     ref_name: String,
-    provider: Option<SdkMeterProvider>,
+    // Keeps the provider alive until all metric instruments are dropped.
+    _provider: Option<SdkMeterProvider>,
     operation_latency: Arc<Mutex<LatencySeries>>,
     topic_e2e_latency: Arc<Mutex<LatencySeries>>,
     operations_total: Option<Counter<u64>>,
@@ -57,7 +58,7 @@ impl Metrics {
             return Ok(Self {
                 inner: Arc::new(MetricsInner {
                     ref_name,
-                    provider: None,
+                    _provider: None,
                     operation_latency,
                     topic_e2e_latency,
                     operations_total: None,
@@ -111,7 +112,7 @@ impl Metrics {
         Ok(Self {
             inner: Arc::new(MetricsInner {
                 ref_name,
-                provider: Some(provider),
+                _provider: Some(provider),
                 operation_latency,
                 topic_e2e_latency,
                 operations_total: Some(
@@ -191,18 +192,6 @@ impl Metrics {
             operation_type,
             started: Instant::now(),
             pending: true,
-        }
-    }
-
-    pub async fn push(&self) {
-        if let Some(provider) = &self.inner.provider {
-            let _ = provider.force_flush();
-        }
-    }
-
-    pub async fn close(&self) {
-        if let Some(provider) = &self.inner.provider {
-            let _ = provider.shutdown();
         }
     }
 }

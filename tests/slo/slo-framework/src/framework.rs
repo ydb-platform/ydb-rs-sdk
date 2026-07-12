@@ -26,7 +26,7 @@ pub trait Workload: Send {
     async fn teardown(&self, ctx: &CancellationToken) -> Result<(), String>;
 }
 
-pub async fn run<F, Fut>(factory: F)
+pub async fn run<F, Fut>(factory: F) -> Result<(), String>
 where
     F: for<'a> Fn(&'a Framework) -> Fut,
     Fut: Future<Output = Result<Box<dyn Workload>, String>> + Send,
@@ -47,13 +47,10 @@ where
         cancel_bg.cancel();
     });
 
-    let mut exit_code = 0;
-
     let config = match Config::from_env() {
         Ok(cfg) => cfg,
         Err(err) => {
-            eprintln!("create config failed: {err}");
-            std::process::exit(1);
+            return Err(format!("create config failed: {err}"));
         }
     };
 
@@ -61,8 +58,7 @@ where
     let metrics = match Metrics::new(&config) {
         Ok(m) => m,
         Err(err) => {
-            eprintln!("create metrics failed: {err}");
-            std::process::exit(1);
+            return Err(format!("create metrics failed: {err}"));
         }
     };
 
@@ -77,11 +73,8 @@ where
     let workload = match factory(&fw).await {
         Ok(w) => w,
         Err(err) => {
-            logger.errorf(format!("create workload failed: {err}"));
-            metrics.push().await;
-            metrics.close().await;
             logger.flush();
-            std::process::exit(1);
+            return Err(format!("create workload failed: {err}"));
         }
     };
 
@@ -119,20 +112,30 @@ where
     }
     .await;
 
-    if let Err(err) = run_result {
-        logger.errorf(format!("workload failed: {err}"));
-        exit_code = 1;
-    } else {
+    if run_result.is_ok() {
         logger.printf("workload completed successfully");
     }
 
-    if let Err(err) = teardown_result.await {
-        logger.errorf(format!("teardown failed: {err}"));
+    let teardown_result = teardown_result
+        .await
+        .map_err(|err| format!("teardown failed: {err}"));
+    let result = preserve_primary_error(run_result, teardown_result);
+
+    logger.flush();
+    if result.is_ok() {
+        logger.printf("program finished");
     }
 
-    metrics.push().await;
-    metrics.close().await;
-    logger.flush();
-    logger.printf("program finished");
-    std::process::exit(exit_code);
+    result
+}
+
+fn preserve_primary_error(
+    primary: Result<(), String>,
+    cleanup: Result<(), String>,
+) -> Result<(), String> {
+    match (primary, cleanup) {
+        (Ok(()), cleanup) => cleanup,
+        (Err(primary), Ok(())) => Err(primary),
+        (Err(primary), Err(cleanup)) => Err(format!("{primary}; additionally, {cleanup}")),
+    }
 }
