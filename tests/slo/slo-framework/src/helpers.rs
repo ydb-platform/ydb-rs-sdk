@@ -55,14 +55,13 @@ pub enum TimeoutOutcome<T> {
 }
 
 /// Awaits `fut` until it completes, the `timeout` elapses, or `ctx` is cancelled —
-/// whichever happens first. Cancellation is checked first on each poll.
+/// whichever happens first.
 pub async fn timeout_or_cancel<F: Future>(
     ctx: &CancellationToken,
     timeout: Duration,
     fut: F,
 ) -> TimeoutOutcome<F::Output> {
     tokio::select! {
-        biased;
         _ = ctx.cancelled() => TimeoutOutcome::Cancelled,
         res = tokio::time::timeout(timeout, fut) => match res {
             Ok(v) => TimeoutOutcome::Completed(v),
