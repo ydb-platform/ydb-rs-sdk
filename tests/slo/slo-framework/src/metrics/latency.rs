@@ -29,79 +29,45 @@ struct LatencyPercentile {
 }
 
 pub(super) struct LatencySeries {
-    histograms: HashMap<String, Histogram<u64>>,
-    // The first percentile callback snapshots and resets the histograms. The
-    // remaining callbacks read that snapshot in any order while new samples
-    // accumulate for the next collection.
-    pending_snapshot: Option<LatencySnapshot>,
-}
-
-struct LatencySnapshot {
-    percentiles: HashMap<String, [f64; LATENCY_PERCENTILES.len()]>,
-    callbacks_remaining: usize,
+    histograms: [HashMap<String, Histogram<u64>>; LATENCY_PERCENTILES.len()],
 }
 
 impl LatencySeries {
     pub(super) fn new() -> Self {
         Self {
-            histograms: HashMap::new(),
-            pending_snapshot: None,
+            histograms: std::array::from_fn(|_| HashMap::new()),
         }
     }
 
     pub(super) fn record(&mut self, latency_micros: u64, attrs_key: String) {
-        let histogram = self.histograms.entry(attrs_key).or_insert_with(|| {
-            Histogram::new_with_bounds(
-                HDR_MIN_MICROSECONDS,
-                HDR_MAX_MICROSECONDS,
-                HDR_SIGNIFICANT_DIGITS,
-            )
-            .expect("valid hdr bounds")
-        });
-        histogram.record(latency_micros).ok();
+        for histograms in &mut self.histograms {
+            let histogram = histograms.entry(attrs_key.clone()).or_insert_with(|| {
+                Histogram::new_with_bounds(
+                    HDR_MIN_MICROSECONDS,
+                    HDR_MAX_MICROSECONDS,
+                    HDR_SIGNIFICANT_DIGITS,
+                )
+                .expect("valid hdr bounds")
+            });
+            histogram.record(latency_micros).ok();
+        }
     }
 
     fn observations_for(&mut self, percentile_index: usize) -> Vec<(String, f64)> {
-        let mut snapshot = match self.pending_snapshot.take() {
-            Some(snapshot) => snapshot,
-            None => self.snapshot_and_reset(),
-        };
-        let observations = snapshot
-            .percentiles
-            .iter()
-            .map(|(attrs, values)| (attrs.clone(), values[percentile_index]))
-            .collect();
-
-        if snapshot.callbacks_remaining > 1 {
-            snapshot.callbacks_remaining -= 1;
-            self.pending_snapshot = Some(snapshot);
-        }
-
-        observations
-    }
-
-    fn snapshot_and_reset(&mut self) -> LatencySnapshot {
-        let percentiles = self
-            .histograms
+        let quantile = LATENCY_PERCENTILES[percentile_index].quantile;
+        self.histograms[percentile_index]
             .iter_mut()
             .filter_map(|(attrs, histogram)| {
                 if histogram.is_empty() {
                     return None;
                 }
 
-                let values = LATENCY_PERCENTILES.map(|percentile| {
-                    histogram.value_at_quantile(percentile.quantile) as f64 / 1_000_000.0
-                });
+                let value = histogram.value_at_quantile(quantile) as f64 / 1_000_000.0;
                 histogram.reset();
 
-                Some((attrs.clone(), values))
+                Some((attrs.clone(), value))
             })
-            .collect();
-
-        LatencySnapshot {
-            percentiles,
-            callbacks_remaining: LATENCY_PERCENTILES.len(),
-        }
+            .collect()
     }
 }
 
@@ -130,5 +96,36 @@ pub(super) fn register_gauges(
                 }
             })
             .build();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ATTRS: &str = "ref=current;operation_type=read;operation_status=success";
+
+    #[test]
+    fn percentile_callbacks_reset_only_their_own_histogram() {
+        let mut series = LatencySeries::new();
+        series.record(100, ATTRS.to_string());
+
+        series.observations_for(0);
+
+        assert!(histogram(&series, 0).is_empty());
+        assert_eq!(histogram(&series, 1).len(), 1);
+        assert_eq!(histogram(&series, 2).len(), 1);
+
+        series.record(200, ATTRS.to_string());
+
+        assert_eq!(histogram(&series, 0).len(), 1);
+        assert_eq!(histogram(&series, 1).len(), 2);
+        assert_eq!(histogram(&series, 2).len(), 2);
+    }
+
+    fn histogram(series: &LatencySeries, percentile_index: usize) -> &Histogram<u64> {
+        series.histograms[percentile_index]
+            .get(ATTRS)
+            .expect("histogram must exist")
     }
 }
