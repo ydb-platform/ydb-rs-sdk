@@ -277,16 +277,15 @@ async fn wait_or_fail(
     attempt: usize,
     time_from_start: Duration,
 ) -> YdbResult<()> {
-    let decision = retrier.wait_duration(RetryParams {
+    let decision = retrier.retry_decision(RetryParams {
         attempt,
         time_from_start,
     });
 
-    if !decision.allow_retry {
+    if !decision.wait().await {
         error!(error = %err, attempt, ?time_from_start, "retry budget exhausted");
         return Err(err);
     }
 
-    tokio::time::sleep(decision.wait_timeout).await;
     Ok(())
 }

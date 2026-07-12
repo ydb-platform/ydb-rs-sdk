@@ -8,7 +8,7 @@ use std::task::Poll;
 use tokio::sync::Notify;
 use ydb::{
     ClientBuilder, Codec, CompressionDecoder, Executor, TopicReader, TopicReaderBatch,
-    TopicReaderCommitMarker, TopicReaderOptionsBuilder, YdbResult,
+    TopicReaderCommitMarker, TopicReaderOptions, YdbResult,
 };
 use ydb_grpc::ydb_proto::topic::stream_read_message::from_client::ClientMessage as ReadFromClient;
 
@@ -257,11 +257,11 @@ async fn make_reader_with_batch_size(
     client
         .topic_client()
         .create_reader_with_params(
-            TopicReaderOptionsBuilder::default()
+            TopicReaderOptions::builder()
                 .consumer(CONSUMER.to_string())
-                .topic(TOPIC_PATH.to_string().into())
+                .topic(TOPIC_PATH.to_string())
                 .batch_size(batch_size)
-                .build()?,
+                .build(),
         )
         .await
 }
@@ -432,11 +432,11 @@ topic_test!(
         let mut reader = client
             .topic_client()
             .create_reader_with_params(
-                TopicReaderOptionsBuilder::default()
+                TopicReaderOptions::builder()
                     .consumer(CONSUMER.to_string())
-                    .topic(TOPIC_PATH.into())
+                    .topic(TOPIC_PATH)
                     .add_decoder(decoder)
-                    .build()?,
+                    .build(),
             )
             .await?;
         driver.state.partition_ready.notified().await;

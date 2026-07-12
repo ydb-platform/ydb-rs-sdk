@@ -1,33 +1,31 @@
 use crate::client_topic::compression::CompressionDecoder;
 use crate::client_topic::topicreader::reader::TopicSelectors;
-use crate::errors;
 use crate::retry::{IndefiniteRetrier, Retry};
-use derive_builder::Builder;
 use std::sync::Arc;
 
-#[derive(Builder, Clone)]
-#[builder(build_fn(error = "errors::YdbError"))]
+#[derive(bon::Builder, Clone)]
 pub struct TopicReaderOptions {
-    pub consumer: String,
-    pub topic: TopicSelectors,
-
-    #[builder(default = "1000")]
-    pub(crate) batch_size: usize,
-    #[builder(setter(custom), default)]
+    // `field` attrs must come first (bon constraint)
+    #[builder(field)]
     pub(crate) extra_decoders: Vec<Arc<dyn CompressionDecoder>>,
 
-    #[builder(setter(skip), default = "Arc::new(IndefiniteRetrier{})")]
+    // required
+    #[builder(into)]
+    pub(crate) consumer: String,
+    #[builder(into)]
+    pub(crate) topic: TopicSelectors,
+
+    // internal tuning
+    #[builder(default = 1000)]
+    pub(crate) batch_size: usize,
+
+    #[builder(default = Arc::new(IndefiniteRetrier {}), setters(vis = "pub(crate)"))]
     pub(crate) retrier: Arc<dyn Retry>,
 }
 
-impl TopicReaderOptionsBuilder {
-    pub fn add_decoder<D>(&mut self, decoder: D) -> &mut Self
-    where
-        D: CompressionDecoder + 'static,
-    {
-        self.extra_decoders
-            .get_or_insert_default()
-            .push(Arc::new(decoder));
+impl<S: topic_reader_options_builder::State> TopicReaderOptionsBuilder<S> {
+    pub fn add_decoder<D: CompressionDecoder + 'static>(mut self, decoder: D) -> Self {
+        self.extra_decoders.push(Arc::new(decoder));
         self
     }
 }
