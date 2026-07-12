@@ -74,9 +74,13 @@ impl DiscoveryState {
         self.nodes.len() == 0
     }
 
+    fn is_pessimized(&self, uri: &Uri) -> bool {
+        self.pessimized_nodes.contains(uri)
+    }
+
     // pessimize return true if state was changed
     pub(crate) fn pessimize(&mut self, uri: &Uri) -> bool {
-        if self.pessimized_nodes.contains(uri) {
+        if self.is_pessimized(uri) {
             return false;
         };
 
@@ -404,21 +408,20 @@ impl DiscoverySharedState {
 #[async_trait]
 impl Discovery for DiscoverySharedState {
     fn pessimization(&self, uri: &Uri) {
-        let Some(Ok(state)) = &*self.state_sender.borrow() else {
-            // Node pessimization is reset after discovery,
-            // so it makes no sense to add pessimize node before
-            // the first discovery.
-            return;
-        };
+        self.state_sender.send_if_modified(|current| {
+            let Some(Ok(state)) = current.as_mut() else {
+                // Node pessimization is reset after discovery,
+                // so it makes no sense to pessimize a node before
+                // the first discovery.
+                return false;
+            };
 
-        // TODO: suppress force copy every time
-        let mut state = state.as_ref().clone();
+            if state.is_pessimized(uri) {
+                return false;
+            }
 
-        if !state.pessimize(uri) {
-            return;
-        }
-
-        self.state_sender.send_replace(Some(Ok(Arc::new(state))));
+            Arc::make_mut(state).pessimize(uri)
+        });
     }
 
     fn subscribe(&self) -> BoxStream<'static, Arc<DiscoveryState>> {
