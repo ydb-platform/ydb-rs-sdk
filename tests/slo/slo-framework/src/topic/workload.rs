@@ -60,7 +60,6 @@ impl<T: TopicService + 'static> Workload for TopicWorkload<T> {
             readers,
             self.params.delivery_timeout,
             self.params.commit_timeout,
-            self.params.commit_delay,
         );
 
         let _ = tokio::join!(write_handle, read_handle);
@@ -135,7 +134,6 @@ fn spawn_reader_workers(
     readers: Vec<ydb::TopicReader>,
     delivery_timeout: Duration,
     commit_timeout: Duration,
-    commit_delay: Duration,
 ) -> tokio::task::JoinHandle<()> {
     let messages_order = Arc::new(verification::MessagesOrder::default());
     let offsets_order = Arc::new(verification::OffsetOrder::default());
@@ -188,14 +186,6 @@ fn spawn_reader_workers(
                     // its offset commit is acknowledged. The commit span below
                     // records that single successful operation.
                     delivery_span.cancel();
-
-                    // This simulates application processing and is intentionally
-                    // outside the SDK commit latency and deadline.
-                    tokio::select! {
-                        biased;
-                        _ = ctx.cancelled() => break,
-                        _ = tokio::time::sleep(commit_delay) => {}
-                    }
 
                     let partition_id = batch.partition_id();
                     let end_offset = batch.offset();

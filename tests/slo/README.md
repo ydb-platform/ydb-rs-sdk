@@ -84,7 +84,6 @@ cargo run --release -p slo-native-topic -- --write-rps 1000
 | `--write-timeout` | 5000 | Message submission and acknowledgement deadline (ms) |
 | `--delivery-timeout` | 5000 | Maximum wait for the next message batch (ms) |
 | `--commit-timeout` | 5000 | Commit acknowledgement deadline (ms) |
-| `--commit-delay` | 100 | Delay before submitting a commit (ms) |
 | `--partition-count` | 10 | Topic partitions |
 | `--reader-count` | 5 | Topic readers |
 | `--writer-count` | 20 | Topic writers |
