@@ -11,6 +11,7 @@ use crate::logger::{Logger, Phase};
 use crate::metrics::Metrics;
 
 const SHUTDOWN_DURATION: Duration = Duration::from_secs(30);
+const WORKLOAD_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Clone)]
 pub struct Framework {
@@ -99,11 +100,11 @@ where
             res = &mut run_fut => res?,
             _ = sleep(run_duration) => {
                 run_cancel.cancel();
-                run_fut.await?;
+                wait_for_workload_shutdown(&mut run_fut, WORKLOAD_SHUTDOWN_TIMEOUT).await?;
             }
             _ = cancel.cancelled() => {
                 run_cancel.cancel();
-                run_fut.await?;
+                wait_for_workload_shutdown(&mut run_fut, WORKLOAD_SHUTDOWN_TIMEOUT).await?;
             }
         }
 
@@ -129,6 +130,15 @@ where
     result
 }
 
+async fn wait_for_workload_shutdown<F>(run_fut: F, shutdown_timeout: Duration) -> Result<(), String>
+where
+    F: Future<Output = Result<(), String>>,
+{
+    timeout(shutdown_timeout, run_fut)
+        .await
+        .map_err(|_| "workload did not stop after cancellation".to_string())?
+}
+
 fn preserve_primary_error(
     primary: Result<(), String>,
     cleanup: Result<(), String>,
@@ -137,5 +147,32 @@ fn preserve_primary_error(
         (Ok(()), cleanup) => cleanup,
         (Err(primary), Ok(())) => Err(primary),
         (Err(primary), Err(cleanup)) => Err(format!("{primary}; additionally, {cleanup}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn workload_shutdown_is_bounded() {
+        let run_fut = std::future::pending::<Result<(), String>>();
+
+        let err = wait_for_workload_shutdown(run_fut, Duration::ZERO)
+            .await
+            .expect_err("pending workload must time out");
+
+        assert_eq!(err, "workload did not stop after cancellation");
+    }
+
+    #[tokio::test]
+    async fn workload_shutdown_preserves_workload_error() {
+        let run_fut = std::future::ready(Err("commit failed".to_string()));
+
+        let err = wait_for_workload_shutdown(run_fut, Duration::from_secs(1))
+            .await
+            .expect_err("workload error must propagate");
+
+        assert_eq!(err, "commit failed");
     }
 }
