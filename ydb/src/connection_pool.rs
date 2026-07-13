@@ -41,10 +41,7 @@ impl<C: Connection> ConnectionPool<C> {
     }
 
     pub(crate) async fn connection(&self, uri: &Uri) -> YdbResult<Channel> {
-        let connection = {
-            let read = self.connections.read()?;
-            read.get(uri).cloned()
-        };
+        let connection = self.connections.read()?.get(uri).cloned();
 
         if let Some(connection) = connection {
             connection.channel().await
