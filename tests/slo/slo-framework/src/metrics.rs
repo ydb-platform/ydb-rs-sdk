@@ -134,20 +134,17 @@ impl Metrics {
     }
 
     pub fn record_latency_with_attrs_key(&self, attrs_key: String, latency: Duration) {
-        self.inner
-            .operation_latency
-            .lock()
-            .unwrap()
-            .record(latency.as_micros() as u64, attrs_key);
+        record_latency_series(&self.inner.operation_latency, latency, attrs_key);
     }
 
     pub fn record_topic_e2e_latency(&self, latency: Duration) {
         let attrs_key = format!("ref={}", self.inner.ref_name);
-        self.inner
-            .topic_e2e_latency
-            .lock()
-            .unwrap()
-            .record(latency.as_micros() as u64, attrs_key);
+        record_latency_series(&self.inner.topic_e2e_latency, latency, attrs_key);
+    }
+
+    pub(crate) fn check(&self) -> Result<(), String> {
+        check_latency_series(&self.inner.operation_latency, "operation latency")?;
+        check_latency_series(&self.inner.topic_e2e_latency, "topic end-to-end latency")
     }
 
     pub fn start(&self, operation_type: OperationType) -> Span {
@@ -165,6 +162,26 @@ impl Metrics {
             started: Instant::now(),
             pending: true,
         }
+    }
+}
+
+fn record_latency_series(series: &Mutex<LatencySeries>, latency: Duration, attrs_key: String) {
+    match series.lock() {
+        Ok(mut series) => series.record(latency, attrs_key),
+        Err(poisoned) => poisoned
+            .into_inner()
+            .fail("latency histogram lock is poisoned"),
+    }
+}
+
+fn check_latency_series(series: &Mutex<LatencySeries>, name: &str) -> Result<(), String> {
+    let series = series
+        .lock()
+        .map_err(|_| format!("{name} histogram lock is poisoned"))?;
+
+    match series.recording_error() {
+        Some(error) => Err(format!("{name} metrics failed: {error}")),
+        None => Ok(()),
     }
 }
 

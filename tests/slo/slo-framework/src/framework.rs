@@ -121,6 +121,7 @@ where
         .await
         .map_err(|err| format!("teardown failed: {err}"));
     let result = preserve_primary_error(run_result, teardown_result);
+    let result = preserve_primary_error(result, metrics.check());
 
     logger.flush();
     if result.is_ok() {
