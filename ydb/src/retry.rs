@@ -19,8 +19,20 @@ pub(crate) struct RetryDecision {
     pub(crate) wait_timeout: Duration,
 }
 
+impl RetryDecision {
+    /// Waits for decided duration and returns `true`
+    /// if retry is allowed, otherwise immediately returns `false`.
+    pub async fn wait(&self) -> bool {
+        if self.allow_retry {
+            tokio::time::sleep(self.wait_timeout).await;
+        }
+
+        self.allow_retry
+    }
+}
+
 pub(crate) trait Retry: Send + Sync {
-    fn wait_duration(&self, params: RetryParams) -> RetryDecision;
+    fn retry_decision(&self, params: RetryParams) -> RetryDecision;
 }
 
 fn exponential_backoff_retry_wait_duration(attempt: usize) -> Duration {
@@ -51,7 +63,7 @@ impl Default for TimeoutRetrier {
 
 impl Retry for TimeoutRetrier {
     #[instrument(ret)]
-    fn wait_duration(&self, params: RetryParams) -> RetryDecision {
+    fn retry_decision(&self, params: RetryParams) -> RetryDecision {
         let mut res = RetryDecision::default();
         if params.time_from_start < self.timeout {
             res.wait_timeout = exponential_backoff_retry_wait_duration(params.attempt);
@@ -62,11 +74,11 @@ impl Retry for TimeoutRetrier {
     }
 }
 
-pub(crate) struct IndefiniteRetrier {}
+pub(crate) struct IndefiniteRetrier;
 
 impl Retry for IndefiniteRetrier {
     #[instrument(skip_all)]
-    fn wait_duration(&self, params: RetryParams) -> RetryDecision {
+    fn retry_decision(&self, params: RetryParams) -> RetryDecision {
         RetryDecision {
             allow_retry: true,
             wait_timeout: exponential_backoff_retry_wait_duration(params.attempt),
@@ -77,7 +89,7 @@ impl Retry for IndefiniteRetrier {
 pub(crate) struct NoRetrier {}
 
 impl Retry for NoRetrier {
-    fn wait_duration(&self, _params: RetryParams) -> RetryDecision {
+    fn retry_decision(&self, _params: RetryParams) -> RetryDecision {
         RetryDecision {
             allow_retry: false,
             wait_timeout: Duration::ZERO,

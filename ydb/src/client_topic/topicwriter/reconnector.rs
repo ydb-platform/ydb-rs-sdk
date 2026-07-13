@@ -308,7 +308,7 @@ impl ReconnectionHelper {
         attempt: usize,
         time_from_start: Duration,
     ) -> Option<Duration> {
-        let decision = self.retrier.wait_duration(RetryParams {
+        let decision = self.retrier.retry_decision(RetryParams {
             attempt,
             time_from_start,
         });

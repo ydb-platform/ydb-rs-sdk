@@ -69,6 +69,26 @@ pub(crate) struct ClientExecContext {
     pub retry_control: std::sync::Arc<RetryControl>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) enum TxState {
+    /// Still going: further queries are allowed, and a final commit is still pending.
+    Active,
+    /// Real, confirmed commit: either `CommitTransaction` succeeded or `commit_tx` completed.
+    Committed,
+    /// Rollback path was chosen and the SDK must not report a commit.
+    RolledBack,
+    /// The server ended the transaction after a definitive status on a query.
+    Invalidated(YdbError),
+    /// A commit or rollback RPC returned an error, so the local end attempt was not confirmed.
+    Ambiguous(YdbError),
+}
+
+impl TxState {
+    pub(crate) fn is_active(&self) -> bool {
+        matches!(self, Self::Active)
+    }
+}
+
 pub(crate) struct TransactionExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub tx_mode: TxMode,
@@ -78,7 +98,7 @@ pub(crate) struct TransactionExecContext {
     pub pooled_lease: Option<SessionPoolLease>,
     pub query_node: Option<Uri>,
     pub tx_id: Option<String>,
-    pub finished: bool,
+    pub state: TxState,
     pub hooks: Vec<Box<dyn QueryTxHook>>,
     /// Absolute deadline from [`QueryClient::retry_tx`] `.timeout()`, propagated to every RPC in the callback.
     pub retry_deadline: Option<Instant>,
@@ -231,7 +251,7 @@ fn tx_control_for_transaction(
     tx: &TransactionExecContext,
     opts: &CallOptions,
 ) -> YdbResult<Option<ydb_grpc::ydb_proto::query::TransactionControl>> {
-    if tx.finished {
+    if !tx.state.is_active() {
         return Err(YdbError::Custom(
             "transaction already finished (committed or rolled back)".to_string(),
         ));
@@ -482,7 +502,7 @@ pub(crate) async fn transaction_ensure_begin(
     tx: &mut TransactionExecContext,
     session_ready: bool,
 ) -> YdbResult<()> {
-    if tx.finished {
+    if !tx.state.is_active() {
         return Err(YdbError::Custom(
             "transaction already finished (committed or rolled back)".to_string(),
         ));
@@ -510,12 +530,12 @@ pub(crate) async fn transaction_ensure_begin(
 
 /// Mark the transaction committed by the server as part of the last `ExecuteQuery` (`commit_tx: true`).
 pub(crate) async fn transaction_finish_committed_via_query(tx: &mut TransactionExecContext) {
-    tx.finished = true;
+    tx.state = TxState::Committed;
     tx.tx_id = None;
     release_tx_session(tx).await;
 }
 
-pub(crate) async fn transaction_before_commit(tx: &mut TransactionExecContext) -> YdbResult<()> {
+async fn transaction_before_commit(tx: &mut TransactionExecContext) -> YdbResult<()> {
     for hook in &mut tx.hooks {
         hook.before_commit().await?;
     }
@@ -527,8 +547,8 @@ pub(crate) fn transaction_mark_invalidated_on_query_error(
     tx: &mut TransactionExecContext,
     err: &YdbError,
 ) {
-    if err.invalidates_server_transaction() {
-        tx.finished = true;
+    if tx.state.is_active() && err.invalidates_server_transaction() {
+        tx.state = TxState::Invalidated(err.clone());
         tx.tx_id = None;
     }
 }
@@ -544,7 +564,7 @@ pub(crate) async fn transaction_begin_stream(
         !opts.implicit_session,
         "implicit_session is only available on QueryClient one-shot builders"
     );
-    if tx.finished {
+    if !tx.state.is_active() {
         return Err(YdbError::Custom(
             "transaction already finished (committed or rolled back)".to_string(),
         ));
@@ -585,11 +605,15 @@ pub(crate) async fn transaction_begin_stream(
 }
 
 pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbResult<()> {
-    if tx.finished {
+    if !tx.state.is_active() {
         return Ok(());
     }
+    if let Err(err) = transaction_before_commit(tx).await {
+        let _ = transaction_rollback(tx).await;
+        return Err(err);
+    }
     if tx.tx_id.as_ref().is_none_or(String::is_empty) {
-        tx.finished = true;
+        tx.state = TxState::Committed;
         release_tx_session(tx).await;
         return Ok(());
     }
@@ -606,13 +630,16 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
         })
         .await;
     release_tx_session_handling_error(tx, result.as_ref().err()).await;
-    tx.finished = true;
+    tx.state = match &result {
+        Ok(()) => TxState::Committed,
+        Err(err) => TxState::Ambiguous(err.clone()),
+    };
     // Do not retry commit: a transport timeout may mean the commit succeeded server-side.
     result
 }
 
 pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> YdbResult<()> {
-    if tx.finished {
+    if !tx.state.is_active() {
         return Ok(());
     }
     let mut rollback_err: Option<YdbError> = None;
@@ -639,10 +666,12 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
         tx.tx_id = None;
     }
     release_tx_session_handling_error(tx, rollback_err.as_ref()).await;
-    tx.finished = true;
-    match rollback_err {
-        Some(err) => Err(err),
-        None => Ok(()),
+    if let Some(err) = rollback_err {
+        tx.state = TxState::Ambiguous(err.clone());
+        Err(err)
+    } else {
+        tx.state = TxState::RolledBack;
+        Ok(())
     }
 }
 
@@ -704,7 +733,7 @@ pub(crate) fn transaction_exec_context(
         pooled_lease: None,
         query_node: None,
         tx_id: None,
-        finished: false,
+        state: TxState::Active,
         hooks: Vec::new(),
         retry_deadline,
     }
@@ -817,7 +846,6 @@ mod unit_tests {
             None,
         );
         ctx.tx_id = Some("tx-1".into());
-        ctx.finished = true;
         transaction_mark_invalidated_on_query_error(
             &mut ctx,
             &YdbError::YdbStatusError(crate::errors::YdbStatusError {
@@ -826,7 +854,7 @@ mod unit_tests {
                 issues: vec![],
             }),
         );
-        assert!(ctx.finished);
+        assert!(!ctx.state.is_active());
         assert!(ctx.tx_id.is_none());
         transaction_rollback(&mut ctx).await.expect("rollback nop");
     }
