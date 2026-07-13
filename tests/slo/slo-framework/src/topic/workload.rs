@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::Framework;
 use crate::framework::Workload;
-use crate::helpers::new_rate_limiter;
+use crate::helpers::{RateLimiter, new_rate_limiter};
 use crate::metrics::{OPERATION_READ, OPERATION_WRITE};
 
 use super::{Params, TopicService, verification};
@@ -150,16 +150,13 @@ fn unexpected_worker_exit(joined: Option<Result<WorkerResult, JoinError>>) -> Re
 async fn writer_worker(
     fw: Arc<Framework>,
     writer: ydb::TopicWriter,
-    limiter: Arc<ratelimit::Ratelimiter>,
+    limiter: Arc<RateLimiter>,
     operation_timeout: Duration,
 ) -> WorkerResult {
     let mut seq_no: i64 = 1;
 
     loop {
-        if let Err(wait) = limiter.try_wait() {
-            tokio::time::sleep(wait).await;
-            continue;
-        }
+        limiter.wait().await;
 
         let payload = format!("{seq_no}").into_bytes();
         seq_no = seq_no.wrapping_add(1);
