@@ -1,8 +1,6 @@
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use hdrhistogram::Histogram;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Counter, Gauge, MeterProvider as _, UpDownCounter};
 use opentelemetry_otlp::WithExportConfig;
@@ -12,14 +10,13 @@ use opentelemetry_sdk::runtime;
 
 use crate::config::Config;
 
-const HDR_MIN_MICROSECONDS: u64 = 1;
-const HDR_MAX_MICROSECONDS: u64 = 60_000_000;
-const HDR_SIGNIFICANT_DIGITS: u8 = 5;
+use self::latency::LatencySeries;
+
+mod latency;
 
 pub type OperationType = &'static str;
 pub const OPERATION_READ: OperationType = "read";
 pub const OPERATION_WRITE: OperationType = "write";
-pub const OPERATION_MESSAGE_RTT: OperationType = "message_rtt";
 
 const STATUS_SUCCESS: &str = "success";
 const STATUS_FAILURE: &str = "failure";
@@ -32,51 +29,14 @@ pub struct Metrics {
 struct MetricsInner {
     ref_name: String,
     provider: Option<SdkMeterProvider>,
-    latency: Arc<Mutex<LatencyHistogram>>,
+    operation_latency: Arc<Mutex<LatencySeries>>,
+    topic_e2e_latency: Arc<Mutex<LatencySeries>>,
     operations_total: Option<Counter<u64>>,
     retry_attempts_total: Option<Counter<u64>>,
     retry_attempts: Option<Gauge<u64>>,
     pending_operations: Option<UpDownCounter<i64>>,
     errors_total: Option<Counter<u64>>,
     timeouts_total: Option<Counter<u64>>,
-}
-
-struct LatencyHistogram {
-    by_attrs: HashMap<String, Histogram<u64>>,
-    cached_percentiles: HashMap<String, [f64; 3]>,
-}
-
-impl LatencyHistogram {
-    fn new() -> Self {
-        Self {
-            by_attrs: HashMap::new(),
-            cached_percentiles: HashMap::new(),
-        }
-    }
-
-    fn record(&mut self, latency_micros: u64, attrs_key: String) {
-        let hist = self.by_attrs.entry(attrs_key.clone()).or_insert_with(|| {
-            Histogram::new_with_bounds(
-                HDR_MIN_MICROSECONDS,
-                HDR_MAX_MICROSECONDS,
-                HDR_SIGNIFICANT_DIGITS,
-            )
-            .expect("valid hdr bounds")
-        });
-        hist.record(latency_micros).ok();
-        self.cached_percentiles.insert(
-            attrs_key,
-            [
-                hist.value_at_quantile(0.5) as f64 / 1_000_000.0,
-                hist.value_at_quantile(0.95) as f64 / 1_000_000.0,
-                hist.value_at_quantile(0.99) as f64 / 1_000_000.0,
-            ],
-        );
-    }
-
-    fn percentiles(&self) -> &HashMap<String, [f64; 3]> {
-        &self.cached_percentiles
-    }
 }
 
 pub struct Span {
@@ -87,7 +47,8 @@ pub struct Span {
 
 impl Metrics {
     pub fn new(cfg: &Config) -> Result<Self, String> {
-        let latency = Arc::new(Mutex::new(LatencyHistogram::new()));
+        let operation_latency = Arc::new(Mutex::new(LatencySeries::new()));
+        let topic_e2e_latency = Arc::new(Mutex::new(LatencySeries::new()));
         let ref_name = cfg.ref_name.clone();
         let label = cfg.label.clone();
 
@@ -96,7 +57,8 @@ impl Metrics {
                 inner: Arc::new(MetricsInner {
                     ref_name,
                     provider: None,
-                    latency,
+                    operation_latency,
+                    topic_e2e_latency,
                     operations_total: None,
                     retry_attempts_total: None,
                     retry_attempts: None,
@@ -132,47 +94,25 @@ impl Metrics {
 
         let meter = provider.meter("slo-workload");
 
-        let latency_p50 = latency.clone();
-        let _latency_p50 = meter
-            .f64_observable_gauge("sdk.operation.latency.p50.seconds")
-            .with_description("50th percentile latency of operations in seconds")
-            .with_unit("s")
-            .with_callback(move |observer| {
-                for (attrs_key, vals) in latency_p50.lock().unwrap().percentiles() {
-                    observer.observe(vals[0], &attrs_from_key(attrs_key));
-                }
-            })
-            .build();
-
-        let latency_p95 = latency.clone();
-        let _latency_p95 = meter
-            .f64_observable_gauge("sdk.operation.latency.p95.seconds")
-            .with_description("95th percentile latency of operations in seconds")
-            .with_unit("s")
-            .with_callback(move |observer| {
-                for (attrs_key, vals) in latency_p95.lock().unwrap().percentiles() {
-                    observer.observe(vals[1], &attrs_from_key(attrs_key));
-                }
-            })
-            .build();
-
-        let latency_p99 = latency.clone();
-        let _latency_p99 = meter
-            .f64_observable_gauge("sdk.operation.latency.p99.seconds")
-            .with_description("99th percentile latency of operations in seconds")
-            .with_unit("s")
-            .with_callback(move |observer| {
-                for (attrs_key, vals) in latency_p99.lock().unwrap().percentiles() {
-                    observer.observe(vals[2], &attrs_from_key(attrs_key));
-                }
-            })
-            .build();
+        latency::register_gauges(
+            &meter,
+            operation_latency.clone(),
+            "sdk.operation.latency",
+            "operation latency",
+        );
+        latency::register_gauges(
+            &meter,
+            topic_e2e_latency.clone(),
+            "sdk.topic.e2e.latency",
+            "topic end-to-end latency",
+        );
 
         Ok(Self {
             inner: Arc::new(MetricsInner {
                 ref_name,
                 provider: Some(provider),
-                latency,
+                operation_latency,
+                topic_e2e_latency,
                 operations_total: Some(
                     meter
                         .u64_counter("sdk.operations.total")
@@ -219,19 +159,19 @@ impl Metrics {
 
     pub fn record_latency_with_attrs_key(&self, attrs_key: String, latency: Duration) {
         self.inner
-            .latency
+            .operation_latency
             .lock()
             .unwrap()
             .record(latency.as_micros() as u64, attrs_key);
     }
 
-    pub fn record_latency_with_operation(&self, operation_type: OperationType, latency: Duration) {
-        let attrs_key = format!(
-            "ref={};operation_type={};operation_status={}",
-            self.inner.ref_name, operation_type, STATUS_SUCCESS
-        );
-
-        self.record_latency_with_attrs_key(attrs_key, latency);
+    pub fn record_topic_e2e_latency(&self, latency: Duration) {
+        let attrs_key = format!("ref={}", self.inner.ref_name);
+        self.inner
+            .topic_e2e_latency
+            .lock()
+            .unwrap()
+            .record(latency.as_micros() as u64, attrs_key);
     }
 
     pub fn start(&self, operation_type: OperationType) -> Span {

@@ -49,6 +49,7 @@ jobs:
             path: native/query
           - name: native-topic
             path: native/topic
+            metrics_yaml_path: current/tests/slo/metrics-topic.yaml
 
     concurrency:
       group: slo-${{ github.ref }}-${{ matrix.sdk.name }}
@@ -158,3 +159,4 @@ jobs:
           workload_current_image: ydb-app-current
           workload_baseline_ref: ${{ steps.baseline.outputs.ref }}
           workload_baseline_image: ydb-app-baseline
+          metrics_yaml_path: ${{ matrix.sdk.metrics_yaml_path }}
