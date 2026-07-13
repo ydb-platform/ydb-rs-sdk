@@ -43,6 +43,7 @@ pub struct Span {
     metrics: Metrics,
     operation_type: OperationType,
     started: Instant,
+    pending: bool,
 }
 
 impl Metrics {
@@ -189,6 +190,7 @@ impl Metrics {
             metrics: self.clone(),
             operation_type,
             started: Instant::now(),
+            pending: true,
         }
     }
 
@@ -206,7 +208,7 @@ impl Metrics {
 }
 
 impl Span {
-    pub fn finish(self, err: Option<&str>, attempts: u64) {
+    pub fn finish(mut self, err: Option<&str>, attempts: u64) {
         let status = if err.is_some() {
             STATUS_FAILURE
         } else {
@@ -231,15 +233,7 @@ impl Span {
         if let Some(gauge) = &self.metrics.inner.retry_attempts {
             gauge.record(attempts, &attrs);
         }
-        if let Some(counter) = &self.metrics.inner.pending_operations {
-            counter.add(
-                -1,
-                &[
-                    KeyValue::new("ref", self.metrics.inner.ref_name.clone()),
-                    KeyValue::new("operation_type", self.operation_type),
-                ],
-            );
-        }
+        self.finish_pending();
 
         if let Some(err_msg) = err {
             if (err_msg.contains("timeout") || err_msg.contains("deadline"))
@@ -256,7 +250,16 @@ impl Span {
         }
     }
 
-    pub fn cancel(self) {
+    pub fn cancel(mut self) {
+        self.finish_pending();
+    }
+
+    fn finish_pending(&mut self) {
+        if !self.pending {
+            return;
+        }
+        self.pending = false;
+
         if let Some(counter) = &self.metrics.inner.pending_operations {
             counter.add(
                 -1,
@@ -266,6 +269,12 @@ impl Span {
                 ],
             );
         }
+    }
+}
+
+impl Drop for Span {
+    fn drop(&mut self) {
+        self.finish_pending();
     }
 }
 
