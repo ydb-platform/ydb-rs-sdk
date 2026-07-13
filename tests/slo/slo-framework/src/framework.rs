@@ -106,11 +106,11 @@ where
             res = &mut run_fut => res?,
             _ = sleep(run_duration) => {
                 run_cancel.cancel();
-                let _ = run_fut.await;
+                run_fut.await?;
             }
             _ = cancel.cancelled() => {
                 run_cancel.cancel();
-                let _ = run_fut.await;
+                run_fut.await?;
             }
         }
 

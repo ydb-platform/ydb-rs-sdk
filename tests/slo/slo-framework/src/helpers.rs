@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -45,43 +44,6 @@ pub async fn run_workers<F, Fut>(
     for handle in handles {
         let _ = handle.await;
     }
-}
-
-/// Outcome of awaiting a future bounded by a deadline and a cancellation token.
-pub enum TimeoutOutcome<T> {
-    Completed(T),
-    TimedOut,
-    Cancelled,
-}
-
-/// Awaits `fut` until it completes, the `timeout` elapses, or `ctx` is cancelled —
-/// whichever happens first. Cancellation is checked first on each poll.
-pub async fn timeout_or_cancel<F: Future>(
-    ctx: &CancellationToken,
-    timeout: Duration,
-    fut: F,
-) -> TimeoutOutcome<F::Output> {
-    tokio::select! {
-        biased;
-        _ = ctx.cancelled() => TimeoutOutcome::Cancelled,
-        res = tokio::time::timeout(timeout, fut) => match res {
-            Ok(v) => TimeoutOutcome::Completed(v),
-            Err(_) => TimeoutOutcome::TimedOut,
-        }
-    }
-}
-
-pub async fn run_workers_for<I, F, Fut>(tasks: I)
-where
-    I: IntoIterator<Item = F>,
-    F: FnOnce() -> Fut,
-    Fut: Future<Output = ()> + Send + 'static,
-{
-    let mut set = tokio::task::JoinSet::new();
-    for task in tasks {
-        set.spawn(task());
-    }
-    while set.join_next().await.is_some() {}
 }
 
 #[cfg(test)]
