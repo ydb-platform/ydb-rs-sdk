@@ -13,7 +13,7 @@ use http::uri::Authority;
 use itertools::Itertools;
 use tokio::sync::watch;
 use tokio_stream::wrappers::WatchStream;
-use tracing::trace;
+use tracing::{instrument, trace};
 
 use crate::YdbError;
 use crate::errors::{NeedRetry, YdbResult};
@@ -304,7 +304,7 @@ impl DiscoverySharedState {
         })
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(name = "ydb.Discovery.DiscoveryNow", skip_all, err)]
     async fn discovery_now(&self) -> YdbResult<()> {
         let lock = self.discovery_lock.lock().await;
 
@@ -349,6 +349,17 @@ impl DiscoverySharedState {
 
     #[tracing::instrument(skip(state))]
     async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
+        #[instrument(name = "ydb.Discovery.Timer", skip_all, fields(db.system.name = "ydb", discovery_uri = %state.discovery_uri), err)]
+        async fn discovery_once(
+            state: Arc<DiscoverySharedState>,
+            attempt: usize,
+        ) -> Result<(), YdbError> {
+            trace!("discovery attempt {attempt}");
+            let res = state.discovery_now().await;
+            trace!("discovery result: {:?}", res);
+            res
+        }
+
         'worker: loop {
             let mut attempt = 0;
             let retrier = IndefiniteRetrier;
@@ -359,11 +370,8 @@ impl DiscoverySharedState {
                     break 'worker;
                 };
 
-                trace!("discovery attempt {attempt}");
-                let res = state.discovery_now().await;
+                let res = discovery_once(state, attempt).await;
                 attempt += 1;
-
-                trace!("discovery result: {:?}", res);
 
                 if res.is_ok() {
                     break 'attempt;
