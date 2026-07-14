@@ -131,13 +131,10 @@ impl RuntimeHandle {
                 let partition_session_id =
                     PartitionSessionId::from_raw(partition_data.partition_session_id);
                 for batch in partition_data.batches {
-                    let added = active.buffer.push_raw_batch(
-                        batch,
-                        partition_session_id,
-                        reader_id,
-                        epoch,
-                    )?;
-                    pushed |= added;
+                    active
+                        .buffer
+                        .push_raw_batch(batch, partition_session_id, reader_id, epoch)?;
+                    pushed = true;
                 }
             }
         }

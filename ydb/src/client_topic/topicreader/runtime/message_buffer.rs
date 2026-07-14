@@ -65,9 +65,11 @@ impl MessageBuffer {
         partition_session_id: PartitionSessionId,
         reader_id: usize,
         epoch: usize,
-    ) -> YdbResult<bool> {
+    ) -> YdbResult<()> {
         if batch.message_data.is_empty() {
-            return Ok(false);
+            return Err(YdbError::custom(format!(
+                "topic reader received empty batch for partition session {partition_session_id}"
+            )));
         }
 
         let batch_bytes = batch.get_read_session_size();
@@ -83,7 +85,7 @@ impl MessageBuffer {
             last.bytes_to_release = batch_bytes;
         }
         partition_entry.queue.extend(messages);
-        Ok(true)
+        Ok(())
     }
 
     #[cfg(test)]
@@ -236,15 +238,19 @@ mod tests {
     }
 
     #[test]
-    fn empty_batch_is_not_added() {
+    fn empty_batch_returns_error() {
         let mut buffer = MessageBuffer::default();
         buffer.start(session(1, 1)).unwrap();
 
-        assert!(
-            !buffer
-                .push_raw_batch(raw_batch([]), PartitionSessionId::from_raw(1), 0, 0)
-                .unwrap()
-        );
+        let err = buffer
+            .push_raw_batch(raw_batch([]), PartitionSessionId::from_raw(1), 0, 0)
+            .expect_err("empty batch should fail");
+
+        assert!(matches!(
+            err,
+            YdbError::Custom(message)
+                if message == "topic reader received empty batch for partition session 1"
+        ));
         assert!(buffer.pop_batch(1).unwrap().is_none());
     }
 }
