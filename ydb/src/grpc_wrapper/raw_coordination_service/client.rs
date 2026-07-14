@@ -1,4 +1,4 @@
-use tracing::trace;
+use tracing::{instrument, trace};
 use ydb_grpc::ydb_proto::coordination::session_request::{self, SessionStart};
 use ydb_grpc::ydb_proto::coordination::v1::coordination_service_client::CoordinationServiceClient;
 use ydb_grpc::ydb_proto::coordination::{SessionRequest, SessionResponse};
@@ -35,6 +35,7 @@ impl RawCoordinationClient {
         }
     }
 
+    #[instrument(name = "ydb.grpc.CoordinationSession", skip_all, fields(ydb.coordination.path = %req.path), err)]
     pub async fn session(
         &mut self,
         req: SessionStart,
@@ -56,6 +57,7 @@ impl RawCoordinationClient {
         Ok(AsyncGrpcStreamWrapper::<SessionRequest, SessionResponse>::new(tx, response_stream))
     }
 
+    #[instrument(name = "ydb.grpc.CreateNode", skip_all, fields(ydb.coordination.path = %req.path), err)]
     pub async fn create_node(&mut self, req: RawCreateNodeRequest) -> RawResult<()> {
         request_without_result!(
             self.service.create_node,
@@ -63,6 +65,7 @@ impl RawCoordinationClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.AlterNode", skip_all, fields(ydb.coordination.path = %req.path), err)]
     pub async fn alter_node(&mut self, req: RawAlterNodeRequest) -> RawResult<()> {
         request_without_result!(
             self.service.alter_node,
@@ -70,6 +73,7 @@ impl RawCoordinationClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.DropNode", skip_all, fields(ydb.coordination.path = %req.path), err)]
     pub async fn drop_node(&mut self, req: RawDropNodeRequest) -> RawResult<()> {
         request_without_result!(
             self.service.drop_node,
@@ -77,6 +81,7 @@ impl RawCoordinationClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.DescribeNode", skip_all, fields(ydb.coordination.path = %req.path), err)]
     pub async fn describe_node(
         &mut self,
         req: RawDescribeNodeRequest,

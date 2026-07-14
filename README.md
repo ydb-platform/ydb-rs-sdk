@@ -21,7 +21,7 @@ CI checks compatibility on Rust 1.88 and Rust 1.96. Linting, publishing, and SLO
 Add the YDB dependency to your project using `cargo add ydb` or add this your Cargo.toml:
 ```toml
 [dependencies]
-ydb = "0.16.1"
+ydb = "0.17.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 

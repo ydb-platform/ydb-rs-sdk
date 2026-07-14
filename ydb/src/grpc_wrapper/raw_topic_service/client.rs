@@ -1,4 +1,4 @@
-use tracing::trace;
+use tracing::{instrument, trace};
 
 use ydb_grpc::ydb_proto::topic::v1::topic_service_client::TopicServiceClient;
 use ydb_grpc::ydb_proto::topic::{stream_read_message, stream_write_message};
@@ -41,6 +41,7 @@ impl RawTopicClient {
         }
     }
 
+    #[instrument(name = "ydb.grpc.CreateTopic", skip_all, fields(ydb.topic.path = %req.path), err)]
     pub async fn create_topic(&mut self, req: RawCreateTopicRequest) -> RawResult<()> {
         request_without_result!(
             self.service.create_topic,
@@ -48,6 +49,7 @@ impl RawTopicClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.AlterTopic", skip_all, fields(ydb.topic.path = %req.path), err)]
     pub async fn alter_topic(&mut self, req: RawAlterTopicRequest) -> RawResult<()> {
         request_without_result!(
             self.service.alter_topic,
@@ -55,6 +57,7 @@ impl RawTopicClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.DescribeConsumer", skip_all, fields(ydb.topic.path = %req.path, ydb.consumer.name = %req.consumer), err)]
     pub async fn describe_consumer(
         &mut self,
         req: RawDescribeConsumerRequest,
@@ -66,6 +69,7 @@ impl RawTopicClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.DescribeTopic", skip_all, fields(ydb.topic.path = %req.path), err)]
     pub async fn describe_topic(
         &mut self,
         req: RawDescribeTopicRequest,
@@ -77,6 +81,7 @@ impl RawTopicClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.DeleteTopic", skip_all, fields(ydb.topic.path = %req.path), err)]
     pub async fn delete_topic(&mut self, req: RawDropTopicRequest) -> RawResult<()> {
         request_without_result!(
             self.service.drop_topic,
@@ -84,6 +89,7 @@ impl RawTopicClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.UpdateOffsetsInTransaction", skip_all, fields(ydb.consumer.name = %req.consumer), err)]
     pub async fn update_offsets_in_transaction(
         &mut self,
         req: RawUpdateOffsetsInTransactionRequest,
@@ -94,6 +100,7 @@ impl RawTopicClient {
         );
     }
 
+    #[instrument(name = "ydb.grpc.StreamRead", skip_all, fields(ydb.consumer.name = %init_req_body.consumer), err)]
     pub async fn stream_read(
         &mut self,
         init_req_body: stream_read::messages::RawInitRequest,
@@ -122,6 +129,7 @@ impl RawTopicClient {
         >::new(tx, response_stream))
     }
 
+    #[instrument(name = "ydb.grpc.StreamWrite", skip_all, fields(ydb.topic.path = %init_req_body.path), err)]
     pub async fn stream_write(
         &mut self,
         init_req_body: stream_write_message::InitRequest,

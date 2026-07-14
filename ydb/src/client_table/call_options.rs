@@ -7,6 +7,8 @@ use crate::errors::{NeedRetry, YdbResult};
 use crate::retry::{IndefiniteRetrier, Retry, RetryParams, TimeoutRetrier};
 use crate::retry_budget::{RetryControl, RetryPauseError, acquire_retry_budget};
 
+use tracing::instrument;
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TableCallOptions {
     pub timeout: Option<Duration>,
@@ -23,6 +25,7 @@ pub(crate) fn resolve_timeouts(opts: &TableCallOptions) -> TimeoutSettings {
     }
 }
 
+#[instrument(name = "ydb.TableClient.RetryOperation", skip_all, fields(db.system.name = "ydb"), err)]
 pub(crate) async fn retry_table_operation<CallbackFuture, CallbackResult>(
     retry_control: &RetryControl,
     opts: &TableCallOptions,
