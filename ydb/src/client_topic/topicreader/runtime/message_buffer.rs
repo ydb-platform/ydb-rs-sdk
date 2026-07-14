@@ -71,16 +71,16 @@ impl MessageBuffer {
         }
 
         let batch_bytes = batch.get_read_session_size();
-        let Some(entry) = self.entries.get_mut(&partition_session_id) else {
+        let Some(partition_entry) = self.entries.get_mut(&partition_session_id) else {
             return Ok(false);
         };
 
-        let batch = TopicReaderBatch::new(batch, &mut entry.session, reader_id, epoch);
+        let batch = TopicReaderBatch::new(batch, &mut partition_entry.session, reader_id, epoch);
         let mut messages = batch.messages;
         if let Some(last) = messages.last_mut() {
             last.bytes_to_release = batch_bytes;
         }
-        entry.queue.extend(messages);
+        partition_entry.queue.extend(messages);
         Ok(true)
     }
 
@@ -88,11 +88,11 @@ impl MessageBuffer {
     pub(super) fn push_batch(&mut self, messages: Vec<TopicReaderMessage>) {
         for message in messages {
             let partition_session_id = message.get_commit_marker().partition_session_id;
-            let entry = self
+            let partition_entry = self
                 .entries
                 .entry(partition_session_id)
                 .or_insert_with(|| PartitionEntry::new(PartitionSession::from_message(&message)));
-            entry.queue.push_back(message);
+            partition_entry.queue.push_back(message);
             self.round_robin.push(partition_session_id);
         }
     }
@@ -102,21 +102,21 @@ impl MessageBuffer {
             let Some(psid) = self.round_robin.next() else {
                 return Ok(None);
             };
-            let Some(entry) = self.entries.get_mut(&psid) else {
+            let Some(partition_entry) = self.entries.get_mut(&psid) else {
                 return Err(YdbError::custom(format!(
                     "topic reader round robin contains unknown partition session {psid}"
                 )));
             };
 
-            if entry.queue.is_empty() {
+            if partition_entry.queue.is_empty() {
                 continue;
             }
 
-            let take = cap.min(entry.queue.len());
+            let take = cap.min(partition_entry.queue.len());
             let mut out = Vec::with_capacity(take);
             let mut bytes = 0;
             for _ in 0..take {
-                let Some(message) = entry.queue.pop_front() else {
+                let Some(message) = partition_entry.queue.pop_front() else {
                     break;
                 };
                 bytes += message.bytes_to_release;
