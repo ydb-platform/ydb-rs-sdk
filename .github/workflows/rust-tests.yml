@@ -18,20 +18,20 @@ env:
 
 jobs:
   tests:
-    name: Tests (${{ matrix.name }})
+    name: ${{ matrix.name }}
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: MSRV
+          - name: tests (RUST_VERSION_MSRV)
             rust_version: "RUST_VERSION_MSRV"
             latest_deps: false
-          - name: modern
+          - name: tests (RUST_VERSION_MODERN)
             rust_version: "RUST_VERSION_MODERN"
             latest_deps: false
           # Advisory leg: failures do not block merges.
-          - name: modern, latest deps (advisory)
+          - name: tests (RUST_VERSION_MODERN, latest deps (advisory))
             rust_version: "RUST_VERSION_MODERN"
             latest_deps: true
 
