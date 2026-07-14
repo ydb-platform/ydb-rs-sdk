@@ -408,7 +408,7 @@ impl DiscoverySharedState {
         Ok(Uri::builder()
             .scheme(if endpoint_info.ssl { "https" } else { "http" })
             .authority(authority)
-            .path_and_query("")
+            .path_and_query("/")
             .build()?)
     }
 }
