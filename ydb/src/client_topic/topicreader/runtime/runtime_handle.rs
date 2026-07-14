@@ -137,12 +137,6 @@ impl RuntimeHandle {
                         reader_id,
                         epoch,
                     )?;
-                    if !added {
-                        warn!(
-                            %partition_session_id,
-                            "topic reader received read response for unknown partition session"
-                        );
-                    }
                     pushed |= added;
                 }
             }
