@@ -15,13 +15,27 @@ env:
   RUST_VERSION_MSRV: "1.88"
   # Pinned modern Rust version used for forward compatibility coverage.
   RUST_VERSION_MODERN: "1.96"
+  # Stable Rust version used against dependencies test
+  RUST_VERSION_STABLE: stable
 
 jobs:
   tests:
+    name: ${{ matrix.name }}
+
     strategy:
       fail-fast: false
       matrix:
-        rust_version: [ "RUST_VERSION_MSRV", "RUST_VERSION_MODERN" ]
+        include:
+          - name: tests (RUST_VERSION_MSRV)
+            rust_version: "RUST_VERSION_MSRV"
+            latest_deps: false
+          - name: tests (RUST_VERSION_MODERN)
+            rust_version: "RUST_VERSION_MODERN"
+            latest_deps: false
+          # Advisory leg: failures do not block merges.
+          - name: tests (RUST_VERSION_STABLE, latest deps (advisory))
+            rust_version: "RUST_VERSION_STABLE"
+            latest_deps: true
 
     services:
       ydb:
@@ -37,6 +51,7 @@ jobs:
         options: '-h localhost --name ydb'
 
     runs-on: ubuntu-24.04
+    continue-on-error: ${{ matrix.latest_deps }}
 
     steps:
     - name: Show YDB server version
@@ -52,6 +67,12 @@ jobs:
       uses: actions/checkout@v4
       with:
         submodules: true
+
+    - name: Update dependencies to latest compatible versions
+      if: ${{ matrix.latest_deps }}
+      run: |
+        cargo update --verbose
+        git diff -- Cargo.lock
 
     - name: Rust version
       id: rust_version_step
@@ -76,6 +97,7 @@ jobs:
       run: cargo llvm-cov --workspace --exclude slo-framework --exclude slo-native-query --exclude slo-native-topic --lcov --output-path lcov.info -- --include-ignored
 
     - name: Upload coverage report to Codecov
+      if: ${{ !matrix.latest_deps }}
       uses: codecov/codecov-action@v4
       with:
         file: ./lcov.info
