@@ -6,7 +6,9 @@ use crate::grpc_wrapper::raw_scheme_client::client::{
 };
 use crate::grpc_wrapper::raw_scheme_client::describe_path_types::RawDescribePathRequest;
 use crate::grpc_wrapper::raw_scheme_client::list_directory_types::RawListDirectoryRequest;
+
 use crate::{YdbResult, grpc_wrapper};
+use tracing::instrument;
 
 #[derive(Clone)]
 pub struct SchemeClient {
@@ -22,6 +24,7 @@ impl SchemeClient {
         }
     }
 
+    #[instrument(name = "ydb.SchemeClient.MakeDirectory", skip_all, fields(db.system.name = "ydb", ydb.path = %path))]
     pub async fn make_directory(&mut self, path: String) -> YdbResult<()> {
         let req = RawMakeDirectoryRequest {
             operation_params: self.timeouts.operation_params(),
@@ -32,6 +35,7 @@ impl SchemeClient {
         Ok(())
     }
 
+    #[instrument(name = "ydb.SchemeClient.DescribePath", skip_all, fields(db.system.name = "ydb", ydb.path = %path))]
     pub async fn describe_path(&mut self, path: String) -> YdbResult<SchemeEntry> {
         let req = RawDescribePathRequest {
             operation_params: self.timeouts.operation_params(),
@@ -44,6 +48,7 @@ impl SchemeClient {
         Ok(res.entry)
     }
 
+    #[instrument(name = "ydb.SchemeClient.ListDirectory", skip_all, fields(db.system.name = "ydb", ydb.path = %path))]
     pub async fn list_directory(&mut self, path: String) -> YdbResult<Vec<SchemeEntry>> {
         let req = RawListDirectoryRequest {
             operation_params: self.timeouts.operation_params(),
@@ -56,6 +61,7 @@ impl SchemeClient {
         Ok(res.children.into_iter().collect())
     }
 
+    #[instrument(name = "ydb.SchemeClient.RemoveDirectory", skip_all, fields(db.system.name = "ydb", ydb.path = %path))]
     pub async fn remove_directory(&mut self, path: String) -> YdbResult<()> {
         let req = RawRemoveDirectoryRequest {
             operation_params: self.timeouts.operation_params(),
