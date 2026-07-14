@@ -6,6 +6,8 @@ use futures_util::Future;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use tracing::instrument;
+
 use crate::client_common::TokenCache;
 use crate::client_query::Transaction;
 use crate::client_topic::compression::Executor;
@@ -72,6 +74,7 @@ impl TopicReader {
         })
     }
 
+    #[instrument(name = "ydb.TopicReader.ReadBatch", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
         self.runtime.pop_batch(self.options.batch_size).await
     }
@@ -80,6 +83,7 @@ impl TopicReader {
     /// using the given [`Transaction`].
     ///
     /// Offsets are committed when the query transaction commits.
+    #[instrument(name = "ydb.TopicReader.PopBatchInTx", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn pop_batch_in_tx(&mut self, tx: &mut Transaction) -> YdbResult<TopicReaderBatch> {
         let (session_id, transaction_id) = tx.identity().await?;
         let batch = self.read_batch().await?;
@@ -88,6 +92,7 @@ impl TopicReader {
         Ok(batch)
     }
 
+    #[instrument(name = "ydb.TopicReader.TxReader", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn tx_reader<'a>(&'a mut self, tx: &mut Transaction) -> YdbResult<TopicReaderTx<'a>> {
         TopicReaderTx::new(self, tx).await
     }
