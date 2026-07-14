@@ -17,19 +17,19 @@ pub(crate) type DiscoveryConnectionManager =
 pub(crate) struct NoBalancer;
 
 #[derive(Derivative)]
-#[derivative(Clone(bound = "B: Clone"), Debug)]
-pub(crate) struct GrpcConnectionManagerGeneric<B, C: Connection> {
-    balancer: B,
-    connections_pool: Arc<ConnectionPool<C>>,
+#[derivative(Clone(bound = "BalancerT: Clone"), Debug)]
+pub(crate) struct GrpcConnectionManagerGeneric<BalancerT, ConnectionT: Connection> {
+    balancer: BalancerT,
+    connections_pool: Arc<ConnectionPool<ConnectionT>>,
     #[derivative(Debug = "ignore")]
     interceptor: MultiInterceptor,
     database: String,
     grpc_max_message_size: usize,
 }
 
-impl<B, C: Connection> GrpcConnectionManagerGeneric<B, C> {
+impl<BalancerT, ConnectionT: Connection> GrpcConnectionManagerGeneric<BalancerT, ConnectionT> {
     pub(crate) fn new(
-        balancer: B,
+        balancer: BalancerT,
         database: String,
         interceptor: MultiInterceptor,
         cert_path: Option<String>,
@@ -57,7 +57,7 @@ impl<B, C: Connection> GrpcConnectionManagerGeneric<B, C> {
         new: F,
     ) -> YdbResult<T>
     where
-        B: LoadBalancer,
+        BalancerT: LoadBalancer,
     {
         let uri = self.balancer.endpoint(T::get_grpc_discovery_service())?;
         self.get_auth_service_to_node(new, &uri).await
@@ -79,7 +79,7 @@ impl<B, C: Connection> GrpcConnectionManagerGeneric<B, C> {
 
     pub(crate) fn endpoint(&self, service: Service) -> YdbResult<Uri>
     where
-        B: LoadBalancer,
+        BalancerT: LoadBalancer,
     {
         self.balancer.endpoint(service)
     }

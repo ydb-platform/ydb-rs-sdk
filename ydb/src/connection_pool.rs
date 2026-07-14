@@ -15,12 +15,12 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use tracing::trace;
 
 #[derive(Debug)]
-pub(crate) struct ConnectionPool<C: Connection> {
-    connections: RwLock<HashMap<Uri, Arc<C>>>,
+pub(crate) struct ConnectionPool<ConnectionT: Connection> {
+    connections: RwLock<HashMap<Uri, Arc<ConnectionT>>>,
     tls_config: Option<Arc<ClientTlsConfig>>,
 }
 
-impl<C: Connection> ConnectionPool<C> {
+impl<ConnectionT: Connection> ConnectionPool<ConnectionT> {
     pub(crate) fn new() -> Self {
         Self {
             connections: HashMap::new().into(),
@@ -46,7 +46,8 @@ impl<C: Connection> ConnectionPool<C> {
         if let Some(connection) = connection {
             connection.channel().await
         } else {
-            let (channel, connection) = C::init(uri.to_owned(), self.tls_config.as_ref()).await?;
+            let (channel, connection) =
+                ConnectionT::init(uri.to_owned(), self.tls_config.as_ref()).await?;
             self.connections
                 .write()?
                 .insert(uri.clone(), Arc::new(connection));
