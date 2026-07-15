@@ -123,11 +123,22 @@ impl TopicWriter {
 
     #[instrument(name = "ydb.TopicWriter.Write", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn write(&self, message: TopicWriterMessage) -> YdbResult<()> {
+        self.write_inner(message).await
+    }
+
+    pub(super) async fn write_inner(&self, message: TopicWriterMessage) -> YdbResult<()> {
         self.write_message(message, None).await
     }
 
     #[instrument(name = "ydb.TopicWriter.WriteWithAck", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn write_with_ack(
+        &self,
+        message: TopicWriterMessage,
+    ) -> YdbResult<MessageWriteStatus> {
+        self.write_with_ack_inner(message).await
+    }
+
+    pub(super) async fn write_with_ack_inner(
         &self,
         message: TopicWriterMessage,
     ) -> YdbResult<MessageWriteStatus> {
@@ -164,6 +175,10 @@ impl TopicWriter {
 
     #[instrument(name = "ydb.TopicWriter.Flush", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn flush(&self) -> YdbResult<()> {
+        self.flush_inner().await
+    }
+
+    pub(super) async fn flush_inner(&self) -> YdbResult<()> {
         self.reconnector.flush().await
     }
 

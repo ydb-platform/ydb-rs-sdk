@@ -47,7 +47,7 @@ pub(crate) fn expect_transactional_write_status(
     match status {
         MessageWriteStatus::WrittenInTx(_) => Ok(status),
         other_status => Err(YdbError::custom(format!(
-            "expected WrittenInTx or AlreadyWritten ack from server, got: {other_status:?}"
+            "expected WrittenInTx ack from server, got: {other_status:?}"
         ))),
     }
 }
