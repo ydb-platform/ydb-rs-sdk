@@ -14,8 +14,11 @@ use crate::grpc_wrapper::raw_query_service::transaction_control::{
     RawTxMode, begin_tx_control, tx_id_control,
 };
 use crate::retry_budget::{RetryControl, RetryPauseError, pause_before_retry};
+use crate::traces::helpers::ensure_len_string;
+
 use crate::types::Value;
 use crate::{TransactionOptions, TxMode};
+use tracing::instrument;
 
 use crate::session_pool::{SessionPool, SessionPoolLease, spawn_pool_release};
 
@@ -280,6 +283,50 @@ pub(crate) fn resolve_commit_tx(core: &super::internal::ExecCoreRef, opts: &Call
     }
 }
 
+#[instrument(name = "ydb.Try", skip_all, fields(
+    ydb.retry.attempt = attempt,
+    ydb.retry.backoff_ms = tracing::field::Empty,
+    db.system.name = "ydb",
+), err)]
+async fn retry_until_loop_body<T, F, Fut>(
+    attempt_fn: &mut F,
+    retry_control: &RetryControl,
+    idempotent: bool,
+    attempt: usize,
+    start: Instant,
+    limit: Option<Duration>,
+) -> YdbResult<Option<T>>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = YdbResult<T>>,
+{
+    #[instrument(name = "ydb.Try.Attempt", skip_all, fields(db.system.name = "ydb"), err)]
+    async fn retry_until_loop_attempt<T, F, Fut>(attempt_fn: &mut F) -> YdbResult<T>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = YdbResult<T>>,
+    {
+        attempt_fn().await
+    }
+
+    match retry_until_loop_attempt(attempt_fn).await {
+        Ok(value) => Ok(Some(value)),
+        Err(err) => {
+            if !should_retry_ydb_error(idempotent, &err) {
+                return Err(err);
+            }
+            match pause_before_retry(retry_control, attempt, start, limit).await {
+                Ok(()) => {}
+                Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
+                    return Err(err);
+                }
+            }
+            Ok(None)
+        }
+    }
+}
+
+#[instrument(name = "ydb.Query.RetryUntil", skip_all, fields(db.system.name = "ydb", ydb.Query.idempotent = idempotent), err)]
 async fn retry_until<T, F, Fut>(
     retry_control: &RetryControl,
     idempotent: bool,
@@ -295,19 +342,18 @@ where
     loop {
         retry_control.metrics().record_attempt();
         attempt += 1;
-        match attempt_fn().await {
-            Ok(value) => return Ok(value),
-            Err(err) => {
-                if !should_retry_ydb_error(idempotent, &err) {
-                    return Err(err);
-                }
-                match pause_before_retry(retry_control, attempt, start, limit).await {
-                    Ok(()) => {}
-                    Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
-                        return Err(err);
-                    }
-                }
-            }
+
+        if let Some(value) = retry_until_loop_body(
+            &mut attempt_fn,
+            retry_control,
+            idempotent,
+            attempt,
+            start,
+            limit,
+        )
+        .await?
+        {
+            return Ok(value);
         }
     }
 }
@@ -350,6 +396,7 @@ async fn client_implicit_session_request(
     Ok((client, req))
 }
 
+#[instrument(name = "ydb.Query.BeginStreamOnce", skip_all, fields(db.system.name = "ydb"), err)]
 async fn client_begin_stream_once(
     ctx: &ClientExecContext,
     text: &str,
@@ -410,6 +457,7 @@ async fn client_pooled_explicit_request(
     Ok((client, req))
 }
 
+#[instrument(name = "ydb.Query.BeginStream", skip_all, fields(db.system.name = "ydb", ydb.Query.text = %ensure_len_string(&text), ydb.Query.params = ?params, ydb.Query.opts = ?opts), err)]
 pub(crate) async fn client_begin_stream(
     ctx: &ClientExecContext,
     text: String,
@@ -425,6 +473,7 @@ pub(crate) async fn client_begin_stream(
 }
 
 /// Interactive transactions need a stable attached session from the driver pool.
+#[instrument(name = "ydb.Query.EnsureTxSession", skip_all, fields(db.system.name = "ydb"), err)]
 async fn ensure_tx_session(tx: &mut TransactionExecContext) -> YdbResult<()> {
     if let Some(lease) = &tx.pooled_lease {
         lease.ensure_alive()?;
@@ -458,6 +507,7 @@ pub(crate) async fn transaction_identity(
     Ok((session_id, transaction_id))
 }
 
+#[instrument(name = "ydb.Query.ReleaseTxSession", skip_all, fields(db.system.name = "ydb"))]
 async fn release_tx_session(tx: &mut TransactionExecContext) {
     if let Some(lease) = tx.pooled_lease.take() {
         lease.return_to_pool().await;
@@ -477,6 +527,7 @@ async fn release_tx_session_handling_error(
     release_tx_session(tx).await;
 }
 
+#[instrument(name = "ydb.ExecuteQuery", skip_all, fields(db.system.name = "ydb", ydb.Query.text = %ensure_len_string(&yql_text), ydb.Query.params = ?parameters, ydb.Query.opts = ?opts))]
 async fn transaction_execute_request(
     tx: &TransactionExecContext,
     yql_text: String,
@@ -498,6 +549,7 @@ async fn transaction_execute_request(
 }
 
 /// Open the transaction via `BeginTransaction` RPC (explicit begin).
+#[instrument(name = "ydb.Query.TransactionEnsureBegin", skip_all, fields(db.system.name = "ydb", ydb.tx.mode = ?tx.tx_mode, ydb.session.id = tracing::field::Empty), err)]
 pub(crate) async fn transaction_ensure_begin(
     tx: &mut TransactionExecContext,
     session_ready: bool,
@@ -515,6 +567,7 @@ pub(crate) async fn transaction_ensure_begin(
         ensure_tx_session(tx).await?;
     }
     let session_id = tx_session_id(tx)?.to_string();
+    tracing::Span::current().record("ydb.session.id", &session_id);
     let mut client = query_client_from_tx(tx).await?;
     let tx_id =
         maybe_with_operation_timeout(resolve_effective_timeout(tx.retry_deadline, None), async {
@@ -553,6 +606,7 @@ pub(crate) fn transaction_mark_invalidated_on_query_error(
     }
 }
 
+#[instrument(name = "ydb.Query.TransactionBeginStream", skip_all, fields(db.system.name = "ydb", ydb.tx.mode = ?tx.tx_mode, ydb.session.id = tracing::field::Empty), err)]
 pub(crate) async fn transaction_begin_stream(
     tx: &mut TransactionExecContext,
     text: String,
@@ -575,6 +629,9 @@ pub(crate) async fn transaction_begin_stream(
             ensure_tx_session(tx).await?;
             if let Some(lease) = &mut tx.pooled_lease {
                 lease.begin_use();
+            }
+            if let Ok(session_id) = tx_session_id(tx) {
+                tracing::Span::current().record("ydb.session.id", session_id);
             }
             if tx.begin {
                 transaction_ensure_begin(tx, true).await?;
@@ -604,6 +661,7 @@ pub(crate) async fn transaction_begin_stream(
     result
 }
 
+#[instrument(name = "ydb.Commit", skip_all, fields(db.system.name = "ydb", ydb.tx.id = tracing::field::Empty, ydb.session.id = tracing::field::Empty), err)]
 pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbResult<()> {
     if !tx.state.is_active() {
         return Ok(());
@@ -620,6 +678,9 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
     ensure_tx_session(tx).await?;
     let tx_id = tx.tx_id.take().expect("checked Some");
     let session_id = tx_session_id(tx)?.to_string();
+    tracing::Span::current()
+        .record("ydb.session.id", &session_id)
+        .record("ydb.tx.id", &tx_id);
     let mut client = query_client_from_tx(tx).await?;
     let result =
         maybe_with_operation_timeout(resolve_effective_timeout(tx.retry_deadline, None), async {
@@ -638,6 +699,7 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
     result
 }
 
+#[instrument(name = "ydb.Rollback", skip_all, fields(db.system.name = "ydb", ydb.tx.id = tracing::field::Empty, ydb.session.id = tracing::field::Empty), err)]
 pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> YdbResult<()> {
     if !tx.state.is_active() {
         return Ok(());
@@ -648,6 +710,9 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
         if let Ok(session_id) = tx_session_id(tx)
             && let Ok(mut client) = query_client_from_tx(tx).await
         {
+            tracing::Span::current()
+                .record("ydb.session.id", session_id)
+                .record("ydb.tx.id", &tx_id);
             let rollback_result = maybe_with_operation_timeout(
                 resolve_effective_timeout(tx.retry_deadline, None),
                 async {

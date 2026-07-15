@@ -13,7 +13,7 @@ use http::uri::Authority;
 use itertools::Itertools;
 use tokio::sync::watch;
 use tokio_stream::wrappers::WatchStream;
-use tracing::trace;
+use tracing::{instrument, trace};
 
 use crate::YdbError;
 use crate::errors::{NeedRetry, YdbResult};
@@ -74,9 +74,13 @@ impl DiscoveryState {
         self.nodes.len() == 0
     }
 
+    fn is_pessimized(&self, uri: &Uri) -> bool {
+        self.pessimized_nodes.contains(uri)
+    }
+
     // pessimize return true if state was changed
     pub(crate) fn pessimize(&mut self, uri: &Uri) -> bool {
-        if self.pessimized_nodes.contains(uri) {
+        if self.is_pessimized(uri) {
             return false;
         };
 
@@ -300,7 +304,7 @@ impl DiscoverySharedState {
         })
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(name = "ydb.Discovery.DiscoveryNow", skip_all, err)]
     async fn discovery_now(&self) -> YdbResult<()> {
         let lock = self.discovery_lock.lock().await;
 
@@ -345,6 +349,17 @@ impl DiscoverySharedState {
 
     #[tracing::instrument(skip(state))]
     async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
+        #[instrument(name = "ydb.Discovery.Timer", skip_all, fields(db.system.name = "ydb", discovery_uri = %state.discovery_uri), err)]
+        async fn discovery_once(
+            state: Arc<DiscoverySharedState>,
+            attempt: usize,
+        ) -> Result<(), YdbError> {
+            trace!("discovery attempt {attempt}");
+            let res = state.discovery_now().await;
+            trace!("discovery result: {:?}", res);
+            res
+        }
+
         'worker: loop {
             let mut attempt = 0;
             let retrier = IndefiniteRetrier;
@@ -355,11 +370,8 @@ impl DiscoverySharedState {
                     break 'worker;
                 };
 
-                trace!("discovery attempt {attempt}");
-                let res = state.discovery_now().await;
+                let res = discovery_once(state, attempt).await;
                 attempt += 1;
-
-                trace!("discovery result: {:?}", res);
 
                 if res.is_ok() {
                     break 'attempt;
@@ -396,7 +408,7 @@ impl DiscoverySharedState {
         Ok(Uri::builder()
             .scheme(if endpoint_info.ssl { "https" } else { "http" })
             .authority(authority)
-            .path_and_query("")
+            .path_and_query("/")
             .build()?)
     }
 }
@@ -404,21 +416,20 @@ impl DiscoverySharedState {
 #[async_trait]
 impl Discovery for DiscoverySharedState {
     fn pessimization(&self, uri: &Uri) {
-        let Some(Ok(state)) = &*self.state_sender.borrow() else {
-            // Node pessimization is reset after discovery,
-            // so it makes no sense to add pessimize node before
-            // the first discovery.
-            return;
-        };
+        self.state_sender.send_if_modified(|current| {
+            let Some(Ok(state)) = current.as_mut() else {
+                // Node pessimization is reset after discovery,
+                // so it makes no sense to pessimize a node before
+                // the first discovery.
+                return false;
+            };
 
-        // TODO: suppress force copy every time
-        let mut state = state.as_ref().clone();
+            if state.is_pessimized(uri) {
+                return false;
+            }
 
-        if !state.pessimize(uri) {
-            return;
-        }
-
-        self.state_sender.send_replace(Some(Ok(Arc::new(state))));
+            Arc::make_mut(state).pessimize(uri)
+        });
     }
 
     fn subscribe(&self) -> BoxStream<'static, Arc<DiscoveryState>> {
@@ -474,7 +485,7 @@ impl Waiter for DiscoverySharedState {
 #[cfg(test)]
 mod test {
     use crate::client_common::{DBCredentials, TokenCache};
-    use crate::discovery::DiscoverySharedState;
+    use crate::discovery::{Discovery, DiscoverySharedState, DiscoveryState, NodeInfo};
     use crate::errors::YdbResult;
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
@@ -484,7 +495,51 @@ mod test {
     use http::Uri;
     use std::str::FromStr;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
+
+    fn discovery_shared_state() -> YdbResult<DiscoverySharedState> {
+        const DATABASE: &str = "/local";
+        const ENDPOINT: &str = "grpc://localhost:2136";
+
+        let uri = Uri::from_str(ENDPOINT)?;
+        let load_balancer =
+            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(uri)));
+        let connection_manager = GrpcConnectionManager::new(
+            load_balancer,
+            DATABASE.to_string(),
+            MultiInterceptor::new(),
+            None,
+            crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+        );
+
+        DiscoverySharedState::new(connection_manager, ENDPOINT)
+    }
+
+    #[test]
+    fn pessimization_completes_after_discovery() -> YdbResult<()> {
+        let state = Arc::new(discovery_shared_state()?);
+        let endpoint = Uri::from_static("http://localhost:2136");
+        state
+            .state_sender
+            .send_replace(Some(Ok(Arc::new(DiscoveryState::new(
+                Instant::now(),
+                vec![NodeInfo::new(endpoint.clone(), String::new())],
+            )))));
+
+        let state_for_thread = state.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            state_for_thread.pessimization(&endpoint);
+            let _ = done_tx.send(());
+        });
+
+        assert!(
+            done_rx.recv_timeout(Duration::from_secs(1)).is_ok(),
+            "endpoint pessimization deadlocked"
+        );
+
+        Ok(())
+    }
 
     #[tokio::test]
     #[ignore] // need YDB access

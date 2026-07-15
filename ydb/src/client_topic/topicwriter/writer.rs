@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 use tokio::sync::{RwLock, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::{CancellationToken, DropGuard};
-use tracing::trace;
+use tracing::{instrument, trace};
 
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
@@ -121,10 +121,12 @@ impl TopicWriter {
         })
     }
 
+    #[instrument(name = "ydb.TopicWriter.Write", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn write(&self, message: TopicWriterMessage) -> YdbResult<()> {
         self.write_message(message, None).await
     }
 
+    #[instrument(name = "ydb.TopicWriter.WriteWithAck", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn write_with_ack(
         &self,
         message: TopicWriterMessage,
@@ -137,6 +139,7 @@ impl TopicWriter {
             .unwrap_or_else(|chan_err| Err(YdbError::from(chan_err)))
     }
 
+    #[instrument(name = "ydb.TopicWriter.WriteWithAckFuture", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn write_with_ack_future(&self, message: TopicWriterMessage) -> YdbResult<AckFuture> {
         let (tx, rx) = oneshot::channel();
 
@@ -159,6 +162,7 @@ impl TopicWriter {
         Ok(())
     }
 
+    #[instrument(name = "ydb.TopicWriter.Flush", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn flush(&self) -> YdbResult<()> {
         self.reconnector.flush().await
     }
@@ -181,6 +185,7 @@ impl TopicWriter {
         }
     }
 
+    #[instrument(name = "ydb.TopicWriter.Stop", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn stop(self) -> YdbResult<()> {
         trace!("stopping...");
 

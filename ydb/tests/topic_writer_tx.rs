@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 mod mock_server;
 
 use std::sync::{Arc, Mutex};

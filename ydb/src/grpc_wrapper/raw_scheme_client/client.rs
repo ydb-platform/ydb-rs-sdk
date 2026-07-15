@@ -35,7 +35,7 @@ impl RawSchemeClient {
         }
     }
 
-    #[instrument(skip(self), err, ret)]
+    #[instrument(name = "ydb.grpc.ListDirectory", skip(self), fields(db.system.name = "ydb", ydb.path = %req.path), err)]
     pub async fn list_directory(
         &mut self,
         req: RawListDirectoryRequest,
@@ -47,7 +47,7 @@ impl RawSchemeClient {
         );
     }
 
-    #[instrument(skip(self), err, ret)]
+    #[instrument(name = "ydb.grpc.MakeDirectory", skip(self), fields(db.system.name = "ydb", ydb.path = %req.path), err)]
     pub async fn make_directory(&mut self, req: RawMakeDirectoryRequest) -> RawResult<()> {
         request_without_result!(
             self.service.make_directory,
@@ -55,7 +55,7 @@ impl RawSchemeClient {
         );
     }
 
-    #[instrument(skip(self), err, ret)]
+    #[instrument(name = "ydb.grpc.RemoveDirectory", skip(self), fields(db.system.name = "ydb", ydb.path = %req.path), err)]
     pub async fn remove_directory(&mut self, req: RawRemoveDirectoryRequest) -> RawResult<()> {
         request_without_result!(
             self.service.remove_directory,
@@ -63,7 +63,7 @@ impl RawSchemeClient {
         );
     }
 
-    #[instrument(skip(self), err, ret)]
+    #[instrument(name = "ydb.grpc.DescribePath", skip(self), fields(db.system.name = "ydb", ydb.path = %req.path), err)]
     pub async fn describe_path(
         &mut self,
         req: RawDescribePathRequest,
