@@ -57,7 +57,7 @@ impl<ConnectionT: Connection> ConnectionPool<ConnectionT> {
     }
 }
 
-pub trait Connection: Sized {
+pub(crate) trait Connection: Sized {
     async fn init(
         uri: Uri,
         tls_config: Option<&Arc<ClientTlsConfig>>,
