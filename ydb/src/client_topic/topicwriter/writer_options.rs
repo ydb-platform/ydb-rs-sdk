@@ -2,50 +2,47 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use derive_builder::Builder;
-
 use crate::client_topic::compression::{CodecSelection, CompressionEncoder};
 use crate::client_topic::topicwriter::partitioning::PartitioningStrategy;
-use crate::errors;
 use crate::retry::{IndefiniteRetrier, Retry};
 
-#[derive(Builder, Clone)]
-#[builder(build_fn(error = "errors::YdbError"))]
+#[derive(bon::Builder, Clone)]
 pub struct TopicWriterOptions {
-    pub topic_path: String,
+    // `field` attrs must come first (bon constraint)
+    #[builder(field)]
+    pub(crate) extra_encoders: Vec<Arc<dyn CompressionEncoder>>,
 
-    #[builder(setter(strip_option), default)]
+    // required
+    #[builder(into)]
+    pub(crate) topic_path: String,
+
+    // producer identity & routing
     pub(crate) producer_id: Option<String>,
     #[builder(default)]
     pub(crate) partitioning: PartitioningStrategy,
-    #[builder(setter(strip_option), default)]
     pub(crate) session_metadata: Option<HashMap<String, String>>,
-    #[builder(default = "true")]
+
+    // sequencing & codec
+    #[builder(default = true)]
     pub(crate) auto_seq_no: bool,
-    #[builder(default = "1000")]
-    pub(crate) write_request_messages_chunk_size: usize,
-    #[builder(default = "Duration::from_millis(1)")]
-    pub(crate) write_request_send_messages_period: Duration,
-    #[builder(default = "Duration::from_secs(3)")]
-    pub(crate) flush_timeout: Duration,
-
-    #[builder(default = "Arc::new(IndefiniteRetrier{ })")]
-    pub(crate) retrier: Arc<dyn Retry>,
-
     #[builder(default)]
     pub(crate) codec_selector: CodecSelection,
-    #[builder(setter(custom), default)]
-    pub(crate) extra_encoders: Vec<Arc<dyn CompressionEncoder>>,
+
+    // internal write-loop tuning
+    #[builder(default = 1000)]
+    pub(crate) write_request_messages_chunk_size: usize,
+    #[builder(default = Duration::from_millis(1))]
+    pub(crate) write_request_send_messages_period: Duration,
+    #[builder(default = Duration::from_secs(3))]
+    pub(crate) flush_timeout: Duration,
+
+    #[builder(default = Arc::new(IndefiniteRetrier {}), setters(vis = "pub(crate)"))]
+    pub(crate) retrier: Arc<dyn Retry>,
 }
 
-impl TopicWriterOptionsBuilder {
-    pub fn add_encoder<E>(&mut self, encoder: E) -> &mut Self
-    where
-        E: CompressionEncoder + 'static,
-    {
-        self.extra_encoders
-            .get_or_insert_default()
-            .push(Arc::new(encoder));
+impl<S: topic_writer_options_builder::State> TopicWriterOptionsBuilder<S> {
+    pub fn add_encoder<E: CompressionEncoder + 'static>(mut self, encoder: E) -> Self {
+        self.extra_encoders.push(Arc::new(encoder));
         self
     }
 }

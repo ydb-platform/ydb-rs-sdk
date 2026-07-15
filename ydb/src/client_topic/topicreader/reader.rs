@@ -6,14 +6,14 @@ use futures_util::Future;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use tracing::instrument;
+
 use crate::client_common::TokenCache;
 use crate::client_query::Transaction;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
 use crate::client_topic::topicreader::messages::TopicReaderBatch;
-use crate::client_topic::topicreader::reader_options::{
-    TopicReaderOptions, TopicReaderOptionsBuilder,
-};
+use crate::client_topic::topicreader::reader_options::TopicReaderOptions;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
 use crate::grpc_wrapper::raw_topic_service::common::partition::RawOffsetsRange;
@@ -74,6 +74,7 @@ impl TopicReader {
         })
     }
 
+    #[instrument(name = "ydb.TopicReader.ReadBatch", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
         self.runtime.pop_batch(self.options.batch_size).await
     }
@@ -82,6 +83,7 @@ impl TopicReader {
     /// using the given [`Transaction`].
     ///
     /// Offsets are committed when the query transaction commits.
+    #[instrument(name = "ydb.TopicReader.PopBatchInTx", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn pop_batch_in_tx(&mut self, tx: &mut Transaction) -> YdbResult<TopicReaderBatch> {
         let (session_id, transaction_id) = tx.identity().await?;
         let batch = self.read_batch().await?;
@@ -90,6 +92,7 @@ impl TopicReader {
         Ok(batch)
     }
 
+    #[instrument(name = "ydb.TopicReader.TxReader", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn tx_reader<'a>(&'a mut self, tx: &mut Transaction) -> YdbResult<TopicReaderTx<'a>> {
         TopicReaderTx::new(self, tx).await
     }
@@ -201,8 +204,9 @@ impl TopicSelectors {
 }
 
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
-#[derive(Clone)]
+#[derive(bon::Builder, Clone)]
 pub struct TopicSelector {
+    #[builder(into)]
     pub path: String,
     pub partition_ids: Option<Vec<i64>>,
     pub read_from: Option<SystemTime>,
@@ -249,17 +253,6 @@ impl<S: Into<TopicSelector>> From<S> for TopicSelectors {
 impl<S: Into<TopicSelector>> FromIterator<S> for TopicSelectors {
     fn from_iter<I: IntoIterator<Item = S>>(iter: I) -> Self {
         Self(iter.into_iter().map(Into::into).collect())
-    }
-}
-
-impl TopicReaderOptionsBuilder {
-    pub fn from_consumer_topic(
-        consumer: impl Into<String>,
-        topic: impl Into<TopicSelectors>,
-    ) -> Self {
-        let mut builder = TopicReaderOptionsBuilder::default();
-        builder.consumer(consumer.into()).topic(topic.into());
-        builder
     }
 }
 

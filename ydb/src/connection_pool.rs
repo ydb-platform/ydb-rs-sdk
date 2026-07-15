@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
+use tracing::instrument;
 use tracing::trace;
 
 #[derive(Clone)]
@@ -21,6 +22,7 @@ impl ConnectionPool {
         }
     }
 
+    #[instrument(level = "trace", name = "ydb.ConnectionPool.LoadCertificate", skip_all, fields(ydb.pool.certificate = %path))]
     pub(crate) fn load_certificate(self, path: String) -> Self {
         let pem = std::fs::read_to_string(path).unwrap();
         trace!("loaded cert: {}", pem);
@@ -32,6 +34,7 @@ impl ConnectionPool {
         }
     }
 
+    #[instrument(name = "ydb.ConnectionPool.GetConnection", skip_all, fields(network.peer.address = uri.host(), network.peer.port = uri.port_u16()), err)]
     pub(crate) async fn connection(&self, uri: &Uri) -> YdbResult<Channel> {
         let now = Instant::now();
         let mut lock = self.state.lock().unwrap();

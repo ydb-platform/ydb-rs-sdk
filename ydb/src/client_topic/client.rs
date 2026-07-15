@@ -7,13 +7,9 @@ use crate::client_common::TokenCache;
 use crate::client_query::Transaction;
 use crate::client_topic::list_types::{AlterConsumer, Consumer, MeteringMode};
 use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
-use crate::client_topic::topicreader::reader_options::{
-    TopicReaderOptions, TopicReaderOptionsBuilder,
-};
+use crate::client_topic::topicreader::reader_options::TopicReaderOptions;
 use crate::client_topic::topicwriter::writer::TopicWriter;
-use crate::client_topic::topicwriter::writer_options::{
-    TopicWriterOptions, TopicWriterOptionsBuilder,
-};
+use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
 use crate::client_topic::topicwriter::writer_tx::TopicWriterTx;
 use crate::errors;
 use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -27,6 +23,7 @@ use derive_builder::{Builder, UninitializedFieldError};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::instrument;
 
 #[derive(Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]
@@ -143,6 +140,7 @@ impl TopicClient {
         }
     }
 
+    #[instrument(name = "ydb.TopicClient.CreateTopic", skip_all, fields(db.system.name = "ydb", ydb.topic.path = %path))]
     pub async fn create_topic(
         &mut self,
         path: String,
@@ -156,6 +154,7 @@ impl TopicClient {
         Ok(())
     }
 
+    #[instrument(name = "ydb.TopicClient.AlterTopic", skip_all, fields(db.system.name = "ydb", ydb.topic.path = %path))]
     pub async fn alter_topic(&mut self, path: String, options: AlterTopicOptions) -> YdbResult<()> {
         let req = RawAlterTopicRequest::new(path, self.timeouts.operation_params(), options);
 
@@ -165,6 +164,7 @@ impl TopicClient {
         Ok(())
     }
 
+    #[instrument(name = "ydb.TopicClient.DescribeConsumer", skip_all, fields(db.system.name = "ydb", ydb.topic.path = %path, ydb.consumer.name = %consumer))]
     pub async fn describe_consumer(
         &mut self,
         path: String,
@@ -185,6 +185,7 @@ impl TopicClient {
         Ok(description)
     }
 
+    #[instrument(name = "ydb.TopicClient.DescribeTopic", skip_all, fields(db.system.name = "ydb", ydb.topic.path = %path))]
     pub async fn describe_topic(
         &mut self,
         path: String,
@@ -199,6 +200,7 @@ impl TopicClient {
         Ok(description)
     }
 
+    #[instrument(name = "ydb.TopicClient.DropTopic", skip_all, fields(db.system.name = "ydb", ydb.topic.path = %path))]
     pub async fn drop_topic(&mut self, path: String) -> YdbResult<()> {
         let req = RawDropTopicRequest {
             operation_params: self.timeouts.operation_params(),
@@ -211,15 +213,16 @@ impl TopicClient {
         Ok(())
     }
 
+    #[instrument(name = "ydb.TopicClient.CreateReader", skip_all)]
     pub async fn create_reader(
         &mut self,
         consumer: impl Into<String>,
         topic: impl Into<TopicSelectors>,
     ) -> YdbResult<TopicReader> {
-        let options = TopicReaderOptionsBuilder::default()
-            .consumer(consumer.into())
-            .topic(topic.into())
-            .build()?;
+        let options = TopicReaderOptions::builder()
+            .consumer(consumer)
+            .topic(topic)
+            .build();
         TopicReader::new(
             options,
             self.connection_manager.clone(),
@@ -229,6 +232,7 @@ impl TopicClient {
         .await
     }
 
+    #[instrument(name = "ydb.TopicClient.CreateReader", skip_all)]
     pub async fn create_reader_with_params(
         &mut self,
         options: TopicReaderOptions,
@@ -242,6 +246,7 @@ impl TopicClient {
         .await
     }
 
+    #[instrument(name = "ydb.TopicClient.CreateWriter", skip_all)]
     pub async fn create_writer_with_params(
         &mut self,
         writer_options: TopicWriterOptions,
@@ -279,12 +284,10 @@ impl TopicClient {
         .await
     }
 
+    #[instrument(name = "ydb.TopicClient.CreateWriter", skip_all)]
     pub async fn create_writer(&mut self, path: impl Into<String>) -> YdbResult<TopicWriter> {
         TopicWriter::new(
-            TopicWriterOptionsBuilder::default()
-                .topic_path(path.into())
-                .build()
-                .unwrap(),
+            TopicWriterOptions::builder().topic_path(path).build(),
             self.connection_manager.clone(),
             self.executor.clone(),
         )

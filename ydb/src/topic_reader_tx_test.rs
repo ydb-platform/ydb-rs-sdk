@@ -10,8 +10,8 @@ use crate::client_topic::client::{
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::test_integration_helper::create_client;
 use crate::{
-    Client, TopicReaderBatch, TopicReaderOptionsBuilder, TopicWriterMessageBuilder,
-    TopicWriterOptionsBuilder, YdbError, YdbResult, YdbResultWithCustomerErr,
+    Client, TopicReaderBatch, TopicReaderOptions, TopicWriterMessage, TopicWriterOptions, YdbError,
+    YdbResult, YdbResultWithCustomerErr,
 };
 
 async fn wait_topic_absent(
@@ -68,21 +68,21 @@ async fn write_messages(
 ) -> YdbResult<()> {
     let writer = topic_client
         .create_writer_with_params(
-            TopicWriterOptionsBuilder::default()
+            TopicWriterOptions::builder()
                 .auto_seq_no(false)
-                .topic_path(topic_path.to_string())
+                .topic_path(topic_path)
                 .producer_id(producer_id.to_string())
-                .build()?,
+                .build(),
         )
         .await?;
 
     for (index, payload) in payloads.iter().enumerate() {
         writer
             .write_with_ack(
-                TopicWriterMessageBuilder::default()
-                    .seq_no(Some(index as i64 + 1))
+                TopicWriterMessage::builder()
                     .data(payload.as_bytes().to_vec())
-                    .build()?,
+                    .seq_no(index as i64 + 1)
+                    .build(),
             )
             .await?;
     }
@@ -342,11 +342,11 @@ async fn query_topic_reader_tx_rewrap_same_reader_same_tx_commits_all_offsets() 
     let mut topic_client = client.topic_client();
     write_messages(&mut topic_client, &topic_path, producer_id, &payloads).await?;
 
-    let reader_options = TopicReaderOptionsBuilder::default()
-        .consumer(consumer_name.to_string())
-        .topic(topic_path.clone().into())
+    let reader_options = TopicReaderOptions::builder()
+        .consumer(consumer_name)
+        .topic(topic_path.clone())
         .batch_size(1)
-        .build()?;
+        .build();
     let mut reader = topic_client
         .create_reader_with_params(reader_options)
         .await?;

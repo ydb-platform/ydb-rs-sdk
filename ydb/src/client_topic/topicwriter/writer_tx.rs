@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
+use tracing::instrument;
+
 use crate::client_query::Transaction;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
@@ -38,7 +40,7 @@ impl TopicWriterTx {
 
         // All validation and configuration, specific for `TopicWriterTx` should be done in
         // options construction and conversion.
-        let options = options.try_into_non_tx_options()?;
+        let options = options.into_non_tx_options();
 
         let inner =
             TopicWriter::with_tx_identity(options, connection_manager, executor, tx_identity)
@@ -61,6 +63,7 @@ impl TopicWriterTx {
     /// This method is not cancel safe. If the returned future is dropped before it
     /// completes, the SDK cannot tell whether YDB attached the message to the transaction.
     /// Roll the transaction back if that ambiguity is not acceptable.
+    #[instrument(name = "ydb.TopicWriterTx.Write", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
         match self.inner.write_with_ack(message).await? {
             MessageWriteStatus::WrittenInTx(_) => Ok(()),
@@ -78,6 +81,7 @@ impl TopicWriterTx {
     /// Calling `stop` is the explicit way to finish using the writer before committing or
     /// rolling back the transaction. Dropping the writer cancels its background work, but
     /// does not report shutdown errors.
+    #[instrument(name = "ydb.TopicWriterTx.Stop", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn stop(self) -> YdbResult<()> {
         self.inner.stop().await
     }

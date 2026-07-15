@@ -1,10 +1,8 @@
+#![recursion_limit = "256"]
 mod mock_server;
 
 use std::sync::{Arc, Mutex};
-use ydb::{
-    Client, ClientBuilder, TopicWriterMessage, TopicWriterMessageBuilder,
-    TopicWriterTxOptionsBuilder, YdbResult,
-};
+use ydb::{Client, ClientBuilder, TopicWriterMessage, TopicWriterTxOptionsBuilder, YdbResult};
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 use ydb_grpc::ydb_proto::topic::stream_write_message::InitRequest;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage as WriteFromClient;
@@ -158,10 +156,9 @@ fn make_client(server: &MockServer) -> YdbResult<Client> {
 }
 
 fn test_message() -> TopicWriterMessage {
-    TopicWriterMessageBuilder::default()
+    TopicWriterMessage::builder()
         .data(TEST_MESSAGE_DATA.to_vec())
         .build()
-        .unwrap()
 }
 
 #[tokio::test]

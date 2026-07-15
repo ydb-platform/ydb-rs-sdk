@@ -4,7 +4,7 @@ use derive_builder::Builder;
 
 use crate::client_topic::compression::{CodecSelection, CompressionEncoder};
 use crate::retry::NoRetrier;
-use crate::{TopicWriterOptions, TopicWriterOptionsBuilder, YdbResult, errors};
+use crate::{TopicWriterOptions, errors};
 
 #[derive(Builder, Clone)]
 #[builder(build_fn(error = "errors::YdbError"))]
@@ -30,18 +30,18 @@ impl TopicWriterTxOptionsBuilder {
 }
 
 impl TopicWriterTxOptions {
-    pub(crate) fn try_into_non_tx_options(self) -> YdbResult<TopicWriterOptions> {
-        let mut options = TopicWriterOptionsBuilder::default()
+    pub(crate) fn into_non_tx_options(self) -> TopicWriterOptions {
+        let mut options = TopicWriterOptions::builder()
             .topic_path(self.topic_path)
             // Writers in transaction should have empty producer_id!
             .producer_id("".to_string())
             // Current WriterTx should not reconnect
             .retrier(Arc::new(NoRetrier {}))
             .codec_selector(self.codec_selector)
-            .build()?;
+            .build();
 
         options.extra_encoders = self.extra_encoders;
 
-        Ok(options)
+        options
     }
 }

@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! Multi-result-set streaming inside `retry_tx` (lazy tx on implicit session).
 
 use ydb::{ClientBuilder, Transaction};

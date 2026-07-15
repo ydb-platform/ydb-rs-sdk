@@ -149,12 +149,10 @@ impl RuntimeHandle {
                         continue;
                     }
 
-                    messages_queued |= active.buffer.push_raw_batch(
-                        batch,
-                        partition_session_id,
-                        reader_id,
-                        epoch,
-                    )?;
+                    active
+                        .buffer
+                        .push_raw_batch(batch, partition_session_id, reader_id, epoch)?;
+                    messages_queued = true;
                 }
             }
 

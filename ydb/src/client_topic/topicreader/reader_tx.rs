@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use tracing::instrument;
+
 use crate::{
     TopicReader, TopicReaderBatch, YdbError, YdbResult,
     client_query::{
@@ -70,6 +72,7 @@ impl<'a> TopicReaderTx<'a> {
         })
     }
 
+    #[instrument(name = "ydb.TopicReaderTx.ReadBatch", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
         let batch = self.inner.read_batch().await?;
         if let Err(err) = self.update_offsets_in_transaction(&batch).await {

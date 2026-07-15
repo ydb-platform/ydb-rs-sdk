@@ -31,7 +31,9 @@ use std::time::{Duration, Instant};
 
 use futures_util::FutureExt;
 use http::Uri;
+use tracing::instrument;
 
+use crate::client_query::exec::TxState;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::result::Row;
@@ -194,6 +196,100 @@ impl QueryClient {
         RetryTxBuilder::new(self, callback)
     }
 
+    #[instrument(
+        name = "ydb.Try",
+        skip_all,
+        fields(
+            ydb.retry.attempt = attempt,
+            ydb.retry.backoff_ms = tracing::field::Empty,
+            db.system.name = "ydb",
+        ),
+        err,
+    )]
+    async fn try_attempt_body<F, T>(
+        &self,
+        callback: &mut F,
+        mut tx: Transaction,
+        attempt: usize,
+        start: Instant,
+        wall_timeout: Option<Duration>,
+        idempotent: bool,
+    ) -> YdbResultWithCustomerErr<Option<T>>
+    where
+        F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
+    {
+        use crate::retry_budget::{RetryPauseError, pause_before_retry};
+        use exec::check_retry_tx_error;
+
+        #[instrument(name = "ydb.Try.Attempt", skip_all, fields(db.system.name = "ydb"))]
+        async fn try_attempt<F, T>(
+            callback: &mut F,
+            tx: &mut Transaction,
+        ) -> Result<Result<T, YdbOrCustomerError>, Box<dyn Any + Send>>
+        where
+            F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
+        {
+            AssertUnwindSafe(callback(tx)).catch_unwind().await
+        }
+
+        let callback_result = try_attempt(callback, &mut tx).await;
+
+        let err = match callback_result {
+            Ok(Ok(value)) => match resolve_post_callback_action(&tx.ctx.state) {
+                PostCallbackAction::Return(status) => {
+                    tx.notify_hooks(status);
+                    return Ok(Some(value));
+                }
+                PostCallbackAction::Commit => {
+                    return match tx.commit().await {
+                        Ok(()) => {
+                            tx.notify_hooks(QueryTxCommitStatus::Committed);
+                            Ok(Some(value))
+                        }
+                        // Commit outcome is ambiguous on transport errors; never retry.
+                        Err(e) => {
+                            tx.notify_hooks(QueryTxCommitStatus::Aborted);
+                            Err(YdbOrCustomerError::YDB(e))
+                        }
+                    };
+                }
+                PostCallbackAction::Retry(err) => {
+                    tx.notify_hooks(QueryTxCommitStatus::Aborted);
+                    err
+                }
+                PostCallbackAction::Fail(err) => {
+                    tx.notify_hooks(QueryTxCommitStatus::Aborted);
+                    return Err(err);
+                }
+            },
+            Ok(Err(err)) => {
+                tx.rollback_quiet().await;
+                tx.notify_hooks(QueryTxCommitStatus::Aborted);
+                err
+            }
+            Err(panic_payload) => {
+                tx.rollback_quiet().await;
+                tx.notify_hooks(QueryTxCommitStatus::Aborted);
+                YdbOrCustomerError::YDB(YdbError::Custom(format!(
+                    "query transaction callback panicked: {}",
+                    panic_message(panic_payload)
+                )))
+            }
+        };
+
+        if !check_retry_tx_error(&err, idempotent) {
+            return Err(err);
+        }
+        match pause_before_retry(&self.ctx.retry_control, attempt, start, wall_timeout).await {
+            Ok(()) => {}
+            Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
+                return Err(err);
+            }
+        }
+        Ok(None)
+    }
+
+    #[instrument(name = "ydb.RunWithRetry", skip_all, fields(db.system.name = "ydb", ydb.Query.idempotent = idempotent), err)]
     pub(crate) async fn run_retry_tx<F, T>(
         &self,
         mut callback: F,
@@ -204,9 +300,6 @@ impl QueryClient {
     where
         F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
     {
-        use crate::retry_budget::{RetryPauseError, pause_before_retry};
-        use exec::check_retry_tx_error;
-
         let start = Instant::now();
         let absolute_deadline = wall_timeout.map(|d| start + d);
         let mut attempt = 0;
@@ -214,63 +307,20 @@ impl QueryClient {
         loop {
             self.ctx.retry_control.metrics().record_attempt();
             attempt += 1;
-            let mut tx = Transaction::new(
+
+            let tx = Transaction::new(
                 self.ctx.connection_manager.clone(),
                 self.ctx.session_pool.clone(),
                 options.clone(),
                 absolute_deadline,
             );
 
-            let callback_result = AssertUnwindSafe(callback(&mut tx)).catch_unwind().await;
+            let result = self
+                .try_attempt_body(&mut callback, tx, attempt, start, wall_timeout, idempotent)
+                .await?;
 
-            let err = match callback_result {
-                Ok(Ok(value)) => {
-                    if tx.state == TxState::RolledBack {
-                        tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                        return Ok(value);
-                    }
-                    if tx.ctx.finished {
-                        // TODO: fix finished transaction handling:
-                        // https://github.com/ydb-platform/ydb-rs-sdk/issues/521
-                        tx.state = TxState::Committed;
-                        tx.notify_hooks(QueryTxCommitStatus::Committed);
-                        return Ok(value);
-                    }
-                    return match tx.commit().await {
-                        Ok(()) => {
-                            tx.notify_hooks(QueryTxCommitStatus::Committed);
-                            Ok(value)
-                        }
-                        // Commit outcome is ambiguous on transport errors; never retry.
-                        Err(e) => {
-                            tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                            Err(YdbOrCustomerError::YDB(e))
-                        }
-                    };
-                }
-                Ok(Err(err)) => {
-                    tx.rollback_quiet().await;
-                    tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                    err
-                }
-                Err(panic_payload) => {
-                    tx.rollback_quiet().await;
-                    tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                    YdbOrCustomerError::YDB(YdbError::Custom(format!(
-                        "query transaction callback panicked: {}",
-                        panic_message(panic_payload)
-                    )))
-                }
-            };
-
-            if !check_retry_tx_error(&err, idempotent) {
-                return Err(err);
-            }
-            match pause_before_retry(&self.ctx.retry_control, attempt, start, wall_timeout).await {
-                Ok(()) => {}
-                Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
-                    return Err(err);
-                }
+            if let Some(value) = result {
+                return Ok(value);
             }
         }
     }
@@ -288,6 +338,25 @@ impl QueryClient {
         operation_id: impl Into<String>,
     ) -> script::FetchScriptResultsBuilder<'_> {
         script::FetchScriptResultsBuilder::new(&self.ctx, operation_id.into())
+    }
+}
+
+enum PostCallbackAction {
+    Return(QueryTxCommitStatus),
+    Commit,
+    Retry(YdbOrCustomerError),
+    Fail(YdbOrCustomerError),
+}
+
+fn resolve_post_callback_action(state: &TxState) -> PostCallbackAction {
+    match state {
+        TxState::RolledBack => PostCallbackAction::Return(QueryTxCommitStatus::Aborted),
+        TxState::Committed => PostCallbackAction::Return(QueryTxCommitStatus::Committed),
+        TxState::Invalidated(err) => {
+            PostCallbackAction::Retry(YdbOrCustomerError::YDB(err.clone()))
+        }
+        TxState::Ambiguous(err) => PostCallbackAction::Fail(YdbOrCustomerError::YDB(err.clone())),
+        TxState::Active => PostCallbackAction::Commit,
     }
 }
 
@@ -311,16 +380,8 @@ impl QueryExecutor for QueryClient {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum TxState {
-    Active,
-    Committed,
-    RolledBack,
-}
-
 pub struct Transaction {
     ctx: TransactionExecContext,
-    state: TxState,
     hooks: Vec<Box<dyn QueryTxHook>>,
 }
 
@@ -340,7 +401,6 @@ impl Transaction {
                 options,
                 retry_deadline,
             ),
-            state: TxState::Active,
             hooks: Vec::new(),
         }
     }
@@ -359,7 +419,7 @@ impl Transaction {
     /// need `tx_id` before any YQL, or configure [`TransactionOptions::with_begin`]
     /// on the client so the first operation does this automatically.
     pub async fn begin(&mut self) -> YdbResult<()> {
-        if self.state != TxState::Active {
+        if !self.ctx.state.is_active() {
             return Err(YdbError::Custom("transaction already finished".to_string()));
         }
         transaction_ensure_begin(&mut self.ctx, false).await
@@ -367,35 +427,26 @@ impl Transaction {
 
     /// Session and transaction ids for topic offset updates inside a transaction.
     pub(crate) async fn identity(&mut self) -> YdbResult<(String, String)> {
-        if self.state != TxState::Active {
+        if !self.ctx.state.is_active() {
             return Err(YdbError::Custom("transaction already finished".to_string()));
         }
         transaction_identity(&mut self.ctx).await
     }
 
     pub async fn rollback(&mut self) -> YdbResult<()> {
-        if self.ctx.finished || self.state == TxState::RolledBack {
+        if !self.ctx.state.is_active() {
             return Ok(());
         }
-        transaction_rollback(&mut self.ctx).await?;
-        self.state = TxState::RolledBack;
-        Ok(())
+        transaction_rollback(&mut self.ctx).await
     }
 
     async fn commit(&mut self) -> YdbResult<()> {
-        if self.ctx.finished {
-            self.state = TxState::Committed;
-            return Ok(());
-        }
-        transaction_commit(&mut self.ctx).await?;
-        self.state = TxState::Committed;
-        Ok(())
+        transaction_commit(&mut self.ctx).await
     }
 
     async fn rollback_quiet(&mut self) {
-        if self.state == TxState::Active && !self.ctx.finished {
+        if self.ctx.state.is_active() {
             let _ = transaction_rollback(&mut self.ctx).await;
-            self.state = TxState::RolledBack;
         }
     }
 
@@ -447,11 +498,10 @@ pub(crate) struct QueryTxIdentity {
 
 impl Drop for Transaction {
     fn drop(&mut self) {
-        if self.state != TxState::Active || self.ctx.finished {
+        if !self.ctx.state.is_active() {
             return;
         }
-        self.state = TxState::RolledBack;
-        self.ctx.finished = true;
+        self.ctx.state = TxState::RolledBack;
         self.notify_hooks(QueryTxCommitStatus::Aborted);
         spawn_query_tx_rollback_on_drop(&mut self.ctx);
     }
@@ -534,5 +584,43 @@ mod unit_tests {
                 .is_none()
         );
         assert!(take_single_row(int64_set(vec![1, 2])).is_err());
+    }
+
+    #[test]
+    fn invalidated_state_fails_instead_of_committing() {
+        let state = TxState::Invalidated(YdbError::Custom("server aborted".into()));
+        assert!(matches!(
+            resolve_post_callback_action(&state),
+            PostCallbackAction::Retry(_)
+        ));
+    }
+
+    #[test]
+    fn ambiguous_state_fails_instead_of_committing() {
+        let state = TxState::Ambiguous(YdbError::Custom("rollback rpc failed".into()));
+        assert!(matches!(
+            resolve_post_callback_action(&state),
+            PostCallbackAction::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn committed_and_rolled_back_states_are_done_not_failed() {
+        assert!(matches!(
+            resolve_post_callback_action(&TxState::Committed),
+            PostCallbackAction::Return(QueryTxCommitStatus::Committed)
+        ));
+        assert!(matches!(
+            resolve_post_callback_action(&TxState::RolledBack),
+            PostCallbackAction::Return(QueryTxCommitStatus::Aborted)
+        ));
+    }
+
+    #[test]
+    fn active_state_needs_a_real_commit() {
+        assert!(matches!(
+            resolve_post_callback_action(&TxState::Active),
+            PostCallbackAction::Commit
+        ));
     }
 }

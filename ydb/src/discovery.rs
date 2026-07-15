@@ -1,26 +1,29 @@
 use std::collections::HashSet;
+use std::future;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock, RwLockWriteGuard, Weak};
+use std::sync::{Arc, Weak};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use derivative::Derivative;
+use futures_util::StreamExt;
+use futures_util::stream::{self, BoxStream};
 use http::Uri;
 use http::uri::Authority;
-
-use crate::errors::YdbResult;
-
-use crate::waiter::Waiter;
-
-use derivative::Derivative;
 use itertools::Itertools;
-use std::time::Duration;
-use tokio::sync::watch::Receiver;
-use tokio::sync::{Mutex, watch};
+use tokio::sync::watch;
+use tokio_stream::wrappers::WatchStream;
+use tracing::{instrument, trace};
 
+use crate::YdbError;
+use crate::errors::{NeedRetry, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
-
-use crate::grpc_wrapper::raw_discovery_client::{EndpointInfo, GrpcDiscoveryClient};
-use crate::grpc_wrapper::raw_services::Service;
-use tracing::trace;
+use crate::grpc_wrapper::{
+    raw_discovery_client::{EndpointInfo, GrpcDiscoveryClient},
+    raw_services::Service,
+};
+use crate::retry::{IndefiniteRetrier, Retry, RetryParams};
+use crate::waiter::Waiter;
 
 /// Current discovery state
 #[derive(Clone, Debug, PartialEq)]
@@ -71,9 +74,13 @@ impl DiscoveryState {
         self.nodes.len() == 0
     }
 
+    fn is_pessimized(&self, uri: &Uri) -> bool {
+        self.pessimized_nodes.contains(uri)
+    }
+
     // pessimize return true if state was changed
     pub(crate) fn pessimize(&mut self, uri: &Uri) -> bool {
-        if self.pessimized_nodes.contains(uri) {
+        if self.is_pessimized(uri) {
             return false;
         };
 
@@ -113,21 +120,30 @@ impl NodeInfo {
 /// Discovery YDB endpoints
 #[async_trait]
 pub trait Discovery: Send + Sync + Waiter {
-    /// Pessimize the endpoint
+    /// Pessimizes an endpoint.
+    ///
+    /// Pessimizations are reset after rediscovery.
     fn pessimization(&self, uri: &Uri);
 
-    /// Subscribe to discovery changes
-    fn subscribe(&self) -> tokio::sync::watch::Receiver<Arc<DiscoveryState>>;
+    /// Subscribes to discovery changes.
+    fn subscribe(&self) -> BoxStream<'static, Arc<DiscoveryState>>;
 
-    /// Get current discovery state
-    fn state(&self) -> Arc<DiscoveryState>;
+    /// Tries to get the current discovery state.
+    ///
+    /// Return `None` if the discovery state is not initialized yet.
+    ///
+    /// Guaranteed to always return `Some(_)` from the moment
+    /// `Self::wait` has been called successfully.
+    fn try_state(&self) -> Option<Arc<DiscoveryState>>;
+
+    /// Returns the current discovery state.
+    async fn state(&self) -> Arc<DiscoveryState>;
 }
 
 /// Always discovery once static node
 ///
 /// Not used in prod, but may be good for tests
 pub struct StaticDiscovery {
-    sender: tokio::sync::watch::Sender<Arc<DiscoveryState>>,
     discovery_state: Arc<DiscoveryState>,
 }
 
@@ -150,9 +166,7 @@ impl StaticDiscovery {
 
         let state = DiscoveryState::new(std::time::Instant::now(), nodes);
         let state = Arc::new(state);
-        let (sender, _) = tokio::sync::watch::channel(state.clone());
         Ok(StaticDiscovery {
-            sender,
             discovery_state: state,
         })
     }
@@ -164,11 +178,15 @@ impl Discovery for StaticDiscovery {
         // pass
     }
 
-    fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
-        self.sender.subscribe()
+    fn subscribe(&self) -> BoxStream<'static, Arc<DiscoveryState>> {
+        stream::empty().boxed()
     }
 
-    fn state(&self) -> Arc<DiscoveryState> {
+    fn try_state(&self) -> Option<Arc<DiscoveryState>> {
+        Some(self.discovery_state.clone())
+    }
+
+    async fn state(&self) -> Arc<DiscoveryState> {
         self.discovery_state.clone()
     }
 }
@@ -191,32 +209,28 @@ impl TimerDiscovery {
         connection_manager: GrpcConnectionManager,
         endpoint: &str,
         interval: Duration,
-        token_waiter: Box<dyn Waiter>,
     ) -> YdbResult<Self> {
         let state = Arc::new(DiscoverySharedState::new(connection_manager, endpoint)?);
-        let state_weak = Arc::downgrade(&state);
-        tokio::spawn(async move {
-            trace!("timer discovery wait token");
-            let result = token_waiter.wait().await;
-            trace!("timer discovery first token done with result: {:?}", result);
-            drop(token_waiter);
-            DiscoverySharedState::background_discovery(state_weak, interval).await;
-        });
-        Ok(TimerDiscovery { state })
-    }
 
-    #[allow(dead_code)]
-    async fn discovery_now(&self) -> YdbResult<()> {
-        self.state.discovery_now().await
+        let state_weak = Arc::downgrade(&state);
+        tokio::spawn(DiscoverySharedState::background_discovery(
+            state_weak, interval,
+        ));
+
+        Ok(TimerDiscovery { state })
     }
 }
 
+#[async_trait]
 impl Discovery for TimerDiscovery {
     fn pessimization(&self, uri: &Uri) {
         self.state.pessimization(uri);
 
         // check if need force discovery
-        let state = self.state();
+        let Some(Ok(state)) = &*self.state.state_sender.borrow() else {
+            return;
+        };
+
         let pessimized_nodes_count = state
             .original_nodes
             .iter()
@@ -232,12 +246,16 @@ impl Discovery for TimerDiscovery {
         }
     }
 
-    fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
+    fn subscribe(&self) -> BoxStream<'static, Arc<DiscoveryState>> {
         self.state.subscribe()
     }
 
-    fn state(&self) -> Arc<DiscoveryState> {
-        self.state.state()
+    fn try_state(&self) -> Option<Arc<DiscoveryState>> {
+        self.state.try_state()
+    }
+
+    async fn state(&self) -> Arc<DiscoveryState> {
+        self.state.state().await
     }
 }
 
@@ -254,36 +272,66 @@ struct DiscoverySharedState {
     #[derivative(Debug = "ignore")]
     connection_manager: GrpcConnectionManager,
     discovery_uri: Uri,
-    sender: tokio::sync::watch::Sender<Arc<DiscoveryState>>,
 
-    discovery_process: Mutex<()>,
-    discovery_state: RwLock<Arc<DiscoveryState>>,
+    discovery_lock: tokio::sync::Mutex<()>,
 
-    state_received: watch::Receiver<bool>,
-    state_received_sender: watch::Sender<bool>,
+    /// Watch sender for the discovery state changes.
+    ///
+    /// Initially contains `None`. Contains `Some(Err(err))` if
+    /// the first discovery has failed with a non-retriable
+    /// error and has not been successfully
+    /// retried yet, where `err` is the last non-retriable error
+    /// received from the first discovery retries.
+    ///
+    /// After the first discovery successfully finishes,
+    /// the value is always `Some(Ok(state))`, where `state`
+    /// is the last successfully received discovery state.
+    ///
+    /// The discovery will always be retried, regardless of whether
+    /// the received error was retriable.
+    state_sender: watch::Sender<Option<YdbResult<Arc<DiscoveryState>>>>,
 }
 
 impl DiscoverySharedState {
     fn new(connection_manager: GrpcConnectionManager, endpoint: &str) -> YdbResult<Self> {
-        let state = Arc::new(DiscoveryState::new(std::time::Instant::now(), Vec::new()));
-        let (sender, _) = watch::channel(state.clone());
-        let (state_received_sender, state_received) = watch::channel(false);
+        let (state_sender, _) = watch::channel(None);
+
         Ok(Self {
             connection_manager,
             discovery_uri: http::Uri::from_str(endpoint)?,
-            sender,
-            discovery_process: Mutex::new(()),
-            discovery_state: RwLock::new(state),
-            state_received,
-            state_received_sender,
+            state_sender,
+            discovery_lock: tokio::sync::Mutex::new(()),
         })
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(name = "ydb.Discovery.DiscoveryNow", skip_all, err)]
     async fn discovery_now(&self) -> YdbResult<()> {
-        trace!("discovery locking");
-        let discovery_lock = self.discovery_process.lock().await;
+        let lock = self.discovery_lock.lock().await;
 
+        let discovery_result = self.discovery_now_impl().await.map(Arc::new);
+
+        let result = discovery_result
+            .as_ref()
+            .map(|_| ())
+            .map_err(YdbError::clone);
+
+        self.state_sender
+            .send_if_modified(move |state| match (&state, &discovery_result) {
+                (_, Err(err)) if err.need_retry() != NeedRetry::False => false,
+                (Some(_), Err(_)) => false,
+                (None, _) | (Some(_), Ok(_)) => {
+                    *state = Some(discovery_result);
+                    true
+                }
+            });
+
+        drop(lock);
+
+        result
+    }
+
+    #[tracing::instrument(skip(self))]
+    async fn discovery_now_impl(&self) -> YdbResult<DiscoveryState> {
         trace!("creating grpc client");
         let start = std::time::Instant::now();
         let mut discovery_client = self
@@ -295,33 +343,50 @@ impl DiscoverySharedState {
             .list_endpoints(self.connection_manager.database().to_owned())
             .await?;
         let new_endpoints = Self::list_endpoints_to_node_infos(res)?;
-        self.set_discovery_state(
-            self.discovery_state.write().unwrap(),
-            Arc::new(DiscoveryState::new(start, new_endpoints)),
-        );
 
-        // lock until exit
-        drop(discovery_lock);
-        Ok(())
-    }
-
-    fn set_discovery_state(
-        &self,
-        mut locked_state: RwLockWriteGuard<Arc<DiscoveryState>>,
-        new_state: Arc<DiscoveryState>,
-    ) {
-        *locked_state = new_state.clone();
-        let _ = self.sender.send(new_state);
-        let _ = self.state_received_sender.send(true);
+        Ok(DiscoveryState::new(start, new_endpoints))
     }
 
     #[tracing::instrument(skip(state))]
     async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
-        while let Some(state) = state.upgrade() {
-            trace!("rekby-discovery");
+        #[instrument(name = "ydb.Discovery.Timer", skip_all, fields(db.system.name = "ydb", discovery_uri = %state.discovery_uri), err)]
+        async fn discovery_once(
+            state: Arc<DiscoverySharedState>,
+            attempt: usize,
+        ) -> Result<(), YdbError> {
+            trace!("discovery attempt {attempt}");
             let res = state.discovery_now().await;
-            trace!("rekby-res: {:?}", res);
-            // return;
+            trace!("discovery result: {:?}", res);
+            res
+        }
+
+        'worker: loop {
+            let mut attempt = 0;
+            let retrier = IndefiniteRetrier;
+            let discovery_start = Instant::now();
+
+            'attempt: loop {
+                let Some(state) = state.upgrade() else {
+                    break 'worker;
+                };
+
+                let res = discovery_once(state, attempt).await;
+                attempt += 1;
+
+                if res.is_ok() {
+                    break 'attempt;
+                }
+
+                let decision = retrier.retry_decision(RetryParams {
+                    attempt,
+                    time_from_start: discovery_start.elapsed(),
+                });
+
+                if !decision.wait().await {
+                    break 'attempt;
+                }
+            }
+
             tokio::time::sleep(interval).await;
         }
         trace!("stop background_discovery");
@@ -343,7 +408,7 @@ impl DiscoverySharedState {
         Ok(Uri::builder()
             .scheme(if endpoint_info.ssl { "https" } else { "http" })
             .authority(authority)
-            .path_and_query("")
+            .path_and_query("/")
             .build()?)
     }
 }
@@ -351,37 +416,68 @@ impl DiscoverySharedState {
 #[async_trait]
 impl Discovery for DiscoverySharedState {
     fn pessimization(&self, uri: &Uri) {
-        // TODO: suppress force copy every time
-        let lock = self.discovery_state.write().unwrap();
-        let mut discovery_state = lock.as_ref().clone();
-        if !discovery_state.pessimize(uri) {
-            return;
+        self.state_sender.send_if_modified(|current| {
+            let Some(Ok(state)) = current.as_mut() else {
+                // Node pessimization is reset after discovery,
+                // so it makes no sense to pessimize a node before
+                // the first discovery.
+                return false;
+            };
+
+            if state.is_pessimized(uri) {
+                return false;
+            }
+
+            Arc::make_mut(state).pessimize(uri)
+        });
+    }
+
+    fn subscribe(&self) -> BoxStream<'static, Arc<DiscoveryState>> {
+        WatchStream::new(self.state_sender.subscribe())
+            .filter_map(|opt_res| future::ready(opt_res.and_then(|res| res.ok())))
+            .boxed()
+    }
+
+    fn try_state(&self) -> Option<Arc<DiscoveryState>> {
+        if let Some(Ok(state)) = &*self.state_sender.borrow() {
+            Some(state.clone())
+        } else {
+            None
         }
-        let discovery_state = Arc::new(discovery_state);
-        self.set_discovery_state(lock, discovery_state);
     }
 
-    fn subscribe(&self) -> Receiver<Arc<DiscoveryState>> {
-        self.sender.subscribe()
-    }
+    async fn state(&self) -> Arc<DiscoveryState> {
+        let mut receiver = self.state_sender.subscribe();
 
-    fn state(&self) -> Arc<DiscoveryState> {
-        return self.discovery_state.read().unwrap().clone();
+        loop {
+            if let Some(Ok(state)) = &*receiver.borrow_and_update() {
+                return state.clone();
+            }
+
+            receiver
+                .changed()
+                .await
+                .expect("at least one sender is stored in `self` so it cannot be dropped");
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl Waiter for DiscoverySharedState {
     async fn wait(&self) -> YdbResult<()> {
-        trace!("start discovery shared state");
-        let mut channel = self.state_received.clone();
+        let mut receiver = self.state_sender.subscribe();
+
         loop {
-            trace!("loop");
-            if *channel.borrow_and_update() {
-                trace!("return ok");
-                return Ok(());
+            match &*receiver.borrow_and_update() {
+                Some(Err(err)) => return Err(err.clone()),
+                Some(Ok(_)) => return Ok(()),
+                None => (),
             }
-            channel.changed().await?
+
+            receiver
+                .changed()
+                .await
+                .expect("`self.state_sender` is alive")
         }
     }
 }
@@ -389,7 +485,7 @@ impl Waiter for DiscoverySharedState {
 #[cfg(test)]
 mod test {
     use crate::client_common::{DBCredentials, TokenCache};
-    use crate::discovery::DiscoverySharedState;
+    use crate::discovery::{Discovery, DiscoverySharedState, DiscoveryState, NodeInfo};
     use crate::errors::YdbResult;
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
@@ -399,7 +495,51 @@ mod test {
     use http::Uri;
     use std::str::FromStr;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
+
+    fn discovery_shared_state() -> YdbResult<DiscoverySharedState> {
+        const DATABASE: &str = "/local";
+        const ENDPOINT: &str = "grpc://localhost:2136";
+
+        let uri = Uri::from_str(ENDPOINT)?;
+        let load_balancer =
+            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(uri)));
+        let connection_manager = GrpcConnectionManager::new(
+            load_balancer,
+            DATABASE.to_string(),
+            MultiInterceptor::new(),
+            None,
+            crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+        );
+
+        DiscoverySharedState::new(connection_manager, ENDPOINT)
+    }
+
+    #[test]
+    fn pessimization_completes_after_discovery() -> YdbResult<()> {
+        let state = Arc::new(discovery_shared_state()?);
+        let endpoint = Uri::from_static("http://localhost:2136");
+        state
+            .state_sender
+            .send_replace(Some(Ok(Arc::new(DiscoveryState::new(
+                Instant::now(),
+                vec![NodeInfo::new(endpoint.clone(), String::new())],
+            )))));
+
+        let state_for_thread = state.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            state_for_thread.pessimization(&endpoint);
+            let _ = done_tx.send(());
+        });
+
+        assert!(
+            done_rx.recv_timeout(Duration::from_secs(1)).is_ok(),
+            "endpoint pessimization deadlocked"
+        );
+
+        Ok(())
+    }
 
     #[tokio::test]
     #[ignore] // need YDB access
@@ -431,7 +571,7 @@ mod test {
             DiscoverySharedState::new(connection_manager, test_client_builder().endpoint.as_str())?;
 
         let state = Arc::new(discovery_shared);
-        let mut rx = state.sender.subscribe();
+        let mut rx = state.state_sender.subscribe();
         // skip initial value
         rx.borrow_and_update();
 
@@ -443,9 +583,38 @@ mod test {
         // wait two updates
         for _ in 0..2 {
             rx.changed().await.unwrap();
-            assert!(!rx.borrow().nodes.is_empty());
+            assert!(
+                !rx.borrow()
+                    .as_ref()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .nodes
+                    .is_empty()
+            );
         }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_wrong_db_name() {
+        let good_client = test_client_builder().client().unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), good_client.wait())
+            .await
+            .unwrap()
+            .unwrap();
+
+        let bad_client = test_client_builder()
+            .with_database("/some-amogus-db")
+            .client()
+            .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), bad_client.wait())
+            .await
+            .unwrap()
+            .unwrap_err();
     }
 }
