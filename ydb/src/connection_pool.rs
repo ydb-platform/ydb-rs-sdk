@@ -197,7 +197,7 @@ impl RacyRoundRobin {
         loop {
             let Some((first_result, addr)) = connections.next().await else {
                 return Err(first_err.unwrap_or_else(|| {
-                    YdbError::from_str(format!("domain '{}' somehow has zero addresses", uri))
+                    YdbError::from_str(format!("domain '{}' has no IP addresses", uri))
                 }));
             };
 
