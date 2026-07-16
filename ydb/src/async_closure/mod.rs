@@ -158,7 +158,7 @@ macro_rules! closure {
     ([$($tt:tt)*], $body:expr) => {
         $crate::async_closure::__make_closure(
             $crate::__closure_make_tuple!($($tt)*),
-            |ctx, args| {
+            move |ctx, args| {
                 $crate::__closure_destruct_tuple!(ctx => $($tt)*);
                 ::std::boxed::Box::pin(async move {($body)(args).await})
             }
