@@ -114,7 +114,7 @@ where
 /// ```
 /// # use ydb::{
 /// #     closure,
-/// #     closure::{
+/// #     async_closure::{
 /// #         AsyncFnMut,
 /// #         with_lifetime::Mut,
 /// #     }
@@ -131,21 +131,20 @@ where
 /// async fn retry<F: AsyncFnMut<Mut<Action>, Output = bool>>(mut attempt: F) {
 ///     let mut action = Action::get();
 ///
-///     while !attempt.call(action).await {
+///     while !attempt.call(&mut action).await {
 ///         println!("Failed, trying again...");
 ///     }
 /// }
 ///
-/// fn main() {
-///     tokio::block_on(async {
-///         let mut logs = vec![];
-///         retry(closure!(
-///             [&mut logs],
-///             async |action: &mut Action| {
-///                 action.perform(logs).await
-///             }
-///         )).await;
-///     });
+/// #[tokio::main]
+/// async fn main() {
+///     let mut logs = vec![];
+///     retry(closure!(
+///         [&mut logs],
+///         async |action: &mut Action| {
+///             action.perform(logs).await.is_ok()
+///         }
+///     )).await;
 /// }
 /// ```
 #[macro_export]

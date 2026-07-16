@@ -182,7 +182,7 @@ impl QueryClient {
     ///
     /// ```no_run
     /// # use std::time::Duration;
-    /// # use ydb::{AccessTokenCredentials, ClientBuilder, TxMode, YdbResultWithCustomerErr};
+    /// # use ydb::{AccessTokenCredentials, ClientBuilder, TxMode, YdbResultWithCustomerErr, closure};
     /// #
     /// # #[tokio::main]
     /// # async fn main() -> YdbResultWithCustomerErr<()> {
@@ -190,7 +190,7 @@ impl QueryClient {
     /// #     .with_credentials(AccessTokenCredentials::from("token"))
     /// #     .client()?;
     /// client.query_client()
-    ///     .retry_tx(async |_tx| Ok(()))
+    ///     .retry_tx(closure!(async |_tx| Ok(())))
     ///     .isolation(TxMode::SerializableReadWrite)
     ///     .timeout(Duration::from_secs(30))
     ///     .await?;
