@@ -1,15 +1,14 @@
-use std::future::{Future, IntoFuture};
+use std::future::IntoFuture;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::time::Duration;
+
+use futures_util::future::BoxFuture;
 
 use crate::TransactionOptions;
 use crate::TxMode;
 use crate::errors::YdbResultWithCustomerErr;
 
 use super::QueryClient;
-
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + 'a>>;
 
 /// Builder for [`QueryClient::retry_tx`].
 pub struct RetryTxBuilder<'a, F, T> {

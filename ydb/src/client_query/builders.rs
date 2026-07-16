@@ -1,7 +1,6 @@
 use std::collections::HashMap;
-use std::future::{Future, IntoFuture};
+use std::future::IntoFuture;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::time::Duration;
 
 use crate::TxMode;
@@ -13,8 +12,6 @@ use super::FromYdbRow;
 use super::exec::{CallOptions, ClientExecContext, TransactionExecContext, resolve_commit_tx};
 use super::internal::ExecCoreRef;
 use super::stream_facade::{QueryStream, materialize_query};
-
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub enum ExecCall {}
 pub struct OneRow<T>(PhantomData<T>);
@@ -331,5 +328,6 @@ macro_rules! impl_transaction_query_methods {
     };
 }
 
+use futures_util::future::BoxFuture;
 pub(crate) use impl_client_query_methods;
 pub(crate) use impl_transaction_query_methods;
