@@ -97,7 +97,7 @@ where
             self.callback,
             self.options,
             self.timeout,
-            self.idempotent,
+            self.idempotent.into(),
         ))
     }
 }

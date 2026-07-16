@@ -1,17 +1,17 @@
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{error, info, instrument, warn};
 
 use crate::client_common::TokenCache;
 use crate::client_topic::compression::Executor;
+use crate::errors::Idempotency;
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::retry::{Retry, RetryParams};
-use crate::{YdbError, YdbResult};
+use crate::retry_strategy::RetryState;
+use crate::{YdbError, YdbResult, closure};
 
 use super::auth_token_sender::AuthTokenSender;
 use super::decompressor::Decompressor;
@@ -19,7 +19,7 @@ use super::grpc_streamer::GrpcStreamer;
 use super::messages::MessageBatch;
 use super::reader_options::TopicReaderOptions;
 use super::runtime;
-use super::task_supervisor::{is_retriable, wait_child_tasks};
+use super::task_supervisor::wait_child_tasks;
 
 pub(super) struct ConnectionAttempt {
     pub(super) manager: GrpcConnectionManager,
@@ -119,6 +119,7 @@ impl Reconnector {
         }
     }
 
+    #[instrument(skip_all, err)]
     async fn reconnect_loop(self) -> YdbResult<Infallible> {
         let Self {
             manager,
@@ -147,43 +148,27 @@ impl Reconnector {
                 "topic reader reconnector starting connection"
             );
 
-            let start_time = Instant::now();
-            let mut attempt = 0;
+            let mut final_retry = RetryState::init();
 
-            let tasks = loop {
-                match Self::establish(&attempt_ctx, &runtime).await {
-                    Ok(tasks) => break tasks,
-
-                    Err(err) if is_retriable(&err) => {
-                        warn!(
-                            error = %err,
-                            reader_id = attempt_ctx.reader_id,
-                            epoch = attempt_ctx.epoch,
-                            connect_attempt = attempt,
-                            "topic reader connection setup failed, will retry"
-                        );
-
-                        wait_or_fail(
-                            err,
-                            attempt_ctx.options.retrier.as_ref(),
-                            attempt,
-                            start_time.elapsed(),
-                        )
-                        .await?;
-                        attempt += 1;
-                    }
-
-                    Err(err) => {
-                        error!(error = %err, "non-retriable error, exiting");
-                        return Err(err);
-                    }
-                }
-            };
+            let tasks = attempt_ctx
+                .options
+                .retry_budget
+                .retry_on_retriable_errors(
+                    Idempotency::Idempotent,
+                    closure!(
+                        [&attempt_ctx, &runtime, &mut final_retry],
+                        async |retry: &RetryState| {
+                            *final_retry = *retry;
+                            Self::establish(attempt_ctx, runtime).await
+                        }
+                    ),
+                )
+                .await?;
 
             info!(
-                connect_attempts = attempt,
+                connect_attempts = final_retry.attempt,
                 reader_id = attempt_ctx.reader_id,
-                time = ?start_time.elapsed(),
+                time = ?final_retry.start_time.elapsed(),
                 "topic reader connected"
             );
 
@@ -198,7 +183,7 @@ impl Reconnector {
 
                 err = Self::run_connection(&attempt_ctx, tasks) => {
                     match err {
-                        Err(err) if is_retriable(&err) => {
+                        Err(err) if err.is_retriable(Idempotency::Idempotent) => {
                             warn!(
                                 error = %err,
                                 reader_id = attempt_ctx.reader_id,
@@ -268,25 +253,4 @@ impl Reconnector {
             Err(err) => Err(err),
         }
     }
-}
-
-/// Fetches [`Retry::wait_duration`]. If retries are not allowed, returns `Err(err)`. Otherwise, waits
-/// for requested duration and returns `Ok(())`.
-async fn wait_or_fail(
-    err: YdbError,
-    retrier: &dyn Retry,
-    attempt: usize,
-    time_from_start: Duration,
-) -> YdbResult<()> {
-    let decision = retrier.retry_decision(RetryParams {
-        attempt,
-        time_from_start,
-    });
-
-    if !decision.wait().await {
-        error!(error = %err, attempt, ?time_from_start, "retry budget exhausted");
-        return Err(err);
-    }
-
-    Ok(())
 }

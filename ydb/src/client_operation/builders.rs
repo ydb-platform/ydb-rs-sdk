@@ -1,11 +1,14 @@
-use std::future::{Future, IntoFuture};
+use std::future::IntoFuture;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
 
-use crate::errors::{NeedRetry, YdbResult};
+use crate::async_closure::AsyncFnMut;
+use crate::async_closure::with_lifetime::Ref;
+use crate::errors::{Idempotency, YdbResult};
 use crate::grpc_wrapper::raw_operation_service::types::{RawListOperationsResult, RawOperation};
-use crate::retry_budget::{RetryControl, RetryPauseError, pause_before_retry};
+use crate::retry_budget::RetryControl;
+use crate::retry_strategy::RetryState;
 
 use super::client::OperationClient;
 use super::types::{ListOperationsRequest, ListOperationsResult, OperationInfo};
@@ -91,39 +94,19 @@ impl_operation_call_builder!(ListOperationsBuilder);
 impl_operation_call_builder!(ForgetOperationBuilder);
 impl_operation_call_builder!(CancelOperationBuilder);
 
-pub(crate) async fn retry_operation_call<T, F, Fut>(
+pub(crate) async fn retry_operation_call<T, F>(
     retry_control: &RetryControl,
     opts: &OperationCallOptions,
-    mut attempt_fn: F,
+    attempt_fn: F,
 ) -> YdbResult<T>
 where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = YdbResult<T>>,
+    F: AsyncFnMut<Ref<RetryState>, Output = YdbResult<T>>,
 {
-    let limit = opts.timeout;
-    let start = std::time::Instant::now();
-    let mut attempt = 0usize;
-    loop {
-        retry_control.metrics().record_attempt();
-        attempt += 1;
-        match attempt_fn().await {
-            Ok(value) => return Ok(value),
-            Err(err) => {
-                if !matches!(
-                    err.need_retry(),
-                    NeedRetry::True | NeedRetry::IdempotentOnly
-                ) {
-                    return Err(err);
-                }
-                match pause_before_retry(retry_control, attempt, start, limit).await {
-                    Ok(()) => {}
-                    Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
-                        return Err(err);
-                    }
-                }
-            }
-        }
-    }
+    retry_control
+        .budget()
+        .deadline(opts.timeout)
+        .retry_on_retriable_errors(Idempotency::Idempotent, attempt_fn)
+        .await
 }
 
 pub(crate) fn raw_to_operation_info(raw: RawOperation) -> OperationInfo {

@@ -5,58 +5,19 @@
 //! each subsequent retry attempt: when the budget is exhausted the retrier waits until a slot
 //! appears or the call deadline expires.
 
+use std::ops::ControlFlow;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use async_trait::async_trait;
 use rand::Rng;
 use tokio::sync::{Mutex as AsyncMutex, mpsc, watch};
 use tokio::time::sleep;
 
-const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;
-const MAX_RETRY_BACKOFF_MILLISECONDS: u64 = 1_000;
-
-/// Error returned when [`RetryBudget::acquire`] cannot grant a retry slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RetryBudgetError {
-    /// The call deadline expired while waiting for budget quota.
-    Exhausted,
-    /// The budget was stopped or misconfigured (for example [`LimitedRetryBudget::new`](LimitedRetryBudget::new)(0)).
-    Closed,
-}
-
-impl std::fmt::Display for RetryBudgetError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RetryBudgetError::Exhausted => write!(f, "retry budget exhausted"),
-            RetryBudgetError::Closed => write!(f, "retry budget closed"),
-        }
-    }
-}
-
-impl std::error::Error for RetryBudgetError {}
-
-/// Limits how many client-side retries may proceed across all SDK retriers on one driver.
-#[async_trait]
-pub trait RetryBudget: Send + Sync {
-    /// Reserve quota for the next retry attempt.
-    ///
-    /// Called before the second and each subsequent retry. When `deadline` is `Some`, the call
-    /// must return [`RetryBudgetError::Exhausted`] if quota is not available before that instant.
-    async fn acquire(&self, deadline: Option<Instant>) -> Result<(), RetryBudgetError>;
-}
-
-/// No-op budget used when the driver has no explicit retry budget.
-#[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct UnlimitedRetryBudget;
-
-#[async_trait]
-impl RetryBudget for UnlimitedRetryBudget {
-    async fn acquire(&self, _deadline: Option<Instant>) -> Result<(), RetryBudgetError> {
-        Ok(())
-    }
-}
+use crate::retry_strategy::{
+    ArcRetryBudget, RetryAlways, RetryBudget, RetryDeadline, RetryState, RetryStrategy,
+    RetryStrategyExt,
+};
 
 /// Fixed maximum number of retry attempts per second (token bucket).
 ///
@@ -127,35 +88,12 @@ impl LimitedRetryBudget {
     }
 }
 
-#[async_trait]
-impl RetryBudget for LimitedRetryBudget {
-    async fn acquire(&self, deadline: Option<Instant>) -> Result<(), RetryBudgetError> {
-        match deadline {
-            None => {
-                let mut quota = self.quota.lock().await;
-                match quota.recv().await {
-                    Some(()) => Ok(()),
-                    None => Err(RetryBudgetError::Closed),
-                }
-            }
-            Some(deadline) => {
-                let now = Instant::now();
-                if now >= deadline {
-                    return Err(RetryBudgetError::Exhausted);
-                }
-                let remaining = deadline.saturating_duration_since(now);
-                let recv = async {
-                    let mut quota = self.quota.lock().await;
-                    quota.recv().await
-                };
-                tokio::select! {
-                    token = recv => match token {
-                        Some(()) => Ok(()),
-                        None => Err(RetryBudgetError::Closed),
-                    },
-                    _ = sleep(remaining) => Err(RetryBudgetError::Exhausted),
-                }
-            }
+impl RetryStrategy for LimitedRetryBudget {
+    async fn wait_retry<'a>(&'a self, _retry: &'a RetryState) -> ControlFlow<()> {
+        let mut quota = self.quota.lock().await;
+        match quota.recv().await {
+            Some(()) => ControlFlow::Continue(()),
+            None => ControlFlow::Break(()),
         }
     }
 }
@@ -181,6 +119,12 @@ impl RetryMetrics {
 impl Default for RetryMetrics {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl RetryStrategy for RetryMetrics {
+    async fn before_attempt<'a>(&'a self, _retry: &'a RetryState) {
+        self.record_attempt();
     }
 }
 
@@ -237,27 +181,18 @@ impl PercentOfRpsRetryBudget {
     }
 }
 
-#[async_trait]
-impl RetryBudget for PercentOfRpsRetryBudget {
-    async fn acquire(&self, deadline: Option<Instant>) -> Result<(), RetryBudgetError> {
+impl RetryStrategy for PercentOfRpsRetryBudget {
+    async fn wait_retry<'a>(&'a self, _retry: &'a RetryState) -> ControlFlow<()> {
         loop {
             if self.metrics.try_acquire_retry_slot(self.percent) {
-                return Ok(());
+                return ControlFlow::Continue(());
             }
-            match deadline {
-                None => sleep(Duration::from_millis(1)).await,
-                Some(deadline) => {
-                    let now = Instant::now();
-                    if now >= deadline {
-                        return Err(RetryBudgetError::Exhausted);
-                    }
-                    let remaining = deadline.saturating_duration_since(now);
-                    sleep(remaining.min(Duration::from_millis(10))).await;
-                }
-            }
+            sleep(Duration::from_millis(1)).await
         }
     }
 }
+
+impl RetryAlways for PercentOfRpsRetryBudget {}
 
 /// Probabilistic retry budget (aligned with ydb-go-sdk `budget.Percent`).
 ///
@@ -278,145 +213,53 @@ impl PercentRetryBudget {
     }
 }
 
-#[async_trait]
-impl RetryBudget for PercentRetryBudget {
-    async fn acquire(&self, deadline: Option<Instant>) -> Result<(), RetryBudgetError> {
+impl RetryStrategy for PercentRetryBudget {
+    async fn wait_retry<'a>(&'a self, _retry: &'a RetryState) -> ControlFlow<()> {
         loop {
             if rand::thread_rng().gen_range(0..100) < self.percent {
-                return Ok(());
+                return ControlFlow::Continue(());
             }
-            match deadline {
-                None => sleep(Duration::from_millis(1)).await,
-                Some(deadline) => {
-                    let now = Instant::now();
-                    if now >= deadline {
-                        return Err(RetryBudgetError::Exhausted);
-                    }
-                    let remaining = deadline.saturating_duration_since(now);
-                    sleep(remaining.min(Duration::from_millis(10))).await;
-                }
-            }
+            sleep(Duration::from_millis(1)).await
         }
     }
 }
 
+impl RetryAlways for PercentRetryBudget {}
+
 /// Driver-local retry budget and RPS counters shared by all retriers on one [`crate::Client`].
 #[derive(Clone)]
 pub(crate) struct RetryControl {
-    budget: Arc<dyn RetryBudget>,
+    budget: ArcRetryBudget,
     metrics: Arc<RetryMetrics>,
 }
 
 impl Default for RetryControl {
     fn default() -> Self {
-        Self::new(Arc::new(UnlimitedRetryBudget))
+        Self::new(RetryBudget::default().arc())
     }
 }
 
 impl RetryControl {
-    pub(crate) fn new(budget: Arc<dyn RetryBudget>) -> Self {
+    pub(crate) fn new(budget: ArcRetryBudget) -> Self {
         Self {
             budget,
             metrics: Arc::new(RetryMetrics::new()),
         }
     }
 
-    pub(crate) fn with_shared_metrics(
-        budget: Arc<dyn RetryBudget>,
-        metrics: Arc<RetryMetrics>,
-    ) -> Self {
+    pub(crate) fn with_shared_metrics(budget: ArcRetryBudget, metrics: Arc<RetryMetrics>) -> Self {
         Self { budget, metrics }
     }
 
-    pub(crate) fn budget(&self) -> Arc<dyn RetryBudget> {
-        self.budget.clone()
+    pub(crate) fn budget(&self) -> RetryBudget<impl RetryStrategy + '_, impl RetryDeadline + '_> {
+        self.budget
+            .as_ref()
+            .and_then(self.metrics.as_ref().as_ref_strategy())
     }
 
-    pub(crate) fn metrics(&self) -> Arc<RetryMetrics> {
-        self.metrics.clone()
+    pub(crate) fn metrics(&self) -> &Arc<RetryMetrics> {
+        &self.metrics
     }
-}
-
-#[derive(Debug)]
-pub(crate) enum RetryPauseError {
-    Timeout,
-    #[allow(dead_code)]
-    Budget(RetryBudgetError),
-}
-
-/// Sleep duration before the next retry attempt, or `None` when a timeout limit is exhausted.
-///
-/// `limit: None` — retry indefinitely (only non-retryable errors stop the loop).
-pub(crate) fn retry_wait(
-    attempt: usize,
-    time_from_start: Duration,
-    limit: Option<Duration>,
-) -> Option<Duration> {
-    let wait = if attempt > 0 {
-        let exp_shift = (attempt - 1).min(63) as u32;
-        let base_ms = INITIAL_RETRY_BACKOFF_MILLISECONDS
-            .saturating_mul(1u64 << exp_shift)
-            .min(MAX_RETRY_BACKOFF_MILLISECONDS);
-        let base = Duration::from_millis(base_ms);
-        let half = base / 2;
-        if half.is_zero() {
-            base
-        } else {
-            half + Duration::from_millis(rand::thread_rng().gen_range(0..=half.as_millis() as u64))
-        }
-    } else {
-        Duration::ZERO
-    };
-    match limit {
-        None => Some(wait),
-        Some(budget) if time_from_start >= budget => None,
-        Some(budget) if time_from_start + wait < budget => Some(wait),
-        Some(_) => None,
-    }
-}
-
-pub(crate) async fn acquire_retry_budget(
-    control: &RetryControl,
-    start: Instant,
-    wall_limit: Option<Duration>,
-) -> Result<(), RetryPauseError> {
-    let deadline = wall_limit.map(|limit| start + limit);
-    control
-        .budget()
-        .acquire(deadline)
-        .await
-        .map_err(RetryPauseError::Budget)?;
-    if wall_limit.is_some_and(|limit| start.elapsed() >= limit) {
-        return Err(RetryPauseError::Timeout);
-    }
-    Ok(())
-}
-
-pub(crate) async fn pause_before_retry(
-    control: &RetryControl,
-    attempt: usize,
-    start: Instant,
-    wall_limit: Option<Duration>,
-) -> Result<(), RetryPauseError> {
-    let wait = match retry_wait(attempt, start.elapsed(), wall_limit) {
-        Some(wait) => wait,
-        None => return Err(RetryPauseError::Timeout),
-    };
-    if wait > Duration::ZERO {
-        sleep(wait).await;
-    }
-
-    let deadline = wall_limit.map(|limit| start + limit);
-    control
-        .budget()
-        .acquire(deadline)
-        .await
-        .map_err(RetryPauseError::Budget)?;
-
-    if wall_limit.is_some_and(|limit| start.elapsed() >= limit) {
-        return Err(RetryPauseError::Timeout);
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -424,16 +267,14 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn unlimited_budget_always_acquires() {
-        let budget = UnlimitedRetryBudget;
-        budget.acquire(None).await.unwrap();
-    }
-
-    #[tokio::test]
     async fn limited_budget_respects_rate() {
         let budget = LimitedRetryBudget::new(1);
-        budget.acquire(None).await.unwrap();
-        let second = tokio::time::timeout(Duration::from_millis(50), budget.acquire(None)).await;
+        assert!(budget.wait_retry(&RetryState::init()).await.is_continue());
+        let second = tokio::time::timeout(
+            Duration::from_millis(50),
+            budget.wait_retry(&RetryState::init()),
+        )
+        .await;
         assert!(second.is_err());
     }
 
@@ -442,20 +283,11 @@ mod tests {
         let budget = LimitedRetryBudget::new(0);
         let result = tokio::time::timeout(
             Duration::from_millis(20),
-            budget.acquire(Some(Instant::now() + Duration::from_millis(10))),
+            budget.wait_retry(&RetryState::init()),
         )
         .await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Err(RetryBudgetError::Closed));
-    }
-
-    #[test]
-    fn retry_wait_helpers() {
-        assert!(retry_wait(1, Duration::ZERO, None).is_some());
-        let budget = Duration::from_millis(100);
-        let wait1 = retry_wait(1, Duration::ZERO, Some(budget)).expect("wait");
-        assert!(!wait1.is_zero());
-        assert!(retry_wait(10, budget, Some(budget)).is_none());
+        assert!(result.unwrap().is_break());
     }
 
     #[test]

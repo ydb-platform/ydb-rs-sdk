@@ -3,7 +3,8 @@ use std::future::IntoFuture;
 use std::time::Duration;
 
 use crate::client::TimeoutSettings;
-use crate::errors::{YdbError, YdbResult};
+use crate::closure;
+use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::execute_script::RawExecuteScriptRequest;
 use crate::grpc_wrapper::raw_query_service::fetch_script_results::RawFetchScriptResultsRequest;
@@ -214,16 +215,22 @@ async fn client_fetch_script_results(
     opts: CallOptions,
 ) -> YdbResult<FetchScriptResult> {
     // FetchScriptResults is always safe to retry (aligned with Go SDK).
-    run_with_retry(&ctx.retry_control, &opts, true, || {
-        client_fetch_script_results_once(
-            ctx,
-            &operation_id,
-            result_set_index,
-            &fetch_token,
-            rows_limit,
-            &opts,
-        )
-    })
+    run_with_retry(
+        &ctx.retry_control,
+        &opts,
+        Idempotency::Idempotent,
+        closure!([&ctx, &operation_id, &fetch_token, &opts], async |_| {
+            client_fetch_script_results_once(
+                ctx,
+                operation_id,
+                result_set_index,
+                fetch_token,
+                rows_limit,
+                opts,
+            )
+            .await
+        }),
+    )
     .await
 }
 

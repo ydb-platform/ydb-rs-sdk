@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::client_topic::compression::{CodecSelection, CompressionEncoder};
 use crate::client_topic::topicwriter::partitioning::PartitioningStrategy;
-use crate::retry::{IndefiniteRetrier, Retry};
+use crate::retry_strategy::{ArcRetryBudget, RetryBudget};
 
 #[derive(bon::Builder, Clone)]
 pub struct TopicWriterOptions {
@@ -36,8 +36,8 @@ pub struct TopicWriterOptions {
     #[builder(default = Duration::from_secs(3))]
     pub(crate) flush_timeout: Duration,
 
-    #[builder(default = Arc::new(IndefiniteRetrier {}), setters(vis = "pub(crate)"))]
-    pub(crate) retrier: Arc<dyn Retry>,
+    #[builder(default = RetryBudget::default().arc(), setters(vis = "pub(crate)"))]
+    pub(crate) retry_budget: ArcRetryBudget,
 }
 
 impl<S: topic_writer_options_builder::State> TopicWriterOptionsBuilder<S> {

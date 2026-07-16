@@ -28,19 +28,21 @@ mod tx_modes_integration_test;
 #[cfg(test)]
 mod concurrent_result_sets_test;
 
-use std::any::Any;
-use std::panic::AssertUnwindSafe;
+use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
 
-use futures_util::FutureExt;
 use http::Uri;
 use tracing::instrument;
 
 use crate::client_query::exec::TxState;
-use crate::errors::{YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr};
+use crate::closure;
+use crate::errors::{
+    Idempotency, YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr,
+};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::result::Row;
 
+use crate::retry_strategy::RetryState;
 use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{
@@ -204,132 +206,99 @@ impl QueryClient {
         RetryTxBuilder::new(self, callback)
     }
 
-    #[instrument(
-        name = "ydb.Try",
-        skip_all,
-        fields(
-            ydb.retry.attempt = attempt,
-            ydb.retry.backoff_ms = tracing::field::Empty,
-            db.system.name = "ydb",
-        ),
-        err,
-    )]
     async fn try_attempt_body<F, T>(
         &self,
         callback: &mut F,
         mut tx: Transaction,
-        attempt: usize,
-        start: Instant,
-        wall_timeout: Option<Duration>,
-        idempotent: bool,
-    ) -> YdbResultWithCustomerErr<Option<T>>
+        idempotency: Idempotency,
+    ) -> ControlFlow<YdbResultWithCustomerErr<T>, YdbOrCustomerError>
     where
         F: RetryTxAttempt<T>,
+        T: Send,
     {
-        use crate::retry_budget::{RetryPauseError, pause_before_retry};
-        use exec::check_retry_tx_error;
-
         #[instrument(name = "ydb.Try.Attempt", skip_all, fields(db.system.name = "ydb"))]
         async fn try_attempt<F, T>(
             callback: &mut F,
             tx: &mut Transaction,
-        ) -> Result<Result<T, YdbOrCustomerError>, Box<dyn Any + Send>>
+        ) -> Result<T, YdbOrCustomerError>
         where
             F: RetryTxAttempt<T>,
         {
-            AssertUnwindSafe(callback.attempt(tx)).catch_unwind().await
+            callback.attempt(tx).await
         }
 
-        let callback_result = try_attempt(callback, &mut tx).await;
-
-        let err = match callback_result {
-            Ok(Ok(value)) => match resolve_post_callback_action(&tx.ctx.state) {
+        match try_attempt(callback, &mut tx).await {
+            Ok(value) => match resolve_post_callback_action(&tx.ctx.state) {
                 PostCallbackAction::Return(status) => {
                     tx.notify_hooks(status);
-                    return Ok(Some(value));
+                    ControlFlow::Break(Ok(value))
                 }
                 PostCallbackAction::Commit => {
-                    return match tx.commit().await {
+                    ControlFlow::Break(match tx.commit().await {
                         Ok(()) => {
                             tx.notify_hooks(QueryTxCommitStatus::Committed);
-                            Ok(Some(value))
+                            Ok(value)
                         }
                         // Commit outcome is ambiguous on transport errors; never retry.
                         Err(e) => {
                             tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                            Err(YdbOrCustomerError::YDB(e))
+                            Err(e.into())
                         }
-                    };
+                    })
                 }
                 PostCallbackAction::Retry(err) => {
                     tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                    err
+                    ControlFlow::Continue(err.into())
                 }
                 PostCallbackAction::Fail(err) => {
                     tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                    return Err(err);
+                    ControlFlow::Break(Err(err.into()))
                 }
             },
-            Ok(Err(err)) => {
+            Err(err) => {
                 tx.rollback_quiet().await;
                 tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                err
+                ControlFlow::Continue(err)
             }
-            Err(panic_payload) => {
-                tx.rollback_quiet().await;
-                tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                YdbOrCustomerError::YDB(YdbError::Custom(format!(
-                    "query transaction callback panicked: {}",
-                    panic_message(panic_payload)
-                )))
-            }
-        };
-
-        if !check_retry_tx_error(&err, idempotent) {
-            return Err(err);
-        }
-        match pause_before_retry(&self.ctx.retry_control, attempt, start, wall_timeout).await {
-            Ok(()) => {}
-            Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
-                return Err(err);
-            }
-        }
-        Ok(None)
+        }?
+        .retry_flow(idempotency)
     }
 
-    #[instrument(name = "ydb.RunWithRetry", skip_all, fields(db.system.name = "ydb", ydb.Query.idempotent = idempotent), err)]
+    #[instrument(name = "ydb.RunWithRetry", skip_all, fields(db.system.name = "ydb", ydb.Query.idempotent = idempotency.is_idempotent()), err)]
     pub(crate) async fn run_retry_tx<F, T>(
         &self,
-        mut callback: F,
+        callback: F,
         options: TransactionOptions,
         wall_timeout: Option<Duration>,
-        idempotent: bool,
+        idempotency: Idempotency,
     ) -> YdbResultWithCustomerErr<T>
     where
         F: RetryTxAttempt<T>,
+        T: Send,
     {
-        let start = Instant::now();
-        let absolute_deadline = wall_timeout.map(|d| start + d);
-        let mut attempt = 0;
+        let result = self
+            .ctx
+            .retry_control
+            .budget()
+            .deadline(wall_timeout)
+            .retry(closure!(
+                [&client = self, callback, &options],
+                async |retry: &RetryState| {
+                    let tx = Transaction::new(
+                        client.ctx.connection_manager.clone(),
+                        client.ctx.session_pool.clone(),
+                        options.clone(),
+                        wall_timeout.map(|d| retry.start_time + d),
+                    );
 
-        loop {
-            self.ctx.retry_control.metrics().record_attempt();
-            attempt += 1;
+                    client.try_attempt_body(callback, tx, idempotency).await
+                }
+            ))
+            .await;
 
-            let tx = Transaction::new(
-                self.ctx.connection_manager.clone(),
-                self.ctx.session_pool.clone(),
-                options.clone(),
-                absolute_deadline,
-            );
-
-            let result = self
-                .try_attempt_body(&mut callback, tx, attempt, start, wall_timeout, idempotent)
-                .await?;
-
-            if let Some(value) = result {
-                return Ok(value);
-            }
+        match result {
+            ControlFlow::Continue(err) | ControlFlow::Break(Err(err)) => Err(err),
+            ControlFlow::Break(Ok(value)) => Ok(value),
         }
     }
 
@@ -352,18 +321,16 @@ impl QueryClient {
 enum PostCallbackAction {
     Return(QueryTxCommitStatus),
     Commit,
-    Retry(YdbOrCustomerError),
-    Fail(YdbOrCustomerError),
+    Retry(YdbError),
+    Fail(YdbError),
 }
 
 fn resolve_post_callback_action(state: &TxState) -> PostCallbackAction {
     match state {
         TxState::RolledBack => PostCallbackAction::Return(QueryTxCommitStatus::Aborted),
         TxState::Committed => PostCallbackAction::Return(QueryTxCommitStatus::Committed),
-        TxState::Invalidated(err) => {
-            PostCallbackAction::Retry(YdbOrCustomerError::YDB(err.clone()))
-        }
-        TxState::Ambiguous(err) => PostCallbackAction::Fail(YdbOrCustomerError::YDB(err.clone())),
+        TxState::Invalidated(err) => PostCallbackAction::Retry(err.clone()),
+        TxState::Ambiguous(err) => PostCallbackAction::Fail(err.clone()),
         TxState::Active => PostCallbackAction::Commit,
     }
 }
@@ -542,16 +509,6 @@ pub use retry_tx::{RetryTxAttempt, RetryTxBuilder};
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};
 pub use stream_facade::{QueryStats, QueryStream};
-
-fn panic_message(payload: Box<dyn Any + Send>) -> String {
-    match payload.downcast::<String>() {
-        Ok(msg) => *msg,
-        Err(payload) => match payload.downcast::<&'static str>() {
-            Ok(msg) => (*msg).to_string(),
-            Err(_) => "unknown panic payload".to_string(),
-        },
-    }
-}
 
 #[cfg(test)]
 mod unit_tests {

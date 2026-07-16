@@ -7,6 +7,7 @@ use crate::client_table::TableClient;
 use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::load_balancer::SharedLoadBalancer;
+use crate::retry_strategy::ArcRetryBudget;
 use crate::session_pool::{SessionPool, default_session_pool_settings};
 pub use crate::session_pool::{SessionPoolSettings, SessionPoolStats};
 use crate::waiter::Waiter;
@@ -72,13 +73,10 @@ impl Client {
     ///
     /// All service clients created from the returned [`Client`] consult `budget` before each retry
     /// (table, query one-shot, [`crate::QueryClient::retry_tx`], operation service, and similar).
-    pub fn clone_with_retry_budget(
-        &self,
-        budget: Arc<dyn crate::retry_budget::RetryBudget>,
-    ) -> Self {
+    pub fn clone_with_retry_budget(&self, budget: ArcRetryBudget) -> Self {
         let retry_control = Arc::new(RetryControl::with_shared_metrics(
             budget,
-            self.retry_control.metrics(),
+            self.retry_control.metrics().clone(),
         ));
         Self {
             credentials: self.credentials.clone(),
@@ -92,7 +90,7 @@ impl Client {
     }
 
     /// Sliding-window request counters for [`PercentOfRpsRetryBudget`].
-    pub fn retry_metrics(&self) -> Arc<RetryMetrics> {
+    pub fn retry_metrics(&self) -> &Arc<RetryMetrics> {
         self.retry_control.metrics()
     }
 
