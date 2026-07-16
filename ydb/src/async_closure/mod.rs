@@ -109,6 +109,12 @@ where
 /// by reference if defined with `&` prefix, by mutable reference if defined
 /// with `&mut` prefix and by value if defined without prefix.
 ///
+/// Alternatively, a capture can be an assignment instead of a variable name,
+/// which allows to capture expressions as variables. Note that
+/// this syntax requires the assigned expression to have type
+/// corresponding to the used prefix. One of use cases for
+/// this syntax is to help capturing `self`.
+///
 /// # Usage example
 ///
 /// ```
@@ -178,6 +184,15 @@ macro_rules! __closure_make_tuple {
     (& $var:ident $(, $( $rest:tt )*)?) => {
         (& $var, $crate::__closure_make_tuple!($($($rest)*)?))
     };
+    ($alias:ident = $expr:expr $(, $( $rest:tt )*)?) => {
+        ($expr, $crate::__closure_make_tuple!($($($rest)*)?))
+    };
+    (&mut $alias:ident = $expr:expr $(, $( $rest:tt )*)?) => {
+        ($expr, $crate::__closure_make_tuple!($($($rest)*)?))
+    };
+    (& $alias:ident = $expr:expr $(, $( $rest:tt )*)?) => {
+        ($expr, $crate::__closure_make_tuple!($($($rest)*)?))
+    };
 }
 
 #[doc(hidden)]
@@ -198,6 +213,21 @@ macro_rules! __closure_destruct_tuple {
     };
     ($ctx:ident => & $var:ident $(, $($rest:tt)*)?) => {
         let $var = & *$ctx.0;
+        let $ctx = &mut $ctx.1;
+        $crate::__closure_destruct_tuple!($ctx => $($($rest)*)?);
+    };
+    ($ctx:ident => $alias:ident = $expr:expr $(, $($rest:tt)*)?) => {
+        let $alias = &mut $ctx.0;
+        let $ctx = &mut $ctx.1;
+        $crate::__closure_destruct_tuple!($ctx => $($($rest)*)?);
+    };
+    ($ctx:ident => &mut $alias:ident = $expr:expr $(, $($rest:tt)*)?) => {
+        let $alias = &mut *$ctx.0;
+        let $ctx = &mut $ctx.1;
+        $crate::__closure_destruct_tuple!($ctx => $($($rest)*)?);
+    };
+    ($ctx:ident => & $alias:ident = $expr:expr $(, $($rest:tt)*)?) => {
+        let $alias = & *$ctx.0;
         let $ctx = &mut $ctx.1;
         $crate::__closure_destruct_tuple!($ctx => $($($rest)*)?);
     };
@@ -255,6 +285,16 @@ mod tests {
             *x -= *d;
             *x < 0
         }))
+        .await;
+        call_in_loop(closure!(
+            [&mut d = &mut f, &mut f = &mut d,],
+            async |x: &mut i32| {
+                *d += *f;
+                *f += 1;
+                *x -= *d;
+                *x < 0
+            }
+        ))
         .await;
     }
 }
