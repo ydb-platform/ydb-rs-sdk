@@ -101,7 +101,7 @@ impl RawType {
 
         let res = match type_id {
             PrimitiveTypeId::Unspecified => {
-                return Err(RawError::decode_error("got unspecified primitive_type_id"))
+                return Err(RawError::decode_error("got unspecified primitive_type_id"));
             }
             PrimitiveTypeId::Bool => RawType::Bool,
             PrimitiveTypeId::Int8 => RawType::Int8,

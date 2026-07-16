@@ -1,5 +1,5 @@
-use crate::connection_pool::{normalize_uri_scheme, ConnectionPool, Simple};
 use crate::YdbResult;
+use crate::connection_pool::{ConnectionPool, normalize_uri_scheme, Simple};
 use http::uri::{Scheme, Uri};
 
 #[test]

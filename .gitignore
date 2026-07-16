@@ -8,3 +8,4 @@ key.json
 .vscode/
 .vscode/tasks.json
 ydb-grpc-helpers/target/
+.kilo/

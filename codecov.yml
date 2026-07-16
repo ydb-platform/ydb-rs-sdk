@@ -1,4 +1,14 @@
 # https://github.com/codecov/support/blob/master/codecov.yml
+coverage:
+  status:
+    project:
+      default:
+        target: auto       # do not drop below the current level...
+        threshold: 1%      # ...by more than 1%
+    patch:
+      default:
+        target: 80%        # new/changed code in the PR diff must be >= 80% covered
+
 ignore:
   - ydb-grpc/src/generated
   - ydb/examples

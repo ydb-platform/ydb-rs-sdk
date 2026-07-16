@@ -1,11 +1,11 @@
 use crate::{YdbError, YdbResult};
 use derivative::Derivative;
+use futures_util::FutureExt;
 use futures_util::stream::FuturesUnordered;
-use futures_util::{FutureExt, StreamExt};
-use http::uri::Scheme;
 use http::Uri;
+use http::uri::Scheme;
+use itertools::Either;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::future::Future;
 use std::net::IpAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -13,8 +13,9 @@ use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::OnceCell;
 use tokio::task::JoinHandle;
-use tokio_util::either::Either;
+use tokio_stream::StreamExt;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
+use tracing::instrument;
 use tracing::trace;
 
 #[derive(Debug)]
@@ -31,6 +32,7 @@ impl<ConnectionT: Connection> ConnectionPool<ConnectionT> {
         }
     }
 
+    #[instrument(level = "trace", name = "ydb.ConnectionPool.LoadCertificate", skip_all, fields(ydb.pool.certificate = %path.as_ref().display()))]
     pub(crate) fn load_certificate(self, path: impl AsRef<Path>) -> Self {
         let pem = std::fs::read_to_string(path).unwrap();
         trace!("loaded cert: {}", pem);
@@ -43,6 +45,7 @@ impl<ConnectionT: Connection> ConnectionPool<ConnectionT> {
         }
     }
 
+    #[instrument(name = "ydb.ConnectionPool.GetConnection", skip_all, fields(network.peer.address = uri.host(), network.peer.port = uri.port_u16()), err)]
     pub(crate) async fn connection(&self, uri: &Uri) -> YdbResult<Channel> {
         let connection = self
             .connections

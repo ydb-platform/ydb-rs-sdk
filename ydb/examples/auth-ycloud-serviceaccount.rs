@@ -1,7 +1,8 @@
+#![recursion_limit = "256"]
 use std::time::Duration;
 use std::{env, str::FromStr};
 use tokio::time::timeout;
-use tracing::{info, Level};
+use tracing::{Level, info};
 use ydb::{ClientBuilder, ServiceAccountCredentials, YdbError, YdbResult};
 
 #[tokio::main]
@@ -23,10 +24,11 @@ async fn main() -> YdbResult<()> {
 
     info!("Waiting for client");
 
-    if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
-        res?
-    } else {
-        return Err(YdbError::from("Connection timeout"));
+    match timeout(Duration::from_secs(3), client.wait()).await {
+        Ok(res) => res?,
+        _ => {
+            return Err(YdbError::from("Connection timeout"));
+        }
     };
 
     let mut row = client

@@ -1,18 +1,16 @@
+#![recursion_limit = "256"]
 mod mock_server;
 
 use std::sync::{Arc, Mutex};
-use ydb::{
-    Client, ClientBuilder, TopicWriterMessage, TopicWriterMessageBuilder,
-    TopicWriterTxOptionsBuilder, YdbResult,
-};
-use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage as WriteFromClient;
-use ydb_grpc::ydb_proto::topic::stream_write_message::InitRequest;
+use ydb::{Client, ClientBuilder, TopicWriterMessage, TopicWriterTxOptionsBuilder, YdbResult};
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
+use ydb_grpc::ydb_proto::topic::stream_write_message::InitRequest;
+use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage as WriteFromClient;
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply};
 use crate::mock_server::query::QueryIncoming;
 use crate::mock_server::server::MockServer;
-use crate::mock_server::topic::{builders, TopicIncoming};
+use crate::mock_server::topic::{TopicIncoming, builders};
 
 const DATABASE: &str = "/local";
 const TOPIC_PATH: &str = "/local/topic";
@@ -158,10 +156,9 @@ fn make_client(server: &MockServer) -> YdbResult<Client> {
 }
 
 fn test_message() -> TopicWriterMessage {
-    TopicWriterMessageBuilder::default()
+    TopicWriterMessage::builder()
         .data(TEST_MESSAGE_DATA.to_vec())
         .build()
-        .unwrap()
 }
 
 #[tokio::test]

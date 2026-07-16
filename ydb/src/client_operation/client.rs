@@ -6,11 +6,12 @@ use crate::grpc_wrapper::raw_operation_service::client::RawOperationClient;
 use crate::grpc_wrapper::raw_operation_service::types::RawListOperationsRequest;
 
 use super::builders::{
-    raw_to_list_result, raw_to_operation_info, retry_operation_call, CancelOperationBuilder,
-    ForgetOperationBuilder, GetOperationBuilder, ListOperationsBuilder, OperationCallOptions,
+    CancelOperationBuilder, ForgetOperationBuilder, GetOperationBuilder, ListOperationsBuilder,
+    OperationCallOptions, raw_to_list_result, raw_to_operation_info, retry_operation_call,
 };
 use super::types::{ListOperationsRequest, ListOperationsResult, OperationInfo};
 use crate::retry_budget::RetryControl;
+use tracing::instrument;
 
 #[derive(Clone)]
 pub struct OperationClient {
@@ -37,6 +38,7 @@ impl OperationClient {
         }
     }
 
+    #[instrument(name = "ydb.OperationClient.GetOperation", skip_all, fields(db.system.name = "ydb", ydb.operation.id = %id), err)]
     pub(crate) async fn get_operation_call(
         &self,
         id: String,
@@ -58,6 +60,7 @@ impl OperationClient {
         }
     }
 
+    #[instrument(name = "ydb.OperationClient.ListOperations", skip_all, fields(db.system.name = "ydb"), err)]
     pub(crate) async fn list_operations_call(
         &self,
         request: ListOperationsRequest,
@@ -91,6 +94,7 @@ impl OperationClient {
         }
     }
 
+    #[instrument(name = "ydb.OperationClient.ForgetOperation", skip_all, fields(db.system.name = "ydb", ydb.operation.id = %id), err)]
     pub(crate) async fn forget_operation_call(
         &self,
         id: String,
@@ -119,6 +123,7 @@ impl OperationClient {
         }
     }
 
+    #[instrument(name = "ydb.OperationClient.CancelOperation", skip_all, fields(db.system.name = "ydb", ydb.operation.id = %id), err)]
     pub(crate) async fn cancel_operation_call(
         &self,
         id: String,

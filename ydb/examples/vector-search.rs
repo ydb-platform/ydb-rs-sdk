@@ -1,9 +1,10 @@
+#![recursion_limit = "256"]
 //! Vector search with YQL Knn UDFs — mirrors
 //! `ydb/public/sdk/python/examples/vector_search/vector_search.py`.
 
 use std::time::Duration;
 
-use ydb::{ydb_struct, Bytes, ClientBuilder, ExecBuilder, QueryStreamBuilder, Value, YdbResult};
+use ydb::{Bytes, ClientBuilder, ExecBuilder, QueryStreamBuilder, Value, YdbResult, ydb_struct};
 
 const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
 

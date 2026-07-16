@@ -7,19 +7,19 @@ use crate::client_table::TableClient;
 use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::load_balancer::SharedLoadBalancer;
-use crate::session_pool::{default_session_pool_settings, SessionPool};
-use crate::waiter::Waiter;
-
+use crate::session_pool::{SessionPool, default_session_pool_settings};
 pub use crate::session_pool::{SessionPoolSettings, SessionPoolStats};
+use crate::waiter::Waiter;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::client_topic::client::TopicClient;
-use crate::client_topic::compression::{default_executor, Executor};
+use crate::client_topic::compression::{Executor, default_executor};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
 use crate::retry_budget::{RetryControl, RetryMetrics};
+use tracing::instrument;
 use tracing::trace;
 
 /// YDB client.
@@ -30,7 +30,7 @@ use tracing::trace;
 pub struct Client {
     credentials: DBCredentials,
     load_balancer: SharedLoadBalancer,
-    discovery: Arc<Box<dyn Discovery>>,
+    discovery: Arc<dyn Discovery>,
     connection_manager: GrpcConnectionManager,
     executor: Arc<dyn Executor>,
     session_pool: SessionPool,
@@ -40,7 +40,7 @@ pub struct Client {
 impl Client {
     pub(crate) fn new(
         credentials: DBCredentials,
-        discovery: Arc<Box<dyn Discovery>>,
+        discovery: Arc<dyn Discovery>,
         connection_manager: GrpcConnectionManager,
         load_balancer: SharedLoadBalancer,
         executor: Option<Arc<dyn Executor>>,
@@ -100,6 +100,7 @@ impl Client {
     ///
     /// Table and query clients created from this driver share the same pool.
     ///
+    #[instrument(name = "ydb.Driver.WithSessionPool", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database), err)]
     pub async fn with_session_pool(self, settings: SessionPoolSettings) -> YdbResult<Self> {
         let session_pool = SessionPool::new_explicit(
             self.connection_manager.clone(),
@@ -123,6 +124,7 @@ impl Client {
     }
 
     /// Create instance of client for table service
+    #[instrument(name = "ydb.Driver.TableClient", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database))]
     pub fn table_client(&self) -> TableClient {
         TableClient::new(
             self.connection_manager.clone(),
@@ -132,6 +134,7 @@ impl Client {
     }
 
     /// Create instance of client for query service.
+    #[instrument(name = "ydb.Driver.QueryClient", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database))]
     pub fn query_client(&self) -> QueryClient {
         QueryClient::new(
             self.connection_manager.clone(),
@@ -141,11 +144,13 @@ impl Client {
     }
 
     /// Create instance of client for directory service
+    #[instrument(name = "ydb.Driver.SchemeClient", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database))]
     pub fn scheme_client(&self) -> SchemeClient {
         SchemeClient::new(self.connection_manager.clone())
     }
 
     /// Create instance of client for topic service
+    #[instrument(name = "ydb.Driver.TopicClient", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database))]
     pub fn topic_client(&self) -> TopicClient {
         TopicClient::new(
             self.connection_manager.clone(),
@@ -155,11 +160,13 @@ impl Client {
     }
 
     /// Create instance of client for coordination service
+    #[instrument(name = "ydb.Driver.CoordinationClient", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database))]
     pub fn coordination_client(&self) -> CoordinationClient {
         CoordinationClient::new(self.connection_manager.clone())
     }
 
     /// Create instance of client for operation service (list/get/forget long-running operations).
+    #[instrument(name = "ydb.Driver.OperationClient", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database))]
     pub fn operation_client(&self) -> OperationClient {
         OperationClient::new(self.connection_manager.clone(), self.retry_control.clone())
     }
@@ -168,6 +175,7 @@ impl Client {
     ///
     /// Wait all background process get first successfully result and client fully
     /// available to work.
+    #[instrument(name = "ydb.Driver.Initialize", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database), err)]
     pub async fn wait(&self) -> YdbResult<()> {
         trace!("waiting_token");
         self.credentials.token_cache.wait().await?;

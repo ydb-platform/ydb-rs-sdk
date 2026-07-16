@@ -56,11 +56,11 @@ impl Logger {
     pub fn errorf(&self, message: impl AsRef<str>) {
         let msg = message.as_ref().to_string();
         let mut last = self.last_error.lock().unwrap();
-        if let Some((prev, count, _)) = last.as_mut() {
-            if *prev == msg {
-                *count += 1;
-                return;
-            }
+        if let Some((prev, count, _)) = last.as_mut()
+            && *prev == msg
+        {
+            *count += 1;
+            return;
         }
         drop(last);
         self.flush();
@@ -72,17 +72,17 @@ impl Logger {
 
     pub fn flush(&self) {
         let mut last = self.last_error.lock().unwrap();
-        if let Some((_, count, started)) = last.take() {
-            if count > 1 {
-                let phase = *self.phase.lock().unwrap();
-                let ts = chrono_like_now();
-                let elapsed = Instant::now().duration_since(started);
-                eprintln!(
-                    "[{ts}] [{phase}] ERROR: (repeated {} times in {:?})",
-                    count - 1,
-                    elapsed
-                );
-            }
+        if let Some((_, count, started)) = last.take()
+            && count > 1
+        {
+            let phase = *self.phase.lock().unwrap();
+            let ts = chrono_like_now();
+            let elapsed = Instant::now().duration_since(started);
+            eprintln!(
+                "[{ts}] [{phase}] ERROR: (repeated {} times in {:?})",
+                count - 1,
+                elapsed
+            );
         }
     }
 }

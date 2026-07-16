@@ -7,8 +7,8 @@ use crate::{YdbError, YdbResult};
 use std::{num::NonZeroUsize, sync::Arc};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
-use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 use ydb_grpc::ydb_proto::topic::stream_write_message::WriteRequest;
+use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
 type ChunkResult = YdbResult<WriteRequest>;
 type InputRx = mpsc::UnboundedReceiver<Vec<MessageData>>;

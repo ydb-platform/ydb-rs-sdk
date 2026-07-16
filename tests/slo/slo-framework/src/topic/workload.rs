@@ -3,12 +3,12 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::framework::Workload;
-use crate::helpers::{new_rate_limiter, run_workers_for, timeout_or_cancel, TimeoutOutcome};
-use crate::metrics::{OPERATION_MESSAGE_RTT, OPERATION_READ, OPERATION_WRITE};
 use crate::Framework;
+use crate::framework::Workload;
+use crate::helpers::{TimeoutOutcome, new_rate_limiter, run_workers_for, timeout_or_cancel};
+use crate::metrics::{OPERATION_MESSAGE_RTT, OPERATION_READ, OPERATION_WRITE};
 
-use super::{verification, Params, TopicService};
+use super::{Params, TopicService, verification};
 
 pub struct TopicWorkload<T: TopicService> {
     fw: Arc<Framework>,
@@ -105,16 +105,7 @@ fn spawn_writer_workers(
                 let payload = format!("{seq_no}").into_bytes();
                 seq_no = seq_no.wrapping_add(1);
 
-                let message = match ydb::TopicWriterMessageBuilder::default()
-                    .data(payload)
-                    .build()
-                {
-                    Ok(m) => m,
-                    Err(err) => {
-                        fw.logger.errorf(format!("build message failed: {err}"));
-                        continue;
-                    }
-                };
+                let message = ydb::TopicWriterMessage::builder().data(payload).build();
 
                 let span = fw.metrics.start(OPERATION_WRITE);
                 match timeout_or_cancel(&ctx, timeout, writer.write(message)).await {

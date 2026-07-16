@@ -11,7 +11,9 @@ use crate::grpc_wrapper::raw_query_service::fetch_script_results::RawFetchScript
 use crate::result::ResultSet;
 use crate::types::Value;
 
-use super::exec::{maybe_with_operation_timeout, run_with_retry, CallOptions, ClientExecContext};
+use tracing::instrument;
+
+use super::exec::{CallOptions, ClientExecContext, maybe_with_operation_timeout, run_with_retry};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -160,6 +162,7 @@ async fn client_execute_script(
     client_execute_script_once(ctx, &text, &params, &opts, results_ttl).await
 }
 
+#[instrument(name = "ydb.ExecuteScript", skip_all, fields(db.system.name = "ydb", ydb.Query.text = %crate::traces::helpers::ensure_len_string(text)), err)]
 async fn client_execute_script_once(
     ctx: &ClientExecContext,
     text: &str,
@@ -203,6 +206,7 @@ async fn client_execute_script_once(
     Ok(ExecuteScriptOperation { id, consumed_units })
 }
 
+#[instrument(name = "ydb.FetchScriptResults", skip_all, fields(db.system.name = "ydb", ydb.operation.id = %operation_id), err)]
 async fn client_fetch_script_results(
     ctx: &ClientExecContext,
     operation_id: String,
@@ -225,6 +229,7 @@ async fn client_fetch_script_results(
     .await
 }
 
+#[instrument(name = "ydb.FetchScriptResultsOnce", skip_all, fields(db.system.name = "ydb", ydb.operation.id = %operation_id), err)]
 async fn client_fetch_script_results_once(
     ctx: &ClientExecContext,
     operation_id: &str,

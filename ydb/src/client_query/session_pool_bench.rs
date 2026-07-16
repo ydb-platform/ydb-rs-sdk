@@ -7,8 +7,8 @@
 //! cargo test -p ydb session_pool_bench --release -- --ignored --nocapture
 //! ```
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::session_pool::{SessionPool, SessionPoolSettings};

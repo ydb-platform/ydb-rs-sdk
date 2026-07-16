@@ -3,9 +3,9 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::time::Duration;
 
-use crate::errors::YdbResultWithCustomerErr;
 use crate::TransactionOptions;
 use crate::TxMode;
+use crate::errors::YdbResultWithCustomerErr;
 
 use super::QueryClient;
 
