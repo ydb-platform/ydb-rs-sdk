@@ -4,8 +4,12 @@ use std::time::Duration;
 
 use futures_util::future::BoxFuture;
 
+use crate::Transaction;
 use crate::TransactionOptions;
 use crate::TxMode;
+use crate::async_closure::AsyncFnMut;
+use crate::async_closure::DynAsyncFnMut;
+use crate::async_closure::with_lifetime::Mut;
 use crate::errors::YdbResultWithCustomerErr;
 
 use super::QueryClient;
@@ -18,6 +22,23 @@ pub struct RetryTxBuilder<'a, F, T> {
     timeout: Option<Duration>,
     idempotent: bool,
     _phantom: PhantomData<fn() -> T>,
+}
+
+/// Auxiliary trait for closures that can be passed into [`QueryClient::retry_tx`].
+pub trait RetryTxAttempt<T>: Send {
+    fn attempt<'a>(
+        &'a mut self,
+        tx: &'a mut Transaction,
+    ) -> BoxFuture<'a, YdbResultWithCustomerErr<T>>;
+}
+
+impl<'c, T> RetryTxAttempt<T> for DynAsyncFnMut<'c, Mut<Transaction>, YdbResultWithCustomerErr<T>> {
+    fn attempt<'a>(
+        &'a mut self,
+        tx: &'a mut Transaction,
+    ) -> BoxFuture<'a, YdbResultWithCustomerErr<T>> {
+        self.call(tx)
+    }
 }
 
 impl<'a, F, T> RetryTxBuilder<'a, F, T> {
@@ -64,9 +85,9 @@ impl<'a, F, T> RetryTxBuilder<'a, F, T> {
 
 impl<'a, F, T> IntoFuture for RetryTxBuilder<'a, F, T>
 where
-    F: AsyncFnMut(&mut super::Transaction) -> YdbResultWithCustomerErr<T>,
+    F: RetryTxAttempt<T>,
     F: 'a,
-    T: 'a,
+    T: Send + 'a,
 {
     type Output = YdbResultWithCustomerErr<T>;
     type IntoFuture = BoxFuture<'a, Self::Output>;

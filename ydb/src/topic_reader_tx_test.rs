@@ -10,8 +10,8 @@ use crate::client_topic::client::{
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::test_integration_helper::create_client;
 use crate::{
-    Client, TopicReaderBatch, TopicReaderOptions, TopicWriterMessage, TopicWriterOptions, YdbError,
-    YdbResult, YdbResultWithCustomerErr,
+    Client, TopicReaderBatch, TopicReaderOptions, TopicWriterMessage, TopicWriterOptions,
+    Transaction, YdbError, YdbResult, YdbResultWithCustomerErr, closure,
 };
 
 async fn wait_topic_absent(
@@ -187,19 +187,22 @@ async fn query_topic_reader_tx_commit_advances_offset() -> YdbResult<()> {
     let query_client = client.query_client();
 
     query_client
-        .retry_tx(async |tx| {
-            tx.begin().await?;
-            let mut reader_tx = reader.tx_reader(tx).await?;
-            let mut observed = Vec::new();
-            while observed.len() < payloads.len() {
-                let batch = timeout(Duration::from_secs(10), reader_tx.read_batch())
-                    .await
-                    .expect("timeout waiting for tx reader batch")?;
-                observed.extend(read_payloads_from_batch(batch).await?);
+        .retry_tx(closure!(
+            [&mut reader, &payloads],
+            async |tx: &mut Transaction| {
+                tx.begin().await?;
+                let mut reader_tx = reader.tx_reader(tx).await?;
+                let mut observed = Vec::new();
+                while observed.len() < payloads.len() {
+                    let batch = timeout(Duration::from_secs(10), reader_tx.read_batch())
+                        .await
+                        .expect("timeout waiting for tx reader batch")?;
+                    observed.extend(read_payloads_from_batch(batch).await?);
+                }
+                assert_eq!(observed, expected_payloads(payloads));
+                Ok(())
             }
-            assert_eq!(observed, expected_payloads(&payloads));
-            Ok(())
-        })
+        ))
         .await?;
 
     wait_committed_offset(
@@ -240,19 +243,22 @@ async fn query_topic_reader_tx_callback_error_redelivers_messages() -> YdbResult
     let query_client = client.query_client();
 
     let result: YdbResultWithCustomerErr<()> = query_client
-        .retry_tx(async |tx| {
-            tx.begin().await?;
-            let mut reader_tx = reader.tx_reader(tx).await?;
-            let mut observed = Vec::new();
-            while observed.len() < payloads.len() {
-                let batch = timeout(Duration::from_secs(10), reader_tx.read_batch())
-                    .await
-                    .expect("timeout waiting for tx reader batch")?;
-                observed.extend(read_payloads_from_batch(batch).await?);
+        .retry_tx(closure!(
+            [&mut reader, payloads],
+            async |tx: &mut Transaction| {
+                tx.begin().await?;
+                let mut reader_tx = reader.tx_reader(tx).await?;
+                let mut observed = Vec::new();
+                while observed.len() < payloads.len() {
+                    let batch = timeout(Duration::from_secs(10), reader_tx.read_batch())
+                        .await
+                        .expect("timeout waiting for tx reader batch")?;
+                    observed.extend(read_payloads_from_batch(batch).await?);
+                }
+                assert_eq!(observed, expected_payloads(payloads));
+                Err(YdbError::Custom("planned topic reader tx abort".into()).into())
             }
-            assert_eq!(observed, expected_payloads(&payloads));
-            Err(YdbError::Custom("planned topic reader tx abort".into()).into())
-        })
+        ))
         .await;
     assert!(result.is_err());
 
@@ -294,20 +300,23 @@ async fn query_topic_reader_tx_explicit_rollback_redelivers_messages() -> YdbRes
     let query_client = client.query_client();
 
     query_client
-        .retry_tx(async |tx| {
-            tx.begin().await?;
-            let mut reader_tx = reader.tx_reader(tx).await?;
-            let mut observed = Vec::new();
-            while observed.len() < payloads.len() {
-                let batch = timeout(Duration::from_secs(10), reader_tx.read_batch())
-                    .await
-                    .expect("timeout waiting for tx reader batch")?;
-                observed.extend(read_payloads_from_batch(batch).await?);
+        .retry_tx(closure!(
+            [&mut reader, &payloads],
+            async |tx: &mut Transaction| {
+                tx.begin().await?;
+                let mut reader_tx = reader.tx_reader(tx).await?;
+                let mut observed = Vec::new();
+                while observed.len() < payloads.len() {
+                    let batch = timeout(Duration::from_secs(10), reader_tx.read_batch())
+                        .await
+                        .expect("timeout waiting for tx reader batch")?;
+                    observed.extend(read_payloads_from_batch(batch).await?);
+                }
+                assert_eq!(observed, expected_payloads(payloads));
+                tx.rollback().await?;
+                Ok(())
             }
-            assert_eq!(observed, expected_payloads(&payloads));
-            tx.rollback().await?;
-            Ok(())
-        })
+        ))
         .await?;
 
     assert_eq!(
@@ -353,29 +362,32 @@ async fn query_topic_reader_tx_rewrap_same_reader_same_tx_commits_all_offsets() 
     let query_client = client.query_client();
 
     query_client
-        .retry_tx(async |tx| {
-            tx.begin().await?;
+        .retry_tx(closure!(
+            [&mut reader, &payloads],
+            async |tx: &mut Transaction| {
+                tx.begin().await?;
 
-            let mut observed = Vec::new();
-            {
-                let mut reader_tx = reader.tx_reader(tx).await?;
-                let batch = timeout(Duration::from_secs(10), reader_tx.read_batch())
-                    .await
-                    .expect("timeout waiting for first tx reader batch")?;
-                observed.extend(read_payloads_from_batch(batch).await?);
+                let mut observed = Vec::new();
+                {
+                    let mut reader_tx = reader.tx_reader(tx).await?;
+                    let batch = timeout(Duration::from_secs(10), reader_tx.read_batch())
+                        .await
+                        .expect("timeout waiting for first tx reader batch")?;
+                    observed.extend(read_payloads_from_batch(batch).await?);
+                }
+
+                {
+                    let mut reader_tx = reader.tx_reader(tx).await?;
+                    let batch = timeout(Duration::from_secs(10), reader_tx.read_batch())
+                        .await
+                        .expect("timeout waiting for second tx reader batch")?;
+                    observed.extend(read_payloads_from_batch(batch).await?);
+                }
+
+                assert_eq!(observed, expected_payloads(payloads));
+                Ok(())
             }
-
-            {
-                let mut reader_tx = reader.tx_reader(tx).await?;
-                let batch = timeout(Duration::from_secs(10), reader_tx.read_batch())
-                    .await
-                    .expect("timeout waiting for second tx reader batch")?;
-                observed.extend(read_payloads_from_batch(batch).await?);
-            }
-
-            assert_eq!(observed, expected_payloads(&payloads));
-            Ok(())
-        })
+        ))
         .await?;
 
     wait_committed_offset(

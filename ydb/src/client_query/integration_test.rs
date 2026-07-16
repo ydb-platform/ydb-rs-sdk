@@ -3,7 +3,7 @@ use crate::errors::YdbResult;
 use crate::session_pool::SessionPoolSettings;
 use crate::test_integration_helper::{create_client, create_client_with_session_pool};
 use crate::types::Value;
-use crate::ydb_struct;
+use crate::{Transaction, closure, ydb_struct};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 use tracing_test::traced_test;
@@ -95,7 +95,7 @@ async fn query_client_multi_result_set() -> YdbResult<()> {
     let qc = client.query_client();
 
     let set_count = qc
-        .retry_tx(async |tx| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             let mut stream = tx.query("SELECT 42 AS a; SELECT 1 AS b, 2 AS c;").await?;
             let mut count = 0usize;
             while stream.next_result_set().await?.is_some() {
@@ -103,7 +103,7 @@ async fn query_client_multi_result_set() -> YdbResult<()> {
             }
             stream.close().await?;
             Ok(count)
-        })
+        }))
         .timeout(TEST_TIMEOUT)
         .await?;
 
@@ -127,15 +127,15 @@ async fn query_client_retry_tx_upsert() -> YdbResult<()> {
 
     let upsert = format!("UPSERT INTO {table_name} (id, val) VALUES ($id, $val)");
 
-    qc.retry_tx(async |tx| {
+    qc.retry_tx(closure!([&upsert], async |tx: &mut Transaction| {
         for id in 0..3_i64 {
-            tx.exec(&upsert)
+            tx.exec(upsert)
                 .param("$id", id)
                 .param("$val", format!("v{id}"))
                 .await?;
         }
         Ok(())
-    })
+    }))
     .timeout(TEST_TIMEOUT)
     .await?;
 
@@ -187,10 +187,10 @@ async fn query_client_snapshot_read_only_tx() -> YdbResult<()> {
     let qc = client.query_client();
 
     let value: i64 = qc
-        .retry_tx(async |tx| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             let mut row = tx.query_row("SELECT 42 AS v").await?;
             Ok(row.remove_field_by_name("v")?.try_into()?)
-        })
+        }))
         .isolation(TxMode::SnapshotReadOnly)
         .timeout(TEST_TIMEOUT)
         .await?;
@@ -213,7 +213,7 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
     )))
     .await?;
 
-    qc.retry_tx(async |tx| {
+    qc.retry_tx(closure!([&table_name], async |tx: &mut Transaction| {
         assert!(
             tx.tx_id_for_test().is_none(),
             "lazy transaction must not have tx_id before the first query"
@@ -238,7 +238,7 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
         assert_eq!(val, Some(42));
 
         Ok(())
-    })
+    }))
     .timeout(TEST_TIMEOUT)
     .await?;
 
@@ -258,10 +258,10 @@ async fn query_lazy_tx_commit_without_queries() -> YdbResult<()> {
     let qc = client.query_client();
 
     let value = qc
-        .retry_tx(async |tx| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             assert!(tx.tx_id_for_test().is_none());
             Ok(7_i32)
-        })
+        }))
         .timeout(TEST_TIMEOUT)
         .await?;
 
@@ -276,7 +276,7 @@ async fn query_explicit_begin_via_begin() -> YdbResult<()> {
     let client = create_client().await?;
     let qc = client.query_client();
 
-    qc.retry_tx(async |tx| {
+    qc.retry_tx(closure!(async |tx: &mut Transaction| {
         assert!(
             tx.tx_id_for_test().is_none(),
             "lazy transaction must not have tx_id before begin()"
@@ -291,7 +291,7 @@ async fn query_explicit_begin_via_begin() -> YdbResult<()> {
         let v: i64 = row.remove_field_by_name("v")?.try_into()?;
         assert_eq!(v, 1);
         Ok(())
-    })
+    }))
     .timeout(TEST_TIMEOUT)
     .await?;
 
@@ -305,14 +305,14 @@ async fn query_explicit_begin_via_client_option() -> YdbResult<()> {
     let client = create_client().await?;
     let qc = client.query_client();
 
-    qc.retry_tx(async |tx| {
+    qc.retry_tx(closure!(async |tx: &mut Transaction| {
         tx.exec("SELECT 1 AS v").await?;
         assert!(
             tx.tx_id_for_test().is_some_and(|id| !id.is_empty()),
             "with_begin must obtain tx_id on the first operation via BeginTransaction RPC"
         );
         Ok(())
-    })
+    }))
     .with_begin()
     .timeout(TEST_TIMEOUT)
     .await?;
@@ -334,7 +334,7 @@ async fn query_with_commit_on_last_query() -> YdbResult<()> {
     )))
     .await?;
 
-    qc.retry_tx(async |tx| {
+    qc.retry_tx(closure!([&table_name], async |tx: &mut Transaction| {
         tx.exec(format!(
             "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
         ))
@@ -353,7 +353,7 @@ async fn query_with_commit_on_last_query() -> YdbResult<()> {
         );
 
         Ok(())
-    })
+    }))
     .timeout(TEST_TIMEOUT)
     .await?;
 

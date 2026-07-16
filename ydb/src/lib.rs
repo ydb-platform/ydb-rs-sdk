@@ -82,6 +82,7 @@ pub(crate) mod custom_ca_test;
 #[cfg(test)]
 mod test_helpers;
 
+pub mod async_closure;
 #[cfg(test)]
 pub(crate) mod coordination_test;
 pub(crate) mod dicovery_pessimization_interceptor;
@@ -174,8 +175,8 @@ pub use client_query::{
     CallBuilder, ClientOneShot, ExecBuilder, ExecCall, ExecuteScriptBuilder,
     ExecuteScriptOperation, FetchScriptResult, FetchScriptResultsBuilder, FromYdbRow, Interactive,
     OneResultSet, OneRow, OptionalRow, OptionalRowBuilder, QueryClient, QueryExecutor,
-    QueryRowBuilder, QueryStats, QueryStream, QueryStreamBuilder, ResultSetBuilder, RetryTxBuilder,
-    Streamed, Transaction, TransactionOptions, TxMode,
+    QueryRowBuilder, QueryStats, QueryStream, QueryStreamBuilder, ResultSetBuilder, RetryTxAttempt,
+    RetryTxBuilder, Streamed, Transaction, TransactionOptions, TxMode,
 };
 
 // full enum pub types

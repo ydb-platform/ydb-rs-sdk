@@ -1,7 +1,7 @@
 #![recursion_limit = "256"]
 use std::time::Duration;
 use tokio::time::timeout;
-use ydb::{ClientBuilder, Row, YdbError, YdbResult};
+use ydb::{ClientBuilder, Row, Transaction, YdbError, YdbResult, closure};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -22,7 +22,7 @@ async fn main() -> YdbResult<()> {
         .await?;
 
     // fill with data
-    qc.retry_tx(async |tx| {
+    qc.retry_tx(closure!(async |tx: &mut Transaction| {
         for i in 1..100 {
             tx.exec("UPSERT INTO test (id, val) VALUES ($id, $val)")
                 .param("$id", i as i64)
@@ -30,7 +30,7 @@ async fn main() -> YdbResult<()> {
                 .await?;
         }
         Ok(())
-    })
+    }))
     .await?;
 
     // Select one row result

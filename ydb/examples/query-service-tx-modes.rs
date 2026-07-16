@@ -4,7 +4,8 @@
 use std::time::Duration;
 
 use ydb::{
-    ClientBuilder, ExecBuilder, QueryRowBuilder, TxMode, YdbError, YdbOrCustomerError, YdbResult,
+    ClientBuilder, ExecBuilder, QueryRowBuilder, Transaction, TxMode, YdbError, YdbOrCustomerError,
+    YdbResult, closure,
 };
 
 const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -67,10 +68,10 @@ async fn main() -> YdbResult<()> {
         ("SnapshotRW", TxMode::SnapshotReadWrite),
     ] {
         let v: i64 = match qc
-            .retry_tx(async |tx| {
+            .retry_tx(closure!(async |tx: &mut Transaction| {
                 let mut row = tx.query_row("SELECT 42 AS v").await?;
                 Ok(row.remove_field_by_name("v")?.try_into()?)
-            })
+            }))
             .isolation(mode)
             .timeout(EXAMPLE_TIMEOUT)
             .await
