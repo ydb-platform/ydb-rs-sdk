@@ -231,12 +231,28 @@ mod tests {
             *x < 0
         }))
         .await;
+        assert!(d > 1);
         call_in_loop(closure!([&d], async |x: &mut i32| {
             *x -= d;
             *x < 0
         }))
         .await;
         call_in_loop(closure!([d], async |x: &mut i32| {
+            *x -= *d;
+            *x < 0
+        }))
+        .await;
+        let mut f = 0;
+        call_in_loop(closure!([&mut d, &mut f], async |x: &mut i32| {
+            *d += *f;
+            *f += 1;
+            *x -= *d;
+            *x < 0
+        }))
+        .await;
+        call_in_loop(closure!([&mut d, &mut f,], async |x: &mut i32| {
+            *d += *f;
+            *f += 1;
             *x -= *d;
             *x < 0
         }))
