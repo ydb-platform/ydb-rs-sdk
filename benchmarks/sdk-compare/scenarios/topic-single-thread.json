@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "topic-single-thread",
+  "execution": {
+    "worker_threads": 1,
+    "warmup_seconds": 15,
+    "measurement_seconds": 60,
+    "drain_timeout_seconds": 30
+  },
+  "workload": {
+    "kind": "topic",
+    "topic_name": "sdk-compare-topic-single-thread",
+    "consumer_name": "sdk-compare-consumer",
+    "partition_count": 4,
+    "writer_count": 4,
+    "reader_count": 4,
+    "message_size_bytes": 1024,
+    "max_in_flight_per_writer": 100,
+    "partition_write_speed_bytes_per_second": 52428800
+  }
+}

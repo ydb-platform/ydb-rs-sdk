@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "topic-smoke",
+  "execution": {
+    "worker_threads": 1,
+    "warmup_seconds": 1,
+    "measurement_seconds": 2,
+    "drain_timeout_seconds": 10
+  },
+  "workload": {
+    "kind": "topic",
+    "topic_name": "sdk-compare-topic-smoke",
+    "consumer_name": "sdk-compare-consumer",
+    "partition_count": 1,
+    "writer_count": 1,
+    "reader_count": 1,
+    "message_size_bytes": 1024,
+    "max_in_flight_per_writer": 10,
+    "partition_write_speed_bytes_per_second": 52428800
+  }
+}
