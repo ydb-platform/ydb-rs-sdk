@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::client_topic::compression::{CodecSelection, CompressionEncoder};
 use crate::client_topic::topicwriter::partitioning::PartitioningStrategy;
-use crate::retry_strategy::{ArcRetryBudget, RetryBudget};
+use crate::retry_budget::{ArcRetryBudget, RetryBudget};
 
 #[derive(bon::Builder, Clone)]
 pub struct TopicWriterOptions {

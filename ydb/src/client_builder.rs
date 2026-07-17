@@ -14,7 +14,7 @@ use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
 use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::SharedLoadBalancer;
-use crate::retry_strategy::ArcRetryBudget;
+use crate::retry_budget::ArcRetryBudget;
 use crate::{Client, Credentials};
 use http::Uri;
 use once_cell::sync::Lazy;

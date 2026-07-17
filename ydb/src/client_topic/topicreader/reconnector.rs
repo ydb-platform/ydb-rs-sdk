@@ -10,7 +10,7 @@ use crate::client_common::TokenCache;
 use crate::client_topic::compression::Executor;
 use crate::errors::Idempotency;
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::retry_strategy::RetryState;
+use crate::retry_budget::RetryState;
 use crate::{YdbError, YdbResult, closure};
 
 use super::auth_token_sender::AuthTokenSender;

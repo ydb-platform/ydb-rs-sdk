@@ -3,7 +3,7 @@ pub(crate) mod call_options;
 
 use crate::async_closure::AsyncFnMut;
 use crate::async_closure::with_lifetime::Ref;
-use crate::retry_strategy::{ArcRetryBudget, RetryState};
+use crate::retry_budget::{ArcRetryBudget, RetryState};
 use crate::session::TableSession;
 use crate::session_pool::{SessionPool, TableSessionPool};
 use crate::types::Value;

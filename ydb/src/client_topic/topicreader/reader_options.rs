@@ -1,6 +1,6 @@
 use crate::client_topic::compression::CompressionDecoder;
 use crate::client_topic::topicreader::reader::TopicSelectors;
-use crate::retry_strategy::{ArcRetryBudget, RetryBudget};
+use crate::retry_budget::{ArcRetryBudget, RetryBudget};
 use std::sync::Arc;
 
 #[derive(bon::Builder, Clone)]
