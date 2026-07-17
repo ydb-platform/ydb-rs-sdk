@@ -9,7 +9,6 @@
 //! - a query returns a transient/ambiguous status: the transaction may still be active;
 //! - the caller explicitly rolls back;
 //! - rollback or commit RPC outcome is unknown;
-//! - the callback panics.
 //!
 //! The regression cases for #521 are the swallowed-error paths: if the callback
 //! returns `Ok` after the server invalidated the transaction, or after rollback
