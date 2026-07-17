@@ -200,16 +200,13 @@ impl PercentOfRpsRetryBudget {
 
 impl RetryStrategy for PercentOfRpsRetryBudget {
     async fn wait_retry<'a>(&'a self, _retry: &'a RetryState) -> ControlFlow<()> {
-        loop {
-            if self.metrics.try_acquire_retry_slot(self.percent) {
-                return ControlFlow::Continue(());
-            }
-            sleep(Duration::from_millis(1)).await
+        if self.metrics.try_acquire_retry_slot(self.percent) {
+            ControlFlow::Continue(())
+        } else {
+            ControlFlow::Break(())
         }
     }
 }
-
-impl RetryAlways for PercentOfRpsRetryBudget {}
 
 /// Probabilistic retry budget (aligned with ydb-go-sdk `budget.Percent`).
 ///
