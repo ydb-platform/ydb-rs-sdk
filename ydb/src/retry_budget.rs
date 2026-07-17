@@ -6,8 +6,7 @@
 //! appears or the call deadline expires.
 
 use std::ops::ControlFlow;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use rand::Rng;
@@ -129,11 +128,7 @@ impl RetryMetrics {
 
 impl RetryStrategy for RetryMetrics {
     async fn before_attempt<'a>(&'a self, retry: &'a RetryState) {
-        let mut metrics = self.inner.lock().unwrap_or_else(|mut poison_err| {
-            **poison_err.get_mut() = RetryMetricsInner::default();
-            self.inner.clear_poison();
-            poison_err.into_inner()
-        });
+        let mut metrics = self.lock_inner();
 
         metrics.record_attempt();
 
@@ -161,13 +156,25 @@ impl RetryMetricsInner {
             self.retry_ops = 0;
         }
     }
+}
 
-    fn try_acquire_retry_slot(&mut self, percent: u32) -> bool {
-        self.maybe_roll_window();
+impl RetryMetrics {
+    fn lock_inner(&self) -> MutexGuard<'_, RetryMetricsInner> {
+        self.inner.lock().unwrap_or_else(|mut poison_err| {
+            **poison_err.get_mut() = RetryMetricsInner::default();
+            self.inner.clear_poison();
+            poison_err.into_inner()
+        })
+    }
 
-        let max_retries = (self.total_ops as u128 * percent as u128 / 100) as u64;
+    fn try_acquire_retry_slot(&self, percent: u32) -> bool {
+        let mut metrics = self.lock_inner();
 
-        self.retry_ops < max_retries.max(1)
+        metrics.maybe_roll_window();
+
+        let max_retries = (metrics.total_ops as u128 * percent as u128 / 100) as u64;
+
+        metrics.retry_ops < max_retries.max(1)
     }
 }
 
@@ -304,7 +311,7 @@ mod tests {
     fn percent_of_rps_respects_share() {
         let metrics = Arc::new(RetryMetrics::new());
         for _ in 0..10 {
-            metrics.record_attempt();
+            metrics.lock_inner().record_attempt();
         }
         let budget = PercentOfRpsRetryBudget::new(50, metrics.clone());
         assert!(metrics.try_acquire_retry_slot(50));
