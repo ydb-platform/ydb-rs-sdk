@@ -213,8 +213,7 @@ impl RetryAlways for PercentOfRpsRetryBudget {}
 
 /// Probabilistic retry budget (aligned with ydb-go-sdk `budget.Percent`).
 ///
-/// Each retry attempt is allowed with probability `percent / 100`. When denied, the retrier
-/// waits and tries again until the call deadline.
+/// Each retry attempt is allowed with probability `percent / 100`.
 #[derive(Debug, Clone)]
 pub struct PercentRetryBudget {
     percent: u32,
@@ -232,16 +231,13 @@ impl PercentRetryBudget {
 
 impl RetryStrategy for PercentRetryBudget {
     async fn wait_retry<'a>(&'a self, _retry: &'a RetryState) -> ControlFlow<()> {
-        loop {
-            if rand::thread_rng().gen_range(0..100) < self.percent {
-                return ControlFlow::Continue(());
-            }
-            sleep(Duration::from_millis(1)).await
+        if rand::thread_rng().gen_range(0..100) < self.percent {
+            ControlFlow::Continue(())
+        } else {
+            ControlFlow::Break(())
         }
     }
 }
-
-impl RetryAlways for PercentRetryBudget {}
 
 /// Driver-local retry budget and RPS counters shared by all retriers on one [`crate::Client`].
 #[derive(Clone)]
