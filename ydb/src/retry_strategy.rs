@@ -484,9 +484,11 @@ impl RetryDeadline for CancellationToken {
 }
 
 impl<D: RetryDeadline> RetryDeadline for Option<D> {
-    fn wait_deadline(&self) -> impl Future<Output = ()> + Send {
-        future::OptionFuture::from(self.as_ref().map(|deadline| deadline.wait_deadline()))
-            .map(|_| ())
+    async fn wait_deadline(&self) {
+        match self {
+            Some(deadline) => deadline.wait_deadline().await,
+            None => future::pending().await,
+        }
     }
 }
 
@@ -585,8 +587,11 @@ impl<A: RetryStrategy, B: RetryStrategy> RetryStrategy for Combine<A, B> {
 }
 
 impl<A: RetryDeadline, B: RetryDeadline> RetryDeadline for Combine<A, B> {
-    fn wait_deadline(&self) -> impl Future<Output = ()> + Send + '_ {
-        future::join(self.0.wait_deadline(), self.1.wait_deadline()).map(|_| ())
+    async fn wait_deadline(&self) {
+        tokio::select! {
+            _ = self.0.wait_deadline() => (),
+            _ = self.1.wait_deadline() => (),
+        }
     }
 }
 
