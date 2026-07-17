@@ -24,19 +24,8 @@ use crate::retry_strategy::{
 /// then returns [`RetryBudgetError::Closed`]).
 #[derive(Debug)]
 pub struct LimitedRetryBudget {
-    quota: AsyncMutex<mpsc::Receiver<()>>,
-    _shutdown: Arc<LimitedRetryBudgetShutdown>,
-}
-
-#[derive(Debug)]
-struct LimitedRetryBudgetShutdown {
-    done: watch::Sender<()>,
-}
-
-impl Drop for LimitedRetryBudgetShutdown {
-    fn drop(&mut self) {
-        let _ = self.done.send(());
-    }
+    semaphore: Arc<Semaphore>,
+    drop_guard: DropGuard,
 }
 
 impl LimitedRetryBudget {
@@ -54,35 +43,29 @@ impl LimitedRetryBudget {
         }
 
         let capacity = attempts_per_second as usize;
-        let (tx, rx) = mpsc::channel(capacity);
-        for _ in 0..attempts_per_second {
-            let _ = tx.try_send(());
-        }
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(capacity));
 
-        let tx_refill = tx.clone();
-        let mut done_rx = done_rx;
-        let interval = Duration::from_secs(1) / attempts_per_second;
-        tokio::spawn(async move {
-            let start = tokio::time::Instant::now() + interval;
-            let mut ticker = tokio::time::interval_at(start, interval);
-            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            loop {
-                tokio::select! {
-                    _ = ticker.tick() => {
-                        let _ = tx_refill.try_send(());
-                    }
-                    changed = done_rx.changed() => {
-                        if changed.is_ok() {
-                            break;
+        let cancellation = CancellationToken::new();
+        let drop_guard = cancellation.clone().drop_guard();
+
+        if attempts_per_second > 0 {
+            let interval = Duration::from_secs(1) / attempts_per_second;
+            let semaphore_refill = semaphore.clone();
+
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(interval);
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
+                loop {
+                    tokio::select!(
+                        _ = cancellation.cancelled() => break,
+                        _ = ticker.tick() => {
+                            if semaphore_refill.available_permits() < capacity {
+                                semaphore_refill.add_permits(1);
+                            }
                         }
-                    }
+                    );
                 }
-            }
-        });
-
-        Self {
-            quota: AsyncMutex::new(rx),
-            _shutdown: shutdown,
+            });
         }
     }
 }
@@ -113,9 +96,8 @@ struct RetryMetricsInner {
 impl Default for RetryMetricsInner {
     fn default() -> Self {
         Self {
-            window_start: Instant::now(),
-            total_ops: 0,
-            retry_ops: 0,
+            semaphore,
+            drop_guard,
         }
     }
 }
