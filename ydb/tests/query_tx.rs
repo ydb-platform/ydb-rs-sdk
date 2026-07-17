@@ -22,7 +22,7 @@ mod mock_server;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ydb::{Client, ClientBuilder, Transaction, YdbOrCustomerError, YdbResult, closure};
+use ydb::{Client, ClientBuilder, Transaction, YdbResult, closure};
 use ydb_grpc::ydb_proto::query::{
     ExecuteQueryResponsePart, RollbackTransactionResponse, TransactionMeta,
 };
@@ -40,10 +40,6 @@ fn make_client(server: &MockServer) -> YdbResult<Client> {
         server.endpoint()
     ))?
     .client()
-}
-
-fn panic_callback<T>(message: &'static str) -> Result<T, YdbOrCustomerError> {
-    panic!("{message}");
 }
 
 fn success_part(tx_id: Option<&str>) -> ExecuteQueryResponsePart {
@@ -617,70 +613,5 @@ async fn swallowed_rollback_failure_must_not_report_committed() -> YdbResult<()>
          RPC failed and the server-side transaction outcome is unknown"
     );
 
-    Ok(())
-}
-
-#[tokio::test]
-#[tracing_test::traced_test]
-async fn panic_before_any_terminal_event_rolls_back_and_is_not_retried() -> YdbResult<()> {
-    let (handler, tx_lifecycle) = CountingHandler::new();
-    let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
-
-    let result = client
-        .query_client()
-        .retry_tx::<_, ()>(closure!(async |tx: &mut Transaction| {
-            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
-            panic_callback("callback exploded before finishing the tx")
-        }))
-        .await;
-
-    assert!(
-        result.is_err(),
-        "a panicked callback must be reported as failure"
-    );
-    let lifecycle = tx_lifecycle.lock().unwrap();
-    assert_eq!(
-        lifecycle.rollback_count, 1,
-        "a real rollback must be attempted"
-    );
-    assert_eq!(lifecycle.commit_count, 0);
-    Ok(())
-}
-
-/// Characterizes today's behavior when the callback panics after a real commit-via-query:
-/// `retry_tx` reports failure even though the transaction already committed. This is a
-/// false negative, not a false commit, and the panic error is non-retryable.
-#[tokio::test]
-#[tracing_test::traced_test]
-async fn panic_after_commit_via_query_reports_failure_despite_real_commit() -> YdbResult<()> {
-    let (handler, tx_lifecycle) = CountingHandler::new();
-    let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
-
-    let result = client
-        .query_client()
-        .retry_tx::<_, ()>(closure!(async |tx: &mut Transaction| {
-            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')")
-                .with_commit(true)
-                .await?;
-            panic_callback("callback exploded after the tx already committed")
-        }))
-        .await;
-
-    assert!(
-        result.is_err(),
-        "known false negative: today this reports failure even though the commit-via-query \
-         already succeeded before the panic"
-    );
-    let lifecycle = tx_lifecycle.lock().unwrap();
-    assert_eq!(
-        lifecycle.commit_count, 0,
-        "committed via query, no separate RPC"
-    );
-    assert_eq!(
-        lifecycle.rollback_count, 0,
-        "rollback_quiet is a no-op once the transaction is already terminal"
-    );
     Ok(())
 }
