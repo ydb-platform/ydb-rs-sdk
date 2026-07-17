@@ -1,15 +1,17 @@
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
+use crate::async_closure::AsyncFnMut;
+use crate::async_closure::with_lifetime::Ref;
 use crate::closure;
-use crate::errors::{YdbError, YdbResult};
+use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_operation_service::client::RawOperationClient;
 use crate::grpc_wrapper::raw_operation_service::types::RawListOperationsRequest;
-use crate::retry_strategy::ArcRetryBudget;
+use crate::retry_strategy::{ArcRetryBudget, RetryState};
 
 use super::builders::{
     CancelOperationBuilder, ForgetOperationBuilder, GetOperationBuilder, ListOperationsBuilder,
-    OperationCallOptions, raw_to_list_result, raw_to_operation_info, retry_operation_call,
+    OperationCallOptions, raw_to_list_result, raw_to_operation_info,
 };
 use super::types::{ListOperationsRequest, ListOperationsResult, OperationInfo};
 use tracing::instrument;
@@ -39,14 +41,29 @@ impl OperationClient {
         }
     }
 
+    /// Constructs retry budget for an operation.
+    async fn retry_operation_call<F, T>(
+        &self,
+        opts: &OperationCallOptions,
+        attempt_fn: F,
+    ) -> YdbResult<T>
+    where
+        F: AsyncFnMut<Ref<RetryState>, Output = YdbResult<T>>,
+    {
+        self.retry_budget
+            .as_ref()
+            .deadline(opts.timeout)
+            .retry_on_retriable_errors(Idempotency::Idempotent, attempt_fn)
+            .await
+    }
+
     #[instrument(name = "ydb.OperationClient.GetOperation", skip_all, fields(db.system.name = "ydb", ydb.operation.id = %id), err)]
     pub(crate) async fn get_operation_call(
         &self,
         id: String,
         opts: OperationCallOptions,
     ) -> YdbResult<OperationInfo> {
-        retry_operation_call(
-            &self.retry_budget,
+        self.retry_operation_call(
             &opts,
             closure!([&client = self, &id], async |_| {
                 let mut client = client.raw_client().await?;
@@ -76,8 +93,7 @@ impl OperationClient {
             page_size: request.page_size,
             page_token: request.page_token,
         };
-        retry_operation_call(
-            &self.retry_budget,
+        self.retry_operation_call(
             &opts,
             closure!([&client = self, raw_req], async |_| {
                 let mut client = client.raw_client().await?;
@@ -109,8 +125,7 @@ impl OperationClient {
         id: String,
         opts: OperationCallOptions,
     ) -> YdbResult<()> {
-        retry_operation_call(
-            &self.retry_budget,
+        self.retry_operation_call(
             &opts,
             closure!([&client = self, &id], async |_| {
                 let mut client = client.raw_client().await?;
@@ -142,8 +157,7 @@ impl OperationClient {
         id: String,
         opts: OperationCallOptions,
     ) -> YdbResult<()> {
-        retry_operation_call(
-            &self.retry_budget,
+        self.retry_operation_call(
             &opts,
             closure!([&client = self, &id], async |_| {
                 let mut client = client.raw_client().await?;

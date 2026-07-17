@@ -1,7 +1,9 @@
 mod builders;
 pub(crate) mod call_options;
 
-use crate::retry_strategy::ArcRetryBudget;
+use crate::async_closure::AsyncFnMut;
+use crate::async_closure::with_lifetime::Ref;
+use crate::retry_strategy::{ArcRetryBudget, RetryState};
 use crate::session::TableSession;
 use crate::session_pool::{SessionPool, TableSessionPool};
 use crate::types::Value;
@@ -44,7 +46,7 @@ pub use builders::{
     RenameTableBuilder, RenameTablesBuilder,
 };
 
-use call_options::{TableCallOptions, resolve_timeouts, retry_table_operation};
+use call_options::{TableCallOptions, resolve_timeouts};
 
 pub(crate) type TableServiceClientType = TableServiceClient<InterceptedChannel>;
 
@@ -146,6 +148,28 @@ impl TableClient {
         }
     }
 
+    async fn retry_table_operation<F, T>(
+        &self,
+        opts: &TableCallOptions,
+        default_idempotency: Idempotency,
+        attempt_fn: F,
+    ) -> YdbResult<T>
+    where
+        F: AsyncFnMut<Ref<RetryState>, Output = YdbResult<T>>,
+    {
+        self.session_pool
+            .retry_budget()
+            .as_ref()
+            .deadline(opts.timeout)
+            .retry_on_retriable_errors(
+                opts.idempotent
+                    .map(Idempotency::from)
+                    .unwrap_or(default_idempotency),
+                attempt_fn,
+            )
+            .await
+    }
+
     #[instrument(name = "ydb.TableClient.ReadRows", skip_all, fields(db.system.name = "ydb", ydb.table.path = %table_path), err)]
     pub(crate) async fn read_rows_call(
         &self,
@@ -163,10 +187,9 @@ impl TableClient {
             request.columns = columns;
         }
         let raw = request.into_raw(String::new())?;
-        retry_table_operation(
-            self.session_pool.retry_budget(),
+        self.retry_table_operation(
             &opts,
-            opts.idempotent.unwrap_or(true),
+            Idempotency::Idempotent,
             closure!([&client = self, &opts, &raw], async |_| {
                 client.read_rows_once(raw.clone(), opts).await
             }),
@@ -198,10 +221,9 @@ impl TableClient {
         let Some(value) = try_vec_to_list_of_structs(rows)? else {
             return Ok(());
         };
-        retry_table_operation(
-            self.session_pool.retry_budget(),
+        self.retry_table_operation(
             &opts,
-            opts.idempotent.unwrap_or(true),
+            Idempotency::Idempotent,
             closure!([&client = self, &table_path, &value, &opts], async |_| {
                 client
                     .bulk_upsert_once(table_path.clone(), value.clone(), opts)
@@ -231,10 +253,9 @@ impl TableClient {
         destination_path: String,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
-        retry_table_operation(
-            self.session_pool.retry_budget(),
+        self.retry_table_operation(
             &opts,
-            opts.idempotent.unwrap_or(false),
+            Idempotency::NonIdempotent,
             closure!(
                 [&client = self, &source_path, &destination_path, &opts],
                 async |_| {
@@ -273,10 +294,9 @@ impl TableClient {
         tables: Vec<CopyTableItem>,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
-        retry_table_operation(
-            self.session_pool.retry_budget(),
+        self.retry_table_operation(
             &opts,
-            opts.idempotent.unwrap_or(false),
+            Idempotency::NonIdempotent,
             closure!([&client = self, &tables, &opts], async |_| {
                 let mut session = client.create_session_with_opts(opts).await?;
                 let session_id = session.id.clone();
@@ -320,10 +340,9 @@ impl TableClient {
         replace_destination: bool,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
-        retry_table_operation(
-            self.session_pool.retry_budget(),
+        self.retry_table_operation(
             &opts,
-            opts.idempotent.unwrap_or(false),
+            Idempotency::NonIdempotent,
             closure!(
                 [&client = self, &opts, &source_path, &destination_path],
                 async |_| {
@@ -365,10 +384,9 @@ impl TableClient {
         tables: Vec<RenameTableItem>,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
-        retry_table_operation(
-            self.session_pool.retry_budget(),
+        self.retry_table_operation(
             &opts,
-            opts.idempotent.unwrap_or(false),
+            Idempotency::NonIdempotent,
             closure!([&client = self, &tables, &opts], async |_| {
                 let mut session = client.create_session_with_opts(opts).await?;
                 let session_id = session.id.clone();
@@ -403,10 +421,9 @@ impl TableClient {
         path: String,
         opts: TableCallOptions,
     ) -> YdbResult<TableDescription> {
-        retry_table_operation(
-            self.session_pool.retry_budget(),
+        self.retry_table_operation(
             &opts,
-            opts.idempotent.unwrap_or(false),
+            Idempotency::NonIdempotent,
             closure!([&client = self, &path, &opts], async |_| {
                 let mut session = client.create_session_with_opts(opts).await?;
                 let session_id = session.id.clone();
@@ -443,10 +460,9 @@ impl TableClient {
         request: CreateTableRequest,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
-        retry_table_operation(
-            self.session_pool.retry_budget(),
+        self.retry_table_operation(
             &opts,
-            opts.idempotent.unwrap_or(false),
+            Idempotency::NonIdempotent,
             closure!([&client = self, &request, &opts], async |_| {
                 let mut session = client.create_session_with_opts(opts).await?;
                 let raw = request
@@ -475,10 +491,9 @@ impl TableClient {
         request: DropTableRequest,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
-        retry_table_operation(
-            self.session_pool.retry_budget(),
+        self.retry_table_operation(
             &opts,
-            opts.idempotent.unwrap_or(false),
+            Idempotency::NonIdempotent,
             closure!([&client = self, &request, &opts], async |_| {
                 let mut session = client.create_session_with_opts(opts).await?;
                 let req = RawDropTableRequest {
@@ -509,10 +524,9 @@ impl TableClient {
         request: AlterTableRequest,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
-        retry_table_operation(
-            self.session_pool.retry_budget(),
+        self.retry_table_operation(
             &opts,
-            opts.idempotent.unwrap_or(false),
+            Idempotency::NonIdempotent,
             closure!([&client = self, &request, &opts], async |_| {
                 let mut session = client.create_session_with_opts(opts).await?;
                 let raw = request
@@ -539,10 +553,9 @@ impl TableClient {
         &self,
         opts: TableCallOptions,
     ) -> YdbResult<TableOptionsDescription> {
-        retry_table_operation(
-            self.session_pool.retry_budget(),
+        self.retry_table_operation(
             &opts,
-            opts.idempotent.unwrap_or(false),
+            Idempotency::NonIdempotent,
             closure!([&client = self, &opts], async |_| {
                 let mut session = client.create_session_with_opts(opts).await?;
                 let req = RawDescribeTableOptionsRequest {

@@ -5,9 +5,7 @@ use std::time::{Duration, Instant};
 use http::Uri;
 use tokio::time::timeout;
 
-use crate::async_closure::AsyncFnMut;
-use crate::async_closure::with_lifetime::Ref;
-use crate::errors::{Idempotency, YdbError, YdbResult};
+use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryRequest;
@@ -15,7 +13,7 @@ use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::grpc_wrapper::raw_query_service::transaction_control::{
     RawTxMode, begin_tx_control, tx_id_control,
 };
-use crate::retry_strategy::{ArcRetryBudget, RetryState};
+use crate::retry_strategy::ArcRetryBudget;
 use crate::traces::helpers::ensure_len_string;
 
 use crate::types::Value;
@@ -151,18 +149,6 @@ where
     }
 }
 
-pub(crate) async fn run_with_retry<T, F>(
-    retry_budget: &ArcRetryBudget,
-    opts: &CallOptions,
-    idempotency: Idempotency,
-    attempt_fn: F,
-) -> YdbResult<T>
-where
-    F: AsyncFnMut<Ref<RetryState>, Output = YdbResult<T>>,
-{
-    retry_until(retry_budget, idempotency, opts.timeout, attempt_fn).await
-}
-
 async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQueryClient> {
     if let Some(uri) = &tx.query_node {
         tx.connection_manager
@@ -280,23 +266,6 @@ pub(crate) fn resolve_commit_tx(core: &super::internal::ExecCoreRef, opts: &Call
     }
 }
 
-#[instrument(name = "ydb.Query.RetryUntil", skip_all, fields(db.system.name = "ydb", ydb.Query.idempotent = idempotency.is_idempotent()), err)]
-async fn retry_until<T, F>(
-    retry_budget: &ArcRetryBudget,
-    idempotency: Idempotency,
-    limit: Option<Duration>,
-    attempt_fn: F,
-) -> YdbResult<T>
-where
-    F: AsyncFnMut<Ref<RetryState>, Output = YdbResult<T>>,
-{
-    retry_budget
-        .as_ref()
-        .deadline(limit)
-        .retry_on_retriable_errors(idempotency, attempt_fn)
-        .await
-}
-
 /// Build `tx_control` for one-shot [`QueryClient`] calls.
 ///
 /// Default [`TxMode::Implicit`] omits `tx_control` (server-side inference).
@@ -404,20 +373,20 @@ pub(crate) async fn client_begin_stream(
     opts: CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
-    let idempotent = opts.idempotent.unwrap_or(false);
-    retry_until(
-        &ctx.retry_budget,
-        idempotent.into(),
-        opts.timeout,
-        closure!([&ctx, &text, &params, &opts], |_| client_begin_stream_once(
-            ctx,
-            text,
-            params,
-            opts,
-            concurrent_result_sets
-        )),
-    )
-    .await
+    ctx.retry_budget
+        .as_ref()
+        .deadline(opts.timeout)
+        .retry_on_retriable_errors(
+            opts.idempotent.unwrap_or(false).into(),
+            closure!([&ctx, &text, &params, &opts], |_| client_begin_stream_once(
+                ctx,
+                text,
+                params,
+                opts,
+                concurrent_result_sets
+            )),
+        )
+        .await
 }
 
 /// Interactive transactions need a stable attached session from the driver pool.

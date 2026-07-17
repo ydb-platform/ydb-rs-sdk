@@ -14,7 +14,7 @@ use crate::types::Value;
 use futures_util::future::BoxFuture;
 use tracing::instrument;
 
-use super::exec::{CallOptions, ClientExecContext, maybe_with_operation_timeout, run_with_retry};
+use super::exec::{CallOptions, ClientExecContext, maybe_with_operation_timeout};
 
 /// Long-running script operation started by [`QueryClient::execute_script`].
 #[derive(Debug, Clone)]
@@ -215,23 +215,24 @@ async fn client_fetch_script_results(
     opts: CallOptions,
 ) -> YdbResult<FetchScriptResult> {
     // FetchScriptResults is always safe to retry (aligned with Go SDK).
-    run_with_retry(
-        &ctx.retry_budget,
-        &opts,
-        Idempotency::Idempotent,
-        closure!([&ctx, &operation_id, &fetch_token, &opts], async |_| {
-            client_fetch_script_results_once(
-                ctx,
-                operation_id,
-                result_set_index,
-                fetch_token,
-                rows_limit,
-                opts,
-            )
-            .await
-        }),
-    )
-    .await
+    ctx.retry_budget
+        .as_ref()
+        .deadline(opts.timeout)
+        .retry_on_retriable_errors(
+            Idempotency::Idempotent,
+            closure!([&ctx, &operation_id, &fetch_token, &opts], async |_| {
+                client_fetch_script_results_once(
+                    ctx,
+                    operation_id,
+                    result_set_index,
+                    fetch_token,
+                    rows_limit,
+                    opts,
+                )
+                .await
+            }),
+        )
+        .await
 }
 
 #[instrument(name = "ydb.FetchScriptResultsOnce", skip_all, fields(db.system.name = "ydb", ydb.operation.id = %operation_id), err)]
