@@ -99,65 +99,75 @@ impl RetryStrategy for LimitedRetryBudget {
 }
 
 /// Sliding-window counters used by [`PercentOfRpsRetryBudget`].
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct RetryMetrics {
-    window_start: Mutex<Instant>,
-    total_ops: AtomicU64,
-    retry_ops: AtomicU64,
+    inner: Mutex<RetryMetricsInner>,
+}
+
+#[derive(Debug)]
+struct RetryMetricsInner {
+    window_start: Instant,
+    total_ops: u64,
+    retry_ops: u64,
+}
+
+impl Default for RetryMetricsInner {
+    fn default() -> Self {
+        Self {
+            window_start: Instant::now(),
+            total_ops: 0,
+            retry_ops: 0,
+        }
+    }
 }
 
 impl RetryMetrics {
     pub fn new() -> Self {
-        Self {
-            window_start: Mutex::new(Instant::now()),
-            total_ops: AtomicU64::new(0),
-            retry_ops: AtomicU64::new(0),
-        }
-    }
-}
-
-impl Default for RetryMetrics {
-    fn default() -> Self {
-        Self::new()
+        Self::default()
     }
 }
 
 impl RetryStrategy for RetryMetrics {
-    async fn before_attempt<'a>(&'a self, _retry: &'a RetryState) {
-        self.record_attempt();
+    async fn before_attempt<'a>(&'a self, retry: &'a RetryState) {
+        let mut metrics = self.inner.lock().unwrap_or_else(|mut poison_err| {
+            **poison_err.get_mut() = RetryMetricsInner::default();
+            self.inner.clear_poison();
+            poison_err.into_inner()
+        });
+
+        metrics.record_attempt();
+
+        if retry.attempt != 0 {
+            metrics.record_retry();
+        }
     }
 }
 
-impl RetryMetrics {
-    pub(crate) fn record_attempt(&self) {
+impl RetryMetricsInner {
+    pub(crate) fn record_attempt(&mut self) {
         self.maybe_roll_window();
-        self.total_ops.fetch_add(1, Ordering::Relaxed);
+        self.total_ops += 1;
     }
 
-    fn maybe_roll_window(&self) {
-        let mut start = self.window_start.lock().expect("retry metrics lock");
-        if start.elapsed() >= Duration::from_secs(1) {
-            *start = Instant::now();
-            self.total_ops.store(0, Ordering::Relaxed);
-            self.retry_ops.store(0, Ordering::Relaxed);
+    pub(crate) fn record_retry(&mut self) {
+        self.maybe_roll_window();
+        self.retry_ops += 1;
+    }
+
+    fn maybe_roll_window(&mut self) {
+        if self.window_start.elapsed() >= Duration::from_secs(1) {
+            self.window_start = Instant::now();
+            self.total_ops = 0;
+            self.retry_ops = 0;
         }
     }
 
-    fn try_acquire_retry_slot(&self, percent: u32) -> bool {
+    fn try_acquire_retry_slot(&mut self, percent: u32) -> bool {
         self.maybe_roll_window();
-        let total = self.total_ops.load(Ordering::Relaxed);
-        if total == 0 {
-            self.retry_ops.fetch_add(1, Ordering::Relaxed);
-            return true;
-        }
-        let max_retries = (total as u128 * percent as u128 / 100) as u64;
-        let retries = self.retry_ops.load(Ordering::Relaxed);
-        if retries < max_retries.max(1) {
-            self.retry_ops.fetch_add(1, Ordering::Relaxed);
-            true
-        } else {
-            false
-        }
+
+        let max_retries = (self.total_ops as u128 * percent as u128 / 100) as u64;
+
+        self.retry_ops < max_retries.max(1)
     }
 }
 
