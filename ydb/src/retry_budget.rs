@@ -25,7 +25,7 @@ use crate::retry_strategy::{
 #[derive(Debug)]
 pub struct LimitedRetryBudget {
     semaphore: Arc<Semaphore>,
-    drop_guard: DropGuard,
+    _drop_guard: DropGuard,
 }
 
 impl LimitedRetryBudget {
@@ -46,7 +46,7 @@ impl LimitedRetryBudget {
         let semaphore = Arc::new(tokio::sync::Semaphore::new(capacity));
 
         let cancellation = CancellationToken::new();
-        let drop_guard = cancellation.clone().drop_guard();
+        let _drop_guard = cancellation.clone().drop_guard();
 
         if attempts_per_second > 0 {
             let interval = Duration::from_secs(1) / attempts_per_second;
@@ -97,7 +97,7 @@ impl Default for RetryMetricsInner {
     fn default() -> Self {
         Self {
             semaphore,
-            drop_guard,
+            _drop_guard,
         }
     }
 }
