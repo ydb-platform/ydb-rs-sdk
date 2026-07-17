@@ -19,7 +19,7 @@ pub struct TopicReaderOptions {
     #[builder(default = 1000)]
     pub(crate) batch_size: usize,
 
-    #[builder(default = RetryBudget::default().arc(), setters(vis = "pub(crate)"))]
+    #[builder(default = RetryBudget::default(), setters(vis = "pub(crate)"))]
     pub(crate) retry_budget: ArcRetryBudget,
 }
 

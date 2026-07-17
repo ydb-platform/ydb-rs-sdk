@@ -36,7 +36,7 @@ pub struct TopicWriterOptions {
     #[builder(default = Duration::from_secs(3))]
     pub(crate) flush_timeout: Duration,
 
-    #[builder(default = RetryBudget::default().arc(), setters(vis = "pub(crate)"))]
+    #[builder(default = RetryBudget::default(), setters(vis = "pub(crate)"))]
     pub(crate) retry_budget: ArcRetryBudget,
 }
 

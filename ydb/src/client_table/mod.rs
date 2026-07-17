@@ -1,6 +1,7 @@
 mod builders;
 pub(crate) mod call_options;
 
+use crate::retry_strategy::ArcRetryBudget;
 use crate::session::TableSession;
 use crate::session_pool::{SessionPool, TableSessionPool};
 use crate::types::Value;
@@ -70,13 +71,13 @@ impl TableClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
         session_pool: SessionPool,
-        retry_control: std::sync::Arc<crate::retry_budget::RetryControl>,
+        retry_budget: ArcRetryBudget,
     ) -> Self {
         Self {
             session_pool: TableSessionPool::from_shared(
                 session_pool,
                 connection_manager,
-                retry_control,
+                retry_budget,
             ),
         }
     }
@@ -163,7 +164,7 @@ impl TableClient {
         }
         let raw = request.into_raw(String::new())?;
         retry_table_operation(
-            self.session_pool.retry_control(),
+            self.session_pool.retry_budget(),
             &opts,
             opts.idempotent.unwrap_or(true),
             closure!([&client = self, &opts, &raw], async |_| {
@@ -198,7 +199,7 @@ impl TableClient {
             return Ok(());
         };
         retry_table_operation(
-            self.session_pool.retry_control(),
+            self.session_pool.retry_budget(),
             &opts,
             opts.idempotent.unwrap_or(true),
             closure!([&client = self, &table_path, &value, &opts], async |_| {
@@ -231,7 +232,7 @@ impl TableClient {
         opts: TableCallOptions,
     ) -> YdbResult<()> {
         retry_table_operation(
-            self.session_pool.retry_control(),
+            self.session_pool.retry_budget(),
             &opts,
             opts.idempotent.unwrap_or(false),
             closure!(
@@ -273,7 +274,7 @@ impl TableClient {
         opts: TableCallOptions,
     ) -> YdbResult<()> {
         retry_table_operation(
-            self.session_pool.retry_control(),
+            self.session_pool.retry_budget(),
             &opts,
             opts.idempotent.unwrap_or(false),
             closure!([&client = self, &tables, &opts], async |_| {
@@ -320,7 +321,7 @@ impl TableClient {
         opts: TableCallOptions,
     ) -> YdbResult<()> {
         retry_table_operation(
-            self.session_pool.retry_control(),
+            self.session_pool.retry_budget(),
             &opts,
             opts.idempotent.unwrap_or(false),
             closure!(
@@ -365,7 +366,7 @@ impl TableClient {
         opts: TableCallOptions,
     ) -> YdbResult<()> {
         retry_table_operation(
-            self.session_pool.retry_control(),
+            self.session_pool.retry_budget(),
             &opts,
             opts.idempotent.unwrap_or(false),
             closure!([&client = self, &tables, &opts], async |_| {
@@ -403,7 +404,7 @@ impl TableClient {
         opts: TableCallOptions,
     ) -> YdbResult<TableDescription> {
         retry_table_operation(
-            self.session_pool.retry_control(),
+            self.session_pool.retry_budget(),
             &opts,
             opts.idempotent.unwrap_or(false),
             closure!([&client = self, &path, &opts], async |_| {
@@ -443,7 +444,7 @@ impl TableClient {
         opts: TableCallOptions,
     ) -> YdbResult<()> {
         retry_table_operation(
-            self.session_pool.retry_control(),
+            self.session_pool.retry_budget(),
             &opts,
             opts.idempotent.unwrap_or(false),
             closure!([&client = self, &request, &opts], async |_| {
@@ -475,7 +476,7 @@ impl TableClient {
         opts: TableCallOptions,
     ) -> YdbResult<()> {
         retry_table_operation(
-            self.session_pool.retry_control(),
+            self.session_pool.retry_budget(),
             &opts,
             opts.idempotent.unwrap_or(false),
             closure!([&client = self, &request, &opts], async |_| {
@@ -509,7 +510,7 @@ impl TableClient {
         opts: TableCallOptions,
     ) -> YdbResult<()> {
         retry_table_operation(
-            self.session_pool.retry_control(),
+            self.session_pool.retry_budget(),
             &opts,
             opts.idempotent.unwrap_or(false),
             closure!([&client = self, &request, &opts], async |_| {
@@ -539,7 +540,7 @@ impl TableClient {
         opts: TableCallOptions,
     ) -> YdbResult<TableOptionsDescription> {
         retry_table_operation(
-            self.session_pool.retry_control(),
+            self.session_pool.retry_budget(),
             &opts,
             opts.idempotent.unwrap_or(false),
             closure!([&client = self, &opts], async |_| {

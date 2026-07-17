@@ -42,7 +42,7 @@ use crate::errors::{
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::result::Row;
 
-use crate::retry_strategy::RetryState;
+use crate::retry_strategy::{ArcRetryBudget, RetryState};
 use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{
@@ -164,13 +164,13 @@ impl QueryClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
         session_pool: SessionPool,
-        retry_control: std::sync::Arc<crate::retry_budget::RetryControl>,
+        retry_budget: ArcRetryBudget,
     ) -> Self {
         Self {
             ctx: ClientExecContext {
                 connection_manager,
                 session_pool,
-                retry_control,
+                retry_budget,
             },
         }
     }
@@ -278,8 +278,8 @@ impl QueryClient {
     {
         let result = self
             .ctx
-            .retry_control
-            .budget()
+            .retry_budget
+            .as_ref()
             .deadline(wall_timeout)
             .retry(closure!(
                 [&client = self, callback, &options],

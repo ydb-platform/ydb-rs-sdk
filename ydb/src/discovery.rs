@@ -358,7 +358,7 @@ impl DiscoverySharedState {
         }
 
         loop {
-            let result = RetryBudget::default()
+            let result = RetryBudget::with_default_backoff()
                 .retry_indefinitely(closure!([&state], async |retry: &RetryState| {
                     let Some(state) = state.upgrade() else {
                         // Break out of the worker loop

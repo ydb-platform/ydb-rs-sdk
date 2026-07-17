@@ -26,12 +26,20 @@ pub struct RetryBudget<S, D = NoDeadline> {
     deadline: D,
 }
 
-impl Default for RetryBudget<ExponentialBackoff, NoDeadline> {
-    fn default() -> Self {
+impl RetryBudget<ExponentialBackoff, NoDeadline> {
+    /// Constructs a retry budget with default
+    /// exponential backoff without any deadlines.
+    pub fn with_default_backoff() -> Self {
         Self {
             strategy: ExponentialBackoff::default(),
             deadline: NoDeadline,
         }
+    }
+}
+
+impl Default for ArcRetryBudget {
+    fn default() -> Self {
+        RetryBudget::with_default_backoff().arc()
     }
 }
 
@@ -59,7 +67,6 @@ impl<S: RetryStrategy> RetryBudget<S> {
         let mut retry = RetryState::init();
 
         loop {
-            self.strategy.before_attempt(&retry).await;
             let attempt_result = Self::attempt(&mut attempt_fn, &retry).await;
 
             if let Some(value) = attempt_result {
@@ -183,7 +190,6 @@ impl<S: RetryStrategy, D: RetryDeadline> RetryBudget<S, D> {
         let mut retry = RetryState::init();
 
         loop {
-            self.strategy.before_attempt(&retry).await;
             let attempt_result = Self::attempt(&mut attempt_fn, &retry).await?;
 
             let should_continue = tokio::select! {
@@ -284,16 +290,6 @@ impl RetryState {
 ///
 /// Should be used with [`RetryBudget`].
 pub trait RetryStrategy: Send + Sync {
-    /// Called before each attempt including the first one.
-    ///
-    /// Useful for logging and measuring attempts.
-    fn before_attempt<'a>(
-        &'a self,
-        _retry: &'a RetryState,
-    ) -> impl Future<Output = ()> + Send + 'a {
-        future::ready(())
-    }
-
     /// Returns a future that waits before the next retry.
     ///
     /// Note that the future can be created before the time it's polled.
@@ -419,10 +415,6 @@ impl RetryAlways for ExponentialBackoff {}
 pub struct RefStrategy<'a, S: RetryStrategy + ?Sized>(pub &'a S);
 
 impl<'s, S: RetryStrategy> RetryStrategy for RefStrategy<'s, S> {
-    fn before_attempt<'a>(&'a self, retry: &'a RetryState) -> impl Future<Output = ()> + Send + 'a {
-        self.0.before_attempt(retry)
-    }
-
     fn wait_retry<'a>(
         &'a self,
         retry: &'a RetryState,
@@ -503,24 +495,16 @@ impl<'a, D: RetryDeadline> RetryDeadline for RefDeadline<'a, D> {
 
 /// Dyn-safe counterpart of [`RetryStrategy`] trait.
 pub trait BoxRetryStrategy: Send + Sync {
-    fn before_attempt_boxed<'a>(&'a self, retry: &'a RetryState) -> BoxFuture<'a, ()>;
     fn wait_retry_boxed<'a>(&'a self, retry: &'a RetryState) -> BoxFuture<'a, ControlFlow<()>>;
 }
 
 impl<S: RetryStrategy> BoxRetryStrategy for S {
-    fn before_attempt_boxed<'a>(&'a self, retry: &'a RetryState) -> BoxFuture<'a, ()> {
-        self.before_attempt(retry).boxed()
-    }
     fn wait_retry_boxed<'a>(&'a self, retry: &'a RetryState) -> BoxFuture<'a, ControlFlow<()>> {
         self.wait_retry(retry).boxed()
     }
 }
 
 impl<'s> RetryStrategy for Box<dyn BoxRetryStrategy + 's> {
-    fn before_attempt<'a>(&'a self, retry: &'a RetryState) -> impl Future<Output = ()> {
-        self.as_ref().before_attempt_boxed(retry)
-    }
-
     fn wait_retry<'a>(
         &'a self,
         retry: &'a RetryState,
@@ -530,10 +514,6 @@ impl<'s> RetryStrategy for Box<dyn BoxRetryStrategy + 's> {
 }
 
 impl<'s> RetryStrategy for Arc<dyn BoxRetryStrategy + 's> {
-    fn before_attempt<'a>(&'a self, retry: &'a RetryState) -> impl Future<Output = ()> + Send + 'a {
-        self.as_ref().before_attempt_boxed(retry)
-    }
-
     fn wait_retry<'a>(
         &'a self,
         retry: &'a RetryState,
@@ -569,10 +549,6 @@ impl<'d> RetryDeadline for Arc<dyn BoxDeadline + 'd> {
 pub struct Combine<A, B>(A, B);
 
 impl<A: RetryStrategy, B: RetryStrategy> RetryStrategy for Combine<A, B> {
-    fn before_attempt<'a>(&'a self, retry: &'a RetryState) -> impl Future<Output = ()> + Send + 'a {
-        future::join(self.0.before_attempt(retry), self.1.before_attempt(retry)).map(|((), ())| ())
-    }
-
     fn wait_retry<'a>(
         &'a self,
         retry: &'a RetryState,

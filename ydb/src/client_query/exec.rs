@@ -15,8 +15,7 @@ use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::grpc_wrapper::raw_query_service::transaction_control::{
     RawTxMode, begin_tx_control, tx_id_control,
 };
-use crate::retry_budget::RetryControl;
-use crate::retry_strategy::RetryState;
+use crate::retry_strategy::{ArcRetryBudget, RetryState};
 use crate::traces::helpers::ensure_len_string;
 
 use crate::types::Value;
@@ -72,7 +71,7 @@ pub(crate) struct CallOptions {
 pub(crate) struct ClientExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub session_pool: SessionPool,
-    pub retry_control: std::sync::Arc<RetryControl>,
+    pub retry_budget: ArcRetryBudget,
 }
 
 #[derive(Clone, Debug)]
@@ -153,7 +152,7 @@ where
 }
 
 pub(crate) async fn run_with_retry<T, F>(
-    retry_control: &RetryControl,
+    retry_budget: &ArcRetryBudget,
     opts: &CallOptions,
     idempotency: Idempotency,
     attempt_fn: F,
@@ -161,7 +160,7 @@ pub(crate) async fn run_with_retry<T, F>(
 where
     F: AsyncFnMut<Ref<RetryState>, Output = YdbResult<T>>,
 {
-    retry_until(retry_control, idempotency, opts.timeout, attempt_fn).await
+    retry_until(retry_budget, idempotency, opts.timeout, attempt_fn).await
 }
 
 async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQueryClient> {
@@ -283,7 +282,7 @@ pub(crate) fn resolve_commit_tx(core: &super::internal::ExecCoreRef, opts: &Call
 
 #[instrument(name = "ydb.Query.RetryUntil", skip_all, fields(db.system.name = "ydb", ydb.Query.idempotent = idempotency.is_idempotent()), err)]
 async fn retry_until<T, F>(
-    retry_control: &RetryControl,
+    retry_budget: &ArcRetryBudget,
     idempotency: Idempotency,
     limit: Option<Duration>,
     attempt_fn: F,
@@ -291,8 +290,8 @@ async fn retry_until<T, F>(
 where
     F: AsyncFnMut<Ref<RetryState>, Output = YdbResult<T>>,
 {
-    retry_control
-        .budget()
+    retry_budget
+        .as_ref()
         .deadline(limit)
         .retry_on_retriable_errors(idempotency, attempt_fn)
         .await
@@ -407,7 +406,7 @@ pub(crate) async fn client_begin_stream(
 ) -> YdbResult<ExecuteQueryStream> {
     let idempotent = opts.idempotent.unwrap_or(false);
     retry_until(
-        &ctx.retry_control,
+        &ctx.retry_budget,
         idempotent.into(),
         opts.timeout,
         closure!([&ctx, &text, &params, &opts], |_| client_begin_stream_once(

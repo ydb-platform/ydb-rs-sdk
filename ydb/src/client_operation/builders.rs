@@ -7,8 +7,7 @@ use crate::async_closure::AsyncFnMut;
 use crate::async_closure::with_lifetime::Ref;
 use crate::errors::{Idempotency, YdbResult};
 use crate::grpc_wrapper::raw_operation_service::types::{RawListOperationsResult, RawOperation};
-use crate::retry_budget::RetryControl;
-use crate::retry_strategy::RetryState;
+use crate::retry_strategy::{ArcRetryBudget, RetryState};
 
 use super::client::OperationClient;
 use super::types::{ListOperationsRequest, ListOperationsResult, OperationInfo};
@@ -95,15 +94,15 @@ impl_operation_call_builder!(ForgetOperationBuilder);
 impl_operation_call_builder!(CancelOperationBuilder);
 
 pub(crate) async fn retry_operation_call<T, F>(
-    retry_control: &RetryControl,
+    retry_budget: &ArcRetryBudget,
     opts: &OperationCallOptions,
     attempt_fn: F,
 ) -> YdbResult<T>
 where
     F: AsyncFnMut<Ref<RetryState>, Output = YdbResult<T>>,
 {
-    retry_control
-        .budget()
+    retry_budget
+        .as_ref()
         .deadline(opts.timeout)
         .retry_on_retriable_errors(Idempotency::Idempotent, attempt_fn)
         .await

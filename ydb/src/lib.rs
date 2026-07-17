@@ -162,9 +162,7 @@ pub use client_topic::topicwriter::writer_tx_options::{
 // full enum pub types
 pub use client::{Client, SessionPoolSettings, SessionPoolStats};
 
-pub use retry_budget::{
-    LimitedRetryBudget, PercentOfRpsRetryBudget, PercentRetryBudget, RetryMetrics,
-};
+pub use retry_budget::{LimitedRetryBudget, PercentRetryBudget};
 
 // full enum pub types
 pub use client_builder::ClientBuilder;

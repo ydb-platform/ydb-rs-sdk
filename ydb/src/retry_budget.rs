@@ -6,17 +6,14 @@
 //! appears or the call deadline expires.
 
 use std::ops::ControlFlow;
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use rand::Rng;
-use tokio::sync::{Mutex as AsyncMutex, mpsc, watch};
-use tokio::time::sleep;
+use tokio::sync::Semaphore;
+use tokio_util::sync::{CancellationToken, DropGuard};
 
-use crate::retry_strategy::{
-    ArcRetryBudget, RetryAlways, RetryBudget, RetryDeadline, RetryState, RetryStrategy,
-    RetryStrategyExt,
-};
+use crate::retry_strategy::{RetryState, RetryStrategy};
 
 /// Fixed maximum number of retry attempts per second (token bucket).
 ///
@@ -30,18 +27,6 @@ pub struct LimitedRetryBudget {
 
 impl LimitedRetryBudget {
     pub fn new(attempts_per_second: u32) -> Self {
-        let (done_tx, done_rx) = watch::channel(());
-        let shutdown = Arc::new(LimitedRetryBudgetShutdown { done: done_tx });
-
-        if attempts_per_second == 0 {
-            let (tx, rx) = mpsc::channel(1);
-            drop(tx);
-            return Self {
-                quota: AsyncMutex::new(rx),
-                _shutdown: shutdown,
-            };
-        }
-
         let capacity = attempts_per_second as usize;
         let semaphore = Arc::new(tokio::sync::Semaphore::new(capacity));
 
@@ -67,34 +52,7 @@ impl LimitedRetryBudget {
                 }
             });
         }
-    }
-}
 
-impl RetryStrategy for LimitedRetryBudget {
-    async fn wait_retry<'a>(&'a self, _retry: &'a RetryState) -> ControlFlow<()> {
-        let mut quota = self.quota.lock().await;
-        match quota.recv().await {
-            Some(()) => ControlFlow::Continue(()),
-            None => ControlFlow::Break(()),
-        }
-    }
-}
-
-/// Sliding-window counters used by [`PercentOfRpsRetryBudget`].
-#[derive(Debug, Default)]
-pub struct RetryMetrics {
-    inner: Mutex<RetryMetricsInner>,
-}
-
-#[derive(Debug)]
-struct RetryMetricsInner {
-    window_start: Instant,
-    total_ops: u64,
-    retry_ops: u64,
-}
-
-impl Default for RetryMetricsInner {
-    fn default() -> Self {
         Self {
             semaphore,
             _drop_guard,
@@ -102,91 +60,14 @@ impl Default for RetryMetricsInner {
     }
 }
 
-impl RetryMetrics {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-impl RetryStrategy for RetryMetrics {
-    async fn before_attempt<'a>(&'a self, retry: &'a RetryState) {
-        let mut metrics = self.lock_inner();
-
-        metrics.record_attempt();
-
-        if retry.attempt != 0 {
-            metrics.record_retry();
-        }
-    }
-}
-
-impl RetryMetricsInner {
-    pub(crate) fn record_attempt(&mut self) {
-        self.maybe_roll_window();
-        self.total_ops += 1;
-    }
-
-    pub(crate) fn record_retry(&mut self) {
-        self.maybe_roll_window();
-        self.retry_ops += 1;
-    }
-
-    fn maybe_roll_window(&mut self) {
-        if self.window_start.elapsed() >= Duration::from_secs(1) {
-            self.window_start = Instant::now();
-            self.total_ops = 0;
-            self.retry_ops = 0;
-        }
-    }
-}
-
-impl RetryMetrics {
-    fn lock_inner(&self) -> MutexGuard<'_, RetryMetricsInner> {
-        self.inner.lock().unwrap_or_else(|mut poison_err| {
-            **poison_err.get_mut() = RetryMetricsInner::default();
-            self.inner.clear_poison();
-            poison_err.into_inner()
-        })
-    }
-
-    fn try_acquire_retry_slot(&self, percent: u32) -> bool {
-        let mut metrics = self.lock_inner();
-
-        metrics.maybe_roll_window();
-
-        let max_retries = (metrics.total_ops as u128 * percent as u128 / 100) as u64;
-
-        metrics.retry_ops < max_retries.max(1)
-    }
-}
-
-/// Retry budget as a percentage of the driver's request rate (operations per second).
-///
-/// [`RetryMetrics`] must be shared with the driver — use [`crate::Client::retry_metrics`] when
-/// constructing this budget, or obtain metrics from an existing child client.
-#[derive(Debug, Clone)]
-pub struct PercentOfRpsRetryBudget {
-    percent: u32,
-    metrics: Arc<RetryMetrics>,
-}
-
-impl PercentOfRpsRetryBudget {
-    pub fn new(percent: u32, metrics: Arc<RetryMetrics>) -> Self {
-        assert!(
-            percent <= 100,
-            "percent must be between 0 and 100, got {percent}"
-        );
-        Self { percent, metrics }
-    }
-}
-
-impl RetryStrategy for PercentOfRpsRetryBudget {
+impl RetryStrategy for LimitedRetryBudget {
     async fn wait_retry<'a>(&'a self, _retry: &'a RetryState) -> ControlFlow<()> {
-        if self.metrics.try_acquire_retry_slot(self.percent) {
-            ControlFlow::Continue(())
-        } else {
-            ControlFlow::Break(())
-        }
+        self.semaphore
+            .acquire()
+            .await
+            .expect("semaphore cannot be canceled because is not accessible anywhere else")
+            .forget();
+        ControlFlow::Continue(())
     }
 }
 
@@ -218,42 +99,6 @@ impl RetryStrategy for PercentRetryBudget {
     }
 }
 
-/// Driver-local retry budget and RPS counters shared by all retriers on one [`crate::Client`].
-#[derive(Clone)]
-pub(crate) struct RetryControl {
-    budget: ArcRetryBudget,
-    metrics: Arc<RetryMetrics>,
-}
-
-impl Default for RetryControl {
-    fn default() -> Self {
-        Self::new(RetryBudget::default().arc())
-    }
-}
-
-impl RetryControl {
-    pub(crate) fn new(budget: ArcRetryBudget) -> Self {
-        Self {
-            budget,
-            metrics: Arc::new(RetryMetrics::new()),
-        }
-    }
-
-    pub(crate) fn with_shared_metrics(budget: ArcRetryBudget, metrics: Arc<RetryMetrics>) -> Self {
-        Self { budget, metrics }
-    }
-
-    pub(crate) fn budget(&self) -> RetryBudget<impl RetryStrategy + '_, impl RetryDeadline + '_> {
-        self.budget
-            .as_ref()
-            .and_then(self.metrics.as_ref().as_ref_strategy())
-    }
-
-    pub(crate) fn metrics(&self) -> &Arc<RetryMetrics> {
-        &self.metrics
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,21 +125,5 @@ mod tests {
         .await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_break());
-    }
-
-    #[test]
-    fn percent_of_rps_respects_share() {
-        let metrics = Arc::new(RetryMetrics::new());
-        for _ in 0..10 {
-            metrics.lock_inner().record_attempt();
-        }
-        let budget = PercentOfRpsRetryBudget::new(50, metrics.clone());
-        assert!(metrics.try_acquire_retry_slot(50));
-        assert!(metrics.try_acquire_retry_slot(50));
-        assert!(metrics.try_acquire_retry_slot(50));
-        assert!(metrics.try_acquire_retry_slot(50));
-        assert!(metrics.try_acquire_retry_slot(50));
-        assert!(!metrics.try_acquire_retry_slot(50));
-        let _ = budget;
     }
 }

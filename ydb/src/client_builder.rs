@@ -14,7 +14,6 @@ use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
 use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::SharedLoadBalancer;
-use crate::retry_budget::RetryControl;
 use crate::retry_strategy::ArcRetryBudget;
 use crate::{Client, Credentials};
 use http::Uri;
@@ -306,11 +305,7 @@ impl ClientBuilder {
             self.grpc_max_message_size,
         );
 
-        let retry_control = self
-            .retry_budget
-            .map(RetryControl::new)
-            .map(Arc::new)
-            .unwrap_or_default();
+        let retry_control = self.retry_budget.unwrap_or_default();
 
         Client::new(
             db_cred,
