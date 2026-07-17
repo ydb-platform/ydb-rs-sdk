@@ -203,13 +203,17 @@ pub(crate) struct TimerDiscovery {
 }
 
 impl TimerDiscovery {
-    #[allow(dead_code)]
     pub(crate) fn new(
         connection_manager: DiscoveryConnectionManager,
         endpoint: &str,
         interval: Duration,
+        token_waiter: Box<dyn Waiter>,
     ) -> YdbResult<Self> {
-        let state = Arc::new(DiscoverySharedState::new(connection_manager, endpoint)?);
+        let state = Arc::new(DiscoverySharedState::new(
+            connection_manager,
+            endpoint,
+            token_waiter,
+        )?);
 
         let state_weak = Arc::downgrade(&state);
         tokio::spawn(DiscoverySharedState::background_discovery(
@@ -272,6 +276,11 @@ struct DiscoverySharedState {
 
     discovery_lock: tokio::sync::Mutex<()>,
 
+    /// Waiter for token readiness. Consumed on the first successful wait
+    /// inside `background_discovery`. Not used after that.
+    #[derivative(Debug = "ignore")]
+    token_waiter: tokio::sync::Mutex<Option<Box<dyn Waiter>>>,
+
     /// Watch sender for the discovery state changes.
     ///
     /// Initially contains `None`. Contains `Some(Err(err))` if
@@ -290,13 +299,18 @@ struct DiscoverySharedState {
 }
 
 impl DiscoverySharedState {
-    fn new(connection_manager: DiscoveryConnectionManager, endpoint: &str) -> YdbResult<Self> {
+    fn new(
+        connection_manager: GrpcConnectionManager,
+        endpoint: &str,
+        token_waiter: Box<dyn Waiter>,
+    ) -> YdbResult<Self> {
         let (state_sender, _) = watch::channel(None);
         Ok(Self {
             connection_manager,
             discovery_uri: http::Uri::from_str(endpoint)?,
             state_sender,
             discovery_lock: tokio::sync::Mutex::new(()),
+            token_waiter: tokio::sync::Mutex::new(Some(token_waiter)),
         })
     }
 
@@ -354,6 +368,18 @@ impl DiscoverySharedState {
             let res = state.discovery_now().await;
             trace!("discovery result: {:?}", res);
             res
+        }
+
+        // Wait for the token to be available before the first discovery
+        // attempt. This ensures that the first `ListEndpoints` gRPC call
+        // carries a valid `x-ydb-auth-ticket` header.
+        if let Some(s) = state.upgrade() {
+            let waiter = s.token_waiter.lock().await.take();
+            if let Some(waiter) = waiter {
+                waiter.wait().await.unwrap_or_else(|err| {
+                    trace!("token waiter returned error (ignored): {err}");
+                });
+            }
         }
 
         'worker: loop {
@@ -489,8 +515,20 @@ mod test {
     use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::test_helpers::test_client_builder;
+    use crate::waiter::Waiter;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
+
+    /// Waiter that returns immediately; used in tests that don't need
+    /// token readiness synchronization.
+    struct ImmediateWaiter;
+
+    #[async_trait::async_trait]
+    impl Waiter for ImmediateWaiter {
+        async fn wait(&self) -> YdbResult<()> {
+            Ok(())
+        }
+    }
 
     fn discovery_shared_state() -> YdbResult<DiscoverySharedState> {
         const DATABASE: &str = "/local";
@@ -504,7 +542,7 @@ mod test {
             crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
         );
 
-        DiscoverySharedState::new(connection_manager, ENDPOINT)
+        DiscoverySharedState::new(connection_manager, ENDPOINT, Box::new(ImmediateWaiter))
     }
 
     #[test]
@@ -555,8 +593,11 @@ mod test {
             crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
         );
 
-        let discovery_shared =
-            DiscoverySharedState::new(connection_manager, test_client_builder().endpoint.as_str())?;
+        let discovery_shared = DiscoverySharedState::new(
+            connection_manager,
+            test_client_builder().endpoint.as_str(),
+            Box::new(ImmediateWaiter),
+        )?;
 
         let state = Arc::new(discovery_shared);
         let mut rx = state.state_sender.subscribe();
