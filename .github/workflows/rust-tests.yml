@@ -2,11 +2,11 @@ name: YDB tests
 
 on:
   push:
-    branches: [ master ]
+    branches: [master]
   pull_request:
-    branches: [ master ]
+    branches: [master]
   schedule:
-    - cron: '18 4 * * *'
+    - cron: "18 4 * * *"
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,26 +15,33 @@ env:
   RUST_VERSION_MSRV: "1.88"
   # Pinned modern Rust version used for forward compatibility coverage.
   RUST_VERSION_MODERN: "1.96"
-  # Stable Rust version used against dependencies test
-  RUST_VERSION_STABLE: stable
 
 jobs:
   tests:
-    name: ${{ matrix.name }}
+    name: tests (${{ matrix.rust_version }}${{ case(matrix.latest_deps, ', latest deps', '') }})
 
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: tests (RUST_VERSION_MSRV)
-            rust_version: "RUST_VERSION_MSRV"
+          - rust_version: ${{ env.RUST_VERSION_MSRV }}
+            codecov: false
             latest_deps: false
-          - name: tests (RUST_VERSION_MODERN)
-            rust_version: "RUST_VERSION_MODERN"
+          - rust_version: ${{ env.RUST_VERSION_MODERN }}
+            codecov: false
             latest_deps: false
-          # Advisory leg: failures do not block merges.
-          - name: tests (RUST_VERSION_STABLE, latest deps (advisory))
-            rust_version: "RUST_VERSION_STABLE"
+          - rust_version: stable
+            codecov: false
+            latest_deps: false
+          # Test with nightly compiler.
+          # Coverarage only tested with nightly compiler
+          # because it supports `--doctests` flag
+          - rust_version: nightly
+            codecov: true
+            latest_deps: false
+          # Test with the latest versions of deps
+          - rust_version: stable
+            codecov: false
             latest_deps: true
 
     services:
@@ -48,60 +55,67 @@ jobs:
           - /tmp/ydb_certs:/ydb_certs
         env:
           YDB_USE_IN_MEMORY_PDISKS: true
-        options: '-h localhost --name ydb'
+        options: "-h localhost --name ydb"
 
     runs-on: ubuntu-24.04
-    continue-on-error: ${{ matrix.latest_deps }}
 
     steps:
-    - name: Show YDB server version
-      run: docker ps; docker exec ydb /ydbd -V
+      - name: Show YDB server version
+        run: docker ps; docker exec ydb /ydbd -V
 
-    - name: Install rust
-      uses: dtolnay/rust-toolchain@v1
-      with:
-        toolchain: ${{ env[matrix.rust_version] }}
-        components: llvm-tools-preview
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust_version }}
+          components: llvm-tools-preview
 
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        submodules: true
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
 
-    - name: Update dependencies to latest compatible versions
-      if: ${{ matrix.latest_deps }}
-      run: |
-        cargo update --verbose
-        git diff -- Cargo.lock
+      - name: Update dependencies to latest compatible versions
+        if: ${{ matrix.latest_deps }}
+        run: |
+          cargo update --verbose
+          git diff -- Cargo.lock
 
-    - name: Rust version
-      id: rust_version_step
-      run: |
-        rustc --version
-        cargo --version
-        echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
-        echo "version=$(rustc --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
+      - name: Rust version
+        id: rust_version_step
+        run: |
+          rustc --version
+          cargo --version
+          echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
+          echo "version=$(rustc --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
 
-    - name: Rust cache
-      uses: Swatinem/rust-cache@v2
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
 
-    - name: Install cargo-llvm-cov
-      uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
 
-    - name: Rustdoc examples check
-      run: cargo test --workspace --doc
+      - name: Rustdoc examples check
+        run: cargo test --workspace --doc
 
-    - name: Run tests with coverage
-      env:
-        YDB_CONNECTION_STRING: grpc://localhost:2136/local
-      run: cargo llvm-cov --workspace --exclude slo-framework --exclude slo-native-query --exclude slo-native-topic --lcov --output-path lcov.info -- --include-ignored
+      - name: Run tests with coverage
+        if: ${{ matrix.codecov }}
+        env:
+          YDB_CONNECTION_STRING: grpc://localhost:2136/local
+        run: >
+          cargo llvm-cov
+            --doctests
+            --workspace
+            --exclude slo-framework
+            --exclude slo-native-query
+            --exclude slo-native-topic
+            --lcov --output-path lcov.info -- --include-ignored
 
-    - name: Upload coverage report to Codecov
-      if: ${{ !matrix.latest_deps }}
-      uses: codecov/codecov-action@v4
-      with:
-        file: ./lcov.info
-        flags: tests,ubuntu,rust-${{ steps.rust_version_step.outputs.version }}
-        name: tests
-      env:
-        CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      - name: Upload coverage report to Codecov
+        if: ${{ matrix.codecov }}
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./lcov.info
+          flags: tests,ubuntu,rust-${{ steps.rust_version_step.outputs.version }}
+          name: tests
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
