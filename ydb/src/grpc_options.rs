@@ -6,7 +6,6 @@ use tracing::trace;
 use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
 
 /// Common options for gRPC connections.
-/// ```
 #[derive(Debug, Clone)]
 pub struct GrpcOptions {
     /// Interval between HTTP/2 PING-based keepalives.
