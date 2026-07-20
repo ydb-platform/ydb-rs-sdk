@@ -461,26 +461,24 @@ impl RetriesPerSecond {
         let cancellation = CancellationToken::new();
         let drop_guard = cancellation.clone().drop_guard();
 
-        if attempts_per_second > 0 {
-            let interval = Duration::from_secs(1) / attempts_per_second;
-            let semaphore_refill = semaphore.clone();
+        let interval = Duration::from_secs(1) / attempts_per_second;
+        let semaphore_refill = semaphore.clone();
 
-            tokio::spawn(async move {
-                let mut ticker = tokio::time::interval(interval);
-                // Skip the first tick as it's immediate
-                ticker.tick().await;
-                loop {
-                    tokio::select!(
-                        _ = cancellation.cancelled() => break,
-                        _ = ticker.tick() => {
-                            if semaphore_refill.available_permits() < capacity {
-                                semaphore_refill.add_permits(1);
-                            }
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            // Skip the first tick as it's immediate
+            ticker.tick().await;
+            loop {
+                tokio::select!(
+                    _ = cancellation.cancelled() => break,
+                    _ = ticker.tick() => {
+                        if semaphore_refill.available_permits() < capacity {
+                            semaphore_refill.add_permits(1);
                         }
-                    );
-                }
-            });
-        }
+                    }
+                );
+            }
+        });
 
         Self {
             semaphore: Some(semaphore),
