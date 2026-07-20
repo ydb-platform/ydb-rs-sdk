@@ -97,7 +97,7 @@ where
 ///
 /// The macro input consists of two comma-separated parts. The first one
 /// is an explicit capture list. It's optional and can be omitted if
-/// your closure doesn't capture anything. The second one in an asynchronous closure
+/// your closure doesn't capture anything. The second one is an asynchronous closure
 /// that doesn't capture anything directly without relying on the explicit
 /// capture list.
 ///
