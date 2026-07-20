@@ -7,9 +7,8 @@ use crate::result::ResultSet;
 use crate::types::Value;
 
 use super::exec::{
-    apply_stream_tx_id, finish_pooled_query_stream, resolve_commit_tx,
+    CallOptions, apply_stream_tx_id, finish_pooled_query_stream, resolve_commit_tx,
     transaction_finish_committed_via_query, transaction_mark_invalidated_on_query_error,
-    CallOptions,
 };
 use super::internal::ExecCoreRef;
 
@@ -25,22 +24,22 @@ pub struct QueryStream<'a> {
 
 impl Drop for QueryStream<'_> {
     fn drop(&mut self) {
-        if let Some(tx_id) = self.stream.take_captured_tx_id() {
-            if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-                apply_stream_tx_id(ctx, Some(tx_id));
-            }
+        if let Some(tx_id) = self.stream.take_captured_tx_id()
+            && let ExecCoreRef::Transaction(ctx) = &mut self.core
+        {
+            apply_stream_tx_id(ctx, Some(tx_id));
         }
         // Do not mark the transaction finished here: with_commit(true) requires
         // draining the stream and calling close() so the server can commit.
         let dropped_mid_stream = self.stream.in_progress();
         self.stream.cancel();
-        if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-            if let Some(lease) = &mut ctx.pooled_lease {
-                if dropped_mid_stream {
-                    lease.invalidate_session();
-                }
-                lease.end_use();
+        if let ExecCoreRef::Transaction(ctx) = &mut self.core
+            && let Some(lease) = &mut ctx.pooled_lease
+        {
+            if dropped_mid_stream {
+                lease.invalidate_session();
             }
+            lease.end_use();
         }
     }
 }
@@ -144,10 +143,10 @@ pub(crate) async fn materialize_query(
     }
     .await;
 
-    if let ExecCoreRef::Transaction(ctx) = core {
-        if let Some(lease) = &mut ctx.pooled_lease {
-            lease.end_use();
-        }
+    if let ExecCoreRef::Transaction(ctx) = core
+        && let Some(lease) = &mut ctx.pooled_lease
+    {
+        lease.end_use();
     }
 
     result

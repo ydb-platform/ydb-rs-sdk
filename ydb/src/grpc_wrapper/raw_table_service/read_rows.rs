@@ -4,12 +4,12 @@ use ydb_grpc::ydb_proto::{
 };
 
 use crate::{
+    YdbIssue,
     grpc::proto_issues_to_ydb_issues,
     grpc_wrapper::{
         raw_errors::RawError,
         raw_table_service::value::{RawResultSet, RawTypedValue},
     },
-    YdbIssue,
 };
 
 #[derive(Clone)]

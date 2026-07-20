@@ -6,7 +6,7 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::retry_budget::RetryControl;
 use crate::session::{NodePinnedTableClient, TableSession};
 
-use super::pool::{spawn_pool_release, SessionPool};
+use super::pool::{SessionPool, spawn_pool_release};
 
 /// Table-side adapter over the driver session pool.
 #[derive(Clone)]

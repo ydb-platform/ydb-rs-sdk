@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 use std::time::Duration;
 use tokio::time::timeout;
 use ydb::{AccessTokenCredentials, ClientBuilder, YdbError, YdbResult};
@@ -8,10 +9,11 @@ async fn main() -> YdbResult<()> {
         .with_credentials(AccessTokenCredentials::from("asd"))
         .client()?;
 
-    if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
-        res?
-    } else {
-        return Err(YdbError::from("Connection timeout"));
+    match timeout(Duration::from_secs(3), client.wait()).await {
+        Ok(res) => res?,
+        _ => {
+            return Err(YdbError::from("Connection timeout"));
+        }
     };
 
     let mut row = client

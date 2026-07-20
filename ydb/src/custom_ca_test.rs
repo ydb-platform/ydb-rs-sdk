@@ -1,4 +1,4 @@
-use crate::{test_integration_helper::create_custom_ca_client, YdbResult};
+use crate::{YdbResult, test_integration_helper::create_custom_ca_client};
 use tracing_test::traced_test;
 
 #[tokio::test]

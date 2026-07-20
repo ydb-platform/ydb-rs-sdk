@@ -1,9 +1,12 @@
 use std::time::Duration;
 
+use tracing::instrument;
+
 use crate::{
+    TopicReader, TopicReaderBatch, YdbError, YdbResult,
     client_query::{
-        hooks::{QueryTxCommitStatus, QueryTxHook},
         QueryTxIdentity, Transaction,
+        hooks::{QueryTxCommitStatus, QueryTxHook},
     },
     grpc_wrapper::{
         raw_topic_service::{
@@ -16,7 +19,6 @@ use crate::{
         },
         raw_ydb_operation::RawOperationParams,
     },
-    TopicReader, TopicReaderBatch, YdbError, YdbResult,
 };
 
 use super::runtime::RuntimeHandle;
@@ -70,8 +72,9 @@ impl<'a> TopicReaderTx<'a> {
         })
     }
 
+    #[instrument(name = "ydb.TopicReaderTx.ReadBatch", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
-        let batch = self.inner.read_batch().await?;
+        let batch = self.inner.read_batch_inner().await?;
         if let Err(err) = self.update_offsets_in_transaction(&batch).await {
             let _ = self.runtime.force_reconnection(YdbError::custom(
                 "UpdateOffsetsInTransaction failed after reading batch",

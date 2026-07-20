@@ -16,7 +16,7 @@
 #[macro_export]
 macro_rules! ydb_params {
     (
-        $($name:expr => $val:expr ),+ $(,)?
+        $($name:expr_2021 => $val:expr_2021 ),+ $(,)?
     ) => {
         std::collections::HashMap::<String, $crate::Value>::from_iter([
             $( ($name.into(), $val.into()), )+
@@ -42,7 +42,7 @@ macro_rules! ydb_params {
 #[macro_export]
 macro_rules! ydb_struct {
     (
-        $($field_name:expr => $val:expr),+ $(,)?
+        $($field_name:expr_2021 => $val:expr_2021),+ $(,)?
     ) => {
         $crate::Value::struct_from_fields(vec![
             $( ($field_name.into(), $val.into()), )+

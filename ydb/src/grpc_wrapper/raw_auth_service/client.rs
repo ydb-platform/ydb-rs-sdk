@@ -7,7 +7,7 @@ use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 
-use tracing::trace;
+use tracing::{instrument, trace};
 
 #[derive(Clone)]
 pub(crate) struct RawAuthClient {
@@ -31,6 +31,7 @@ impl RawAuthClient {
         }
     }
 
+    #[instrument(name = "ydb.grpc.Login", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn login(&mut self, req: RawLoginRequest) -> RawResult<RawLoginResult> {
         request_with_hidden_result!(
             self.service.login,

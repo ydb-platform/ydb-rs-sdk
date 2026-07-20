@@ -6,7 +6,7 @@ pub(crate) mod r#type;
 pub(crate) mod value_ydb;
 
 use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
-use crate::trace_helpers::ensure_len_string;
+use crate::traces::helpers::ensure_len_string;
 use std::fmt::{Debug, Formatter};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -60,7 +60,7 @@ pub(crate) struct RawResultSet {
 impl Debug for RawResultSet {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match serde_json::to_string(self) {
-            Ok(s) => f.write_str(ensure_len_string(s).as_str()),
+            Ok(s) => f.write_str(&ensure_len_string(s)),
             Err(_) => Err(std::fmt::Error),
         }
     }

@@ -1,8 +1,8 @@
+use crate::YdbResult;
 use crate::grpc_wrapper::grpc::grpc_read_operation_result;
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
-use crate::YdbResult;
 use itertools::Itertools;
 use ydb_grpc::ydb_proto::discovery::v1::discovery_service_client::DiscoveryServiceClient;
 use ydb_grpc::ydb_proto::discovery::{ListEndpointsRequest, ListEndpointsResult};
@@ -28,7 +28,7 @@ impl GrpcDiscoveryClient {
         }
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(name = "ydb.grpc.Discover", skip(self), fields(db.system.name = "ydb", db.namespace = %database), err)]
     pub(crate) async fn list_endpoints(
         &mut self,
         database: String,

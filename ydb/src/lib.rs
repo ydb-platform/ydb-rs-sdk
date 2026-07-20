@@ -32,6 +32,15 @@
 //! # More examples
 //! [Examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
 //!
+// This workaround solves compiler error
+// ```
+// error: queries overflow the depth limit!
+//   |
+//   = help: consider increasing the recursion limit by adding a `#![recursion_limit = "256"]` attribute to your crate ...
+// ```
+// because queue depth limit has changed since 1.94. See https://github.com/rust-lang/rust/issues/152942
+#![recursion_limit = "256"]
+
 extern crate core;
 
 pub(crate) mod client;
@@ -89,7 +98,7 @@ pub(crate) mod topics_compression_test;
 pub(crate) mod topics_test;
 #[cfg(test)]
 pub(crate) mod topics_writer_tx_test;
-mod trace_helpers;
+pub mod traces;
 mod trait_operation;
 mod types;
 mod types_converters;
@@ -130,7 +139,7 @@ pub use client_topic::topicreader::messages::{
 };
 // full enum pub types
 pub use client_topic::topicreader::reader::{
-    TopicReader, TopicReaderCommitMarker, TopicSelector, TopicSelectors,
+    TopicReader, TopicReaderCommitMarker, TopicSelector, TopicSelectorBuilder, TopicSelectors,
 };
 pub use client_topic::topicreader::reader_options::{
     TopicReaderOptions, TopicReaderOptionsBuilder,

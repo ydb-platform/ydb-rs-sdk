@@ -1,3 +1,5 @@
+use tracing::instrument;
+
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::grpc_wrapper::raw_operation_service::status::check_status;
@@ -38,6 +40,7 @@ impl RawOperationClient {
         }
     }
 
+    #[instrument(name = "ydb.grpc.GetOperation", skip_all, fields(ydb.operation.id = %id), err)]
     pub async fn get_operation(&mut self, id: &str) -> RawResult<RawOperation> {
         let response = self
             .service
@@ -50,6 +53,7 @@ impl RawOperationClient {
         Ok(RawOperation::from(operation))
     }
 
+    #[instrument(name = "ydb.grpc.ListOperations", skip_all, err)]
     pub async fn list_operations(
         &mut self,
         req: RawListOperationsRequest,
@@ -75,6 +79,7 @@ impl RawOperationClient {
         })
     }
 
+    #[instrument(name = "ydb.grpc.ForgetOperation", skip_all, fields(ydb.operation.id = %id), err)]
     pub async fn forget_operation(&mut self, id: &str) -> RawResult<()> {
         let response = self
             .service
@@ -84,6 +89,7 @@ impl RawOperationClient {
         check_status(inner.status, &inner.issues)
     }
 
+    #[instrument(name = "ydb.grpc.CancelOperation", skip_all, fields(ydb.operation.id = %id), err)]
     pub async fn cancel_operation(&mut self, id: &str) -> RawResult<()> {
         let response = self
             .service

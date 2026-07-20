@@ -7,6 +7,7 @@ use crate::session_pool::{SessionPool, TableSessionPool};
 use crate::types::Value;
 
 use crate::grpc_connection_manager::GrpcConnectionManager;
+use tracing::instrument;
 
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
 use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertRequest;
@@ -15,7 +16,7 @@ use crate::grpc_wrapper::raw_table_service::copy_table::{
     RawCopyTableRequest, RawCopyTablesRequest,
 };
 use crate::grpc_wrapper::raw_table_service::describe_table::{
-    table_description_from_raw, RawDescribeTableRequest,
+    RawDescribeTableRequest, table_description_from_raw,
 };
 use crate::grpc_wrapper::raw_table_service::describe_table_options::{
     RawDescribeTableOptionsRequest, RawDescribeTableOptionsResult,
@@ -42,7 +43,7 @@ pub use builders::{
     RenameTableBuilder, RenameTablesBuilder,
 };
 
-use call_options::{resolve_idempotent, resolve_timeouts, retry_table_operation, TableCallOptions};
+use call_options::{TableCallOptions, resolve_idempotent, resolve_timeouts, retry_table_operation};
 
 pub(crate) type TableServiceClientType = TableServiceClient<InterceptedChannel>;
 
@@ -144,6 +145,7 @@ impl TableClient {
         }
     }
 
+    #[instrument(name = "ydb.TableClient.ReadRows", skip_all, fields(db.system.name = "ydb", ydb.table.path = %table_path), err)]
     pub(crate) async fn read_rows_call(
         &self,
         table_path: String,
@@ -183,6 +185,7 @@ impl TableClient {
         }
     }
 
+    #[instrument(name = "ydb.TableClient.BulkUpsert", skip_all, fields(db.system.name = "ydb", ydb.table.path = %table_path), err)]
     pub(crate) async fn bulk_upsert_call(
         &self,
         table_path: String,
@@ -217,6 +220,7 @@ impl TableClient {
         }
     }
 
+    #[instrument(name = "ydb.TableClient.CopyTable", skip_all, fields(db.system.name = "ydb", ydb.table.path = %source_path), err)]
     pub(crate) async fn copy_table_call(
         &self,
         source_path: String,
@@ -256,6 +260,7 @@ impl TableClient {
         }
     }
 
+    #[instrument(name = "ydb.TableClient.CopyTables", skip_all, fields(db.system.name = "ydb"), err)]
     pub(crate) async fn copy_tables_call(
         &self,
         tables: Vec<CopyTableItem>,
@@ -300,6 +305,7 @@ impl TableClient {
         }
     }
 
+    #[instrument(name = "ydb.TableClient.RenameTable", skip_all, fields(db.system.name = "ydb", ydb.table.path = %source_path), err)]
     pub(crate) async fn rename_table_call(
         &self,
         source_path: String,
@@ -343,6 +349,7 @@ impl TableClient {
         }
     }
 
+    #[instrument(name = "ydb.TableClient.RenameTables", skip_all, fields(db.system.name = "ydb"), err)]
     pub(crate) async fn rename_tables_call(
         &self,
         tables: Vec<RenameTableItem>,
@@ -380,6 +387,7 @@ impl TableClient {
         }
     }
 
+    #[instrument(name = "ydb.TableClient.DescribeTable", skip_all, fields(db.system.name = "ydb", ydb.table.path = %path), err)]
     pub(crate) async fn describe_table_call(
         &self,
         path: String,
@@ -419,6 +427,7 @@ impl TableClient {
         }
     }
 
+    #[instrument(name = "ydb.TableClient.CreateTable", skip_all, fields(db.system.name = "ydb"), err)]
     pub(crate) async fn create_table_call(
         &self,
         request: CreateTableRequest,
@@ -450,6 +459,7 @@ impl TableClient {
         }
     }
 
+    #[instrument(name = "ydb.TableClient.DropTable", skip_all, fields(db.system.name = "ydb", ydb.table.path = %request.path), err)]
     pub(crate) async fn drop_table_call(
         &self,
         request: DropTableRequest,
@@ -483,6 +493,7 @@ impl TableClient {
         }
     }
 
+    #[instrument(name = "ydb.TableClient.AlterTable", skip_all, fields(db.system.name = "ydb"), err)]
     pub(crate) async fn alter_table_call(
         &self,
         request: AlterTableRequest,
@@ -513,6 +524,7 @@ impl TableClient {
         }
     }
 
+    #[instrument(name = "ydb.TableClient.DescribeTableOptions", skip_all, fields(db.system.name = "ydb"), err)]
     pub(crate) async fn describe_table_options_call(
         &self,
         opts: TableCallOptions,

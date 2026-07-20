@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 use std::time::Duration;
 use tokio::time::timeout;
 use ydb::{ClientBuilder, HasGrpcOptions, YdbError, YdbResult};
@@ -23,10 +24,11 @@ async fn main() -> YdbResult<()> {
         })
         .client()?;
 
-    if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
-        res?
-    } else {
-        return Err(YdbError::from("Connection timeout"));
+    match timeout(Duration::from_secs(3), client.wait()).await {
+        Ok(res) => res?,
+        _ => {
+            return Err(YdbError::from("Connection timeout"));
+        }
     };
 
     println!("done");

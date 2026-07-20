@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::{oneshot, watch, Mutex};
+use tokio::sync::{Mutex, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -11,7 +11,9 @@ use ydb_grpc::ydb_proto::topic::stream_write_message;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
-use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
+use crate::client_topic::topicwriter::message_write_status::{
+    MessageWriteStatus, MessageWriteStatusValidator,
+};
 use crate::client_topic::topicwriter::queue::Queue;
 use crate::client_topic::topicwriter::stream_writer::StreamWriter;
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
@@ -34,6 +36,7 @@ pub(crate) struct ReconnectorParams {
     pub(crate) flush_timeout: Duration,
     pub(crate) executor: Arc<dyn Executor>,
     pub(crate) tx_identity: Option<TransactionIdentity>,
+    pub(crate) status_validator: MessageWriteStatusValidator,
 }
 
 #[derive(Clone)]
@@ -69,7 +72,7 @@ pub(crate) struct Reconnector {
 
 impl Reconnector {
     pub(crate) async fn new(params: ReconnectorParams) -> YdbResult<Self> {
-        let queue = Queue::new();
+        let queue = Queue::new_with_status_validator(params.status_validator);
         let cancellation_token = params.cancellation_token;
         let auto_seq_no = params.writer_options.auto_seq_no;
 
@@ -146,8 +149,8 @@ impl Reconnector {
         if self.auto_seq_no {
             if message.seq_no.is_some() {
                 return Err(YdbError::custom(
-                        "explicitly specifying message.seq_no is only allowed if auto_seq_no is disabled",
-                    ));
+                    "explicitly specifying message.seq_no is only allowed if auto_seq_no is disabled",
+                ));
             }
             let last_seq_no_assigned = state_guard.connection_info.last_seq_no_assigned;
             message.seq_no = Some(last_seq_no_assigned + 1);
@@ -305,7 +308,7 @@ impl ReconnectionHelper {
         attempt: usize,
         time_from_start: Duration,
     ) -> Option<Duration> {
-        let decision = self.retrier.wait_duration(RetryParams {
+        let decision = self.retrier.retry_decision(RetryParams {
             attempt,
             time_from_start,
         });
@@ -429,10 +432,10 @@ impl ReconnectionLoop {
         }
 
         // Wait ending old stream writer before recreating
-        if let Some(old) = self.stream_writer.take() {
-            if let Err(err) = old.stop().await {
-                return ReconnectionLoopStatus::HandleError(err);
-            }
+        if let Some(old) = self.stream_writer.take()
+            && let Err(err) = old.stop().await
+        {
+            return ReconnectionLoopStatus::HandleError(err);
         }
 
         let (error_sender, error_receiver) = oneshot::channel();

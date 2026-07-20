@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use rand::Rng;
-use tokio::sync::{mpsc, watch, Mutex as AsyncMutex};
+use tokio::sync::{Mutex as AsyncMutex, mpsc, watch};
 use tokio::time::sleep;
 
 const INITIAL_RETRY_BACKOFF_MILLISECONDS: u64 = 1;

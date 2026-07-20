@@ -33,7 +33,7 @@ pub(crate) struct RawDescribeTableOptionsResult {
 }
 
 macro_rules! map_policy_field {
-    ($value:expr, $field:ident) => {
+    ($value:expr_2021, $field:ident) => {
         $value
             .$field
             .into_iter()

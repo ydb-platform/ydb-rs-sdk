@@ -8,6 +8,7 @@ use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::{GrpcOptions, YdbResult};
 use derivative::Derivative;
 use http::Uri;
+use tracing::instrument;
 
 pub(crate) type GrpcConnectionManager = GrpcConnectionManagerGeneric<SharedLoadBalancer, Simple>;
 pub(crate) type DiscoveryConnectionManager =
@@ -17,19 +18,19 @@ pub(crate) type DiscoveryConnectionManager =
 pub(crate) struct NoBalancer;
 
 #[derive(Derivative)]
-#[derivative(Clone(bound = "B: Clone"), Debug)]
-pub(crate) struct GrpcConnectionManagerGeneric<B, C: Connection> {
-    balancer: B,
-    connections_pool: Arc<ConnectionPool<C>>,
+#[derivative(Clone(bound = "BalancerT: Clone"), Debug)]
+pub(crate) struct GrpcConnectionManagerGeneric<BalancerT, ConnectionT: Connection> {
+    balancer: BalancerT,
+    connections_pool: Arc<ConnectionPool<ConnectionT>>,
     #[derivative(Debug = "ignore")]
     interceptor: MultiInterceptor,
     database: String,
     opts: GrpcOptions,
 }
 
-impl<B, C: Connection> GrpcConnectionManagerGeneric<B, C> {
+impl<BalancerT, ConnectionT: Connection> GrpcConnectionManagerGeneric<BalancerT, ConnectionT> {
     pub(crate) fn new(
-        balancer: B,
+        balancer: BalancerT,
         database: String,
         interceptor: MultiInterceptor,
         opts: GrpcOptions,
@@ -45,6 +46,7 @@ impl<B, C: Connection> GrpcConnectionManagerGeneric<B, C> {
         }
     }
 
+    #[instrument(name = "ydb.ConnectionManager.GetAuthService", skip_all, fields(db.system.name = "ydb", ydb.service.name = ?T::get_grpc_discovery_service()))]
     pub(crate) async fn get_auth_service<
         T: GrpcServiceForDiscovery + WithGrpcMaxMessageSize,
         F: FnOnce(InterceptedChannel) -> T,
@@ -53,12 +55,13 @@ impl<B, C: Connection> GrpcConnectionManagerGeneric<B, C> {
         new: F,
     ) -> YdbResult<T>
     where
-        B: LoadBalancer,
+        BalancerT: LoadBalancer,
     {
         let uri = self.balancer.endpoint(T::get_grpc_discovery_service())?;
         self.get_auth_service_to_node(new, &uri).await
     }
 
+    #[instrument(name = "ydb.ConnectionManager.GetAuthServiceToNode", skip_all)]
     pub(crate) async fn get_auth_service_to_node<
         T: GrpcServiceForDiscovery + WithGrpcMaxMessageSize,
         F: FnOnce(InterceptedChannel) -> T,
@@ -73,9 +76,10 @@ impl<B, C: Connection> GrpcConnectionManagerGeneric<B, C> {
         Ok(new(intercepted_channel).with_grpc_max_message_size(self.opts.max_message_size))
     }
 
+    #[instrument(name = "ydb.ConnectionManager.GetEndpoint", skip_all, fields(ydb.service.name = ?service))]
     pub(crate) fn endpoint(&self, service: Service) -> YdbResult<Uri>
     where
-        B: LoadBalancer,
+        BalancerT: LoadBalancer,
     {
         self.balancer.endpoint(service)
     }
