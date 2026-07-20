@@ -139,6 +139,11 @@ fn token_static_password(uri: &str, mut client_builder: ClientBuilder) -> YdbRes
             "password was not provided for password authentication".to_string(),
         ));
     }
+
+    if client_builder.grpc_opts.tls_config.is_none() {
+        client_builder = ca_certificate(uri, client_builder)?;
+    }
+
     let username = username.unwrap();
     let password = password.unwrap();
 
