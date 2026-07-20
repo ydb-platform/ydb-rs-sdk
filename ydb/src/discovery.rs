@@ -5,7 +5,6 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use derivative::Derivative;
 use futures_util::StreamExt;
 use futures_util::stream::{self, BoxStream};
 use http::Uri;
@@ -17,7 +16,7 @@ use tracing::{instrument, trace};
 
 use crate::YdbError;
 use crate::errors::{NeedRetry, YdbResult};
-use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::grpc_connection_manager::DiscoveryConnectionManager;
 use crate::grpc_wrapper::{
     raw_discovery_client::{EndpointInfo, GrpcDiscoveryClient},
     raw_services::Service,
@@ -206,7 +205,7 @@ pub(crate) struct TimerDiscovery {
 impl TimerDiscovery {
     #[allow(dead_code)]
     pub(crate) fn new(
-        connection_manager: GrpcConnectionManager,
+        connection_manager: DiscoveryConnectionManager,
         endpoint: &str,
         interval: Duration,
     ) -> YdbResult<Self> {
@@ -266,11 +265,9 @@ impl Waiter for TimerDiscovery {
     }
 }
 
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Debug)]
 struct DiscoverySharedState {
-    #[derivative(Debug = "ignore")]
-    connection_manager: GrpcConnectionManager,
+    connection_manager: DiscoveryConnectionManager,
     discovery_uri: Uri,
 
     discovery_lock: tokio::sync::Mutex<()>,
@@ -293,9 +290,8 @@ struct DiscoverySharedState {
 }
 
 impl DiscoverySharedState {
-    fn new(connection_manager: GrpcConnectionManager, endpoint: &str) -> YdbResult<Self> {
+    fn new(connection_manager: DiscoveryConnectionManager, endpoint: &str) -> YdbResult<Self> {
         let (state_sender, _) = watch::channel(None);
-
         Ok(Self {
             connection_manager,
             discovery_uri: http::Uri::from_str(endpoint)?,
@@ -484,16 +480,15 @@ impl Waiter for DiscoverySharedState {
 
 #[cfg(test)]
 mod test {
+    use http::Uri;
+
     use crate::client_common::{DBCredentials, TokenCache};
     use crate::discovery::{Discovery, DiscoverySharedState, DiscoveryState, NodeInfo};
     use crate::errors::YdbResult;
-    use crate::grpc_connection_manager::GrpcConnectionManager;
+    use crate::grpc_connection_manager::{DiscoveryConnectionManager, NoBalancer};
     use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
-    use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
     use crate::test_helpers::test_client_builder;
-    use http::Uri;
-    use std::str::FromStr;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -501,11 +496,8 @@ mod test {
         const DATABASE: &str = "/local";
         const ENDPOINT: &str = "grpc://localhost:2136";
 
-        let uri = Uri::from_str(ENDPOINT)?;
-        let load_balancer =
-            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(uri)));
-        let connection_manager = GrpcConnectionManager::new(
-            load_balancer,
+        let connection_manager = DiscoveryConnectionManager::new(
+            NoBalancer,
             DATABASE.to_string(),
             MultiInterceptor::new(),
             None,
@@ -552,15 +544,11 @@ mod test {
             .await??,
         };
 
-        let uri = Uri::from_str(test_client_builder().endpoint.as_str())?;
-        let load_balancer =
-            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(uri)));
-
         let interceptor =
             MultiInterceptor::new().with_interceptor(AuthGrpcInterceptor::new(cred.clone())?);
 
-        let connection_manager = GrpcConnectionManager::new(
-            load_balancer,
+        let connection_manager = DiscoveryConnectionManager::new(
+            NoBalancer,
             cred.database,
             interceptor,
             None,
