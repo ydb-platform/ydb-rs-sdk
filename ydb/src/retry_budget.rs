@@ -713,6 +713,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dont_retry_dont_retries() {
+        let retry_budget = RetryBudget::dont_retry();
+
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(15),
+                retry_budget.wait_retry(&RetryState::init()),
+            )
+            .await
+            .unwrap()
+            .is_break()
+        );
+    }
+
+    #[tokio::test]
     async fn combine_deadlines() {
         let start = Instant::now();
         Combine(Duration::from_secs(1), Duration::from_secs(1))
