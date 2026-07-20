@@ -17,7 +17,7 @@ use std::{
 };
 use tokio::sync::Semaphore;
 use tokio_util::sync::{CancellationToken, DropGuard};
-use tracing::{instrument, trace};
+use tracing::{instrument, trace, warn};
 
 use crate::{
     YdbResult,
@@ -492,11 +492,11 @@ impl RetriesPerSecond {
 impl RetryStrategy for RetriesPerSecond {
     async fn wait_retry<'a>(&'a self, _retry: &'a RetryState) -> ControlFlow<()> {
         if let Some(semaphore) = self.semaphore.as_ref() {
-            semaphore
-                .acquire()
-                .await
-                .expect("semaphore cannot be canceled because is not accessible anywhere else")
-                .forget();
+            let Ok(permit) = semaphore.acquire().await else {
+                warn!("semaphore that must never be closed is closed");
+                return ControlFlow::Break(());
+            };
+            permit.forget();
             ControlFlow::Continue(())
         } else {
             ControlFlow::Break(())
