@@ -176,7 +176,6 @@ async fn write_single_message_written_in_tx() -> YdbResult<()> {
                 .create_writer_tx(TOPIC_PATH.to_string(), tx)
                 .await?;
             writer.write(test_message()).await?;
-            writer.stop().await?;
             Ok(())
         })
         .await?;
@@ -202,7 +201,6 @@ async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
                 .await?;
 
             let result = writer.write(test_message()).await;
-            writer.stop().await?;
             result?;
             Ok(())
         })
@@ -239,7 +237,6 @@ async fn tx_identity_present_in_write_request() -> YdbResult<()> {
                 .create_writer_tx(TOPIC_PATH.to_string(), tx)
                 .await?;
             writer.write(test_message()).await?;
-            writer.stop().await?;
             Ok(())
         })
         .await?;
@@ -297,7 +294,6 @@ async fn tx_writer_options_propagated_to_init_request() -> YdbResult<()> {
                 .create_writer_tx_with_params(options.clone(), tx)
                 .await?;
             writer.write(test_message()).await?;
-            writer.stop().await?;
             Ok(())
         })
         .await?;
@@ -374,12 +370,12 @@ impl Handler for ReconnectHandler {
 
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn write_skipped_already_written_treated_as_success() -> YdbResult<()> {
-    let (handler, _, _, _) = AutoReplyHandler::new(AckMode::SkippedAlreadyWritten);
+async fn write_skipped_already_written_returns_error_and_rolls_back() -> YdbResult<()> {
+    let (handler, _, _, tx_lifecycle) = AutoReplyHandler::new(AckMode::SkippedAlreadyWritten);
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server)?;
 
-    client
+    let result = client
         .query_client()
         .retry_tx(async |tx| {
             let mut writer = client
@@ -387,10 +383,22 @@ async fn write_skipped_already_written_treated_as_success() -> YdbResult<()> {
                 .create_writer_tx(TOPIC_PATH.to_string(), tx)
                 .await?;
             writer.write(test_message()).await?;
-            writer.stop().await?;
             Ok(())
         })
-        .await?;
+        .await;
+
+    assert!(result.is_err(), "expected error for AlreadyWritten ack");
+
+    let tx_lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(tx_lifecycle.begin_count, 1);
+    assert_eq!(
+        tx_lifecycle.rollback_count, 1,
+        "AlreadyWritten ack must roll back the query transaction"
+    );
+    assert_eq!(
+        tx_lifecycle.commit_count, 0,
+        "AlreadyWritten ack must not commit the query transaction"
+    );
 
     Ok(())
 }
@@ -420,7 +428,6 @@ async fn write_returns_error_after_stream_close_and_rolls_back() -> YdbResult<()
                 .expect("mock server failed to fail write stream");
 
             let result = writer.write(test_message()).await;
-            let _ = writer.stop().await;
             result?;
             Ok(())
         })
@@ -540,7 +547,6 @@ async fn commit_failure_after_successful_write_is_not_retried() -> YdbResult<()>
                 .create_writer_tx(TOPIC_PATH.to_string(), tx)
                 .await?;
             writer.write(test_message()).await?;
-            writer.stop().await?;
             Ok(())
         })
         .await;

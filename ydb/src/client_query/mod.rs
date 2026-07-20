@@ -14,6 +14,9 @@ mod stream_facade;
 mod integration_test;
 
 #[cfg(test)]
+mod query_hooks_integration_test;
+
+#[cfg(test)]
 mod session_pool_integration_test;
 
 #[cfg(test)]
@@ -382,7 +385,6 @@ impl QueryExecutor for QueryClient {
 
 pub struct Transaction {
     ctx: TransactionExecContext,
-    hooks: Vec<Box<dyn QueryTxHook>>,
 }
 
 impl Transaction {
@@ -401,7 +403,6 @@ impl Transaction {
                 options,
                 retry_deadline,
             ),
-            hooks: Vec::new(),
         }
     }
 
@@ -409,8 +410,8 @@ impl Transaction {
         self.ctx.tx_mode
     }
 
-    pub(crate) fn register_hook(&mut self, hook: impl QueryTxHook + 'static) {
-        self.hooks.push(Box::new(hook));
+    pub(crate) fn register_hook(&mut self, hook: impl QueryTxHook) {
+        self.ctx.hooks.push(Box::new(hook));
     }
 
     /// Explicitly open the transaction via `BeginTransaction` RPC.
@@ -451,7 +452,7 @@ impl Transaction {
     }
 
     fn notify_hooks(&mut self, status: QueryTxCommitStatus) {
-        for hook in &mut self.hooks {
+        for hook in &mut self.ctx.hooks {
             hook.after_commit(status);
         }
     }
