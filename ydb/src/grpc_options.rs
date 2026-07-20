@@ -66,10 +66,12 @@ pub trait HasGrpcOptions {
     ///
     /// ```
     /// # use std::time::Duration;
+    /// # use ydb::{ClientBuilder, HasGrpcOptions};
     /// #
-    /// # fn main() {
-    ///     let client_builder = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")
-    ///         .with_grpc_opts(|opts| opts.keepalive_interval(Duration::from_sec(10)));
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let client_builder = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
+    ///         .with_grpc_opts(|opts| opts.keepalive_interval(Duration::from_secs(10)));
+    /// #    Ok(())
     /// # }
     /// ```
     fn with_grpc_opts<F: FnOnce(GrpcOptions) -> GrpcOptions>(mut self, f: F) -> Self
