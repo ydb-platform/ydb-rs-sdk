@@ -3,6 +3,8 @@
 //! # Example
 //!
 //! ```no_run
+//! # #![recursion_limit = "256"]
+//! #
 //! # use ydb::{AccessTokenCredentials, ClientBuilder, YdbResult};
 //! #
 //! # #[tokio::main]

@@ -176,6 +176,8 @@ impl QueryClient {
     /// Run a callback inside a retried interactive transaction.
     ///
     /// ```no_run
+    /// # #![recursion_limit = "256"]
+    /// #
     /// # use std::time::Duration;
     /// # use ydb::{AccessTokenCredentials, ClientBuilder, TxMode, YdbResultWithCustomerErr};
     /// #
