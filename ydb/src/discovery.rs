@@ -12,7 +12,7 @@ use http::uri::Authority;
 use itertools::Itertools;
 use tokio::sync::watch;
 use tokio_stream::wrappers::WatchStream;
-use tracing::{instrument, trace};
+use tracing::{instrument, trace, warn};
 
 use crate::YdbError;
 use crate::errors::{NeedRetry, YdbResult};
@@ -207,17 +207,15 @@ impl TimerDiscovery {
         connection_manager: DiscoveryConnectionManager,
         endpoint: &str,
         interval: Duration,
-        token_waiter: Box<dyn Waiter>,
+        token_waiter: impl Waiter + 'static,
     ) -> YdbResult<Self> {
-        let state = Arc::new(DiscoverySharedState::new(
-            connection_manager,
-            endpoint,
-            token_waiter,
-        )?);
+        let state = Arc::new(DiscoverySharedState::new(connection_manager, endpoint)?);
 
         let state_weak = Arc::downgrade(&state);
         tokio::spawn(DiscoverySharedState::background_discovery(
-            state_weak, interval,
+            state_weak,
+            interval,
+            token_waiter,
         ));
 
         Ok(TimerDiscovery { state })
@@ -276,11 +274,6 @@ struct DiscoverySharedState {
 
     discovery_lock: tokio::sync::Mutex<()>,
 
-    /// Waiter for token readiness. Consumed on the first successful wait
-    /// inside `background_discovery`. Not used after that.
-    #[derivative(Debug = "ignore")]
-    token_waiter: tokio::sync::Mutex<Option<Box<dyn Waiter>>>,
-
     /// Watch sender for the discovery state changes.
     ///
     /// Initially contains `None`. Contains `Some(Err(err))` if
@@ -299,18 +292,13 @@ struct DiscoverySharedState {
 }
 
 impl DiscoverySharedState {
-    fn new(
-        connection_manager: GrpcConnectionManager,
-        endpoint: &str,
-        token_waiter: Box<dyn Waiter>,
-    ) -> YdbResult<Self> {
+    fn new(connection_manager: GrpcConnectionManager, endpoint: &str) -> YdbResult<Self> {
         let (state_sender, _) = watch::channel(None);
         Ok(Self {
             connection_manager,
             discovery_uri: http::Uri::from_str(endpoint)?,
             state_sender,
             discovery_lock: tokio::sync::Mutex::new(()),
-            token_waiter: tokio::sync::Mutex::new(Some(token_waiter)),
         })
     }
 
@@ -357,8 +345,12 @@ impl DiscoverySharedState {
         Ok(DiscoveryState::new(start, new_endpoints))
     }
 
-    #[tracing::instrument(skip(state))]
-    async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
+    #[tracing::instrument(skip(state, token_waiter))]
+    async fn background_discovery(
+        state: Weak<DiscoverySharedState>,
+        interval: Duration,
+        token_waiter: impl Waiter,
+    ) {
         #[instrument(name = "ydb.Discovery.Timer", skip_all, fields(db.system.name = "ydb", discovery_uri = %state.discovery_uri), err)]
         async fn discovery_once(
             state: Arc<DiscoverySharedState>,
@@ -370,17 +362,13 @@ impl DiscoverySharedState {
             res
         }
 
+        trace!("start background_discovery. Waiting for token renew...");
         // Wait for the token to be available before the first discovery
         // attempt. This ensures that the first `ListEndpoints` gRPC call
         // carries a valid `x-ydb-auth-ticket` header.
-        if let Some(s) = state.upgrade() {
-            let waiter = s.token_waiter.lock().await.take();
-            if let Some(waiter) = waiter {
-                waiter.wait().await.unwrap_or_else(|err| {
-                    trace!("token waiter returned error (ignored): {err}");
-                });
-            }
-        }
+        token_waiter.wait().await.unwrap_or_else(|err| {
+            warn!("token waiter returned error (ignored): {err}");
+        });
 
         'worker: loop {
             let mut attempt = 0;
@@ -515,20 +503,10 @@ mod test {
     use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::test_helpers::test_client_builder;
-    use crate::waiter::Waiter;
+    use http::Uri;
+    use std::str::FromStr;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
-
-    /// Waiter that returns immediately; used in tests that don't need
-    /// token readiness synchronization.
-    struct ImmediateWaiter;
-
-    #[async_trait::async_trait]
-    impl Waiter for ImmediateWaiter {
-        async fn wait(&self) -> YdbResult<()> {
-            Ok(())
-        }
-    }
 
     fn discovery_shared_state() -> YdbResult<DiscoverySharedState> {
         const DATABASE: &str = "/local";
@@ -542,7 +520,7 @@ mod test {
             crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
         );
 
-        DiscoverySharedState::new(connection_manager, ENDPOINT, Box::new(ImmediateWaiter))
+        DiscoverySharedState::new(connection_manager, ENDPOINT)
     }
 
     #[test]
@@ -593,11 +571,8 @@ mod test {
             crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
         );
 
-        let discovery_shared = DiscoverySharedState::new(
-            connection_manager,
-            test_client_builder().endpoint.as_str(),
-            Box::new(ImmediateWaiter),
-        )?;
+        let discovery_shared =
+            DiscoverySharedState::new(connection_manager, test_client_builder().endpoint.as_str())?;
 
         let state = Arc::new(discovery_shared);
         let mut rx = state.state_sender.subscribe();
@@ -605,9 +580,12 @@ mod test {
         rx.borrow_and_update();
 
         let state_weak = Arc::downgrade(&state);
-        tokio::spawn(async {
-            DiscoverySharedState::background_discovery(state_weak, Duration::from_millis(50)).await;
-        });
+
+        tokio::spawn(DiscoverySharedState::background_discovery(
+            state_weak,
+            Duration::from_millis(50),
+            cred.token_cache.clone(),
+        ));
 
         // wait two updates
         for _ in 0..2 {
