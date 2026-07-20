@@ -319,13 +319,7 @@ pub fn endpoint(uri: Uri, original_uri: Option<&Uri>, opts: &GrpcOptions) -> Ydb
             .host()
             .ok_or_else(|| YdbError::EndpointHasNoHost(uri.clone()))?;
 
-        endpoint = configure_tls_endpoint(
-            endpoint,
-            domain,
-            opts.tls_config.clone().map(|tls_config| {
-                Arc::try_unwrap(tls_config).unwrap_or_else(|arc| arc.as_ref().clone())
-            }),
-        )?;
+        endpoint = configure_tls_endpoint(endpoint, domain, opts.tls_config.as_deref().cloned())?;
     }
 
     Ok(endpoint)
