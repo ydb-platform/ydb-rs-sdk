@@ -18,7 +18,7 @@ env:
 
 jobs:
   tests:
-    name: tests (${{ matrix.rust_version }}${{ case(matrix.latest_deps, ', latest deps', '') }})
+    name: ${{ format('tests ({0}{1})', matrix.rust_version, case(matrix.latest_deps, ', latest deps', '')) }}
 
     strategy:
       fail-fast: false
@@ -101,14 +101,7 @@ jobs:
         if: ${{ matrix.codecov }}
         env:
           YDB_CONNECTION_STRING: grpc://localhost:2136/local
-        run: >
-          cargo llvm-cov
-            --doctests
-            --workspace
-            --exclude slo-framework
-            --exclude slo-native-query
-            --exclude slo-native-topic
-            --lcov --output-path lcov.info -- --include-ignored
+        run: cargo llvm-cov --doctests --workspace --exclude slo-framework --exclude slo-native-query --exclude slo-native-topic --lcov --output-path lcov.info -- --include-ignored
 
       - name: Upload coverage report to Codecov
         if: ${{ matrix.codecov }}
