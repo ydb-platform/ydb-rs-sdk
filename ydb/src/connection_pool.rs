@@ -309,8 +309,8 @@ pub fn endpoint(uri: Uri, original_uri: Option<&Uri>, opts: &GrpcOptions) -> Ydb
 
     let mut endpoint = Endpoint::from(uri.clone());
 
-    if let Some(inverval) = opts.keepalive_interval {
-        endpoint = endpoint.http2_keep_alive_interval(inverval);
+    if let Some(interval) = opts.keepalive_interval {
+        endpoint = endpoint.http2_keep_alive_interval(interval);
     }
 
     if need_tls {
