@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Result;
 use tokio::sync::Mutex;
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
@@ -28,6 +29,15 @@ pub fn new_rate_limiter(rps: u32) -> RateLimiter {
     RateLimiter {
         interval,
         next: Mutex::new(Instant::now()),
+    }
+}
+
+/// Keeps the first failure as the source and attaches a later failure as context.
+pub fn preserve_primary_error(primary: Result<()>, additional: Result<()>) -> Result<()> {
+    match (primary, additional) {
+        (Ok(()), additional) => additional,
+        (Err(primary), Ok(())) => Err(primary),
+        (Err(primary), Err(additional)) => Err(primary.context(format!("{additional:#}"))),
     }
 }
 
