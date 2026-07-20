@@ -145,9 +145,6 @@ fn token_static_password(uri: &str, mut client_builder: ClientBuilder) -> YdbRes
     if client_builder.database.is_empty() {
         client_builder = database(uri, client_builder)?;
     }
-    if client_builder.cert_path.is_none() {
-        client_builder = ca_certificate(uri, client_builder)?;
-    }
 
     let endpoint: Uri = Uri::from_str(client_builder.endpoint.as_str())?;
 
@@ -169,7 +166,8 @@ fn ca_certificate(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
         if key != "ca_certificate" {
             continue;
         };
-        client_builder.cert_path = Some(value.as_ref().to_string());
+        client_builder =
+            client_builder.try_with_grpc_opts(|opts| opts.load_certificate(&*value))?;
         break;
     }
 
@@ -231,7 +229,6 @@ pub struct ClientBuilder {
     pub(crate) endpoint: String,
     discovery: Option<Box<dyn Discovery>>,
     discovery_enabled: bool,
-    pub cert_path: Option<String>,
     grpc_opts: GrpcOptions,
     executor: Option<Arc<dyn Executor>>,
     retry_budget: Option<Arc<dyn RetryBudget>>,
@@ -363,7 +360,6 @@ impl ClientBuilder {
             endpoint: "grpc://localhost:2135".to_string(),
             discovery: None,
             discovery_enabled: true,
-            cert_path: None,
             grpc_opts: GrpcOptions::default(),
             executor: None,
             retry_budget: None,
