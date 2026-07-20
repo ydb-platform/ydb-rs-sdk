@@ -97,7 +97,14 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Rustdoc examples check
+        if: ${{ !matrix.codecov }}
         run: cargo test --workspace --doc
+
+      - name: Run tests
+        if: ${{ !matrix.codecov }}
+        env:
+          YDB_CONNECTION_STRING: grpc://localhost:2136/local
+        run: cargo test --workspace -- --include-ignored
 
       - name: Run tests with coverage
         if: ${{ matrix.codecov }}
