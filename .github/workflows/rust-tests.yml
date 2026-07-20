@@ -14,7 +14,7 @@ env:
 
 jobs:
   tests:
-    name: tests (${{ matrix.label }})
+    name: tests (${{ case(matrix.label != '', matrix.label, format('{0} rustc', matrix.rust_version)) }})
 
     strategy:
       fail-fast: false
@@ -30,19 +30,18 @@ jobs:
             rust_version: "1.96"
             codecov: false
             latest_deps: false
-          - label: stable rustc
-            rust_version: stable
+          - rust_version: stable
             codecov: false
             latest_deps: false
           # Test with nightly compiler.
           # Coverage only tested with nightly compiler
           # because it supports `--doctests` flag
-          - label: nightly rustc
-            rust_version: nightly
+          - rust_version: nightly
             codecov: true
             latest_deps: false
           # Test with the latest versions of deps
           - label: stable rustc, latest deps
+            rust_version: stable
             codecov: false
             latest_deps: true
 
