@@ -1,0 +1,97 @@
+# Topic transaction metrics are merged with the ydb-slo-action defaults.
+metrics:
+  - name: transaction_latency_p50_ms
+    unit: ms
+    query: |
+      1000 * max by(ref) (
+        sdk_operation_latency_p50_seconds{operation_type="transaction",operation_status="success"}
+      )
+
+  - name: transaction_latency_p95_ms
+    unit: ms
+    query: |
+      1000 * max by(ref) (
+        sdk_operation_latency_p95_seconds{operation_type="transaction",operation_status="success"}
+      )
+
+  - name: transaction_latency_p99_ms
+    unit: ms
+    query: |
+      1000 * max by(ref) (
+        sdk_operation_latency_p99_seconds{operation_type="transaction",operation_status="success"}
+      )
+
+  - name: transaction_throughput
+    unit: ops/s
+    query: |
+      sum by(ref) (
+        rate(sdk_operations_total{operation_type="transaction",operation_status="success"}[5s])
+      )
+
+  - name: transaction_retry_attempts
+    unit: attempts
+    round: 1
+    query: |
+      clamp_min(
+        round(
+          sum by(ref) (increase(sdk_retry_attempts_total{operation_type="transaction"}[5s]))
+          -
+          sum by(ref) (increase(sdk_operations_total{operation_type="transaction"}[5s]))
+        ),
+        0
+      )
+
+  - name: transaction_availability
+    unit: "%"
+    round: 0.01
+    query: |
+      clamp_max(
+        100 * (
+          sum by(ref) (rate(sdk_operations_total{operation_type="transaction",operation_status="success"}[5s]))
+          /
+          sum by(ref) (rate(sdk_operations_total{operation_type="transaction"}[5s]))
+        ),
+        100
+      )
+
+  - name: transaction_ambiguous_commit_percent
+    unit: "%"
+    round: 0.01
+    query: |
+      100 * (
+        sum by(ref) (
+          rate(sdk_errors_total{operation_type="transaction",error_name="ambiguous_commit"}[5s])
+        )
+        or on(ref)
+        0 * sum by(ref) (rate(sdk_operations_total{operation_type="transaction"}[5s]))
+      )
+      /
+      sum by(ref) (rate(sdk_operations_total{operation_type="transaction"}[5s]))
+
+  - name: transaction_operational_failure_percent
+    unit: "%"
+    round: 0.01
+    query: |
+      100 * (
+        sum by(ref) (
+          rate(sdk_errors_total{operation_type="transaction",error_name="operational_failure"}[5s])
+        )
+        or on(ref)
+        0 * sum by(ref) (rate(sdk_operations_total{operation_type="transaction"}[5s]))
+      )
+      /
+      sum by(ref) (rate(sdk_operations_total{operation_type="transaction"}[5s]))
+
+  - name: transaction_invalid_chain_state_percent
+    unit: "%"
+    round: 0.01
+    query: |
+      100 * (
+        sum by(ref) (
+          rate(sdk_errors_total{operation_type="transaction",error_name="invalid_chain_state"}[5s])
+        )
+        or on(ref)
+        0 * sum by(ref) (rate(sdk_operations_total{operation_type="transaction"}[5s]))
+      )
+      /
+      sum by(ref) (rate(sdk_operations_total{operation_type="transaction"}[5s]))
