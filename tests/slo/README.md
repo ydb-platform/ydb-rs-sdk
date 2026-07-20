@@ -8,17 +8,25 @@ SLO tests exercise the SDK against a YDB cluster under chaos (node failures, net
 
 ```
 tests/slo/
-  Dockerfile                 # builds slo-native-query / slo-native-topic binaries
+  Dockerfile                 # builds the native SLO workload binaries
   slo-framework/             # shared framework (config, metrics, kv workload)
   native/query/              # QueryClient key-value workload (#453)
   native/topic/              # Topic workload
+  native/topic-tx/           # Topic + table transaction workload
 ```
 
 ## CI
 
-1. Add the `SLO` label to a pull request targeting `master`.
-2. Workflow `.github/workflows/slo.yml` builds current and baseline Docker images and runs `ydb-slo-action/init@v2`.
-3. Workflow `.github/workflows/slo-report.yml` publishes the comparison report as a PR comment (same format as ydb-go-sdk).
+Workflow `.github/workflows/slo.yml` builds current and baseline Docker images
+and runs `ydb-slo-action/init@v2`. It can be started by adding the `SLO` label
+to a pull request targeting `master`, or manually through `workflow_dispatch`.
+The manual run does not require an issue or pull request number.
+
+Workflow `.github/workflows/slo-report.yml` processes every non-cancelled SLO
+run. Successful workload reports are uploaded as HTML artifacts. When an issue
+or pull request number is available, the workflow also publishes the report as
+a comment. The original SLO run retains raw metrics and logs when a workload
+fails before an HTML report can be generated.
 
 ## Local run
 
@@ -28,6 +36,8 @@ The workload runs **setup → run → teardown** in one process (create table, p
 cargo build --release -p slo-native-query
 # or
 cargo build --release -p slo-native-topic
+# or
+cargo build --release -p slo-native-topic-tx
 
 export YDB_CONNECTION_STRING=grpc://localhost:2136/local
 export WORKLOAD_REF=local
@@ -61,6 +71,15 @@ WORKLOAD_REF=local \
 WORKLOAD_NAME=native-topic \
 WORKLOAD_DURATION=60 \
 cargo run --release -p slo-native-topic -- --write-rps 1000
+
+# Topic transaction chains:
+YDB_CONNECTION_STRING=grpc://localhost:2136/local \
+WORKLOAD_REF=local \
+WORKLOAD_NAME=native-topic-tx \
+WORKLOAD_DURATION=60 \
+cargo run --release -p slo-native-topic-tx -- \
+  --partition-count 16 \
+  --session-pool-size 16
 ```
 
 ### CLI flags
@@ -94,6 +113,41 @@ acknowledgement; delivery timeouts, SDK read errors, and validation failures are
 also failed `read` operations. Successful read latency measures only commit
 acknowledgement time. Consequently, write throughput counts messages while read
 throughput counts committed batches.
+
+### Topic transaction CLI flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--partition-count` | 16 | Fixed topic partitions; one worker runs per partition |
+| `--session-pool-size` | 16 | Shared query session pool limit and warm-up size |
+| `--operation-timeout` | 120000 | YDB operation deadline (ms) |
+
+The topic transaction workload creates the configured number of fixed topic
+partitions and runs one worker per partition. Each partition starts with one
+generation-0 event. A transaction reads one message, UPSERTs its immutable
+transition, writes its successor to the same partition, and commits the consumer
+offset. Workers share the bounded query session pool; the defaults provide one
+query session per partition worker.
+
+After shutdown, every partition must have exactly one live message:
+
+```text
+topic end offset - committed consumer offset = 1
+```
+
+The transition table must contain exactly one row for every committed input
+offset, with contiguous generations. An ambiguous commit is recorded as a
+failed transaction operation; the transactional reader reconnects in the
+background and continues from the offset exposed by YDB without trying to
+classify the previous outcome. The workload does not exercise automatic topic
+partitioning or consumer-group rebalancing; the plain topic workload owns that
+coverage.
+
+Topic transaction metrics measure one logical chain advance, including any
+internal `retry_tx` attempts. A confirmed commit is successful; an operational
+error or ambiguous commit result is failed. The report separates ambiguous
+commits, operational failures, and invalid chain state.
+Atomicity and worker progress remain final pass/fail invariants.
 
 Table path: `{database}/{WORKLOAD_NAME}/{WORKLOAD_REF}` (e.g. `/local/native-query/local`).
 
