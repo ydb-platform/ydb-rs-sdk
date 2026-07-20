@@ -328,4 +328,4 @@ topic_test!(non_retryable_fail, timeout_secs = 20, {
     Ok(())
 });
 
-// TODO: Test TopicReader Token recieving before restart, Token recieving after restart.
+// TODO: Test TopicReader Token receiving before restart, Token receiving after restart.

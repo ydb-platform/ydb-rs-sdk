@@ -43,7 +43,7 @@ pub type YandexMetadata = MetadataUrlCredentials;
 
 pub(crate) type CredentialsRef = Arc<dyn Credentials>;
 
-pub(crate) fn credencials_ref<T: 'static + Credentials>(cred: T) -> CredentialsRef {
+pub(crate) fn credentials_ref<T: 'static + Credentials>(cred: T) -> CredentialsRef {
     Arc::new(cred)
 }
 

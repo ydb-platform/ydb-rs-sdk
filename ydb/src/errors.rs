@@ -71,7 +71,7 @@ impl From<YdbError> for YdbOrCustomerError {
 pub(crate) enum NeedRetry {
     True,           // operation guarantee to not completed, error is temporary, need retry
     IdempotentOnly, // operation in unknown state - it may be completed or not, error temporary. Operation may be auto retry for idempotent operations only.
-    False, // operation is completed or error is stable (for example yql syntaxt errror) and no need retry
+    False, // operation is completed or error is stable (for example yql syntax error) and no need retry
 }
 
 /// Error which can be returned from the crate.
@@ -121,7 +121,7 @@ impl YdbError {
 
 /// Describe operation status from server
 ///
-/// Messages and codes doesn't have stable gurantee. But codes more stable.
+/// Messages and codes doesn't have stable guarantee. But codes more stable.
 /// If you want detect some errors prefer code over text parse. Messages for human usage only.
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
@@ -216,7 +216,7 @@ impl From<u32> for YdbIssueSeverity {
 
 /// Describe issue from server
 ///
-/// Messages and codes doesn't have stable gurantee. But codes more stable.
+/// Messages and codes doesn't have stable guarantee. But codes more stable.
 /// If you want detect some errors prefer code over text parse. Messages for human usage only.
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
