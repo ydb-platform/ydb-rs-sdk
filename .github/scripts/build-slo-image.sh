@@ -80,6 +80,9 @@ case "$src_path" in
   native/topic)
     pkg_name="slo-native-topic"
     ;;
+  native/topic-tx)
+    pkg_name="slo-native-topic-tx"
+    ;;
   *)
     die "Unknown --src-path: $src_path"
     ;;

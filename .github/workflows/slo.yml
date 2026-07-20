@@ -12,8 +12,8 @@ on:
   workflow_dispatch:
     inputs:
       github_issue:
-        description: "GitHub issue number where the SLO results will be reported"
-        required: true
+        description: "Optional issue or pull request number for the SLO report comment"
+        required: false
       baseline_ref:
         description: "Baseline commit/branch/tag to compare against (leave empty to auto-detect merge-base with main)"
         required: false
@@ -50,6 +50,9 @@ jobs:
           - name: native-topic
             path: native/topic
             metrics_yaml_path: current/tests/slo/metrics-topic.yaml
+          - name: native-topic-tx
+            path: native/topic-tx
+            metrics_yaml_path: current/tests/slo/metrics-topic-tx.yaml
 
     concurrency:
       group: slo-${{ github.ref }}-${{ matrix.sdk.name }}
@@ -123,7 +126,16 @@ jobs:
           fetch-depth: 1
           submodules: true
 
-      - name: Build workload images
+      - name: Check baseline workload availability
+        id: baseline-workload
+        run: |
+          if [[ -f "$GITHUB_WORKSPACE/baseline/tests/slo/${{ matrix.sdk.path }}/Cargo.toml" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build current workload image
         run: |
           SCRIPT="$GITHUB_WORKSPACE/current/.github/scripts/build-slo-image.sh"
           chmod +x "$SCRIPT"
@@ -132,6 +144,11 @@ jobs:
             --context "$GITHUB_WORKSPACE/current" \
             --tag "ydb-app-current" \
             --src-path "${{ matrix.sdk.path }}"
+
+      - name: Build baseline workload image
+        if: steps.baseline-workload.outputs.available == 'true'
+        run: |
+          SCRIPT="$GITHUB_WORKSPACE/current/.github/scripts/build-slo-image.sh"
 
           # slo-framework is shared by all workloads; keep it in sync with current
           # so baseline images pick up framework fixes (e.g. OTLP client features).
@@ -158,6 +175,7 @@ jobs:
           fail_on_workload_error: "true"
           workload_current_ref: ${{ github.head_ref || github.ref_name }}
           workload_current_image: ydb-app-current
-          workload_baseline_ref: ${{ steps.baseline.outputs.ref }}
-          workload_baseline_image: ydb-app-baseline
+          workload_baseline_ref: ${{ steps.baseline-workload.outputs.available == 'true' && steps.baseline.outputs.ref || '' }}
+          workload_baseline_image: ${{ steps.baseline-workload.outputs.available == 'true' && 'ydb-app-baseline' || '' }}
           metrics_yaml_path: ${{ matrix.sdk.metrics_yaml_path }}
+          disable_compose_profiles: ${{ steps.baseline-workload.outputs.available != 'true' && 'workload-baseline' || '' }}
