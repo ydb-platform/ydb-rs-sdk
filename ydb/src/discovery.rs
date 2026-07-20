@@ -292,7 +292,7 @@ struct DiscoverySharedState {
 }
 
 impl DiscoverySharedState {
-    fn new(connection_manager: GrpcConnectionManager, endpoint: &str) -> YdbResult<Self> {
+    fn new(connection_manager: DiscoveryConnectionManager, endpoint: &str) -> YdbResult<Self> {
         let (state_sender, _) = watch::channel(None);
         Ok(Self {
             connection_manager,
@@ -503,8 +503,6 @@ mod test {
     use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::test_helpers::test_client_builder;
-    use http::Uri;
-    use std::str::FromStr;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
