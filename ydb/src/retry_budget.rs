@@ -467,7 +467,8 @@ impl RetriesPerSecond {
 
             tokio::spawn(async move {
                 let mut ticker = tokio::time::interval(interval);
-                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
+                // Skip the first tick as it's immediate
+                ticker.tick().await;
                 loop {
                     tokio::select!(
                         _ = cancellation.cancelled() => break,
