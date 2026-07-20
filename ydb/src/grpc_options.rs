@@ -6,6 +6,7 @@ use tracing::trace;
 use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
 
 /// Common options for gRPC connections.
+/// ```
 #[derive(Debug, Clone)]
 pub struct GrpcOptions {
     /// Interval between HTTP/2 PING-based keepalives.
@@ -62,6 +63,13 @@ pub trait HasGrpcOptions {
     /// Modifies the inner gRPC options.
     ///
     /// For fallible version of this method, see [`Self::try_with_grpc_opts`].
+    ///
+    /// ```
+    /// # fn main() {
+    ///     let client_builder = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")
+    ///         .with_grpc_opts(|opts| opts.keepalive_interval(Duration::from_sec(10)));
+    /// # }
+    /// ```
     fn with_grpc_opts<F: FnOnce(GrpcOptions) -> GrpcOptions>(mut self, f: F) -> Self
     where
         Self: Sized,
