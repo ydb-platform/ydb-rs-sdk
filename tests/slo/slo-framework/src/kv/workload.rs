@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use anyhow::{Context, Error, Result, bail};
 use rand::Rng;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
@@ -30,15 +31,19 @@ impl<D: Database + 'static> KvWorkload<D> {
 
 #[async_trait::async_trait]
 impl<D: Database + 'static> Workload for KvWorkload<D> {
-    async fn setup(&self, ctx: &CancellationToken) -> Result<(), String> {
-        self.db.create_table().await?;
+    async fn setup(&self, ctx: &CancellationToken) -> Result<()> {
+        self.db
+            .create_table()
+            .await
+            .map_err(Error::msg)
+            .context("create table")?;
         self.fw.logger.printf("create table ok");
 
         let r#gen = Generator::new(0);
         let mut tasks = JoinSet::new();
         for _ in 0..self.params.prefill_count {
             if ctx.is_cancelled() {
-                return Err("setup cancelled".to_string());
+                bail!("setup cancelled");
             }
             let db = self.db.clone();
             let row = r#gen.generate();
@@ -46,14 +51,14 @@ impl<D: Database + 'static> Workload for KvWorkload<D> {
         }
 
         while let Some(res) = tasks.join_next().await {
-            res.map_err(|err| err.to_string())??;
+            res?.map_err(Error::msg).context("write prefill entry")?;
         }
 
         self.fw.logger.printf("entries write ok");
         Ok(())
     }
 
-    async fn run(&self, ctx: &CancellationToken) -> Result<(), String> {
+    async fn run(&self, ctx: &CancellationToken) -> Result<()> {
         let run_gen = Generator::new(self.params.prefill_count);
         let read_limiter = new_rate_limiter(self.params.read_rps);
         let write_limiter = new_rate_limiter(self.params.write_rps);
@@ -148,10 +153,10 @@ impl<D: Database + 'static> Workload for KvWorkload<D> {
         Ok(())
     }
 
-    async fn teardown(&self, _ctx: &CancellationToken) -> Result<(), String> {
+    async fn teardown(&self, _ctx: &CancellationToken) -> Result<()> {
         let result = self.db.drop_table().await;
         let _ = self.db.close().await;
-        result?;
+        result.map_err(Error::msg).context("drop table")?;
         self.fw.logger.printf("cleanup table ok");
         Ok(())
     }
