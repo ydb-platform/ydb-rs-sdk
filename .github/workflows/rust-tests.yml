@@ -14,35 +14,35 @@ env:
 
 jobs:
   tests:
-    name: ${{ format('tests ({0}{1})', matrix.rust_version_name, case(matrix.latest_deps, ', latest deps', '')) }}
+    name: tests (${{ matrix.label }})
 
     strategy:
       fail-fast: false
       matrix:
         include:
           # MSRV. Keep in sync with [workspace.package].rust-version in Cargo.toml.
-          - rust_version_name: MSRV
+          - label: MSRV
             rust_version: "1.88"
             codecov: false
             latest_deps: false
           # Pinned modern Rust version used for forward compatibility coverage.
-          - rust_version_name: modern
+          - label: modern
             rust_version: "1.96"
             codecov: false
             latest_deps: false
-          - rust_version_name: stable
+          - label: stable
             rust_version: stable
             codecov: false
             latest_deps: false
           # Test with nightly compiler.
           # Coverage only tested with nightly compiler
           # because it supports `--doctests` flag
-          - rust_version_name: nightly
+          - label: nightly
             rust_version: nightly
             codecov: true
             latest_deps: false
           # Test with the latest versions of deps
-          - rust_version: stable
+          - label: stable, with latest deps
             codecov: false
             latest_deps: true
 
