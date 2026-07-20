@@ -36,7 +36,8 @@ jobs:
           # Test with nightly compiler.
           # Coverage only tested with nightly compiler
           # because it supports `--doctests` flag
-          - rust_version: nightly
+          - label: nightly rustc, codecov
+            rust_version: nightly
             codecov: true
             latest_deps: false
           # Test with the latest versions of deps
