@@ -21,28 +21,28 @@ jobs:
       matrix:
         include:
           # MSRV. Keep in sync with [workspace.package].rust-version in Cargo.toml.
-          - label: MSRV
+          - label: MSRV rustc
             rust_version: "1.88"
             codecov: false
             latest_deps: false
           # Pinned modern Rust version used for forward compatibility coverage.
-          - label: modern
+          - label: modern rustc
             rust_version: "1.96"
             codecov: false
             latest_deps: false
-          - label: stable
+          - label: stable rustc
             rust_version: stable
             codecov: false
             latest_deps: false
           # Test with nightly compiler.
           # Coverage only tested with nightly compiler
           # because it supports `--doctests` flag
-          - label: nightly
+          - label: nightly rustc
             rust_version: nightly
             codecov: true
             latest_deps: false
           # Test with the latest versions of deps
-          - label: stable, with latest deps
+          - label: stable rustc, latest deps
             codecov: false
             latest_deps: true
 
