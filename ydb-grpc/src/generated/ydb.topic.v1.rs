@@ -6,10 +6,10 @@ pub mod topic_service_client {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value
+        clippy::let_unit_value,
     )]
-    use tonic::codegen::http::Uri;
     use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
     #[derive(Debug, Clone)]
     pub struct TopicServiceClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -48,13 +48,14 @@ pub mod topic_service_client {
             F: tonic::service::Interceptor,
             T::ResponseBody: Default,
             T: tonic::codegen::Service<
-                    http::Request<tonic::body::Body>,
-                    Response = http::Response<
-                        <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
-                    >,
+                http::Request<tonic::body::Body>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
                 >,
-            <T as tonic::codegen::Service<http::Request<tonic::body::Body>>>::Error:
-                Into<StdError> + std::marker::Send + std::marker::Sync,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::Body>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
         {
             TopicServiceClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -116,12 +117,18 @@ pub mod topic_service_client {
             >,
             tonic::Status,
         > {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/Ydb.Topic.V1.TopicService/StreamWrite");
+            let path = http::uri::PathAndQuery::from_static(
+                "/Ydb.Topic.V1.TopicService/StreamWrite",
+            );
             let mut req = request.into_streaming_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("Ydb.Topic.V1.TopicService", "StreamWrite"));
@@ -143,7 +150,7 @@ pub mod topic_service_client {
         /// StartPartitionSessionRequest(Topic2, Partition2, PartitionSessionID2, ...)
         /// \<----------------
         /// StartPartitionSessionResponse(PartitionSessionID1, ...)
-        /// client must respond with this message to actually start receiving data messages from this partition
+        /// client must respond with this message to actually start recieving data messages from this partition
         /// ---------------->
         /// StopPartitionSessionRequest(PartitionSessionID1, ...)
         /// \<----------------
@@ -166,15 +173,23 @@ pub mod topic_service_client {
                 Message = super::super::stream_read_message::FromClient,
             >,
         ) -> std::result::Result<
-            tonic::Response<tonic::codec::Streaming<super::super::stream_read_message::FromServer>>,
+            tonic::Response<
+                tonic::codec::Streaming<super::super::stream_read_message::FromServer>,
+            >,
             tonic::Status,
         > {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/Ydb.Topic.V1.TopicService/StreamRead");
+            let path = http::uri::PathAndQuery::from_static(
+                "/Ydb.Topic.V1.TopicService/StreamRead",
+            );
             let mut req = request.into_streaming_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("Ydb.Topic.V1.TopicService", "StreamRead"));
@@ -184,14 +199,22 @@ pub mod topic_service_client {
         pub async fn commit_offset(
             &mut self,
             request: impl tonic::IntoRequest<super::super::CommitOffsetRequest>,
-        ) -> std::result::Result<tonic::Response<super::super::CommitOffsetResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::super::CommitOffsetResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/Ydb.Topic.V1.TopicService/CommitOffset");
+            let path = http::uri::PathAndQuery::from_static(
+                "/Ydb.Topic.V1.TopicService/CommitOffset",
+            );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("Ydb.Topic.V1.TopicService", "CommitOffset"));
@@ -200,37 +223,55 @@ pub mod topic_service_client {
         /// Add information about offset ranges to the transaction.
         pub async fn update_offsets_in_transaction(
             &mut self,
-            request: impl tonic::IntoRequest<super::super::UpdateOffsetsInTransactionRequest>,
+            request: impl tonic::IntoRequest<
+                super::super::UpdateOffsetsInTransactionRequest,
+            >,
         ) -> std::result::Result<
             tonic::Response<super::super::UpdateOffsetsInTransactionResponse>,
             tonic::Status,
         > {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/Ydb.Topic.V1.TopicService/UpdateOffsetsInTransaction",
             );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "Ydb.Topic.V1.TopicService",
-                "UpdateOffsetsInTransaction",
-            ));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "Ydb.Topic.V1.TopicService",
+                        "UpdateOffsetsInTransaction",
+                    ),
+                );
             self.inner.unary(req, path, codec).await
         }
         /// Create topic command.
         pub async fn create_topic(
             &mut self,
             request: impl tonic::IntoRequest<super::super::CreateTopicRequest>,
-        ) -> std::result::Result<tonic::Response<super::super::CreateTopicResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::super::CreateTopicResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/Ydb.Topic.V1.TopicService/CreateTopic");
+            let path = http::uri::PathAndQuery::from_static(
+                "/Ydb.Topic.V1.TopicService/CreateTopic",
+            );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("Ydb.Topic.V1.TopicService", "CreateTopic"));
@@ -240,19 +281,25 @@ pub mod topic_service_client {
         pub async fn describe_topic(
             &mut self,
             request: impl tonic::IntoRequest<super::super::DescribeTopicRequest>,
-        ) -> std::result::Result<tonic::Response<super::super::DescribeTopicResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::super::DescribeTopicResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/Ydb.Topic.V1.TopicService/DescribeTopic");
+            let path = http::uri::PathAndQuery::from_static(
+                "/Ydb.Topic.V1.TopicService/DescribeTopic",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "Ydb.Topic.V1.TopicService",
-                "DescribeTopic",
-            ));
+            req.extensions_mut()
+                .insert(GrpcMethod::new("Ydb.Topic.V1.TopicService", "DescribeTopic"));
             self.inner.unary(req, path, codec).await
         }
         /// Describe topic's consumer command.
@@ -263,31 +310,45 @@ pub mod topic_service_client {
             tonic::Response<super::super::DescribeConsumerResponse>,
             tonic::Status,
         > {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/Ydb.Topic.V1.TopicService/DescribeConsumer");
+            let path = http::uri::PathAndQuery::from_static(
+                "/Ydb.Topic.V1.TopicService/DescribeConsumer",
+            );
             let mut req = request.into_request();
-            req.extensions_mut().insert(GrpcMethod::new(
-                "Ydb.Topic.V1.TopicService",
-                "DescribeConsumer",
-            ));
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("Ydb.Topic.V1.TopicService", "DescribeConsumer"),
+                );
             self.inner.unary(req, path, codec).await
         }
         /// Alter topic command.
         pub async fn alter_topic(
             &mut self,
             request: impl tonic::IntoRequest<super::super::AlterTopicRequest>,
-        ) -> std::result::Result<tonic::Response<super::super::AlterTopicResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::super::AlterTopicResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path =
-                http::uri::PathAndQuery::from_static("/Ydb.Topic.V1.TopicService/AlterTopic");
+            let path = http::uri::PathAndQuery::from_static(
+                "/Ydb.Topic.V1.TopicService/AlterTopic",
+            );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("Ydb.Topic.V1.TopicService", "AlterTopic"));
@@ -297,13 +358,22 @@ pub mod topic_service_client {
         pub async fn drop_topic(
             &mut self,
             request: impl tonic::IntoRequest<super::super::DropTopicRequest>,
-        ) -> std::result::Result<tonic::Response<super::super::DropTopicResponse>, tonic::Status>
-        {
-            self.inner.ready().await.map_err(|e| {
-                tonic::Status::unknown(format!("Service was not ready: {}", e.into()))
-            })?;
+        ) -> std::result::Result<
+            tonic::Response<super::super::DropTopicResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
             let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static("/Ydb.Topic.V1.TopicService/DropTopic");
+            let path = http::uri::PathAndQuery::from_static(
+                "/Ydb.Topic.V1.TopicService/DropTopic",
+            );
             let mut req = request.into_request();
             req.extensions_mut()
                 .insert(GrpcMethod::new("Ydb.Topic.V1.TopicService", "DropTopic"));
@@ -318,7 +388,7 @@ pub mod topic_service_server {
         dead_code,
         missing_docs,
         clippy::wildcard_imports,
-        clippy::let_unit_value
+        clippy::let_unit_value,
     )]
     use tonic::codegen::*;
     /// Generated trait containing gRPC methods that should be implemented for use with TopicServiceServer.
@@ -330,7 +400,8 @@ pub mod topic_service_server {
                     super::super::stream_write_message::FromServer,
                     tonic::Status,
                 >,
-            > + std::marker::Send
+            >
+            + std::marker::Send
             + 'static;
         /// Create Write Session
         /// Pipeline example:
@@ -356,14 +427,18 @@ pub mod topic_service_server {
             request: tonic::Request<
                 tonic::Streaming<super::super::stream_write_message::FromClient>,
             >,
-        ) -> std::result::Result<tonic::Response<Self::StreamWriteStream>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<Self::StreamWriteStream>,
+            tonic::Status,
+        >;
         /// Server streaming response type for the StreamRead method.
         type StreamReadStream: tonic::codegen::tokio_stream::Stream<
                 Item = std::result::Result<
                     super::super::stream_read_message::FromServer,
                     tonic::Status,
                 >,
-            > + std::marker::Send
+            >
+            + std::marker::Send
             + 'static;
         /// Create Read Session
         /// Pipeline:
@@ -381,7 +456,7 @@ pub mod topic_service_server {
         /// StartPartitionSessionRequest(Topic2, Partition2, PartitionSessionID2, ...)
         /// \<----------------
         /// StartPartitionSessionResponse(PartitionSessionID1, ...)
-        /// client must respond with this message to actually start receiving data messages from this partition
+        /// client must respond with this message to actually start recieving data messages from this partition
         /// ---------------->
         /// StopPartitionSessionRequest(PartitionSessionID1, ...)
         /// \<----------------
@@ -408,7 +483,10 @@ pub mod topic_service_server {
         async fn commit_offset(
             &self,
             request: tonic::Request<super::super::CommitOffsetRequest>,
-        ) -> std::result::Result<tonic::Response<super::super::CommitOffsetResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::super::CommitOffsetResponse>,
+            tonic::Status,
+        >;
         /// Add information about offset ranges to the transaction.
         async fn update_offsets_in_transaction(
             &self,
@@ -421,12 +499,18 @@ pub mod topic_service_server {
         async fn create_topic(
             &self,
             request: tonic::Request<super::super::CreateTopicRequest>,
-        ) -> std::result::Result<tonic::Response<super::super::CreateTopicResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::super::CreateTopicResponse>,
+            tonic::Status,
+        >;
         /// Describe topic command.
         async fn describe_topic(
             &self,
             request: tonic::Request<super::super::DescribeTopicRequest>,
-        ) -> std::result::Result<tonic::Response<super::super::DescribeTopicResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::super::DescribeTopicResponse>,
+            tonic::Status,
+        >;
         /// Describe topic's consumer command.
         async fn describe_consumer(
             &self,
@@ -439,12 +523,18 @@ pub mod topic_service_server {
         async fn alter_topic(
             &self,
             request: tonic::Request<super::super::AlterTopicRequest>,
-        ) -> std::result::Result<tonic::Response<super::super::AlterTopicResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::super::AlterTopicResponse>,
+            tonic::Status,
+        >;
         /// Drop topic command.
         async fn drop_topic(
             &self,
             request: tonic::Request<super::super::DropTopicRequest>,
-        ) -> std::result::Result<tonic::Response<super::super::DropTopicResponse>, tonic::Status>;
+        ) -> std::result::Result<
+            tonic::Response<super::super::DropTopicResponse>,
+            tonic::Status,
+        >;
     }
     #[derive(Debug)]
     pub struct TopicServiceServer<T> {
@@ -467,7 +557,10 @@ pub mod topic_service_server {
                 max_encoding_message_size: None,
             }
         }
-        pub fn with_interceptor<F>(inner: T, interceptor: F) -> InterceptedService<Self, F>
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
         where
             F: tonic::service::Interceptor,
         {
@@ -520,19 +613,23 @@ pub mod topic_service_server {
                 "/Ydb.Topic.V1.TopicService/StreamWrite" => {
                     #[allow(non_camel_case_types)]
                     struct StreamWriteSvc<T: TopicService>(pub Arc<T>);
-                    impl<T: TopicService>
-                        tonic::server::StreamingService<
-                            super::super::stream_write_message::FromClient,
-                        > for StreamWriteSvc<T>
-                    {
+                    impl<
+                        T: TopicService,
+                    > tonic::server::StreamingService<
+                        super::super::stream_write_message::FromClient,
+                    > for StreamWriteSvc<T> {
                         type Response = super::super::stream_write_message::FromServer;
                         type ResponseStream = T::StreamWriteStream;
-                        type Future =
-                            BoxFuture<tonic::Response<Self::ResponseStream>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<
-                                tonic::Streaming<super::super::stream_write_message::FromClient>,
+                                tonic::Streaming<
+                                    super::super::stream_write_message::FromClient,
+                                >,
                             >,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
@@ -567,19 +664,23 @@ pub mod topic_service_server {
                 "/Ydb.Topic.V1.TopicService/StreamRead" => {
                     #[allow(non_camel_case_types)]
                     struct StreamReadSvc<T: TopicService>(pub Arc<T>);
-                    impl<T: TopicService>
-                        tonic::server::StreamingService<
-                            super::super::stream_read_message::FromClient,
-                        > for StreamReadSvc<T>
-                    {
+                    impl<
+                        T: TopicService,
+                    > tonic::server::StreamingService<
+                        super::super::stream_read_message::FromClient,
+                    > for StreamReadSvc<T> {
                         type Response = super::super::stream_read_message::FromServer;
                         type ResponseStream = T::StreamReadStream;
-                        type Future =
-                            BoxFuture<tonic::Response<Self::ResponseStream>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::ResponseStream>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<
-                                tonic::Streaming<super::super::stream_read_message::FromClient>,
+                                tonic::Streaming<
+                                    super::super::stream_read_message::FromClient,
+                                >,
                             >,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
@@ -614,12 +715,15 @@ pub mod topic_service_server {
                 "/Ydb.Topic.V1.TopicService/CommitOffset" => {
                     #[allow(non_camel_case_types)]
                     struct CommitOffsetSvc<T: TopicService>(pub Arc<T>);
-                    impl<T: TopicService>
-                        tonic::server::UnaryService<super::super::CommitOffsetRequest>
-                        for CommitOffsetSvc<T>
-                    {
+                    impl<
+                        T: TopicService,
+                    > tonic::server::UnaryService<super::super::CommitOffsetRequest>
+                    for CommitOffsetSvc<T> {
                         type Response = super::super::CommitOffsetResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::super::CommitOffsetRequest>,
@@ -656,12 +760,16 @@ pub mod topic_service_server {
                 "/Ydb.Topic.V1.TopicService/UpdateOffsetsInTransaction" => {
                     #[allow(non_camel_case_types)]
                     struct UpdateOffsetsInTransactionSvc<T: TopicService>(pub Arc<T>);
-                    impl<T: TopicService>
-                        tonic::server::UnaryService<super::super::UpdateOffsetsInTransactionRequest>
-                        for UpdateOffsetsInTransactionSvc<T>
-                    {
+                    impl<
+                        T: TopicService,
+                    > tonic::server::UnaryService<
+                        super::super::UpdateOffsetsInTransactionRequest,
+                    > for UpdateOffsetsInTransactionSvc<T> {
                         type Response = super::super::UpdateOffsetsInTransactionResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<
@@ -670,7 +778,10 @@ pub mod topic_service_server {
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as TopicService>::update_offsets_in_transaction(&inner, request)
+                                <T as TopicService>::update_offsets_in_transaction(
+                                        &inner,
+                                        request,
+                                    )
                                     .await
                             };
                             Box::pin(fut)
@@ -701,12 +812,15 @@ pub mod topic_service_server {
                 "/Ydb.Topic.V1.TopicService/CreateTopic" => {
                     #[allow(non_camel_case_types)]
                     struct CreateTopicSvc<T: TopicService>(pub Arc<T>);
-                    impl<T: TopicService>
-                        tonic::server::UnaryService<super::super::CreateTopicRequest>
-                        for CreateTopicSvc<T>
-                    {
+                    impl<
+                        T: TopicService,
+                    > tonic::server::UnaryService<super::super::CreateTopicRequest>
+                    for CreateTopicSvc<T> {
                         type Response = super::super::CreateTopicResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::super::CreateTopicRequest>,
@@ -743,12 +857,15 @@ pub mod topic_service_server {
                 "/Ydb.Topic.V1.TopicService/DescribeTopic" => {
                     #[allow(non_camel_case_types)]
                     struct DescribeTopicSvc<T: TopicService>(pub Arc<T>);
-                    impl<T: TopicService>
-                        tonic::server::UnaryService<super::super::DescribeTopicRequest>
-                        for DescribeTopicSvc<T>
-                    {
+                    impl<
+                        T: TopicService,
+                    > tonic::server::UnaryService<super::super::DescribeTopicRequest>
+                    for DescribeTopicSvc<T> {
                         type Response = super::super::DescribeTopicResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::super::DescribeTopicRequest>,
@@ -785,19 +902,25 @@ pub mod topic_service_server {
                 "/Ydb.Topic.V1.TopicService/DescribeConsumer" => {
                     #[allow(non_camel_case_types)]
                     struct DescribeConsumerSvc<T: TopicService>(pub Arc<T>);
-                    impl<T: TopicService>
-                        tonic::server::UnaryService<super::super::DescribeConsumerRequest>
-                        for DescribeConsumerSvc<T>
-                    {
+                    impl<
+                        T: TopicService,
+                    > tonic::server::UnaryService<super::super::DescribeConsumerRequest>
+                    for DescribeConsumerSvc<T> {
                         type Response = super::super::DescribeConsumerResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
-                            request: tonic::Request<super::super::DescribeConsumerRequest>,
+                            request: tonic::Request<
+                                super::super::DescribeConsumerRequest,
+                            >,
                         ) -> Self::Future {
                             let inner = Arc::clone(&self.0);
                             let fut = async move {
-                                <T as TopicService>::describe_consumer(&inner, request).await
+                                <T as TopicService>::describe_consumer(&inner, request)
+                                    .await
                             };
                             Box::pin(fut)
                         }
@@ -827,12 +950,15 @@ pub mod topic_service_server {
                 "/Ydb.Topic.V1.TopicService/AlterTopic" => {
                     #[allow(non_camel_case_types)]
                     struct AlterTopicSvc<T: TopicService>(pub Arc<T>);
-                    impl<T: TopicService>
-                        tonic::server::UnaryService<super::super::AlterTopicRequest>
-                        for AlterTopicSvc<T>
-                    {
+                    impl<
+                        T: TopicService,
+                    > tonic::server::UnaryService<super::super::AlterTopicRequest>
+                    for AlterTopicSvc<T> {
                         type Response = super::super::AlterTopicResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::super::AlterTopicRequest>,
@@ -869,12 +995,15 @@ pub mod topic_service_server {
                 "/Ydb.Topic.V1.TopicService/DropTopic" => {
                     #[allow(non_camel_case_types)]
                     struct DropTopicSvc<T: TopicService>(pub Arc<T>);
-                    impl<T: TopicService>
-                        tonic::server::UnaryService<super::super::DropTopicRequest>
-                        for DropTopicSvc<T>
-                    {
+                    impl<
+                        T: TopicService,
+                    > tonic::server::UnaryService<super::super::DropTopicRequest>
+                    for DropTopicSvc<T> {
                         type Response = super::super::DropTopicResponse;
-                        type Future = BoxFuture<tonic::Response<Self::Response>, tonic::Status>;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
                         fn call(
                             &mut self,
                             request: tonic::Request<super::super::DropTopicRequest>,
@@ -908,19 +1037,25 @@ pub mod topic_service_server {
                     };
                     Box::pin(fut)
                 }
-                _ => Box::pin(async move {
-                    let mut response = http::Response::new(tonic::body::Body::default());
-                    let headers = response.headers_mut();
-                    headers.insert(
-                        tonic::Status::GRPC_STATUS,
-                        (tonic::Code::Unimplemented as i32).into(),
-                    );
-                    headers.insert(
-                        http::header::CONTENT_TYPE,
-                        tonic::metadata::GRPC_CONTENT_TYPE,
-                    );
-                    Ok(response)
-                }),
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
             }
         }
     }
