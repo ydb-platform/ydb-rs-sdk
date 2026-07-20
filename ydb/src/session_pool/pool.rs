@@ -753,10 +753,10 @@ fn session_should_close(
 impl SessionPool {
     /// Explicit pool backed by in-memory stub sessions (no CreateSession / Attach / Delete RPC).
     pub(crate) fn new_explicit_bench(settings: SessionPoolSettings) -> Self {
+        use crate::GrpcOptions;
         use crate::grpc_connection_manager::GrpcConnectionManager;
         use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
         use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-        use crate::GrpcOptions;
 
         let settings = normalize_pool_settings(settings);
         let warm_up = settings.warm_up;

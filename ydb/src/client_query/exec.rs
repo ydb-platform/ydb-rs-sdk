@@ -855,9 +855,9 @@ pub(super) fn build_client_execute_request_for_test(
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+    use crate::GrpcOptions;
     use crate::errors::{YdbError, YdbOrCustomerError};
     use crate::retry_budget::retry_wait;
-    use crate::GrpcOptions;
 
     #[test]
     fn retry_helpers_and_wait() {

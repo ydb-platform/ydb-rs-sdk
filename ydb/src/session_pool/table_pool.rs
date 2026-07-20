@@ -70,12 +70,12 @@ impl TableSessionPool {
 #[cfg(test)]
 mod test {
     use super::TableSessionPool;
+    use crate::GrpcOptions;
     use crate::errors::YdbResult;
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
     use crate::session_pool::{SessionPool, SessionPoolSettings};
-    use crate::GrpcOptions;
     use http::Uri;
     use std::time::Duration;
     use tokio::sync::oneshot;
