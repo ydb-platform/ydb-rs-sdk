@@ -406,7 +406,9 @@ impl FromStr for ClientBuilder {
 
 #[cfg(test)]
 mod test {
-    use crate::{ClientBuilder, YdbError, YdbResult};
+    use std::time::Duration;
+
+    use crate::{ClientBuilder, HasGrpcOptions, YdbError, YdbResult};
 
     #[test]
     fn database_from_path() -> YdbResult<()> {
@@ -501,5 +503,24 @@ mod test {
                 "expected connection string parsing failure".to_string(),
             )),
         }
+    }
+
+    #[test]
+    fn grpc_opts_can_be_set() {
+        let path = std::env::temp_dir().join(format!("ydb-test-cert-{}.pem", std::process::id()));
+
+        std::fs::write(
+            &path,
+            "whatever, nobody validate the certificate at this stage",
+        )
+        .unwrap();
+
+        ClientBuilder::new_from_connection_string("grpc://ydb.local:123/database")
+            .unwrap()
+            .with_grpc_opts(|opts| opts.keepalive_interval(Duration::from_secs(5)))
+            .try_with_grpc_opts(|opts| opts.max_message_size(10).load_certificate(&path))
+            .unwrap();
+
+        let _ = std::fs::remove_file(path);
     }
 }
