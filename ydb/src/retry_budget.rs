@@ -15,7 +15,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::Semaphore;
+use tokio::{sync::Semaphore, time::MissedTickBehavior};
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::{instrument, trace, warn};
 
@@ -268,7 +268,7 @@ impl<S: RetryStrategy, D: RetryDeadline> RetryBudget<S, D> {
 /// State of a retried operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RetryState {
-    /// Number of the current attempt.
+    /// Number of the failed attempt.
     ///
     /// Starts from zero.
     pub attempt: usize,
@@ -286,11 +286,6 @@ impl RetryState {
             start_time: Instant::now(),
         }
     }
-
-    /// Resets retry state.
-    pub fn reset(&mut self) {
-        *self = Self::init();
-    }
 }
 
 /// Retry wait strategy.
@@ -305,9 +300,7 @@ pub trait RetryStrategy: Send + Sync {
     fn wait_retry<'a>(
         &'a self,
         _retry: &'a RetryState,
-    ) -> impl Future<Output = ControlFlow<()>> + Send + 'a {
-        future::ready(ControlFlow::Continue(()))
-    }
+    ) -> impl Future<Output = ControlFlow<()>> + Send + 'a;
 }
 
 /// Extension trait that provides useful methods for retry strategies.
@@ -468,6 +461,7 @@ impl RetriesPerSecond {
             let mut ticker = tokio::time::interval(interval);
             // Skip the first tick as it's immediate
             ticker.tick().await;
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
             loop {
                 tokio::select!(
                     _ = cancellation.cancelled() => break,
@@ -686,16 +680,105 @@ impl<A: RetryAlways, B: RetryAlways> RetryAlways for Combine<A, B> {}
 mod tests {
     use super::*;
 
+    struct ConstantBackoff(Duration);
+
+    impl RetryStrategy for ConstantBackoff {
+        async fn wait_retry<'a>(&'a self, _retry: &'a RetryState) -> ControlFlow<()> {
+            tokio::time::sleep(self.0).await;
+            ControlFlow::Continue(())
+        }
+    }
+
+    struct WaitTrap {
+        waited: std::sync::Mutex<bool>,
+    }
+
+    impl WaitTrap {
+        fn new() -> Self {
+            Self {
+                waited: Default::default(),
+            }
+        }
+
+        fn waited(&self) -> bool {
+            *self.waited.lock().unwrap()
+        }
+    }
+
+    impl RetryStrategy for WaitTrap {
+        async fn wait_retry<'a>(&'a self, _retry: &'a RetryState) -> ControlFlow<()> {
+            *self.waited.lock().unwrap() = true;
+            ControlFlow::Continue(())
+        }
+    }
+
+    #[tokio::test]
+    async fn combine_deadlines() {
+        let start = Instant::now();
+        Combine(Duration::from_secs(1), Duration::from_secs(1))
+            .wait_deadline()
+            .await;
+        // Deadline composition is their minimum
+        assert!(start.elapsed() >= Duration::from_secs(1));
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[tokio::test]
+    async fn combine_backoffs() {
+        let start = Instant::now();
+
+        let result = Combine(
+            ConstantBackoff(Duration::from_secs(1)),
+            ConstantBackoff(Duration::from_secs(1)),
+        )
+        .wait_retry(&RetryState::init())
+        .await;
+
+        assert!(result.is_continue());
+        assert!(start.elapsed() >= Duration::from_secs(2));
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+
+    #[tokio::test]
+    async fn combine_first_fail() {
+        let first_trap = WaitTrap::new();
+        let last_trap = WaitTrap::new();
+        let retry_budget = RetryBudget::new(first_trap.as_ref_strategy())
+            .and_then(DontRetry)
+            .and_then(last_trap.as_ref_strategy());
+
+        assert!(
+            retry_budget
+                .wait_retry(&RetryState::init())
+                .await
+                .is_break()
+        );
+
+        assert!(first_trap.waited());
+        assert!(!last_trap.waited());
+    }
+
     #[tokio::test]
     async fn limited_budget_respects_rate() {
-        let budget = RetriesPerSecond::new(1);
-        assert!(budget.wait_retry(&RetryState::init()).await.is_continue());
-        let second = tokio::time::timeout(
-            Duration::from_millis(50),
-            budget.wait_retry(&RetryState::init()),
-        )
-        .await;
-        assert!(second.is_err());
+        async fn try_wait_retry(retry_strategy: &impl RetryStrategy) -> Option<ControlFlow<()>> {
+            tokio::time::timeout(
+                Duration::from_millis(50),
+                retry_strategy.wait_retry(&RetryState::init()),
+            )
+            .await
+            .ok()
+        }
+
+        tokio::time::pause();
+
+        let strategy = RetriesPerSecond::new(1);
+        assert!(strategy.wait_retry(&RetryState::init()).await.is_continue());
+        let second = try_wait_retry(&strategy).await;
+        assert!(second.is_none());
+        tokio::time::advance(Duration::from_secs(2)).await;
+
+        assert!(try_wait_retry(&strategy).await.unwrap().is_continue());
+        assert!(try_wait_retry(&strategy).await.is_none());
     }
 
     #[tokio::test]
