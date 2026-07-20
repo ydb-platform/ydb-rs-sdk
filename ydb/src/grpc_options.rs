@@ -65,6 +65,8 @@ pub trait HasGrpcOptions {
     /// For fallible version of this method, see [`Self::try_with_grpc_opts`].
     ///
     /// ```
+    /// # use std::time::Duration;
+    /// #
     /// # fn main() {
     ///     let client_builder = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")
     ///         .with_grpc_opts(|opts| opts.keepalive_interval(Duration::from_sec(10)));
