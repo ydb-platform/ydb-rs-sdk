@@ -15,6 +15,13 @@ pub struct TopicWriterMessage {
     pub(crate) created_at: time::SystemTime,
 }
 
+impl TopicWriterMessage {
+    /// Creates a message with the provided payload and default metadata.
+    pub fn new(data: impl Into<Vec<u8>>) -> Self {
+        Self::builder().data(data.into()).build()
+    }
+}
+
 impl TryFrom<TopicWriterMessage> for MessageData {
     type Error = YdbError;
 
