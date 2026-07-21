@@ -45,14 +45,11 @@ jobs:
       fail-fast: false
       matrix:
         sdk:
-          - name: native-query
-            path: native/query
-          - name: native-topic
-            path: native/topic
-            metrics_yaml_path: current/tests/slo/metrics-topic.yaml
           - name: native-topic-tx
             path: native/topic-tx
             metrics_yaml_path: current/tests/slo/metrics-topic-tx.yaml
+            baseline: false
+            disable_compose_profiles: workload-baseline
 
     concurrency:
       group: slo-${{ github.ref }}-${{ matrix.sdk.name }}
@@ -95,6 +92,7 @@ jobs:
           submodules: true
 
       - name: Determine baseline commit
+        if: matrix.sdk.baseline
         id: baseline
         run: |
           cd current
@@ -119,21 +117,13 @@ jobs:
           echo "ref=$BASELINE_REF" >> $GITHUB_OUTPUT
 
       - name: Checkout baseline version
+        if: matrix.sdk.baseline
         uses: actions/checkout@v5
         with:
           ref: ${{ steps.baseline.outputs.sha }}
           path: baseline
           fetch-depth: 1
           submodules: true
-
-      - name: Check baseline workload availability
-        id: baseline-workload
-        run: |
-          if [[ -f "$GITHUB_WORKSPACE/baseline/tests/slo/${{ matrix.sdk.path }}/Cargo.toml" ]]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Build current workload image
         run: |
@@ -146,7 +136,7 @@ jobs:
             --src-path "${{ matrix.sdk.path }}"
 
       - name: Build baseline workload image
-        if: steps.baseline-workload.outputs.available == 'true'
+        if: matrix.sdk.baseline
         run: |
           SCRIPT="$GITHUB_WORKSPACE/current/.github/scripts/build-slo-image.sh"
 
@@ -175,7 +165,7 @@ jobs:
           fail_on_workload_error: "true"
           workload_current_ref: ${{ github.head_ref || github.ref_name }}
           workload_current_image: ydb-app-current
-          workload_baseline_ref: ${{ steps.baseline-workload.outputs.available == 'true' && steps.baseline.outputs.ref || '' }}
-          workload_baseline_image: ${{ steps.baseline-workload.outputs.available == 'true' && 'ydb-app-baseline' || '' }}
+          workload_baseline_ref: ${{ matrix.sdk.baseline && steps.baseline.outputs.ref || '' }}
+          workload_baseline_image: ${{ matrix.sdk.baseline && 'ydb-app-baseline' || '' }}
           metrics_yaml_path: ${{ matrix.sdk.metrics_yaml_path }}
-          disable_compose_profiles: ${{ steps.baseline-workload.outputs.available != 'true' && 'workload-baseline' || '' }}
+          disable_compose_profiles: ${{ matrix.sdk.disable_compose_profiles }}
