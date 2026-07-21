@@ -74,17 +74,6 @@ pub(super) async fn upsert_transition(
     Ok(())
 }
 
-pub(super) fn transition_from_row(mut row: Row) -> Result<ChainTransition> {
-    Ok(ChainTransition {
-        coordinate: MessageCoordinate {
-            partition_id: PartitionId::new(required_field(&mut row, "partition_id")?),
-            offset: TopicOffset::new(required_field(&mut row, "input_offset")?),
-        },
-        input_generation: required_field(&mut row, "input_generation")?,
-        output_generation: required_field(&mut row, "output_generation")?,
-    })
-}
-
 pub(super) fn required_field<T>(row: &mut Row, name: &str) -> Result<T>
 where
     T: TryFrom<Value, Error = YdbError>,

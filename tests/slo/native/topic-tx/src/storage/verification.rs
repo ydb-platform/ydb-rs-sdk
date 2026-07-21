@@ -2,12 +2,12 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use tokio::time::{Instant, sleep, timeout};
-use ydb::{DescribeConsumerOptionsBuilder, ResultSet};
+use ydb::DescribeConsumerOptionsBuilder;
 
-use slo_framework::topic_tx::{ChainTransition, MessageCoordinate, PartitionId, TopicOffset};
+use slo_framework::topic_tx::{PartitionId, TopicOffset};
 
 use super::TopicTxStorage;
-use super::queries::transition_from_row;
+use super::queries::required_field;
 
 const STABLE_STATE_PERIOD: Duration = Duration::from_secs(1);
 const POOL_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -115,8 +115,7 @@ impl TopicTxStorage {
         for (raw_partition_id, partition) in partitions.iter().enumerate() {
             let partition_id = PartitionId::new(raw_partition_id as i64);
             Self::verify_partition_topic_state(partition_id, partition)?;
-            let transition_rows = self.read_partition_transition_rows(partition_id).await?;
-            Self::verify_partition_table_state(partition, transition_rows)?;
+            self.verify_partition_table_state(partition).await?;
         }
         Ok(())
     }
@@ -150,21 +149,27 @@ impl TopicTxStorage {
         Ok(())
     }
 
-    async fn read_partition_transition_rows(&self, partition_id: PartitionId) -> Result<ResultSet> {
-        // Reading one partition at a time keeps the standard SLO result below
-        // the Query API result limit.
+    async fn verify_partition_table_state(&self, partition: &PartitionOffsets) -> Result<()> {
+        let partition_id = partition.partition_id;
         let query = format!(
-            "SELECT partition_id, input_offset, input_generation, output_generation
+            "SELECT
+                COUNT(*) AS transition_count,
+                COUNT_IF(
+                    input_offset >= 0
+                    AND input_offset < $committed_offset
+                    AND input_generation = CAST(input_offset AS Uint64)
+                    AND output_generation = CAST(input_offset + 1 AS Uint64)
+                ) AS valid_transition_count
              FROM `{}`
-             WHERE partition_id = $partition_id
-             ORDER BY input_offset",
+             WHERE partition_id = $partition_id",
             self.params.table_path,
         );
-        let result_set = self
+        let mut row = self
             .query_client
             .clone()
-            .query_result_set(query)
+            .query_row(query)
             .param("$partition_id", partition_id.value())
+            .param("$committed_offset", partition.committed_offset.value())
             .idempotent(true)
             .timeout(self.params.operation_timeout)
             .await
@@ -174,39 +179,17 @@ impl TopicTxStorage {
                     self.params.table_path,
                 )
             })?;
-        ensure!(
-            !result_set.is_truncated(),
-            "table result for partition {partition_id} is truncated",
-        );
-        Ok(result_set)
-    }
+        let transition_count: u64 = required_field(&mut row, "transition_count")?;
+        let valid_transition_count: u64 = required_field(&mut row, "valid_transition_count")?;
+        let expected_count = partition.committed_offset.value() as u64;
 
-    fn verify_partition_table_state(
-        partition: &PartitionOffsets,
-        transition_rows: ResultSet,
-    ) -> Result<()> {
-        let partition_id = partition.partition_id;
-        let mut transition_count = 0;
-        for row in transition_rows.rows() {
-            let expected = ChainTransition {
-                coordinate: MessageCoordinate {
-                    partition_id,
-                    offset: TopicOffset::new(transition_count),
-                },
-                input_generation: transition_count as u64,
-                output_generation: transition_count as u64 + 1,
-            };
-            let transition = transition_from_row(row)?;
-            ensure!(
-                transition == expected,
-                "expected transition {expected:?}, found {transition:?}",
-            );
-            transition_count += 1;
-        }
         ensure!(
-            transition_count == partition.committed_offset.value(),
-            "partition {partition_id} has {transition_count} table transitions, expected {}",
-            partition.committed_offset,
+            transition_count == expected_count,
+            "partition {partition_id} has {transition_count} table transitions, expected {expected_count}",
+        );
+        ensure!(
+            valid_transition_count == expected_count,
+            "partition {partition_id} has {valid_transition_count} valid table transitions, expected {expected_count}",
         );
         Ok(())
     }
