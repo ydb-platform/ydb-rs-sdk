@@ -2612,6 +2612,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "slo-native-topic-tx"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "slo-framework",
+ "tokio",
+ "tokio-util",
+ "ydb",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
