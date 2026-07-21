@@ -7,6 +7,7 @@ use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
 
 /// Common options for gRPC connections.
 #[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 pub struct GrpcOptions {
     /// Interval between HTTP/2 PING-based keepalives.
     pub keepalive_interval: Option<Duration>,
