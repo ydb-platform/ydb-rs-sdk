@@ -414,10 +414,7 @@ impl ReconnectionLoop {
             .helper
             .get_timeout_before_reconnect(self.attempt, self.reconnect_start_time.elapsed())
         else {
-            return ReconnectionLoopStatus::Exit(Some(YdbError::custom(format!(
-                "reconnect is not allowed after {} attempts for error: {err}",
-                self.attempt,
-            ))));
+            return ReconnectionLoopStatus::Exit(Some(err));
         };
 
         match self.helper.wait_before_reconnect(wait_timeout).await {
