@@ -28,16 +28,18 @@ metrics:
         rate(sdk_operations_total{operation_type="transaction",operation_status="success"}[5s])
       )
 
-  - name: transaction_retry_attempts
-    unit: attempts
-    round: 1
+  - name: transaction_retry_overhead_percent
+    unit: "%"
+    round: 0.01
     query: |
-      clamp_min(
-        round(
+      100 * clamp_min(
+        (
           sum by(ref) (increase(sdk_retry_attempts_total{operation_type="transaction"}[5s]))
           -
           sum by(ref) (increase(sdk_operations_total{operation_type="transaction"}[5s]))
-        ),
+        )
+        /
+        sum by(ref) (increase(sdk_operations_total{operation_type="transaction"}[5s])),
         0
       )
 

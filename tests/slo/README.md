@@ -144,9 +144,11 @@ partitioning or consumer-group rebalancing; the plain topic workload owns that
 coverage.
 
 Topic transaction metrics measure one logical chain advance, including any
-internal `retry_tx` attempts. A confirmed commit is successful; an operational
-error or ambiguous commit result is failed. The report separates ambiguous
-commits, operational failures, and invalid chain state.
+internal `retry_tx` attempts. Retry overhead is the number of extra attempts per
+logical transaction, expressed as a percentage. A confirmed commit is
+successful; an operational error or ambiguous commit result is failed. The
+report separates ambiguous commits, operational failures, and invalid chain
+state.
 Atomicity and worker progress remain final pass/fail invariants.
 
 Table path: `{database}/{WORKLOAD_NAME}/{WORKLOAD_REF}` (e.g. `/local/native-query/local`).
