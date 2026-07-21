@@ -1,7 +1,7 @@
 #![recursion_limit = "256"]
 use std::time::Duration;
 use tokio::time::timeout;
-use ydb::{ClientBuilder, HasGrpcOptions, YdbError, YdbResult};
+use ydb::{ClientBuilder, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
@@ -12,17 +12,8 @@ async fn main() -> YdbResult<()> {
         // sets this to be the default, global collector for this application.
         .init();
 
-    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
-        .try_with_grpc_opts(|opts| {
-            opts.keepalive_interval(Duration::from_secs(3))
-                .max_message_size(100500)
-                .load_certificate("./cert.pem")
-        })?
-        .with_grpc_opts(|opts| {
-            opts.keepalive_interval(Duration::from_secs(3))
-                .max_message_size(100500)
-        })
-        .client()?;
+    let client =
+        ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.client()?;
 
     match timeout(Duration::from_secs(3), client.wait()).await {
         Ok(res) => res?,
