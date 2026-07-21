@@ -159,7 +159,7 @@ fn token_static_password(uri: &str, mut client_builder: ClientBuilder) -> YdbRes
         endpoint,
         client_builder.database.clone(),
     )
-    .with_grpc_opts(|_| client_builder.grpc_opts.clone());
+    .with_grpc_opts(client_builder.grpc_opts.clone());
 
     client_builder.credentials = credencials_ref(creds);
 
@@ -171,8 +171,7 @@ fn ca_certificate(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
         if key != "ca_certificate" {
             continue;
         };
-        client_builder =
-            client_builder.try_with_grpc_opts(|opts| opts.load_certificate(&*value))?;
+        client_builder = client_builder.load_certificate(&*value)?;
         break;
     }
 
@@ -312,7 +311,7 @@ impl ClientBuilder {
         )
     }
 
-    pub fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
+    pub fn with_credentials<T: Credentials + 'static>(mut self, cred: T) -> Self {
         self.credentials = credencials_ref(cred);
         self
     }
@@ -386,10 +385,6 @@ impl ClientBuilder {
 }
 
 impl HasGrpcOptions for ClientBuilder {
-    fn grpc_opts(&self) -> &GrpcOptions {
-        &self.grpc_opts
-    }
-
     fn grpc_opts_mut(&mut self) -> &mut GrpcOptions {
         &mut self.grpc_opts
     }
@@ -517,8 +512,9 @@ mod test {
 
         ClientBuilder::new_from_connection_string("grpc://ydb.local:123/database")
             .unwrap()
-            .with_grpc_opts(|opts| opts.keepalive_interval(Duration::from_secs(5)))
-            .try_with_grpc_opts(|opts| opts.max_message_size(10).load_certificate(&path))
+            .with_grpc_keepalive_interval(Duration::from_secs(5))
+            .with_grpc_max_message_size(10)
+            .load_certificate(&path)
             .unwrap();
 
         let _ = std::fs::remove_file(path);

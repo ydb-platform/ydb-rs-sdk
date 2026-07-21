@@ -27,77 +27,58 @@ impl Default for GrpcOptions {
     }
 }
 
-impl GrpcOptions {
+impl GrpcOptions {}
+
+/// Helper trait for types that has configurable gRPC options.
+pub trait HasGrpcOptions {
     /// Sets interval between HTTP/2 PING-based keepalives.
-    pub fn keepalive_interval<I: Into<Option<Duration>>>(mut self, value: I) -> Self {
-        self.keepalive_interval = value.into();
+    fn with_grpc_keepalive_interval<I: Into<Option<Duration>>>(mut self, value: I) -> Self
+    where
+        Self: Sized,
+    {
+        self.grpc_opts_mut().keepalive_interval = value.into();
         self
     }
 
     /// Loads TLS certificate from given path.
-    pub fn load_certificate<P: AsRef<Path>>(mut self, path: P) -> io::Result<Self> {
+    fn load_certificate<P: AsRef<Path>>(self, path: P) -> io::Result<Self>
+    where
+        Self: Sized,
+    {
         let pem = fs::read_to_string(path)?;
         trace!("loaded cert: {pem}");
 
         let ca = Certificate::from_pem(pem);
-        self.tls_config = Some(ClientTlsConfig::new().ca_certificate(ca).into());
 
-        Ok(self)
+        Ok(self.with_tls_config(ClientTlsConfig::new().ca_certificate(ca)))
     }
 
     /// Sets TLS configuration.
-    pub fn tls_config<I: Into<Arc<ClientTlsConfig>>>(mut self, value: I) -> Self {
-        self.tls_config = Some(value.into());
+    fn with_tls_config<I: Into<Arc<ClientTlsConfig>>>(mut self, value: I) -> Self
+    where
+        Self: Sized,
+    {
+        self.grpc_opts_mut().tls_config = Some(value.into());
         self
     }
 
     /// Sets maximum gRPC message size.
-    pub fn max_message_size(mut self, value: usize) -> Self {
-        self.max_message_size = value;
-        self
-    }
-}
-
-/// Helper trait for types that has configurable gRPC options.
-pub trait HasGrpcOptions {
-    /// Modifies the inner gRPC options.
-    ///
-    /// For fallible version of this method, see [`Self::try_with_grpc_opts`].
-    ///
-    /// ```
-    /// # use std::time::Duration;
-    /// # use ydb::{ClientBuilder, HasGrpcOptions};
-    /// #
-    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     let client_builder = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
-    ///         .with_grpc_opts(|opts| opts.keepalive_interval(Duration::from_secs(10)));
-    /// #    Ok(())
-    /// # }
-    /// ```
-    fn with_grpc_opts<F: FnOnce(GrpcOptions) -> GrpcOptions>(mut self, f: F) -> Self
+    fn with_grpc_max_message_size(mut self, value: usize) -> Self
     where
         Self: Sized,
     {
-        *self.grpc_opts_mut() = f(std::mem::take(self.grpc_opts_mut()));
+        self.grpc_opts_mut().max_message_size = value;
         self
     }
 
-    /// Tries to modify the inner gRPC options.
-    ///
-    /// Fallible counterpart of [`Self::with_grpc_opts`].
-    fn try_with_grpc_opts<E, F: FnOnce(GrpcOptions) -> Result<GrpcOptions, E>>(
-        mut self,
-        f: F,
-    ) -> Result<Self, E>
+    /// Sets gRPC options.
+    fn with_grpc_opts(mut self, opts: GrpcOptions) -> Self
     where
         Self: Sized,
     {
-        *self.grpc_opts_mut() = f(std::mem::take(self.grpc_opts_mut()))?;
-        Ok(self)
+        *self.grpc_opts_mut() = opts;
+        self
     }
-
-    /// Borrows the inner gRPC options.
-    fn grpc_opts(&self) -> &GrpcOptions;
 
     /// Mutably borrows the inner gRPC options.
     fn grpc_opts_mut(&mut self) -> &mut GrpcOptions;

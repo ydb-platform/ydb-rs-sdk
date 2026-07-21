@@ -581,10 +581,6 @@ impl Credentials for StaticCredentials {
 }
 
 impl HasGrpcOptions for StaticCredentials {
-    fn grpc_opts(&self) -> &GrpcOptions {
-        &self.grpc_opts
-    }
-
     fn grpc_opts_mut(&mut self) -> &mut GrpcOptions {
         &mut self.grpc_opts
     }
