@@ -215,7 +215,7 @@ impl RuntimeHandle {
             partition_session_id,
             Some(committed_offset),
             &YdbError::custom(format!(
-                "partition session {partition_session_id} stopped by server"
+                "partition session stopped by server: {partition_session_id}"
             )),
         );
         active
