@@ -7,12 +7,14 @@ mod logger;
 mod metrics;
 mod row;
 pub mod topic;
+pub mod topic_tx;
 
 pub use config::Config;
 pub use framework::{Framework, Workload, run};
 pub use generator::Generator;
+pub use helpers::{RateLimiter, new_rate_limiter, preserve_primary_error};
 pub use kv::{Database, KvWorkload};
 pub use logger::Logger;
-pub use metrics::Metrics;
+pub use metrics::{Metrics, OPERATION_READ, OPERATION_WRITE, Span};
 pub use row::{RowID, TestRow, test_row_from_row};
 pub use topic::{TopicService, TopicWorkload};
