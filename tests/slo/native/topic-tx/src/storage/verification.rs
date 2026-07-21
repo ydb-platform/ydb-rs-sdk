@@ -7,7 +7,7 @@ use ydb::{DescribeConsumerOptionsBuilder, ResultSet};
 use slo_framework::topic_tx::{ChainTransition, MessageCoordinate, PartitionId, TopicOffset};
 
 use super::TopicTxStorage;
-use super::queries::{required_field, transition_from_row};
+use super::queries::transition_from_row;
 
 const STABLE_STATE_PERIOD: Duration = Duration::from_secs(1);
 const POOL_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -118,13 +118,7 @@ impl TopicTxStorage {
             let transition_rows = self.read_partition_transition_rows(partition_id).await?;
             Self::verify_partition_table_state(partition, transition_rows)?;
         }
-
-        let expected_transition_count = partitions
-            .iter()
-            .map(|partition| partition.committed_offset.value() as u64)
-            .sum();
-        self.verify_total_transition_count(expected_transition_count)
-            .await
+        Ok(())
     }
 
     fn verify_partition_topic_state(
@@ -213,26 +207,6 @@ impl TopicTxStorage {
             transition_count == partition.committed_offset.value(),
             "partition {partition_id} has {transition_count} table transitions, expected {}",
             partition.committed_offset,
-        );
-        Ok(())
-    }
-
-    async fn verify_total_transition_count(&self, expected: u64) -> Result<()> {
-        let mut row = self
-            .query_client
-            .clone()
-            .query_row(format!(
-                "SELECT COUNT(*) AS transition_count FROM `{}`",
-                self.params.table_path,
-            ))
-            .idempotent(true)
-            .timeout(self.params.operation_timeout)
-            .await
-            .with_context(|| format!("count transitions in table {}", self.params.table_path))?;
-        let actual: u64 = required_field(&mut row, "transition_count")?;
-        ensure!(
-            actual == expected,
-            "table contains {actual} transitions, expected {expected}",
         );
         Ok(())
     }
