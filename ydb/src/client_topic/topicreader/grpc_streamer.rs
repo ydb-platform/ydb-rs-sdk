@@ -41,7 +41,8 @@ impl GrpcStreamer {
         decompression_input_tx: mpsc::UnboundedSender<RawFromServer>,
         client_message_rx: mpsc::UnboundedReceiver<RawFromClientOneOf>,
     ) -> YdbResult<Self> {
-        let stream = grpc_connect(&attempt.manager, &attempt.options).await?;
+        let mut stream = grpc_connect(&attempt.manager, &attempt.options).await?;
+        handle_init_response(stream.receive::<RawFromServer>().await?)?;
 
         Ok(Self {
             stream,
@@ -77,6 +78,18 @@ impl GrpcStreamer {
         ));
 
         wait_child_tasks(&stream_cancellation, tasks, "topic reader grpc stream").await
+    }
+}
+
+fn handle_init_response(message: RawFromServer) -> YdbResult<()> {
+    match message {
+        RawFromServer::InitResponse(response) => {
+            debug!(?response, "topic reader initialized");
+            Ok(())
+        }
+        message => Err(YdbError::custom(format!(
+            "topic reader expected init response, got: {message:?}"
+        ))),
     }
 }
 
@@ -174,4 +187,36 @@ fn send_client_message(
     sender
         .send(from_client)
         .map_err(|err| YdbError::Transport(format!("topic reader send failed: {err}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
+        RawInitResponse, RawReadResponse,
+    };
+    use ydb_grpc::ydb_proto::topic::stream_read_message;
+
+    #[test]
+    fn accepts_init_response_as_first_server_message() {
+        let response = stream_read_message::InitResponse {
+            session_id: "test-session".to_string(),
+        };
+
+        assert!(
+            handle_init_response(RawFromServer::InitResponse(RawInitResponse::from(response)))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn rejects_non_init_response_as_first_server_message() {
+        assert!(
+            handle_init_response(RawFromServer::ReadResponse(RawReadResponse {
+                bytes_size: 0,
+                partition_data: Vec::new(),
+            }))
+            .is_err()
+        );
+    }
 }

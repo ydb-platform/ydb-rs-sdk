@@ -102,9 +102,11 @@ impl RuntimeHandle {
             RawFromServer::StopPartitionSessionRequest(req) => {
                 self.handle_stop_partition_session(req)
             }
-            RawFromServer::InitResponse(_) => {
-                debug!("topic reader initialized");
-                Ok(())
+            RawFromServer::InitResponse(response) => {
+                warn!(?response, "topic reader received unexpected init response");
+                Err(YdbError::custom(format!(
+                    "topic reader received unexpected init response: {response:?}"
+                )))
             }
             RawFromServer::UpdateTokenResponse(_) => {
                 debug!("topic reader received update token response");
@@ -467,7 +469,24 @@ mod tests {
 
     use super::*;
     use crate::client_topic::topicreader::messages::TopicReaderMessage;
-    use crate::grpc_wrapper::raw_topic_service::stream_read::messages::RawReadRequest;
+    use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
+        RawInitResponse, RawReadRequest,
+    };
+    use ydb_grpc::ydb_proto::topic::stream_read_message;
+
+    #[test]
+    fn rejects_init_response_after_initialization() {
+        let (runtime, _outgoing_rx) = runtime_with_epoch(0);
+        let response = stream_read_message::InitResponse {
+            session_id: "duplicate-session".to_string(),
+        };
+
+        assert!(
+            runtime
+                .handle_from_server(RawFromServer::InitResponse(RawInitResponse::from(response)))
+                .is_err()
+        );
+    }
 
     #[test]
     fn commit_rejects_stale_epoch() {
