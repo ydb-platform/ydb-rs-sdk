@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail, ensure};
-use tokio::time::{Instant, sleep};
+use anyhow::{Context, Result, ensure};
+use tokio::time::{Instant, sleep, timeout};
 use ydb::{DescribeConsumerOptionsBuilder, ResultSet};
 
 use slo_framework::topic_tx::{ChainTransition, MessageCoordinate, PartitionId, TopicOffset};
@@ -9,17 +9,9 @@ use slo_framework::topic_tx::{ChainTransition, MessageCoordinate, PartitionId, T
 use super::TopicTxStorage;
 use super::queries::{required_field, transition_from_row};
 
-const SHUTDOWN_VERIFICATION_TIMEOUT: Duration = Duration::from_secs(5);
-const STATE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const STABLE_STATE_PERIOD: Duration = Duration::from_secs(1);
+const POOL_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 const POOL_POLL_INTERVAL: Duration = Duration::from_millis(10);
-
-// A valid chain is uniquely determined by its committed partition offsets;
-// verify_current_state rechecks the corresponding table rows on every poll.
-struct StableObservation {
-    partition_offsets: Vec<PartitionOffsets>,
-    unchanged_since: Instant,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct PartitionOffsets {
@@ -37,59 +29,35 @@ impl TopicTxStorage {
     }
 
     async fn wait_for_settled_state(&self) -> Result<()> {
-        let timeout = self
-            .params
-            .operation_timeout
-            .min(SHUTDOWN_VERIFICATION_TIMEOUT);
-        let deadline = Instant::now() + timeout;
-        // An ambiguous commit may finish on the server after its RPC has failed.
-        // Require an unchanged valid observation before declaring shutdown clean.
-        let mut stable_observation: Option<StableObservation> = None;
+        timeout(self.params.operation_timeout, async {
+            loop {
+                let partition_offsets = self.wait_for_stable_partition_offsets().await?;
+                // Delay a table failure until the second topic observation. If
+                // offsets moved during the scan, it was not a coherent snapshot.
+                let verification = self.verify_partitions(&partition_offsets).await;
+                let partition_offsets_after = self.read_partition_offsets().await?;
 
-        loop {
-            match self.verify_current_state().await {
-                Ok(partition_offsets) => match &stable_observation {
-                    Some(stable) if stable.partition_offsets == partition_offsets => {
-                        if stable.unchanged_since.elapsed() >= STABLE_STATE_PERIOD {
-                            return Ok(());
-                        }
-                    }
-                    _ => {
-                        stable_observation = Some(StableObservation {
-                            partition_offsets,
-                            unchanged_since: Instant::now(),
-                        });
-                    }
-                },
-                Err(error) => {
-                    stable_observation = None;
-                    if Instant::now() >= deadline {
-                        return Err(error).context("final transaction state did not settle");
-                    }
+                if partition_offsets == partition_offsets_after {
+                    return verification;
                 }
             }
-
-            if Instant::now() >= deadline {
-                bail!(
-                    "final transaction state did not remain unchanged for {} ms",
-                    STABLE_STATE_PERIOD.as_millis(),
-                );
-            }
-            sleep(STATE_POLL_INTERVAL).await;
-        }
+        })
+        .await
+        .context("final transaction state did not settle")?
     }
 
-    async fn verify_current_state(&self) -> Result<Vec<PartitionOffsets>> {
-        // Topic and Query APIs cannot participate in one read snapshot. Equal
-        // topic observations bracket table verification while offsets were stable.
-        let partitions_before = self.read_partition_offsets().await?;
-        self.verify_partitions(&partitions_before).await?;
-        let partitions_after = self.read_partition_offsets().await?;
-        ensure!(
-            partitions_before == partitions_after,
-            "topic transaction state changed while reading table transitions",
-        );
-        Ok(partitions_after)
+    /// An unresolved final commit can advance a partition after its RPC fails.
+    /// Wait for a quiet topic frontier before performing the expensive table scan.
+    async fn wait_for_stable_partition_offsets(&self) -> Result<Vec<PartitionOffsets>> {
+        let mut previous = self.read_partition_offsets().await?;
+        loop {
+            sleep(STABLE_STATE_PERIOD).await;
+            let current = self.read_partition_offsets().await?;
+            if current == previous {
+                return Ok(current);
+            }
+            previous = current;
+        }
     }
 
     pub(super) async fn read_partition_offsets(&self) -> Result<Vec<PartitionOffsets>> {
@@ -270,10 +238,7 @@ impl TopicTxStorage {
     }
 
     async fn wait_for_pool_release(&self) -> Result<()> {
-        let timeout = self
-            .params
-            .operation_timeout
-            .min(SHUTDOWN_VERIFICATION_TIMEOUT);
+        let timeout = self.params.operation_timeout.min(POOL_RELEASE_TIMEOUT);
         let deadline = Instant::now() + timeout;
         loop {
             let stats = self.client.session_pool_stats();
