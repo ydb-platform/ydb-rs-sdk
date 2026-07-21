@@ -85,7 +85,8 @@ impl PartitionWorker {
             // TopicReaderTx discards buffered state and reconnects its reader in
             // the background whenever the transaction aborts.
             //
-            // Metrics use bounded outcome names; complete errors stay in logs.
+            // Non-terminal outcomes use bounded metric names; complete errors
+            // stay in logs. Invalid state propagates as a fatal error.
             match report.outcome {
                 ChainAdvanceOutcome::Committed => {
                     span.finish(None, report.attempts);
@@ -102,7 +103,6 @@ impl PartitionWorker {
                     logger.errorf(message);
                 }
                 ChainAdvanceOutcome::InvalidChainState(error) => {
-                    span.finish(Some("invalid_chain_state"), report.attempts);
                     return Err(error).with_context(|| {
                         format!("partition {} transaction failed", self.partition_id)
                     });

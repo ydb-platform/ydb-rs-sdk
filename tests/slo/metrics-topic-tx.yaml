@@ -81,17 +81,3 @@ metrics:
       )
       /
       sum by(ref) (rate(sdk_operations_total{operation_type="transaction"}[5s]))
-
-  - name: transaction_invalid_chain_state_percent
-    unit: "%"
-    round: 0.01
-    query: |
-      100 * (
-        sum by(ref) (
-          rate(sdk_errors_total{operation_type="transaction",error_name="invalid_chain_state"}[5s])
-        )
-        or on(ref)
-        0 * sum by(ref) (rate(sdk_operations_total{operation_type="transaction"}[5s]))
-      )
-      /
-      sum by(ref) (rate(sdk_operations_total{operation_type="transaction"}[5s]))
