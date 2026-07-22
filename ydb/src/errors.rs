@@ -309,6 +309,7 @@ impl YdbError {
                     | StatusCode::Unavailable
                     | StatusCode::Overloaded
                     | StatusCode::BadSession
+                    | StatusCode::SessionExpired
                     | StatusCode::SessionBusy => NeedRetry::True,
                     StatusCode::Undetermined => NeedRetry::IdempotentOnly,
                     _ => NeedRetry::False,
