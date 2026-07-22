@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use tracing::instrument;
+
 use crate::{
     TopicReader, TopicReaderBatch, YdbError, YdbResult,
     client_query::{
@@ -70,8 +72,9 @@ impl<'a> TopicReaderTx<'a> {
         })
     }
 
+    #[instrument(name = "ydb.TopicReaderTx.ReadBatch", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
-        let batch = self.inner.read_batch().await?;
+        let batch = self.inner.read_batch_inner().await?;
         if let Err(err) = self.update_offsets_in_transaction(&batch).await {
             let _ = self.runtime.force_reconnection(YdbError::custom(
                 "UpdateOffsetsInTransaction failed after reading batch",
@@ -96,7 +99,7 @@ impl<'a> TopicReaderTx<'a> {
             topics: vec![RawTopicOffsets {
                 path: commit_marker.topic.clone(),
                 partitions: vec![RawPartitionOffsets {
-                    partition_id: commit_marker.partition_id,
+                    partition_id: commit_marker.partition_id.into_raw(),
                     partition_offsets: vec![RawOffsetsRange {
                         start: commit_marker.start_offset,
                         end: commit_marker.end_offset,

@@ -5,7 +5,6 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use derivative::Derivative;
 use futures_util::StreamExt;
 use futures_util::stream::{self, BoxStream};
 use http::Uri;
@@ -13,11 +12,11 @@ use http::uri::Authority;
 use itertools::Itertools;
 use tokio::sync::watch;
 use tokio_stream::wrappers::WatchStream;
-use tracing::trace;
+use tracing::{instrument, trace, warn};
 
 use crate::YdbError;
 use crate::errors::{NeedRetry, YdbResult};
-use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::grpc_connection_manager::DiscoveryConnectionManager;
 use crate::grpc_wrapper::{
     raw_discovery_client::{EndpointInfo, GrpcDiscoveryClient},
     raw_services::Service,
@@ -74,9 +73,13 @@ impl DiscoveryState {
         self.nodes.len() == 0
     }
 
+    fn is_pessimized(&self, uri: &Uri) -> bool {
+        self.pessimized_nodes.contains(uri)
+    }
+
     // pessimize return true if state was changed
     pub(crate) fn pessimize(&mut self, uri: &Uri) -> bool {
-        if self.pessimized_nodes.contains(uri) {
+        if self.is_pessimized(uri) {
             return false;
         };
 
@@ -200,17 +203,19 @@ pub(crate) struct TimerDiscovery {
 }
 
 impl TimerDiscovery {
-    #[allow(dead_code)]
     pub(crate) fn new(
-        connection_manager: GrpcConnectionManager,
+        connection_manager: DiscoveryConnectionManager,
         endpoint: &str,
         interval: Duration,
+        token_waiter: impl Waiter + 'static,
     ) -> YdbResult<Self> {
         let state = Arc::new(DiscoverySharedState::new(connection_manager, endpoint)?);
 
         let state_weak = Arc::downgrade(&state);
         tokio::spawn(DiscoverySharedState::background_discovery(
-            state_weak, interval,
+            state_weak,
+            interval,
+            token_waiter,
         ));
 
         Ok(TimerDiscovery { state })
@@ -262,11 +267,9 @@ impl Waiter for TimerDiscovery {
     }
 }
 
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Debug)]
 struct DiscoverySharedState {
-    #[derivative(Debug = "ignore")]
-    connection_manager: GrpcConnectionManager,
+    connection_manager: DiscoveryConnectionManager,
     discovery_uri: Uri,
 
     discovery_lock: tokio::sync::Mutex<()>,
@@ -289,9 +292,8 @@ struct DiscoverySharedState {
 }
 
 impl DiscoverySharedState {
-    fn new(connection_manager: GrpcConnectionManager, endpoint: &str) -> YdbResult<Self> {
+    fn new(connection_manager: DiscoveryConnectionManager, endpoint: &str) -> YdbResult<Self> {
         let (state_sender, _) = watch::channel(None);
-
         Ok(Self {
             connection_manager,
             discovery_uri: http::Uri::from_str(endpoint)?,
@@ -300,7 +302,7 @@ impl DiscoverySharedState {
         })
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(name = "ydb.Discovery.DiscoveryNow", skip_all, err)]
     async fn discovery_now(&self) -> YdbResult<()> {
         let lock = self.discovery_lock.lock().await;
 
@@ -343,8 +345,31 @@ impl DiscoverySharedState {
         Ok(DiscoveryState::new(start, new_endpoints))
     }
 
-    #[tracing::instrument(skip(state))]
-    async fn background_discovery(state: Weak<DiscoverySharedState>, interval: Duration) {
+    #[tracing::instrument(skip(state, token_waiter))]
+    async fn background_discovery(
+        state: Weak<DiscoverySharedState>,
+        interval: Duration,
+        token_waiter: impl Waiter,
+    ) {
+        #[instrument(name = "ydb.Discovery.Timer", skip_all, fields(db.system.name = "ydb", discovery_uri = %state.discovery_uri), err)]
+        async fn discovery_once(
+            state: Arc<DiscoverySharedState>,
+            attempt: usize,
+        ) -> Result<(), YdbError> {
+            trace!("discovery attempt {attempt}");
+            let res = state.discovery_now().await;
+            trace!("discovery result: {:?}", res);
+            res
+        }
+
+        trace!("start background_discovery. Waiting for token renew...");
+        // Wait for the token to be available before the first discovery
+        // attempt. This ensures that the first `ListEndpoints` gRPC call
+        // carries a valid `x-ydb-auth-ticket` header.
+        token_waiter.wait().await.unwrap_or_else(|err| {
+            warn!("token waiter returned error (ignored): {err}");
+        });
+
         'worker: loop {
             let mut attempt = 0;
             let retrier = IndefiniteRetrier;
@@ -355,11 +380,8 @@ impl DiscoverySharedState {
                     break 'worker;
                 };
 
-                trace!("discovery attempt {attempt}");
-                let res = state.discovery_now().await;
+                let res = discovery_once(state, attempt).await;
                 attempt += 1;
-
-                trace!("discovery result: {:?}", res);
 
                 if res.is_ok() {
                     break 'attempt;
@@ -396,7 +418,7 @@ impl DiscoverySharedState {
         Ok(Uri::builder()
             .scheme(if endpoint_info.ssl { "https" } else { "http" })
             .authority(authority)
-            .path_and_query("")
+            .path_and_query("/")
             .build()?)
     }
 }
@@ -404,21 +426,20 @@ impl DiscoverySharedState {
 #[async_trait]
 impl Discovery for DiscoverySharedState {
     fn pessimization(&self, uri: &Uri) {
-        let Some(Ok(state)) = &*self.state_sender.borrow() else {
-            // Node pessimization is reset after discovery,
-            // so it makes no sense to add pessimize node before
-            // the first discovery.
-            return;
-        };
+        self.state_sender.send_if_modified(|current| {
+            let Some(Ok(state)) = current.as_mut() else {
+                // Node pessimization is reset after discovery,
+                // so it makes no sense to pessimize a node before
+                // the first discovery.
+                return false;
+            };
 
-        // TODO: suppress force copy every time
-        let mut state = state.as_ref().clone();
+            if state.is_pessimized(uri) {
+                return false;
+            }
 
-        if !state.pessimize(uri) {
-            return;
-        }
-
-        self.state_sender.send_replace(Some(Ok(Arc::new(state))));
+            Arc::make_mut(state).pessimize(uri)
+        });
     }
 
     fn subscribe(&self) -> BoxStream<'static, Arc<DiscoveryState>> {
@@ -473,18 +494,58 @@ impl Waiter for DiscoverySharedState {
 
 #[cfg(test)]
 mod test {
+    use http::Uri;
+
     use crate::client_common::{DBCredentials, TokenCache};
-    use crate::discovery::DiscoverySharedState;
+    use crate::discovery::{Discovery, DiscoverySharedState, DiscoveryState, NodeInfo};
     use crate::errors::YdbResult;
-    use crate::grpc_connection_manager::GrpcConnectionManager;
+    use crate::grpc_connection_manager::{DiscoveryConnectionManager, NoBalancer};
     use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
-    use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
     use crate::test_helpers::test_client_builder;
-    use http::Uri;
-    use std::str::FromStr;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
+
+    fn discovery_shared_state() -> YdbResult<DiscoverySharedState> {
+        const DATABASE: &str = "/local";
+        const ENDPOINT: &str = "grpc://localhost:2136";
+
+        let connection_manager = DiscoveryConnectionManager::new(
+            NoBalancer,
+            DATABASE.to_string(),
+            MultiInterceptor::new(),
+            None,
+            crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+        );
+
+        DiscoverySharedState::new(connection_manager, ENDPOINT)
+    }
+
+    #[test]
+    fn pessimization_completes_after_discovery() -> YdbResult<()> {
+        let state = Arc::new(discovery_shared_state()?);
+        let endpoint = Uri::from_static("http://localhost:2136");
+        state
+            .state_sender
+            .send_replace(Some(Ok(Arc::new(DiscoveryState::new(
+                Instant::now(),
+                vec![NodeInfo::new(endpoint.clone(), String::new())],
+            )))));
+
+        let state_for_thread = state.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            state_for_thread.pessimization(&endpoint);
+            let _ = done_tx.send(());
+        });
+
+        assert!(
+            done_rx.recv_timeout(Duration::from_secs(1)).is_ok(),
+            "endpoint pessimization deadlocked"
+        );
+
+        Ok(())
+    }
 
     #[tokio::test]
     #[ignore] // need YDB access
@@ -497,15 +558,11 @@ mod test {
             .await??,
         };
 
-        let uri = Uri::from_str(test_client_builder().endpoint.as_str())?;
-        let load_balancer =
-            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(uri)));
-
         let interceptor =
             MultiInterceptor::new().with_interceptor(AuthGrpcInterceptor::new(cred.clone())?);
 
-        let connection_manager = GrpcConnectionManager::new(
-            load_balancer,
+        let connection_manager = DiscoveryConnectionManager::new(
+            NoBalancer,
             cred.database,
             interceptor,
             None,
@@ -521,9 +578,12 @@ mod test {
         rx.borrow_and_update();
 
         let state_weak = Arc::downgrade(&state);
-        tokio::spawn(async {
-            DiscoverySharedState::background_discovery(state_weak, Duration::from_millis(50)).await;
-        });
+
+        tokio::spawn(DiscoverySharedState::background_discovery(
+            state_weak,
+            Duration::from_millis(50),
+            cred.token_cache.clone(),
+        ));
 
         // wait two updates
         for _ in 0..2 {

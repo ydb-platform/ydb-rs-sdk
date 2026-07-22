@@ -1,6 +1,7 @@
 use crate::errors::NeedRetry::IdempotentOnly;
 
 use crate::grpc_wrapper::raw_errors::RawError;
+use http::Uri;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
@@ -92,6 +93,9 @@ pub enum YdbError {
 
     /// No rows in result set
     NoRows,
+
+    /// Endpoint URI has no host.
+    EndpointHasNoHost(Uri),
 
     /// Unexpected error. Write issue if it will happen.
     InternalError(String),
@@ -278,10 +282,11 @@ impl YdbError {
 
     pub(crate) fn need_retry(&self) -> NeedRetry {
         match self {
-            Self::Convert(_) => NeedRetry::False,
-            Self::Custom(_) => NeedRetry::False,
-            Self::InternalError(_) => NeedRetry::False,
-            Self::NoRows => NeedRetry::False,
+            Self::Convert(_)
+            | Self::Custom(_)
+            | Self::InternalError(_)
+            | Self::NoRows
+            | Self::EndpointHasNoHost(_) => NeedRetry::False,
             Self::TransportDial(_) => NeedRetry::True,
             Self::Transport(_) => IdempotentOnly, // TODO: check when transport error created
             Self::TransportGRPCStatus(status) => {

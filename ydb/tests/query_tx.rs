@@ -16,6 +16,7 @@
 //! failed, `retry_tx` must not report a successful commit. Swallowing a transient
 //! query error is different: the transaction is not known to be invalidated, so a
 //! real commit attempt decides the outcome.
+#![recursion_limit = "256"]
 mod mock_server;
 
 use std::sync::atomic::{AtomicUsize, Ordering};

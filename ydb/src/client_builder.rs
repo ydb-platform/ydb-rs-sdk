@@ -7,11 +7,13 @@ use crate::credentials::{
 use crate::dicovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
 use crate::discovery::{Discovery, StaticDiscovery, TimerDiscovery};
 use crate::errors::{YdbError, YdbResult};
-use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::grpc_connection_manager::{
+    DiscoveryConnectionManager, GrpcConnectionManager, NoBalancer,
+};
 use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
 use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
-use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+use crate::load_balancer::SharedLoadBalancer;
 use crate::retry_budget::{RetryBudget, RetryControl};
 use crate::{Client, Credentials};
 use http::Uri;
@@ -266,14 +268,11 @@ impl ClientBuilder {
             database: self.database.clone(),
         };
 
-        let endpoint: Uri = Uri::from_str(self.endpoint.as_str())?;
-        let static_balancer = StaticLoadBalancer::new(endpoint);
-
         let interceptor =
             MultiInterceptor::new().with_interceptor(AuthGrpcInterceptor::new(db_cred.clone())?);
 
-        let discovery_connection_manager = GrpcConnectionManager::new(
-            SharedLoadBalancer::new_with_balancer(Box::new(static_balancer)),
+        let discovery_connection_manager = DiscoveryConnectionManager::new(
+            NoBalancer,
             db_cred.database.clone(),
             interceptor.clone(),
             self.cert_path.clone(),
@@ -289,6 +288,7 @@ impl ClientBuilder {
                 discovery_connection_manager,
                 self.endpoint.as_str(),
                 self.discovery_interval,
+                db_cred.token_cache.clone(),
             )?),
         };
 

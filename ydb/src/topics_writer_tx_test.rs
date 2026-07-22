@@ -49,7 +49,6 @@ async fn topic_writer_tx_write_and_commit() -> YdbResult<()> {
                         .build(),
                 )
                 .await?;
-            writer.stop().await?;
             Ok(true)
         })
         .await?;
@@ -109,7 +108,6 @@ async fn topic_writer_tx_rollback_discards_message() -> YdbResult<()> {
                         .build(),
                 )
                 .await?;
-            writer.stop().await?;
             tx.rollback().await?;
             Ok(())
         })
