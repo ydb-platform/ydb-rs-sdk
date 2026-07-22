@@ -460,3 +460,96 @@ async fn query_execute_script() -> YdbResult<()> {
     idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;
     Ok(())
 }
+
+#[test_log::test(test)]
+#[traced_test]
+#[ignore] // need YDB access
+fn query_and_table_clients_check_no_warn() {
+    struct CustomType {
+        key: String,
+        description: String,
+        changed: SystemTime,
+    }
+
+    async fn get_custom_data(
+        qc: &mut crate::QueryClient,
+        table_name: &str,
+    ) -> YdbResult<Vec<CustomType>> {
+        let rs = qc
+            .query_result_set(format!(
+                "SELECT key, description, changed FROM `{table_name}` ORDER BY key;"
+            ))
+            .with_tx_mode(TxMode::OnlineReadOnly)
+            .await?;
+
+        let mut results = vec![];
+        for mut row in rs {
+            results.push(CustomType {
+                key: row.remove_field_by_name("key")?.try_into()?,
+                description: row.remove_field_by_name("description")?.try_into()?,
+                changed: row.remove_field_by_name("changed")?.try_into()?,
+            });
+        }
+
+        Ok(results)
+    }
+
+    async fn run_me_once() -> YdbResult<()> {
+        let client = create_client().await?;
+        let mut qc = client.query_client();
+
+        let table_name = unique_table_name("query_and_table_clients_check_no_warn");
+
+        let _ = idem!(qc.exec(format!("DROP TABLE IF EXISTS {table_name}"))).await;
+
+        idem!(qc.exec(format!(
+            "CREATE TABLE {table_name} 
+            (key utf8 NOT NULL, 
+            description utf8 NOT NULL, 
+            changed Timestamp NOT NULL, 
+            PRIMARY KEY (key))"
+        )))
+        .await?;
+
+        let upsert_query = format!("UPSERT INTO {table_name} SELECT * FROM AS_TABLE($values);");
+
+        let changed_since_epoch = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
+        let mut values = vec![];
+        let example = ydb_struct!("key" => format!("key_example"), "description" => format!("description_example"), "changed" => Value::Timestamp(changed_since_epoch));
+        for i in 0..5 {
+            let value = ydb_struct!("key" => format!("key_{i}"), "description" => format!("description_{i}"), "changed" => Value::Timestamp(changed_since_epoch));
+            values.push(value);
+        }
+        let list = Value::list_from(example, values).unwrap();
+
+        idem!(qc.exec(&upsert_query).param("$values", list))
+            .await
+            .unwrap();
+
+        let custom_types = get_custom_data(&mut qc, table_name.as_str())
+            .await
+            .expect("Failed to get custom types");
+
+        assert!(!custom_types.is_empty());
+        assert_eq!(custom_types.iter().len(), 5);
+
+        for (i, item) in custom_types.iter().enumerate() {
+            assert_eq!(item.key, format!("key_{i}"));
+            assert_eq!(item.description, format!("description_{i}"));
+            assert_eq!(item.changed, changed_since_epoch);
+        }
+
+        Ok(())
+    }
+
+    let _ = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(run_me_once());
+
+    assert!(
+        !logs_contain("query session dropped without explicit close"),
+        "Logs should not contain ydb::grpc_wrapper::raw_query_service::session: query session dropped without explicit close;..."
+    );
+}
