@@ -204,6 +204,10 @@ impl RuntimeHandle {
                 return Ok(());
             };
 
+            // The server may first request a graceful stop and later send a non-graceful
+            // stop, but the second request is optional. Remove the session immediately;
+            // if the second request does arrive, it is safe to acknowledge it again.
+            // Other server messages for unknown sessions are treated as desynchronization.
             if active.buffer.is_active_session(partition_session_id) {
                 stop_error = active.buffer.stop(partition_session_id).err().map(|err| {
                     warn!(
