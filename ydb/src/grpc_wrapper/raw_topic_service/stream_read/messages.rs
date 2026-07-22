@@ -59,6 +59,7 @@ impl From<RawFromClientOneOf> for stream_read_message::from_client::ClientMessag
     }
 }
 
+#[derive(Debug)]
 pub(crate) enum RawFromServer {
     InitResponse(RawInitResponse),
     ReadResponse(RawReadResponse),
@@ -186,6 +187,7 @@ impl From<RawReadRequest> for stream_read_message::ReadRequest {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct RawReadResponse {
     pub bytes_size: i64,
 
@@ -366,6 +368,7 @@ impl From<PartitionCommitOffset>
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct RawStartPartitionSessionRequest {
     pub partition_session: RawPartitionSession,
     pub committed_offset: i64,
@@ -387,6 +390,7 @@ impl From<stream_read_message::StartPartitionSessionRequest> for RawStartPartiti
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct RawPartitionSession {
     pub partition_session_id: i64,
     pub path: String,
@@ -417,6 +421,7 @@ impl From<RawStartPartitionSessionResponse> for stream_read_message::StartPartit
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct RawStopPartitionSessionRequest {
     pub partition_session_id: i64,
     pub graceful: bool,
