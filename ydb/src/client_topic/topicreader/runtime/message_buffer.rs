@@ -49,7 +49,7 @@ impl PartitionEntry {
                 Ok(())
             }
             InputState::Closed => Err(YdbError::custom(format!(
-                "topic reader close session: session {psid} already closed"
+                "topic reader close session: session already closed ({psid})"
             ))),
         }
     }
@@ -116,13 +116,13 @@ impl MessageBuffer {
 
         if let Some(existing) = self.partition_to_session.get(&pid) {
             return Err(YdbError::custom(format!(
-                "topic reader start partition session: duplicate partition {pid}, new session {psid}, existing session {existing}"
+                "topic reader start partition session: duplicate partition (partition {pid}, new session {psid}, existing session {existing})"
             )));
         }
 
         if self.entries.contains_key(&psid) {
             return Err(YdbError::custom(format!(
-                "topic reader start partition session: duplicate partition session {psid}"
+                "topic reader start partition session: duplicate partition session ({psid})"
             )));
         }
 
@@ -177,7 +177,7 @@ impl MessageBuffer {
     ) -> YdbResult<&PartitionEntry> {
         self.entries.get(&partition_session_id).ok_or_else(|| {
             YdbError::custom(format!(
-                "topic reader {callsite}: unknown partition session {partition_session_id}"
+                "topic reader: unknown partition session ({partition_session_id}, {callsite})"
             ))
         })
     }
@@ -189,7 +189,7 @@ impl MessageBuffer {
     ) -> YdbResult<&mut PartitionEntry> {
         self.entries.get_mut(&partition_session_id).ok_or_else(|| {
             YdbError::custom(format!(
-                "topic reader {callsite}: unknown partition session {partition_session_id}"
+                "topic reader: unknown partition session ({partition_session_id}, {callsite})"
             ))
         })
     }
@@ -203,7 +203,7 @@ impl MessageBuffer {
     ) -> YdbResult<()> {
         if batch.message_data.is_empty() {
             return Err(YdbError::custom(format!(
-                "topic reader received empty batch for partition session {partition_session_id}"
+                "topic reader received empty batch for partition session ({partition_session_id})"
             )));
         }
 
@@ -213,13 +213,13 @@ impl MessageBuffer {
             .get_mut(&partition_session_id)
             .ok_or_else(|| {
                 YdbError::custom(format!(
-                    "topic reader received messages for unopened partition session {partition_session_id}"
+                    "topic reader received messages for unopened partition session ({partition_session_id})"
                 ))
             })?;
 
         if partition_entry.is_closed() {
             return Err(YdbError::custom(format!(
-                "topic reader push batch: partition session {partition_session_id} is closed"
+                "topic reader push batch: partition session is closed ({partition_session_id})"
             )));
         }
 
@@ -320,12 +320,12 @@ impl MessageBuffer {
             Some(stored_session_id) if *stored_session_id == partition_session_id => {}
             Some(stored_session_id) => {
                 return Err(YdbError::custom(format!(
-                    "topic reader {callsite}: partition {partition_id} maps to session {stored_session_id}, not {partition_session_id}"
+                    "topic reader: partition maps to unexpected session (partition {partition_id}, stored session {stored_session_id}, requested session {partition_session_id}, {callsite})"
                 )));
             }
             None => {
                 return Err(YdbError::custom(format!(
-                    "topic reader {callsite}: missing partition mapping for {partition_id}"
+                    "topic reader: missing partition mapping ({partition_id}, {callsite})"
                 )));
             }
         }
@@ -335,7 +335,7 @@ impl MessageBuffer {
 
         self.entries.remove(&partition_session_id).ok_or_else(|| {
             YdbError::custom(format!(
-                "topic reader {callsite}: unknown partition session {partition_session_id}"
+                "topic reader: unknown partition session ({partition_session_id}, {callsite})"
             ))
         })
     }
@@ -453,7 +453,7 @@ mod tests {
             err,
             YdbError::Custom(message)
                 if message
-                    == "topic reader received messages for unopened partition session 1"
+                    == "topic reader received messages for unopened partition session (1)"
         ));
         assert!(buffer.pop_batch(1).unwrap().is_none());
     }
@@ -470,7 +470,7 @@ mod tests {
         assert!(matches!(
             err,
             YdbError::Custom(message)
-                if message == "topic reader received empty batch for partition session 1"
+                if message == "topic reader received empty batch for partition session (1)"
         ));
         assert!(buffer.pop_batch(1).unwrap().is_none());
     }
