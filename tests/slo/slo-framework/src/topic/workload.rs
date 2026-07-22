@@ -196,7 +196,7 @@ async fn reader_worker(
                 let msg = err.to_string();
                 delivery_span.finish(Some(&msg), 1);
                 fw.logger.errorf(format!("read failed: {msg}"));
-                continue;
+                return Err(format!("reader {worker_id} failed: {msg}"));
             }
             Err(_) => {
                 delivery_span.finish(Some("message delivery timeout"), 1);
