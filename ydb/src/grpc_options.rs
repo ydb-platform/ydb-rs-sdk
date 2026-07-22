@@ -27,8 +27,6 @@ impl Default for GrpcOptions {
     }
 }
 
-impl GrpcOptions {}
-
 /// Helper trait for types that has configurable gRPC options.
 pub trait HasGrpcOptions {
     /// Sets interval between HTTP/2 PING-based keepalives.
