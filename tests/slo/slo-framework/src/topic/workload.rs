@@ -170,6 +170,7 @@ async fn writer_worker(
                 let msg = err.to_string();
                 span.finish(Some(&msg), 1);
                 fw.logger.errorf(format!("write failed: {msg}"));
+                return Err(format!("writer failed: {msg}"));
             }
             Err(_) => {
                 span.finish(Some("write timeout"), 1);
