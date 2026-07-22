@@ -143,7 +143,7 @@ where
 ///             }
 ///
 ///             tx.exec("UPDATE accounts SET balance = balance - 100 WHERE id = $id")
-///                 .param("$d", user_id)
+///                 .param("$id", user_id)
 ///                 .await?;
 ///             Ok(Withdraw::Done {
 ///                 remaining: balance - 100,
