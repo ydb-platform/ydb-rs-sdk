@@ -435,51 +435,45 @@ topic_test!(
     }
 );
 
-topic_test!(
-    duplicate_or_unknown_end_partition_does_not_fail_reader,
-    timeout_secs = 5,
-    {
-        let driver = Driver::start().await;
-        let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
-        driver.state.partition_ready.notified().await;
+topic_test!(unknown_end_partition_fails_reader, timeout_secs = 5, {
+    let driver = Driver::start().await;
+    let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
+    driver.state.partition_ready.notified().await;
 
-        let stream_id = driver.state.current_stream_id();
-        driver.send(Reply::Topic(builders::end_partition_session(
-            stream_id,
-            99,
-            Vec::new(),
-        )));
-        driver.send_read_response(0, b"parent");
-        driver.send(Reply::Topic(builders::end_partition_session(
-            stream_id,
-            PARTITION_SESSION_ID,
-            vec![1],
-        )));
-        driver.send(Reply::Topic(builders::end_partition_session(
-            stream_id,
-            PARTITION_SESSION_ID,
-            vec![1],
-        )));
+    driver.send(Reply::Topic(builders::end_partition_session(
+        driver.state.current_stream_id(),
+        99,
+        Vec::new(),
+    )));
 
-        driver.start_session(PARTITION_SESSION_ID_2, 1).await;
-        driver.send_read_response_for(PARTITION_SESSION_ID_2, 0, b"child");
+    assert!(matches!(
+        reader.read_batch().await,
+        Err(ydb::YdbError::Custom(message))
+            if message == "topic reader: unknown partition session (99, end partition session)"
+    ));
 
-        let first = reader.read_batch().await?;
-        let second = reader.read_batch().await?;
+    Ok(())
+});
 
-        assert_eq!(first.messages[0].get_partition_id(), 0);
-        assert_eq!(
-            second.messages[0].get_partition_id(),
-            1,
-            "child partition must still be delivered when duplicate/unknown end is tolerated"
-        );
+topic_test!(duplicate_end_partition_fails_reader, timeout_secs = 5, {
+    let driver = Driver::start().await;
+    let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
+    driver.state.partition_ready.notified().await;
 
-        Ok(())
-    }
-);
+    driver.send_end_partition_session(PARTITION_SESSION_ID, vec![1]);
+    driver.send_end_partition_session(PARTITION_SESSION_ID, vec![1]);
+
+    assert!(matches!(
+        reader.read_batch().await,
+        Err(ydb::YdbError::Custom(message))
+            if message == "topic reader close session: session already closed (1)"
+    ));
+
+    Ok(())
+});
 
 topic_test!(
-    read_response_for_stopped_partition_is_ignored,
+    read_response_for_stopped_partition_fails_reader,
     timeout_secs = 5,
     {
         let driver = Driver::start().await;
@@ -493,18 +487,19 @@ topic_test!(
         driver.state.wait_stops(1).await;
         driver.send_read_response_for(PARTITION_SESSION_ID, 1, b"late");
 
-        driver.start_session(PARTITION_SESSION_ID_2, 1).await;
-        driver.send_read_response_for(PARTITION_SESSION_ID_2, 0, b"child");
-
-        let batch = reader.read_batch().await?;
-        assert_eq!(batch.messages[0].get_partition_id(), 1);
+        assert!(matches!(
+            reader.read_batch().await,
+            Err(ydb::YdbError::Custom(message))
+                if message
+                    == "topic reader received messages for unopened partition session (1)"
+        ));
 
         Ok(())
     }
 );
 
 topic_test!(
-    read_response_for_ended_partition_is_ignored,
+    read_response_for_ended_partition_fails_reader,
     timeout_secs = 5,
     {
         let driver = Driver::start().await;
@@ -512,17 +507,13 @@ topic_test!(
         driver.state.partition_ready.notified().await;
 
         driver.send_end_partition_session(PARTITION_SESSION_ID, vec![1]);
-        driver.start_session(PARTITION_SESSION_ID_2, 1).await;
         driver.send_read_response_for(PARTITION_SESSION_ID, 1, b"late");
-        driver.send_read_response_for(PARTITION_SESSION_ID_2, 0, b"child");
 
-        let mut batch = reader.read_batch().await?;
-        assert_eq!(batch.messages[0].offset, 0);
-        assert_eq!(batch.messages[0].get_partition_id(), 1);
-        assert_eq!(
-            batch.messages[0].read_and_take().await?.as_deref(),
-            Some(b"child".as_ref())
-        );
+        assert!(matches!(
+            reader.read_batch().await,
+            Err(ydb::YdbError::Custom(message))
+                if message == "topic reader push batch: partition session is closed (1)"
+        ));
 
         Ok(())
     }

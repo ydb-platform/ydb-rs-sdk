@@ -232,12 +232,6 @@ impl MessageBuffer {
         Ok(())
     }
 
-    pub(super) fn is_input_closed(&self, partition_session_id: PartitionSessionId) -> bool {
-        self.entries
-            .get(&partition_session_id)
-            .is_some_and(PartitionEntry::is_closed)
-    }
-
     #[cfg(test)]
     pub(super) fn push_batch(&mut self, messages: Vec<TopicReaderMessage>) {
         for message in messages {

@@ -120,9 +120,8 @@ impl RuntimeHandle {
     }
 
     fn handle_read_response(&self, resp: RawReadResponse) -> YdbResult<()> {
-        let (messages_queued, bytes_to_release, epoch) = {
+        let messages_queued = {
             let mut messages_queued = false;
-            let mut bytes_to_release = 0;
             let mut state = self.lock_state()?;
             let State::Active(active) = &mut *state else {
                 return Ok(());
@@ -133,24 +132,6 @@ impl RuntimeHandle {
             for partition_data in resp.partition_data {
                 let partition_session_id = partition_data.partition_session_id;
                 for batch in partition_data.batches {
-                    if !active.buffer.is_active_session(partition_session_id) {
-                        bytes_to_release += batch.get_read_session_size();
-                        debug!(
-                            %partition_session_id,
-                            "topic reader received read response for unknown partition session"
-                        );
-                        continue;
-                    }
-
-                    if active.buffer.is_input_closed(partition_session_id) {
-                        bytes_to_release += batch.get_read_session_size();
-                        debug!(
-                            %partition_session_id,
-                            "topic reader received read response for closed partition session"
-                        );
-                        continue;
-                    }
-
                     active
                         .buffer
                         .push_raw_batch(batch, partition_session_id, reader_id, epoch)?;
@@ -158,10 +139,8 @@ impl RuntimeHandle {
                 }
             }
 
-            (messages_queued, bytes_to_release, epoch)
+            messages_queued
         };
-
-        self.request_bytes(bytes_to_release, epoch)?;
 
         if messages_queued {
             self.inner.messages_available.notify_one();
@@ -266,29 +245,11 @@ impl RuntimeHandle {
     }
 
     fn handle_end_partition_session(&self, req: RawEndPartitionSession) -> YdbResult<()> {
-        let partition_session_id = req.partition_session_id;
-
         {
             let mut state = self.lock_state()?;
             let State::Active(active) = &mut *state else {
                 return Ok(());
             };
-
-            if !active.buffer.is_active_session(partition_session_id) {
-                debug!(
-                    %partition_session_id,
-                    "topic reader received end partition session request for unknown session"
-                );
-                return Ok(());
-            }
-
-            if active.buffer.is_input_closed(partition_session_id) {
-                debug!(
-                    %partition_session_id,
-                    "topic reader received duplicate end partition session request"
-                );
-                return Ok(());
-            }
 
             active.buffer.end(req)?;
         };
@@ -751,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn end_partition_session_is_ignored_for_unknown_and_duplicates() {
+    fn end_partition_session_rejects_unknown_and_duplicates() {
         let runtime =
             RuntimeHandle::with_connection(Connection::new(mpsc::unbounded_channel().0, 0));
         activate_test_session(&runtime, 0);
@@ -762,9 +723,15 @@ mod tests {
             adjacent_partition_ids: Vec::new(),
         };
 
-        runtime
+        let err = runtime
             .handle_from_server(RawFromServer::EndPartitionSession(unknown))
-            .expect("unknown end should be tolerated");
+            .expect_err("unknown end should fail");
+        assert!(matches!(
+            err,
+            YdbError::Custom(message)
+                if message
+                    == "topic reader: unknown partition session (99, end partition session)"
+        ));
         runtime
             .handle_from_server(RawFromServer::EndPartitionSession(RawEndPartitionSession {
                 partition_session_id: psid(10),
@@ -772,17 +739,22 @@ mod tests {
                 adjacent_partition_ids: Vec::new(),
             }))
             .expect("first end should be processed");
-        runtime
+        let err = runtime
             .handle_from_server(RawFromServer::EndPartitionSession(RawEndPartitionSession {
                 partition_session_id: psid(10),
                 child_partition_ids: Vec::new(),
                 adjacent_partition_ids: Vec::new(),
             }))
-            .expect("duplicate end should be tolerated");
+            .expect_err("duplicate end should fail");
+        assert!(matches!(
+            err,
+            YdbError::Custom(message)
+                if message == "topic reader close session: session already closed (10)"
+        ));
     }
 
     #[test]
-    fn read_response_for_closed_session_releases_bytes() {
+    fn read_response_for_closed_session_returns_error() {
         let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
         let runtime = RuntimeHandle::with_connection(Connection::new(outgoing_tx, 0));
         activate_test_session(&runtime, 0);
@@ -795,34 +767,35 @@ mod tests {
             }))
             .expect("end partition session should be handled");
 
-        runtime
+        let err = runtime
             .handle_from_server(RawFromServer::ReadResponse(raw_read_response(psid(10), 17)))
-            .expect("late read response should be handled");
+            .expect_err("closed session read response should fail");
 
         assert!(matches!(
-            outgoing_rx.try_recv(),
-            Ok(RawFromClientOneOf::ReadRequest(RawReadRequest {
-                bytes_size: 17
-            }))
+            err,
+            YdbError::Custom(message)
+                if message == "topic reader push batch: partition session is closed (10)"
         ));
+        assert!(outgoing_rx.try_recv().is_err());
     }
 
     #[test]
-    fn read_response_for_unknown_session_releases_bytes() {
+    fn read_response_for_unknown_session_returns_error() {
         let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel();
         let runtime = RuntimeHandle::with_connection(Connection::new(outgoing_tx, 0));
         activate_test_session(&runtime, 0);
 
-        runtime
+        let err = runtime
             .handle_from_server(RawFromServer::ReadResponse(raw_read_response(psid(99), 23)))
-            .expect("unknown session read response should be handled");
+            .expect_err("unknown session read response should fail");
 
         assert!(matches!(
-            outgoing_rx.try_recv(),
-            Ok(RawFromClientOneOf::ReadRequest(RawReadRequest {
-                bytes_size: 23
-            }))
+            err,
+            YdbError::Custom(message)
+                if message
+                    == "topic reader received messages for unopened partition session (99)"
         ));
+        assert!(outgoing_rx.try_recv().is_err());
     }
 
     #[test]
