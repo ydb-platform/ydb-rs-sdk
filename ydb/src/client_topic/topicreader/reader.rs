@@ -76,6 +76,10 @@ impl TopicReader {
 
     #[instrument(name = "ydb.TopicReader.ReadBatch", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
+        self.read_batch_inner().await
+    }
+
+    pub(super) async fn read_batch_inner(&mut self) -> YdbResult<TopicReaderBatch> {
         self.runtime.pop_batch(self.options.batch_size).await
     }
 
@@ -86,7 +90,7 @@ impl TopicReader {
     #[instrument(name = "ydb.TopicReader.PopBatchInTx", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn pop_batch_in_tx(&mut self, tx: &mut Transaction) -> YdbResult<TopicReaderBatch> {
         let (session_id, transaction_id) = tx.identity().await?;
-        let batch = self.read_batch().await?;
+        let batch = self.read_batch_inner().await?;
         self.update_offsets_in_transaction(&batch, session_id, transaction_id)
             .await?;
         Ok(batch)

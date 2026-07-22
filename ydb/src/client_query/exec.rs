@@ -22,6 +22,8 @@ use tracing::instrument;
 
 use crate::session_pool::{SessionPool, SessionPoolLease, spawn_pool_release};
 
+use super::hooks::QueryTxHook;
+
 /// Tracks in-flight ExecuteQuery RPC on a pooled session held by [`ExecuteQueryStream`].
 struct PooledQuerySessionGuard {
     lease: SessionPoolLease,
@@ -100,6 +102,7 @@ pub(crate) struct TransactionExecContext {
     pub query_node: Option<Uri>,
     pub tx_id: Option<String>,
     pub state: TxState,
+    pub hooks: Vec<Box<dyn QueryTxHook>>,
     /// Absolute deadline from [`QueryClient::retry_tx`] `.timeout()`, propagated to every RPC in the callback.
     pub retry_deadline: Option<Instant>,
 }
@@ -585,6 +588,13 @@ pub(crate) async fn transaction_finish_committed_via_query(tx: &mut TransactionE
     release_tx_session(tx).await;
 }
 
+async fn transaction_before_commit(tx: &mut TransactionExecContext) -> YdbResult<()> {
+    for hook in &mut tx.hooks {
+        hook.before_commit().await?;
+    }
+    Ok(())
+}
+
 /// Server ended the transaction after a definitive operation error on a query.
 pub(crate) fn transaction_mark_invalidated_on_query_error(
     tx: &mut TransactionExecContext,
@@ -626,6 +636,9 @@ pub(crate) async fn transaction_begin_stream(
             if tx.begin {
                 transaction_ensure_begin(tx, true).await?;
             }
+            if opts.commit_tx.unwrap_or(false) {
+                transaction_before_commit(tx).await?;
+            }
             let (mut client, req) =
                 transaction_execute_request(tx, text, params, &opts, concurrent_result_sets)
                     .await?;
@@ -652,6 +665,10 @@ pub(crate) async fn transaction_begin_stream(
 pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbResult<()> {
     if !tx.state.is_active() {
         return Ok(());
+    }
+    if let Err(err) = transaction_before_commit(tx).await {
+        let _ = transaction_rollback(tx).await;
+        return Err(err);
     }
     if tx.tx_id.as_ref().is_none_or(String::is_empty) {
         tx.state = TxState::Committed;
@@ -782,6 +799,7 @@ pub(crate) fn transaction_exec_context(
         query_node: None,
         tx_id: None,
         state: TxState::Active,
+        hooks: Vec::new(),
         retry_deadline,
     }
 }

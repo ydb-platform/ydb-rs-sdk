@@ -102,9 +102,11 @@ impl RuntimeHandle {
                 self.handle_stop_partition_session(req)
             }
             RawFromServer::EndPartitionSession(req) => self.handle_end_partition_session(req),
-            RawFromServer::InitResponse(_) => {
-                debug!("topic reader initialized");
-                Ok(())
+            RawFromServer::InitResponse(response) => {
+                warn!(?response, "topic reader received unexpected init response");
+                Err(YdbError::custom(format!(
+                    "topic reader received unexpected init response: {response:?}"
+                )))
             }
             RawFromServer::UpdateTokenResponse(_) => {
                 debug!("topic reader received update token response");
@@ -236,7 +238,7 @@ impl RuntimeHandle {
                     partition_session_id,
                     Some(committed_offset),
                     &YdbError::custom(format!(
-                        "partition session {partition_session_id} stopped by server"
+                        "partition session stopped by server: {partition_session_id}"
                     )),
                 );
             } else {
@@ -543,8 +545,24 @@ mod tests {
     use crate::grpc_wrapper::raw_common_types::Timestamp;
     use crate::grpc_wrapper::raw_topic_service::common::codecs::RawCodec;
     use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
-        RawBatch, RawMessageData, RawPartitionData, RawReadRequest, RawStopPartitionSessionRequest,
+        RawBatch, RawInitResponse, RawMessageData, RawPartitionData, RawReadRequest,
+        RawStopPartitionSessionRequest,
     };
+    use ydb_grpc::ydb_proto::topic::stream_read_message;
+
+    #[test]
+    fn rejects_init_response_after_initialization() {
+        let (runtime, _outgoing_rx) = runtime_with_epoch(0);
+        let response = stream_read_message::InitResponse {
+            session_id: "duplicate-session".to_string(),
+        };
+
+        assert!(
+            runtime
+                .handle_from_server(RawFromServer::InitResponse(RawInitResponse::from(response)))
+                .is_err()
+        );
+    }
 
     #[test]
     fn commit_rejects_stale_epoch() {

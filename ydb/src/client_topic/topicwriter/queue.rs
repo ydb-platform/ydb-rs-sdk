@@ -8,7 +8,9 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData
 use crate::client_topic::topicwriter::message_queue::{
     AppendMessageToSendBufferResult, MessageQueue,
 };
-use crate::client_topic::topicwriter::message_write_status::{MessageWriteStatus, WriteAck};
+use crate::client_topic::topicwriter::message_write_status::{
+    MessageWriteStatus, MessageWriteStatusValidator, WriteAck,
+};
 use crate::client_topic::topicwriter::reception_queue::{ReceptionQueue, ReceptionTicket};
 use crate::{YdbError, YdbResult};
 
@@ -22,9 +24,16 @@ pub(crate) struct Queue {
 }
 
 impl Queue {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
+        Self::new_with_status_validator(
+            crate::client_topic::topicwriter::message_write_status::accept_any_write_status,
+        )
+    }
+
+    pub(crate) fn new_with_status_validator(status_validator: MessageWriteStatusValidator) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(QueueInner::new())),
+            inner: Arc::new(Mutex::new(QueueInner::new(status_validator))),
             new_message_added: Arc::new(Notify::new()),
             last_acknowledged_seq_no: Arc::new(RwLock::new(None)),
             message_acknowledged: Arc::new(Notify::new()),
@@ -53,28 +62,21 @@ impl Queue {
         Ok(())
     }
 
-    // Waits for the last message to be acknowledged.
-    // Note that the "last message" is the last message in the queue at the start of the method call.
-    // If more messages are added during the wait, they will not be waited for here.
-    //
-    // Is used for the flush operation.
+    // Waits for the last message present at method start; messages added later are out of scope.
     pub(crate) async fn wait_for_messages_to_be_acknowledged(&self) {
         let last_seq_no = {
             let inner = self.inner.lock().await;
-            inner.last_added_seq_no()
+            inner.message_queue.last_added_seq_no()
         };
         let Some(last_seq_no) = last_seq_no else {
             return;
         };
 
         loop {
-            tokio::select! {
-                _ = self.message_acknowledged.notified() => {
-                    match *self.last_acknowledged_seq_no.read().await {
-                        Some(last_acknowledged_seq_no) if last_acknowledged_seq_no >= last_seq_no => break,
-                        _ => continue,
-                    }
-                }
+            self.message_acknowledged.notified().await;
+            match *self.last_acknowledged_seq_no.read().await {
+                Some(last_acknowledged_seq_no) if last_acknowledged_seq_no >= last_seq_no => break,
+                _ => continue,
             }
         }
     }
@@ -85,7 +87,9 @@ impl Queue {
         threshold: usize,
     ) -> AppendMessageToSendBufferResult {
         let mut inner = self.inner.lock().await;
-        inner.append_message_to_send_buffer(send_buffer, threshold)
+        inner
+            .message_queue
+            .append_message_to_send_buffer(send_buffer, threshold)
     }
 
     pub(crate) async fn get_messages_to_send(
@@ -107,7 +111,6 @@ impl Queue {
                     .await
                 {
                     AppendMessageToSendBufferResult::Full => return messages,
-                    // Looks like there are no messages
                     AppendMessageToSendBufferResult::CouldNotGetMessage => break,
                     AppendMessageToSendBufferResult::UnderThreshold => {}
                 }
@@ -126,28 +129,29 @@ impl Queue {
 
     pub(crate) async fn notify_reception_tickets(&self, error: YdbError) {
         let mut inner = self.inner.lock().await;
-        inner.notify_reception_tickets(error)
+        inner.reception_queue.send_error_to_tickets_and_clear(error);
     }
 
     pub(crate) async fn close_for_new_messages(&self) {
         let mut inner = self.inner.lock().await;
-        inner.close_for_new_messages()
+        inner.is_open_for_new_messages = false;
     }
 
     pub(crate) async fn reset_progress(&self) {
         let mut inner = self.inner.lock().await;
-        inner.reset_progress()
+        inner.message_queue.reset_progress();
     }
 
     pub(crate) async fn flush(&self) -> YdbResult<()> {
-        let flush_op_completed = {
+        let mut flush_result_rx = {
             let mut inner = self.inner.lock().await;
-            inner.init_flush()?
+            inner.reception_queue.init_flush()?
         };
 
-        self.wait_for_messages_to_be_acknowledged().await;
-
-        Ok(flush_op_completed.await?)
+        tokio::select! {
+            result = &mut flush_result_rx => result?,
+            _ = self.wait_for_messages_to_be_acknowledged() => flush_result_rx.await?,
+        }
     }
 }
 
@@ -155,14 +159,16 @@ struct QueueInner {
     message_queue: MessageQueue,
     reception_queue: ReceptionQueue,
     is_open_for_new_messages: bool,
+    status_validator: MessageWriteStatusValidator,
 }
 
 impl QueueInner {
-    fn new() -> Self {
+    fn new(status_validator: MessageWriteStatusValidator) -> Self {
         Self {
             message_queue: MessageQueue::new(),
             reception_queue: ReceptionQueue::new(),
             is_open_for_new_messages: true,
+            status_validator,
         }
     }
 
@@ -201,45 +207,18 @@ impl QueueInner {
 
         self.message_queue.acknowledge_message(ticket_seq_no)?;
 
-        let ticket = self.reception_queue.try_get_ticket()?;
-        let Some(ticket) = ticket else {
+        let Some(ticket) = self.reception_queue.pop_ticket() else {
             return Err(YdbError::custom(
                 "reception ticket is missing after message queue ack",
             ));
         };
-        ticket.send_confirmation_if_needed(write_ack.status);
+        let status_result = (self.status_validator)(write_ack.status);
+        let flush_error = status_result.as_ref().err().cloned();
+        ticket.send_result_if_needed(status_result);
+        self.reception_queue
+            .notify_ticket_processed(ticket_seq_no, flush_error);
 
         Ok(())
-    }
-
-    fn append_message_to_send_buffer(
-        &mut self,
-        send_buffer: &mut Vec<MessageData>,
-        threshold: usize,
-    ) -> AppendMessageToSendBufferResult {
-        self.message_queue
-            .append_message_to_send_buffer(send_buffer, threshold)
-    }
-
-    fn last_added_seq_no(&self) -> Option<i64> {
-        self.message_queue.last_added_seq_no()
-    }
-
-    fn notify_reception_tickets(&mut self, error: YdbError) {
-        self.reception_queue.send_error_to_tickets_and_clear(error)
-    }
-
-    fn init_flush(&mut self) -> YdbResult<oneshot::Receiver<()>> {
-        let receiver = self.reception_queue.init_flush()?;
-        Ok(receiver)
-    }
-
-    fn reset_progress(&mut self) {
-        self.message_queue.reset_progress();
-    }
-
-    fn close_for_new_messages(&mut self) {
-        self.is_open_for_new_messages = false;
     }
 }
 
@@ -251,6 +230,7 @@ mod tests {
     use tokio::time::timeout;
 
     use super::*;
+    use crate::client_topic::topicwriter::message_write_status::expect_transactional_write_status;
     use crate::client_topic::topicwriter::test_helpers::{create_message, write_ack};
 
     #[tokio::test]
@@ -521,5 +501,67 @@ mod tests {
         )
         .await
         .expect("wait shall return immediately when non-empty queue is fully drained (0 messages to send and 0 messages to acknowledge)");
+    }
+
+    #[tokio::test]
+    async fn flush_returns_status_validation_error_observed_before_flush() {
+        let q = Queue::new_with_status_validator(expect_transactional_write_status);
+        q.add_message(create_message(1, vec![]), None)
+            .await
+            .unwrap();
+        let messages = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        assert_eq!(messages.len(), 1);
+
+        q.acknowledge_message(write_ack(1)).await.unwrap();
+
+        assert!(q.flush().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn flush_returns_status_validation_error_observed_during_flush() {
+        let q = Arc::new(Queue::new_with_status_validator(
+            expect_transactional_write_status,
+        ));
+        q.add_message(create_message(1, vec![]), None)
+            .await
+            .unwrap();
+        let messages = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        assert_eq!(messages.len(), 1);
+
+        let q_flush = Arc::clone(&q);
+        let flush_handle = tokio::spawn(async move { q_flush.flush().await });
+
+        q.acknowledge_message(write_ack(1)).await.unwrap();
+
+        assert!(
+            flush_handle
+                .await
+                .expect("flush task must complete")
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn flush_returns_error_when_reception_tickets_fail_during_wait() {
+        let q = Arc::new(Queue::new());
+        q.add_message(create_message(1, vec![]), None)
+            .await
+            .unwrap();
+        let messages = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        assert_eq!(messages.len(), 1);
+
+        let q_flush = Arc::clone(&q);
+        let flush_handle = tokio::spawn(async move { q_flush.flush().await });
+        tokio::task::yield_now().await;
+
+        q.notify_reception_tickets(YdbError::custom("fatal writer error"))
+            .await;
+
+        let result = timeout(Duration::from_millis(100), flush_handle)
+            .await
+            .expect("flush must finish after reception tickets fail")
+            .expect("flush task must not panic");
+
+        assert!(result.is_err());
     }
 }
