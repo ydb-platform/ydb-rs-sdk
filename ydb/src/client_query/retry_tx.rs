@@ -101,3 +101,23 @@ where
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::closure;
+
+    const fn assert_send<T: Send>(value: T) -> T {
+        value
+    }
+
+    // This compile-time test asserts that `retry_tx` future is `Send`.
+    #[allow(unused)]
+    fn compile_time_test_retry_tx_is_send(qc: &QueryClient) {
+        assert_send(qc.retry_tx(closure!(async |tx: &mut Transaction| {
+            tx.exec("SELECT 1").await?;
+            Ok(())
+        })));
+    }
+}
