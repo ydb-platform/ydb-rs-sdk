@@ -1,7 +1,7 @@
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
+use crate::RefWithLifetime;
 use crate::async_closure::AsyncFnMut;
-use crate::async_closure::with_lifetime::Ref;
 use crate::closure;
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -48,7 +48,7 @@ impl OperationClient {
         attempt_fn: F,
     ) -> YdbResult<T>
     where
-        F: AsyncFnMut<Ref<RetryState>, Output = YdbResult<T>>,
+        F: AsyncFnMut<RefWithLifetime<RetryState>, Output = YdbResult<T>>,
     {
         self.retry_budget
             .as_ref()

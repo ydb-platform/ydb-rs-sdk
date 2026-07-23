@@ -28,7 +28,7 @@ use futures_util::future::BoxFuture;
 
 use crate::async_closure::with_lifetime::WithLifetime;
 
-pub mod with_lifetime;
+pub(crate) mod with_lifetime;
 
 /// [`AsyncFnMut`] equivalent with type-erased future
 /// that can be implemented for different types and
@@ -117,46 +117,45 @@ where
 ///
 /// # Usage example
 ///
-/// ```
-/// # use ydb::{
-/// #     closure,
-/// #     async_closure::{
-/// #         AsyncFnMut,
-/// #         with_lifetime::Mut,
-/// #     }
-/// # };
-/// # struct Action;
+/// ```no_run
+/// # use ydb::{closure, Transaction};
 /// #
-/// # impl Action {
-/// #     fn get() -> Self { Self }
-/// #     async fn perform(&mut self, logs: &mut Vec<String>) -> Result<(), ()> {
-/// #         Ok(())
-/// #     }
+/// # enum Withdraw {
+/// #     Done { remaining: i64 },
+/// #     Insufficient,
 /// # }
 /// #
-/// async fn retry<F: AsyncFnMut<Mut<Action>, Output = bool>>(mut attempt: F) {
-///     let mut action = Action::get();
+/// # #[tokio::main]
+/// # async fn main() {
+/// #   let qc: ydb::QueryClient = todo!();
+/// #   let user_id: i64 = 1;
+///     qc
+///         .retry_tx(closure!(async |tx: &mut Transaction| {
+///             let mut row = tx
+///                 .query_row("SELECT balance FROM accounts WHERE id = $id")
+///                 .param("$id", user_id)
+///                 .await?;
+///             let balance: i64 = row.remove_field_by_name("balance")?.try_into()?;
 ///
-///     while !attempt.call(&mut action).await {
-///         println!("Failed, trying again...");
-///     }
-/// }
+///             if balance < 100 {
+///                 tx.rollback().await?;
+///                 return Ok(Withdraw::Insufficient);
+///             }
 ///
-/// #[tokio::main]
-/// async fn main() {
-///     let mut logs = vec![];
-///     retry(closure!(
-///         [&mut logs],
-///         async |action: &mut Action| {
-///             action.perform(logs).await.is_ok()
-///         }
-///     )).await;
-/// }
+///             tx.exec("UPDATE accounts SET balance = balance - 100 WHERE id = $id")
+///                 .param("$id", user_id)
+///                 .await?;
+///             Ok(Withdraw::Done {
+///                 remaining: balance - 100,
+///             })
+///         }))
+///         .await;
+/// # }
 /// ```
 #[macro_export]
 macro_rules! closure {
     ([$($tt:tt)*], $body:expr) => {
-        $crate::async_closure::__make_closure(
+        $crate::__make_closure(
             $crate::__closure_make_tuple!($($tt)*),
             move |ctx, args| {
                 $crate::__closure_destruct_tuple!(ctx => $($tt)*);
@@ -237,9 +236,9 @@ macro_rules! __closure_destruct_tuple {
 mod tests {
     use super::*;
 
-    use crate::async_closure::with_lifetime::Mut;
+    use crate::async_closure::with_lifetime::MutWithLifetime;
 
-    async fn call_in_loop<F: AsyncFnMut<Mut<i32>, Output = bool>>(mut f: F) {
+    async fn call_in_loop<F: AsyncFnMut<MutWithLifetime<i32>, Output = bool>>(mut f: F) {
         let mut x = 10;
         while !f.call(&mut x).await {
             x += 1;

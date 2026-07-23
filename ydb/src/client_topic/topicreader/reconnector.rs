@@ -10,13 +10,13 @@ use crate::client_common::TokenCache;
 use crate::client_topic::compression::Executor;
 use crate::errors::Idempotency;
 use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::grpc_wrapper::raw_topic_service::stream_read::messages::RawFromServer;
 use crate::retry_budget::RetryState;
 use crate::{YdbError, YdbResult, closure};
 
 use super::auth_token_sender::AuthTokenSender;
 use super::decompressor::Decompressor;
 use super::grpc_streamer::GrpcStreamer;
-use super::messages::MessageBatch;
 use super::reader_options::TopicReaderOptions;
 use super::runtime;
 use super::task_supervisor::wait_child_tasks;
@@ -77,7 +77,7 @@ impl Reconnector {
         cancellation_token: CancellationToken,
         reader_id: usize,
     ) -> Self {
-        let runtime = runtime::RuntimeHandle::new();
+        let runtime = runtime::RuntimeHandle::new(reader_id);
 
         Self {
             manager,
@@ -214,10 +214,9 @@ impl Reconnector {
         runtime: &runtime::RuntimeHandle,
     ) -> YdbResult<tokio::task::JoinSet<YdbResult<()>>> {
         let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
-        let (decomp_input_tx, decomp_input_rx) = mpsc::unbounded_channel::<MessageBatch>();
+        let (decomp_input_tx, decomp_input_rx) = mpsc::unbounded_channel::<RawFromServer>();
 
-        let grpc =
-            GrpcStreamer::new(attempt_ctx, decomp_input_tx, outgoing_rx, runtime.clone()).await?;
+        let grpc = GrpcStreamer::new(attempt_ctx, decomp_input_tx, outgoing_rx).await?;
 
         runtime.install_connection(
             runtime::Connection::new(outgoing_tx.clone(), attempt_ctx.epoch),

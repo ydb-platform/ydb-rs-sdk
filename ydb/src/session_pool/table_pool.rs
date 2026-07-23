@@ -70,9 +70,9 @@ impl TableSessionPool {
 #[cfg(test)]
 mod test {
     use super::TableSessionPool;
+    use crate::GrpcOptions;
     use crate::errors::YdbResult;
     use crate::grpc_connection_manager::GrpcConnectionManager;
-    use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
     use crate::retry_budget::RetryBudget;
@@ -92,8 +92,7 @@ mod test {
             ))),
             "bench".to_string(),
             MultiInterceptor::new(),
-            None,
-            DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+            GrpcOptions::default(),
         )
     }
 

@@ -9,7 +9,7 @@ use crate::TransactionOptions;
 use crate::TxMode;
 use crate::async_closure::AsyncFnMut;
 use crate::async_closure::DynAsyncFnMut;
-use crate::async_closure::with_lifetime::Mut;
+use crate::async_closure::with_lifetime::MutWithLifetime;
 use crate::errors::YdbResultWithCustomerErr;
 
 use super::QueryClient;
@@ -32,7 +32,9 @@ pub trait RetryTxAttempt<T>: Send {
     ) -> BoxFuture<'a, YdbResultWithCustomerErr<T>>;
 }
 
-impl<'c, T> RetryTxAttempt<T> for DynAsyncFnMut<'c, Mut<Transaction>, YdbResultWithCustomerErr<T>> {
+impl<'c, T> RetryTxAttempt<T>
+    for DynAsyncFnMut<'c, MutWithLifetime<Transaction>, YdbResultWithCustomerErr<T>>
+{
     fn attempt<'a>(
         &'a mut self,
         tx: &'a mut Transaction,
@@ -99,5 +101,25 @@ where
             self.timeout,
             self.idempotent.into(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::closure;
+
+    const fn assert_send<T: Send>(value: T) -> T {
+        value
+    }
+
+    // This compile-time test asserts that `retry_tx` future is `Send`.
+    #[allow(unused)]
+    fn compile_time_test_retry_tx_is_send(qc: &QueryClient) {
+        assert_send(qc.retry_tx(closure!(async |tx: &mut Transaction| {
+            tx.exec("SELECT 1").await?;
+            Ok(())
+        })));
     }
 }

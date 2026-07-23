@@ -175,6 +175,8 @@ pub(crate) fn should_discard_session_from_pool(err: &YdbError) -> bool {
 
 #[cfg(test)]
 mod discard_session_tests {
+    use crate::GrpcOptions;
+
     use super::*;
     use std::sync::Arc;
     use tonic::{Code, Status};
@@ -238,7 +240,6 @@ mod discard_session_tests {
     fn discard_from_pool_clears_can_pooled() {
         use crate::client::TimeoutSettings;
         use crate::grpc_connection_manager::GrpcConnectionManager;
-        use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
         use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
         use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
         use crate::session::NodePinnedTableClient;
@@ -253,8 +254,7 @@ mod discard_session_tests {
                     ))),
                     "bench".to_string(),
                     MultiInterceptor::new(),
-                    None,
-                    DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+                    GrpcOptions::default(),
                 ),
                 Uri::from_static("http://127.0.0.1/bench"),
             ),

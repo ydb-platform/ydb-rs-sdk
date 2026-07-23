@@ -1,8 +1,8 @@
 mod builders;
 pub(crate) mod call_options;
 
+use crate::RefWithLifetime;
 use crate::async_closure::AsyncFnMut;
-use crate::async_closure::with_lifetime::Ref;
 use crate::retry_budget::{ArcRetryBudget, RetryState};
 use crate::session::TableSession;
 use crate::session_pool::{SessionPool, TableSessionPool};
@@ -155,7 +155,7 @@ impl TableClient {
         attempt_fn: F,
     ) -> YdbResult<T>
     where
-        F: AsyncFnMut<Ref<RetryState>, Output = YdbResult<T>>,
+        F: AsyncFnMut<RefWithLifetime<RetryState>, Output = YdbResult<T>>,
     {
         self.session_pool
             .retry_budget()

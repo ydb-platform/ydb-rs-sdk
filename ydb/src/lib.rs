@@ -62,6 +62,7 @@ pub(crate) mod discovery;
 mod errors;
 mod grpc;
 pub(crate) mod grpc_connection_manager;
+mod grpc_options;
 mod grpc_wrapper;
 mod load_balancer;
 mod pub_traits;
@@ -81,10 +82,10 @@ pub(crate) mod custom_ca_test;
 #[cfg(test)]
 mod test_helpers;
 
-pub mod async_closure;
+mod async_closure;
 #[cfg(test)]
 pub(crate) mod coordination_test;
-pub(crate) mod dicovery_pessimization_interceptor;
+pub(crate) mod discovery_pessimization_interceptor;
 mod table_requests;
 mod table_service_types;
 #[cfg(test)]
@@ -108,6 +109,11 @@ mod types_test;
 
 #[cfg(test)]
 mod connection_pool_test;
+
+pub use async_closure::{
+    __make_closure, AsyncFnMut, DynAsyncFnMut,
+    with_lifetime::{MutWithLifetime, OwnedWithLifetime, RefWithLifetime, WithLifetime},
+};
 
 pub use client_coordination::client::CoordinationClient;
 pub use client_coordination::list_types::{
@@ -165,6 +171,7 @@ pub use retry_budget::RetryProbability;
 
 // full enum pub types
 pub use client_builder::ClientBuilder;
+pub use grpc_options::{GrpcOptions, HasGrpcOptions};
 
 // full enum pub types
 pub use client_query::{

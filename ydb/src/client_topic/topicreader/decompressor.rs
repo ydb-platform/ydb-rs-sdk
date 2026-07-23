@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -13,19 +14,21 @@ use crate::client_topic::compression::{
     OrderedTaskQueue, TaskResultRx,
 };
 use crate::client_topic::list_types::Codec;
-use crate::{TopicReaderMessage, YdbError, YdbResult};
+use crate::grpc_wrapper::raw_topic_service::stream_read::messages::{
+    RawBatch, RawFromServer, RawPartitionData, RawReadResponse,
+};
+use crate::{YdbError, YdbResult};
 
-use super::messages::MessageBatch;
 use super::reconnector;
 use super::runtime::RuntimeHandle;
 use super::task_supervisor::wait_child_tasks;
 
-type BatchRx = mpsc::UnboundedReceiver<MessageBatch>;
+type EventRx = mpsc::UnboundedReceiver<RawFromServer>;
 
 pub(super) struct Decompressor {
     codec_registry: Arc<CodecRegistry>,
     executor: Arc<dyn Executor>,
-    rx: BatchRx,
+    rx: EventRx,
     runtime: RuntimeHandle,
     cancellation: CancellationToken,
 }
@@ -33,7 +36,7 @@ pub(super) struct Decompressor {
 impl Decompressor {
     pub(super) fn new(
         attempt: &reconnector::ConnectionAttempt,
-        rx: BatchRx,
+        rx: EventRx,
         runtime: RuntimeHandle,
     ) -> Self {
         let mut codec_registry = CodecRegistry::new();
@@ -82,8 +85,8 @@ impl Decompressor {
 }
 
 async fn schedule_loop(
-    rx: BatchRx,
-    queue: OrderedTaskQueue<Vec<TopicReaderMessage>>,
+    rx: EventRx,
+    queue: OrderedTaskQueue<RawFromServer>,
     codec_registry: Arc<CodecRegistry>,
     parallelism: NonZeroUsize,
     cancellation: CancellationToken,
@@ -93,51 +96,68 @@ async fn schedule_loop(
             debug!("decompressor schedule cancelled, stopping");
             Ok(())
         }
-        result = schedule_messages(rx, queue, codec_registry, parallelism) => {
+        result = schedule_events(rx, queue, codec_registry, parallelism) => {
             let Err(e) = result;
             Err(e)
         }
     }
 }
 
-async fn schedule_messages(
-    mut rx: BatchRx,
-    queue: OrderedTaskQueue<Vec<TopicReaderMessage>>,
+async fn schedule_events(
+    mut rx: EventRx,
+    queue: OrderedTaskQueue<RawFromServer>,
     codec_registry: Arc<CodecRegistry>,
     parallelism: NonZeroUsize,
 ) -> YdbResult<Infallible> {
     loop {
-        let Some(MessageBatch { messages, codec }) = rx.recv().await else {
+        let Some(msg) = rx.recv().await else {
             return Err(YdbError::Transport(
                 "decompressor input channel closed".into(),
             ));
         };
 
-        let decoder: Option<Arc<dyn CompressionDecoder>> = if codec == Codec::RAW {
-            None
-        } else {
-            Some(codec_registry.get_decoder(codec).ok_or_else(|| {
-                YdbError::custom(format!("no decoder found for codec {}", codec.code))
-            })?)
-        };
-
-        let chunk_size = (messages.len() / parallelism.get()).clamp(1, MAX_MESSAGES_PER_CHUNK);
-        let mut iter = messages.into_iter();
-        loop {
-            let chunk: Vec<TopicReaderMessage> = iter.by_ref().take(chunk_size).collect();
-            if chunk.is_empty() {
-                break;
+        match msg {
+            RawFromServer::ReadResponse(resp) => {
+                for (partition_session_id, batch) in split_into_batches(resp, parallelism) {
+                    let decoder = decoder_for_batch(&codec_registry, &batch)?;
+                    queue
+                        .submit(Box::new(move || {
+                            let batch = decompress_batch(batch, decoder)?;
+                            Ok(RawFromServer::ReadResponse(RawReadResponse {
+                                bytes_size: batch.get_read_session_size(),
+                                partition_data: vec![RawPartitionData {
+                                    partition_session_id,
+                                    batches: VecDeque::from([batch]),
+                                }],
+                            }))
+                        }))
+                        .await;
+                }
             }
-            let dec = decoder.clone();
-            queue
-                .submit(Box::new(move || decompress_batch(chunk, dec)))
-                .await;
+            other => {
+                queue.submit(Box::new(move || Ok(other))).await;
+            }
         }
     }
 }
 
+fn decoder_for_batch(
+    codec_registry: &Arc<CodecRegistry>,
+    batch: &RawBatch,
+) -> YdbResult<Option<Arc<dyn CompressionDecoder>>> {
+    let codec: Codec = batch.codec.into();
+    if codec == Codec::RAW {
+        return Ok(None);
+    }
+
+    codec_registry
+        .get_decoder(codec)
+        .map(Some)
+        .ok_or_else(|| YdbError::custom(format!("no decoder found for codec {}", codec.code)))
+}
+
 async fn forward_loop(
-    results_rx: TaskResultRx<Vec<TopicReaderMessage>>,
+    results_rx: TaskResultRx<RawFromServer>,
     runtime: RuntimeHandle,
     cancellation: CancellationToken,
 ) -> YdbResult<()> {
@@ -146,15 +166,15 @@ async fn forward_loop(
             debug!("decompressor forward cancelled, stopping");
             Ok(())
         }
-        result = forward_messages(results_rx, runtime) => {
+        result = forward_events(results_rx, runtime) => {
             let Err(e) = result;
             Err(e)
         }
     }
 }
 
-async fn forward_messages(
-    mut results_rx: TaskResultRx<Vec<TopicReaderMessage>>,
+async fn forward_events(
+    mut results_rx: TaskResultRx<RawFromServer>,
     runtime: RuntimeHandle,
 ) -> YdbResult<Infallible> {
     loop {
@@ -163,32 +183,73 @@ async fn forward_messages(
                 "decompressor results channel closed".into(),
             ));
         };
-        let messages = result_rx
+        let msg = result_rx
             .await
             .unwrap_or_else(|_| Err(YdbError::custom("executor decompression task panicked")))?;
-        runtime.push_batch(messages)?;
+
+        runtime.handle_from_server(msg)?;
     }
 }
 
+fn split_into_batches(resp: RawReadResponse, parallelism: NonZeroUsize) -> Vec<(i64, RawBatch)> {
+    let total_messages: usize = resp
+        .partition_data
+        .iter()
+        .flat_map(|partition_data| partition_data.batches.iter())
+        .map(|batch| batch.message_data.len())
+        .sum();
+    let chunk_size = (total_messages / parallelism.get()).clamp(1, MAX_MESSAGES_PER_CHUNK);
+
+    let mut batches = Vec::new();
+    for partition_data in resp.partition_data {
+        for batch in partition_data.batches {
+            let RawBatch {
+                producer_id,
+                write_session_meta,
+                codec,
+                written_at,
+                message_data,
+            } = batch;
+
+            let mut iter = message_data.into_iter();
+            loop {
+                let chunk: Vec<_> = iter.by_ref().take(chunk_size).collect();
+                if chunk.is_empty() {
+                    break;
+                }
+
+                batches.push((
+                    partition_data.partition_session_id,
+                    RawBatch {
+                        producer_id: producer_id.clone(),
+                        write_session_meta: write_session_meta.clone(),
+                        codec,
+                        written_at: written_at.clone(),
+                        message_data: chunk,
+                    },
+                ));
+            }
+        }
+    }
+
+    batches
+}
+
 fn decompress_batch(
-    mut batch: Vec<TopicReaderMessage>,
+    mut batch: RawBatch,
     decoder: Option<Arc<dyn CompressionDecoder>>,
-) -> YdbResult<Vec<TopicReaderMessage>> {
+) -> YdbResult<RawBatch> {
     let Some(decoder) = decoder else {
         return Ok(batch);
     };
 
-    for message in batch.iter_mut() {
-        let Some(raw_data) = message.raw_data.as_ref() else {
-            continue;
-        };
-
-        message.raw_data = Some(decoder.decode(raw_data.as_slice()).map_err(|err| {
+    for message in &mut batch.message_data {
+        message.data = decoder.decode(&message.data).map_err(|err| {
             YdbError::custom(format!(
                 "{decoder:?} failed to decode: {err}, message seq_no: {}, message offset: {}",
                 message.seq_no, message.offset,
             ))
-        })?);
+        })?;
     }
 
     Ok(batch)

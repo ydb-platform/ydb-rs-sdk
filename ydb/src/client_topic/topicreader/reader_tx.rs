@@ -99,7 +99,7 @@ impl<'a> TopicReaderTx<'a> {
             topics: vec![RawTopicOffsets {
                 path: commit_marker.topic.clone(),
                 partitions: vec![RawPartitionOffsets {
-                    partition_id: commit_marker.partition_id,
+                    partition_id: commit_marker.partition_id.into_raw(),
                     partition_offsets: vec![RawOffsetsRange {
                         start: commit_marker.start_offset,
                         end: commit_marker.end_offset,

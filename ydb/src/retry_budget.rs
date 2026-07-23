@@ -19,12 +19,7 @@ use tokio::{sync::Semaphore, time::MissedTickBehavior};
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::{instrument, trace, warn};
 
-use crate::{
-    YdbResult,
-    async_closure::{AsyncFnMut, with_lifetime::Ref},
-    closure,
-    errors::Idempotency,
-};
+use crate::{AsyncFnMut, RefWithLifetime, YdbResult, closure, errors::Idempotency};
 
 /// Retry budget.
 #[derive(Debug, Clone, Copy)]
@@ -69,7 +64,7 @@ impl<S: RetryStrategy> RetryBudget<S, NoDeadline> {
     pub async fn retry_indefinitely<T, F>(&self, mut attempt_fn: F) -> T
     where
         S: RetryAlways,
-        F: AsyncFnMut<Ref<RetryState>, Output = Option<T>>,
+        F: AsyncFnMut<RefWithLifetime<RetryState>, Output = Option<T>>,
     {
         let mut retry = RetryState::init();
 
@@ -178,7 +173,7 @@ impl<S: RetryStrategy, D: RetryDeadline> RetryBudget<S, D> {
         ydb.retry.backoff_ms = tracing::field::Empty,
         db.system.name = "ydb",
     ))]
-    async fn attempt<F: AsyncFnMut<Ref<RetryState>>>(
+    async fn attempt<F: AsyncFnMut<RefWithLifetime<RetryState>>>(
         closure: &mut F,
         retry: &RetryState,
     ) -> F::Output {
@@ -191,7 +186,7 @@ impl<S: RetryStrategy, D: RetryDeadline> RetryBudget<S, D> {
     /// or the retrier asks to stop. Waits between retries.
     pub async fn retry<B, C, F>(&self, mut attempt_fn: F) -> ControlFlow<B, C>
     where
-        F: AsyncFnMut<Ref<RetryState>, Output = ControlFlow<B, C>>,
+        F: AsyncFnMut<RefWithLifetime<RetryState>, Output = ControlFlow<B, C>>,
     {
         let mut deadline_exceeded = pin!(self.deadline.wait_deadline());
         let mut retry = RetryState::init();
@@ -216,7 +211,7 @@ impl<S: RetryStrategy, D: RetryDeadline> RetryBudget<S, D> {
     /// Runs retry-wait loop retrying on errors.
     pub async fn retry_on_errors<T, E, F>(&self, attempt_fn: F) -> Result<T, E>
     where
-        F: AsyncFnMut<Ref<RetryState>, Output = Result<T, E>>,
+        F: AsyncFnMut<RefWithLifetime<RetryState>, Output = Result<T, E>>,
         E: std::error::Error,
     {
         let result = self
@@ -244,7 +239,7 @@ impl<S: RetryStrategy, D: RetryDeadline> RetryBudget<S, D> {
         attempt_fn: F,
     ) -> YdbResult<T>
     where
-        F: AsyncFnMut<Ref<RetryState>, Output = YdbResult<T>>,
+        F: AsyncFnMut<RefWithLifetime<RetryState>, Output = YdbResult<T>>,
     {
         let result = self
             .retry(closure!([attempt_fn, idempotency], async |retry| {

@@ -77,7 +77,7 @@ fn from_grpc_code_to_scheme_entry_type(value: i32) -> SchemeEntryType {
         grpcT::Unspecified => SchemeEntryType::Unspecified,
         grpcT::Directory => SchemeEntryType::Directory,
         grpcT::Table => SchemeEntryType::Table,
-        grpcT::ColumnStore => SchemeEntryType::ColumnStrore,
+        grpcT::ColumnStore => SchemeEntryType::ColumnStore,
         grpcT::ColumnTable => SchemeEntryType::ColumnTable,
         grpcT::PersQueueGroup => SchemeEntryType::PersQueueGroup,
         grpcT::Database => SchemeEntryType::Database,
