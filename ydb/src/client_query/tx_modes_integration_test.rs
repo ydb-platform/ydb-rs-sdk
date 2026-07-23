@@ -1,6 +1,7 @@
-use crate::TxMode;
+use crate::closure;
 use crate::errors::{YdbError, YdbOrCustomerError, YdbResult};
 use crate::test_integration_helper::create_client;
+use crate::{Transaction, TxMode};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing_test::traced_test;
 
@@ -136,10 +137,10 @@ macro_rules! interactive_mode_select {
             let qc = client.query_client();
 
             let v: i64 = qc
-                .retry_tx(async |tx| {
+                .retry_tx(closure!(async |tx: &mut Transaction| {
                     let mut row = tx.query_row("SELECT 42 AS v").await?;
                     Ok(row.remove_field_by_name("v")?.try_into()?)
-                })
+                }))
                 .isolation($mode)
                 .timeout(TEST_TIMEOUT)
                 .await?;
@@ -160,11 +161,11 @@ async fn query_tx_snapshot_rw() -> YdbResult<()> {
     let qc = client.query_client();
 
     match qc
-        .retry_tx(async |tx| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             let mut row = tx.query_row("SELECT 42 AS v").await?;
             let v: i64 = row.remove_field_by_name("v")?.try_into()?;
             Ok(v)
-        })
+        }))
         .isolation(TxMode::SnapshotReadWrite)
         .timeout(TEST_TIMEOUT)
         .await
@@ -193,7 +194,7 @@ async fn query_tx_snapshot_rw_upsert() -> YdbResult<()> {
     .await?;
 
     if let Err(err) = qc
-        .retry_tx(async |tx| {
+        .retry_tx(closure!([&table_name], async |tx: &mut Transaction| {
             tx.exec(format!(
                 "UPSERT INTO {table_name} (id, val) VALUES ($id, $val)"
             ))
@@ -201,7 +202,7 @@ async fn query_tx_snapshot_rw_upsert() -> YdbResult<()> {
             .param("$val", 55_i64)
             .await?;
             Ok(())
-        })
+        }))
         .isolation(TxMode::SnapshotReadWrite)
         .timeout(TEST_TIMEOUT)
         .await
@@ -230,10 +231,10 @@ async fn query_tx_stale_ro_rejected_in_interactive() {
     let qc = client.query_client();
 
     let err = qc
-        .retry_tx(async |tx| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             tx.query_row("SELECT 1 AS v").await?;
             Ok(())
-        })
+        }))
         .isolation(TxMode::StaleReadOnly)
         .timeout(TEST_TIMEOUT)
         .await
@@ -253,10 +254,10 @@ async fn query_tx_implicit_rejected_in_interactive() {
     let qc = client.query_client();
 
     let err = qc
-        .retry_tx(async |tx| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             tx.query_row("SELECT 1 AS v").await?;
             Ok(())
-        })
+        }))
         .isolation(TxMode::Implicit)
         .timeout(TEST_TIMEOUT)
         .await

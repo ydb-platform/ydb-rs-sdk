@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use ydb::{
     ClientBuilder, ExecBuilder, QueryExecutor, QueryRowBuilder, Transaction, YdbOrCustomerError,
-    YdbResult, YdbResultWithCustomerErr,
+    YdbResult, YdbResultWithCustomerErr, closure,
 };
 
 const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -51,17 +51,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // on `tx`: rust-analyzer does not yet reliably infer `async ||`
         // closure parameter types from the `AsyncFnMut` bound (the compiler
         // infers it fine without this).
-        .retry_tx(async |tx: &mut Transaction| {
-            attempts += 1; // mutable capture: AsyncFnMut allows it
-            for id in 0..10_i64 {
-                tx.exec(upsert)
-                    .param("$id", id)
-                    .param("$val", format!("val {id}"))
-                    .await?;
+        .retry_tx(closure!(
+            [&mut attempts, &upsert],
+            async |tx: &mut Transaction| {
+                *attempts += 1; // mutable capture: AsyncFnMut allows it
+                for id in 0..10_i64 {
+                    tx.exec(*upsert)
+                        .param("$id", id)
+                        .param("$val", format!("val {id}"))
+                        .await?;
+                }
+                let sum = fetch_total(tx).await?; // generic over QueryExecutor
+                Ok(sum) // Ok => commit; Err => rollback + retry
             }
-            let sum = fetch_total(tx).await?; // generic over QueryExecutor
-            Ok(sum) // Ok => commit; Err => rollback + retry
-        })
+        ))
         .timeout(EXAMPLE_TIMEOUT)
         .await?;
     println!("total = {total} after {attempts} attempt(s)");
@@ -77,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A business outcome, not a failure: finish the transaction explicitly
     // and return a value. No commit, no retry, no Err.
     let outcome = qc
-        .retry_tx(async |tx: &mut Transaction| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             let mut row = tx
                 .query_row("SELECT balance FROM accounts WHERE id = $id")
                 .param("$id", 1_i64)
@@ -94,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(Withdraw::Done {
                 remaining: balance - 100,
             })
-        })
+        }))
         .timeout(EXAMPLE_TIMEOUT)
         .await?;
     match outcome {
@@ -104,39 +107,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- 3. Customer errors are never retried -------------------------------
     let res: YdbResultWithCustomerErr<()> = qc
-        .retry_tx(async |tx: &mut Transaction| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             tx.exec("DELETE FROM test").await?;
             Err(YdbOrCustomerError::from_err(std::io::Error::other(
                 "business rule violated",
             )))
-        })
+        }))
         .timeout(EXAMPLE_TIMEOUT)
         .await;
     println!("customer error passed through: {}", res.is_err());
 
     // --- 5. Lazy tx vs explicit begin ---------------------------------------
     // Default (lazy): the first ExecuteQuery opens the transaction (BeginTx in tx_control).
-    qc.retry_tx(async |tx: &mut Transaction| {
+    qc.retry_tx(closure!(async |tx: &mut Transaction| {
         tx.exec("SELECT 1").await?;
         Ok(())
-    })
+    }))
     .timeout(EXAMPLE_TIMEOUT)
     .await?;
 
     // Explicit BeginTransaction RPC before any YQL:
-    qc.retry_tx(async |tx: &mut Transaction| {
+    qc.retry_tx(closure!(async |tx: &mut Transaction| {
         tx.begin().await?;
         tx.exec("SELECT 1").await?;
         Ok(())
-    })
+    }))
     .timeout(EXAMPLE_TIMEOUT)
     .await?;
 
     // Or configure explicit begin per retry_tx call:
-    qc.retry_tx(async |tx: &mut Transaction| {
+    qc.retry_tx(closure!(async |tx: &mut Transaction| {
         tx.exec("SELECT 1").await?; // BeginTransaction RPC runs before this query
         Ok(())
-    })
+    }))
     .with_begin()
     .timeout(EXAMPLE_TIMEOUT)
     .await?;
@@ -148,7 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )))
     .await?;
 
-    qc.retry_tx(async |tx: &mut Transaction| {
+    qc.retry_tx(closure!([&table], async |tx: &mut Transaction| {
         tx.exec(format!("UPSERT INTO {table} (id, val) VALUES ($id, $val)"))
             .param("$id", 1_i64)
             .param("$val", 100_i64)
@@ -156,7 +159,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
         // Transaction is already committed; further queries in this callback would fail.
         Ok(())
-    })
+    }))
     .timeout(EXAMPLE_TIMEOUT)
     .await?; // retry_tx commit is a no-op
 

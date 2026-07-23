@@ -1,6 +1,7 @@
-use std::future::{Future, IntoFuture};
-use std::pin::Pin;
+use std::future::IntoFuture;
 use std::time::Duration;
+
+use futures_util::future::BoxFuture;
 
 use crate::errors::YdbResult;
 use crate::result::ResultSet;
@@ -12,8 +13,6 @@ use crate::types::Value;
 
 use super::TableClient;
 use super::call_options::TableCallOptions;
-
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 macro_rules! impl_table_call_builder {
     ($name:ident) => {

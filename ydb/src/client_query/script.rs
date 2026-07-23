@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use std::future::{Future, IntoFuture};
-use std::pin::Pin;
+use std::future::IntoFuture;
 use std::time::Duration;
 
 use crate::client::TimeoutSettings;
@@ -11,11 +10,10 @@ use crate::grpc_wrapper::raw_query_service::fetch_script_results::RawFetchScript
 use crate::result::ResultSet;
 use crate::types::Value;
 
+use futures_util::future::BoxFuture;
 use tracing::instrument;
 
 use super::exec::{CallOptions, ClientExecContext, maybe_with_operation_timeout, run_with_retry};
-
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 /// Long-running script operation started by [`QueryClient::execute_script`].
 #[derive(Debug, Clone)]
