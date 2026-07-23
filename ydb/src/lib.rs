@@ -62,6 +62,7 @@ pub(crate) mod discovery;
 mod errors;
 mod grpc;
 pub(crate) mod grpc_connection_manager;
+mod grpc_options;
 mod grpc_wrapper;
 mod load_balancer;
 mod pub_traits;
@@ -85,7 +86,7 @@ mod test_helpers;
 pub mod async_closure;
 #[cfg(test)]
 pub(crate) mod coordination_test;
-pub(crate) mod dicovery_pessimization_interceptor;
+pub(crate) mod discovery_pessimization_interceptor;
 mod table_requests;
 mod table_service_types;
 #[cfg(test)]
@@ -169,6 +170,7 @@ pub use retry_budget::{
 
 // full enum pub types
 pub use client_builder::ClientBuilder;
+pub use grpc_options::{GrpcOptions, HasGrpcOptions};
 
 // full enum pub types
 pub use client_query::{
