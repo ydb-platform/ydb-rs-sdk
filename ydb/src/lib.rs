@@ -85,7 +85,7 @@ mod test_helpers;
 
 #[cfg(test)]
 pub(crate) mod coordination_test;
-pub(crate) mod dicovery_pessimization_interceptor;
+pub(crate) mod discovery_pessimization_interceptor;
 mod table_requests;
 mod table_service_types;
 #[cfg(test)]

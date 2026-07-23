@@ -9,7 +9,7 @@ pub trait Waiter: Send + Sync {
 }
 
 pub(crate) struct WaiterImpl {
-    received_succesfull: AtomicBool,
+    received_successful: AtomicBool,
     sender: watch::Sender<YdbResult<bool>>,
     receiver: watch::Receiver<YdbResult<bool>>,
 }
@@ -18,7 +18,7 @@ impl WaiterImpl {
     pub fn new() -> Self {
         let (sender, receiver) = watch::channel(YdbResult::Ok(false));
         WaiterImpl {
-            received_succesfull: AtomicBool::new(false),
+            received_successful: AtomicBool::new(false),
             sender,
             receiver,
         }
@@ -26,7 +26,7 @@ impl WaiterImpl {
 
     pub fn set_received(&self, res: YdbResult<()>) {
         // fast return if received already
-        if self.received_succesfull.load(Ordering::Relaxed) {
+        if self.received_successful.load(Ordering::Relaxed) {
             return;
         }
 
@@ -37,7 +37,7 @@ impl WaiterImpl {
         };
         let _ = self.sender.send(send_val);
         if success {
-            self.received_succesfull.store(true, Ordering::Relaxed)
+            self.received_successful.store(true, Ordering::Relaxed)
         }
     }
 }
@@ -45,7 +45,7 @@ impl WaiterImpl {
 #[async_trait::async_trait]
 impl Waiter for WaiterImpl {
     async fn wait(&self) -> YdbResult<()> {
-        if self.received_succesfull.load(Ordering::Relaxed) {
+        if self.received_successful.load(Ordering::Relaxed) {
             return Ok(());
         };
 

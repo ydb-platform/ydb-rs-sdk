@@ -2,10 +2,10 @@ use crate::client_common::{DBCredentials, TokenCache};
 use crate::client_topic::compression::Executor;
 use crate::credentials::{
     AccessTokenCredentials, CredentialsRef, GCEMetadata, ServiceAccountCredentials,
-    StaticCredentials, credencials_ref,
+    StaticCredentials, credentials_ref,
 };
-use crate::dicovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
 use crate::discovery::{Discovery, StaticDiscovery, TimerDiscovery};
+use crate::discovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::{
     DiscoveryConnectionManager, GrpcConnectionManager, NoBalancer,
@@ -72,7 +72,7 @@ fn token(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilde
             continue;
         };
 
-        client_builder.credentials = credencials_ref(
+        client_builder.credentials = credentials_ref(
             crate::credentials::AccessTokenCredentials::from(value.as_ref()),
         );
     }
@@ -85,7 +85,7 @@ fn token_cmd(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBu
             continue;
         };
 
-        client_builder.credentials = credencials_ref(
+        client_builder.credentials = credentials_ref(
             crate::credentials::CommandLineCredentials::from_cmd(value.as_ref())?,
         );
     }
@@ -100,7 +100,7 @@ fn token_metadata(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
 
         match value.as_ref() {
             "google" | "yandex-cloud" => {
-                client_builder.credentials = credencials_ref(GCEMetadata::new())
+                client_builder.credentials = credentials_ref(GCEMetadata::new())
             }
             _ => {
                 return Err(YdbError::Custom(format!(
@@ -161,7 +161,7 @@ fn token_static_password(uri: &str, mut client_builder: ClientBuilder) -> YdbRes
     )
     .with_grpc_opts(client_builder.grpc_opts.clone());
 
-    client_builder.credentials = credencials_ref(creds);
+    client_builder.credentials = credentials_ref(creds);
 
     Ok(client_builder)
 }
@@ -189,7 +189,7 @@ fn token_file(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientB
                 value.as_ref()
             ))
         })?;
-        client_builder.credentials = credencials_ref(AccessTokenCredentials::from(token.trim()));
+        client_builder.credentials = credentials_ref(AccessTokenCredentials::from(token.trim()));
         break;
     }
     Ok(client_builder)
@@ -201,7 +201,7 @@ fn sa_key_file(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Client
             continue;
         };
         client_builder.credentials =
-            credencials_ref(ServiceAccountCredentials::from_file(value.as_ref())?);
+            credentials_ref(ServiceAccountCredentials::from_file(value.as_ref())?);
         break;
     }
     Ok(client_builder)
@@ -313,7 +313,7 @@ impl ClientBuilder {
     }
 
     pub fn with_credentials<T: Credentials + 'static>(mut self, cred: T) -> Self {
-        self.credentials = credencials_ref(cred);
+        self.credentials = credentials_ref(cred);
         self
     }
 
@@ -359,7 +359,7 @@ impl ClientBuilder {
 
     fn new() -> Self {
         Self {
-            credentials: credencials_ref(AccessTokenCredentials::from("")),
+            credentials: credentials_ref(AccessTokenCredentials::from("")),
             database: "/local".to_string(),
             discovery_interval: Duration::from_secs(60),
             endpoint: "grpc://localhost:2135".to_string(),
