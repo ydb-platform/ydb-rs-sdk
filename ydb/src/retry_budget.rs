@@ -28,7 +28,7 @@ use crate::{
 
 /// Retry budget.
 #[derive(Debug, Clone, Copy)]
-pub struct RetryBudget<S, D = NoDeadline> {
+pub struct RetryBudget<S, D> {
     strategy: S,
     deadline: D,
 }
@@ -56,7 +56,7 @@ pub type BoxRetryBudget = RetryBudget<Box<dyn BoxRetryStrategy>, Box<dyn BoxDead
 /// Alias for reference-counted type-erased retry budget.
 pub type ArcRetryBudget = RetryBudget<Arc<dyn BoxRetryStrategy>, Arc<dyn BoxDeadline>>;
 
-impl<S: RetryStrategy> RetryBudget<S> {
+impl<S: RetryStrategy> RetryBudget<S, NoDeadline> {
     /// Constructs a retry budget from a retry strategy.
     pub fn new(strategy: S) -> Self {
         Self {
