@@ -83,7 +83,7 @@ pub(crate) mod custom_ca_test;
 #[cfg(test)]
 mod test_helpers;
 
-pub mod async_closure;
+mod async_closure;
 #[cfg(test)]
 pub(crate) mod coordination_test;
 pub(crate) mod discovery_pessimization_interceptor;
@@ -110,6 +110,11 @@ mod types_test;
 
 #[cfg(test)]
 mod connection_pool_test;
+
+pub use async_closure::{
+    __make_closure, AsyncFnMut, DynAsyncFnMut,
+    with_lifetime::{MutWithLifetime, OwnedWithLifetime, RefWithLifetime, WithLifetime},
+};
 
 pub use client_coordination::client::CoordinationClient;
 pub use client_coordination::list_types::{

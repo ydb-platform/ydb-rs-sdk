@@ -9,7 +9,7 @@ use crate::TransactionOptions;
 use crate::TxMode;
 use crate::async_closure::AsyncFnMut;
 use crate::async_closure::DynAsyncFnMut;
-use crate::async_closure::with_lifetime::Mut;
+use crate::async_closure::with_lifetime::MutWithLifetime;
 use crate::errors::YdbResultWithCustomerErr;
 
 use super::QueryClient;
@@ -32,7 +32,9 @@ pub trait RetryTxAttempt<T>: Send {
     ) -> BoxFuture<'a, YdbResultWithCustomerErr<T>>;
 }
 
-impl<'c, T> RetryTxAttempt<T> for DynAsyncFnMut<'c, Mut<Transaction>, YdbResultWithCustomerErr<T>> {
+impl<'c, T> RetryTxAttempt<T>
+    for DynAsyncFnMut<'c, MutWithLifetime<Transaction>, YdbResultWithCustomerErr<T>>
+{
     fn attempt<'a>(
         &'a mut self,
         tx: &'a mut Transaction,

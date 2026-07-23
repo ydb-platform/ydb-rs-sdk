@@ -48,9 +48,9 @@ pub trait WithLifetime {
 ///
 /// Its associated lifetime-parametrized
 /// type is `T` for all lifetimes.
-pub struct Owned<T>(T);
+pub struct OwnedWithLifetime<T>(T);
 
-impl<T> WithLifetime for Owned<T> {
+impl<T> WithLifetime for OwnedWithLifetime<T> {
     type Type<'a>
         = T
     where
@@ -60,9 +60,9 @@ impl<T> WithLifetime for Owned<T> {
 /// Marker type that represents
 /// reference type parametrized
 /// by its lifetime.
-pub struct Ref<T>(T);
+pub struct RefWithLifetime<T>(T);
 
-impl<T> WithLifetime for Ref<T> {
+impl<T> WithLifetime for RefWithLifetime<T> {
     type Type<'a>
         = &'a T
     where
@@ -72,9 +72,9 @@ impl<T> WithLifetime for Ref<T> {
 /// Marker type that represents
 /// mutable reference type
 /// parametrized by its lifetime.
-pub struct Mut<T>(T);
+pub struct MutWithLifetime<T>(T);
 
-impl<T> WithLifetime for Mut<T> {
+impl<T> WithLifetime for MutWithLifetime<T> {
     type Type<'a>
         = &'a mut T
     where

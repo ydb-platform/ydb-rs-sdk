@@ -28,7 +28,7 @@ use futures_util::future::BoxFuture;
 
 use crate::async_closure::with_lifetime::WithLifetime;
 
-pub mod with_lifetime;
+pub(crate) mod with_lifetime;
 
 /// [`AsyncFnMut`] equivalent with type-erased future
 /// that can be implemented for different types and
@@ -155,7 +155,7 @@ where
 #[macro_export]
 macro_rules! closure {
     ([$($tt:tt)*], $body:expr) => {
-        $crate::async_closure::__make_closure(
+        $crate::__make_closure(
             $crate::__closure_make_tuple!($($tt)*),
             move |ctx, args| {
                 $crate::__closure_destruct_tuple!(ctx => $($tt)*);
@@ -236,9 +236,9 @@ macro_rules! __closure_destruct_tuple {
 mod tests {
     use super::*;
 
-    use crate::async_closure::with_lifetime::Mut;
+    use crate::async_closure::with_lifetime::MutWithLifetime;
 
-    async fn call_in_loop<F: AsyncFnMut<Mut<i32>, Output = bool>>(mut f: F) {
+    async fn call_in_loop<F: AsyncFnMut<MutWithLifetime<i32>, Output = bool>>(mut f: F) {
         let mut x = 10;
         while !f.call(&mut x).await {
             x += 1;
