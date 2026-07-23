@@ -1,7 +1,6 @@
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
-use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::task::JoinSet;
 use ydb::{PartitioningStrategy, TopicClient, TopicWriter, TopicWriterMessage, TopicWriterOptions};
 
@@ -38,13 +37,6 @@ impl WriterMetrics {
 
     fn merge(&mut self, other: &Self) -> Result<()> {
         self.write_ack.merge(&other.write_ack)?;
-        Ok(())
-    }
-
-    fn record_acknowledgement(&mut self, latency: Option<Duration>) -> Result<()> {
-        if let Some(latency) = latency {
-            self.write_ack.record(latency)?;
-        }
         Ok(())
     }
 }
@@ -99,62 +91,52 @@ async fn run_writer(
     schedule: BenchmarkSchedule,
     settings: WriterSettings,
 ) -> Result<WriterMetrics> {
-    let mut in_flight = FuturesUnordered::new();
-    let mut metrics = WriterMetrics::new()?;
+    let (pending_acks_tx, mut pending_acks_rx) = tokio::sync::mpsc::channel(settings.max_in_flight);
+
+    let ack_recorder_task = tokio::spawn(async move {
+        let mut ack_latency = LatencyRecorder::new()?;
+
+        while let Some(pending_ack) = pending_acks_rx.recv().await {
+            if let Some(elapsed) = pending_ack.await? {
+                ack_latency.record(elapsed)?;
+            }
+        }
+
+        anyhow::Ok(ack_latency)
+    });
 
     // Keep one continuous pipeline across warm-up and measurement.
     loop {
-        if in_flight.len() < settings.max_in_flight {
-            let Some(message) = prepare_next_message(&schedule, settings.message_size_bytes)?
-            else {
-                break;
-            };
-            let ack = writer
-                .write_with_ack_future(message.message)
-                .await
-                .context("writer submission failed")?;
-            let measured = schedule.is_measurement_instant(message.started);
-            in_flight.push(async move {
-                ack.await.context("writer acknowledgement failed")?;
-                anyhow::Ok(measured.then(|| message.started.elapsed()))
-            });
-        } else {
-            let completion = in_flight
-                .next()
-                .await
-                .context("writer acknowledgement stream ended")?;
-            metrics.record_acknowledgement(completion?)?;
+        // Allocate before starting the latency timer.
+        let mut data = payload::allocate(settings.message_size_bytes)?;
+        let started = Instant::now();
+        if started >= schedule.measurement_end {
+            break;
         }
+        payload::write_timestamp(&mut data, schedule.ns_at(started)?)?;
+
+        let message = TopicWriterMessage::builder().data(data).build();
+        let ack = writer
+            .write_with_ack_future(message)
+            .await
+            .context("writer submission failed")?;
+        let measured = schedule.is_measurement_instant(started);
+
+        pending_acks_tx
+            .send(async move {
+                ack.await.context("writer ack failed")?;
+                anyhow::Ok(measured.then_some(started.elapsed()))
+            })
+            .await?;
     }
 
-    // Stop submitting at the measurement boundary, then finish acknowledgements already started.
-    while let Some(completion) = in_flight.next().await {
-        metrics.record_acknowledgement(completion?)?;
-    }
+    // Close the channel so the acknowledgement recorder can finish.
+    drop(pending_acks_tx);
+
+    let metrics = WriterMetrics {
+        write_ack: ack_recorder_task.await??,
+    };
 
     writer.stop().await.context("failed to stop writer")?;
     Ok(metrics)
-}
-
-fn prepare_next_message(
-    schedule: &BenchmarkSchedule,
-    message_size_bytes: usize,
-) -> Result<Option<PreparedMessage>> {
-    // Allocate before starting the latency timer, then check that submissions remain open.
-    let mut data = payload::allocate(message_size_bytes)?;
-    let started = Instant::now();
-    if started >= schedule.measurement_end {
-        return Ok(None);
-    }
-    payload::write_timestamp(&mut data, schedule.ns_at(started)?)?;
-
-    Ok(Some(PreparedMessage {
-        message: TopicWriterMessage::builder().data(data).build(),
-        started,
-    }))
-}
-
-struct PreparedMessage {
-    message: TopicWriterMessage,
-    started: Instant,
 }
