@@ -130,6 +130,7 @@ pub(crate) struct RawInitRequest {
     pub topics_read_settings: Vec<RawTopicReadSettings>,
     pub consumer: String,
     pub reader_name: String,
+    pub auto_partitioning_support: bool,
 }
 
 impl From<RawInitRequest> for stream_read_message::InitRequest {
@@ -143,7 +144,7 @@ impl From<RawInitRequest> for stream_read_message::InitRequest {
             consumer: value.consumer,
             reader_name: value.reader_name,
             direct_read: false,
-            auto_partitioning_support: true,
+            auto_partitioning_support: value.auto_partitioning_support,
             ..Default::default()
         }
     }
