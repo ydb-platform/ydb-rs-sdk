@@ -1,7 +1,6 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::task::JoinSet;
 use tokio::time::sleep_until;
 use ydb::{TopicClient, TopicReader, TopicReaderMessage, TopicReaderOptions, TopicSelector};
@@ -27,13 +26,6 @@ impl ReaderMetrics {
     fn merge(&mut self, other: &Self) -> Result<()> {
         self.end_to_end.merge(&other.end_to_end)?;
         self.commit_ack.merge(&other.commit_ack)?;
-        Ok(())
-    }
-
-    fn record_commit(&mut self, latency: Option<Duration>) -> Result<()> {
-        if let Some(latency) = latency {
-            self.commit_ack.record(latency)?;
-        }
         Ok(())
     }
 }
@@ -77,19 +69,29 @@ pub(super) async fn run(
 }
 
 async fn run_reader(mut reader: TopicReader, schedule: BenchmarkSchedule) -> Result<ReaderMetrics> {
-    let mut metrics = ReaderMetrics::new()?;
-    let mut commits = FuturesUnordered::new();
     let measurement_start_ns = schedule.ns_at(schedule.measurement_start)?;
     let measurement_end = schedule.measurement_end;
+
+    let (pending_acks_tx, mut pending_acks_rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let ack_recorder_task = tokio::spawn(async move {
+        let mut ack_latency = LatencyRecorder::new()?;
+
+        while let Some(pending_ack) = pending_acks_rx.recv().await {
+            if let Some(elapsed) = pending_ack.await? {
+                ack_latency.record(elapsed)?;
+            }
+        }
+
+        anyhow::Ok(ack_latency)
+    });
+
+    let mut end_to_end = LatencyRecorder::new()?;
 
     loop {
         // Keep reading while completed commit acknowledgements are recorded in parallel.
         let batch = tokio::select! {
             () = sleep_until(measurement_end.into()) => break,
-            Some(completion) = commits.next(), if !commits.is_empty() => {
-                metrics.record_commit(completion?)?;
-                continue;
-            }
             batch = reader.read_batch() => batch.context("reader failed")?,
         };
 
@@ -99,31 +101,37 @@ async fn run_reader(mut reader: TopicReader, schedule: BenchmarkSchedule) -> Res
             batch.messages,
             delivered_at_ns,
             measurement_start_ns,
-            &mut metrics,
+            &mut end_to_end,
         )
         .await?;
 
         let started = Instant::now();
         let ack = reader.commit_with_ack(marker);
 
-        commits.push(async move {
-            ack.await.context("commit acknowledgement failed")?;
-            anyhow::Ok(measured_batch.then(|| started.elapsed()))
-        });
+        pending_acks_tx.send(async move {
+            ack.await?;
+            anyhow::Ok(measured_batch.then_some(started.elapsed()))
+        })?;
     }
 
-    // Stop reading at the measurement boundary, then finish commits already started.
-    while let Some(completion) = commits.next().await {
-        metrics.record_commit(completion?)?;
-    }
-    Ok(metrics)
+    // Close the channel so the acknowledgement recorder can finish.
+    drop(pending_acks_tx);
+
+    let commit_ack = ack_recorder_task
+        .await
+        .context("commit acknowledgement recorder panicked or was cancelled")??;
+
+    Ok(ReaderMetrics {
+        end_to_end,
+        commit_ack,
+    })
 }
 
 async fn process_batch(
     messages: Vec<TopicReaderMessage>,
     delivered_at_ns: u64,
     measurement_start_ns: u64,
-    metrics: &mut ReaderMetrics,
+    end_to_end: &mut LatencyRecorder,
 ) -> Result<bool> {
     let mut measured_batch = false;
     for mut message in messages {
@@ -141,9 +149,7 @@ async fn process_batch(
         let latency_ns = delivered_at_ns
             .checked_sub(sent_at_ns)
             .context("payload timestamp is ahead of the benchmark clock")?;
-        metrics
-            .end_to_end
-            .record(Duration::from_nanos(latency_ns))?;
+        end_to_end.record(Duration::from_nanos(latency_ns))?;
     }
     Ok(measured_batch)
 }
