@@ -13,7 +13,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt};
 
 use ydb::traces::filter_ext::{EnvFilterExt, TargetFilterExt};
-use ydb::{ClientBuilder, Row, YdbError, YdbResult};
+use ydb::{ClientBuilder, Row, Transaction, YdbError, YdbResult, closure};
 
 static SERVICE_NAME: &str = "example_service";
 
@@ -78,7 +78,7 @@ async fn start_app() -> YdbResult<()> {
         .await?;
 
     query_client
-        .retry_tx(async |tx| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             for i in 1..100 {
                 tx.exec("UPSERT INTO test (id, val) VALUES ($id, $val)")
                     .param("$id", i as i64)
@@ -86,27 +86,27 @@ async fn start_app() -> YdbResult<()> {
                     .await?;
             }
             Ok(())
-        })
+        }))
         .await
         .map_err(|e| YdbError::Transport(format!("{e:?}")))?;
 
     let sum: Option<i64> = query_client
-        .retry_tx(async |tx| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             let mut row = tx.query_row("SELECT SUM(id) AS sum FROM test").await?;
             Ok(row.remove_field_by_name("sum")?.try_into()?)
-        })
+        }))
         .await
         .map_err(|e| YdbError::Transport(format!("{e:?}")))?;
     println!("sum: {}", sum.unwrap_or(-1));
 
     let rows: Vec<Row> = query_client
-        .retry_tx(async |tx| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             Ok(tx
                 .query_result_set("SELECT * FROM test ORDER BY id LIMIT 10")
                 .await?
                 .rows()
                 .collect())
-        })
+        }))
         .await
         .map_err(|e| YdbError::Transport(format!("{e:?}")))?;
 

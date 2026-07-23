@@ -165,9 +165,9 @@ fn split_by_location() -> YdbResult<()> {
         five.clone(),
     ];
 
-    let splitted = NearestDCBalancer::split_endpoints_by_location(&nodes);
+    let split = NearestDCBalancer::split_endpoints_by_location(&nodes);
     assert_eq!(
-        splitted,
+        split,
         HashMap::from([
             ("A".to_string(), vec![&one, &two]),
             ("B".to_string(), vec![&three, &four]),
@@ -388,7 +388,7 @@ async fn adjusting_dc() -> YdbResult<()> {
     let discovery_state = Arc::new(DiscoveryState::default());
     let balancer_state = Arc::new(RwLock::new(BalancerState::default()));
     let balancer_state_updater = balancer_state.clone();
-    let (state_sender, state_reciever) = watch::channel(discovery_state.clone());
+    let (state_sender, state_receiver) = watch::channel(discovery_state.clone());
 
     let ping_token = CancellationToken::new();
     let ping_token_clone = ping_token.clone();
@@ -399,7 +399,7 @@ async fn adjusting_dc() -> YdbResult<()> {
     let updater = tokio::spawn(async move {
         NearestDCBalancer::adjust_local_dc(
             balancer_state_updater,
-            state_reciever,
+            state_receiver,
             ping_token_clone,
             waiter_clone,
         )
@@ -479,7 +479,7 @@ async fn adjusting_dc() -> YdbResult<()> {
             .len()
             == 2 // both endpoints in same dc
     );
-    ping_token.cancel(); // reciever stops wait for state change
+    ping_token.cancel(); // receiver stops wait for state change
     let _ = tokio::join!(updater); // should join
     Ok(())
 }
@@ -537,11 +537,11 @@ async fn nearest_dc_balancer_integration() -> YdbResult<()> {
 
     let sh = SharedLoadBalancer::new_with_balancer(Box::new(balancer));
     let self_updater = sh.clone();
-    let (state_sender, state_reciever) =
+    let (state_sender, state_receiver) =
         watch::channel::<Arc<DiscoveryState>>(Arc::new(DiscoveryState::default()));
 
     tokio::spawn(async move {
-        update_load_balancer(self_updater, WatchStream::new(state_reciever).boxed()).await
+        update_load_balancer(self_updater, WatchStream::new(state_receiver).boxed()).await
     });
 
     match sh.endpoint(Table) {

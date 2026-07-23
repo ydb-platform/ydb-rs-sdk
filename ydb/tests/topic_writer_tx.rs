@@ -2,7 +2,10 @@
 mod mock_server;
 
 use std::sync::{Arc, Mutex};
-use ydb::{Client, ClientBuilder, TopicWriterMessage, TopicWriterTxOptionsBuilder, YdbResult};
+use ydb::{
+    Client, ClientBuilder, TopicWriterMessage, TopicWriterTxOptionsBuilder, Transaction, YdbResult,
+    closure,
+};
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 use ydb_grpc::ydb_proto::topic::stream_write_message::InitRequest;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage as WriteFromClient;
@@ -170,14 +173,14 @@ async fn write_single_message_written_in_tx() -> YdbResult<()> {
 
     client
         .query_client()
-        .retry_tx(async |tx| {
+        .retry_tx(closure!([&client], async |tx: &mut Transaction| {
             let mut writer = client
                 .topic_client()
                 .create_writer_tx(TOPIC_PATH.to_string(), tx)
                 .await?;
             writer.write(test_message()).await?;
             Ok(())
-        })
+        }))
         .await?;
 
     Ok(())
@@ -194,7 +197,7 @@ async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
 
     let result = client
         .query_client()
-        .retry_tx(async |tx| {
+        .retry_tx(closure!([&client], async |tx: &mut Transaction| {
             let mut writer = client
                 .topic_client()
                 .create_writer_tx(TOPIC_PATH.to_string(), tx)
@@ -203,7 +206,7 @@ async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
             let result = writer.write(test_message()).await;
             result?;
             Ok(())
-        })
+        }))
         .await;
 
     assert!(result.is_err(), "expected error for non-WrittenInTx ack");
@@ -231,14 +234,14 @@ async fn tx_identity_present_in_write_request() -> YdbResult<()> {
 
     client
         .query_client()
-        .retry_tx(async |tx| {
+        .retry_tx(closure!([&client], async |tx: &mut Transaction| {
             let mut writer = client
                 .topic_client()
                 .create_writer_tx(TOPIC_PATH.to_string(), tx)
                 .await?;
             writer.write(test_message()).await?;
             Ok(())
-        })
+        }))
         .await?;
 
     let identity = captured_tx.lock().unwrap().clone();
@@ -288,14 +291,17 @@ async fn tx_writer_options_propagated_to_init_request() -> YdbResult<()> {
     let client = make_client(&server)?;
     client
         .query_client()
-        .retry_tx(async |tx| {
-            let mut writer = client
-                .topic_client()
-                .create_writer_tx_with_params(options.clone(), tx)
-                .await?;
-            writer.write(test_message()).await?;
-            Ok(())
-        })
+        .retry_tx(closure!(
+            [&client, &options],
+            async |tx: &mut Transaction| {
+                let mut writer = client
+                    .topic_client()
+                    .create_writer_tx_with_params(options.clone(), tx)
+                    .await?;
+                writer.write(test_message()).await?;
+                Ok(())
+            }
+        ))
         .await?;
 
     let init = captured_init.lock().unwrap().clone();
@@ -377,14 +383,14 @@ async fn write_skipped_already_written_returns_error_and_rolls_back() -> YdbResu
 
     let result = client
         .query_client()
-        .retry_tx(async |tx| {
+        .retry_tx(closure!([&client], async |tx: &mut Transaction| {
             let mut writer = client
                 .topic_client()
                 .create_writer_tx(TOPIC_PATH.to_string(), tx)
                 .await?;
             writer.write(test_message()).await?;
             Ok(())
-        })
+        }))
         .await;
 
     assert!(result.is_err(), "expected error for AlreadyWritten ack");
@@ -412,25 +418,28 @@ async fn write_returns_error_after_stream_close_and_rolls_back() -> YdbResult<()
 
     let result = client
         .query_client()
-        .retry_tx(async |tx| {
-            let mut writer = client
-                .topic_client()
-                .create_writer_tx(TOPIC_PATH.to_string(), tx)
-                .await?;
+        .retry_tx(closure!(
+            [&client, &captured_stream_id, &server],
+            async |tx: &mut Transaction| {
+                let mut writer = client
+                    .topic_client()
+                    .create_writer_tx(TOPIC_PATH.to_string(), tx)
+                    .await?;
 
-            let stream_id = captured_stream_id
-                .lock()
-                .unwrap()
-                .expect("stream_id must be set after writer init");
-            server
-                .write_sender()
-                .close(stream_id)
-                .expect("mock server failed to fail write stream");
+                let stream_id = captured_stream_id
+                    .lock()
+                    .unwrap()
+                    .expect("stream_id must be set after writer init");
+                server
+                    .write_sender()
+                    .close(stream_id)
+                    .expect("mock server failed to fail write stream");
 
-            let result = writer.write(test_message()).await;
-            result?;
-            Ok(())
-        })
+                let result = writer.write(test_message()).await;
+                result?;
+                Ok(())
+            }
+        ))
         .await;
 
     assert!(result.is_err(), "expected error after stream failure");
@@ -541,14 +550,14 @@ async fn commit_failure_after_successful_write_is_not_retried() -> YdbResult<()>
 
     let result = client
         .query_client()
-        .retry_tx(async |tx| {
+        .retry_tx(closure!([&client], async |tx: &mut Transaction| {
             let mut writer = client
                 .topic_client()
                 .create_writer_tx(TOPIC_PATH.to_string(), tx)
                 .await?;
             writer.write(test_message()).await?;
             Ok(())
-        })
+        }))
         .await;
 
     assert!(result.is_err(), "commit failure must be returned");

@@ -147,7 +147,7 @@ impl From<YdbDecimal> for Value {
 /// # }
 /// ```
 ///
-/// #### Possible native convertions
+/// #### Possible native conversions
 ///
 #[derive(Clone, Debug, EnumCount, EnumDiscriminants, PartialEq)]
 #[strum_discriminants(vis(pub(crate)))] // private
@@ -676,7 +676,7 @@ impl TryFrom<RawColumn> for Column {
     }
 }
 
-// Container fot bytes for prevent conflict Vec<u8> - List of values u8 or String type (bytes)
+// Container for bytes for prevent conflict Vec<u8> - List of values u8 or String type (bytes)
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Bytes {
     vec: Vec<u8>,

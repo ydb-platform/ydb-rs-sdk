@@ -496,6 +496,7 @@ impl Waiter for DiscoverySharedState {
 mod test {
     use http::Uri;
 
+    use crate::GrpcOptions;
     use crate::client_common::{DBCredentials, TokenCache};
     use crate::discovery::{Discovery, DiscoverySharedState, DiscoveryState, NodeInfo};
     use crate::errors::YdbResult;
@@ -514,8 +515,7 @@ mod test {
             NoBalancer,
             DATABASE.to_string(),
             MultiInterceptor::new(),
-            None,
-            crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+            GrpcOptions::default(),
         );
 
         DiscoverySharedState::new(connection_manager, ENDPOINT)
@@ -565,8 +565,7 @@ mod test {
             NoBalancer,
             cred.database,
             interceptor,
-            None,
-            crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+            GrpcOptions::default(),
         );
 
         let discovery_shared =
