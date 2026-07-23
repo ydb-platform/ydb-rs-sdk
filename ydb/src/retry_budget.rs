@@ -3,10 +3,8 @@
 //! A [`RetryBudget`] instance is shared by all service clients created from
 //! the same [`Client`](crate::Client).
 
-use futures_util::{
-    FutureExt,
-    future::{self, BoxFuture},
-};
+use async_trait::async_trait;
+use futures_util::future;
 use rand::Rng;
 use std::{
     fmt::Debug,
@@ -46,10 +44,10 @@ impl Default for ArcRetryBudget {
 }
 
 /// Alias for type-erased retry budget.
-pub type BoxRetryBudget = RetryBudget<Box<dyn BoxRetryStrategy>, Box<dyn BoxDeadline>>;
+pub type BoxRetryBudget = RetryBudget<Box<dyn RetryStrategy>, Box<dyn RetryDeadline>>;
 
 /// Alias for reference-counted type-erased retry budget.
-pub type ArcRetryBudget = RetryBudget<Arc<dyn BoxRetryStrategy>, Arc<dyn BoxDeadline>>;
+pub type ArcRetryBudget = RetryBudget<Arc<dyn RetryStrategy>, Arc<dyn RetryDeadline>>;
 
 impl<S: RetryStrategy> RetryBudget<S, NoDeadline> {
     /// Constructs a retry budget from a retry strategy.
@@ -149,10 +147,10 @@ impl<S: RetryStrategy, D: RetryDeadline> RetryBudget<S, D> {
 
     /// Returns a retry budget that borrows
     /// the current one.
-    pub fn as_ref(&self) -> RetryBudget<RefStrategy<'_, S>, RefDeadline<'_, D>> {
+    pub fn as_ref(&self) -> RetryBudget<&'_ S, &'_ D> {
         RetryBudget {
-            strategy: self.strategy.as_ref_strategy(),
-            deadline: self.deadline.as_ref_deadline(),
+            strategy: &self.strategy,
+            deadline: &self.deadline,
         }
     }
 
@@ -286,27 +284,15 @@ impl RetryState {
 /// Retry wait strategy.
 ///
 /// Should be used with [`RetryBudget`].
+#[async_trait]
 pub trait RetryStrategy: Send + Sync {
     /// Returns a future that waits before the next retry.
     ///
     /// Note that the future can be created before the time it's polled.
     ///
     /// Its output tells whether to continue retries.
-    fn wait_retry<'a>(
-        &'a self,
-        _retry: &'a RetryState,
-    ) -> impl Future<Output = ControlFlow<()>> + Send + 'a;
+    async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()>;
 }
-
-/// Extension trait that provides useful methods for retry strategies.
-pub trait RetryStrategyExt: RetryStrategy {
-    /// Returns a borrowed retry strategy.
-    fn as_ref_strategy(&self) -> RefStrategy<'_, Self> {
-        RefStrategy(self)
-    }
-}
-
-impl<S: RetryStrategy> RetryStrategyExt for S {}
 
 /// Retry wait strategy that never asks to stop.
 ///
@@ -320,12 +306,10 @@ pub trait RetryAlways: Send + Sync + RetryStrategy {}
 #[derive(Debug, Clone, Copy)]
 pub struct DontRetry;
 
+#[async_trait]
 impl RetryStrategy for DontRetry {
-    fn wait_retry<'a>(
-        &'a self,
-        _retry: &'a RetryState,
-    ) -> impl Future<Output = ControlFlow<()>> + Send + 'a {
-        future::ready(ControlFlow::Break(()))
+    async fn wait_retry(&self, _retry: &RetryState) -> ControlFlow<()> {
+        ControlFlow::Break(())
     }
 }
 
@@ -395,26 +379,34 @@ impl ExponentialBackoff {
     }
 }
 
+#[async_trait]
 impl RetryStrategy for ExponentialBackoff {
-    fn wait_retry<'a>(
-        &'a self,
-        retry: &'a RetryState,
-    ) -> impl Future<Output = ControlFlow<()>> + Send + 'a {
-        tokio::time::sleep(self.wait_duration(retry.attempt)).map(ControlFlow::Continue)
+    async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
+        tokio::time::sleep(self.wait_duration(retry.attempt)).await;
+        ControlFlow::Continue(())
     }
 }
 
 impl RetryAlways for ExponentialBackoff {}
 
-/// Borrowed retry strategy that is a retry strategy itself.
-pub struct RefStrategy<'a, S: RetryStrategy + ?Sized>(pub &'a S);
+#[async_trait]
+impl<S: RetryStrategy + ?Sized> RetryStrategy for &S {
+    async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
+        S::wait_retry(*self, retry).await
+    }
+}
 
-impl<'s, S: RetryStrategy> RetryStrategy for RefStrategy<'s, S> {
-    fn wait_retry<'a>(
-        &'a self,
-        retry: &'a RetryState,
-    ) -> impl Future<Output = ControlFlow<()>> + Send + 'a {
-        self.0.wait_retry(retry)
+#[async_trait]
+impl<S: RetryStrategy + ?Sized> RetryStrategy for Box<S> {
+    async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
+        S::wait_retry(&self, retry).await
+    }
+}
+
+#[async_trait]
+impl<S: RetryStrategy + ?Sized> RetryStrategy for Arc<S> {
+    async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
+        S::wait_retry(&self, retry).await
     }
 }
 
@@ -476,8 +468,9 @@ impl RetriesPerSecond {
     }
 }
 
+#[async_trait]
 impl RetryStrategy for RetriesPerSecond {
-    async fn wait_retry<'a>(&'a self, _retry: &'a RetryState) -> ControlFlow<()> {
+    async fn wait_retry(&self, _retry: &RetryState) -> ControlFlow<()> {
         if let Some(semaphore) = self.semaphore.as_ref() {
             let Ok(permit) = semaphore.acquire().await else {
                 warn!("semaphore that must never be closed is closed");
@@ -511,8 +504,9 @@ impl RetryProbability {
     }
 }
 
+#[async_trait]
 impl RetryStrategy for RetryProbability {
-    async fn wait_retry<'a>(&'a self, _retry: &'a RetryState) -> ControlFlow<()> {
+    async fn wait_retry(&self, _retry: &RetryState) -> ControlFlow<()> {
         if rand::thread_rng().gen_range(0..100) < self.percent {
             ControlFlow::Continue(())
         } else {
@@ -524,6 +518,7 @@ impl RetryStrategy for RetryProbability {
 /// Retry deadline.
 ///
 /// Should be used with [`RetryBudget`].
+#[async_trait]
 pub trait RetryDeadline: Send + Sync {
     /// Returns a future that waits for the retry deadline.
     ///
@@ -531,48 +526,42 @@ pub trait RetryDeadline: Send + Sync {
     /// and should behave correctly in both cases.
     ///
     /// When it completes, retries should be stopped.
-    fn wait_deadline(&self) -> impl Future<Output = ()> + Send + '_;
+    async fn wait_deadline(&self);
 }
-
-/// Extension trait that provides useful methods for retry deadlines.
-pub trait RetryDeadlineExt: RetryDeadline {
-    /// Returns a borrowed retry deadline.
-    fn as_ref_deadline(&self) -> RefDeadline<'_, Self> {
-        RefDeadline(self)
-    }
-}
-
-impl<D: RetryDeadline> RetryDeadlineExt for D {}
 
 /// Retry deadline that is never exceeded.
 #[derive(Debug, Clone, Copy)]
 pub struct NoDeadline;
 
+#[async_trait]
 impl RetryDeadline for NoDeadline {
-    fn wait_deadline(&self) -> impl Future<Output = ()> + Send {
-        future::pending()
+    async fn wait_deadline(&self) {
+        loop {}
     }
 }
 
+#[async_trait]
 impl RetryDeadline for Duration {
-    fn wait_deadline(&self) -> impl Future<Output = ()> + Send {
-        let timeout = *self;
-        async move { tokio::time::sleep_until((Instant::now() + timeout).into()).await }
+    async fn wait_deadline(&self) {
+        tokio::time::sleep_until((Instant::now() + *self).into()).await
     }
 }
 
+#[async_trait]
 impl RetryDeadline for Instant {
-    fn wait_deadline(&self) -> impl Future<Output = ()> + Send {
-        tokio::time::sleep_until((*self).into())
+    async fn wait_deadline(&self) {
+        tokio::time::sleep_until((*self).into()).await
     }
 }
 
+#[async_trait]
 impl RetryDeadline for CancellationToken {
-    fn wait_deadline(&self) -> impl Future<Output = ()> + Send + '_ {
-        self.cancelled()
+    async fn wait_deadline(&self) {
+        self.cancelled().await
     }
 }
 
+#[async_trait]
 impl<D: RetryDeadline> RetryDeadline for Option<D> {
     async fn wait_deadline(&self) {
         match self {
@@ -582,84 +571,39 @@ impl<D: RetryDeadline> RetryDeadline for Option<D> {
     }
 }
 
-/// Borrowed retry deadline that is retry deadline itself.
-pub struct RefDeadline<'a, D: RetryDeadline + ?Sized>(pub &'a D);
-
-impl<'a, D: RetryDeadline> RetryDeadline for RefDeadline<'a, D> {
-    fn wait_deadline(&self) -> impl Future<Output = ()> + Send + '_ {
-        self.0.wait_deadline()
+#[async_trait]
+impl<D: RetryDeadline + ?Sized> RetryDeadline for &D {
+    async fn wait_deadline(&self) {
+        D::wait_deadline(*self).await
     }
 }
 
-/// Dyn-safe counterpart of [`RetryStrategy`] trait.
-pub trait BoxRetryStrategy: Send + Sync {
-    fn wait_retry_boxed<'a>(&'a self, retry: &'a RetryState) -> BoxFuture<'a, ControlFlow<()>>;
-}
-
-impl<S: RetryStrategy> BoxRetryStrategy for S {
-    fn wait_retry_boxed<'a>(&'a self, retry: &'a RetryState) -> BoxFuture<'a, ControlFlow<()>> {
-        self.wait_retry(retry).boxed()
+#[async_trait]
+impl<D: RetryDeadline + ?Sized> RetryDeadline for Box<D> {
+    async fn wait_deadline(&self) {
+        D::wait_deadline(&self).await
     }
 }
 
-impl<'s> RetryStrategy for Box<dyn BoxRetryStrategy + 's> {
-    fn wait_retry<'a>(
-        &'a self,
-        retry: &'a RetryState,
-    ) -> impl Future<Output = ControlFlow<()>> + Send + 'a {
-        self.as_ref().wait_retry_boxed(retry)
-    }
-}
-
-impl<'s> RetryStrategy for Arc<dyn BoxRetryStrategy + 's> {
-    fn wait_retry<'a>(
-        &'a self,
-        retry: &'a RetryState,
-    ) -> impl Future<Output = ControlFlow<()>> + Send + 'a {
-        self.as_ref().wait_retry_boxed(retry)
-    }
-}
-
-/// Dyn-safe counterpart of [`RetryDeadline`] trait.
-pub trait BoxDeadline: Send + Sync {
-    fn wait_deadline_boxed(&self) -> BoxFuture<'_, ()>;
-}
-
-impl<D: RetryDeadline> BoxDeadline for D {
-    fn wait_deadline_boxed(&self) -> BoxFuture<'_, ()> {
-        self.wait_deadline().boxed()
-    }
-}
-
-impl<'d> RetryDeadline for Box<dyn BoxDeadline + 'd> {
-    fn wait_deadline(&self) -> impl Future<Output = ()> + Send + '_ {
-        self.as_ref().wait_deadline_boxed()
-    }
-}
-
-impl<'d> RetryDeadline for Arc<dyn BoxDeadline + 'd> {
-    fn wait_deadline(&self) -> impl Future<Output = ()> + Send + '_ {
-        self.as_ref().wait_deadline_boxed()
+#[async_trait]
+impl<D: RetryDeadline + ?Sized> RetryDeadline for Arc<D> {
+    async fn wait_deadline(&self) {
+        D::wait_deadline(&self).await
     }
 }
 
 /// Helper type for combining deadlines and retry wait strategies.
 pub struct Combine<A, B>(A, B);
 
+#[async_trait]
 impl<A: RetryStrategy, B: RetryStrategy> RetryStrategy for Combine<A, B> {
-    fn wait_retry<'a>(
-        &'a self,
-        retry: &'a RetryState,
-    ) -> impl Future<Output = ControlFlow<()>> + Send + 'a {
-        let left_future = self.0.wait_retry(retry);
-        let right_future = self.1.wait_retry(retry);
-        async move {
-            left_future.await?;
-            right_future.await
-        }
+    async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
+        self.0.wait_retry(retry).await?;
+        self.1.wait_retry(retry).await
     }
 }
 
+#[async_trait]
 impl<A: RetryDeadline, B: RetryDeadline> RetryDeadline for Combine<A, B> {
     async fn wait_deadline(&self) {
         tokio::select! {
@@ -677,8 +621,9 @@ mod tests {
 
     struct ConstantBackoff(Duration);
 
+    #[async_trait]
     impl RetryStrategy for ConstantBackoff {
-        async fn wait_retry<'a>(&'a self, _retry: &'a RetryState) -> ControlFlow<()> {
+        async fn wait_retry(&self, _retry: &RetryState) -> ControlFlow<()> {
             tokio::time::sleep(self.0).await;
             ControlFlow::Continue(())
         }
@@ -700,8 +645,9 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl RetryStrategy for WaitTrap {
-        async fn wait_retry<'a>(&'a self, _retry: &'a RetryState) -> ControlFlow<()> {
+        async fn wait_retry(&self, _retry: &RetryState) -> ControlFlow<()> {
             *self.waited.lock().unwrap() = true;
             ControlFlow::Continue(())
         }
@@ -753,9 +699,9 @@ mod tests {
     async fn combine_first_fail() {
         let first_trap = WaitTrap::new();
         let last_trap = WaitTrap::new();
-        let retry_budget = RetryBudget::new(first_trap.as_ref_strategy())
+        let retry_budget = RetryBudget::new(&first_trap)
             .and_then(DontRetry)
-            .and_then(last_trap.as_ref_strategy());
+            .and_then(&last_trap);
 
         assert!(
             retry_budget
