@@ -5,7 +5,8 @@ use tracing::{info, trace};
 use tracing_test::traced_test;
 
 use crate::client_topic::client::{
-    CreateTopicOptionsBuilder, DescribeConsumerOptionsBuilder, TopicClient,
+    CreateTopicOptionsBuilder, DescribeConsumerOptionsBuilder, DescribeTopicOptionsBuilder,
+    TopicClient,
 };
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::test_integration_helper::create_client;
@@ -127,6 +128,33 @@ async fn wait_committed_offset(
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+async fn topic_end_offset(topic_client: &mut TopicClient, topic_path: &str) -> YdbResult<i64> {
+    let description = topic_client
+        .describe_topic(
+            topic_path.to_string(),
+            DescribeTopicOptionsBuilder::default()
+                .include_stats(true)
+                .build()?,
+        )
+        .await?;
+
+    description
+        .partitions
+        .first()
+        .and_then(|partition| partition.stats.as_ref())
+        .map(|stats| stats.end_offset)
+        .ok_or_else(|| YdbError::custom(format!("topic {topic_path} has no partition stats")))
+}
+
+async fn table_row_count(client: &Client, table_path: &str) -> YdbResult<u64> {
+    let mut row = client
+        .query_client()
+        .query_row(format!("SELECT COUNT(*) AS count FROM `{table_path}`"))
+        .idempotent(true)
+        .await?;
+    row.remove_field_by_name("count")?.try_into()
 }
 
 async fn read_payloads_from_batch(batch: TopicReaderBatch) -> YdbResult<Vec<String>> {
@@ -397,6 +425,154 @@ async fn query_topic_reader_tx_rewrap_same_reader_same_tx_commits_all_offsets() 
         payloads.len() as i64,
     )
     .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_tx_atomically_reads_topic_writes_table_and_writes_topic() -> YdbResult<()> {
+    let client = create_client().await?;
+    let database = client.database();
+    let topic_name = "query_tx_reads_and_writes_topic_with_table";
+    let topic_path = create_topic(&client, topic_name, &["topic-tx-chain-consumer"]).await?;
+    let table_path = format!("{database}/query_tx_reads_and_writes_topic_with_table_rows");
+    let mut query_client = client.query_client();
+    let _ = query_client
+        .exec(format!("DROP TABLE IF EXISTS `{table_path}`"))
+        .idempotent(true)
+        .await;
+    query_client
+        .exec(format!(
+            "CREATE TABLE `{table_path}` (id Uint64 NOT NULL, PRIMARY KEY (id))"
+        ))
+        .idempotent(true)
+        .await?;
+
+    let mut topic_client = client.topic_client();
+    write_messages(
+        &mut topic_client,
+        &topic_path,
+        "topic-tx-chain-seed",
+        &["generation-0"],
+    )
+    .await?;
+    let mut reader = topic_client
+        .create_reader("topic-tx-chain-consumer", topic_path.clone())
+        .await?;
+
+    query_client
+        .retry_tx(closure!(
+            [&mut reader, &topic_path, &table_path, &mut topic_client],
+            async |tx: &mut Transaction| {
+                let mut reader_tx = reader.tx_reader(tx).await?;
+                let batch = timeout(Duration::from_secs(10), reader_tx.read_batch())
+                    .await
+                    .expect("timeout waiting for chain seed")?;
+                assert_eq!(read_payloads_from_batch(batch).await?, ["generation-0"]);
+                drop(reader_tx);
+
+                tx.exec(format!("UPSERT INTO `{table_path}` (id) VALUES (0u)"))
+                    .await?;
+                let mut writer = topic_client.create_writer_tx(topic_path, tx).await?;
+                writer
+                    .write(
+                        TopicWriterMessage::builder()
+                            .data(b"generation-1".to_vec())
+                            .build(),
+                    )
+                    .await?;
+                Ok(())
+            }
+        ))
+        .timeout(Duration::from_secs(30))
+        .await?;
+
+    wait_committed_offset(&mut topic_client, &topic_path, "topic-tx-chain-consumer", 1).await?;
+    assert_eq!(table_row_count(&client, &table_path).await?, 1);
+    assert_eq!(topic_end_offset(&mut topic_client, &topic_path).await?, 2);
+    assert_eq!(
+        read_payloads_from_reader(&mut reader, 1, "timeout waiting for chain successor").await?,
+        ["generation-1"]
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_tx_rollback_discards_table_and_topic_writes() -> YdbResult<()> {
+    let client = create_client().await?;
+    let database = client.database();
+    let topic_name = "query_tx_rollback_discards_table_and_topic_writes";
+    let consumer_name = "topic-tx-chain-rollback-consumer";
+    let topic_path = create_topic(&client, topic_name, &[consumer_name]).await?;
+    let table_path = format!("{database}/query_tx_rollback_discards_table_and_topic_write_rows");
+    let mut query_client = client.query_client();
+    let _ = query_client
+        .exec(format!("DROP TABLE IF EXISTS `{table_path}`"))
+        .idempotent(true)
+        .await;
+    query_client
+        .exec(format!(
+            "CREATE TABLE `{table_path}` (id Uint64 NOT NULL, PRIMARY KEY (id))"
+        ))
+        .idempotent(true)
+        .await?;
+
+    let mut topic_client = client.topic_client();
+    write_messages(
+        &mut topic_client,
+        &topic_path,
+        "topic-tx-chain-rollback-seed",
+        &["generation-0"],
+    )
+    .await?;
+    let mut reader = topic_client
+        .create_reader(consumer_name, topic_path.clone())
+        .await?;
+
+    query_client
+        .retry_tx(closure!(
+            [&mut reader, &topic_path, &table_path, &mut topic_client],
+            async |tx: &mut Transaction| {
+                let mut reader_tx = reader.tx_reader(tx).await?;
+                let batch = timeout(Duration::from_secs(10), reader_tx.read_batch())
+                    .await
+                    .expect("timeout waiting for rollback seed")?;
+                assert_eq!(read_payloads_from_batch(batch).await?, ["generation-0"]);
+                drop(reader_tx);
+
+                tx.exec(format!("UPSERT INTO `{table_path}` (id) VALUES (0u)"))
+                    .await?;
+                let mut writer = topic_client.create_writer_tx(topic_path, tx).await?;
+                writer
+                    .write(
+                        TopicWriterMessage::builder()
+                            .data(b"generation-1".to_vec())
+                            .build(),
+                    )
+                    .await?;
+                tx.rollback().await?;
+                Ok(())
+            }
+        ))
+        .timeout(Duration::from_secs(30))
+        .await?;
+
+    assert_eq!(
+        committed_offset(&mut topic_client, &topic_path, consumer_name).await?,
+        0
+    );
+    assert_eq!(table_row_count(&client, &table_path).await?, 0);
+    assert_eq!(topic_end_offset(&mut topic_client, &topic_path).await?, 1);
+    assert_eq!(
+        read_payloads_from_reader(&mut reader, 1, "timeout waiting for rollback redelivery")
+            .await?,
+        ["generation-0"]
+    );
 
     Ok(())
 }

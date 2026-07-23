@@ -31,37 +31,48 @@ async fn topic_writer_tx_write_and_commit() -> YdbResult<()> {
         )
         .await?;
 
-    let message_data = b"hello from tx writer".to_vec();
+    let messages = [b"first tx writer".to_vec(), b"second tx writer".to_vec()];
 
-    client
-        .query_client()
-        .retry_tx(closure!(
-            [&mut topic_client, &topic_path, &message_data],
-            async |tx: &mut Transaction| {
-                let mut writer = topic_client.create_writer_tx(topic_path, tx).await?;
-                writer
-                    .write(
-                        TopicWriterMessage::builder()
-                            .data(message_data.clone())
-                            .build(),
-                    )
-                    .await?;
-                Ok(true)
-            }
-        ))
-        .await?;
+    for message_data in &messages {
+        client
+            .query_client()
+            .retry_tx(closure!(
+                [&mut topic_client, &topic_path, message_data],
+                async |tx: &mut Transaction| {
+                    let mut writer = topic_client.create_writer_tx(topic_path, tx).await?;
+                    writer
+                        .write(
+                            TopicWriterMessage::builder()
+                                .data(message_data.clone())
+                                .build(),
+                        )
+                        .await?;
+                    Ok(true)
+                }
+            ))
+            .await?;
+    }
 
     let mut reader = topic_client
         .create_reader(consumer_name, topic_path.clone())
         .await?;
 
-    let batch = timeout(Duration::from_secs(10), reader.read_batch())
-        .await
-        .map_err(|_| crate::YdbError::custom("timed out waiting for committed tx message"))??;
+    let received = timeout(Duration::from_secs(10), async {
+        let mut received = Vec::with_capacity(messages.len());
+        while received.len() < messages.len() {
+            let batch = reader.read_batch().await?;
+            for mut message in batch.messages {
+                if let Some(body) = message.read_and_take().await? {
+                    received.push(body);
+                }
+            }
+        }
+        YdbResult::Ok(received)
+    })
+    .await
+    .map_err(|_| crate::YdbError::custom("timed out waiting for committed tx messages"))??;
 
-    let mut msg = batch.messages.into_iter().next().unwrap();
-    let body = msg.read_and_take().await?.unwrap();
-    assert_eq!(body, message_data);
+    assert_eq!(received, messages);
 
     let _ = topic_client.drop_topic(topic_path).await;
     Ok(())

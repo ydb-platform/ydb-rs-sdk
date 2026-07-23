@@ -2575,6 +2575,7 @@ checksum = "7a2ae44ef20feb57a68b23d846850f861394c2e02dc425a50098ae8c90267589"
 name = "slo-framework"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64 0.22.1",
  "clap",
@@ -2607,6 +2608,18 @@ dependencies = [
  "async-trait",
  "slo-framework",
  "tokio",
+ "ydb",
+]
+
+[[package]]
+name = "slo-native-topic-tx"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "slo-framework",
+ "tokio",
+ "tokio-util",
  "ydb",
 ]
 

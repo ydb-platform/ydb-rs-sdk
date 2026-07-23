@@ -2,6 +2,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::{Context, Error, Result};
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -15,7 +16,7 @@ use super::{Params, TopicService, verification};
 
 const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
-type WorkerResult = Result<Infallible, String>;
+type WorkerResult = std::result::Result<Infallible, String>;
 
 pub struct TopicWorkload<T: TopicService> {
     fw: Arc<Framework>,
@@ -35,16 +36,30 @@ impl<T: TopicService + 'static> TopicWorkload<T> {
 
 #[async_trait::async_trait]
 impl<T: TopicService + 'static> Workload for TopicWorkload<T> {
-    async fn setup(&self, _ctx: &CancellationToken) -> Result<(), String> {
-        self.topic.create_topic().await?;
+    async fn setup(&self, _ctx: &CancellationToken) -> Result<()> {
+        self.topic
+            .create_topic()
+            .await
+            .map_err(Error::msg)
+            .context("create topic")?;
         self.fw.logger.printf("create topic ok");
 
         Ok(())
     }
 
-    async fn run(&self, ctx: &CancellationToken) -> Result<(), String> {
-        let writers = self.topic.open_writers().await?;
-        let readers = self.topic.open_readers().await?;
+    async fn run(&self, ctx: &CancellationToken) -> Result<()> {
+        let writers = self
+            .topic
+            .open_writers()
+            .await
+            .map_err(Error::msg)
+            .context("open topic writers")?;
+        let readers = self
+            .topic
+            .open_readers()
+            .await
+            .map_err(Error::msg)
+            .context("open topic readers")?;
 
         self.fw.logger.printf(format!(
             "opened {} partition(s), {} writer(s), {} reader(s)",
@@ -71,14 +86,14 @@ impl<T: TopicService + 'static> Workload for TopicWorkload<T> {
             self.params.commit_timeout,
         );
 
-        supervise_workers(ctx, workers).await
+        supervise_workers(ctx, workers).await.map_err(Error::msg)
     }
 
-    async fn teardown(&self, _ctx: &CancellationToken) -> Result<(), String> {
+    async fn teardown(&self, _ctx: &CancellationToken) -> Result<()> {
         let drop_result = self.topic.drop_topic().await;
         let _ = self.topic.close().await;
 
-        drop_result?;
+        drop_result.map_err(Error::msg).context("drop topic")?;
         self.fw.logger.printf("cleanup topic ok");
 
         Ok(())

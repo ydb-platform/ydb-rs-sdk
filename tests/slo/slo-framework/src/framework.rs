@@ -2,11 +2,13 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::{Context, Error, Result};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
+use crate::helpers::preserve_primary_error;
 use crate::logger::{Logger, Phase};
 use crate::metrics::Metrics;
 
@@ -22,15 +24,15 @@ pub struct Framework {
 
 #[async_trait::async_trait]
 pub trait Workload: Send {
-    async fn setup(&self, ctx: &CancellationToken) -> Result<(), String>;
-    async fn run(&self, ctx: &CancellationToken) -> Result<(), String>;
-    async fn teardown(&self, ctx: &CancellationToken) -> Result<(), String>;
+    async fn setup(&self, ctx: &CancellationToken) -> Result<()>;
+    async fn run(&self, ctx: &CancellationToken) -> Result<()>;
+    async fn teardown(&self, ctx: &CancellationToken) -> Result<()>;
 }
 
-pub async fn run<F, Fut>(factory: F) -> Result<(), String>
+pub async fn run<F, Fut>(factory: F) -> std::result::Result<(), String>
 where
     F: for<'a> Fn(&'a Framework) -> Fut,
-    Fut: Future<Output = Result<Box<dyn Workload>, String>> + Send,
+    Fut: Future<Output = std::result::Result<Box<dyn Workload>, String>> + Send,
 {
     let cancel = CancellationToken::new();
     let cancel_bg = cancel.clone();
@@ -83,10 +85,10 @@ where
         logger.set_phase(Phase::Teardown);
         timeout(SHUTDOWN_DURATION, workload.teardown(&cancel))
             .await
-            .unwrap_or_else(|_| Err("teardown timed out".to_string()))
+            .context("teardown timed out")?
     };
 
-    let run_result: Result<(), String> = async {
+    let run_result: Result<()> = async {
         logger.set_phase(Phase::Setup);
         workload.setup(&cancel).await?;
         logger.printf("setup ok");
@@ -117,36 +119,23 @@ where
         logger.printf("workload completed successfully");
     }
 
-    let teardown_result = teardown_result
-        .await
-        .map_err(|err| format!("teardown failed: {err}"));
+    let teardown_result = teardown_result.await.context("teardown failed");
     let result = preserve_primary_error(run_result, teardown_result);
-    let result = preserve_primary_error(result, metrics.check());
+    let result = preserve_primary_error(result, metrics.check().map_err(Error::msg));
 
     logger.flush();
     if result.is_ok() {
         logger.printf("program finished");
     }
 
-    result
+    result.map_err(|err| format!("{err:#}"))
 }
 
-async fn wait_for_workload_shutdown<F>(run_fut: F, shutdown_timeout: Duration) -> Result<(), String>
+async fn wait_for_workload_shutdown<F>(run_fut: F, shutdown_timeout: Duration) -> Result<()>
 where
-    F: Future<Output = Result<(), String>>,
+    F: Future<Output = Result<()>>,
 {
     timeout(shutdown_timeout, run_fut)
         .await
-        .map_err(|_| "workload did not stop after cancellation".to_string())?
-}
-
-fn preserve_primary_error(
-    primary: Result<(), String>,
-    cleanup: Result<(), String>,
-) -> Result<(), String> {
-    match (primary, cleanup) {
-        (Ok(()), cleanup) => cleanup,
-        (Err(primary), Ok(())) => Err(primary),
-        (Err(primary), Err(cleanup)) => Err(format!("{primary}; additionally, {cleanup}")),
-    }
+        .context("workload did not stop after cancellation")?
 }

@@ -3,12 +3,13 @@ mod mock_server;
 
 use std::sync::{Arc, Mutex};
 use ydb::{
-    Client, ClientBuilder, TopicWriterMessage, TopicWriterTxOptionsBuilder, Transaction, YdbResult,
-    closure,
+    Client, ClientBuilder, PartitioningStrategy, TopicWriterMessage, TopicWriterTxOptionsBuilder,
+    Transaction, YdbResult, closure,
 };
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 use ydb_grpc::ydb_proto::topic::stream_write_message::InitRequest;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage as WriteFromClient;
+use ydb_grpc::ydb_proto::topic::stream_write_message::init_request::Partitioning;
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply};
 use crate::mock_server::query::QueryIncoming;
@@ -24,6 +25,7 @@ const PARTITION_ID: i64 = 0;
 const WRONG_ACK_OFFSET: i64 = 42;
 const REGULAR_WRITER_OFFSET: i64 = 0;
 const TEST_MESSAGE_DATA: &[u8] = b"hello tx";
+const PRODUCER_ID: &str = "tx-producer";
 
 type CapturedTxIdentity = Arc<Mutex<Option<TransactionIdentity>>>;
 type CapturedInitRequest = Arc<Mutex<Option<InitRequest>>>;
@@ -280,7 +282,7 @@ async fn regular_writer_sends_no_tx_identity() -> YdbResult<()> {
 
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn tx_writer_options_propagated_to_init_request() -> YdbResult<()> {
+async fn tx_writer_without_producer_generates_producer_id() -> YdbResult<()> {
     let (handler, _, captured_init, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
     let (server, _reply_tx) = MockServer::start(handler).await;
 
@@ -307,9 +309,47 @@ async fn tx_writer_options_propagated_to_init_request() -> YdbResult<()> {
     let init = captured_init.lock().unwrap().clone();
     let init = init.expect("InitRequest must be captured");
     assert_eq!(init.path, TOPIC_PATH);
+    assert_ne!(init.producer_id, "");
+    uuid::Uuid::parse_str(&init.producer_id).expect("generated producer ID must be a UUID");
+
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn tx_writer_with_producer_sends_producer_id() -> YdbResult<()> {
+    let (handler, _, captured_init, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+
+    let options = TopicWriterTxOptionsBuilder::default()
+        .topic_path(TOPIC_PATH.to_string())
+        .producer_id(PRODUCER_ID)
+        .partitioning(PartitioningStrategy::PartitionId(PARTITION_ID))
+        .build()?;
+
+    let client = make_client(&server)?;
+    client
+        .query_client()
+        .retry_tx(closure!(
+            [&client, &options],
+            async |tx: &mut Transaction| {
+                let mut writer = client
+                    .topic_client()
+                    .create_writer_tx_with_params(options.clone(), tx)
+                    .await?;
+                writer.write(test_message()).await?;
+                Ok(())
+            }
+        ))
+        .await?;
+
+    let init = captured_init.lock().unwrap().clone();
+    let init = init.expect("InitRequest must be captured");
+    assert_eq!(init.path, TOPIC_PATH);
+    assert_eq!(init.producer_id, PRODUCER_ID);
     assert_eq!(
-        init.producer_id, "",
-        "tx writer must always use empty producer_id"
+        init.partitioning,
+        Some(Partitioning::PartitionId(PARTITION_ID))
     );
 
     Ok(())

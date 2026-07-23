@@ -8,11 +8,13 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tracing::warn;
 
+use crate::errors::YdbStatusError;
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::status::check_status;
 use ydb_grpc::ydb_proto::query::SessionState;
 use ydb_grpc::ydb_proto::query::session_state::SessionHint;
+use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 /// Explicit Query Service session: CreateSession + AttachSession stream kept alive.
 #[derive(Clone)]
@@ -114,9 +116,11 @@ impl AttachedQuerySession {
         if self.is_alive() {
             Ok(())
         } else {
-            Err(RawError::custom(
-                "query session is not alive; acquire a new session from the pool",
-            ))
+            Err(RawError::YdbStatus(YdbStatusError {
+                message: "query session is not alive; acquire a new session from the pool".into(),
+                operation_status: StatusCode::BadSession as i32,
+                issues: Vec::new(),
+            }))
         }
     }
 
@@ -250,4 +254,24 @@ fn shutdown_hint_error(hint: ShutdownHint) -> RawError {
 
 fn check_attach_state(state: &SessionState) -> RawResult<()> {
     check_status(state.status, &state.issues)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dead_session_reports_bad_session() {
+        let session = AttachedQuerySession::new_bench_stub(
+            "dead-session".into(),
+            Uri::from_static("http://127.0.0.1"),
+        );
+        session.clone().bench_close();
+
+        assert!(matches!(
+            session.ensure_alive().unwrap_err(),
+            RawError::YdbStatus(error)
+                if error.operation_status == StatusCode::BadSession as i32
+        ));
+    }
 }

@@ -7,6 +7,7 @@ members = [
     "tests/slo/slo-framework",
     "tests/slo/native/query",
     "tests/slo/native/topic",
+    "tests/slo/native/topic-tx",
 ]
 
 [workspace.package]
@@ -21,6 +22,8 @@ dbg_macro = "warn"
 incompatible_msrv = "warn"
 
 [workspace.dependencies]
+anyhow = "1.0"
+
 # Versions of those crates should match, that's why all of them are here.
 prost = "0.14.1"
 prost-types = "0.14.1"
