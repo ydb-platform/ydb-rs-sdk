@@ -1,7 +1,7 @@
 //! Regression tests for session-pool corner cases found during PR #501 / native-table SLO work.
 
 use super::pool::{SessionPool, SessionPoolSettings};
-use crate::{errors::YdbError, retry_budget::RetryBudget, GrpcOptions};
+use crate::{GrpcOptions, errors::YdbError, retry_budget::RetryBudget};
 
 #[tokio::test]
 async fn warm_up_partial_keeps_successful_sessions() {
