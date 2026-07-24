@@ -19,7 +19,9 @@ use tracing::{instrument, trace, warn};
 
 use crate::{AsyncFnMut, RefWithLifetime, YdbResult, closure, errors::Idempotency};
 
-/// Retry budget.
+/// Retry settings.
+///
+/// Defines retry strategy and deadlines for retried operations.
 #[derive(Debug, Clone, Copy)]
 pub struct RetrySettings<S, D = NoDeadline> {
     strategy: S,
@@ -27,7 +29,7 @@ pub struct RetrySettings<S, D = NoDeadline> {
 }
 
 impl RetrySettings<ExponentialBackoff> {
-    /// Constructs a retry budget with default
+    /// Constructs a retry settings with default
     /// exponential backoff without any deadlines.
     pub fn with_default_backoff() -> Self {
         Self {
@@ -38,7 +40,7 @@ impl RetrySettings<ExponentialBackoff> {
 }
 
 impl RetrySettings<DontRetry> {
-    /// Constructs a retry budget that allows no retries.
+    /// Constructs a retry settings udget that allows no retries.
     pub fn dont_retry() -> Self {
         Self::new(DontRetry)
     }
@@ -50,14 +52,27 @@ impl Default for ArcRetrySettings {
     }
 }
 
-/// Alias for type-erased retry budget.
+/// Alias for type-erased retry settings.
+///
+/// Can be constructed from [`RetrySettings`]
+/// using [`RetrySettings::arc`] method.
 pub type BoxRetrySettings = RetrySettings<Box<dyn RetryStrategy>, Box<dyn RetryDeadline>>;
 
-/// Alias for reference-counted type-erased retry budget.
+/// Alias for reference-counted type-erased retry settings.
+///
+/// Can be constructed from [`RetrySettings`]
+/// using [`RetrySettings::boxed`] method.
 pub type ArcRetrySettings = RetrySettings<Arc<dyn RetryStrategy>, Arc<dyn RetryDeadline>>;
 
 impl<S: RetryStrategy> RetrySettings<S> {
-    /// Constructs a retry budget from a retry strategy.
+    /// Constructs a retry settings from a retry strategy.
+    ///
+    /// Note that this function doesn't include
+    /// exponential backoff automatically. Use it only
+    /// when you want to construct retry settings
+    /// from scratch. Otherwise you probably want
+    /// [`RetrySettings::with_default_backoff`]
+    /// or [`ArcRetrySettings::default`].
     pub fn new(strategy: S) -> Self {
         Self {
             strategy,
@@ -145,7 +160,7 @@ impl<S: RetryStrategy, D: RetryDeadline> RetrySettings<S, D> {
         }
     }
 
-    /// Returns a retry budget that borrows
+    /// Returns a retry strategy that borrows
     /// the current one.
     pub fn as_ref(&self) -> RetrySettings<&'_ S, &'_ D> {
         RetrySettings {
