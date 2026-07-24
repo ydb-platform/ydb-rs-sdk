@@ -3,7 +3,7 @@ use std::sync::Arc;
 use derive_builder::Builder;
 
 use crate::client_topic::compression::{CodecSelection, CompressionEncoder};
-use crate::retry_budget::{DontRetry, RetrySettings};
+use crate::retry_settings::{DontRetry, RetrySettings};
 use crate::{TopicWriterOptions, errors};
 
 #[derive(Builder, Clone)]

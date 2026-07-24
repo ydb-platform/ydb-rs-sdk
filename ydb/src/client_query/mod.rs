@@ -42,7 +42,7 @@ use crate::errors::{
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::result::Row;
 
-use crate::retry_budget::{ArcRetrySettings, RetryState};
+use crate::retry_settings::{ArcRetrySettings, RetryState};
 use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{

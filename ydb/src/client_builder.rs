@@ -13,7 +13,7 @@ use crate::grpc_connection_manager::{
 use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::SharedLoadBalancer;
-use crate::retry_budget::ArcRetrySettings;
+use crate::retry_settings::ArcRetrySettings;
 use crate::{Client, Credentials, GrpcOptions, HasGrpcOptions};
 use http::Uri;
 use once_cell::sync::Lazy;

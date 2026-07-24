@@ -68,7 +68,7 @@ mod load_balancer;
 mod pub_traits;
 pub(crate) mod query;
 pub(crate) mod result;
-pub mod retry_budget;
+pub mod retry_settings;
 mod session;
 mod session_pool;
 mod sugar;
@@ -167,7 +167,7 @@ pub use client_topic::topicwriter::writer_tx_options::{
 // full enum pub types
 pub use client::{Client, SessionPoolSettings, SessionPoolStats};
 
-pub use retry_budget::RetryProbability;
+pub use retry_settings::RetryProbability;
 
 // full enum pub types
 pub use client_builder::ClientBuilder;

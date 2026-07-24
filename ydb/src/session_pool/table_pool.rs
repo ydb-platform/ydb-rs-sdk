@@ -3,7 +3,7 @@ use tracing::trace;
 use crate::client::TimeoutSettings;
 use crate::errors::YdbResult;
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::retry_budget::ArcRetrySettings;
+use crate::retry_settings::ArcRetrySettings;
 use crate::session::{NodePinnedTableClient, TableSession};
 
 use super::pool::{SessionPool, spawn_pool_release};
@@ -75,7 +75,7 @@ mod test {
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-    use crate::retry_budget::RetrySettings;
+    use crate::retry_settings::RetrySettings;
     use crate::session_pool::{SessionPool, SessionPoolSettings};
     use http::Uri;
     use std::time::Duration;

@@ -13,7 +13,7 @@ use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::grpc_wrapper::raw_query_service::transaction_control::{
     RawTxMode, begin_tx_control, tx_id_control,
 };
-use crate::retry_budget::ArcRetrySettings;
+use crate::retry_settings::ArcRetrySettings;
 use crate::traces::helpers::ensure_len_string;
 
 use crate::types::Value;

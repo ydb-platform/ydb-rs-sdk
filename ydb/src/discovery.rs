@@ -21,7 +21,7 @@ use crate::grpc_wrapper::{
     raw_discovery_client::{EndpointInfo, GrpcDiscoveryClient},
     raw_services::Service,
 };
-use crate::retry_budget::{RetrySettings, RetryState};
+use crate::retry_settings::{RetrySettings, RetryState};
 use crate::waiter::Waiter;
 use crate::{YdbError, closure};
 

@@ -23,7 +23,7 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
-use crate::retry_budget::{ArcRetrySettings, RetryState};
+use crate::retry_settings::{ArcRetrySettings, RetryState};
 use crate::{YdbError, YdbResult};
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 

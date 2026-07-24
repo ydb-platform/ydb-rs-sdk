@@ -11,7 +11,7 @@ use crate::client_topic::compression::Executor;
 use crate::errors::Idempotency;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::stream_read::messages::RawFromServer;
-use crate::retry_budget::RetryState;
+use crate::retry_settings::RetryState;
 use crate::{YdbError, YdbResult, closure};
 
 use super::auth_token_sender::AuthTokenSender;

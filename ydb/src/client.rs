@@ -7,7 +7,7 @@ use crate::client_table::TableClient;
 use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::load_balancer::SharedLoadBalancer;
-use crate::retry_budget::ArcRetrySettings;
+use crate::retry_settings::ArcRetrySettings;
 use crate::session_pool::{SessionPool, default_session_pool_settings};
 pub use crate::session_pool::{SessionPoolSettings, SessionPoolStats};
 use crate::waiter::Waiter;
