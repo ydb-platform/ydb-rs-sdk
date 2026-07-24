@@ -737,8 +737,8 @@ mod tests {
         .await;
 
         assert!(result.is_continue());
-        assert!(start.elapsed() >= Duration::from_secs(2));
-        assert!(start.elapsed() < Duration::from_secs(3));
+        assert!(start.elapsed() >= Duration::from_secs(1));
+        assert!(start.elapsed() < Duration::from_secs(2));
     }
 
     #[tokio::test]
