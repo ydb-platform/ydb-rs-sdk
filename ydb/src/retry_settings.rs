@@ -341,7 +341,7 @@ pub trait RetryStrategy: Send + Sync {
 /// that always returns [`ControlFlow::Continue`]. It also
 /// implies that output of its [`RetryWait::wait_retry`]
 /// can be ignored.
-pub trait RetryAlways: Send + Sync + RetryStrategy {}
+pub trait RetryAlways: RetryStrategy {}
 
 /// Retry strategy that doesn't allow retries.
 #[derive(Debug, Clone, Copy)]
