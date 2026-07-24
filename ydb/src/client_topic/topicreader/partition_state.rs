@@ -28,10 +28,8 @@ impl PartitionSession {
 impl From<RawStartPartitionSessionRequest> for PartitionSession {
     fn from(request: RawStartPartitionSessionRequest) -> Self {
         Self {
-            partition_session_id: PartitionSessionId::from_raw(
-                request.partition_session.partition_session_id,
-            ),
-            partition_id: PartitionId::from_raw(request.partition_session.partition_id),
+            partition_session_id: request.partition_session.partition_session_id,
+            partition_id: request.partition_session.partition_id,
             topic: request.partition_session.path,
             next_commit_offset_start: request.committed_offset,
         }

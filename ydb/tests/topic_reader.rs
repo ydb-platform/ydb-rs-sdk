@@ -227,6 +227,14 @@ impl Driver {
         )))
     }
 
+    fn send_end_partition_session(&self, partition_session_id: i64, child_partition_ids: Vec<i64>) {
+        self.send(Reply::Topic(builders::end_partition_session(
+            self.state.current_stream_id(),
+            partition_session_id,
+            child_partition_ids,
+        )))
+    }
+
     async fn start_session(&self, partition_session_id: i64, partition_id: i64) {
         let notified = self.state.partition_ready.notified();
         self.send(Reply::Topic(builders::start_partition_session_request(
@@ -362,6 +370,195 @@ topic_test!(round_robin_interleaves_two_partitions, timeout_secs = 2, {
 
     Ok(())
 });
+
+topic_test!(
+    end_partition_blocks_child_until_parent_drains,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
+        driver.state.partition_ready.notified().await;
+
+        driver.send(Reply::Topic(builders::read_response_batch_with_codec(
+            driver.state.current_stream_id(),
+            PARTITION_SESSION_ID,
+            vec![
+                (0, 12, b"parent-first".to_vec()),
+                (1, 13, b"parent-second".to_vec()),
+            ],
+            Codec::RAW,
+        )));
+        driver.send_end_partition_session(PARTITION_SESSION_ID, vec![1]);
+        driver.start_session(PARTITION_SESSION_ID_2, 1).await;
+        driver.send_read_response_for(PARTITION_SESSION_ID_2, 0, b"child");
+
+        let first = reader.read_batch().await?;
+        let second = reader.read_batch().await?;
+        let third = reader.read_batch().await?;
+
+        assert_eq!(first.messages[0].get_partition_id(), 0);
+        assert_eq!(second.messages[0].get_partition_id(), 0);
+        assert_eq!(
+            third.messages[0].get_partition_id(),
+            1,
+            "child partition must not be readable before parent queue drains"
+        );
+
+        Ok(())
+    }
+);
+
+topic_test!(
+    end_partition_blocks_child_started_after_end,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
+        driver.state.partition_ready.notified().await;
+
+        driver.send_read_response(0, b"parent");
+        driver.send_end_partition_session(PARTITION_SESSION_ID, vec![1]);
+        driver.start_session(PARTITION_SESSION_ID_2, 1).await;
+        driver.send_read_response_for(PARTITION_SESSION_ID_2, 0, b"child");
+
+        let first = reader.read_batch().await?;
+        let second = reader.read_batch().await?;
+
+        assert_eq!(first.messages[0].get_partition_id(), 0);
+        assert_eq!(
+            second.messages[0].get_partition_id(),
+            1,
+            "child partition must wait for parent to drain even when child starts after EndPartition"
+        );
+
+        Ok(())
+    }
+);
+
+topic_test!(unknown_end_partition_fails_reader, timeout_secs = 5, {
+    let driver = Driver::start().await;
+    let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
+    driver.state.partition_ready.notified().await;
+
+    driver.send(Reply::Topic(builders::end_partition_session(
+        driver.state.current_stream_id(),
+        99,
+        Vec::new(),
+    )));
+
+    assert!(matches!(
+        reader.read_batch().await,
+        Err(ydb::YdbError::Custom(message))
+            if message == "topic reader: unknown partition session (99, end partition session)"
+    ));
+
+    Ok(())
+});
+
+topic_test!(duplicate_end_partition_fails_reader, timeout_secs = 5, {
+    let driver = Driver::start().await;
+    let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
+    driver.state.partition_ready.notified().await;
+
+    driver.send_end_partition_session(PARTITION_SESSION_ID, vec![1]);
+    driver.send_end_partition_session(PARTITION_SESSION_ID, vec![1]);
+
+    assert!(matches!(
+        reader.read_batch().await,
+        Err(ydb::YdbError::Custom(message))
+            if message == "topic reader close session: session already closed (1)"
+    ));
+
+    Ok(())
+});
+
+topic_test!(
+    read_response_for_stopped_partition_fails_reader,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
+        driver.state.partition_ready.notified().await;
+
+        driver.send_read_response(0, b"parent");
+        assert_single_message_batch(reader.read_batch().await?, 0, b"parent").await?;
+
+        driver.send_stop_partition_session_request(0);
+        driver.state.wait_stops(1).await;
+        driver.send_read_response_for(PARTITION_SESSION_ID, 1, b"late");
+
+        assert!(matches!(
+            reader.read_batch().await,
+            Err(ydb::YdbError::Custom(message))
+                if message
+                    == "topic reader received messages for unopened partition session (1)"
+        ));
+
+        Ok(())
+    }
+);
+
+topic_test!(
+    read_response_for_ended_partition_fails_reader,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
+        driver.state.partition_ready.notified().await;
+
+        driver.send_end_partition_session(PARTITION_SESSION_ID, vec![1]);
+        driver.send_read_response_for(PARTITION_SESSION_ID, 1, b"late");
+
+        assert!(matches!(
+            reader.read_batch().await,
+            Err(ydb::YdbError::Custom(message))
+                if message == "topic reader push batch: partition session is closed (1)"
+        ));
+
+        Ok(())
+    }
+);
+
+topic_test!(
+    end_partition_order_prioritizes_multiple_ended_sessions_before_child,
+    timeout_secs = 5,
+    {
+        let driver = Driver::start().await;
+        let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
+        driver.state.partition_ready.notified().await;
+        driver.start_session(PARTITION_SESSION_ID_2, 1).await;
+
+        let stream_id = driver.state.current_stream_id();
+        driver.send(Reply::Topic(builders::read_response_batch_with_codec(
+            stream_id,
+            PARTITION_SESSION_ID,
+            vec![(0, 8, b"parent-a".to_vec())],
+            Codec::RAW,
+        )));
+        driver.send(Reply::Topic(builders::read_response_batch_with_codec(
+            stream_id,
+            PARTITION_SESSION_ID_2,
+            vec![(0, 8, b"parent-b".to_vec())],
+            Codec::RAW,
+        )));
+
+        driver.send_end_partition_session(PARTITION_SESSION_ID, vec![2]);
+        driver.send_end_partition_session(PARTITION_SESSION_ID_2, vec![2]);
+
+        driver.start_session(3, 2).await;
+        driver.send_read_response_for(3, 0, b"child");
+
+        let first = reader.read_batch().await?;
+        let second = reader.read_batch().await?;
+        let third = reader.read_batch().await?;
+
+        assert_eq!(first.messages[0].get_partition_id(), 0);
+        assert_eq!(second.messages[0].get_partition_id(), 1);
+        assert_eq!(third.messages[0].get_partition_id(), 2);
+
+        Ok(())
+    }
+);
 
 topic_test!(commit_after_partition_stop_must_fail, timeout_secs = 5, {
     let driver = Driver::start().await;
