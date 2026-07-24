@@ -475,3 +475,86 @@ impl ReconnectionLoop {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use tokio::sync::{Mutex, watch};
+    use tokio_util::sync::CancellationToken;
+
+    use crate::{
+        TopicWriterMessage,
+        client_topic::topicwriter::{
+            connection::ConnectionInfo,
+            queue::Queue,
+            reconnector::{Reconnector, ReconnectorState, ReconnectorStatus},
+        },
+        grpc_wrapper::raw_topic_service::common::codecs::RawSupportedCodecs,
+    };
+
+    fn reconnector(auto_seq_no: bool) -> Reconnector {
+        let (_, rx) = watch::channel(ReconnectorStatus::Working);
+
+        Reconnector {
+            state: Arc::new(Mutex::new(ReconnectorState {
+                connection_info: ConnectionInfo {
+                    partition_id: 0,
+                    session_id: "".to_string(),
+                    last_seq_no_assigned: 1,
+                    codecs_from_server: RawSupportedCodecs { codecs: vec![] },
+                },
+            })),
+            cancellation_token: CancellationToken::new(),
+            reconnect_loop: tokio::spawn(async {}),
+            queue: Queue::new(),
+            auto_seq_no,
+            flush_timeout: Duration::from_secs(10),
+            status_rx: rx,
+        }
+    }
+
+    #[tokio::test]
+    async fn add_message_cancellation_safety_custom_seq_no() {
+        let reconnector = reconnector(false);
+
+        let message = TopicWriterMessage::builder().data(vec![]).seq_no(2).build();
+
+        let queue_lock = reconnector.queue.lock().await;
+
+        tokio::select! {biased;
+            result = reconnector.add_message(message, None) => {
+                panic!("add_message unexpectedly completed: {result:?}");
+            },
+            _ = async {} => {},
+        };
+
+        drop(queue_lock);
+
+        let message = TopicWriterMessage::builder().data(vec![]).seq_no(2).build();
+
+        assert!(reconnector.add_message(message, None).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn add_message_cancellation_safety_auto_seq_no() {
+        let reconnector = reconnector(true);
+
+        let message = TopicWriterMessage::builder().data(vec![]).build();
+
+        let queue_lock = reconnector.queue.lock().await;
+
+        tokio::select! {biased;
+            result = reconnector.add_message(message, None) => {
+                panic!("add_message unexpectedly completed: {result:?}");
+            },
+            _ = async {} => {},
+        };
+
+        drop(queue_lock);
+
+        let message = TopicWriterMessage::builder().data(vec![]).build();
+
+        assert!(reconnector.add_message(message, None).await.is_ok());
+    }
+}
