@@ -78,11 +78,11 @@ fn clean_dst_dir(dst: &str) -> Result<(), Box<dyn std::error::Error>> {
         let fname = file?.file_name().to_str().unwrap().to_owned();
         let fpath = format!("{dst}/{fname}");
         if fname == "lib.rs" || fname == "mod.rs" {
-            println!("truncate file: {}", &fpath);
+            println!("truncate file: {}", fpath);
             fs::File::create(&fpath)?;
             continue;
         }
-        println!("remove file: {}", &fpath);
+        println!("remove file: {}", fpath);
         fs::remove_file(fpath)?;
     }
 
