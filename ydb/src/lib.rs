@@ -168,9 +168,8 @@ pub use client_topic::topicwriter::writer_tx_options::{
 pub use client::{Client, SessionPoolSettings, SessionPoolStats};
 
 pub use retry_settings::{
-    ArcRetrySettings, BoxRetrySettings, Combine, DontRetry, ExponentialBackoff, NoDeadline,
-    RetriesPerSecond, RetryAlways, RetryDeadline, RetryProbability, RetrySettings, RetryState,
-    RetryStrategy,
+    Combine, DontRetry, ExponentialBackoff, NoDeadline, RetriesPerSecond, RetryDeadline,
+    RetryProbability, RetrySettings, RetryState, RetryStrategy,
 };
 
 // full enum pub types

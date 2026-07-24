@@ -3,7 +3,7 @@ use tracing::trace;
 use crate::client::TimeoutSettings;
 use crate::errors::YdbResult;
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::retry_settings::ArcRetrySettings;
+use crate::retry_settings::RetrySettings;
 use crate::session::{NodePinnedTableClient, TableSession};
 
 use super::pool::{SessionPool, spawn_pool_release};
@@ -13,14 +13,14 @@ use super::pool::{SessionPool, spawn_pool_release};
 pub(crate) struct TableSessionPool {
     pool: SessionPool,
     connection_manager: GrpcConnectionManager,
-    retry_settings: ArcRetrySettings,
+    retry_settings: RetrySettings,
 }
 
 impl TableSessionPool {
     pub(crate) fn from_shared(
         pool: SessionPool,
         connection_manager: GrpcConnectionManager,
-        retry_settings: ArcRetrySettings,
+        retry_settings: RetrySettings,
     ) -> Self {
         Self {
             pool,
@@ -33,7 +33,7 @@ impl TableSessionPool {
         &self.connection_manager
     }
 
-    pub(crate) fn retry_settings(&self) -> &ArcRetrySettings {
+    pub(crate) fn retry_settings(&self) -> &RetrySettings {
         &self.retry_settings
     }
 
@@ -101,7 +101,7 @@ mod test {
         let pool = TableSessionPool::from_shared(
             bench_pool(),
             bench_connection_manager(),
-            RetrySettings::default().arc(),
+            RetrySettings::with_default_backoff(),
         );
         let first_session = pool.session().await?;
 

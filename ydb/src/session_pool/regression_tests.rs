@@ -91,7 +91,7 @@ async fn bad_session_marks_table_session_non_poolable() {
             MultiInterceptor::new(),
             GrpcOptions::default(),
         ),
-        RetrySettings::default().arc(),
+        RetrySettings::with_default_backoff(),
     );
 
     let mut session = pool.session().await.expect("lease table session");

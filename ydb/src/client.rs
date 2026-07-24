@@ -1,3 +1,4 @@
+use crate::RetrySettings;
 use crate::client_common::DBCredentials;
 use crate::client_coordination::client::CoordinationClient;
 use crate::client_operation::OperationClient;
@@ -7,7 +8,6 @@ use crate::client_table::TableClient;
 use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::load_balancer::SharedLoadBalancer;
-use crate::retry_settings::ArcRetrySettings;
 use crate::session_pool::{SessionPool, default_session_pool_settings};
 pub use crate::session_pool::{SessionPoolSettings, SessionPoolStats};
 use crate::waiter::Waiter;
@@ -34,7 +34,7 @@ pub struct Client {
     connection_manager: GrpcConnectionManager,
     executor: Arc<dyn Executor>,
     session_pool: SessionPool,
-    retry_settings: ArcRetrySettings,
+    retry_settings: RetrySettings,
 }
 
 impl Client {
@@ -44,7 +44,7 @@ impl Client {
         connection_manager: GrpcConnectionManager,
         load_balancer: SharedLoadBalancer,
         executor: Option<Arc<dyn Executor>>,
-        retry_budget: ArcRetrySettings,
+        retry_settings: RetrySettings,
     ) -> YdbResult<Self> {
         let executor = match executor {
             Some(e) => e,
@@ -64,7 +64,7 @@ impl Client {
             connection_manager,
             executor,
             session_pool,
-            retry_settings: retry_budget,
+            retry_settings,
         })
     }
 
@@ -72,7 +72,7 @@ impl Client {
     ///
     /// All service clients created from the returned [`Client`] consult `budget` before each retry
     /// (table, query one-shot, [`crate::QueryClient::retry_tx`], operation service, and similar).
-    pub fn clone_with_retry_settings(&self, retry_settings: ArcRetrySettings) -> Self {
+    pub fn clone_with_retry_settings(&self, retry_settings: RetrySettings) -> Self {
         Self {
             credentials: self.credentials.clone(),
             load_balancer: self.load_balancer.clone(),

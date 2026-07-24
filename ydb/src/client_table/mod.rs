@@ -3,7 +3,7 @@ pub(crate) mod call_options;
 
 use crate::RefWithLifetime;
 use crate::async_closure::AsyncFnMut;
-use crate::retry_settings::{ArcRetrySettings, RetryState};
+use crate::retry_settings::{RetrySettings, RetryState};
 use crate::session::TableSession;
 use crate::session_pool::{SessionPool, TableSessionPool};
 use crate::types::Value;
@@ -73,7 +73,7 @@ impl TableClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
         session_pool: SessionPool,
-        retry_settings: ArcRetrySettings,
+        retry_settings: RetrySettings,
     ) -> Self {
         Self {
             session_pool: TableSessionPool::from_shared(
@@ -159,7 +159,7 @@ impl TableClient {
     {
         self.session_pool
             .retry_settings()
-            .as_ref()
+            .clone()
             .with_deadline(opts.timeout)
             .retry_on_retriable_errors(
                 opts.idempotent

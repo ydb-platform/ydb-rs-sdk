@@ -7,7 +7,7 @@ use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_operation_service::client::RawOperationClient;
 use crate::grpc_wrapper::raw_operation_service::types::RawListOperationsRequest;
-use crate::retry_settings::{ArcRetrySettings, RetryState};
+use crate::retry_settings::{RetrySettings, RetryState};
 
 use super::builders::{
     CancelOperationBuilder, ForgetOperationBuilder, GetOperationBuilder, ListOperationsBuilder,
@@ -19,13 +19,13 @@ use tracing::instrument;
 #[derive(Clone)]
 pub struct OperationClient {
     connection_manager: GrpcConnectionManager,
-    retry_settings: ArcRetrySettings,
+    retry_settings: RetrySettings,
 }
 
 impl OperationClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
-        retry_settings: ArcRetrySettings,
+        retry_settings: RetrySettings,
     ) -> Self {
         Self {
             connection_manager,
@@ -51,7 +51,7 @@ impl OperationClient {
         F: AsyncFnMut<RefWithLifetime<RetryState>, Output = YdbResult<T>>,
     {
         self.retry_settings
-            .as_ref()
+            .clone()
             .with_deadline(opts.timeout)
             .retry_on_retriable_errors(Idempotency::Idempotent, attempt_fn)
             .await

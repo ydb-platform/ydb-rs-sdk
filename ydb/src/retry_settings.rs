@@ -22,97 +22,53 @@ use crate::{AsyncFnMut, RefWithLifetime, YdbResult, closure, errors::Idempotency
 /// Retry settings.
 ///
 /// Defines retry strategy and deadlines for retried operations.
-#[derive(Debug, Clone, Copy)]
-pub struct RetrySettings<S: RetryStrategy, D: RetryDeadline = NoDeadline> {
-    strategy: S,
-    deadline: D,
+#[derive(Debug, Clone)]
+pub struct RetrySettings {
+    strategy: Arc<dyn RetryStrategy>,
+    deadline: Arc<dyn RetryDeadline>,
 }
 
-impl RetrySettings<ExponentialBackoff> {
+impl RetrySettings {
+    /// Default retry timeout.
+    ///
+    /// Can be set using [`Self::with_default_timeout`] method.
+    pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+
     /// Constructs a retry settings with default
     /// exponential backoff without any deadlines.
     pub fn with_default_backoff() -> Self {
         Self {
-            strategy: ExponentialBackoff::default(),
-            deadline: NoDeadline,
+            strategy: Arc::new(ExponentialBackoff::default()),
+            deadline: Arc::new(NoDeadline),
         }
     }
-}
 
-impl RetrySettings<DontRetry> {
     /// Constructs a retry settings udget that allows no retries.
     pub fn dont_retry() -> Self {
         Self::new(DontRetry)
     }
-}
 
-impl Default for ArcRetrySettings {
-    fn default() -> Self {
-        RetrySettings::with_default_backoff().arc()
-    }
-}
-
-/// Alias for type-erased retry settings.
-///
-/// Can be constructed from [`RetrySettings`]
-/// using [`RetrySettings::arc`] method.
-pub type BoxRetrySettings = RetrySettings<Box<dyn RetryStrategy>, Box<dyn RetryDeadline>>;
-
-/// Alias for reference-counted type-erased retry settings.
-///
-/// Can be constructed from [`RetrySettings`]
-/// using [`RetrySettings::boxed`] method.
-pub type ArcRetrySettings = RetrySettings<Arc<dyn RetryStrategy>, Arc<dyn RetryDeadline>>;
-
-impl<S: RetryStrategy> RetrySettings<S> {
     /// Constructs a retry settings from a retry strategy.
     ///
     /// Note that this function doesn't include
     /// exponential backoff automatically. Use it only
     /// when you want to construct retry settings
     /// from scratch. Otherwise you probably want
-    /// [`RetrySettings::with_default_backoff`]
-    /// or [`ArcRetrySettings::default`].
-    pub fn new(strategy: S) -> Self {
+    /// [`RetrySettings::with_default_backoff`].
+    pub fn new<S: RetryStrategy>(strategy: S) -> Self {
         Self {
-            strategy,
-            deadline: NoDeadline,
+            strategy: Arc::new(strategy),
+            deadline: Arc::new(NoDeadline),
         }
     }
-
-    /// Runs retry-wait loop until an attempt results in `Some(_)`.
-    pub async fn retry_indefinitely<T, F>(&self, mut attempt_fn: F) -> T
-    where
-        S: RetryAlways,
-        F: AsyncFnMut<RefWithLifetime<RetryState>, Output = Option<T>>,
-    {
-        let mut retry = RetryState::init();
-
-        loop {
-            let attempt_result = Self::attempt(&mut attempt_fn, &retry).await;
-
-            if let Some(value) = attempt_result {
-                return value;
-            } else {
-                trace!("attempt failed");
-                _ = self.strategy.wait_retry(&retry).await;
-            }
-
-            retry.attempt += 1;
-        }
-    }
-}
-
-impl<S: RetryStrategy, D: RetryDeadline> RetrySettings<S, D> {
-    pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
     /// Adds another deadline to the retry budget on top of existing deadlines.
     ///
     /// Deadline is exceeded when either of deadlines is exceeded.
-    pub fn with_deadline<T: RetryDeadline>(self, deadline: T) -> RetrySettings<S, Combine<D, T>> {
+    pub fn with_deadline<D: RetryDeadline>(self, deadline: D) -> RetrySettings {
         RetrySettings {
             strategy: self.strategy,
-            deadline: Combine(self.deadline, deadline),
+            deadline: Arc::new(Combine(self.deadline, deadline)),
         }
     }
 
@@ -122,76 +78,17 @@ impl<S: RetryStrategy, D: RetryDeadline> RetrySettings<S, D> {
     /// the budget.
     ///
     /// The default timeout is [`Self::DEFAULT_TIMEOUT`].
-    pub fn with_default_timeout(self) -> RetrySettings<S, Combine<D, Duration>> {
+    pub fn with_default_timeout(self) -> RetrySettings {
         self.with_deadline(Self::DEFAULT_TIMEOUT)
     }
 
     /// Adds another retry strategy on top of existing strategies.
     ///
     /// Their delays are applied in parallel.
-    pub fn with<T: RetryStrategy>(self, wait: T) -> RetrySettings<Combine<S, T>, D> {
+    pub fn with<T: RetryStrategy>(self, strategy: T) -> RetrySettings {
         RetrySettings {
-            strategy: Combine(self.strategy, wait),
+            strategy: Arc::new(Combine(self.strategy, strategy)),
             deadline: self.deadline,
-        }
-    }
-
-    /// Maps `RetryStrategy<S, D>` to `RetryStrategy<NewS, D>`
-    /// by applying a function to contained retry strategy.
-    pub fn map_strategy<F, NewS>(self, f: F) -> RetrySettings<NewS, D>
-    where
-        F: FnOnce(S) -> NewS,
-        NewS: RetryStrategy,
-    {
-        RetrySettings {
-            strategy: f(self.strategy),
-            deadline: self.deadline,
-        }
-    }
-
-    /// Maps `RetryStrategy<S, D>` to `RetryStrategy<S, NewD>`
-    /// by applying a function to contained deadline.
-    pub fn map_deadline<F, NewD>(self, f: F) -> RetrySettings<S, NewD>
-    where
-        F: FnOnce(D) -> NewD,
-        NewD: RetryDeadline,
-    {
-        RetrySettings {
-            strategy: self.strategy,
-            deadline: f(self.deadline),
-        }
-    }
-
-    /// Type-erases the retry budget using [`Box`].
-    pub fn boxed(self) -> BoxRetrySettings
-    where
-        S: 'static,
-        D: 'static,
-    {
-        RetrySettings {
-            strategy: Box::new(self.strategy),
-            deadline: Box::new(self.deadline),
-        }
-    }
-
-    /// Type-erases retry budget using [`Arc`].
-    pub fn arc(self) -> ArcRetrySettings
-    where
-        S: 'static,
-        D: 'static,
-    {
-        RetrySettings {
-            strategy: Arc::new(self.strategy),
-            deadline: Arc::new(self.deadline),
-        }
-    }
-
-    /// Returns a retry strategy that borrows
-    /// the current one.
-    pub fn as_ref(&self) -> RetrySettings<&'_ S, &'_ D> {
-        RetrySettings {
-            strategy: &self.strategy,
-            deadline: &self.deadline,
         }
     }
 
@@ -326,7 +223,7 @@ impl RetryState {
 ///
 /// Should be used with [`RetrySettings`].
 #[async_trait]
-pub trait RetryStrategy: Send + Sync {
+pub trait RetryStrategy: Debug + Send + Sync + 'static {
     /// Returns a future that waits before the next retry.
     ///
     /// Note that the future can be created before the time it's polled.
@@ -334,14 +231,6 @@ pub trait RetryStrategy: Send + Sync {
     /// Its output tells whether to continue retries.
     async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()>;
 }
-
-/// Retry strategy that never asks to stop.
-///
-/// This trait should be implemented for retry strategies
-/// that always returns [`ControlFlow::Continue`]. It also
-/// implies that output of its [`RetryWait::wait_retry`]
-/// can be ignored.
-pub trait RetryAlways: RetryStrategy {}
 
 /// Retry strategy that doesn't allow retries.
 #[derive(Debug, Clone, Copy)]
@@ -418,6 +307,33 @@ impl ExponentialBackoff {
 
         self.initial.saturating_mul(total_multiplier).min(self.max)
     }
+
+    /// Runs retry-wait loop until an attempt results in `Some(_)`.
+    ///
+    /// This method ignores deadlines and [`ControlFlow`] returned by retry strategy,
+    /// so it should be used only with retry settings that never stops retries.
+    /// Unfortunately, this limitation is not expressible on type level,
+    /// because we decided to type-erase deadlines and strategies,
+    /// so this method is `pub(crate)` and should be used with care.
+    pub(crate) async fn retry_indefinitely<T, F>(&self, mut attempt_fn: F) -> T
+    where
+        F: AsyncFnMut<RefWithLifetime<RetryState>, Output = Option<T>>,
+    {
+        let mut retry = RetryState::init();
+
+        loop {
+            let attempt_result = RetrySettings::attempt(&mut attempt_fn, &retry).await;
+
+            if let Some(value) = attempt_result {
+                return value;
+            } else {
+                trace!("attempt failed");
+                _ = self.wait_retry(&retry).await;
+            }
+
+            retry.attempt += 1;
+        }
+    }
 }
 
 #[async_trait]
@@ -425,15 +341,6 @@ impl RetryStrategy for ExponentialBackoff {
     async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
         tokio::time::sleep(self.wait_duration(retry.attempt)).await;
         ControlFlow::Continue(())
-    }
-}
-
-impl RetryAlways for ExponentialBackoff {}
-
-#[async_trait]
-impl<S: RetryStrategy + ?Sized> RetryStrategy for &S {
-    async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
-        S::wait_retry(*self, retry).await
     }
 }
 
@@ -560,7 +467,7 @@ impl RetryStrategy for RetryProbability {
 ///
 /// Should be used with [`RetrySettings`].
 #[async_trait]
-pub trait RetryDeadline: Send + Sync {
+pub trait RetryDeadline: Debug + Send + Sync + 'static {
     /// Returns a future that waits for the retry deadline.
     ///
     /// It can be called once per retry loop or each time
@@ -613,13 +520,6 @@ impl<D: RetryDeadline> RetryDeadline for Option<D> {
 }
 
 #[async_trait]
-impl<D: RetryDeadline + ?Sized> RetryDeadline for &D {
-    async fn wait_deadline(&self) {
-        D::wait_deadline(*self).await
-    }
-}
-
-#[async_trait]
 impl<D: RetryDeadline + ?Sized> RetryDeadline for Box<D> {
     async fn wait_deadline(&self) {
         D::wait_deadline(&self).await
@@ -634,6 +534,7 @@ impl<D: RetryDeadline + ?Sized> RetryDeadline for Arc<D> {
 }
 
 /// Helper type for combining deadlines and retry strategies.
+#[derive(Debug)]
 pub struct Combine<A, B>(A, B);
 
 #[async_trait]
@@ -659,12 +560,11 @@ impl<A: RetryDeadline, B: RetryDeadline> RetryDeadline for Combine<A, B> {
     }
 }
 
-impl<A: RetryAlways, B: RetryAlways> RetryAlways for Combine<A, B> {}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[derive(Debug)]
     struct ConstantBackoff(Duration);
 
     #[async_trait]
@@ -675,6 +575,7 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
     struct WaitTrap {
         waited: std::sync::Mutex<bool>,
     }
@@ -743,11 +644,11 @@ mod tests {
 
     #[tokio::test]
     async fn combine_first_fail() {
-        let first_trap = WaitTrap::new();
-        let last_trap = WaitTrap::new();
-        let retry_settings = RetrySettings::new(&first_trap)
+        let first_trap = Arc::new(WaitTrap::new());
+        let last_trap = Arc::new(WaitTrap::new());
+        let retry_settings = RetrySettings::new(first_trap.clone())
             .with(DontRetry)
-            .with(&last_trap);
+            .with(last_trap.clone());
 
         assert!(
             retry_settings

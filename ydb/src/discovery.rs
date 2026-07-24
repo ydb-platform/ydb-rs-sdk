@@ -21,9 +21,9 @@ use crate::grpc_wrapper::{
     raw_discovery_client::{EndpointInfo, GrpcDiscoveryClient},
     raw_services::Service,
 };
-use crate::retry_settings::{RetrySettings, RetryState};
+use crate::retry_settings::RetryState;
 use crate::waiter::Waiter;
-use crate::{YdbError, closure};
+use crate::{ExponentialBackoff, YdbError, closure};
 
 /// Current discovery state
 #[derive(Clone, Debug, PartialEq)]
@@ -372,7 +372,7 @@ impl DiscoverySharedState {
         });
 
         loop {
-            let result = RetrySettings::with_default_backoff()
+            let result = ExponentialBackoff::default()
                 .retry_indefinitely(closure!([&state], async |retry: &RetryState| {
                     let Some(state) = state.upgrade() else {
                         // Break out of the worker loop
