@@ -23,7 +23,7 @@ use crate::{AsyncFnMut, RefWithLifetime, YdbResult, closure, errors::Idempotency
 ///
 /// Defines retry strategy and deadlines for retried operations.
 #[derive(Debug, Clone, Copy)]
-pub struct RetrySettings<S, D = NoDeadline> {
+pub struct RetrySettings<S: RetryStrategy, D: RetryDeadline = NoDeadline> {
     strategy: S,
     deadline: D,
 }
