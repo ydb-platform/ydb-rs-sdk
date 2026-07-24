@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use tokio::task::JoinSet;
@@ -59,6 +59,10 @@ pub(super) async fn open(
                 .topic_path(topic_path)
                 .producer_id(format!("sdk-compare-writer-{partition_id}-{writer_index}"))
                 .partitioning(PartitioningStrategy::PartitionId(i64::from(partition_id)))
+                .write_request_messages_chunk_size(workload.write_batch_max_messages)
+                .write_request_send_messages_period(Duration::from_millis(
+                    workload.write_batch_max_delay_ms,
+                ))
                 .build();
 
             let writer = topic_client
