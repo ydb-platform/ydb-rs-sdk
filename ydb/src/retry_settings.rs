@@ -136,6 +136,32 @@ impl<S: RetryStrategy, D: RetryDeadline> RetrySettings<S, D> {
         }
     }
 
+    /// Maps `RetryStrategy<S, D>` to `RetryStrategy<NewS, D>`
+    /// by applying a function to contained retry strategy.
+    pub fn map_strategy<F, NewS>(self, f: F) -> RetrySettings<NewS, D>
+    where
+        F: FnOnce(S) -> NewS,
+        NewS: RetryStrategy,
+    {
+        RetrySettings {
+            strategy: f(self.strategy),
+            deadline: self.deadline,
+        }
+    }
+
+    /// Maps `RetryStrategy<S, D>` to `RetryStrategy<S, NewD>`
+    /// by applying a function to contained deadline.
+    pub fn map_deadline<F, NewD>(self, f: F) -> RetrySettings<S, NewD>
+    where
+        F: FnOnce(D) -> NewD,
+        NewD: RetryDeadline,
+    {
+        RetrySettings {
+            strategy: self.strategy,
+            deadline: f(self.deadline),
+        }
+    }
+
     /// Type-erases the retry budget using [`Box`].
     pub fn boxed(self) -> BoxRetrySettings
     where
