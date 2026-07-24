@@ -12,7 +12,7 @@
     "topic_name": "sdk-compare-topic-smoke",
     "consumer_name": "sdk-compare-consumer",
     "partition_count": 1,
-    "writer_count": 1,
+    "writers_per_partition": 1,
     "reader_count": 1,
     "message_size_bytes": 1024,
     "max_in_flight_per_writer": 10,

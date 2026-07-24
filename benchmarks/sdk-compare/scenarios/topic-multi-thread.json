@@ -12,7 +12,7 @@
     "topic_name": "sdk-compare-topic-multi-thread",
     "consumer_name": "sdk-compare-consumer",
     "partition_count": 4,
-    "writer_count": 4,
+    "writers_per_partition": 1,
     "reader_count": 4,
     "message_size_bytes": 1024,
     "max_in_flight_per_writer": 100,
