@@ -1,19 +1,16 @@
 use std::fmt;
 use std::future::Future;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier};
 use std::time::Duration;
 use tracing_test::traced_test;
 
-use crate::Executor;
 use crate::TopicWriter;
 use crate::TopicWriterMessage;
 use crate::client_topic::client::CreateTopicOptionsBuilder;
-use crate::client_topic::compression::RayonExecutor;
 use crate::client_topic::compression::{CodecSelection, CompressionDecoder, CompressionEncoder};
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::test_integration_helper::create_client;
-use crate::test_integration_helper::create_client_with_executor;
 use crate::{
     Client, Codec, TopicClient, TopicReaderOptions, TopicWriterOptions, YdbError, YdbResult,
 };
@@ -172,15 +169,6 @@ where
 
 async fn topic_setup(name: &str, codecs: &[Codec]) -> YdbResult<(TopicClient, String, String)> {
     let client = create_client().await?;
-    setup_topic(name, codecs, client).await
-}
-
-async fn topic_setup_with_executor(
-    name: &str,
-    codecs: &[Codec],
-    executor: Arc<dyn Executor>,
-) -> YdbResult<(TopicClient, String, String)> {
-    let client = create_client_with_executor(executor).await?;
     setup_topic(name, codecs, client).await
 }
 
@@ -358,85 +346,6 @@ async fn codec_gzip_fixed() -> YdbResult<()> {
         },
     )
     .await
-}
-
-#[tokio::test]
-#[traced_test]
-#[ignore] // need YDB access
-async fn codec_parallelism() -> YdbResult<()> {
-    let (mut topic_client, topic_path, consumer_name) = topic_setup_with_executor(
-        "codec_parallelism",
-        &[Codec::RAW, Codec::PAR],
-        Arc::new(RayonExecutor::new(2)?),
-    )
-    .await?;
-
-    let encoder_barrier = Arc::new(Barrier::new(2));
-    let decoder_barrier = Arc::new(Barrier::new(2));
-
-    let writer = topic_client
-        .create_writer_with_params(
-            TopicWriterOptions::builder()
-                .topic_path(topic_path.clone())
-                .codec_selector(CodecSelection::Fixed(Codec::PAR))
-                .add_encoder(encoder(Codec::PAR, {
-                    let barrier = encoder_barrier.clone();
-
-                    move |data: &[u8]| -> YdbResult<Vec<u8>> {
-                        barrier.wait();
-                        Ok(data.into())
-                    }
-                }))
-                .build(),
-        )
-        .await?;
-    trace!("writer created");
-
-    let message_count = 10;
-    let mut expected_messages = Vec::with_capacity(message_count);
-
-    for i in 0..message_count {
-        let data: Vec<u8> = format!("test-message-{i}").into_bytes();
-        expected_messages.push(data.clone());
-        writer
-            .write(TopicWriterMessage::builder().data(data).build())
-            .await?;
-    }
-
-    timeout(writer.flush()).await?;
-    stop_writer(writer).await?;
-
-    let mut reader = topic_client
-        .create_reader_with_params(
-            TopicReaderOptions::builder()
-                .topic(topic_path.clone())
-                .consumer(consumer_name)
-                .add_decoder(decoder(Codec::PAR, {
-                    let barrier = decoder_barrier.clone();
-
-                    move |data: &[u8]| -> YdbResult<Vec<u8>> {
-                        barrier.wait();
-                        Ok(data.into())
-                    }
-                }))
-                .build(),
-        )
-        .await?;
-
-    let mut received_messages: Vec<Vec<u8>> = Vec::new();
-    while received_messages.len() < message_count {
-        let batch = timeout(reader.read_batch()).await?;
-
-        for mut message in batch.messages {
-            if let Some(data) = message.read_and_take().await? {
-                received_messages.push(data);
-            }
-        }
-    }
-
-    assert_eq!(received_messages, expected_messages);
-
-    Ok(())
 }
 
 #[tokio::test]

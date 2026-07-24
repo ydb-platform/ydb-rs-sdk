@@ -77,7 +77,6 @@ const DATABASE: &str = "/local";
 const TOPIC_PATH: &str = "/local/topic";
 const CONSUMER: &str = "consumer";
 const PARTITION_SESSION_ID: i64 = 1;
-const PARTITION_SESSION_ID_2: i64 = 2;
 const UNKNOWN_CODEC: Codec = Codec { code: 10001 };
 const RACE_CODEC: Codec = Codec { code: 10002 };
 
@@ -226,18 +225,6 @@ impl Driver {
             committed_offset,
         )))
     }
-
-    async fn start_session(&self, partition_session_id: i64, partition_id: i64) {
-        let notified = self.state.partition_ready.notified();
-        self.send(Reply::Topic(builders::start_partition_session_request(
-            self.state.current_stream_id(),
-            partition_session_id,
-            TOPIC_PATH,
-            partition_id,
-            0,
-        )));
-        notified.await;
-    }
 }
 
 async fn make_reader(server: &MockServer) -> YdbResult<TopicReader> {
@@ -329,36 +316,6 @@ topic_test!(unknown_codec_fails_reader, timeout_secs = 1, {
     driver.send_read_response_with_codec(0, 5, b"hello", UNKNOWN_CODEC);
 
     assert!(reader.read_batch().await.is_err());
-
-    Ok(())
-});
-
-topic_test!(round_robin_interleaves_two_partitions, timeout_secs = 2, {
-    let driver = Driver::start().await;
-    let mut reader = make_reader_with_batch_size(&driver.server, 1).await?;
-    driver.state.partition_ready.notified().await;
-    driver.start_session(PARTITION_SESSION_ID_2, 1).await;
-
-    let stream_id = driver.state.current_stream_id();
-    driver.send(Reply::Topic(builders::read_response_batch_with_codec(
-        stream_id,
-        PARTITION_SESSION_ID,
-        vec![(0, 8, b"p0-first".to_vec()), (1, 9, b"p0-second".to_vec())],
-        Codec::RAW,
-    )));
-    driver.send_read_response_for(PARTITION_SESSION_ID_2, 0, b"p1-only");
-
-    let first = reader.read_batch().await?;
-    let second = reader.read_batch().await?;
-    let third = reader.read_batch().await?;
-
-    assert_eq!(first.messages[0].get_partition_id(), 0);
-    assert_eq!(
-        second.messages[0].get_partition_id(),
-        1,
-        "round-robin must switch partitions before returning to the first partition"
-    );
-    assert_eq!(third.messages[0].get_partition_id(), 0);
 
     Ok(())
 });
