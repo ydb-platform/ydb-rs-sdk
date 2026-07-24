@@ -43,7 +43,7 @@ impl RetrySettings {
         }
     }
 
-    /// Constructs a retry settings udget that allows no retries.
+    /// Constructs a retry settings that allows no retries.
     pub fn dont_retry() -> Self {
         Self::new(DontRetry)
     }
