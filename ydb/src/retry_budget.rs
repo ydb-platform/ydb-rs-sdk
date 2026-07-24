@@ -536,7 +536,7 @@ pub struct NoDeadline;
 #[async_trait]
 impl RetryDeadline for NoDeadline {
     async fn wait_deadline(&self) {
-        loop {}
+        future::pending().await
     }
 }
 
