@@ -1,7 +1,7 @@
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use crate::errors::NeedRetry;
+use crate::errors::Idempotency;
 use crate::{YdbError, YdbResult};
 
 pub(super) async fn wait_child_tasks(
@@ -49,7 +49,7 @@ fn select_error(
         return;
     };
 
-    if selected_error.is_none() || !is_retriable(&err) {
+    if selected_error.is_none() || !err.is_retriable(Idempotency::Idempotent) {
         *selected_error = Some(err);
     }
 }
@@ -61,12 +61,5 @@ fn task_error(joined: Result<YdbResult<()>, tokio::task::JoinError>) -> Option<Y
         Err(join_err) => Some(YdbError::custom(format!(
             "topic reader task failed: {join_err}"
         ))),
-    }
-}
-
-pub(super) fn is_retriable(err: &YdbError) -> bool {
-    match err.need_retry() {
-        NeedRetry::True | NeedRetry::IdempotentOnly => true,
-        NeedRetry::False => false,
     }
 }

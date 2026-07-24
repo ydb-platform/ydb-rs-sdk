@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use http::Uri;
 use tokio::time::timeout;
 
-use crate::errors::{NeedRetry, YdbError, YdbOrCustomerError, YdbResult};
+use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryRequest;
@@ -13,11 +13,11 @@ use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::grpc_wrapper::raw_query_service::transaction_control::{
     RawTxMode, begin_tx_control, tx_id_control,
 };
-use crate::retry_budget::{RetryControl, RetryPauseError, pause_before_retry};
+use crate::retry_settings::RetrySettings;
 use crate::traces::helpers::ensure_len_string;
 
 use crate::types::Value;
-use crate::{TransactionOptions, TxMode};
+use crate::{TransactionOptions, TxMode, closure};
 use tracing::instrument;
 
 use crate::session_pool::{SessionPool, SessionPoolLease, spawn_pool_release};
@@ -69,7 +69,7 @@ pub(crate) struct CallOptions {
 pub(crate) struct ClientExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub session_pool: SessionPool,
-    pub retry_control: std::sync::Arc<RetryControl>,
+    pub retry_settings: RetrySettings,
 }
 
 #[derive(Clone, Debug)]
@@ -105,10 +105,6 @@ pub(crate) struct TransactionExecContext {
     pub hooks: Vec<Box<dyn QueryTxHook>>,
     /// Absolute deadline from [`QueryClient::retry_tx`] `.timeout()`, propagated to every RPC in the callback.
     pub retry_deadline: Option<Instant>,
-}
-
-fn resolve_idempotent(opts: &CallOptions) -> bool {
-    opts.idempotent.unwrap_or(false)
 }
 
 /// Per-call timeout capped by the parent [`retry_tx`](crate::QueryClient::retry_tx) deadline when set.
@@ -151,19 +147,6 @@ where
             "operation timed out after {timeout_duration:?}"
         ))),
     }
-}
-
-pub(crate) async fn run_with_retry<T, F, Fut>(
-    retry_control: &RetryControl,
-    opts: &CallOptions,
-    idempotent: bool,
-    attempt_fn: F,
-) -> YdbResult<T>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = YdbResult<T>>,
-{
-    retry_until(retry_control, idempotent, opts.timeout, attempt_fn).await
 }
 
 async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQueryClient> {
@@ -283,81 +266,6 @@ pub(crate) fn resolve_commit_tx(core: &super::internal::ExecCoreRef, opts: &Call
     }
 }
 
-#[instrument(name = "ydb.Try", skip_all, fields(
-    ydb.retry.attempt = attempt,
-    ydb.retry.backoff_ms = tracing::field::Empty,
-    db.system.name = "ydb",
-), err)]
-async fn retry_until_loop_body<T, F, Fut>(
-    attempt_fn: &mut F,
-    retry_control: &RetryControl,
-    idempotent: bool,
-    attempt: usize,
-    start: Instant,
-    limit: Option<Duration>,
-) -> YdbResult<Option<T>>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = YdbResult<T>>,
-{
-    #[instrument(name = "ydb.Try.Attempt", skip_all, fields(db.system.name = "ydb"), err)]
-    async fn retry_until_loop_attempt<T, F, Fut>(attempt_fn: &mut F) -> YdbResult<T>
-    where
-        F: FnMut() -> Fut,
-        Fut: Future<Output = YdbResult<T>>,
-    {
-        attempt_fn().await
-    }
-
-    match retry_until_loop_attempt(attempt_fn).await {
-        Ok(value) => Ok(Some(value)),
-        Err(err) => {
-            if !should_retry_ydb_error(idempotent, &err) {
-                return Err(err);
-            }
-            match pause_before_retry(retry_control, attempt, start, limit).await {
-                Ok(()) => {}
-                Err(RetryPauseError::Timeout) | Err(RetryPauseError::Budget(_)) => {
-                    return Err(err);
-                }
-            }
-            Ok(None)
-        }
-    }
-}
-
-#[instrument(name = "ydb.Query.RetryUntil", skip_all, fields(db.system.name = "ydb", ydb.Query.idempotent = idempotent), err)]
-async fn retry_until<T, F, Fut>(
-    retry_control: &RetryControl,
-    idempotent: bool,
-    limit: Option<Duration>,
-    mut attempt_fn: F,
-) -> YdbResult<T>
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = YdbResult<T>>,
-{
-    let start = Instant::now();
-    let mut attempt = 0usize;
-    loop {
-        retry_control.metrics().record_attempt();
-        attempt += 1;
-
-        if let Some(value) = retry_until_loop_body(
-            &mut attempt_fn,
-            retry_control,
-            idempotent,
-            attempt,
-            start,
-            limit,
-        )
-        .await?
-        {
-            return Ok(value);
-        }
-    }
-}
-
 /// Build `tx_control` for one-shot [`QueryClient`] calls.
 ///
 /// Default [`TxMode::Implicit`] omits `tx_control` (server-side inference).
@@ -465,11 +373,20 @@ pub(crate) async fn client_begin_stream(
     opts: CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
-    let idempotent = resolve_idempotent(&opts);
-    retry_until(&ctx.retry_control, idempotent, opts.timeout, || {
-        client_begin_stream_once(ctx, &text, &params, &opts, concurrent_result_sets)
-    })
-    .await
+    ctx.retry_settings
+        .clone()
+        .with_deadline(opts.timeout)
+        .retry_on_retriable_errors(
+            opts.idempotent.unwrap_or(false).into(),
+            closure!([&ctx, &text, &params, &opts], |_| client_begin_stream_once(
+                ctx,
+                text,
+                params,
+                opts,
+                concurrent_result_sets
+            )),
+        )
+        .await
 }
 
 /// Interactive transactions need a stable attached session from the driver pool.
@@ -821,21 +738,6 @@ pub(crate) fn apply_stream_tx_id(tx: &mut TransactionExecContext, tx_id: Option<
     tx.tx_id = Some(id);
 }
 
-pub(crate) fn should_retry_ydb_error(idempotent: bool, err: &YdbError) -> bool {
-    match err.need_retry() {
-        NeedRetry::True => true,
-        NeedRetry::IdempotentOnly => idempotent,
-        NeedRetry::False => false,
-    }
-}
-
-pub(crate) fn check_retry_tx_error(err: &YdbOrCustomerError, idempotent: bool) -> bool {
-    match err {
-        YdbOrCustomerError::Customer(_) => false,
-        YdbOrCustomerError::YDB(err) => should_retry_ydb_error(idempotent, err),
-    }
-}
-
 #[cfg(test)]
 pub(super) fn build_client_execute_request_for_test(
     opts: &CallOptions,
@@ -856,34 +758,15 @@ pub(super) fn build_client_execute_request_for_test(
 mod unit_tests {
     use super::*;
     use crate::GrpcOptions;
-    use crate::errors::{YdbError, YdbOrCustomerError};
-    use crate::retry_budget::retry_wait;
+    use crate::errors::{Idempotency, YdbError, YdbOrCustomerError};
 
     #[test]
     fn retry_helpers_and_wait() {
         let transport = YdbOrCustomerError::YDB(YdbError::Transport("timeout".into()));
-        assert!(check_retry_tx_error(&transport, true));
-        assert!(should_retry_ydb_error(
-            true,
-            &YdbError::Transport("timeout".into())
-        ));
-        assert!(!should_retry_ydb_error(
-            false,
-            &YdbError::Transport("timeout".into())
-        ));
-        assert!(!check_retry_tx_error(
-            &YdbOrCustomerError::from_mess("customer"),
-            true
-        ));
-
-        assert!(retry_wait(1, Duration::ZERO, None).is_some());
-
-        let budget = Duration::from_millis(100);
-        let wait1 = retry_wait(1, Duration::ZERO, Some(budget)).expect("wait");
-        assert!(wait1 > Duration::ZERO);
-        let wait2 = retry_wait(2, Duration::ZERO, Some(budget)).expect("wait");
-        assert!(wait2 >= wait1);
-        assert!(retry_wait(10, budget, Some(budget)).is_none());
+        assert!(transport.is_retriable(Idempotency::Idempotent));
+        assert!(YdbError::Transport("timeout".into()).is_retriable(Idempotency::Idempotent));
+        assert!(!YdbError::Transport("timeout".into()).is_retriable(Idempotency::NonIdempotent));
+        assert!(!YdbOrCustomerError::from_mess("customer").is_retriable(Idempotency::Idempotent));
     }
 
     #[tokio::test]

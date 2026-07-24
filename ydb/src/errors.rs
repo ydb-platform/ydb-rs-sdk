@@ -3,6 +3,7 @@ use crate::errors::NeedRetry::IdempotentOnly;
 use crate::grpc_wrapper::raw_errors::RawError;
 use http::Uri;
 use std::fmt::{Debug, Display, Formatter};
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
@@ -39,6 +40,24 @@ impl YdbOrCustomerError {
             Self::Customer(err) => YdbError::custom(format!("{err}")),
         }
     }
+
+    pub(crate) fn is_retriable(&self, idempotency: Idempotency) -> bool {
+        match self {
+            YdbOrCustomerError::YDB(err) => err.is_retriable(idempotency),
+            YdbOrCustomerError::Customer(_) => false,
+        }
+    }
+
+    pub(crate) fn retry_flow<T>(
+        self,
+        idempotency: Idempotency,
+    ) -> ControlFlow<Result<T, Self>, Self> {
+        if self.is_retriable(idempotency) {
+            ControlFlow::Continue(self)
+        } else {
+            ControlFlow::Break(Err(self))
+        }
+    }
 }
 
 impl Debug for YdbOrCustomerError {
@@ -72,6 +91,31 @@ pub(crate) enum NeedRetry {
     True,           // operation guarantee to not completed, error is temporary, need retry
     IdempotentOnly, // operation in unknown state - it may be completed or not, error temporary. Operation may be auto retry for idempotent operations only.
     False, // operation is completed or error is stable (for example yql syntax error) and no need retry
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Idempotency {
+    Idempotent,
+    NonIdempotent,
+}
+
+impl From<bool> for Idempotency {
+    fn from(is_idempotent: bool) -> Self {
+        if is_idempotent {
+            Idempotency::Idempotent
+        } else {
+            Idempotency::NonIdempotent
+        }
+    }
+}
+
+impl Idempotency {
+    pub const fn is_idempotent(self) -> bool {
+        match self {
+            Idempotency::Idempotent => true,
+            Idempotency::NonIdempotent => false,
+        }
+    }
 }
 
 /// Error which can be returned from the crate.
@@ -314,6 +358,25 @@ impl YdbError {
                     _ => NeedRetry::False,
                 }
             }
+        }
+    }
+
+    pub(crate) fn is_retriable(&self, idempotency: Idempotency) -> bool {
+        match self.need_retry() {
+            NeedRetry::True => true,
+            IdempotentOnly => idempotency.is_idempotent(),
+            NeedRetry::False => false,
+        }
+    }
+
+    pub(crate) fn retry_flow<T>(
+        self,
+        idempotency: Idempotency,
+    ) -> ControlFlow<Result<T, Self>, Self> {
+        if self.is_retriable(idempotency) {
+            ControlFlow::Continue(self)
+        } else {
+            ControlFlow::Break(Err(self))
         }
     }
 }

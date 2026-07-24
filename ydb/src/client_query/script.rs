@@ -3,7 +3,8 @@ use std::future::IntoFuture;
 use std::time::Duration;
 
 use crate::client::TimeoutSettings;
-use crate::errors::{YdbError, YdbResult};
+use crate::closure;
+use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::execute_script::RawExecuteScriptRequest;
 use crate::grpc_wrapper::raw_query_service::fetch_script_results::RawFetchScriptResultsRequest;
@@ -13,7 +14,7 @@ use crate::types::Value;
 use futures_util::future::BoxFuture;
 use tracing::instrument;
 
-use super::exec::{CallOptions, ClientExecContext, maybe_with_operation_timeout, run_with_retry};
+use super::exec::{CallOptions, ClientExecContext, maybe_with_operation_timeout};
 
 /// Long-running script operation started by [`QueryClient::execute_script`].
 #[derive(Debug, Clone)]
@@ -214,17 +215,24 @@ async fn client_fetch_script_results(
     opts: CallOptions,
 ) -> YdbResult<FetchScriptResult> {
     // FetchScriptResults is always safe to retry (aligned with Go SDK).
-    run_with_retry(&ctx.retry_control, &opts, true, || {
-        client_fetch_script_results_once(
-            ctx,
-            &operation_id,
-            result_set_index,
-            &fetch_token,
-            rows_limit,
-            &opts,
+    ctx.retry_settings
+        .clone()
+        .with_deadline(opts.timeout)
+        .retry_on_retriable_errors(
+            Idempotency::Idempotent,
+            closure!([&ctx, &operation_id, &fetch_token, &opts], async |_| {
+                client_fetch_script_results_once(
+                    ctx,
+                    operation_id,
+                    result_set_index,
+                    fetch_token,
+                    rows_limit,
+                    opts,
+                )
+                .await
+            }),
         )
-    })
-    .await
+        .await
 }
 
 #[instrument(name = "ydb.FetchScriptResultsOnce", skip_all, fields(db.system.name = "ydb", ydb.operation.id = %operation_id), err)]
