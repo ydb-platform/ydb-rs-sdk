@@ -111,7 +111,7 @@ impl<S: RetryStrategy, D: RetryDeadline> RetryBudget<S, D> {
         self.deadline(Self::DEFAULT_TIMEOUT)
     }
 
-    /// Adds another retry wait strategy on top of existing strategies.
+    /// Adds another retry strategy on top of existing strategies.
     ///
     /// Their delays are applied in parallel.
     pub fn with<T: RetryStrategy>(self, wait: T) -> RetryBudget<Combine<S, T>, D> {
@@ -281,7 +281,7 @@ impl RetryState {
     }
 }
 
-/// Retry wait strategy.
+/// Retry strategy.
 ///
 /// Should be used with [`RetryBudget`].
 #[async_trait]
@@ -294,7 +294,7 @@ pub trait RetryStrategy: Send + Sync {
     async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()>;
 }
 
-/// Retry wait strategy that never asks to stop.
+/// Retry strategy that never asks to stop.
 ///
 /// This trait should be implemented for retry strategies
 /// that always returns [`ControlFlow::Continue`]. It also
@@ -302,7 +302,7 @@ pub trait RetryStrategy: Send + Sync {
 /// can be ignored.
 pub trait RetryAlways: Send + Sync + RetryStrategy {}
 
-/// Retry wait strategy that doesn't allow retries.
+/// Retry strategy that doesn't allow retries.
 #[derive(Debug, Clone, Copy)]
 pub struct DontRetry;
 
@@ -592,7 +592,7 @@ impl<D: RetryDeadline + ?Sized> RetryDeadline for Arc<D> {
     }
 }
 
-/// Helper type for combining deadlines and retry wait strategies.
+/// Helper type for combining deadlines and retry strategies.
 pub struct Combine<A, B>(A, B);
 
 #[async_trait]
