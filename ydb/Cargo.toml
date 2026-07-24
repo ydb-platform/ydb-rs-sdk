@@ -63,12 +63,14 @@ flate2 = "1.1.9"
 rayon = "1.10"
 
 [dev-dependencies]
+anyhow = "1"
 async_once = "0.2"
 chrono = { version = "0.4", default-features = false, features = [
     "clock",
     "std",
 ] }
 lazy_static = "1.4"
+hdrhistogram = "7.5.4"
 ntest = "0.7"
 opentelemetry = "0.32.0"
 opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"] }
@@ -76,3 +78,9 @@ opentelemetry_sdk = "0.32.1"
 tokio = { version = "1.22", features = ["test-util"] }
 tracing-opentelemetry = "0.33.0"
 uuid = { version = "1.17.0", features = ["v4"] }
+
+[[bench]]
+name = "sdk_compare"
+path = "benches/sdk_compare/main.rs"
+harness = false
+test = false
