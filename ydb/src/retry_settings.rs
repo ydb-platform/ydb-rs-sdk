@@ -1,6 +1,6 @@
 //! Retry backoffs, timeouts, strategies and client-side rate limiting.
 //!
-//! A [`RetryBudget`] instance is shared by all service clients created from
+//! A [`RetrySettings`] instance is shared by all service clients created from
 //! the same [`Client`](crate::Client).
 
 use async_trait::async_trait;
@@ -283,7 +283,7 @@ impl RetryState {
 
 /// Retry strategy.
 ///
-/// Should be used with [`RetryBudget`].
+/// Should be used with [`RetrySettings`].
 #[async_trait]
 pub trait RetryStrategy: Send + Sync {
     /// Returns a future that waits before the next retry.
@@ -517,7 +517,7 @@ impl RetryStrategy for RetryProbability {
 
 /// Retry deadline.
 ///
-/// Should be used with [`RetryBudget`].
+/// Should be used with [`RetrySettings`].
 #[async_trait]
 pub trait RetryDeadline: Send + Sync {
     /// Returns a future that waits for the retry deadline.
