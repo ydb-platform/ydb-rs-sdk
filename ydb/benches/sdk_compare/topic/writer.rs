@@ -46,21 +46,30 @@ pub(super) async fn open(
     topic_path: &str,
     workload: &TopicWorkload,
 ) -> Result<Vec<TopicWriter>> {
-    let mut writers = Vec::with_capacity(workload.writer_count);
+    let partition_count = usize::try_from(workload.partition_count)
+        .context("partition count does not fit into usize")?;
+    let writer_count = partition_count
+        .checked_mul(workload.writers_per_partition)
+        .context("total writer count overflowed")?;
+    let mut writers = Vec::with_capacity(writer_count);
 
-    for writer_id in 0..workload.writer_count {
-        let options = TopicWriterOptions::builder()
-            .topic_path(topic_path)
-            .producer_id(format!("sdk-compare-writer-{writer_id}"))
-            .partitioning(PartitioningStrategy::ByProducerId)
-            .build();
+    for partition_id in 0..workload.partition_count {
+        for writer_index in 0..workload.writers_per_partition {
+            let options = TopicWriterOptions::builder()
+                .topic_path(topic_path)
+                .producer_id(format!("sdk-compare-writer-{partition_id}-{writer_index}"))
+                .partitioning(PartitioningStrategy::PartitionId(i64::from(partition_id)))
+                .build();
 
-        let writer = topic_client
-            .create_writer_with_params(options)
-            .await
-            .with_context(|| format!("failed to create writer {writer_id}"))?;
+            let writer = topic_client
+                .create_writer_with_params(options)
+                .await
+                .with_context(|| {
+                    format!("failed to create writer {writer_index} for partition {partition_id}")
+                })?;
 
-        writers.push(writer);
+            writers.push(writer);
+        }
     }
 
     Ok(writers)

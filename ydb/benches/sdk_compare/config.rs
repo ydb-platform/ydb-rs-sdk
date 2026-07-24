@@ -96,7 +96,7 @@ pub(crate) struct TopicWorkload {
     pub(crate) topic_name: String,
     pub(crate) consumer_name: String,
     pub(crate) partition_count: u32,
-    pub(crate) writer_count: usize,
+    pub(crate) writers_per_partition: usize,
     pub(crate) reader_count: usize,
     pub(crate) message_size_bytes: usize,
     pub(crate) max_in_flight_per_writer: usize,
@@ -118,8 +118,8 @@ impl TopicWorkload {
             "partition_count must be greater than zero"
         );
         ensure!(
-            self.writer_count > 0,
-            "writer_count must be greater than zero"
+            self.writers_per_partition > 0,
+            "writers_per_partition must be greater than zero"
         );
         ensure!(
             self.reader_count > 0,

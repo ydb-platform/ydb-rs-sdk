@@ -59,7 +59,7 @@ invalid fields are rejected.
     "topic_name": "sdk-compare-topic-single-thread",
     "consumer_name": "sdk-compare-consumer",
     "partition_count": 4,
-    "writer_count": 4,
+    "writers_per_partition": 1,
     "reader_count": 4,
     "message_size_bytes": 1024,
     "max_in_flight_per_writer": 100,
@@ -79,10 +79,12 @@ and the configured per-partition write quota. Fixed partitions hold server
 topology constant while the clients are compared. Setup fails if the Topic
 already exists.
 
-Writer `i` uses producer ID `sdk-compare-writer-{i}` and normal SDK sequence
-numbering and producer-ID routing. `max_in_flight_per_writer` is enforced by the
-benchmark; SDK batching and transport defaults remain untouched. Readers use
-normal SDK/server partition assignment and commit every delivered SDK batch.
+Each partition has `writers_per_partition` writers pinned to it. Writer `i` for
+partition `p` uses producer ID `sdk-compare-writer-{p}-{i}` and normal SDK
+sequence numbering. `max_in_flight_per_writer` is enforced independently for
+every writer; SDK batching and transport defaults remain untouched. Readers
+subscribe to the entire topic, use normal SDK/server partition assignment, and
+commit every delivered SDK batch.
 
 ## Timeline
 
