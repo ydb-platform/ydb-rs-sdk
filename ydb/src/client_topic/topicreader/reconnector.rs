@@ -152,7 +152,7 @@ impl Reconnector {
 
             let tasks = attempt_ctx
                 .options
-                .retry_budget
+                .retry_settings
                 .retry_on_retriable_errors(
                     Idempotency::Idempotent,
                     closure!(

@@ -13,7 +13,7 @@ use crate::grpc_connection_manager::{
 use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::SharedLoadBalancer;
-use crate::retry_budget::ArcRetryBudget;
+use crate::retry_budget::ArcRetrySettings;
 use crate::{Client, Credentials, GrpcOptions, HasGrpcOptions};
 use http::Uri;
 use once_cell::sync::Lazy;
@@ -235,7 +235,7 @@ pub struct ClientBuilder {
     discovery_enabled: bool,
     grpc_opts: GrpcOptions,
     executor: Option<Arc<dyn Executor>>,
-    retry_budget: Option<ArcRetryBudget>,
+    retry_settings: Option<ArcRetrySettings>,
 }
 
 impl ClientBuilder {
@@ -297,7 +297,7 @@ impl ClientBuilder {
             self.grpc_opts.clone(),
         );
 
-        let retry_control = self.retry_budget.unwrap_or_default();
+        let retry_control = self.retry_settings.unwrap_or_default();
 
         Client::new(
             db_cred,
@@ -349,8 +349,8 @@ impl ClientBuilder {
     }
 
     /// Set the driver-wide retry budget consulted by all SDK retriers.
-    pub fn with_retry_budget(mut self, budget: ArcRetryBudget) -> Self {
-        self.retry_budget = Some(budget);
+    pub fn with_retry_settings(mut self, budget: ArcRetrySettings) -> Self {
+        self.retry_settings = Some(budget);
         self
     }
 
@@ -364,7 +364,7 @@ impl ClientBuilder {
             discovery_enabled: true,
             grpc_opts: GrpcOptions::default(),
             executor: None,
-            retry_budget: None,
+            retry_settings: None,
         }
     }
 

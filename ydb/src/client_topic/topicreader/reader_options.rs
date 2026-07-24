@@ -1,6 +1,6 @@
 use crate::client_topic::compression::CompressionDecoder;
 use crate::client_topic::topicreader::reader::TopicSelectors;
-use crate::retry_budget::{ArcRetryBudget, RetryBudget};
+use crate::retry_budget::{ArcRetrySettings, RetrySettings};
 use std::sync::Arc;
 
 #[derive(bon::Builder, Clone)]
@@ -19,8 +19,8 @@ pub struct TopicReaderOptions {
     #[builder(default = 1000)]
     pub(crate) batch_size: usize,
 
-    #[builder(default = RetryBudget::default(), setters(vis = "pub(crate)"))]
-    pub(crate) retry_budget: ArcRetryBudget,
+    #[builder(default = RetrySettings::default(), setters(vis = "pub(crate)"))]
+    pub(crate) retry_settings: ArcRetrySettings,
 }
 
 impl<S: topic_reader_options_builder::State> TopicReaderOptionsBuilder<S> {

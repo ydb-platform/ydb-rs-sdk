@@ -23,7 +23,7 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
-use crate::retry_budget::{ArcRetryBudget, RetryState};
+use crate::retry_budget::{ArcRetrySettings, RetryState};
 use crate::{YdbError, YdbResult};
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
@@ -32,7 +32,7 @@ pub(crate) struct ReconnectorParams {
     pub(crate) producer_id: String,
     pub(crate) connection_manager: GrpcConnectionManager,
     pub(crate) cancellation_token: CancellationToken,
-    pub(crate) retry_budget: ArcRetryBudget,
+    pub(crate) retry_settings: ArcRetrySettings,
     pub(crate) fatal_error_tx: oneshot::Sender<YdbError>,
     pub(crate) flush_timeout: Duration,
     pub(crate) executor: Arc<dyn Executor>,
@@ -83,7 +83,7 @@ impl Reconnector {
         let reconnect_loop = Reconnector::start_reconnection_loop(
             ReconnectionHelper {
                 connection_manager: params.connection_manager,
-                retry_budget: params.retry_budget,
+                retry_settings: params.retry_settings,
                 cancellation_token: cancellation_token.clone(),
                 writer_options: params.writer_options,
                 producer_id: params.producer_id,
@@ -217,7 +217,7 @@ struct ReconnectionHelper {
     queue: Queue,
     writer_options: TopicWriterOptions,
     connection_manager: GrpcConnectionManager,
-    retry_budget: ArcRetryBudget,
+    retry_settings: ArcRetrySettings,
     cancellation_token: CancellationToken,
     producer_id: String,
     executor: Arc<dyn Executor>,
@@ -302,7 +302,7 @@ impl ReconnectionHelper {
         tokio::select! {
             biased;
             _ = self.cancellation_token.cancelled() => None,
-            result = self.retry_budget.wait_retry(retry) => Some(result)
+            result = self.retry_settings.wait_retry(retry) => Some(result)
         }
     }
 }

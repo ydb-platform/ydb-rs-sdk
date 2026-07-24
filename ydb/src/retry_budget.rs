@@ -21,12 +21,12 @@ use crate::{AsyncFnMut, RefWithLifetime, YdbResult, closure, errors::Idempotency
 
 /// Retry budget.
 #[derive(Debug, Clone, Copy)]
-pub struct RetryBudget<S, D = NoDeadline> {
+pub struct RetrySettings<S, D = NoDeadline> {
     strategy: S,
     deadline: D,
 }
 
-impl RetryBudget<ExponentialBackoff> {
+impl RetrySettings<ExponentialBackoff> {
     /// Constructs a retry budget with default
     /// exponential backoff without any deadlines.
     pub fn with_default_backoff() -> Self {
@@ -37,26 +37,26 @@ impl RetryBudget<ExponentialBackoff> {
     }
 }
 
-impl RetryBudget<DontRetry> {
+impl RetrySettings<DontRetry> {
     /// Constructs a retry budget that allows no retries.
     pub fn dont_retry() -> Self {
         Self::new(DontRetry)
     }
 }
 
-impl Default for ArcRetryBudget {
+impl Default for ArcRetrySettings {
     fn default() -> Self {
-        RetryBudget::with_default_backoff().arc()
+        RetrySettings::with_default_backoff().arc()
     }
 }
 
 /// Alias for type-erased retry budget.
-pub type BoxRetryBudget = RetryBudget<Box<dyn RetryStrategy>, Box<dyn RetryDeadline>>;
+pub type BoxRetrySettings = RetrySettings<Box<dyn RetryStrategy>, Box<dyn RetryDeadline>>;
 
 /// Alias for reference-counted type-erased retry budget.
-pub type ArcRetryBudget = RetryBudget<Arc<dyn RetryStrategy>, Arc<dyn RetryDeadline>>;
+pub type ArcRetrySettings = RetrySettings<Arc<dyn RetryStrategy>, Arc<dyn RetryDeadline>>;
 
-impl<S: RetryStrategy> RetryBudget<S> {
+impl<S: RetryStrategy> RetrySettings<S> {
     /// Constructs a retry budget from a retry strategy.
     pub fn new(strategy: S) -> Self {
         Self {
@@ -88,14 +88,14 @@ impl<S: RetryStrategy> RetryBudget<S> {
     }
 }
 
-impl<S: RetryStrategy, D: RetryDeadline> RetryBudget<S, D> {
+impl<S: RetryStrategy, D: RetryDeadline> RetrySettings<S, D> {
     pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
     /// Adds another deadline to the retry budget on top of existing deadlines.
     ///
     /// Deadline is exceeded when either of deadlines is exceeded.
-    pub fn deadline<T: RetryDeadline>(self, deadline: T) -> RetryBudget<S, Combine<D, T>> {
-        RetryBudget {
+    pub fn with_deadline<T: RetryDeadline>(self, deadline: T) -> RetrySettings<S, Combine<D, T>> {
+        RetrySettings {
             strategy: self.strategy,
             deadline: Combine(self.deadline, deadline),
         }
@@ -107,39 +107,39 @@ impl<S: RetryStrategy, D: RetryDeadline> RetryBudget<S, D> {
     /// the budget.
     ///
     /// The default timeout is [`Self::DEFAULT_TIMEOUT`].
-    pub fn default_timeout(self) -> RetryBudget<S, Combine<D, Duration>> {
-        self.deadline(Self::DEFAULT_TIMEOUT)
+    pub fn with_default_timeout(self) -> RetrySettings<S, Combine<D, Duration>> {
+        self.with_deadline(Self::DEFAULT_TIMEOUT)
     }
 
     /// Adds another retry strategy on top of existing strategies.
     ///
     /// Their delays are applied in parallel.
-    pub fn with<T: RetryStrategy>(self, wait: T) -> RetryBudget<Combine<S, T>, D> {
-        RetryBudget {
+    pub fn with<T: RetryStrategy>(self, wait: T) -> RetrySettings<Combine<S, T>, D> {
+        RetrySettings {
             strategy: Combine(self.strategy, wait),
             deadline: self.deadline,
         }
     }
 
     /// Type-erases the retry budget using [`Box`].
-    pub fn boxed(self) -> BoxRetryBudget
+    pub fn boxed(self) -> BoxRetrySettings
     where
         S: 'static,
         D: 'static,
     {
-        RetryBudget {
+        RetrySettings {
             strategy: Box::new(self.strategy),
             deadline: Box::new(self.deadline),
         }
     }
 
     /// Type-erases retry budget using [`Arc`].
-    pub fn arc(self) -> ArcRetryBudget
+    pub fn arc(self) -> ArcRetrySettings
     where
         S: 'static,
         D: 'static,
     {
-        RetryBudget {
+        RetrySettings {
             strategy: Arc::new(self.strategy),
             deadline: Arc::new(self.deadline),
         }
@@ -147,8 +147,8 @@ impl<S: RetryStrategy, D: RetryDeadline> RetryBudget<S, D> {
 
     /// Returns a retry budget that borrows
     /// the current one.
-    pub fn as_ref(&self) -> RetryBudget<&'_ S, &'_ D> {
-        RetryBudget {
+    pub fn as_ref(&self) -> RetrySettings<&'_ S, &'_ D> {
+        RetrySettings {
             strategy: &self.strategy,
             deadline: &self.deadline,
         }
@@ -660,7 +660,7 @@ mod tests {
 
     #[tokio::test]
     async fn dont_retry_dont_retries() {
-        let retry_budget = RetryBudget::dont_retry();
+        let retry_budget = RetrySettings::dont_retry();
 
         assert!(
             tokio::time::timeout(
@@ -704,12 +704,12 @@ mod tests {
     async fn combine_first_fail() {
         let first_trap = WaitTrap::new();
         let last_trap = WaitTrap::new();
-        let retry_budget = RetryBudget::new(&first_trap)
+        let retry_settings = RetrySettings::new(&first_trap)
             .with(DontRetry)
             .with(&last_trap);
 
         assert!(
-            retry_budget
+            retry_settings
                 .wait_retry(&RetryState::init())
                 .await
                 .is_break()

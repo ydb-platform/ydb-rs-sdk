@@ -13,7 +13,7 @@ use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::grpc_wrapper::raw_query_service::transaction_control::{
     RawTxMode, begin_tx_control, tx_id_control,
 };
-use crate::retry_budget::ArcRetryBudget;
+use crate::retry_budget::ArcRetrySettings;
 use crate::traces::helpers::ensure_len_string;
 
 use crate::types::Value;
@@ -69,7 +69,7 @@ pub(crate) struct CallOptions {
 pub(crate) struct ClientExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub session_pool: SessionPool,
-    pub retry_budget: ArcRetryBudget,
+    pub retry_settings: ArcRetrySettings,
 }
 
 #[derive(Clone, Debug)]
@@ -373,9 +373,9 @@ pub(crate) async fn client_begin_stream(
     opts: CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
-    ctx.retry_budget
+    ctx.retry_settings
         .as_ref()
-        .deadline(opts.timeout)
+        .with_deadline(opts.timeout)
         .retry_on_retriable_errors(
             opts.idempotent.unwrap_or(false).into(),
             closure!([&ctx, &text, &params, &opts], |_| client_begin_stream_once(

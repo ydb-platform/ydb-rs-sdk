@@ -215,9 +215,9 @@ async fn client_fetch_script_results(
     opts: CallOptions,
 ) -> YdbResult<FetchScriptResult> {
     // FetchScriptResults is always safe to retry (aligned with Go SDK).
-    ctx.retry_budget
+    ctx.retry_settings
         .as_ref()
-        .deadline(opts.timeout)
+        .with_deadline(opts.timeout)
         .retry_on_retriable_errors(
             Idempotency::Idempotent,
             closure!([&ctx, &operation_id, &fetch_token, &opts], async |_| {

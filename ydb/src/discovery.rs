@@ -21,7 +21,7 @@ use crate::grpc_wrapper::{
     raw_discovery_client::{EndpointInfo, GrpcDiscoveryClient},
     raw_services::Service,
 };
-use crate::retry_budget::{RetryBudget, RetryState};
+use crate::retry_budget::{RetrySettings, RetryState};
 use crate::waiter::Waiter;
 use crate::{YdbError, closure};
 
@@ -372,7 +372,7 @@ impl DiscoverySharedState {
         });
 
         loop {
-            let result = RetryBudget::with_default_backoff()
+            let result = RetrySettings::with_default_backoff()
                 .retry_indefinitely(closure!([&state], async |retry: &RetryState| {
                     let Some(state) = state.upgrade() else {
                         // Break out of the worker loop

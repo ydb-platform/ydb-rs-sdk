@@ -3,7 +3,7 @@ use tracing::trace;
 use crate::client::TimeoutSettings;
 use crate::errors::YdbResult;
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::retry_budget::ArcRetryBudget;
+use crate::retry_budget::ArcRetrySettings;
 use crate::session::{NodePinnedTableClient, TableSession};
 
 use super::pool::{SessionPool, spawn_pool_release};
@@ -13,19 +13,19 @@ use super::pool::{SessionPool, spawn_pool_release};
 pub(crate) struct TableSessionPool {
     pool: SessionPool,
     connection_manager: GrpcConnectionManager,
-    retry_budget: ArcRetryBudget,
+    retry_settings: ArcRetrySettings,
 }
 
 impl TableSessionPool {
     pub(crate) fn from_shared(
         pool: SessionPool,
         connection_manager: GrpcConnectionManager,
-        retry_budget: ArcRetryBudget,
+        retry_settings: ArcRetrySettings,
     ) -> Self {
         Self {
             pool,
             connection_manager,
-            retry_budget,
+            retry_settings,
         }
     }
 
@@ -33,8 +33,8 @@ impl TableSessionPool {
         &self.connection_manager
     }
 
-    pub(crate) fn retry_budget(&self) -> &ArcRetryBudget {
-        &self.retry_budget
+    pub(crate) fn retry_settings(&self) -> &ArcRetrySettings {
+        &self.retry_settings
     }
 
     pub(crate) async fn session(&self) -> YdbResult<TableSession> {
@@ -75,7 +75,7 @@ mod test {
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-    use crate::retry_budget::RetryBudget;
+    use crate::retry_budget::RetrySettings;
     use crate::session_pool::{SessionPool, SessionPoolSettings};
     use http::Uri;
     use std::time::Duration;
@@ -101,7 +101,7 @@ mod test {
         let pool = TableSessionPool::from_shared(
             bench_pool(),
             bench_connection_manager(),
-            RetryBudget::default().arc(),
+            RetrySettings::default().arc(),
         );
         let first_session = pool.session().await?;
 

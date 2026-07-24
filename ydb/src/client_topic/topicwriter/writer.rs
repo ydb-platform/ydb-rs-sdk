@@ -83,7 +83,7 @@ impl TopicWriter {
         let cancellation_token = CancellationToken::new();
         let cancel_on_drop = cancellation_token.clone().drop_guard();
 
-        let retrier = writer_options.retry_budget.clone();
+        let retrier = writer_options.retry_settings.clone();
 
         let (fatal_error_tx, fatal_error_rx) = oneshot::channel();
         let status_validator = if tx_identity.is_some() {
@@ -97,7 +97,7 @@ impl TopicWriter {
             producer_id: producer_id.clone(),
             connection_manager,
             cancellation_token: cancellation_token.clone(),
-            retry_budget: retrier,
+            retry_settings: retrier,
             fatal_error_tx,
             flush_timeout: writer_options.flush_timeout,
             executor,

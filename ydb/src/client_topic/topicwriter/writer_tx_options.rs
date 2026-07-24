@@ -3,7 +3,7 @@ use std::sync::Arc;
 use derive_builder::Builder;
 
 use crate::client_topic::compression::{CodecSelection, CompressionEncoder};
-use crate::retry_budget::{DontRetry, RetryBudget};
+use crate::retry_budget::{DontRetry, RetrySettings};
 use crate::{TopicWriterOptions, errors};
 
 #[derive(Builder, Clone)]
@@ -36,7 +36,7 @@ impl TopicWriterTxOptions {
             // Writers in transaction should have empty producer_id!
             .producer_id("".to_string())
             // Current WriterTx should not reconnect
-            .retry_budget(RetryBudget::new(DontRetry).arc())
+            .retry_settings(RetrySettings::new(DontRetry).arc())
             .codec_selector(self.codec_selector)
             .build();
 

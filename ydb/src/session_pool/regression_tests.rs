@@ -1,7 +1,7 @@
 //! Regression tests for session-pool corner cases found during PR #501 / native-table SLO work.
 
 use super::pool::{SessionPool, SessionPoolSettings};
-use crate::{GrpcOptions, errors::YdbError, retry_budget::RetryBudget};
+use crate::{GrpcOptions, errors::YdbError, retry_budget::RetrySettings};
 
 #[tokio::test]
 async fn warm_up_partial_keeps_successful_sessions() {
@@ -91,7 +91,7 @@ async fn bad_session_marks_table_session_non_poolable() {
             MultiInterceptor::new(),
             GrpcOptions::default(),
         ),
-        RetryBudget::default().arc(),
+        RetrySettings::default().arc(),
     );
 
     let mut session = pool.session().await.expect("lease table session");
