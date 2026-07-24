@@ -153,9 +153,14 @@ impl Queue {
             _ = self.wait_for_messages_to_be_acknowledged() => flush_result_rx.await?,
         }
     }
+
+    #[cfg(test)]
+    pub(super) async fn lock(&self) -> tokio::sync::MutexGuard<'_, QueueInner> {
+        self.inner.lock().await
+    }
 }
 
-struct QueueInner {
+pub(super) struct QueueInner {
     message_queue: MessageQueue,
     reception_queue: ReceptionQueue,
     is_open_for_new_messages: bool,
