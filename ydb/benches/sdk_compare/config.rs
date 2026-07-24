@@ -6,12 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::payload::HEADER_SIZE_BYTES;
 
-pub(crate) const SCHEMA_VERSION: u32 = 1;
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Scenario {
-    pub(crate) schema_version: u32,
     pub(crate) name: String,
     pub(crate) execution: Execution,
     pub(crate) workload: Workload,
@@ -33,12 +30,6 @@ impl Scenario {
     }
 
     fn validate(&self) -> Result<()> {
-        ensure!(
-            self.schema_version == SCHEMA_VERSION,
-            "unsupported schema_version {}; expected {}",
-            self.schema_version,
-            SCHEMA_VERSION
-        );
         ensure!(
             !self.name.trim().is_empty(),
             "scenario name must not be empty"
@@ -100,6 +91,8 @@ pub(crate) struct TopicWorkload {
     pub(crate) reader_count: usize,
     pub(crate) message_size_bytes: usize,
     pub(crate) max_in_flight_per_writer: usize,
+    pub(crate) write_batch_max_messages: usize,
+    pub(crate) write_batch_max_delay_ms: u64,
     pub(crate) partition_write_speed_bytes_per_second: i64,
 }
 
@@ -132,6 +125,14 @@ impl TopicWorkload {
         ensure!(
             self.max_in_flight_per_writer > 0,
             "max_in_flight_per_writer must be greater than zero"
+        );
+        ensure!(
+            self.write_batch_max_messages == 1,
+            "write_batch_max_messages must be 1 for comparable SDK writes"
+        );
+        ensure!(
+            self.write_batch_max_delay_ms > 0,
+            "write_batch_max_delay_ms must be greater than zero"
         );
         ensure!(
             self.partition_write_speed_bytes_per_second > 0,
