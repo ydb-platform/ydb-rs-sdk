@@ -21,12 +21,12 @@ use crate::{AsyncFnMut, RefWithLifetime, YdbResult, closure, errors::Idempotency
 
 /// Retry budget.
 #[derive(Debug, Clone, Copy)]
-pub struct RetryBudget<S, D> {
+pub struct RetryBudget<S, D = NoDeadline> {
     strategy: S,
     deadline: D,
 }
 
-impl RetryBudget<ExponentialBackoff, NoDeadline> {
+impl RetryBudget<ExponentialBackoff> {
     /// Constructs a retry budget with default
     /// exponential backoff without any deadlines.
     pub fn with_default_backoff() -> Self {
@@ -34,6 +34,13 @@ impl RetryBudget<ExponentialBackoff, NoDeadline> {
             strategy: ExponentialBackoff::default(),
             deadline: NoDeadline,
         }
+    }
+}
+
+impl RetryBudget<DontRetry> {
+    /// Constructs a retry budget that allows no retries.
+    pub fn dont_retry() -> Self {
+        Self::new(DontRetry)
     }
 }
 
@@ -49,7 +56,7 @@ pub type BoxRetryBudget = RetryBudget<Box<dyn RetryStrategy>, Box<dyn RetryDeadl
 /// Alias for reference-counted type-erased retry budget.
 pub type ArcRetryBudget = RetryBudget<Arc<dyn RetryStrategy>, Arc<dyn RetryDeadline>>;
 
-impl<S: RetryStrategy> RetryBudget<S, NoDeadline> {
+impl<S: RetryStrategy> RetryBudget<S> {
     /// Constructs a retry budget from a retry strategy.
     pub fn new(strategy: S) -> Self {
         Self {
@@ -81,13 +88,6 @@ impl<S: RetryStrategy> RetryBudget<S, NoDeadline> {
     }
 }
 
-impl RetryBudget<DontRetry, NoDeadline> {
-    /// Constructs a retry budget that allows no retries.
-    pub fn dont_retry() -> Self {
-        Self::new(DontRetry)
-    }
-}
-
 impl<S: RetryStrategy, D: RetryDeadline> RetryBudget<S, D> {
     pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -113,8 +113,8 @@ impl<S: RetryStrategy, D: RetryDeadline> RetryBudget<S, D> {
 
     /// Adds another retry wait strategy on top of existing strategies.
     ///
-    /// Waits are applied sequentially.
-    pub fn and_then<T: RetryStrategy>(self, wait: T) -> RetryBudget<Combine<S, T>, D> {
+    /// Their delays are applied in parallel.
+    pub fn with<T: RetryStrategy>(self, wait: T) -> RetryBudget<Combine<S, T>, D> {
         RetryBudget {
             strategy: Combine(self.strategy, wait),
             deadline: self.deadline,
@@ -598,8 +598,13 @@ pub struct Combine<A, B>(A, B);
 #[async_trait]
 impl<A: RetryStrategy, B: RetryStrategy> RetryStrategy for Combine<A, B> {
     async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
-        self.0.wait_retry(retry).await?;
-        self.1.wait_retry(retry).await
+        let (result, other_future) =
+            future::select(self.0.wait_retry(retry), self.1.wait_retry(retry))
+                .await
+                .into_inner();
+
+        result?;
+        other_future.await
     }
 }
 
@@ -700,8 +705,8 @@ mod tests {
         let first_trap = WaitTrap::new();
         let last_trap = WaitTrap::new();
         let retry_budget = RetryBudget::new(&first_trap)
-            .and_then(DontRetry)
-            .and_then(&last_trap);
+            .with(DontRetry)
+            .with(&last_trap);
 
         assert!(
             retry_budget
