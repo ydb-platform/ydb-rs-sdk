@@ -1,14 +1,21 @@
+use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
+use tokio::task::{JoinError, JoinSet};
+use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
 use crate::Framework;
 use crate::framework::Workload;
-use crate::helpers::{TimeoutOutcome, new_rate_limiter, run_workers_for, timeout_or_cancel};
-use crate::metrics::{OPERATION_MESSAGE_RTT, OPERATION_READ, OPERATION_WRITE};
+use crate::helpers::{RateLimiter, new_rate_limiter};
+use crate::metrics::{OPERATION_READ, OPERATION_WRITE};
 
 use super::{Params, TopicService, verification};
+
+const WORKER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+
+type WorkerResult = Result<Infallible, String>;
 
 pub struct TopicWorkload<T: TopicService> {
     fw: Arc<Framework>,
@@ -46,26 +53,25 @@ impl<T: TopicService + 'static> Workload for TopicWorkload<T> {
             readers.len(),
         ));
 
-        let write_handle = spawn_writer_workers(
-            ctx.clone(),
+        let mut workers = JoinSet::new();
+
+        spawn_writer_workers(
+            &mut workers,
             self.fw.clone(),
             writers,
             self.params.write_rps,
             self.params.write_timeout,
         );
 
-        let read_handle = spawn_reader_workers(
-            ctx.clone(),
+        spawn_reader_workers(
+            &mut workers,
             self.fw.clone(),
             readers,
-            self.params.read_rps,
-            self.params.read_timeout,
-            self.params.commit_delay,
+            self.params.delivery_timeout,
+            self.params.commit_timeout,
         );
 
-        let _ = tokio::join!(write_handle, read_handle);
-
-        Ok(())
+        supervise_workers(ctx, workers).await
     }
 
     async fn teardown(&self, _ctx: &CancellationToken) -> Result<(), String> {
@@ -80,124 +86,158 @@ impl<T: TopicService + 'static> Workload for TopicWorkload<T> {
 }
 
 fn spawn_writer_workers(
-    ctx: CancellationToken,
+    workers: &mut JoinSet<WorkerResult>,
     fw: Arc<Framework>,
     writers: Vec<ydb::TopicWriter>,
     rps: u32,
     timeout: Duration,
-) -> tokio::task::JoinHandle<()> {
+) {
     let limiter = Arc::new(new_rate_limiter(rps));
 
-    tokio::spawn(run_workers_for(writers.into_iter().map(move |writer| {
-        let ctx = ctx.clone();
-        let fw = fw.clone();
-        let limiter = limiter.clone();
-
-        move || async move {
-            let mut seq_no: i64 = 1;
-
-            while !ctx.is_cancelled() {
-                if let Err(wait) = limiter.try_wait() {
-                    tokio::time::sleep(wait).await;
-                    continue;
-                }
-
-                let payload = format!("{seq_no}").into_bytes();
-                seq_no = seq_no.wrapping_add(1);
-
-                let message = ydb::TopicWriterMessage::builder().data(payload).build();
-
-                let span = fw.metrics.start(OPERATION_WRITE);
-                match timeout_or_cancel(&ctx, timeout, writer.write(message)).await {
-                    TimeoutOutcome::Completed(Ok(())) => span.finish(None, 1),
-                    TimeoutOutcome::Completed(Err(err)) => {
-                        let msg = err.to_string();
-                        span.finish(Some(&msg), 1);
-                        fw.logger.errorf(format!("write failed: {msg}"));
-                    }
-                    TimeoutOutcome::TimedOut => {
-                        span.finish(Some("write timeout"), 1);
-                        fw.logger.errorf("write failed: timeout");
-                    }
-                    TimeoutOutcome::Cancelled => {
-                        span.cancel();
-                        break;
-                    }
-                }
-            }
-        }
-    })))
+    for writer in writers {
+        workers.spawn(writer_worker(fw.clone(), writer, limiter.clone(), timeout));
+    }
 }
 
 fn spawn_reader_workers(
-    ctx: CancellationToken,
+    workers: &mut JoinSet<WorkerResult>,
     fw: Arc<Framework>,
     readers: Vec<ydb::TopicReader>,
-    rps: u32,
-    timeout: Duration,
-    commit_delay: Duration,
-) -> tokio::task::JoinHandle<()> {
-    let limiter = Arc::new(new_rate_limiter(rps));
+    delivery_timeout: Duration,
+    commit_timeout: Duration,
+) {
     let messages_order = Arc::new(verification::MessagesOrder::default());
     let offsets_order = Arc::new(verification::OffsetOrder::default());
 
-    tokio::spawn(run_workers_for(readers.into_iter().map(move |reader| {
-        let ctx = ctx.clone();
-        let fw = fw.clone();
-        let limiter = limiter.clone();
+    for (worker_id, reader) in readers.into_iter().enumerate() {
+        workers.spawn(reader_worker(
+            worker_id,
+            fw.clone(),
+            reader,
+            messages_order.clone(),
+            offsets_order.clone(),
+            delivery_timeout,
+            commit_timeout,
+        ));
+    }
+}
 
-        let reader = Arc::new(tokio::sync::Mutex::new(reader));
-        let messages_order = messages_order.clone();
-        let offset_order = offsets_order.clone();
+async fn supervise_workers(
+    ctx: &CancellationToken,
+    mut workers: JoinSet<WorkerResult>,
+) -> Result<(), String> {
+    tokio::select! {
+        _ = ctx.cancelled() => {
+            workers.abort_all();
+            timeout(WORKER_SHUTDOWN_TIMEOUT, workers.shutdown())
+                .await
+                .map_err(|_| "topic workers did not stop after cancellation".to_string())?;
+            Ok(())
+        }
+        joined = workers.join_next() => unexpected_worker_exit(joined),
+    }
+}
 
-        move || async move {
-            while !ctx.is_cancelled() {
-                if let Err(wait) = limiter.try_wait() {
-                    tokio::time::sleep(wait).await;
-                    continue;
-                }
+fn unexpected_worker_exit(joined: Option<Result<WorkerResult, JoinError>>) -> Result<(), String> {
+    match joined {
+        Some(Ok(Err(err))) => Err(err),
+        Some(Ok(Ok(never))) => match never {},
+        Some(Err(err)) => Err(format!("topic worker task failed: {err}")),
+        None => Err("topic worker set is empty".to_string()),
+    }
+}
 
-                let span = fw.metrics.start(OPERATION_READ);
+async fn writer_worker(
+    fw: Arc<Framework>,
+    writer: ydb::TopicWriter,
+    limiter: Arc<RateLimiter>,
+    operation_timeout: Duration,
+) -> WorkerResult {
+    let mut seq_no: i64 = 1;
 
-                match timeout_or_cancel(&ctx, timeout, reader.lock().await.read_batch()).await {
-                    TimeoutOutcome::Completed(Ok(mut batch)) => {
-                        if let Err(err) =
-                            process_batch(&fw, &messages_order, &offset_order, &mut batch).await
-                        {
-                            fw.logger.errorf(format!("invariant violated: {err}"));
-                            span.finish(Some(&err), 1);
-                            continue;
-                        }
+    loop {
+        limiter.wait().await;
 
-                        spawn_commit(
-                            fw.clone(),
-                            reader.clone(),
-                            offset_order.clone(),
-                            batch.partition_id(),
-                            batch.offset(),
-                            batch.get_commit_marker(),
-                            commit_delay,
-                        );
+        let payload = format!("{seq_no}").into_bytes();
+        seq_no = seq_no.wrapping_add(1);
 
-                        span.finish(None, 1)
-                    }
-                    TimeoutOutcome::Completed(Err(err)) => {
-                        let msg = err.to_string();
-                        span.finish(Some(&msg), 1);
-                        fw.logger.errorf(format!("read failed: {msg}"));
-                    }
-                    TimeoutOutcome::TimedOut => {
-                        span.finish(Some("read timeout"), 1);
-                        fw.logger.errorf("read failed: timeout");
-                    }
-                    TimeoutOutcome::Cancelled => {
-                        span.cancel();
-                        break;
-                    }
-                }
+        let message = ydb::TopicWriterMessage::builder().data(payload).build();
+        let span = fw.metrics.start(OPERATION_WRITE);
+
+        match timeout(operation_timeout, writer.write_with_ack(message)).await {
+            Ok(Ok(_)) => span.finish(None, 1),
+            Ok(Err(err)) => {
+                let msg = err.to_string();
+                span.finish(Some(&msg), 1);
+                fw.logger.errorf(format!("write failed: {msg}"));
+                return Err(format!("writer failed: {msg}"));
+            }
+            Err(_) => {
+                span.finish(Some("write timeout"), 1);
+                fw.logger.errorf("write failed: timeout");
             }
         }
-    })))
+    }
+}
+
+async fn reader_worker(
+    worker_id: usize,
+    fw: Arc<Framework>,
+    mut reader: ydb::TopicReader,
+    messages_order: Arc<verification::MessagesOrder>,
+    offset_order: Arc<verification::OffsetOrder>,
+    delivery_timeout: Duration,
+    commit_timeout: Duration,
+) -> WorkerResult {
+    loop {
+        let delivery_span = fw.metrics.start(OPERATION_READ);
+        let mut batch = match timeout(delivery_timeout, reader.read_batch()).await {
+            Ok(Ok(batch)) => batch,
+            Ok(Err(err)) => {
+                let msg = err.to_string();
+                delivery_span.finish(Some(&msg), 1);
+                fw.logger.errorf(format!("read failed: {msg}"));
+                return Err(format!("reader {worker_id} failed: {msg}"));
+            }
+            Err(_) => {
+                delivery_span.finish(Some("message delivery timeout"), 1);
+                fw.logger.errorf("read failed: message delivery timeout");
+                continue;
+            }
+        };
+
+        if let Err(err) = process_batch(&fw, &messages_order, &offset_order, &mut batch).await {
+            delivery_span.finish(Some(&err), 1);
+            return Err(format!("reader {worker_id} invariant violated: {err}"));
+        }
+
+        // A delivered batch is not a completed read operation until
+        // its offset commit is acknowledged. The commit span below
+        // records that single successful operation.
+        delivery_span.cancel();
+
+        let partition_id = batch.partition_id();
+        let end_offset = batch.offset();
+        let commit_marker = batch.get_commit_marker();
+        let span = fw.metrics.start(OPERATION_READ);
+
+        match timeout(commit_timeout, reader.commit_with_ack(commit_marker)).await {
+            Ok(Ok(())) => {
+                offset_order.insert(partition_id, end_offset);
+                span.finish(None, 1);
+            }
+            Ok(Err(err)) => {
+                let msg = err.to_string();
+                span.finish(Some(&msg), 1);
+                fw.logger
+                    .errorf(format!("commit acknowledgement failed: {msg}"));
+            }
+            Err(_) => {
+                span.finish(Some("commit acknowledgement timeout"), 1);
+                fw.logger.errorf("commit acknowledgement failed: timeout");
+            }
+        }
+    }
 }
 
 async fn process_batch(
@@ -206,8 +246,6 @@ async fn process_batch(
     offset_order: &verification::OffsetOrder,
     batch: &mut ydb::TopicReaderBatch,
 ) -> Result<(), String> {
-    let now = std::time::SystemTime::now();
-
     for message in batch.messages.iter_mut() {
         let payload = message
             .read_and_take()
@@ -225,49 +263,25 @@ async fn process_batch(
 
         messages_order.insert(message)?;
         offset_order.ack_message(message)?;
-        log_message_rtt_latency(fw, message, now)?;
+        record_topic_e2e_latency(fw, message)?;
     }
 
     Ok(())
 }
 
-fn log_message_rtt_latency(
+fn record_topic_e2e_latency(
     fw: &Framework,
     message: &ydb::TopicReaderMessage,
-    now: std::time::SystemTime,
 ) -> Result<(), String> {
     let created_at = message
         .created_at
         .ok_or_else(|| "message has no timestamp".to_string())?;
 
-    let latency = now
+    let latency = std::time::SystemTime::now()
         .duration_since(created_at)
         .map_err(|e| format!("message timestamp in the future: {e}"))?;
 
-    fw.metrics
-        .record_latency_with_operation(OPERATION_MESSAGE_RTT, latency);
+    fw.metrics.record_topic_e2e_latency(latency);
 
     Ok(())
-}
-
-fn spawn_commit(
-    fw: Arc<Framework>,
-    reader: Arc<tokio::sync::Mutex<ydb::TopicReader>>,
-    offset_order: Arc<verification::OffsetOrder>,
-
-    partition_id: i64,
-    offset: i64,
-
-    commit_marker: ydb::TopicReaderCommitMarker,
-    commit_delay: Duration,
-) {
-    tokio::spawn(async move {
-        tokio::time::sleep(commit_delay).await;
-        let handle = reader.lock().await.commit_with_ack(commit_marker);
-
-        match handle.await {
-            Ok(()) => offset_order.insert(partition_id, offset),
-            Err(err) => fw.logger.printf(format!("commit not acked: {err}")),
-        }
-    });
 }
