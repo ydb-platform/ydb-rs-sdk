@@ -100,8 +100,9 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
     /// combined with [`.idempotent(true)`](Self::idempotent). Without `.timeout()`, retries
     /// continue until a non-retryable error.
     ///
-    /// For [`QueryStream`](Self) the timeout bounds opening the gRPC stream and any retries;
+    /// For [`QueryStream`](`query()`) the timeout bounds opening the gRPC stream and any retries;
     /// iterating result sets is not bounded by this value.
+    ///  For one-shot builders (`exec` / `query_row` / `query_result_set`) the timeout covers retries.
     ///
     /// Inside [`retry_tx`](crate::QueryClient::retry_tx), per-call `.timeout()` is capped by
     /// the remaining `retry_tx` deadline.

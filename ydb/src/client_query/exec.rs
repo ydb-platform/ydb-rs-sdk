@@ -107,7 +107,7 @@ pub(crate) struct TransactionExecContext {
     pub retry_deadline: Option<Instant>,
 }
 
-fn resolve_idempotent(opts: &CallOptions) -> bool {
+pub(super) fn resolve_idempotent(opts: &CallOptions) -> bool {
     opts.idempotent.unwrap_or(false)
 }
 
@@ -397,7 +397,7 @@ async fn client_implicit_session_request(
 }
 
 #[instrument(name = "ydb.Query.BeginStreamOnce", skip_all, fields(db.system.name = "ydb"), err)]
-async fn client_begin_stream_once(
+pub(super) async fn client_begin_stream_once(
     ctx: &ClientExecContext,
     text: &str,
     params: &HashMap<String, Value>,

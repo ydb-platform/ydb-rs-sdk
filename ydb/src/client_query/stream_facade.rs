@@ -7,7 +7,8 @@ use crate::result::ResultSet;
 use crate::types::Value;
 
 use super::exec::{
-    CallOptions, apply_stream_tx_id, finish_pooled_query_stream, resolve_commit_tx,
+    CallOptions, ClientExecContext, apply_stream_tx_id, client_begin_stream_once,
+    finish_pooled_query_stream, resolve_commit_tx, resolve_idempotent, run_with_retry,
     transaction_finish_committed_via_query, transaction_mark_invalidated_on_query_error,
 };
 use super::internal::ExecCoreRef;
@@ -98,7 +99,41 @@ impl QueryStream<'_> {
 ///
 /// Used by one-shot builders (`exec`, `query_result_set`, `query_row`) on both
 /// [`QueryClient`](super::QueryClient) and [`Transaction`](super::Transaction).
+///
+/// On [`QueryClient`], the full open+drain+close cycle is retried on retryable errors.
+/// Interactive transactions are materialized once since tx retries are owned by [`QueryClient::retry_tx`] loop.
 pub(crate) async fn materialize_query(
+    core: &mut ExecCoreRef<'_>,
+    text: String,
+    params: HashMap<String, Value>,
+    opts: CallOptions,
+) -> YdbResult<Vec<ResultSet>> {
+    match core {
+        ExecCoreRef::Client(ctx) => {
+            let idempotent = resolve_idempotent(&opts);
+            run_with_retry(&ctx.retry_control, &opts, idempotent, || {
+                materialize_client_once(ctx, &text, &params, &opts)
+            })
+            .await
+        }
+        ExecCoreRef::Transaction(_) => materialize_transaction_once(core, text, params, opts).await,
+    }
+}
+
+async fn materialize_client_once(
+    ctx: &ClientExecContext,
+    text: &str,
+    params: &HashMap<String, Value>,
+    opts: &CallOptions,
+) -> YdbResult<Vec<ResultSet>> {
+    let mut stream = client_begin_stream_once(ctx, text, params, opts, true).await?;
+    let sets = collect_result_sets(&mut stream).await?;
+    stream.close().await.map_err(YdbError::from)?;
+    finish_pooled_query_stream(&mut stream);
+    Ok(sets)
+}
+
+async fn materialize_transaction_once(
     core: &mut ExecCoreRef<'_>,
     text: String,
     params: HashMap<String, Value>,
@@ -107,20 +142,15 @@ pub(crate) async fn materialize_query(
     let commit_tx = resolve_commit_tx(core, &opts);
     let result: YdbResult<Vec<ResultSet>> = async {
         let mut stream = core.begin_stream(text, params, opts, true).await?;
-        let raw_sets = match stream.materialize_all_result_sets().await {
-            Ok(v) => v,
-            Err(err) => {
-                let ydb_err = YdbError::from(err);
+        let sets = match collect_result_sets(&mut stream).await {
+            Ok(sets) => sets,
+            Err(ydb_err) => {
                 if let ExecCoreRef::Transaction(ctx) = core {
                     transaction_mark_invalidated_on_query_error(ctx, &ydb_err);
                 }
                 return Err(ydb_err);
             }
         };
-        let mut sets = Vec::with_capacity(raw_sets.len());
-        for raw in raw_sets {
-            sets.push(ResultSet::try_from(raw)?);
-        }
         match stream.close().await {
             Ok(meta) => {
                 finish_pooled_query_stream(&mut stream);
@@ -150,6 +180,18 @@ pub(crate) async fn materialize_query(
     }
 
     result
+}
+
+async fn collect_result_sets(stream: &mut ExecuteQueryStream) -> YdbResult<Vec<ResultSet>> {
+    let raw_sets = stream
+        .materialize_all_result_sets()
+        .await
+        .map_err(YdbError::from)?;
+    let mut sets = Vec::with_capacity(raw_sets.len());
+    for raw in raw_sets {
+        sets.push(ResultSet::try_from(raw)?);
+    }
+    Ok(sets)
 }
 
 #[derive(Debug, Default)]
