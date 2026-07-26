@@ -100,10 +100,9 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
     /// combined with [`.idempotent(true)`](Self::idempotent). Without `.timeout()`, retries
     /// continue until a non-retryable error.
     ///
-    /// For [`QueryStream`](`query()`) the timeout bounds opening the gRPC stream and any retries;
-    /// iterating result sets is not bounded by this value.
-    ///  For one-shot builders (`exec` / `query_row` / `query_result_set`) the timeout covers retries.
-    ///
+    /// On [`QueryClient`], retryable one-shot calls retry the full open+drain+close cycle.
+    /// Calls inside interactive transactions are materialized once; transaction retries are
+    /// owned by the [`QueryClient::retry_tx`] loop.
     /// Inside [`retry_tx`](crate::QueryClient::retry_tx), per-call `.timeout()` is capped by
     /// the remaining `retry_tx` deadline.
     pub fn timeout(mut self, timeout: Duration) -> Self {

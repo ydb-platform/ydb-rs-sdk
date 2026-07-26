@@ -412,23 +412,39 @@ pub(super) async fn client_begin_stream_once(
         return Ok(ExecuteQueryStream::new(stream));
     }
 
-    let lease = ctx.session_pool.acquire_explicit().await?;
-    let mut pooled_lease = Some(lease);
-    let lease_ref = pooled_lease
-        .as_mut()
-        .expect("lease set on successful acquire");
-    let (mut client, req) =
-        client_pooled_explicit_request(ctx, lease_ref, text, params, opts, concurrent_result_sets)
-            .await?;
-    let stream = client.execute_query(req).await.map_err(YdbError::from)?;
-    let mut stream = ExecuteQueryStream::new(stream);
-    if let Some(lease) = pooled_lease.take() {
-        stream = stream.with_session_guard(PooledQuerySessionGuard {
+    let mut lease = ctx.session_pool.acquire_explicit().await?;
+
+    let (mut client, req) = match client_pooled_explicit_request(
+        ctx,
+        &mut lease,
+        text,
+        params,
+        opts,
+        concurrent_result_sets,
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            lease.handle_pool_error(&err);
+            lease.end_use();
+            return Err(err);
+        }
+    };
+    let stream = match client.execute_query(req).await.map_err(YdbError::from) {
+        Ok(stream) => stream,
+        Err(err) => {
+            lease.handle_pool_error(&err);
+            lease.end_use();
+            return Err(err);
+        }
+    };
+    Ok(
+        ExecuteQueryStream::new(stream).with_session_guard(PooledQuerySessionGuard {
             lease,
             rpc_finished: false,
-        });
-    }
-    Ok(stream)
+        }),
+    )
 }
 
 async fn client_pooled_explicit_request(
