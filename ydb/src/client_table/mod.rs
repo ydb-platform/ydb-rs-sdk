@@ -265,7 +265,11 @@ impl TableClient {
             &opts,
             resolve_idempotent(&opts, true),
             || async {
-                let (arrow_schema, arrow_data) = first_payload.lock().unwrap().take().map_or_else(
+                let payload = first_payload
+                    .lock()
+                    .map_err(|_| YdbError::custom("Arrow bulk upsert payload lock poisoned"))?
+                    .take();
+                let (arrow_schema, arrow_data) = payload.map_or_else(
                     || crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(&batch),
                     Ok,
                 )?;

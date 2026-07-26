@@ -4003,7 +4003,6 @@ dependencies = [
  "async-trait",
  "async_once",
  "bon",
- "bytes",
  "chrono",
  "decimal-rs",
  "derivative",
