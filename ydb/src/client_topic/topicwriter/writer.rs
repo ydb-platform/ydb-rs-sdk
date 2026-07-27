@@ -28,11 +28,12 @@ pub struct TopicWriter {
     _cancel_on_drop: DropGuard,
 }
 
-pub struct AckFuture {
+/// A pending acknowledgement for a submitted Topic write.
+pub struct TopicWriterAckFuture {
     receiver: oneshot::Receiver<YdbResult<MessageWriteStatus>>,
 }
 
-impl Future for AckFuture {
+impl Future for TopicWriterAckFuture {
     type Output = YdbResult<MessageWriteStatus>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -151,12 +152,15 @@ impl TopicWriter {
     }
 
     #[instrument(name = "ydb.TopicWriter.WriteWithAckFuture", skip_all, fields(db.system.name = "ydb"), err)]
-    pub async fn write_with_ack_future(&self, message: TopicWriterMessage) -> YdbResult<AckFuture> {
+    pub async fn write_with_ack_future(
+        &self,
+        message: TopicWriterMessage,
+    ) -> YdbResult<TopicWriterAckFuture> {
         let (tx, rx) = oneshot::channel();
 
         self.write_message(message, Some(tx)).await?;
 
-        Ok(AckFuture { receiver: rx })
+        Ok(TopicWriterAckFuture { receiver: rx })
     }
 
     async fn write_message(
