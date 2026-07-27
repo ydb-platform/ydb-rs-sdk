@@ -127,8 +127,8 @@ impl TopicWorkload {
             "max_in_flight_per_writer must be greater than zero"
         );
         ensure!(
-            self.write_batch_max_messages == 1,
-            "write_batch_max_messages must be 1 for comparable SDK writes"
+            self.write_batch_max_messages > 0,
+            "write_batch_max_messages must be greater than zero"
         );
         ensure!(
             self.write_batch_max_delay_ms > 0,

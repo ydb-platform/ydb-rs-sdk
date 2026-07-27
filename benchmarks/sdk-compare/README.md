@@ -46,7 +46,6 @@ invalid fields are rejected.
 
 ```json
 {
-  "schema_version": 1,
   "name": "topic-single-thread",
   "execution": {
     "worker_threads": 1,
@@ -63,12 +62,13 @@ invalid fields are rejected.
     "reader_count": 4,
     "message_size_bytes": 1024,
     "max_in_flight_per_writer": 100,
+    "write_batch_max_messages": 1,
+    "write_batch_max_delay_ms": 1,
     "partition_write_speed_bytes_per_second": 52428800
   }
 }
 ```
 
-`schema_version` versions the complete scenario and result protocol.
 `worker_threads` controls benchmark-owned executor threads, not threads created
 inside an SDK. Single-thread therefore means one application executor thread,
 not one process-wide CPU.
@@ -82,9 +82,11 @@ already exists.
 Each partition has `writers_per_partition` writers pinned to it. Writer `i` for
 partition `p` uses producer ID `sdk-compare-writer-{p}-{i}` and normal SDK
 sequence numbering. `max_in_flight_per_writer` is enforced independently for
-every writer; SDK batching and transport defaults remain untouched. Readers
-subscribe to the entire topic, use normal SDK/server partition assignment, and
-commit every delivered SDK batch.
+every writer. `write_batch_max_messages` and `write_batch_max_delay_ms`
+configure SDK write-request batching. Other transport settings keep their SDK
+defaults. Readers subscribe to the entire topic, use normal SDK/server
+partition assignment, and commit every delivered SDK batch. Commit
+acknowledgements are recorded asynchronously and do not backpressure reading.
 
 ## Timeline
 
