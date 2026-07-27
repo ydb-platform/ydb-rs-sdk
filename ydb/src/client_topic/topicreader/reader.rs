@@ -1,8 +1,11 @@
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use futures_util::Future;
+use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -27,6 +30,42 @@ use crate::{YdbError, YdbResult};
 use super::reader_tx::TopicReaderTx;
 use super::reconnector::{Reconnector, ReconnectorTask};
 use super::runtime::RuntimeHandle;
+
+/// A pending acknowledgement for a submitted Topic reader commit.
+pub struct TopicReaderCommitAckFuture {
+    state: TopicReaderCommitAckState,
+}
+
+enum TopicReaderCommitAckState {
+    Waiting(oneshot::Receiver<YdbResult<()>>),
+    Failed(YdbError),
+    Completed,
+}
+
+impl Future for TopicReaderCommitAckFuture {
+    type Output = YdbResult<()>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let result = match &mut self.state {
+            TopicReaderCommitAckState::Waiting(receiver) => match Pin::new(receiver).poll(cx) {
+                Poll::Ready(Ok(result)) => result,
+                Poll::Ready(Err(_)) => Err(YdbError::custom(
+                    "commit channel was closed without error message",
+                )),
+                Poll::Pending => return Poll::Pending,
+            },
+            TopicReaderCommitAckState::Failed(error) => Err(error.clone()),
+            TopicReaderCommitAckState::Completed => {
+                return Poll::Ready(Err(YdbError::custom(
+                    "commit acknowledgement future was polled after completion",
+                )));
+            }
+        };
+
+        self.state = TopicReaderCommitAckState::Completed;
+        Poll::Ready(result)
+    }
+}
 
 pub struct TopicReader {
     pub(super) manager: GrpcConnectionManager,
@@ -123,19 +162,13 @@ impl TopicReader {
     pub fn commit_with_ack(
         &mut self,
         commit_marker: TopicReaderCommitMarker,
-    ) -> impl Future<Output = YdbResult<()>> + use<> {
-        let ack = self.runtime.commit(commit_marker);
+    ) -> TopicReaderCommitAckFuture {
+        let state = match self.runtime.commit(commit_marker) {
+            Ok(receiver) => TopicReaderCommitAckState::Waiting(receiver),
+            Err(error) => TopicReaderCommitAckState::Failed(error),
+        };
 
-        async {
-            let ack = ack?;
-
-            match ack.await {
-                Ok(res) => res,
-                Err(_) => Err(YdbError::custom(
-                    "commit channel was closed without error message",
-                )),
-            }
-        }
+        TopicReaderCommitAckFuture { state }
     }
 
     pub(super) fn runtime_handle(&self) -> RuntimeHandle {

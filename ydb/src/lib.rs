@@ -138,7 +138,8 @@ pub use client_topic::topicreader::messages::{
 };
 // full enum pub types
 pub use client_topic::topicreader::reader::{
-    TopicReader, TopicReaderCommitMarker, TopicSelector, TopicSelectorBuilder, TopicSelectors,
+    TopicReader, TopicReaderCommitAckFuture, TopicReaderCommitMarker, TopicSelector,
+    TopicSelectorBuilder, TopicSelectors,
 };
 pub use client_topic::topicreader::reader_options::{
     TopicReaderOptions, TopicReaderOptionsBuilder,
@@ -146,11 +147,14 @@ pub use client_topic::topicreader::reader_options::{
 pub use client_topic::topicreader::reader_tx::TopicReaderTx;
 // full enum pub types
 pub use client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMessageBuilder};
+pub use client_topic::topicwriter::message_write_status::{
+    MessageSkipReason, MessageWriteInTxInfo, MessageWriteInfo, MessageWriteStatus,
+};
 // full enum pub types
 pub use client_topic::topicwriter::partitioning::PartitioningStrategy;
 // full enum pub types
 pub use client_topic::compression::{CompressionDecoder, CompressionEncoder, Executor};
-pub use client_topic::topicwriter::writer::TopicWriter;
+pub use client_topic::topicwriter::writer::{TopicWriter, TopicWriterAckFuture};
 pub use client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
 };
