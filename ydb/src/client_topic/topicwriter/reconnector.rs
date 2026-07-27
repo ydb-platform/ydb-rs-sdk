@@ -480,6 +480,7 @@ impl ReconnectionLoop {
 mod tests {
     use std::{sync::Arc, time::Duration};
 
+    use futures_util::FutureExt;
     use tokio::sync::{Mutex, watch};
     use tokio_util::sync::CancellationToken;
 
@@ -522,12 +523,11 @@ mod tests {
 
         let queue_lock = reconnector.queue.lock().await;
 
-        tokio::select! {biased;
-            result = reconnector.add_message(message, None) => {
-                panic!("add_message unexpectedly completed: {result:?}");
-            },
-            _ = async {} => {},
-        };
+        let result = reconnector.add_message(message, None).now_or_never();
+        assert!(
+            result.is_none(),
+            "add_message unexpectedly completed: {result:?}"
+        );
 
         drop(queue_lock);
 
@@ -544,12 +544,11 @@ mod tests {
 
         let queue_lock = reconnector.queue.lock().await;
 
-        tokio::select! {biased;
-            result = reconnector.add_message(message, None) => {
-                panic!("add_message unexpectedly completed: {result:?}");
-            },
-            _ = async {} => {},
-        };
+        let result = reconnector.add_message(message, None).now_or_never();
+        assert!(
+            result.is_none(),
+            "add_message unexpectedly completed: {result:?}"
+        );
 
         drop(queue_lock);
 
