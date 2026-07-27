@@ -3,9 +3,12 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use tokio::task::JoinSet;
 use tokio::time::sleep_until;
-use ydb::{TopicClient, TopicReader, TopicReaderMessage, TopicReaderOptions, TopicSelector};
+use ydb::{
+    TopicClient, TopicReader, TopicReaderCommitAckFuture, TopicReaderMessage, TopicReaderOptions,
+    TopicSelector,
+};
 
-use super::BenchmarkSchedule;
+use super::{AckLatencyStart, BenchmarkSchedule};
 use crate::config::TopicWorkload;
 use crate::metrics::LatencyRecorder;
 use crate::payload;
@@ -13,6 +16,11 @@ use crate::payload;
 pub(super) struct ReaderMetrics {
     pub(super) end_to_end: LatencyRecorder,
     pub(super) commit_ack: LatencyRecorder,
+}
+
+struct PendingCommit {
+    acknowledgement: TopicReaderCommitAckFuture,
+    latency_start: AckLatencyStart,
 }
 
 impl ReaderMetrics {
@@ -72,14 +80,21 @@ async fn run_reader(mut reader: TopicReader, schedule: BenchmarkSchedule) -> Res
     let measurement_start_ns = schedule.ns_at(schedule.measurement_start)?;
     let measurement_end = schedule.measurement_end;
 
-    let (pending_acks_tx, mut pending_acks_rx) = tokio::sync::mpsc::unbounded_channel();
+    // Ordered commit acknowledgements must not backpressure message delivery.
+    let (pending_commits_tx, mut pending_commits_rx) =
+        tokio::sync::mpsc::unbounded_channel::<PendingCommit>();
 
     let ack_recorder_task = tokio::spawn(async move {
         let mut ack_latency = LatencyRecorder::new()?;
 
-        while let Some(pending_ack) = pending_acks_rx.recv().await {
-            if let Some(elapsed) = pending_ack.await? {
-                ack_latency.record(elapsed)?;
+        while let Some(pending_commit) = pending_commits_rx.recv().await {
+            pending_commit
+                .acknowledgement
+                .await
+                .context("commit acknowledgement failed")?;
+
+            if let AckLatencyStart::Measured(started_at) = pending_commit.latency_start {
+                ack_latency.record(started_at.elapsed())?;
             }
         }
 
@@ -97,7 +112,7 @@ async fn run_reader(mut reader: TopicReader, schedule: BenchmarkSchedule) -> Res
 
         let delivered_at_ns = schedule.now_ns()?;
         let marker = batch.get_commit_marker();
-        let measured_batch = process_batch(
+        let contains_measured_messages = record_end_to_end_latencies(
             batch.messages,
             delivered_at_ns,
             measurement_start_ns,
@@ -105,17 +120,24 @@ async fn run_reader(mut reader: TopicReader, schedule: BenchmarkSchedule) -> Res
         )
         .await?;
 
-        let started = Instant::now();
-        let ack = reader.commit_with_ack(marker);
+        let commit_started_at = Instant::now();
+        let acknowledgement = reader.commit_with_ack(marker);
+        let latency_start = if contains_measured_messages {
+            AckLatencyStart::Measured(commit_started_at)
+        } else {
+            AckLatencyStart::Warmup
+        };
 
-        pending_acks_tx.send(async move {
-            ack.await?;
-            anyhow::Ok(measured_batch.then_some(started.elapsed()))
-        })?;
+        pending_commits_tx
+            .send(PendingCommit {
+                acknowledgement,
+                latency_start,
+            })
+            .context("commit acknowledgement recorder stopped")?;
     }
 
     // Close the channel so the acknowledgement recorder can finish.
-    drop(pending_acks_tx);
+    drop(pending_commits_tx);
 
     let commit_ack = ack_recorder_task
         .await
@@ -127,13 +149,13 @@ async fn run_reader(mut reader: TopicReader, schedule: BenchmarkSchedule) -> Res
     })
 }
 
-async fn process_batch(
+async fn record_end_to_end_latencies(
     messages: Vec<TopicReaderMessage>,
     delivered_at_ns: u64,
     measurement_start_ns: u64,
     end_to_end: &mut LatencyRecorder,
 ) -> Result<bool> {
-    let mut measured_batch = false;
+    let mut contains_measured_messages = false;
     for mut message in messages {
         let data = message
             .read_and_take()
@@ -145,11 +167,11 @@ async fn process_batch(
             continue;
         }
 
-        measured_batch = true;
+        contains_measured_messages = true;
         let latency_ns = delivered_at_ns
             .checked_sub(sent_at_ns)
             .context("payload timestamp is ahead of the benchmark clock")?;
         end_to_end.record(Duration::from_nanos(latency_ns))?;
     }
-    Ok(measured_batch)
+    Ok(contains_measured_messages)
 }

@@ -131,6 +131,12 @@ pub(super) struct BenchmarkSchedule {
     pub(super) completion_deadline: Instant,
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum AckLatencyStart {
+    Warmup,
+    Measured(Instant),
+}
+
 impl BenchmarkSchedule {
     fn new(
         warmup_duration: Duration,
