@@ -11,6 +11,7 @@ coverage:
 
 ignore:
   - ydb-grpc/src/generated
+  - ydb/benches
   - ydb/examples
   - tests/slo
 
