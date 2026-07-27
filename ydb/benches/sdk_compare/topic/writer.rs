@@ -1,27 +1,39 @@
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task::JoinSet;
-use ydb::{PartitioningStrategy, TopicClient, TopicWriter, TopicWriterMessage, TopicWriterOptions};
+use tokio::time::sleep_until;
+use ydb::{
+    MessageSkipReason, MessageWriteStatus, PartitioningStrategy, TopicClient, TopicWriter,
+    TopicWriterAckFuture, TopicWriterMessage, TopicWriterOptions,
+};
 
-use super::BenchmarkSchedule;
+use super::{AckLatencyStart, BenchmarkSchedule};
 use crate::config::TopicWorkload;
 use crate::metrics::LatencyRecorder;
 use crate::payload;
 
 #[derive(Clone, Copy)]
-struct WriterSettings {
+struct WriterTaskSettings {
     message_size_bytes: usize,
     max_in_flight: usize,
 }
 
-impl WriterSettings {
+impl WriterTaskSettings {
     fn new(workload: &TopicWorkload) -> Self {
         Self {
             message_size_bytes: workload.message_size_bytes,
             max_in_flight: workload.max_in_flight_per_writer,
         }
     }
+}
+
+struct PendingWrite {
+    acknowledgement: TopicWriterAckFuture,
+    latency_start: AckLatencyStart,
+    _concurrency_permit: OwnedSemaphorePermit,
 }
 
 pub(super) struct WriterMetrics {
@@ -84,7 +96,7 @@ pub(super) async fn run(
     schedule: BenchmarkSchedule,
     workload: &TopicWorkload,
 ) -> Result<WriterMetrics> {
-    let settings = WriterSettings::new(workload);
+    let settings = WriterTaskSettings::new(workload);
     let mut tasks = JoinSet::new();
     for writer in writers {
         tasks.spawn(run_writer(writer, schedule, settings));
@@ -102,16 +114,25 @@ pub(super) async fn run(
 async fn run_writer(
     writer: TopicWriter,
     schedule: BenchmarkSchedule,
-    settings: WriterSettings,
+    settings: WriterTaskSettings,
 ) -> Result<WriterMetrics> {
-    let (pending_acks_tx, mut pending_acks_rx) = tokio::sync::mpsc::channel(settings.max_in_flight);
+    let write_slots = Arc::new(Semaphore::new(settings.max_in_flight));
+    // The semaphore limits submitted writes; the channel only transfers ownership.
+    let (pending_writes_tx, mut pending_writes_rx) =
+        tokio::sync::mpsc::channel::<PendingWrite>(settings.max_in_flight);
 
     let ack_recorder_task = tokio::spawn(async move {
         let mut ack_latency = LatencyRecorder::new()?;
 
-        while let Some(pending_ack) = pending_acks_rx.recv().await {
-            if let Some(elapsed) = pending_ack.await? {
-                ack_latency.record(elapsed)?;
+        while let Some(pending_write) = pending_writes_rx.recv().await {
+            let status = pending_write
+                .acknowledgement
+                .await
+                .context("writer ack failed")?;
+            ensure_message_persisted(status)?;
+
+            if let AckLatencyStart::Measured(started_at) = pending_write.latency_start {
+                ack_latency.record(started_at.elapsed())?;
             }
         }
 
@@ -120,36 +141,57 @@ async fn run_writer(
 
     // Keep one continuous pipeline across warm-up and measurement.
     loop {
+        let concurrency_permit = tokio::select! {
+            permit = Arc::clone(&write_slots).acquire_owned() => {
+                permit.context("write concurrency limiter was closed")?
+            }
+            () = sleep_until(schedule.measurement_end.into()) => break,
+        };
+
         // Allocate before starting the latency timer.
         let mut data = payload::allocate(settings.message_size_bytes)?;
-        let started = Instant::now();
-        if started >= schedule.measurement_end {
+        let write_started_at = Instant::now();
+        if write_started_at >= schedule.measurement_end {
             break;
         }
-        payload::write_timestamp(&mut data, schedule.ns_at(started)?)?;
+        payload::write_timestamp(&mut data, schedule.ns_at(write_started_at)?)?;
 
         let message = TopicWriterMessage::builder().data(data).build();
-        let ack = writer
+        let acknowledgement = writer
             .write_with_ack_future(message)
             .await
             .context("writer submission failed")?;
-        let measured = schedule.is_measurement_instant(started);
+        let latency_start = if schedule.is_measurement_instant(write_started_at) {
+            AckLatencyStart::Measured(write_started_at)
+        } else {
+            AckLatencyStart::Warmup
+        };
 
-        pending_acks_tx
-            .send(async move {
-                ack.await.context("writer ack failed")?;
-                anyhow::Ok(measured.then_some(started.elapsed()))
+        pending_writes_tx
+            .try_send(PendingWrite {
+                acknowledgement,
+                latency_start,
+                _concurrency_permit: concurrency_permit,
             })
-            .await?;
+            .context("failed to hand write to acknowledgement recorder")?;
     }
 
     // Close the channel so the acknowledgement recorder can finish.
-    drop(pending_acks_tx);
+    drop(pending_writes_tx);
 
-    let metrics = WriterMetrics {
-        write_ack: ack_recorder_task.await??,
-    };
+    let write_ack = ack_recorder_task
+        .await
+        .context("write acknowledgement recorder panicked or was cancelled")??;
+    let metrics = WriterMetrics { write_ack };
 
     writer.stop().await.context("failed to stop writer")?;
     Ok(metrics)
+}
+
+fn ensure_message_persisted(status: MessageWriteStatus) -> Result<()> {
+    match status {
+        MessageWriteStatus::Written(_)
+        | MessageWriteStatus::Skipped(MessageSkipReason::AlreadyWritten) => Ok(()),
+        other => bail!("message was not persisted: server returned {other:?}"),
+    }
 }
