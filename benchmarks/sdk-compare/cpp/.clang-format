@@ -1,0 +1,8 @@
+BasedOnStyle: Google
+ColumnLimit: 80
+IndentWidth: 4
+AccessModifierOffset: -4
+BinPackArguments: false
+BinPackParameters: OnePerLine
+BreakConstructorInitializers: BeforeComma
+PackConstructorInitializers: Never

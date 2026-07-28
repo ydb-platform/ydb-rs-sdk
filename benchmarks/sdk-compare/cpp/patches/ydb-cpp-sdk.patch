@@ -1,0 +1,126 @@
+diff --git a/include/ydb-cpp-sdk/client/topic/read_events.h b/include/ydb-cpp-sdk/client/topic/read_events.h
+index 04192b9c8..ecf86f686 100644
+--- a/include/ydb-cpp-sdk/client/topic/read_events.h
++++ b/include/ydb-cpp-sdk/client/topic/read_events.h
+@@ -6,6 +6,7 @@
+ 
+ #include <util/datetime/base.h>
+ 
++#include <span>
+ 
+ namespace NYdb::inline V3::NTopic {
+ 
+diff --git a/include/ydb-cpp-sdk/client/topic/write_session.h b/include/ydb-cpp-sdk/client/topic/write_session.h
+index eaeb061df..2fb684cc7 100644
+--- a/include/ydb-cpp-sdk/client/topic/write_session.h
++++ b/include/ydb-cpp-sdk/client/topic/write_session.h
+@@ -11,6 +11,8 @@
+ 
+ #include <util/generic/size_literals.h>
+ 
++#include <concepts>
++
+ namespace NYdb::inline V3::NTopic {
+ 
+ //! Result of close operation.
+diff --git a/src/client/export/CMakeLists.txt b/src/client/export/CMakeLists.txt
+index 929565bce..3761a16f2 100644
+--- a/src/client/export/CMakeLists.txt
++++ b/src/client/export/CMakeLists.txt
+@@ -6,6 +6,7 @@ target_link_libraries(client-ydb_export PUBLIC
+   api-grpc
+   api-protos
+   client-ydb_common_client-impl
++  impl-internal-make_request
+   client-ydb_driver
+   client-ydb_proto
+   client-types-operation
+diff --git a/src/client/helpers/CMakeLists.txt b/src/client/helpers/CMakeLists.txt
+index 827af2aa4..382ca8d15 100644
+--- a/src/client/helpers/CMakeLists.txt
++++ b/src/client/helpers/CMakeLists.txt
+@@ -6,6 +6,7 @@ target_link_libraries(client-helpers
+     client-types-credentials-oauth2
+     client-iam
+     client-types-credentials
++    client-ydb_driver
+ )
+ 
+ target_sources(client-helpers
+diff --git a/src/client/import/CMakeLists.txt b/src/client/import/CMakeLists.txt
+index 1083b26e2..c54c2872b 100644
+--- a/src/client/import/CMakeLists.txt
++++ b/src/client/import/CMakeLists.txt
+@@ -6,6 +6,7 @@ target_link_libraries(client-ydb_import PUBLIC
+   api-grpc
+   api-protos
+   client-ydb_common_client-impl
++  impl-internal-make_request
+   client-ydb_driver
+   client-ydb_proto
+   client-types-operation
+diff --git a/src/client/rate_limiter/CMakeLists.txt b/src/client/rate_limiter/CMakeLists.txt
+index c97574b49..7433c5f80 100644
+--- a/src/client/rate_limiter/CMakeLists.txt
++++ b/src/client/rate_limiter/CMakeLists.txt
+@@ -4,6 +4,7 @@ target_link_libraries(client-ydb_rate_limiter PUBLIC
+   yutil
+   api-grpc
+   client-ydb_common_client-impl
++  impl-internal-make_request
+   client-ydb_driver
+ )
+ 
+diff --git a/src/client/topic/impl/read_session_impl.ipp b/src/client/topic/impl/read_session_impl.ipp
+index c2a6c38e..ae61dc9f 100644
+--- a/src/client/topic/impl/read_session_impl.ipp
++++ b/src/client/topic/impl/read_session_impl.ipp
+@@ -1237,6 +1237,6 @@ inline void TSingleClusterReadSessionImpl<true>::OnReadDoneImpl(
+     } else {
+         pushRes = EventsQueue->PushEvent(
+             partitionStream,
+-            NPersQueue::TReadSessionEvent::TDestroyPartitionStreamEvent(std::move(partitionStream), msg.commit_offset()),
++            NPersQueue::TReadSessionEvent::TDestroyPartitionStreamEvent(partitionStream, msg.commit_offset()),
+             deferred);
+     }
+@@ -1437,7 +1437,7 @@ inline void TSingleClusterReadSessionImpl<false>::StopPartitionSessionImpl(
+         pushRes = EventsQueue->PushEvent(
+             partitionStream,
+             // TODO(qyryq) Is it safe to use GetMaxCommittedOffset here instead of StopPartitionSessionRequest.commmitted_offset?
+-            TReadSessionEvent::TStopPartitionSessionEvent(std::move(partitionStream), committedOffset),
++            TReadSessionEvent::TStopPartitionSessionEvent(partitionStream, committedOffset),
+             deferred);
+     } else {
+         // partitionStream->ConfirmDestroy();
+@@ -1726,6 +1726,6 @@ inline void TSingleClusterReadSessionImpl<false>::OnReadDoneImpl(
+     bool pushRes = EventsQueue->PushEvent(
+             partitionStream,
+-            TReadSessionEvent::TEndPartitionSessionEvent(std::move(partitionStream), std::move(adjacentPartitionIds), std::move(childPartitionIds)),
++            TReadSessionEvent::TEndPartitionSessionEvent(partitionStream, std::move(adjacentPartitionIds), std::move(childPartitionIds)),
+             deferred);
+     if (!pushRes) {
+         AbortImpl();
+@@ -1840,7 +1840,7 @@ void TSingleClusterReadSessionImpl<UseMigrationProtocol>::DestroyAllPartitionStr
+ 
+     for (auto&& [key, partitionStream] : PartitionStreams) {
+         bool pushRes = EventsQueue->PushEvent(partitionStream,
+-                                TClosedEvent(std::move(partitionStream), TClosedEvent::EReason::ConnectionLost),
++                                TClosedEvent(partitionStream, TClosedEvent::EReason::ConnectionLost),
+                                deferred);
+         if (!pushRes) {
+             AbortImpl();
+diff --git a/util/stream/output.cpp b/util/stream/output.cpp
+index 64a5d0db7..819b5281c 100644
+--- a/util/stream/output.cpp
++++ b/util/stream/output.cpp
+@@ -271,6 +271,10 @@ void Out<TNullPtr>(IOutputStream& o, TTypeTraits<TNullPtr>::TFuncParam) {
+ DEF_OPTIONAL(ui32);
+ DEF_OPTIONAL(i64);
+ DEF_OPTIONAL(ui64);
++#if defined(_darwin_) && defined(_64_)
++DEF_OPTIONAL(long long);
++DEF_OPTIONAL(unsigned long long);
++#endif
+ DEF_OPTIONAL(std::string);
+ DEF_OPTIONAL(TString);
+ DEF_OPTIONAL(TStringBuf);

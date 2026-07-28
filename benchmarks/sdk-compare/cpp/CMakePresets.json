@@ -1,0 +1,71 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "native",
+      "displayName": "Native release build",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../../../target/sdk-compare-cpp-native",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "FETCHCONTENT_BASE_DIR": "${sourceDir}/../../../target/sdk-compare-fetchcontent",
+        "Python3_EXECUTABLE": "$env{SDK_COMPARE_PYTHON_EXECUTABLE}",
+        "SDK_COMPARE_YDB_SDK_SOURCE": "$env{YDB_CPP_SDK_SOURCE}",
+        "YDB_SDK_ENABLE_OTEL_METRICS": "OFF",
+        "YDB_SDK_ENABLE_OTEL_TRACE": "OFF",
+        "YDB_SDK_EXAMPLES": "OFF",
+        "YDB_SDK_INSTALL": "OFF",
+        "YDB_SDK_TESTS": "OFF",
+        "YDB_SDK_USE_RAPID_JSON": "ON",
+        "YDB_SDK_USE_SYSTEM_GOOGLEAPIS": "OFF"
+      }
+    },
+    {
+      "name": "native-asan",
+      "displayName": "Native ASan and UBSan build",
+      "inherits": "native",
+      "binaryDir": "${sourceDir}/../../../target/sdk-compare-cpp-native-asan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "SDK_COMPARE_SANITIZERS": "address,undefined"
+      }
+    },
+    {
+      "name": "native-tsan",
+      "displayName": "Native TSan build",
+      "inherits": "native",
+      "binaryDir": "${sourceDir}/../../../target/sdk-compare-cpp-native-tsan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "SDK_COMPARE_SANITIZERS": "thread"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "native",
+      "configurePreset": "native",
+      "targets": [
+        "ydb-sdk-compare"
+      ],
+      "jobs": 8
+    },
+    {
+      "name": "native-asan",
+      "configurePreset": "native-asan",
+      "targets": [
+        "ydb-sdk-compare"
+      ],
+      "jobs": 8
+    },
+    {
+      "name": "native-tsan",
+      "configurePreset": "native-tsan",
+      "targets": [
+        "ydb-sdk-compare"
+      ],
+      "jobs": 8
+    }
+  ]
+}
