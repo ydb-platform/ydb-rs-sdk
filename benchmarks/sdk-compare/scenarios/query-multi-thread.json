@@ -1,0 +1,15 @@
+{
+  "name": "query-multi-thread",
+  "execution": {
+    "worker_threads": 4,
+    "warmup_seconds": 15,
+    "measurement_seconds": 60,
+    "drain_timeout_seconds": 30
+  },
+  "workload": {
+    "kind": "query",
+    "concurrent_requests": 4,
+    "row_count": 2500,
+    "payload_size_bytes": 1024
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "query-smoke",
+  "execution": {
+    "worker_threads": 1,
+    "warmup_seconds": 1,
+    "measurement_seconds": 2,
+    "drain_timeout_seconds": 10
+  },
+  "workload": {
+    "kind": "query",
+    "concurrent_requests": 1,
+    "row_count": 2500,
+    "payload_size_bytes": 1024
+  }
+}
