@@ -2,7 +2,7 @@ use anyhow::{Result, ensure};
 
 pub(crate) const HEADER_SIZE_BYTES: usize = 8;
 
-const FILL_BYTE: u8 = 0xA5;
+pub(crate) const FILL_BYTE: u8 = 0xA5;
 
 pub(crate) fn allocate(message_size_bytes: usize) -> Result<Vec<u8>> {
     ensure!(

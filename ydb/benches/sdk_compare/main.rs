@@ -2,6 +2,7 @@ mod config;
 mod connection;
 mod metrics;
 mod payload;
+mod query;
 mod result;
 mod schedule;
 mod topic;
@@ -25,7 +26,7 @@ fn main() -> Result<()> {
 
     let result = match &scenario.workload {
         Workload::Topic(workload) => runtime.block_on(topic::run(&scenario, workload))?,
-        Workload::Query(_) => bail!("Query workload execution is not implemented"),
+        Workload::Query(workload) => runtime.block_on(query::run(&scenario, workload))?,
     };
     let stdout = io::stdout();
     let mut output = stdout.lock();
