@@ -25,6 +25,7 @@ fn main() -> Result<()> {
 
     let result = match &scenario.workload {
         Workload::Topic(workload) => runtime.block_on(topic::run(&scenario, workload))?,
+        Workload::Query(_) => bail!("Query workload execution is not implemented"),
     };
     let stdout = io::stdout();
     let mut output = stdout.lock();

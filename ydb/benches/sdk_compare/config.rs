@@ -71,12 +71,14 @@ impl Execution {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum Workload {
     Topic(TopicWorkload),
+    Query(QueryWorkload),
 }
 
 impl Workload {
     fn validate(&self) -> Result<()> {
         match self {
             Self::Topic(topic) => topic.validate(),
+            Self::Query(query) => query.validate(),
         }
     }
 }
@@ -138,6 +140,34 @@ impl TopicWorkload {
             self.partition_write_speed_bytes_per_second > 0,
             "partition_write_speed_bytes_per_second must be greater than zero"
         );
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct QueryWorkload {
+    pub(crate) concurrent_requests: usize,
+    pub(crate) row_count: u64,
+    pub(crate) payload_size_bytes: usize,
+}
+
+impl QueryWorkload {
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            self.concurrent_requests > 0,
+            "concurrent_requests must be greater than zero"
+        );
+        ensure!(self.row_count > 0, "row_count must be greater than zero");
+        ensure!(
+            self.payload_size_bytes > 0,
+            "payload_size_bytes must be greater than zero"
+        );
+        let payload_size_bytes = u64::try_from(self.payload_size_bytes)
+            .context("payload_size_bytes does not fit into u64")?;
+        self.row_count
+            .checked_mul(payload_size_bytes)
+            .context("total query payload bytes overflowed")?;
         Ok(())
     }
 }
