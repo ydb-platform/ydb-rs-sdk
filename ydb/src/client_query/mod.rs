@@ -297,7 +297,8 @@ impl QueryClient {
             .await;
 
         match result {
-            ControlFlow::Continue(err) | ControlFlow::Break(Err(err)) => Err(err),
+            ControlFlow::Continue(err) => Err(err.unwrap_or(YdbError::DeadlineExceeded.into())),
+            ControlFlow::Break(Err(err)) => Err(err),
             ControlFlow::Break(Ok(value)) => Ok(value),
         }
     }

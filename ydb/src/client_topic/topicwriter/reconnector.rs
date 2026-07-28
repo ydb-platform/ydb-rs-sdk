@@ -2,6 +2,7 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use futures_util::FutureExt;
 use tokio::sync::{Mutex, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -339,13 +340,21 @@ impl ReconnectionLoop {
     }
 
     async fn run(&mut self, fatal_error_tx: oneshot::Sender<YdbError>) {
+        let retry_settings = self.helper.retry_settings.clone();
+        let mut deadline = retry_settings.wait_deadline().boxed();
+
         let mut status = ReconnectionLoopStatus::RecreateStreamWriter;
 
         let final_result = loop {
             status = match status {
-                ReconnectionLoopStatus::HandleError(err) => self.handle_error(err).await,
+                ReconnectionLoopStatus::HandleError(err) => {
+                    RetrySettings::run_with_deadline(&mut deadline, self.handle_error(err))
+                        .await
+                        .unwrap_or(ReconnectionLoopStatus::Exit(None))
+                }
                 ReconnectionLoopStatus::RecreateStreamWriter => self.recreate_stream_writer().await,
                 ReconnectionLoopStatus::WaitForErrorOrCancellation(error_receiver) => {
+                    deadline = retry_settings.wait_deadline().boxed();
                     self.wait_for_error_or_cancellation(error_receiver).await
                 }
                 ReconnectionLoopStatus::Exit(err) => {
@@ -391,17 +400,15 @@ impl ReconnectionLoop {
 
         trace!("error, trying to reconnect: {err}");
 
-        match self.helper.wait_before_reconnect(&self.retry).await {
-            // Cancelled
-            None => ReconnectionLoopStatus::Exit(None),
+        match self.helper.retry_settings.wait_retry(&self.retry).await {
             // Retry budget blocked the retry
-            Some(ControlFlow::Break(())) => {
+            ControlFlow::Break(()) => {
                 ReconnectionLoopStatus::Exit(Some(YdbError::custom(format!(
                     "reconnect is not allowed after {} attempts for error: {err}",
                     self.retry.attempt,
                 ))))
             }
-            Some(ControlFlow::Continue(())) => ReconnectionLoopStatus::RecreateStreamWriter,
+            ControlFlow::Continue(()) => ReconnectionLoopStatus::RecreateStreamWriter,
         }
     }
 

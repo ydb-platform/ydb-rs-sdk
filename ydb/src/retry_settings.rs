@@ -3,8 +3,10 @@
 //! A [`RetrySettings`] instance is shared by all service clients created from
 //! the same [`Client`](crate::Client).
 
-use async_trait::async_trait;
-use futures_util::future;
+use futures_util::{
+    FutureExt,
+    future::{self, BoxFuture},
+};
 use rand::Rng;
 use std::{
     fmt::Debug,
@@ -17,15 +19,15 @@ use tokio::{sync::Semaphore, time::MissedTickBehavior};
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::{instrument, trace, warn};
 
-use crate::{AsyncFnMut, RefWithLifetime, YdbResult, closure, errors::Idempotency};
+use crate::{AsyncFnMut, RefWithLifetime, YdbError, YdbResult, closure, errors::Idempotency};
 
 /// Retry settings.
 ///
 /// Defines retry strategy and deadlines for retried operations.
 #[derive(Debug, Clone)]
 pub struct RetrySettings {
-    strategy: Arc<dyn RetryStrategy>,
-    deadline: Arc<dyn RetryDeadline>,
+    strategy: Arc<dyn BoxRetryStrategy>,
+    deadline: Arc<dyn BoxRetryDeadline>,
 }
 
 impl RetrySettings {
@@ -92,15 +94,33 @@ impl RetrySettings {
         }
     }
 
+    /// Waits for the deadline.
+    ///
+    /// Can be used to manually implement retry loop in difficult
+    /// cases. Not recommended to use. If you use it, make sure
+    /// that all your operations are aborted when deadline is exceeded.
+    /// Also make sure that the deadline is polled at the start of the loop.
+    pub(crate) async fn wait_deadline(&self) {
+        self.deadline.wait_deadline().await
+    }
+
+    /// Applies deadline for given retry loop future.
+    pub(crate) async fn run_with_deadline<D: Future<Output = ()>, F: Future>(
+        deadline: D,
+        f: F,
+    ) -> Option<F::Output> {
+        tokio::select! {
+            biased;
+            res = f => Some(res),
+            () = deadline => None
+        }
+    }
+
     /// Waits until retry or deadline.
     ///
     /// Returns whether to continue retries.
-    pub async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
-        tokio::select! {
-            biased;
-            () = self.deadline.wait_deadline() => ControlFlow::Break(()),
-            control_flow = self.strategy.wait_retry(retry) => control_flow
-        }
+    pub(crate) async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
+        self.strategy.wait_retry(retry).await
     }
 
     /// Makes an attempt with proper tracing.
@@ -109,7 +129,7 @@ impl RetrySettings {
         ydb.retry.backoff_ms = tracing::field::Empty,
         db.system.name = "ydb",
     ))]
-    async fn attempt<F: AsyncFnMut<RefWithLifetime<RetryState>>>(
+    pub(crate) async fn attempt<F: AsyncFnMut<RefWithLifetime<RetryState>>>(
         closure: &mut F,
         retry: &RetryState,
     ) -> F::Output {
@@ -120,51 +140,31 @@ impl RetrySettings {
     ///
     /// Calls `attempt_fn` until it returns [`ControlFlow::Break`]
     /// or the retrier asks to stop. Waits between retries.
-    pub async fn retry<B, C, F>(&self, mut attempt_fn: F) -> ControlFlow<B, C>
+    pub(crate) async fn retry<B, C, F>(&self, mut attempt_fn: F) -> ControlFlow<B, Option<C>>
     where
         F: AsyncFnMut<RefWithLifetime<RetryState>, Output = ControlFlow<B, C>>,
     {
-        let mut deadline_exceeded = pin!(self.deadline.wait_deadline());
-        let mut retry = RetryState::init();
+        let mut attempt_result = None;
+        let loop_result = Self::run_with_deadline(self.deadline.wait_deadline(), async {
+            let mut retry = RetryState::init();
 
-        loop {
-            let attempt_result = Self::attempt(&mut attempt_fn, &retry).await?;
+            loop {
+                attempt_result = Some(Self::attempt(&mut attempt_fn, &retry).await?);
 
-            let should_continue = tokio::select! {
-                biased;
-                () = &mut deadline_exceeded => false,
-                control_flow = self.strategy.wait_retry(&retry) => control_flow.is_continue()
-            };
+                let should_continue = self.strategy.wait_retry(&retry).await.is_continue();
 
-            if !should_continue {
-                return ControlFlow::Continue(attempt_result);
-            }
-
-            retry.attempt += 1;
-        }
-    }
-
-    /// Runs retry-wait loop retrying on errors.
-    pub async fn retry_on_errors<T, E, F>(&self, attempt_fn: F) -> Result<T, E>
-    where
-        F: AsyncFnMut<RefWithLifetime<RetryState>, Output = Result<T, E>>,
-        E: std::error::Error,
-    {
-        let result = self
-            .retry(closure!([attempt_fn], async |retry| {
-                match attempt_fn.call(retry).await {
-                    Ok(value) => ControlFlow::Break(value),
-                    Err(err) => {
-                        trace!("attempt failed: {err}");
-                        ControlFlow::Continue(err)
-                    }
+                if !should_continue {
+                    return ControlFlow::Continue(());
                 }
-            }))
-            .await;
 
-        match result {
-            ControlFlow::Break(value) => Ok(value),
-            ControlFlow::Continue(err) => Err(err),
+                retry.attempt += 1;
+            }
+        })
+        .await;
+
+        match loop_result {
+            Some(ControlFlow::Break(value)) => ControlFlow::Break(value),
+            Some(ControlFlow::Continue(())) | None => ControlFlow::Continue(attempt_result),
         }
     }
 
@@ -190,7 +190,8 @@ impl RetrySettings {
             .await;
 
         match result {
-            ControlFlow::Continue(err) | ControlFlow::Break(Err(err)) => Err(err),
+            ControlFlow::Continue(err) => Err(err.unwrap_or(YdbError::DeadlineExceeded)),
+            ControlFlow::Break(Err(err)) => Err(err),
             ControlFlow::Break(Ok(value)) => Ok(value),
         }
     }
@@ -222,21 +223,44 @@ impl RetryState {
 /// Retry strategy.
 ///
 /// Should be used with [`RetrySettings`].
-#[async_trait]
 pub trait RetryStrategy: Debug + Send + Sync + 'static {
     /// Returns a future that waits before the next retry.
     ///
     /// Note that the future can be created before the time it's polled.
     ///
     /// Its output tells whether to continue retries.
-    async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()>;
+    ///
+    /// Can be a mere `async` method, as long as its future
+    /// meets trait and lifetime bounds.
+    fn wait_retry<'a>(
+        &'a self,
+        retry: &'a RetryState,
+    ) -> impl Future<Output = ControlFlow<()>> + Send + 'a;
+}
+
+trait BoxRetryStrategy: Debug + Send + Sync + 'static {
+    fn wait_retry_boxed<'a>(&'a self, retry: &'a RetryState) -> BoxFuture<'a, ControlFlow<()>>;
+}
+
+impl RetryStrategy for Arc<dyn BoxRetryStrategy> {
+    fn wait_retry<'a>(
+        &'a self,
+        retry: &'a RetryState,
+    ) -> impl Future<Output = ControlFlow<()>> + Send + 'a {
+        self.wait_retry_boxed(retry)
+    }
+}
+
+impl<S: RetryStrategy> BoxRetryStrategy for S {
+    fn wait_retry_boxed<'a>(&'a self, retry: &'a RetryState) -> BoxFuture<'a, ControlFlow<()>> {
+        self.wait_retry(retry).boxed()
+    }
 }
 
 /// Retry strategy that doesn't allow retries.
 #[derive(Debug, Clone, Copy)]
 pub struct DontRetry;
 
-#[async_trait]
 impl RetryStrategy for DontRetry {
     async fn wait_retry(&self, _retry: &RetryState) -> ControlFlow<()> {
         ControlFlow::Break(())
@@ -336,7 +360,6 @@ impl ExponentialBackoff {
     }
 }
 
-#[async_trait]
 impl RetryStrategy for ExponentialBackoff {
     async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
         tokio::time::sleep(self.wait_duration(retry.attempt)).await;
@@ -344,14 +367,12 @@ impl RetryStrategy for ExponentialBackoff {
     }
 }
 
-#[async_trait]
 impl<S: RetryStrategy + ?Sized> RetryStrategy for Box<S> {
     async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
         S::wait_retry(&self, retry).await
     }
 }
 
-#[async_trait]
 impl<S: RetryStrategy + ?Sized> RetryStrategy for Arc<S> {
     async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
         S::wait_retry(&self, retry).await
@@ -416,7 +437,6 @@ impl RetriesPerSecond {
     }
 }
 
-#[async_trait]
 impl RetryStrategy for RetriesPerSecond {
     async fn wait_retry(&self, _retry: &RetryState) -> ControlFlow<()> {
         if let Some(semaphore) = self.semaphore.as_ref() {
@@ -452,7 +472,6 @@ impl RetryProbability {
     }
 }
 
-#[async_trait]
 impl RetryStrategy for RetryProbability {
     async fn wait_retry(&self, _retry: &RetryState) -> ControlFlow<()> {
         if rand::thread_rng().gen_range(0..100) < self.percent {
@@ -466,50 +485,63 @@ impl RetryStrategy for RetryProbability {
 /// Retry deadline.
 ///
 /// Should be used with [`RetrySettings`].
-#[async_trait]
 pub trait RetryDeadline: Debug + Send + Sync + 'static {
     /// Returns a future that waits for the retry deadline.
     ///
-    /// It can be called once per retry loop or each time
-    /// and should behave correctly in both cases.
+    /// It is called once per retry loop.
+    /// Its future is guaranteed to be polled at the start of the loop.
     ///
-    /// When it completes, retries should be stopped.
-    async fn wait_deadline(&self);
+    /// When it completes, attempts should be stopped.
+    ///
+    /// Can be a mere `async` method, as long as its future
+    /// meets trait and lifetime bounds.
+    fn wait_deadline(&self) -> impl Future<Output = ()> + Send + '_;
+}
+
+trait BoxRetryDeadline: Debug + Send + Sync + 'static {
+    fn wait_deadline_boxed(&self) -> BoxFuture<'_, ()>;
+}
+
+impl<D: RetryDeadline> BoxRetryDeadline for D {
+    fn wait_deadline_boxed(&self) -> BoxFuture<'_, ()> {
+        self.wait_deadline().boxed()
+    }
+}
+
+impl RetryDeadline for Arc<dyn BoxRetryDeadline> {
+    fn wait_deadline(&self) -> impl Future<Output = ()> + Send + '_ {
+        self.wait_deadline_boxed()
+    }
 }
 
 /// Retry deadline that is never exceeded.
 #[derive(Debug, Clone, Copy)]
-pub struct NoDeadline;
+struct NoDeadline;
 
-#[async_trait]
 impl RetryDeadline for NoDeadline {
     async fn wait_deadline(&self) {
         future::pending().await
     }
 }
 
-#[async_trait]
 impl RetryDeadline for Duration {
     async fn wait_deadline(&self) {
         tokio::time::sleep_until((Instant::now() + *self).into()).await
     }
 }
 
-#[async_trait]
 impl RetryDeadline for Instant {
     async fn wait_deadline(&self) {
         tokio::time::sleep_until((*self).into()).await
     }
 }
 
-#[async_trait]
 impl RetryDeadline for CancellationToken {
     async fn wait_deadline(&self) {
         self.cancelled().await
     }
 }
 
-#[async_trait]
 impl<D: RetryDeadline> RetryDeadline for Option<D> {
     async fn wait_deadline(&self) {
         match self {
@@ -519,38 +551,41 @@ impl<D: RetryDeadline> RetryDeadline for Option<D> {
     }
 }
 
-#[async_trait]
 impl<D: RetryDeadline + ?Sized> RetryDeadline for Box<D> {
-    async fn wait_deadline(&self) {
-        D::wait_deadline(&self).await
+    fn wait_deadline(&self) -> impl Future<Output = ()> + Send + '_ {
+        D::wait_deadline(&self)
     }
 }
 
-#[async_trait]
 impl<D: RetryDeadline + ?Sized> RetryDeadline for Arc<D> {
-    async fn wait_deadline(&self) {
-        D::wait_deadline(&self).await
+    fn wait_deadline(&self) -> impl Future<Output = ()> + Send + '_ {
+        D::wait_deadline(&self)
     }
 }
 
 /// Helper type for combining deadlines and retry strategies.
 #[derive(Debug)]
-pub struct Combine<A, B>(A, B);
+struct Combine<A, B>(A, B);
 
-#[async_trait]
 impl<A: RetryStrategy, B: RetryStrategy> RetryStrategy for Combine<A, B> {
     async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
-        let (result, other_future) =
-            future::select(self.0.wait_retry(retry), self.1.wait_retry(retry))
-                .await
-                .into_inner();
+        let first_future = pin!(self.0.wait_retry(retry));
+        let second_future = pin!(self.1.wait_retry(retry));
+        let select_result = future::select(first_future, second_future).await;
 
-        result?;
-        other_future.await
+        match select_result {
+            future::Either::Left((result, other_future)) => {
+                result?;
+                other_future.await
+            }
+            future::Either::Right((result, other_future)) => {
+                result?;
+                other_future.await
+            }
+        }
     }
 }
 
-#[async_trait]
 impl<A: RetryDeadline, B: RetryDeadline> RetryDeadline for Combine<A, B> {
     async fn wait_deadline(&self) {
         tokio::select! {
@@ -567,7 +602,6 @@ mod tests {
     #[derive(Debug)]
     struct ConstantBackoff(Duration);
 
-    #[async_trait]
     impl RetryStrategy for ConstantBackoff {
         async fn wait_retry(&self, _retry: &RetryState) -> ControlFlow<()> {
             tokio::time::sleep(self.0).await;
@@ -592,7 +626,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl RetryStrategy for WaitTrap {
         async fn wait_retry(&self, _retry: &RetryState) -> ControlFlow<()> {
             *self.waited.lock().unwrap() = true;

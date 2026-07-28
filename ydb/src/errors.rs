@@ -155,6 +155,12 @@ pub enum YdbError {
 
     /// Error from operation status
     YdbStatusError(YdbStatusError),
+
+    /// Attempt failed due to exceeded deadline.
+    ///
+    /// Occurs when the retried operation times out
+    /// on the first attempt.
+    DeadlineExceeded,
 }
 
 impl YdbError {
@@ -332,7 +338,7 @@ impl YdbError {
             | Self::NoRows
             | Self::EndpointHasNoHost(_) => NeedRetry::False,
             Self::TransportDial(_) => NeedRetry::True,
-            Self::Transport(_) => IdempotentOnly, // TODO: check when transport error created
+            Self::Transport(_) | Self::DeadlineExceeded => IdempotentOnly, // TODO: check when transport error created
             Self::TransportGRPCStatus(status) => {
                 use tonic::Code;
                 match status.code() {
