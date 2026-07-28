@@ -1,7 +1,11 @@
 .DS_Store
 Cargo.toml.bak
 /.idea
+/.direnv/
+/benchmarks/sdk-compare/.direnv/
 /target
+/benchmarks/sdk-compare/cpp/.cache/
+/benchmarks/sdk-compare/cpp/compile_commands.json
 /.run/
 key.json
 .env

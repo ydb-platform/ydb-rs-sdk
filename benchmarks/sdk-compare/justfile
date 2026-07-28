@@ -1,0 +1,74 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# Build the release benchmark and its local YDB C++ SDK.
+cpp-build:
+    @just _cpp-native-build native
+
+# Build and run the release benchmark. Defaults to local YDB.
+cpp-run scenario="scenarios/topic-smoke.json":
+    @just _cpp-native-build native >&2
+    @just _cpp-native-run native {{ quote(scenario) }}
+
+# Run native ASan and UBSan; defaults to the one-reader smoke scenario.
+cpp-asan scenario="scenarios/topic-smoke.json":
+    @just _cpp-native-build native-asan >&2
+    @ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:symbolize=1 \
+        UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+        just _cpp-native-run native-asan {{ quote(scenario) }}
+
+# Run native TSan on AMD64.
+cpp-tsan scenario="scenarios/topic-smoke.json":
+    @if [[ "$(uname -m)" != x86_64 ]]; then \
+        echo "TSan requires a native AMD64 host; use 'just cpp-asan' on this machine" >&2; \
+        exit 2; \
+    fi
+    @just _cpp-native-build native-tsan >&2
+    @TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1 \
+        just _cpp-native-run native-tsan {{ quote(scenario) }}
+
+_cpp-native-build preset:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    benchmark_root="$PWD"
+    repo_root="$(git rev-parse --show-toplevel)"
+    sdk_source="$repo_root/target/sdk-compare-ydb-cpp-sdk"
+    if [[ ! -d "$sdk_source" ]]; then
+        git clone https://github.com/ydb-platform/ydb-cpp-sdk.git "$sdk_source"
+        git -C "$sdk_source" checkout --detach 7e0839b71043ae4a6066ff934a62dd333d6cd265
+        git -C "$sdk_source" submodule update --init \
+            third_party/FastLZ \
+            third_party/aklomp-base64 \
+            third_party/api-common-protos \
+            third_party/jwt-cpp
+        git -C "$sdk_source" apply \
+            "$benchmark_root/cpp/patches/ydb-cpp-sdk.patch"
+    fi
+    cd cpp
+    YDB_CPP_SDK_SOURCE="$sdk_source" cmake --preset "{{ preset }}"
+    YDB_CPP_SDK_SOURCE="$sdk_source" \
+        cmake --build --preset "{{ preset }}"
+    if [[ "{{ preset }}" == native ]]; then
+        ln -sfn ../../../target/sdk-compare-cpp-native/compile_commands.json \
+            compile_commands.json
+    fi
+
+_cpp-native-run preset scenario:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    repo_root="$(git rev-parse --show-toplevel)"
+    scenario={{ quote(scenario) }}
+    if [[ ! -f "$scenario" ]]; then
+        echo "scenario does not exist: $scenario" >&2
+        exit 2
+    fi
+
+    if [[ -z "${YDB_CONNECTION_STRING:-}" ]]; then
+        if ! nc -z localhost 2136 >/dev/null 2>&1; then
+            docker compose --project-directory "$repo_root" \
+                up -d --wait ydb >&2
+        fi
+        export YDB_CONNECTION_STRING=grpc://localhost:2136/local
+        export YDB_ANONYMOUS_CREDENTIALS=1
+    fi
+    "$repo_root/target/sdk-compare-cpp-{{ preset }}/ydb-sdk-compare" \
+        "$scenario"
