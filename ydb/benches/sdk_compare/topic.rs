@@ -91,7 +91,7 @@ async fn run_workload(
     let write_messages_per_second = writer_metrics.write_ack.count() as f64 / seconds;
     let read_messages_per_second = reader_metrics.end_to_end.count() as f64 / seconds;
 
-    Ok(BenchmarkResult::new(
+    Ok(BenchmarkResult::topic(
         scenario.clone(),
         TopicMetrics {
             write_ack: writer_metrics.write_ack.summary(),
