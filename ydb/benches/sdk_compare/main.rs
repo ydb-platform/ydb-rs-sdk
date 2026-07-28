@@ -1,7 +1,9 @@
 mod config;
+mod connection;
 mod metrics;
 mod payload;
 mod result;
+mod schedule;
 mod topic;
 
 use std::env;
