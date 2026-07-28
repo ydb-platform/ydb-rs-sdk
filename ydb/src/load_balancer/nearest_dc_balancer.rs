@@ -57,7 +57,7 @@ impl Default for BalancerConfig {
 
 pub(crate) struct NearestDCBalancer {
     state_sender: Sender<Arc<DiscoveryState>>,
-    adjusting_proccess_token: CancellationToken,
+    adjusting_process_token: CancellationToken,
     waiter: Arc<WaiterImpl>,
     config: BalancerConfig,
     balancer_state: Arc<RwLock<BalancerState>>,
@@ -69,10 +69,10 @@ impl NearestDCBalancer {
         let discovery_state = Arc::new(DiscoveryState::default());
         let balancer_state = Arc::new(RwLock::new(BalancerState::default()));
         let balancer_state_updater = balancer_state.clone();
-        let (state_sender, state_reciever) = watch::channel(discovery_state.clone());
+        let (state_sender, state_receiver) = watch::channel(discovery_state.clone());
 
-        let adjusting_proccess_token = CancellationToken::new();
-        let adjusting_proccess_token_clone = adjusting_proccess_token.clone();
+        let adjusting_process_token = CancellationToken::new();
+        let adjusting_process_token_clone = adjusting_process_token.clone();
 
         let waiter = Arc::new(WaiterImpl::new());
         let waiter_clone = waiter.clone();
@@ -80,8 +80,8 @@ impl NearestDCBalancer {
         tokio::spawn(async move {
             Self::adjust_local_dc(
                 balancer_state_updater,
-                state_reciever,
-                adjusting_proccess_token_clone,
+                state_receiver,
+                adjusting_process_token_clone,
                 waiter_clone,
             )
             .await
@@ -89,7 +89,7 @@ impl NearestDCBalancer {
 
         Ok(Self {
             state_sender,
-            adjusting_proccess_token,
+            adjusting_process_token,
             waiter,
             config,
             balancer_state,
@@ -99,7 +99,7 @@ impl NearestDCBalancer {
 
 impl Drop for NearestDCBalancer {
     fn drop(&mut self) {
-        self.adjusting_proccess_token.cancel();
+        self.adjusting_process_token.cancel();
     }
 }
 
@@ -174,7 +174,7 @@ impl NearestDCBalancer {
 
     pub(super) async fn adjust_local_dc(
         balancer_state: Arc<RwLock<BalancerState>>,
-        mut state_reciever: watch::Receiver<Arc<DiscoveryState>>,
+        mut state_receiver: watch::Receiver<Arc<DiscoveryState>>,
         stop_ping_process: CancellationToken,
         waiter: Arc<WaiterImpl>,
     ) {
@@ -183,13 +183,13 @@ impl NearestDCBalancer {
                 _ = stop_ping_process.cancelled() => {
                     return
                 }
-                result = state_reciever.changed() =>{
+                result = state_receiver.changed() =>{
                     if result.is_err(){ // sender have been dropped
                         return
                     }
                 }
             }
-            let new_discovery_state = state_reciever.borrow_and_update().clone();
+            let new_discovery_state = state_receiver.borrow_and_update().clone();
             match Self::extract_nodes(&new_discovery_state) {
                 Ok(some_nodes) => {
                     let mut dc_to_nodes = Self::split_endpoints_by_location(some_nodes);
@@ -323,7 +323,7 @@ impl NearestDCBalancer {
 
         let (start_measure, _) = broadcast::channel::<()>(1);
         let buffer_cap = if addrs.len() == 0 { 1 } else { addrs.len() };
-        let (addr_sender, mut addr_reciever) = mpsc::channel::<String>(buffer_cap);
+        let (addr_sender, mut addr_receiver) = mpsc::channel::<String>(buffer_cap);
         let mut nursery = JoinSet::new();
 
         for addr in addrs {
@@ -358,7 +358,7 @@ impl NearestDCBalancer {
                     Self::join_all(&mut nursery).await; // Children will be cancelled due to tokens chaining
                     YdbResult::Err("cancelled".into())
                 }
-                address_option = addr_reciever.recv() =>{
+                address_option = addr_receiver.recv() =>{
                     match address_option {
                         Some(address) => {
                             interrupt_collector_future.cancel(); // Cancel other producing children

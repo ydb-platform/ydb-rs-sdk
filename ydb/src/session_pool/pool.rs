@@ -753,8 +753,8 @@ fn session_should_close(
 impl SessionPool {
     /// Explicit pool backed by in-memory stub sessions (no CreateSession / Attach / Delete RPC).
     pub(crate) fn new_explicit_bench(settings: SessionPoolSettings) -> Self {
+        use crate::GrpcOptions;
         use crate::grpc_connection_manager::GrpcConnectionManager;
-        use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
         use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
         use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 
@@ -769,8 +769,7 @@ impl SessionPool {
             ))),
             "bench".to_string(),
             MultiInterceptor::new(),
-            None,
-            DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+            GrpcOptions::default(),
         );
 
         let inner = Arc::new(SessionPoolInner {

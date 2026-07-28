@@ -1,6 +1,7 @@
 mod auth_token_sender;
 mod decompressor;
 mod grpc_streamer;
+pub(crate) mod ids;
 pub(crate) mod messages;
 pub(crate) mod partition_state;
 pub(crate) mod reader;

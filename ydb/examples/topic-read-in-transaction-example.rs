@@ -105,13 +105,11 @@ Topic Status: test_topic
 
 */
 
-use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tokio::time::timeout;
 use ydb::{
     ClientBuilder, ConsumerBuilder, CreateTopicOptionsBuilder, DescribeTopicOptionsBuilder,
-    TopicWriterMessage, TopicWriterOptions, YdbError, YdbResult,
+    TopicWriterMessage, TopicWriterOptions, Transaction, YdbError, YdbResult, closure,
 };
 
 /// Sets up the test environment including table and topic creation, and publishes test messages.
@@ -321,14 +319,9 @@ async fn main() -> YdbResult<()> {
     let query_client = client.query_client();
 
     // Create topic reader for the consumer
-    let reader = topic_client
+    let mut reader = topic_client
         .create_reader(consumer_name.to_string(), topic_path.clone())
         .await?;
-
-    // Wrap reader in Arc<Mutex> for thread safety within transaction retries
-    // IMPORTANT: Transaction retry can happen on different async tasks, so we need
-    // to ensure the reader can be safely shared across retry attempts
-    let reader_mutex = Arc::new(Mutex::new(reader));
 
     println!("Topic reader created successfully");
 
@@ -353,11 +346,9 @@ async fn main() -> YdbResult<()> {
         // IMPORTANT: The code inside this block can be executed MULTIPLE TIMES if retries occur!
         // Our approach prevents multiply side effects (like duplicate prints) during retries
         let result = query_client
-            .retry_tx(async |tx| {
-                let mut reader_guard = reader_mutex.lock().await;
-
+            .retry_tx(closure!([&mut reader], async |tx: &mut Transaction| {
                 let batch_result =
-                    timeout(Duration::from_secs(3), reader_guard.pop_batch_in_tx(tx)).await;
+                    timeout(Duration::from_secs(3), reader.pop_batch_in_tx(tx)).await;
 
                 match batch_result {
                         Ok(Ok(batch)) => {
@@ -402,7 +393,7 @@ async fn main() -> YdbResult<()> {
                             Ok(false) // Stop reading
                         }
                     }
-            })
+            }))
             .await;
 
         match result {
@@ -451,7 +442,7 @@ async fn main() -> YdbResult<()> {
     // 3. Makes the code more testable and modular
     // 4. Reduces transaction retry overhead
     let table_data = query_client
-        .retry_tx(async |tx| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             let mut stream = tx
                 .query(
                     "SELECT topic, partition, offset, body
@@ -479,7 +470,7 @@ async fn main() -> YdbResult<()> {
             stream.close().await?;
 
             Ok(rows)
-        })
+        }))
         .await;
 
     match table_data {

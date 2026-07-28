@@ -1,3 +1,5 @@
+use crate::YdbResult;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum QueryTxCommitStatus {
     /// The transaction definitely committed.
@@ -7,6 +9,11 @@ pub(crate) enum QueryTxCommitStatus {
     Aborted,
 }
 
-pub(crate) trait QueryTxHook: Send {
+#[async_trait::async_trait]
+pub(crate) trait QueryTxHook: Send + Sync + 'static {
+    async fn before_commit(&mut self) -> YdbResult<()> {
+        Ok(())
+    }
+
     fn after_commit(&mut self, status: QueryTxCommitStatus);
 }

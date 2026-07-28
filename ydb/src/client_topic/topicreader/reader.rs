@@ -14,6 +14,7 @@ use tracing::instrument;
 use crate::client_common::TokenCache;
 use crate::client_query::Transaction;
 use crate::client_topic::compression::Executor;
+use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
 use crate::client_topic::topicreader::messages::TopicReaderBatch;
 use crate::client_topic::topicreader::reader_options::TopicReaderOptions;
 use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -114,6 +115,10 @@ impl TopicReader {
 
     #[instrument(name = "ydb.TopicReader.ReadBatch", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn read_batch(&mut self) -> YdbResult<TopicReaderBatch> {
+        self.read_batch_inner().await
+    }
+
+    pub(super) async fn read_batch_inner(&mut self) -> YdbResult<TopicReaderBatch> {
         self.runtime.pop_batch(self.options.batch_size).await
     }
 
@@ -124,7 +129,7 @@ impl TopicReader {
     #[instrument(name = "ydb.TopicReader.PopBatchInTx", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn pop_batch_in_tx(&mut self, tx: &mut Transaction) -> YdbResult<TopicReaderBatch> {
         let (session_id, transaction_id) = tx.identity().await?;
-        let batch = self.read_batch().await?;
+        let batch = self.read_batch_inner().await?;
         self.update_offsets_in_transaction(&batch, session_id, transaction_id)
             .await?;
         Ok(batch)
@@ -199,7 +204,7 @@ impl TopicReader {
             topics: vec![RawTopicOffsets {
                 path: commit_marker.topic.clone(),
                 partitions: vec![RawPartitionOffsets {
-                    partition_id: commit_marker.partition_id,
+                    partition_id: commit_marker.partition_id.into_raw(),
                     partition_offsets: vec![RawOffsetsRange {
                         start: commit_marker.start_offset,
                         end: commit_marker.end_offset,
@@ -285,8 +290,8 @@ impl<S: Into<TopicSelector>> FromIterator<S> for TopicSelectors {
 
 #[derive(Clone, Debug)]
 pub struct TopicReaderCommitMarker {
-    pub(crate) partition_session_id: i64,
-    pub(crate) partition_id: i64,
+    pub(crate) partition_session_id: PartitionSessionId,
+    pub(crate) partition_id: PartitionId,
     pub(crate) start_offset: i64,
     pub(crate) end_offset: i64,
     pub(crate) topic: String,

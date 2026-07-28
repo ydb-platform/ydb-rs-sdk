@@ -14,6 +14,9 @@ mod stream_facade;
 mod integration_test;
 
 #[cfg(test)]
+mod query_hooks_integration_test;
+
+#[cfg(test)]
 mod session_pool_integration_test;
 
 #[cfg(test)]
@@ -172,9 +175,14 @@ impl QueryClient {
 
     /// Run a callback inside a retried interactive transaction.
     ///
+    /// The callback must implement [`RetryTxAttempt`] trait.
+    /// Currently it's only implemented for output of [`closure`](crate::closure)
+    /// macro. In future it can be implemented for plain asynchronous
+    /// closures when their traits are expressible enough to do it.
+    ///
     /// ```no_run
     /// # use std::time::Duration;
-    /// # use ydb::{AccessTokenCredentials, ClientBuilder, TxMode, YdbResultWithCustomerErr};
+    /// # use ydb::{AccessTokenCredentials, ClientBuilder, TxMode, YdbResultWithCustomerErr, closure};
     /// #
     /// # #[tokio::main]
     /// # async fn main() -> YdbResultWithCustomerErr<()> {
@@ -182,7 +190,7 @@ impl QueryClient {
     /// #     .with_credentials(AccessTokenCredentials::from("token"))
     /// #     .client()?;
     /// client.query_client()
-    ///     .retry_tx(async |_tx| Ok(()))
+    ///     .retry_tx(closure!(async |_tx| Ok(())))
     ///     .isolation(TxMode::SerializableReadWrite)
     ///     .timeout(Duration::from_secs(30))
     ///     .await?;
@@ -191,7 +199,7 @@ impl QueryClient {
     /// ```
     pub fn retry_tx<F, T>(&self, callback: F) -> RetryTxBuilder<'_, F, T>
     where
-        F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
+        F: RetryTxAttempt<T>,
     {
         RetryTxBuilder::new(self, callback)
     }
@@ -216,7 +224,7 @@ impl QueryClient {
         idempotent: bool,
     ) -> YdbResultWithCustomerErr<Option<T>>
     where
-        F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
+        F: RetryTxAttempt<T>,
     {
         use crate::retry_budget::{RetryPauseError, pause_before_retry};
         use exec::check_retry_tx_error;
@@ -227,9 +235,9 @@ impl QueryClient {
             tx: &mut Transaction,
         ) -> Result<Result<T, YdbOrCustomerError>, Box<dyn Any + Send>>
         where
-            F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
+            F: RetryTxAttempt<T>,
         {
-            AssertUnwindSafe(callback(tx)).catch_unwind().await
+            AssertUnwindSafe(callback.attempt(tx)).catch_unwind().await
         }
 
         let callback_result = try_attempt(callback, &mut tx).await;
@@ -298,7 +306,7 @@ impl QueryClient {
         idempotent: bool,
     ) -> YdbResultWithCustomerErr<T>
     where
-        F: AsyncFnMut(&mut Transaction) -> YdbResultWithCustomerErr<T>,
+        F: RetryTxAttempt<T>,
     {
         let start = Instant::now();
         let absolute_deadline = wall_timeout.map(|d| start + d);
@@ -382,7 +390,6 @@ impl QueryExecutor for QueryClient {
 
 pub struct Transaction {
     ctx: TransactionExecContext,
-    hooks: Vec<Box<dyn QueryTxHook>>,
 }
 
 impl Transaction {
@@ -401,7 +408,6 @@ impl Transaction {
                 options,
                 retry_deadline,
             ),
-            hooks: Vec::new(),
         }
     }
 
@@ -409,8 +415,8 @@ impl Transaction {
         self.ctx.tx_mode
     }
 
-    pub(crate) fn register_hook(&mut self, hook: impl QueryTxHook + 'static) {
-        self.hooks.push(Box::new(hook));
+    pub(crate) fn register_hook(&mut self, hook: impl QueryTxHook) {
+        self.ctx.hooks.push(Box::new(hook));
     }
 
     /// Explicitly open the transaction via `BeginTransaction` RPC.
@@ -451,7 +457,7 @@ impl Transaction {
     }
 
     fn notify_hooks(&mut self, status: QueryTxCommitStatus) {
-        for hook in &mut self.hooks {
+        for hook in &mut self.ctx.hooks {
             hook.after_commit(status);
         }
     }
@@ -532,7 +538,7 @@ pub use builders::{
     OptionalRow, OptionalRowBuilder, QueryExecutor, QueryRowBuilder, QueryStreamBuilder,
     ResultSetBuilder, Streamed,
 };
-pub use retry_tx::RetryTxBuilder;
+pub use retry_tx::{RetryTxAttempt, RetryTxBuilder};
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};
 pub use stream_facade::{QueryStats, QueryStream};

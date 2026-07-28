@@ -3,7 +3,7 @@ pub(crate) mod grpc;
 pub(crate) mod grpc_limits;
 
 #[macro_use]
-mod macroses;
+mod macros;
 pub(crate) mod grpc_stream_wrapper;
 pub(crate) mod raw_auth_service;
 pub(crate) mod raw_common_types;

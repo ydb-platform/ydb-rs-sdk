@@ -11,7 +11,9 @@ use ydb_grpc::ydb_proto::topic::stream_write_message;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
-use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
+use crate::client_topic::topicwriter::message_write_status::{
+    MessageWriteStatus, MessageWriteStatusValidator,
+};
 use crate::client_topic::topicwriter::queue::Queue;
 use crate::client_topic::topicwriter::stream_writer::StreamWriter;
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
@@ -34,6 +36,7 @@ pub(crate) struct ReconnectorParams {
     pub(crate) flush_timeout: Duration,
     pub(crate) executor: Arc<dyn Executor>,
     pub(crate) tx_identity: Option<TransactionIdentity>,
+    pub(crate) status_validator: MessageWriteStatusValidator,
 }
 
 #[derive(Clone)]
@@ -69,7 +72,7 @@ pub(crate) struct Reconnector {
 
 impl Reconnector {
     pub(crate) async fn new(params: ReconnectorParams) -> YdbResult<Self> {
-        let queue = Queue::new();
+        let queue = Queue::new_with_status_validator(params.status_validator);
         let cancellation_token = params.cancellation_token;
         let auto_seq_no = params.writer_options.auto_seq_no;
 

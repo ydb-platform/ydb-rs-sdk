@@ -1,6 +1,7 @@
 use crate::errors::NeedRetry::IdempotentOnly;
 
 use crate::grpc_wrapper::raw_errors::RawError;
+use http::Uri;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
@@ -70,7 +71,7 @@ impl From<YdbError> for YdbOrCustomerError {
 pub(crate) enum NeedRetry {
     True,           // operation guarantee to not completed, error is temporary, need retry
     IdempotentOnly, // operation in unknown state - it may be completed or not, error temporary. Operation may be auto retry for idempotent operations only.
-    False, // operation is completed or error is stable (for example yql syntaxt errror) and no need retry
+    False, // operation is completed or error is stable (for example yql syntax error) and no need retry
 }
 
 /// Error which can be returned from the crate.
@@ -92,6 +93,9 @@ pub enum YdbError {
 
     /// No rows in result set
     NoRows,
+
+    /// Endpoint URI has no host.
+    EndpointHasNoHost(Uri),
 
     /// Unexpected error. Write issue if it will happen.
     InternalError(String),
@@ -117,7 +121,7 @@ impl YdbError {
 
 /// Describe operation status from server
 ///
-/// Messages and codes doesn't have stable gurantee. But codes more stable.
+/// Messages and codes doesn't have stable guarantee. But codes more stable.
 /// If you want detect some errors prefer code over text parse. Messages for human usage only.
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
@@ -212,7 +216,7 @@ impl From<u32> for YdbIssueSeverity {
 
 /// Describe issue from server
 ///
-/// Messages and codes doesn't have stable gurantee. But codes more stable.
+/// Messages and codes doesn't have stable guarantee. But codes more stable.
 /// If you want detect some errors prefer code over text parse. Messages for human usage only.
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
@@ -278,10 +282,11 @@ impl YdbError {
 
     pub(crate) fn need_retry(&self) -> NeedRetry {
         match self {
-            Self::Convert(_) => NeedRetry::False,
-            Self::Custom(_) => NeedRetry::False,
-            Self::InternalError(_) => NeedRetry::False,
-            Self::NoRows => NeedRetry::False,
+            Self::Convert(_)
+            | Self::Custom(_)
+            | Self::InternalError(_)
+            | Self::NoRows
+            | Self::EndpointHasNoHost(_) => NeedRetry::False,
             Self::TransportDial(_) => NeedRetry::True,
             Self::Transport(_) => IdempotentOnly, // TODO: check when transport error created
             Self::TransportGRPCStatus(status) => {

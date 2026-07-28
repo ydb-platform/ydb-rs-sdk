@@ -22,7 +22,7 @@ mod mock_server;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ydb::{Client, ClientBuilder, Transaction, YdbOrCustomerError, YdbResult};
+use ydb::{Client, ClientBuilder, Transaction, YdbOrCustomerError, YdbResult, closure};
 use ydb_grpc::ydb_proto::query::{
     ExecuteQueryResponsePart, RollbackTransactionResponse, TransactionMeta,
 };
@@ -290,10 +290,10 @@ async fn happy_path_reports_committed() -> YdbResult<()> {
 
     let result = client
         .query_client()
-        .retry_tx(async |tx: &mut Transaction| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
             Ok(())
-        })
+        }))
         .await;
 
     assert!(result.is_ok(), "expected success, got {result:?}");
@@ -314,10 +314,10 @@ async fn commit_rpc_failure_is_reported_and_not_retried() -> YdbResult<()> {
 
     let result = client
         .query_client()
-        .retry_tx(async |tx: &mut Transaction| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
             Ok(())
-        })
+        }))
         .await;
 
     assert!(
@@ -342,12 +342,12 @@ async fn commit_via_query_reports_committed() -> YdbResult<()> {
 
     let result = client
         .query_client()
-        .retry_tx(async |tx: &mut Transaction| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')")
                 .with_commit(true)
                 .await?;
             Ok(())
-        })
+        }))
         .await;
 
     assert!(result.is_ok(), "expected success, got {result:?}");
@@ -372,10 +372,10 @@ async fn invalidating_error_propagated_is_retried_until_success() -> YdbResult<(
 
     let result = client
         .query_client()
-        .retry_tx(async |tx: &mut Transaction| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
             Ok(())
-        })
+        }))
         .await;
 
     assert!(result.is_ok(), "expected eventual success, got {result:?}");
@@ -404,7 +404,7 @@ async fn swallowed_invalidating_error_must_not_report_committed() -> YdbResult<(
 
     let result = client
         .query_client()
-        .retry_tx(async |tx: &mut Transaction| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (2, 'x')").await?;
 
             // Duplicate-key-style conflict: server aborts the transaction.
@@ -415,7 +415,7 @@ async fn swallowed_invalidating_error_must_not_report_committed() -> YdbResult<(
             let _ = conflict;
 
             Ok(())
-        })
+        }))
         .await;
 
     {
@@ -459,11 +459,11 @@ async fn transient_error_propagated_rolls_back_and_retries() -> YdbResult<()> {
 
     let result = client
         .query_client()
-        .retry_tx(async |tx: &mut Transaction| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
             tx.exec("UPSERT INTO t (id, val) VALUES (2, 'y')").await?;
             Ok(())
-        })
+        }))
         .await;
 
     assert!(result.is_ok(), "expected eventual success, got {result:?}");
@@ -491,14 +491,14 @@ async fn transient_error_swallowed_falls_through_to_real_commit() -> YdbResult<(
 
     let result = client
         .query_client()
-        .retry_tx(async |tx: &mut Transaction| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
 
             let transient = tx.exec("UPSERT INTO t (id, val) VALUES (2, 'y')").await;
             let _ = transient; // swallowed
 
             Ok(())
-        })
+        }))
         .await;
 
     assert!(
@@ -526,11 +526,11 @@ async fn explicit_rollback_reports_ok_with_real_rollback_rpc() -> YdbResult<()> 
 
     let result = client
         .query_client()
-        .retry_tx(async |tx: &mut Transaction| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
             tx.rollback().await?;
             Ok(())
-        })
+        }))
         .await;
 
     assert!(
@@ -557,11 +557,11 @@ async fn rollback_rpc_failure_propagated_is_retried_until_rollback_succeeds() ->
 
     let result = client
         .query_client()
-        .retry_tx(async |tx: &mut Transaction| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
             tx.rollback().await?;
             Ok(())
-        })
+        }))
         .await;
 
     assert!(
@@ -593,13 +593,13 @@ async fn swallowed_rollback_failure_must_not_report_committed() -> YdbResult<()>
 
     let result = client
         .query_client()
-        .retry_tx(async |tx: &mut Transaction| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
             let _ = tx.rollback().await;
             let _ = tx.rollback().await;
 
             Ok(())
-        })
+        }))
         .await;
 
     {
@@ -629,10 +629,10 @@ async fn panic_before_any_terminal_event_rolls_back_and_is_not_retried() -> YdbR
 
     let result = client
         .query_client()
-        .retry_tx::<_, ()>(async |tx: &mut Transaction| {
+        .retry_tx::<_, ()>(closure!(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
             panic_callback("callback exploded before finishing the tx")
-        })
+        }))
         .await;
 
     assert!(
@@ -660,12 +660,12 @@ async fn panic_after_commit_via_query_reports_failure_despite_real_commit() -> Y
 
     let result = client
         .query_client()
-        .retry_tx::<_, ()>(async |tx: &mut Transaction| {
+        .retry_tx::<_, ()>(closure!(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')")
                 .with_commit(true)
                 .await?;
             panic_callback("callback exploded after the tx already committed")
-        })
+        }))
         .await;
 
     assert!(

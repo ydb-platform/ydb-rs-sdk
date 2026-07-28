@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use tokio::sync::oneshot;
 
+use crate::client_topic::topicreader::ids::PartitionSessionId;
 use crate::{YdbError, YdbResult};
 
-pub(super) type PartitionSessionId = i64;
 type CommitAckSender = oneshot::Sender<YdbResult<()>>;
 pub(super) type CommitAckReceiver = oneshot::Receiver<YdbResult<()>>;
 type PartitionPendingCommits = BTreeMap<Reverse<i64>, CommitAckSender>;
@@ -113,23 +113,27 @@ mod tests {
 
     use super::*;
 
+    fn psid(value: i64) -> PartitionSessionId {
+        PartitionSessionId::from_raw(value)
+    }
+
     #[test]
     fn pending_commits_acks_up_to_committed_offset() {
         let mut pending = PendingCommits::default();
 
-        let mut ack0_0 = pending.push(0, 0);
-        let mut ack0_1 = pending.push(0, 1);
-        let mut ack0_2 = pending.push(0, 2);
-        let mut ack1_0 = pending.push(1, 0);
+        let mut ack0_0 = pending.push(psid(0), 0);
+        let mut ack0_1 = pending.push(psid(0), 1);
+        let mut ack0_2 = pending.push(psid(0), 2);
+        let mut ack1_0 = pending.push(psid(1), 0);
 
-        pending.ack([(0, 1)]);
+        pending.ack([(psid(0), 1)]);
 
         assert!(ack0_0.try_recv().is_ok());
         assert!(ack0_1.try_recv().is_ok());
         assert!(matches!(ack0_2.try_recv(), Err(TryRecvError::Empty)));
         assert!(matches!(ack1_0.try_recv(), Err(TryRecvError::Empty)));
 
-        pending.fail_session(1, &YdbError::custom("fail"));
+        pending.fail_session(psid(1), &YdbError::custom("fail"));
         assert!(matches!(ack1_0.try_recv(), Ok(Err(_))));
 
         drop(pending);

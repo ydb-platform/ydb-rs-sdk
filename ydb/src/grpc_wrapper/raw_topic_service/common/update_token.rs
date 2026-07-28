@@ -10,6 +10,7 @@ impl From<RawUpdateTokenRequest> for UpdateTokenRequest {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct RawUpdateTokenResponse {}
 
 impl From<UpdateTokenResponse> for RawUpdateTokenResponse {
