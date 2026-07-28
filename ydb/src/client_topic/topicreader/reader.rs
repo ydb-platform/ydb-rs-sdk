@@ -297,3 +297,49 @@ pub struct TopicReaderCommitMarker {
     pub(crate) topic: String,
     pub(crate) epoch: usize,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn commit_ack_future_reports_closed_channel() {
+        let (sender, receiver) = oneshot::channel();
+        drop(sender);
+
+        let future = TopicReaderCommitAckFuture {
+            state: TopicReaderCommitAckState::Waiting(receiver),
+        };
+
+        assert!(future.await.is_err());
+    }
+
+    #[tokio::test]
+    async fn commit_ack_future_returns_initial_failure() {
+        let future = TopicReaderCommitAckFuture {
+            state: TopicReaderCommitAckState::Failed(YdbError::Transport(String::new())),
+        };
+
+        assert!(future.await.is_err());
+    }
+
+    #[test]
+    fn commit_ack_future_rejects_poll_after_completion() {
+        let (sender, receiver) = oneshot::channel();
+        sender.send(Ok(())).expect("receiver must remain open");
+
+        let mut future = std::pin::pin!(TopicReaderCommitAckFuture {
+            state: TopicReaderCommitAckState::Waiting(receiver),
+        });
+        let mut context = Context::from_waker(std::task::Waker::noop());
+
+        assert!(matches!(
+            future.as_mut().poll(&mut context),
+            Poll::Ready(Ok(()))
+        ));
+        assert!(matches!(
+            future.as_mut().poll(&mut context),
+            Poll::Ready(Err(_))
+        ));
+    }
+}
