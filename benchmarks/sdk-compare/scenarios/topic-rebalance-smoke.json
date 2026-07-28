@@ -1,0 +1,22 @@
+{
+  "name": "topic-rebalance-smoke",
+  "execution": {
+    "worker_threads": 4,
+    "warmup_seconds": 1,
+    "measurement_seconds": 2,
+    "drain_timeout_seconds": 10
+  },
+  "workload": {
+    "kind": "topic",
+    "topic_name": "sdk-compare-topic-rebalance-smoke",
+    "consumer_name": "sdk-compare-consumer",
+    "partition_count": 4,
+    "writers_per_partition": 1,
+    "reader_count": 4,
+    "message_size_bytes": 1024,
+    "max_in_flight_per_writer": 10,
+    "write_batch_max_messages": 1,
+    "write_batch_max_delay_ms": 1,
+    "partition_write_speed_bytes_per_second": 52428800
+  }
+}
