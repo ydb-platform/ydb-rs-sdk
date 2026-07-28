@@ -15,6 +15,7 @@ use crate::waiter::Waiter;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::client_metrics::names::MetricsNames;
 use crate::client_topic::client::TopicClient;
 use crate::client_topic::compression::{Executor, default_executor};
 use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -35,6 +36,7 @@ pub struct Client {
     executor: Arc<dyn Executor>,
     session_pool: SessionPool,
     retry_settings: RetrySettings,
+    metrics_names: MetricsNames,
 }
 
 impl Client {
@@ -45,6 +47,7 @@ impl Client {
         load_balancer: SharedLoadBalancer,
         executor: Option<Arc<dyn Executor>>,
         retry_settings: RetrySettings,
+        metrics_names: MetricsNames,
     ) -> YdbResult<Self> {
         let executor = match executor {
             Some(e) => e,
@@ -65,6 +68,7 @@ impl Client {
             executor,
             session_pool,
             retry_settings,
+            metrics_names,
         };
         client.wait().await?;
 
@@ -84,6 +88,7 @@ impl Client {
             executor: self.executor.clone(),
             session_pool: self.session_pool.clone(),
             retry_settings,
+            metrics_names: self.metrics_names.clone(),
         }
     }
 
@@ -117,6 +122,9 @@ impl Client {
     /// Create instance of client for table service
     #[instrument(name = "ydb.Driver.TableClient", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database))]
     pub fn table_client(&self) -> TableClient {
+        self.metrics_names
+            .client_new_table_client_counter
+            .increment(1);
         TableClient::new(
             self.connection_manager.clone(),
             self.session_pool.clone(),
@@ -127,22 +135,32 @@ impl Client {
     /// Create instance of client for query service.
     #[instrument(name = "ydb.Driver.QueryClient", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database))]
     pub fn query_client(&self) -> QueryClient {
+        self.metrics_names
+            .client_new_query_client_counter
+            .increment(1);
         QueryClient::new(
             self.connection_manager.clone(),
             self.session_pool.clone(),
             self.retry_settings.clone(),
+            self.metrics_names.clone(),
         )
     }
 
     /// Create instance of client for directory service
     #[instrument(name = "ydb.Driver.SchemeClient", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database))]
     pub fn scheme_client(&self) -> SchemeClient {
+        self.metrics_names
+            .client_new_scheme_client_counter
+            .increment(1);
         SchemeClient::new(self.connection_manager.clone())
     }
 
     /// Create instance of client for topic service
     #[instrument(name = "ydb.Driver.TopicClient", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database))]
     pub fn topic_client(&self) -> TopicClient {
+        self.metrics_names
+            .client_new_topic_client_counter
+            .increment(1);
         TopicClient::new(
             self.connection_manager.clone(),
             self.credentials.token_cache.clone(),

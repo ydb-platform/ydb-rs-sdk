@@ -15,11 +15,11 @@ use crate::grpc_wrapper::raw_query_service::transaction_control::{
 use crate::retry_settings::RetrySettings;
 use crate::traces::helpers::ensure_len_string;
 
+use crate::client_metrics::names::MetricsNames;
+use crate::session_pool::{SessionPool, SessionPoolLease, spawn_pool_release};
 use crate::types::Value;
 use crate::{TransactionOptions, TxMode, closure};
 use tracing::instrument;
-
-use crate::session_pool::{SessionPool, SessionPoolLease, spawn_pool_release};
 
 use super::hooks::QueryTxHook;
 
@@ -48,6 +48,7 @@ pub(crate) struct ClientExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub session_pool: SessionPool,
     pub retry_settings: RetrySettings,
+    pub metrics_names: MetricsNames,
 }
 
 /// Query stream together with a pooled session lease when the stream itself owns that lease.
@@ -91,6 +92,7 @@ pub(crate) struct TransactionExecContext {
     pub hooks: Vec<Box<dyn QueryTxHook>>,
     /// Absolute deadline from [`QueryClient::retry_tx`] `.timeout()`, propagated to every RPC in the callback.
     pub retry_deadline: Option<Instant>,
+    pub metrics_names: MetricsNames,
 }
 
 impl TransactionExecContext {
@@ -473,6 +475,9 @@ pub(crate) async fn transaction_ensure_begin(
 
 /// Mark the transaction committed by the server as part of the last `ExecuteQuery` (`commit_tx: true`).
 pub(crate) fn transaction_finish_committed_via_query(tx: &mut TransactionExecContext) {
+    tx.metrics_names
+        .client_transaction_commit_counter
+        .increment(1);
     tx.state = TxState::Committed;
     tx.tx_id = None;
     release_tx_session(tx);
@@ -561,6 +566,10 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
         release_tx_session(tx);
         return Ok(());
     }
+    tx.metrics_names
+        .client_transaction_commit_counter
+        .increment(1);
+
     ensure_tx_session(tx).await?;
     let tx_id = tx.tx_id.take().expect("checked Some");
     let session_id = tx.session_lease()?.session_id().to_string();
@@ -590,6 +599,9 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
     if !tx.state.is_active() {
         return Ok(());
     }
+    tx.metrics_names
+        .client_transaction_rollback_counter
+        .increment(1);
     let mut rollback_err: Option<YdbError> = None;
     if tx.tx_id.as_ref().is_some_and(|id| !id.is_empty()) && tx.pooled_lease.is_some() {
         let tx_id = tx.tx_id.take().expect("checked Some");
@@ -658,6 +670,7 @@ pub(crate) fn transaction_exec_context(
     session_pool: SessionPool,
     options: TransactionOptions,
     retry_deadline: Option<Instant>,
+    metrics_names: MetricsNames,
 ) -> TransactionExecContext {
     TransactionExecContext {
         connection_manager,
@@ -669,6 +682,7 @@ pub(crate) fn transaction_exec_context(
         state: TxState::Active,
         hooks: Vec::new(),
         retry_deadline,
+        metrics_names,
     }
 }
 
@@ -742,6 +756,7 @@ mod unit_tests {
             SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
             TransactionOptions::default(),
             None,
+            MetricsNames::new(None),
         );
         ctx.tx_id = Some("tx-1".into());
         transaction_handle_query_error(

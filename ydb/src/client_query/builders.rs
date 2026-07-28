@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::future::IntoFuture;
 use std::marker::PhantomData;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::TxMode;
 use crate::errors::{YdbError, YdbResult};
@@ -211,10 +211,22 @@ impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OneRow<T>, S> {
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
+            let start = Instant::now();
             let set = exactly_one_set(
                 materialize_query(&mut self.core, self.text, self.params, self.opts).await?,
             )?;
             let row = take_single_row(set)?.ok_or(YdbError::NoRows)?;
+            let delta = start.elapsed();
+            match &self.core {
+                ExecCoreRef::Client(core) => core
+                    .metrics_names
+                    .client_row_query_time_histogram
+                    .record(delta.as_secs_f64()),
+                ExecCoreRef::Transaction(core) => core
+                    .metrics_names
+                    .client_transaction_row_query_time_histogram
+                    .record(delta.as_secs_f64()),
+            }
             T::from_row(row)
         })
     }
@@ -226,10 +238,23 @@ impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OptionalRow<T>, S
 
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
+            let start = Instant::now();
             let set = exactly_one_set(
                 materialize_query(&mut self.core, self.text, self.params, self.opts).await?,
             )?;
-            take_single_row(set)?.map(T::from_row).transpose()
+            let row = take_single_row(set)?.map(T::from_row).transpose();
+            let delta = start.elapsed();
+            match &self.core {
+                ExecCoreRef::Client(core) => core
+                    .metrics_names
+                    .client_row_query_time_histogram
+                    .record(delta.as_secs_f64()),
+                ExecCoreRef::Transaction(core) => core
+                    .metrics_names
+                    .client_transaction_row_query_time_histogram
+                    .record(delta.as_secs_f64()),
+            }
+            row
         })
     }
 }

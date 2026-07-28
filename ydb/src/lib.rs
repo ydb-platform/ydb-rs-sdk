@@ -106,6 +106,7 @@ pub(crate) mod waiter;
 #[cfg(test)]
 mod types_test;
 
+mod client_metrics;
 #[cfg(test)]
 mod connection_pool_test;
 
