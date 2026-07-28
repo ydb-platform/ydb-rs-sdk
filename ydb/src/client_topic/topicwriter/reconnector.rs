@@ -312,7 +312,7 @@ struct ReconnectionLoop {
     helper: ReconnectionHelper,
     init_tx: Option<oneshot::Sender<YdbResult<ConnectionInfo>>>,
     status_tx: watch::Sender<ReconnectorStatus>,
-    retry: RetryState,
+    retry: Option<RetryState>,
     stream_writer: Option<StreamWriter>,
 }
 
@@ -400,15 +400,19 @@ impl ReconnectionLoop {
 
         trace!("error, trying to reconnect: {err}");
 
-        match self.helper.retry_settings.wait_retry(&self.retry).await {
-            // Retry budget blocked the retry
-            ControlFlow::Break(()) => {
-                ReconnectionLoopStatus::Exit(Some(YdbError::custom(format!(
-                    "reconnect is not allowed after {} attempts for error: {err}",
-                    self.retry.attempt,
-                ))))
+        if let Some(retry) = self.retry.as_ref() {
+            match self.helper.retry_settings.wait_retry(&retry).await {
+                // Retry budget blocked the retry
+                ControlFlow::Break(()) => {
+                    ReconnectionLoopStatus::Exit(Some(YdbError::custom(format!(
+                        "reconnect is not allowed after {} attempts for error: {err}",
+                        retry.attempt,
+                    ))))
+                }
+                ControlFlow::Continue(()) => ReconnectionLoopStatus::RecreateStreamWriter,
             }
-            ControlFlow::Continue(()) => ReconnectionLoopStatus::RecreateStreamWriter,
+        } else {
+            ReconnectionLoopStatus::RecreateStreamWriter
         }
     }
 
@@ -428,7 +432,7 @@ impl ReconnectionLoop {
         match self.helper.recreate_stream_writer(error_sender).await {
             Ok(swr) => {
                 self.stream_writer = Some(swr.stream_writer);
-                self.retry.attempt = 0;
+                self.retry = None;
 
                 if let Some(tx) = self.init_tx.take() {
                     let _ = tx.send(Ok(swr.connection_info));
@@ -438,7 +442,7 @@ impl ReconnectionLoop {
             }
             Err(err) => {
                 trace!("error creating stream writer: {err}");
-                self.retry.attempt += 1;
+                self.retry.get_or_insert_with(RetryState::init).attempt += 1;
 
                 ReconnectionLoopStatus::HandleError(err)
             }
@@ -453,7 +457,6 @@ impl ReconnectionLoop {
             _ = self.helper.cancellation_token.cancelled() => ReconnectionLoopStatus::Exit(None),
             received_err = error_receiver => match received_err {
                 Ok(err) => {
-                    self.retry.start_time = Instant::now();
                     ReconnectionLoopStatus::HandleError(err)
                 },
                 Err(chan_err) => ReconnectionLoopStatus::Exit(Some(YdbError::custom(format!("error channel error: {chan_err}"))))
