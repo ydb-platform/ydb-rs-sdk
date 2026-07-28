@@ -10,10 +10,11 @@ use ydb::{
     TopicWriterAckFuture, TopicWriterMessage, TopicWriterOptions,
 };
 
-use super::{AckLatencyStart, BenchmarkSchedule};
+use super::AckLatencyStart;
 use crate::config::TopicWorkload;
 use crate::metrics::LatencyRecorder;
 use crate::payload;
+use crate::schedule::BenchmarkSchedule;
 
 #[derive(Clone, Copy)]
 struct WriterTaskSettings {

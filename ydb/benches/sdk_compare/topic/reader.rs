@@ -8,10 +8,11 @@ use ydb::{
     TopicSelector,
 };
 
-use super::{AckLatencyStart, BenchmarkSchedule};
+use super::AckLatencyStart;
 use crate::config::TopicWorkload;
 use crate::metrics::LatencyRecorder;
 use crate::payload;
+use crate::schedule::BenchmarkSchedule;
 
 pub(super) struct ReaderMetrics {
     pub(super) end_to_end: LatencyRecorder,
