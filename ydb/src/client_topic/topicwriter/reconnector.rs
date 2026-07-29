@@ -350,7 +350,9 @@ impl ReconnectionLoop {
                 ReconnectionLoopStatus::HandleError(err) => {
                     RetrySettings::run_with_deadline(&mut deadline, self.handle_error(err))
                         .await
-                        .unwrap_or(ReconnectionLoopStatus::Exit(None))
+                        .unwrap_or(ReconnectionLoopStatus::Exit(Some(
+                            YdbError::DeadlineExceeded,
+                        )))
                 }
                 ReconnectionLoopStatus::RecreateStreamWriter => self.recreate_stream_writer().await,
                 ReconnectionLoopStatus::WaitForErrorOrCancellation(error_receiver) => {
