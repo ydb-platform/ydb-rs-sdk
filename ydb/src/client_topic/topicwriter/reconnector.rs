@@ -1,6 +1,6 @@
 use std::ops::ControlFlow;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use futures_util::FutureExt;
 use tokio::sync::{Mutex, oneshot, watch};
@@ -334,7 +334,7 @@ impl ReconnectionLoop {
             helper,
             init_tx: Some(init_tx),
             status_tx,
-            retry: RetryState::init(),
+            retry: Some(RetryState::init()),
             stream_writer: None,
         }
     }
@@ -401,15 +401,16 @@ impl ReconnectionLoop {
         trace!("error, trying to reconnect: {err}");
 
         if let Some(retry) = self.retry.as_ref() {
-            match self.helper.retry_settings.wait_retry(&retry).await {
+            match self.helper.wait_before_reconnect(retry).await {
                 // Retry budget blocked the retry
-                ControlFlow::Break(()) => {
+                Some(ControlFlow::Break(())) => {
                     ReconnectionLoopStatus::Exit(Some(YdbError::custom(format!(
                         "reconnect is not allowed after {} attempts for error: {err}",
                         retry.attempt,
                     ))))
                 }
-                ControlFlow::Continue(()) => ReconnectionLoopStatus::RecreateStreamWriter,
+                Some(ControlFlow::Continue(())) => ReconnectionLoopStatus::RecreateStreamWriter,
+                None => ReconnectionLoopStatus::Exit(None),
             }
         } else {
             ReconnectionLoopStatus::RecreateStreamWriter
