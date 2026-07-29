@@ -247,7 +247,7 @@ impl RetryStrategy for Arc<dyn BoxRetryStrategy> {
         &'a self,
         retry: &'a RetryState,
     ) -> impl Future<Output = ControlFlow<()>> + Send + 'a {
-        self.wait_retry_boxed(retry)
+        self.as_ref().wait_retry_boxed(retry)
     }
 }
 
@@ -510,7 +510,7 @@ impl<D: RetryDeadline> BoxRetryDeadline for D {
 
 impl RetryDeadline for Arc<dyn BoxRetryDeadline> {
     fn wait_deadline(&self) -> impl Future<Output = ()> + Send + '_ {
-        self.wait_deadline_boxed()
+        self.as_ref().wait_deadline_boxed()
     }
 }
 
