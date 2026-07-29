@@ -1,7 +1,7 @@
 mod reader;
 mod writer;
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use tokio::time::timeout_at;
@@ -62,17 +62,10 @@ async fn run_workload(
     scenario: &Scenario,
     workload: &TopicWorkload,
 ) -> Result<BenchmarkResult> {
-    let drain_timeout = Duration::from_secs(scenario.execution.drain_timeout_seconds);
-    let measurement_duration = Duration::from_secs(scenario.execution.measurement_seconds);
-
     // Open every SDK session before the benchmark clock starts.
     let writers = writer::open(topic_client, topic_path, workload).await?;
     let readers = reader::open(topic_client, topic_path, workload).await?;
-    let schedule = BenchmarkSchedule::new(
-        Duration::from_secs(scenario.execution.warmup_seconds),
-        measurement_duration,
-        drain_timeout,
-    )?;
+    let schedule = BenchmarkSchedule::from_execution(&scenario.execution)?;
 
     // Run readers and writers continuously across the warm-up/measurement boundary.
     let worker_run = async {
@@ -86,10 +79,10 @@ async fn run_workload(
             .await
             .context("benchmark drain timed out")??;
 
-    let seconds = measurement_duration.as_secs_f64();
+    let measurement_seconds = schedule.measurement_seconds();
     let message_size = workload.message_size_bytes as f64;
-    let write_messages_per_second = writer_metrics.write_ack.count() as f64 / seconds;
-    let read_messages_per_second = reader_metrics.end_to_end.count() as f64 / seconds;
+    let write_messages_per_second = writer_metrics.write_ack.count() as f64 / measurement_seconds;
+    let read_messages_per_second = reader_metrics.end_to_end.count() as f64 / measurement_seconds;
 
     Ok(BenchmarkResult::topic(
         scenario.clone(),

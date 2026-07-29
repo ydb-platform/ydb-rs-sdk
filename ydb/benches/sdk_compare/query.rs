@@ -1,10 +1,9 @@
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use tokio::task::JoinSet;
 use tokio::time::timeout_at;
-use ydb::{Bytes, QueryClient};
+use ydb::{Bytes, QueryClient, Row, Value, YdbError};
 
 use crate::config::{QueryWorkload, Scenario};
 use crate::connection;
@@ -31,31 +30,26 @@ pub(crate) async fn run(scenario: &Scenario, workload: &QueryWorkload) -> Result
         .session_pool_size(workload.concurrent_requests)
         .call()
         .await?;
-    let request_payload = Arc::new(vec![FILL_BYTE; workload.payload_size_bytes]);
+    let request_payload = vec![FILL_BYTE; workload.payload_size_bytes];
     let query_clients = (0..workload.concurrent_requests)
         .map(|_| client.query_client())
         .collect::<Vec<_>>();
 
-    let measurement_duration = Duration::from_secs(scenario.execution.measurement_seconds);
-    let schedule = BenchmarkSchedule::new(
-        Duration::from_secs(scenario.execution.warmup_seconds),
-        measurement_duration,
-        Duration::from_secs(scenario.execution.drain_timeout_seconds),
-    )?;
+    let schedule = BenchmarkSchedule::from_execution(&scenario.execution)?;
 
     let worker_run = run_workers(query_clients, request_payload, schedule, workload);
     let metrics = timeout_at(schedule.completion_deadline.into(), worker_run)
         .await
         .context("Query benchmark did not complete before drain deadline")??;
 
-    let seconds = measurement_duration.as_secs_f64();
+    let measurement_seconds = schedule.measurement_seconds();
     Ok(BenchmarkResult::query(
         scenario.clone(),
         QueryMetrics {
             execute: metrics.execute.summary(),
-            queries_per_second: metrics.execute.count() as f64 / seconds,
-            rows_per_second: metrics.rows as f64 / seconds,
-            payload_bytes_per_second: metrics.payload_bytes as f64 / seconds,
+            queries_per_second: metrics.execute.count() as f64 / measurement_seconds,
+            rows_per_second: metrics.rows as f64 / measurement_seconds,
+            payload_bytes_per_second: metrics.payload_bytes as f64 / measurement_seconds,
         },
     ))
 }
@@ -109,7 +103,7 @@ struct QueryExecution {
 
 async fn run_workers(
     query_clients: Vec<QueryClient>,
-    request_payload: Arc<Vec<u8>>,
+    request_payload: Vec<u8>,
     schedule: BenchmarkSchedule,
     workload: &QueryWorkload,
 ) -> Result<WorkerMetrics> {
@@ -117,7 +111,7 @@ async fn run_workers(
     for query_client in query_clients {
         tasks.spawn(run_worker(
             query_client,
-            Arc::clone(&request_payload),
+            request_payload.clone(),
             schedule,
             workload.row_count,
         ));
@@ -125,28 +119,15 @@ async fn run_workers(
 
     let mut combined = WorkerMetrics::new()?;
     while let Some(joined) = tasks.join_next().await {
-        let worker_metrics = match joined {
-            Ok(Ok(metrics)) => metrics,
-            Ok(Err(error)) => {
-                tasks.shutdown().await;
-                return Err(error);
-            }
-            Err(error) => {
-                tasks.shutdown().await;
-                return Err(error).context("Query worker task panicked or was cancelled");
-            }
-        };
-        if let Err(error) = combined.merge(&worker_metrics) {
-            tasks.shutdown().await;
-            return Err(error);
-        }
+        let worker_metrics = joined.context("Query worker task panicked or was cancelled")??;
+        combined.merge(&worker_metrics)?;
     }
     Ok(combined)
 }
 
 async fn run_worker(
     mut query_client: QueryClient,
-    request_payload: Arc<Vec<u8>>,
+    request_payload: Vec<u8>,
     schedule: BenchmarkSchedule,
     row_count: u64,
 ) -> Result<WorkerMetrics> {
@@ -159,8 +140,7 @@ async fn run_worker(
             break;
         }
 
-        let execution =
-            execute_query(&mut query_client, request_payload.as_ref(), row_count).await?;
+        let execution = execute_query(&mut query_client, &request_payload, row_count).await?;
         if schedule.is_measurement_instant(started_at) {
             metrics.record(started_at, execution)?;
         }
@@ -191,23 +171,10 @@ async fn execute_query(
         .context("failed to consume Query result stream")?
     {
         for mut row in result_set {
-            let _: u64 = row
-                .remove_field_by_name("row_id")
-                .context("failed to extract Query column row_id")?
-                .try_into()
-                .context("failed to decode Query column row_id as u64")?;
-            let row_payload: Bytes = row
-                .remove_field_by_name("payload")
-                .context("failed to extract Query column payload")?
-                .try_into()
-                .context("failed to decode Query column payload as binary")?;
-            let _: f64 = row
-                .remove_field_by_name("value")
-                .context("failed to extract Query column value")?
-                .try_into()
-                .context("failed to decode Query column value as f64")?;
+            let _: u64 = decode_field(&mut row, "row_id")?;
+            let row_payload: Vec<u8> = decode_field::<Bytes>(&mut row, "payload")?.into();
+            let _: f64 = decode_field(&mut row, "value")?;
 
-            let row_payload: Vec<u8> = row_payload.into();
             let row_payload_bytes = u64::try_from(row_payload.len())
                 .context("row payload size does not fit into u64")?;
             rows = rows
@@ -228,4 +195,13 @@ async fn execute_query(
         rows,
         payload_bytes,
     })
+}
+
+fn decode_field<T>(row: &mut Row, name: &'static str) -> Result<T>
+where
+    T: TryFrom<Value, Error = YdbError>,
+{
+    row.remove_field_by_name(name)
+        .and_then(T::try_from)
+        .with_context(|| format!("failed to decode Query column {name}"))
 }
