@@ -13,6 +13,7 @@ use crate::{
     TopicWriterMessage, TopicWriterOptions, YdbError, YdbResult,
     client_topic::client::{AlterTopicOptionsBuilder, CreateTopicOptionsBuilder},
 };
+use crate::{Transaction, closure};
 use tracing::{debug, info, trace, warn};
 use ydb_grpc::ydb_proto::topic::stream_read_message;
 use ydb_grpc::ydb_proto::topic::stream_read_message::init_request::TopicReadSettings;
@@ -644,9 +645,6 @@ async fn read_topic_message() -> YdbResult<()> {
 #[traced_test]
 #[ignore] // need YDB access
 async fn read_topic_message_in_transaction() -> YdbResult<()> {
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
-
     let client = create_client().await?;
     let database_path = client.database();
     let topic_name = "tx_test_topic".to_string();
@@ -738,17 +736,15 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
     );
 
     info!("creating topic reader");
-    let reader = topic_client
+    let mut reader = topic_client
         .create_reader(consumer_name.clone(), topic_path.clone())
         .await?;
 
-    let reader_mutex = Arc::new(Mutex::new(reader));
-    let received_messages = Arc::new(Mutex::new(Vec::new()));
+    let mut received_messages = Vec::new();
 
     client
         .query_client()
-        .retry_tx(async |tx| {
-            let mut reader_guard = reader_mutex.lock().await;
+        .retry_tx(closure!([&mut reader, &mut received_messages], async |tx: &mut Transaction| {
             let mut local_received_messages = Vec::new();
             let mut message_counter = 0;
             const EXPECTED_MESSAGE_COUNT: usize = 3;
@@ -761,7 +757,7 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
 
                 let batch = timeout(
                     Duration::from_secs(10),
-                    reader_guard.pop_batch_in_tx(tx),
+                    reader.pop_batch_in_tx(tx),
                 )
                 .await
                 .map_err(|_| {
@@ -784,19 +780,11 @@ async fn read_topic_message_in_transaction() -> YdbResult<()> {
                 }
             }
 
-            {
-                let mut global_messages = received_messages.lock().await;
-                *global_messages = local_received_messages;
-            }
+            *received_messages = local_received_messages;
 
             Ok(())
-        })
+        }))
         .await?;
-
-    let received_messages = {
-        let mut guard = received_messages.lock().await;
-        std::mem::take(&mut *guard)
-    };
 
     assert_eq!(
         received_messages.len(),

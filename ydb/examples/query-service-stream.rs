@@ -1,7 +1,7 @@
 #![recursion_limit = "256"]
 //! Multi-result-set streaming inside `retry_tx` (lazy tx on implicit session).
 
-use ydb::{ClientBuilder, Transaction};
+use ydb::{ClientBuilder, Transaction, closure};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,7 +16,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // IDE can complete methods on `tx`: rust-analyzer does not yet
         // reliably infer `async ||` closure parameter types from the
         // `AsyncFnMut` bound. The compiler infers it fine without this.
-        .retry_tx(async |tx: &mut Transaction| {
+        .retry_tx(closure!(async |tx: &mut Transaction| {
             let mut stream = tx.query("SELECT 42 AS a; SELECT 1 AS b, 2 AS c;").await?;
 
             // While `stream` is alive, `tx` stays mutably borrowed — a second
@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             stream.close().await?;
 
             Ok(set_count)
-        })
+        }))
         .await?;
 
     println!("result sets: {sets}");

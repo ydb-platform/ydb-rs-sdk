@@ -14,7 +14,5 @@ pub use codec_registry::{CompressionDecoder, CompressionEncoder};
 pub use codec_selector::CodecSelection;
 pub(crate) use compression_worker::CompressionWorker;
 pub use executor::Executor;
-#[cfg(test)]
-pub(crate) use executor::RayonExecutor;
 pub(crate) use executor::default_executor;
 pub(crate) use ordered_task_queue::{OrderedTaskQueue, TaskResultRx};
