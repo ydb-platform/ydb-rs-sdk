@@ -25,60 +25,68 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        submodules: true
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
 
-    - name: Install rust
-      uses: dtolnay/rust-toolchain@v1
-      with:
-        toolchain: ${{ env[matrix.rust_version] }}
-        components: clippy, rustfmt
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env[matrix.rust_version] }}
+          components: clippy, rustfmt
 
-    - name: Install taplo
-      uses: uncenter/setup-taplo@v2
-      with:
-        version: "0.10.0"
+      - name: Install taplo
+        uses: uncenter/setup-taplo@v2
+        with:
+          version: "0.10.0"
 
-    - name: Rust version
-      id: rust_version_step
-      run: |
-        rustc --version
-        cargo --version
-        echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
-        echo "version=$(rustc --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
+      - name: Rust version
+        id: rust_version_step
+        run: |
+          rustc --version
+          cargo --version
+          echo "CARGO_INCREMENTAL=$CARGO_INCREMENTAL"
+          echo "version=$(rustc --version | cut -d ' ' -f 2)" >> "$GITHUB_OUTPUT"
 
-    - name: Rust cache
-      uses: Swatinem/rust-cache@v2
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
 
-    - name: Rustfmt check
-      run: |
-        cargo fmt --all
-        git diff --exit-code
+      - name: Rustfmt check
+        run: |
+          cargo fmt --all
+          git diff --exit-code
 
-    - name: Clippy check
-      run: |
-        cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
+      - name: Clippy check
+        run: |
+          cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
 
-    - name: Taplo check
-      run: |
-        taplo fmt
-        git diff --exit-code
+      - name: Taplo check
+        run: |
+          taplo fmt
+          git diff --exit-code
+
+  check-for-typos:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Actions Repository
+        uses: actions/checkout@v5
+      - name: typos-action
+        uses: crate-ci/typos@v1.48.0
 
   check-grpc-build:
     runs-on: ubuntu-24.04
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        submodules: true
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
 
-    - name: Build ydb-grpc
-      run: |
-        make proto
+      - name: Build ydb-grpc
+        run: |
+          make proto
 
-    - name: Compare submitted ydb-grpc
-      run: |-
-        git diff --exit-code
+      - name: Compare submitted ydb-grpc
+        run: |-
+          git diff --exit-code

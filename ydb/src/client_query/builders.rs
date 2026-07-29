@@ -1,7 +1,6 @@
 use std::collections::HashMap;
-use std::future::{Future, IntoFuture};
+use std::future::IntoFuture;
 use std::marker::PhantomData;
-use std::pin::Pin;
 use std::time::Duration;
 
 use crate::TxMode;
@@ -14,7 +13,7 @@ use super::exec::{CallOptions, ClientExecContext, TransactionExecContext, resolv
 use super::internal::ExecCoreRef;
 use super::stream_facade::{QueryStream, materialize_query};
 
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+use futures_util::future::BoxFuture;
 
 pub enum ExecCall {}
 pub struct OneRow<T>(PhantomData<T>);

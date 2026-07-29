@@ -51,7 +51,7 @@ impl Lease {
         release_channel: Arc<RequestController<RawReleaseSemaphoreResult>>,
     ) -> YdbResult<()> {
         cancellation_token.cancel();
-        trace!("releaseing semaphore {}", semaphore_name);
+        trace!("releasing semaphore {}", semaphore_name);
         let mut rx = release_channel
             .send(RawReleaseSemaphoreRequest::new(semaphore_name.clone()))
             .await?;

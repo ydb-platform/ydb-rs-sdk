@@ -1,6 +1,7 @@
 use std::future::{Future, IntoFuture};
-use std::pin::Pin;
 use std::time::Duration;
+
+use futures_util::future::BoxFuture;
 
 use crate::errors::{NeedRetry, YdbResult};
 use crate::grpc_wrapper::raw_operation_service::types::{RawListOperationsResult, RawOperation};
@@ -8,8 +9,6 @@ use crate::retry_budget::{RetryControl, RetryPauseError, pause_before_retry};
 
 use super::client::OperationClient;
 use super::types::{ListOperationsRequest, ListOperationsResult, OperationInfo};
-
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OperationCallOptions {

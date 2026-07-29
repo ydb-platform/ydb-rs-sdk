@@ -6,6 +6,7 @@ use crate::grpc_wrapper::raw_auth_service::login::RawLoginRequest;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 use crate::pub_traits::{Credentials, TokenInfo};
+use crate::{GrpcOptions, HasGrpcOptions};
 use chrono::DateTime;
 use http::Uri;
 
@@ -43,7 +44,7 @@ pub type YandexMetadata = MetadataUrlCredentials;
 
 pub(crate) type CredentialsRef = Arc<dyn Credentials>;
 
-pub(crate) fn credencials_ref<T: 'static + Credentials>(cred: T) -> CredentialsRef {
+pub(crate) fn credentials_ref<T: 'static + Credentials>(cred: T) -> CredentialsRef {
     Arc::new(cred)
 }
 
@@ -532,7 +533,7 @@ pub struct StaticCredentials {
     password: SecretString,
     database: String,
     endpoint: Uri,
-    cert_path: Option<String>,
+    grpc_opts: GrpcOptions,
 }
 
 impl StaticCredentials {
@@ -542,8 +543,7 @@ impl StaticCredentials {
             SharedLoadBalancer::new_with_balancer(Box::new(static_balancer)),
             self.database.clone(),
             MultiInterceptor::new(),
-            self.cert_path.clone(),
-            crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+            self.grpc_opts.clone(),
         );
 
         let mut auth_client = empty_connection_manager
@@ -568,23 +568,7 @@ impl StaticCredentials {
             password: SecretString::new(password),
             database,
             endpoint,
-            cert_path: None,
-        }
-    }
-
-    pub fn new_with_ca(
-        username: String,
-        password: String,
-        endpoint: Uri,
-        database: String,
-        cert_path: String,
-    ) -> Self {
-        Self {
-            username,
-            password: SecretString::new(password),
-            database,
-            endpoint,
-            cert_path: Some(cert_path),
+            grpc_opts: GrpcOptions::default(),
         }
     }
 }
@@ -593,5 +577,11 @@ impl Credentials for StaticCredentials {
     #[tokio::main(flavor = "current_thread")]
     async fn create_token(&self) -> YdbResult<TokenInfo> {
         Ok(TokenInfo::token(self.acquire_token().await?))
+    }
+}
+
+impl HasGrpcOptions for StaticCredentials {
+    fn grpc_opts_mut(&mut self) -> &mut GrpcOptions {
+        &mut self.grpc_opts
     }
 }

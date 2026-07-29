@@ -15,7 +15,7 @@ pub enum SchemeEntryType {
     Unspecified,
     Directory,
     Table,
-    ColumnStrore,
+    ColumnStore,
     ColumnTable,
     PersQueueGroup,
     Database,

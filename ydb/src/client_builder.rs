@@ -2,20 +2,19 @@ use crate::client_common::{DBCredentials, TokenCache};
 use crate::client_topic::compression::Executor;
 use crate::credentials::{
     AccessTokenCredentials, CredentialsRef, GCEMetadata, ServiceAccountCredentials,
-    StaticCredentials, credencials_ref,
+    StaticCredentials, credentials_ref,
 };
-use crate::dicovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
 use crate::discovery::{Discovery, StaticDiscovery, TimerDiscovery};
+use crate::discovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::{
     DiscoveryConnectionManager, GrpcConnectionManager, NoBalancer,
 };
 use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
-use crate::grpc_wrapper::grpc_limits::DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::SharedLoadBalancer;
 use crate::retry_budget::{RetryBudget, RetryControl};
-use crate::{Client, Credentials};
+use crate::{Client, Credentials, GrpcOptions, HasGrpcOptions};
 use http::Uri;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -73,7 +72,7 @@ fn token(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilde
             continue;
         };
 
-        client_builder.credentials = credencials_ref(
+        client_builder.credentials = credentials_ref(
             crate::credentials::AccessTokenCredentials::from(value.as_ref()),
         );
     }
@@ -86,7 +85,7 @@ fn token_cmd(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBu
             continue;
         };
 
-        client_builder.credentials = credencials_ref(
+        client_builder.credentials = credentials_ref(
             crate::credentials::CommandLineCredentials::from_cmd(value.as_ref())?,
         );
     }
@@ -101,7 +100,7 @@ fn token_metadata(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
 
         match value.as_ref() {
             "google" | "yandex-cloud" => {
-                client_builder.credentials = credencials_ref(GCEMetadata::new())
+                client_builder.credentials = credentials_ref(GCEMetadata::new())
             }
             _ => {
                 return Err(YdbError::Custom(format!(
@@ -140,34 +139,29 @@ fn token_static_password(uri: &str, mut client_builder: ClientBuilder) -> YdbRes
             "password was not provided for password authentication".to_string(),
         ));
     }
+
+    if client_builder.grpc_opts.tls_config.is_none() {
+        client_builder = ca_certificate(uri, client_builder)?;
+    }
+
     let username = username.unwrap();
     let password = password.unwrap();
 
     if client_builder.database.is_empty() {
         client_builder = database(uri, client_builder)?;
     }
-    if client_builder.cert_path.is_none() {
-        client_builder = ca_certificate(uri, client_builder)?;
-    }
 
     let endpoint: Uri = Uri::from_str(client_builder.endpoint.as_str())?;
 
-    let creds = match client_builder.cert_path.as_ref() {
-        Some(path) => StaticCredentials::new_with_ca(
-            username,
-            password,
-            endpoint,
-            client_builder.database.clone(),
-            path.clone(),
-        ),
-        None => StaticCredentials::new(
-            username,
-            password,
-            endpoint,
-            client_builder.database.clone(),
-        ),
-    };
-    client_builder.credentials = credencials_ref(creds);
+    let creds = StaticCredentials::new(
+        username,
+        password,
+        endpoint,
+        client_builder.database.clone(),
+    )
+    .with_grpc_opts(client_builder.grpc_opts.clone());
+
+    client_builder.credentials = credentials_ref(creds);
 
     Ok(client_builder)
 }
@@ -177,7 +171,7 @@ fn ca_certificate(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Cli
         if key != "ca_certificate" {
             continue;
         };
-        client_builder.cert_path = Some(value.as_ref().to_string());
+        client_builder = client_builder.load_certificate(&*value)?;
         break;
     }
 
@@ -195,7 +189,7 @@ fn token_file(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientB
                 value.as_ref()
             ))
         })?;
-        client_builder.credentials = credencials_ref(AccessTokenCredentials::from(token.trim()));
+        client_builder.credentials = credentials_ref(AccessTokenCredentials::from(token.trim()));
         break;
     }
     Ok(client_builder)
@@ -207,7 +201,7 @@ fn sa_key_file(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<Client
             continue;
         };
         client_builder.credentials =
-            credencials_ref(ServiceAccountCredentials::from_file(value.as_ref())?);
+            credentials_ref(ServiceAccountCredentials::from_file(value.as_ref())?);
         break;
     }
     Ok(client_builder)
@@ -239,8 +233,7 @@ pub struct ClientBuilder {
     pub(crate) endpoint: String,
     discovery: Option<Box<dyn Discovery>>,
     discovery_enabled: bool,
-    pub cert_path: Option<String>,
-    grpc_max_message_size: usize,
+    grpc_opts: GrpcOptions,
     executor: Option<Arc<dyn Executor>>,
     retry_budget: Option<Arc<dyn RetryBudget>>,
 }
@@ -275,8 +268,7 @@ impl ClientBuilder {
             NoBalancer,
             db_cred.database.clone(),
             interceptor.clone(),
-            self.cert_path.clone(),
-            self.grpc_max_message_size,
+            self.grpc_opts.clone(),
         );
 
         let discovery: Box<dyn Discovery> = match self.discovery {
@@ -302,8 +294,7 @@ impl ClientBuilder {
             load_balancer.clone(),
             db_cred.database.clone(),
             interceptor,
-            self.cert_path,
-            self.grpc_max_message_size,
+            self.grpc_opts.clone(),
         );
 
         let retry_control = match self.retry_budget {
@@ -321,8 +312,8 @@ impl ClientBuilder {
         )
     }
 
-    pub fn with_credentials<T: 'static + Credentials>(mut self, cred: T) -> Self {
-        self.credentials = credencials_ref(cred);
+    pub fn with_credentials<T: Credentials + 'static>(mut self, cred: T) -> Self {
+        self.credentials = credentials_ref(cred);
         self
     }
 
@@ -353,15 +344,6 @@ impl ClientBuilder {
         self
     }
 
-    /// Set the maximum encoded/decoded gRPC message size in bytes.
-    ///
-    /// Applies to every gRPC service client used by this `Client`
-    /// (both encoding and decoding directions).
-    pub fn with_grpc_max_message_size(mut self, bytes: usize) -> Self {
-        self.grpc_max_message_size = bytes;
-        self
-    }
-
     /// Set the executor used for topic compression / decompression work.
     /// If unset, `default_executor()` is used.
     pub fn with_executor(mut self, executor: Arc<dyn Executor>) -> Self {
@@ -377,14 +359,13 @@ impl ClientBuilder {
 
     fn new() -> Self {
         Self {
-            credentials: credencials_ref(AccessTokenCredentials::from("")),
+            credentials: credentials_ref(AccessTokenCredentials::from("")),
             database: "/local".to_string(),
             discovery_interval: Duration::from_secs(60),
             endpoint: "grpc://localhost:2135".to_string(),
             discovery: None,
             discovery_enabled: true,
-            cert_path: None,
-            grpc_max_message_size: DEFAULT_GRPC_MESSAGE_SIZE_LIMIT_BYTES,
+            grpc_opts: GrpcOptions::default(),
             executor: None,
             retry_budget: None,
         }
@@ -404,6 +385,12 @@ impl ClientBuilder {
     }
 }
 
+impl HasGrpcOptions for ClientBuilder {
+    fn grpc_opts_mut(&mut self) -> &mut GrpcOptions {
+        &mut self.grpc_opts
+    }
+}
+
 // allow "asd".parse() for create builder
 impl FromStr for ClientBuilder {
     type Err = YdbError;
@@ -415,7 +402,9 @@ impl FromStr for ClientBuilder {
 
 #[cfg(test)]
 mod test {
-    use crate::{ClientBuilder, YdbError, YdbResult};
+    use std::time::Duration;
+
+    use crate::{ClientBuilder, HasGrpcOptions, YdbError, YdbResult};
 
     #[test]
     fn database_from_path() -> YdbResult<()> {
@@ -510,5 +499,25 @@ mod test {
                 "expected connection string parsing failure".to_string(),
             )),
         }
+    }
+
+    #[test]
+    fn grpc_opts_can_be_set() {
+        let path = std::env::temp_dir().join(format!("ydb-test-cert-{}.pem", std::process::id()));
+
+        std::fs::write(
+            &path,
+            "whatever, nobody validate the certificate at this stage",
+        )
+        .unwrap();
+
+        ClientBuilder::new_from_connection_string("grpc://ydb.local:123/database")
+            .unwrap()
+            .with_grpc_keepalive_interval(Duration::from_secs(5))
+            .with_grpc_max_message_size(10)
+            .load_certificate(&path)
+            .unwrap();
+
+        let _ = std::fs::remove_file(path);
     }
 }

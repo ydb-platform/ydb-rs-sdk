@@ -5,7 +5,7 @@ use tracing_test::traced_test;
 use crate::client_topic::client::CreateTopicOptionsBuilder;
 use crate::client_topic::list_types::ConsumerBuilder;
 use crate::test_integration_helper::create_client;
-use crate::{TopicWriterMessage, YdbResult};
+use crate::{TopicWriterMessage, Transaction, YdbResult, closure};
 
 #[tokio::test]
 #[traced_test]
@@ -33,24 +33,22 @@ async fn topic_writer_tx_write_and_commit() -> YdbResult<()> {
 
     let message_data = b"hello from tx writer".to_vec();
 
-    let topic_path_clone = topic_path.clone();
-    let message_clone = message_data.clone();
-    let topic_client_clone = topic_client.clone();
-
     client
         .query_client()
-        .retry_tx(async |tx| {
-            let mut tc = topic_client_clone.clone();
-            let mut writer = tc.create_writer_tx(topic_path_clone.clone(), tx).await?;
-            writer
-                .write(
-                    TopicWriterMessage::builder()
-                        .data(message_clone.clone())
-                        .build(),
-                )
-                .await?;
-            Ok(true)
-        })
+        .retry_tx(closure!(
+            [&mut topic_client, &topic_path, &message_data],
+            async |tx: &mut Transaction| {
+                let mut writer = topic_client.create_writer_tx(topic_path, tx).await?;
+                writer
+                    .write(
+                        TopicWriterMessage::builder()
+                            .data(message_data.clone())
+                            .build(),
+                    )
+                    .await?;
+                Ok(true)
+            }
+        ))
         .await?;
 
     let mut reader = topic_client
@@ -93,24 +91,23 @@ async fn topic_writer_tx_rollback_discards_message() -> YdbResult<()> {
         )
         .await?;
 
-    let topic_path_clone = topic_path.clone();
-    let topic_client_clone = topic_client.clone();
-
     client
         .query_client()
-        .retry_tx(async |tx| {
-            let mut tc = topic_client_clone.clone();
-            let mut writer = tc.create_writer_tx(topic_path_clone.clone(), tx).await?;
-            writer
-                .write(
-                    TopicWriterMessage::builder()
-                        .data(b"should be discarded".to_vec())
-                        .build(),
-                )
-                .await?;
-            tx.rollback().await?;
-            Ok(())
-        })
+        .retry_tx(closure!(
+            [&mut topic_client, &topic_path],
+            async |tx: &mut Transaction| {
+                let mut writer = topic_client.create_writer_tx(topic_path, tx).await?;
+                writer
+                    .write(
+                        TopicWriterMessage::builder()
+                            .data(b"should be discarded".to_vec())
+                            .build(),
+                    )
+                    .await?;
+                tx.rollback().await?;
+                Ok(())
+            }
+        ))
         .await?;
 
     let mut reader = topic_client

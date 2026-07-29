@@ -10,8 +10,11 @@ use super::{
     Transaction,
     hooks::{QueryTxCommitStatus, QueryTxHook},
 };
-use crate::errors::{YdbError, YdbResult, YdbResultWithCustomerErr};
 use crate::test_integration_helper::create_client;
+use crate::{
+    closure,
+    errors::{YdbError, YdbResult, YdbResultWithCustomerErr},
+};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -92,11 +95,11 @@ async fn commit_implicit_calls_before_commit_once() -> YdbResult<()> {
 
     client
         .query_client()
-        .retry_tx(async |tx| {
-            register_stats_hook(tx, &stats);
+        .retry_tx(closure!([&stats], async |tx: &mut Transaction| {
+            register_stats_hook(tx, stats);
             tx.exec("SELECT 1").await?;
             Ok(())
-        })
+        }))
         .timeout(TEST_TIMEOUT)
         .await?;
 
@@ -113,12 +116,12 @@ async fn rollback_explicit_skips_before_commit() -> YdbResult<()> {
 
     client
         .query_client()
-        .retry_tx(async |tx| {
-            register_stats_hook(tx, &stats);
+        .retry_tx(closure!([&stats], async |tx: &mut Transaction| {
+            register_stats_hook(tx, stats);
             tx.exec("SELECT 1").await?;
             tx.rollback().await?;
             Ok(())
-        })
+        }))
         .timeout(TEST_TIMEOUT)
         .await?;
 
@@ -135,11 +138,11 @@ async fn rollback_on_callback_error_skips_before_commit() -> YdbResult<()> {
 
     let result: YdbResultWithCustomerErr<()> = client
         .query_client()
-        .retry_tx(async |tx| {
-            register_stats_hook(tx, &stats);
+        .retry_tx(closure!([&stats], async |tx: &mut Transaction| {
+            register_stats_hook(tx, stats);
             tx.exec("SELECT 1").await?;
             Err(YdbError::custom("callback failed").into())
-        })
+        }))
         .timeout(TEST_TIMEOUT)
         .await;
 
@@ -157,11 +160,11 @@ async fn commit_with_commit_calls_before_commit_once() -> YdbResult<()> {
 
     client
         .query_client()
-        .retry_tx(async |tx| {
-            register_stats_hook(tx, &stats);
+        .retry_tx(closure!([&stats], async |tx: &mut Transaction| {
+            register_stats_hook(tx, stats);
             tx.exec("SELECT 1").with_commit(true).await?;
             Ok(())
-        })
+        }))
         .timeout(TEST_TIMEOUT)
         .await?;
 
@@ -178,14 +181,14 @@ async fn finished_tx_rejects_second_with_commit_without_before_commit() -> YdbRe
 
     client
         .query_client()
-        .retry_tx(async |tx| {
-            register_stats_hook(tx, &stats);
+        .retry_tx(closure!([&stats], async |tx: &mut Transaction| {
+            register_stats_hook(tx, stats);
             tx.exec("SELECT 1").with_commit(true).await?;
 
             assert!(tx.exec("SELECT 1").with_commit(true).await.is_err());
 
             Ok(())
-        })
+        }))
         .timeout(TEST_TIMEOUT)
         .await?;
 
@@ -203,11 +206,11 @@ async fn before_commit_error_aborts_transaction() -> YdbResult<()> {
 
     let result: YdbResultWithCustomerErr<()> = client
         .query_client()
-        .retry_tx(async |tx| {
-            register_stats_hook(tx, &stats);
+        .retry_tx(closure!([&stats], async |tx: &mut Transaction| {
+            register_stats_hook(tx, stats);
             tx.exec("SELECT 1").await?;
             Ok(())
-        })
+        }))
         .timeout(TEST_TIMEOUT)
         .await;
 
