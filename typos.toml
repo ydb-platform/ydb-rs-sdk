@@ -1,2 +1,5 @@
 [files]
-extend-exclude = ["ydb-grpc/src/generated/*"]
+extend-exclude = [
+    "benchmarks/sdk-compare/cpp/patches/*.patch",
+    "ydb-grpc/src/generated/*",
+]
