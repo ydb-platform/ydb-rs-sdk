@@ -369,13 +369,13 @@ impl RetryStrategy for ExponentialBackoff {
 
 impl<S: RetryStrategy + ?Sized> RetryStrategy for Box<S> {
     async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
-        S::wait_retry(&self, retry).await
+        S::wait_retry(self, retry).await
     }
 }
 
 impl<S: RetryStrategy + ?Sized> RetryStrategy for Arc<S> {
     async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
-        S::wait_retry(&self, retry).await
+        S::wait_retry(self, retry).await
     }
 }
 
@@ -553,13 +553,13 @@ impl<D: RetryDeadline> RetryDeadline for Option<D> {
 
 impl<D: RetryDeadline + ?Sized> RetryDeadline for Box<D> {
     fn wait_deadline(&self) -> impl Future<Output = ()> + Send + '_ {
-        D::wait_deadline(&self)
+        D::wait_deadline(self)
     }
 }
 
 impl<D: RetryDeadline + ?Sized> RetryDeadline for Arc<D> {
     fn wait_deadline(&self) -> impl Future<Output = ()> + Send + '_ {
-        D::wait_deadline(&self)
+        D::wait_deadline(self)
     }
 }
 
