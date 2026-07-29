@@ -402,21 +402,18 @@ impl ReconnectionLoop {
 
         trace!("error, trying to reconnect: {err}");
 
-        if let Some(retry) = self.retry.as_ref() {
-            match self.helper.wait_before_reconnect(retry).await {
-                // Retry budget blocked the retry
-                Some(ControlFlow::Break(())) => {
-                    ReconnectionLoopStatus::Exit(Some(YdbError::custom(format!(
-                        "reconnect is not allowed after {} attempts for error: {err}",
-                        retry.attempt,
-                    ))))
-                }
-                Some(ControlFlow::Continue(())) => ReconnectionLoopStatus::RecreateStreamWriter,
-                None => ReconnectionLoopStatus::Exit(None),
-            }
-        } else {
-            ReconnectionLoopStatus::RecreateStreamWriter
+        let retry = self.retry.unwrap_or_else(RetryState::init);
+        let state = match self.helper.wait_before_reconnect(&retry).await {
+            // Retry budget blocked the retry
+            Some(ControlFlow::Break(())) => ReconnectionLoopStatus::Exit(Some(err)),
+            Some(ControlFlow::Continue(())) => ReconnectionLoopStatus::RecreateStreamWriter,
+            None => ReconnectionLoopStatus::Exit(None),
+        };
+        if let Some(retry) = &mut self.retry {
+            retry.attempt += 1;
         }
+
+        state
     }
 
     async fn recreate_stream_writer(&mut self) -> ReconnectionLoopStatus {
@@ -432,6 +429,11 @@ impl ReconnectionLoop {
         }
 
         let (error_sender, error_receiver) = oneshot::channel();
+
+        if self.retry.is_none() {
+            self.retry = Some(RetryState::init());
+        }
+
         match self.helper.recreate_stream_writer(error_sender).await {
             Ok(swr) => {
                 self.stream_writer = Some(swr.stream_writer);
@@ -445,7 +447,6 @@ impl ReconnectionLoop {
             }
             Err(err) => {
                 trace!("error creating stream writer: {err}");
-                self.retry.get_or_insert_with(RetryState::init).attempt += 1;
 
                 ReconnectionLoopStatus::HandleError(err)
             }
