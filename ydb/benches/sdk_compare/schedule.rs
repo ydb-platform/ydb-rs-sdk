@@ -2,6 +2,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
+use crate::config::Execution;
+
 #[derive(Clone, Copy)]
 pub(crate) struct BenchmarkSchedule {
     origin: Instant,
@@ -11,11 +13,10 @@ pub(crate) struct BenchmarkSchedule {
 }
 
 impl BenchmarkSchedule {
-    pub(crate) fn new(
-        warmup_duration: Duration,
-        measurement_duration: Duration,
-        drain_timeout: Duration,
-    ) -> Result<Self> {
+    pub(crate) fn from_execution(execution: &Execution) -> Result<Self> {
+        let warmup_duration = Duration::from_secs(execution.warmup_seconds);
+        let measurement_duration = Duration::from_secs(execution.measurement_seconds);
+        let drain_timeout = Duration::from_secs(execution.drain_timeout_seconds);
         let origin = Instant::now();
         let measurement_start = origin
             .checked_add(warmup_duration)
@@ -33,6 +34,12 @@ impl BenchmarkSchedule {
             measurement_end,
             completion_deadline,
         })
+    }
+
+    pub(crate) fn measurement_seconds(&self) -> f64 {
+        self.measurement_end
+            .duration_since(self.measurement_start)
+            .as_secs_f64()
     }
 
     pub(crate) fn is_measurement_instant(&self, instant: Instant) -> bool {
