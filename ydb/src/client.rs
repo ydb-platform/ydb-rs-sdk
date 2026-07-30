@@ -1,3 +1,4 @@
+use crate::RetrySettings;
 use crate::client_common::DBCredentials;
 use crate::client_coordination::client::CoordinationClient;
 use crate::client_operation::OperationClient;
@@ -18,7 +19,6 @@ use crate::client_topic::client::TopicClient;
 use crate::client_topic::compression::{Executor, default_executor};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-use crate::retry_budget::{RetryControl, RetryMetrics};
 use tracing::instrument;
 use tracing::trace;
 
@@ -34,7 +34,7 @@ pub struct Client {
     connection_manager: GrpcConnectionManager,
     executor: Arc<dyn Executor>,
     session_pool: SessionPool,
-    retry_control: Arc<RetryControl>,
+    retry_settings: RetrySettings,
 }
 
 impl Client {
@@ -44,7 +44,7 @@ impl Client {
         connection_manager: GrpcConnectionManager,
         load_balancer: SharedLoadBalancer,
         executor: Option<Arc<dyn Executor>>,
-        retry_control: Arc<RetryControl>,
+        retry_settings: RetrySettings,
     ) -> YdbResult<Self> {
         let executor = match executor {
             Some(e) => e,
@@ -64,7 +64,7 @@ impl Client {
             connection_manager,
             executor,
             session_pool,
-            retry_control,
+            retry_settings,
         })
     }
 
@@ -72,14 +72,7 @@ impl Client {
     ///
     /// All service clients created from the returned [`Client`] consult `budget` before each retry
     /// (table, query one-shot, [`crate::QueryClient::retry_tx`], operation service, and similar).
-    pub fn clone_with_retry_budget(
-        &self,
-        budget: Arc<dyn crate::retry_budget::RetryBudget>,
-    ) -> Self {
-        let retry_control = Arc::new(RetryControl::with_shared_metrics(
-            budget,
-            self.retry_control.metrics(),
-        ));
+    pub fn clone_with_retry_settings(&self, retry_settings: RetrySettings) -> Self {
         Self {
             credentials: self.credentials.clone(),
             load_balancer: self.load_balancer.clone(),
@@ -87,13 +80,8 @@ impl Client {
             connection_manager: self.connection_manager.clone(),
             executor: self.executor.clone(),
             session_pool: self.session_pool.clone(),
-            retry_control,
+            retry_settings,
         }
-    }
-
-    /// Sliding-window request counters for [`PercentOfRpsRetryBudget`].
-    pub fn retry_metrics(&self) -> Arc<RetryMetrics> {
-        self.retry_control.metrics()
     }
 
     /// Replace the driver session pool (CreateSession + AttachSession) and optionally warm it up.
@@ -129,7 +117,7 @@ impl Client {
         TableClient::new(
             self.connection_manager.clone(),
             self.session_pool.clone(),
-            self.retry_control.clone(),
+            self.retry_settings.clone(),
         )
     }
 
@@ -139,7 +127,7 @@ impl Client {
         QueryClient::new(
             self.connection_manager.clone(),
             self.session_pool.clone(),
-            self.retry_control.clone(),
+            self.retry_settings.clone(),
         )
     }
 
@@ -168,7 +156,7 @@ impl Client {
     /// Create instance of client for operation service (list/get/forget long-running operations).
     #[instrument(name = "ydb.Driver.OperationClient", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database))]
     pub fn operation_client(&self) -> OperationClient {
-        OperationClient::new(self.connection_manager.clone(), self.retry_control.clone())
+        OperationClient::new(self.connection_manager.clone(), self.retry_settings.clone())
     }
 
     /// Wait initialization completed

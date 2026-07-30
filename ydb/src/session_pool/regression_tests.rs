@@ -1,7 +1,7 @@
 //! Regression tests for session-pool corner cases found during PR #501 / native-table SLO work.
 
 use super::pool::{SessionPool, SessionPoolSettings};
-use crate::{GrpcOptions, errors::YdbError};
+use crate::{GrpcOptions, errors::YdbError, retry_settings::RetrySettings};
 
 #[tokio::test]
 async fn warm_up_partial_keeps_successful_sessions() {
@@ -77,7 +77,6 @@ async fn bad_session_marks_table_session_non_poolable() {
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-    use crate::retry_budget::RetryControl;
     use crate::session_pool::TableSessionPool;
     use http::Uri;
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
@@ -92,7 +91,7 @@ async fn bad_session_marks_table_session_non_poolable() {
             MultiInterceptor::new(),
             GrpcOptions::default(),
         ),
-        std::sync::Arc::new(RetryControl::default()),
+        RetrySettings::with_default_backoff(),
     );
 
     let mut session = pool.session().await.expect("lease table session");

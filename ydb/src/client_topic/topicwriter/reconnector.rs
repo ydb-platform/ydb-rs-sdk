@@ -1,6 +1,8 @@
+use std::ops::ControlFlow;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use futures_util::FutureExt;
 use tokio::sync::{Mutex, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -22,7 +24,7 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
-use crate::retry::{Retry, RetryParams};
+use crate::retry_settings::{RetrySettings, RetryState};
 use crate::{YdbError, YdbResult};
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
@@ -31,7 +33,7 @@ pub(crate) struct ReconnectorParams {
     pub(crate) producer_id: String,
     pub(crate) connection_manager: GrpcConnectionManager,
     pub(crate) cancellation_token: CancellationToken,
-    pub(crate) retrier: Arc<dyn Retry>,
+    pub(crate) retry_settings: RetrySettings,
     pub(crate) fatal_error_tx: oneshot::Sender<YdbError>,
     pub(crate) flush_timeout: Duration,
     pub(crate) executor: Arc<dyn Executor>,
@@ -82,7 +84,7 @@ impl Reconnector {
         let reconnect_loop = Reconnector::start_reconnection_loop(
             ReconnectionHelper {
                 connection_manager: params.connection_manager,
-                retrier: params.retrier,
+                retry_settings: params.retry_settings,
                 cancellation_token: cancellation_token.clone(),
                 writer_options: params.writer_options,
                 producer_id: params.producer_id,
@@ -216,16 +218,11 @@ struct ReconnectionHelper {
     queue: Queue,
     writer_options: TopicWriterOptions,
     connection_manager: GrpcConnectionManager,
-    retrier: Arc<dyn Retry>,
+    retry_settings: RetrySettings,
     cancellation_token: CancellationToken,
     producer_id: String,
     executor: Arc<dyn Executor>,
     tx_identity: Option<TransactionIdentity>,
-}
-
-enum WaitBeforeReconnectResult {
-    Ok,
-    Cancelled,
 }
 
 struct RecreateStreamWriterResult {
@@ -302,24 +299,11 @@ impl ReconnectionHelper {
         }
     }
 
-    // Decides whether reconnect is allowed and returns a wait timeout if it is.
-    fn get_timeout_before_reconnect(
-        &self,
-        attempt: usize,
-        time_from_start: Duration,
-    ) -> Option<Duration> {
-        let decision = self.retrier.retry_decision(RetryParams {
-            attempt,
-            time_from_start,
-        });
-
-        decision.allow_retry.then_some(decision.wait_timeout)
-    }
-
-    async fn wait_before_reconnect(&self, wait_timeout: Duration) -> WaitBeforeReconnectResult {
-        match timeout(wait_timeout, self.cancellation_token.cancelled()).await {
-            Ok(_) => WaitBeforeReconnectResult::Cancelled,
-            Err(_) => WaitBeforeReconnectResult::Ok,
+    async fn wait_before_reconnect(&self, retry: &RetryState) -> Option<ControlFlow<()>> {
+        tokio::select! {
+            biased;
+            _ = self.cancellation_token.cancelled() => None,
+            result = self.retry_settings.wait_retry(retry) => Some(result)
         }
     }
 }
@@ -328,8 +312,7 @@ struct ReconnectionLoop {
     helper: ReconnectionHelper,
     init_tx: Option<oneshot::Sender<YdbResult<ConnectionInfo>>>,
     status_tx: watch::Sender<ReconnectorStatus>,
-    reconnect_start_time: Instant,
-    attempt: usize,
+    retry: Option<RetryState>,
     stream_writer: Option<StreamWriter>,
 }
 
@@ -351,20 +334,29 @@ impl ReconnectionLoop {
             helper,
             init_tx: Some(init_tx),
             status_tx,
-            reconnect_start_time: Instant::now(),
-            attempt: 0,
+            retry: Some(RetryState::init()),
             stream_writer: None,
         }
     }
 
     async fn run(&mut self, fatal_error_tx: oneshot::Sender<YdbError>) {
+        let retry_settings = self.helper.retry_settings.clone();
+        let mut deadline = retry_settings.wait_deadline().boxed();
+
         let mut status = ReconnectionLoopStatus::RecreateStreamWriter;
 
         let final_result = loop {
             status = match status {
-                ReconnectionLoopStatus::HandleError(err) => self.handle_error(err).await,
+                ReconnectionLoopStatus::HandleError(err) => {
+                    RetrySettings::run_with_deadline(&mut deadline, self.handle_error(err))
+                        .await
+                        .unwrap_or(ReconnectionLoopStatus::Exit(Some(
+                            YdbError::DeadlineExceeded,
+                        )))
+                }
                 ReconnectionLoopStatus::RecreateStreamWriter => self.recreate_stream_writer().await,
                 ReconnectionLoopStatus::WaitForErrorOrCancellation(error_receiver) => {
+                    deadline = retry_settings.wait_deadline().boxed();
                     self.wait_for_error_or_cancellation(error_receiver).await
                 }
                 ReconnectionLoopStatus::Exit(err) => {
@@ -410,20 +402,18 @@ impl ReconnectionLoop {
 
         trace!("error, trying to reconnect: {err}");
 
-        let Some(wait_timeout) = self
-            .helper
-            .get_timeout_before_reconnect(self.attempt, self.reconnect_start_time.elapsed())
-        else {
-            return ReconnectionLoopStatus::Exit(Some(YdbError::custom(format!(
-                "reconnect is not allowed after {} attempts for error: {err}",
-                self.attempt,
-            ))));
+        let retry = self.retry.unwrap_or_else(RetryState::init);
+        let state = match self.helper.wait_before_reconnect(&retry).await {
+            // Retry budget blocked the retry
+            Some(ControlFlow::Break(())) => ReconnectionLoopStatus::Exit(Some(err)),
+            Some(ControlFlow::Continue(())) => ReconnectionLoopStatus::RecreateStreamWriter,
+            None => ReconnectionLoopStatus::Exit(None),
         };
-
-        match self.helper.wait_before_reconnect(wait_timeout).await {
-            WaitBeforeReconnectResult::Ok => ReconnectionLoopStatus::RecreateStreamWriter,
-            WaitBeforeReconnectResult::Cancelled => ReconnectionLoopStatus::Exit(None),
+        if let Some(retry) = &mut self.retry {
+            retry.attempt += 1;
         }
+
+        state
     }
 
     async fn recreate_stream_writer(&mut self) -> ReconnectionLoopStatus {
@@ -439,10 +429,15 @@ impl ReconnectionLoop {
         }
 
         let (error_sender, error_receiver) = oneshot::channel();
+
+        if self.retry.is_none() {
+            self.retry = Some(RetryState::init());
+        }
+
         match self.helper.recreate_stream_writer(error_sender).await {
             Ok(swr) => {
                 self.stream_writer = Some(swr.stream_writer);
-                self.attempt = 0;
+                self.retry = None;
 
                 if let Some(tx) = self.init_tx.take() {
                     let _ = tx.send(Ok(swr.connection_info));
@@ -452,7 +447,6 @@ impl ReconnectionLoop {
             }
             Err(err) => {
                 trace!("error creating stream writer: {err}");
-                self.attempt += 1;
 
                 ReconnectionLoopStatus::HandleError(err)
             }
@@ -467,7 +461,6 @@ impl ReconnectionLoop {
             _ = self.helper.cancellation_token.cancelled() => ReconnectionLoopStatus::Exit(None),
             received_err = error_receiver => match received_err {
                 Ok(err) => {
-                    self.reconnect_start_time = Instant::now();
                     ReconnectionLoopStatus::HandleError(err)
                 },
                 Err(chan_err) => ReconnectionLoopStatus::Exit(Some(YdbError::custom(format!("error channel error: {chan_err}"))))

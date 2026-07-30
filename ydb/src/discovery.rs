@@ -1,8 +1,9 @@
 use std::collections::HashSet;
 use std::future;
+use std::ops::ControlFlow;
 use std::str::FromStr;
 use std::sync::{Arc, Weak};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -14,15 +15,15 @@ use tokio::sync::watch;
 use tokio_stream::wrappers::WatchStream;
 use tracing::{instrument, trace, warn};
 
-use crate::YdbError;
 use crate::errors::{NeedRetry, YdbResult};
 use crate::grpc_connection_manager::DiscoveryConnectionManager;
 use crate::grpc_wrapper::{
     raw_discovery_client::{EndpointInfo, GrpcDiscoveryClient},
     raw_services::Service,
 };
-use crate::retry::{IndefiniteRetrier, Retry, RetryParams};
+use crate::retry_settings::RetryState;
 use crate::waiter::Waiter;
+use crate::{ExponentialBackoff, YdbError, closure};
 
 /// Current discovery state
 #[derive(Clone, Debug, PartialEq)]
@@ -370,31 +371,23 @@ impl DiscoverySharedState {
             warn!("token waiter returned error (ignored): {err}");
         });
 
-        'worker: loop {
-            let mut attempt = 0;
-            let retrier = IndefiniteRetrier;
-            let discovery_start = Instant::now();
+        loop {
+            let result = ExponentialBackoff::default()
+                .retry_indefinitely(closure!([&state], async |retry: &RetryState| {
+                    let Some(state) = state.upgrade() else {
+                        // Break out of the worker loop
+                        return Some(ControlFlow::Break(()));
+                    };
 
-            'attempt: loop {
-                let Some(state) = state.upgrade() else {
-                    break 'worker;
-                };
+                    discovery_once(state, retry.attempt)
+                        .await
+                        .ok()
+                        .map(ControlFlow::Continue)
+                }))
+                .await;
 
-                let res = discovery_once(state, attempt).await;
-                attempt += 1;
-
-                if res.is_ok() {
-                    break 'attempt;
-                }
-
-                let decision = retrier.retry_decision(RetryParams {
-                    attempt,
-                    time_from_start: discovery_start.elapsed(),
-                });
-
-                if !decision.wait().await {
-                    break 'attempt;
-                }
+            if result.is_break() {
+                break;
             }
 
             tokio::time::sleep(interval).await;
