@@ -11,10 +11,8 @@
 //!  // create driver
 //!  let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
 //!     .with_credentials(AccessTokenCredentials::from("asd"))
-//!     .client()?;
-//!
-//!  // wait until driver background initialization finish
-//!  client.wait().await?;
+//!     .build()
+//!     .await?;
 //!
 //!  // read query result via Query API
 //!  let mut row = client

@@ -153,10 +153,14 @@ pub struct StaticDiscovery {
 /// ```no_run
 /// # use ydb::{ClientBuilder, StaticDiscovery, YdbResult};
 ///
-/// # fn main()->YdbResult<()>{
+/// # #[tokio::main]
+/// # async fn main() -> YdbResult<()> {
 /// let discovery = StaticDiscovery::new_from_str("grpc://localhost:2136")?;
-/// let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.with_discovery(discovery).client()?;
-/// # return Ok(());
+/// let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
+///     .with_discovery(discovery)
+///     .build()
+///     .await?;
+/// # Ok(())
 /// # }
 /// ```
 impl StaticDiscovery {

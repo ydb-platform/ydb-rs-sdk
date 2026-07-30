@@ -190,7 +190,8 @@ impl QueryClient {
     /// # async fn main() -> YdbResultWithCustomerErr<()> {
     /// # let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
     /// #     .with_credentials(AccessTokenCredentials::from("token"))
-    /// #     .client()?;
+    /// #     .build()
+    /// #     .await?;
     /// client.query_client()
     ///     .retry_tx(closure!(async |_tx| Ok(())))
     ///     .isolation(TxMode::SerializableReadWrite)
