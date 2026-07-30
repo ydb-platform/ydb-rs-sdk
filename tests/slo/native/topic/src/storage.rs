@@ -21,10 +21,9 @@ impl TopicStorage {
     pub async fn new(fw: &Framework, params: Params) -> Result<Self, String> {
         let client = ClientBuilder::new_from_connection_string(&fw.config.connection_string)
             .map_err(|err| err.to_string())?
-            .client()
+            .build()
+            .await
             .map_err(|err| err.to_string())?;
-
-        client.wait().await.map_err(|err| err.to_string())?;
 
         Ok(Self {
             topic_client: Mutex::new(client.topic_client()),

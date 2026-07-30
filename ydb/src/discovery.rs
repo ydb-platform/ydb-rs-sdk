@@ -601,21 +601,18 @@ mod test {
     #[tokio::test]
     #[ignore]
     async fn test_wrong_db_name() {
-        let good_client = test_client_builder().client().unwrap();
-
-        tokio::time::timeout(Duration::from_secs(5), good_client.wait())
+        tokio::time::timeout(Duration::from_secs(5), test_client_builder().build())
             .await
             .unwrap()
             .unwrap();
 
-        let bad_client = test_client_builder()
-            .with_database("/some-amogus-db")
-            .client()
-            .unwrap();
+        let bad_client_builder = test_client_builder().with_database("/some-amogus-db");
 
-        tokio::time::timeout(Duration::from_secs(5), bad_client.wait())
-            .await
-            .unwrap()
-            .unwrap_err();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(5), bad_client_builder.build())
+                .await
+                .unwrap()
+                .is_err()
+        );
     }
 }
