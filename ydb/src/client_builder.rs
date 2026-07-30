@@ -254,7 +254,7 @@ impl ClientBuilder {
         Ok(client_builder)
     }
 
-    pub fn client(self) -> YdbResult<Client> {
+    pub async fn build(self) -> YdbResult<Client> {
         let db_cred = DBCredentials {
             token_cache: TokenCache::new(self.credentials.clone())?,
             database: self.database.clone(),
@@ -300,7 +300,7 @@ impl ClientBuilder {
             .retry_settings
             .unwrap_or_else(RetrySettings::with_default_backoff);
 
-        Client::new(
+        Client::init(
             db_cred,
             discovery,
             connection_manager,
@@ -308,6 +308,7 @@ impl ClientBuilder {
             self.executor,
             retry_control,
         )
+        .await
     }
 
     pub fn with_credentials<T: Credentials + 'static>(mut self, cred: T) -> Self {
@@ -331,10 +332,14 @@ impl ClientBuilder {
     /// ```no_run
     /// # use ydb::{ClientBuilder, StaticDiscovery, YdbResult};
     ///
-    /// # fn main()->YdbResult<()>{
+    /// # #[tokio::main]
+    /// # async fn main() -> YdbResult<()> {
     /// let discovery = StaticDiscovery::new_from_str("grpc://localhost:2136")?;
-    /// let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.with_discovery(discovery).client()?;
-    /// # return Ok(());
+    /// let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
+    ///     .with_discovery(discovery)
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
     /// # }
     /// ```
     pub fn with_discovery<T: 'static + Discovery>(mut self, discovery: T) -> Self {
