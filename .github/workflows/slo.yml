@@ -97,6 +97,8 @@ jobs:
           cd current
           if [[ -n "${{ inputs.baseline_ref }}" ]]; then
             BASELINE="${{ inputs.baseline_ref }}"
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            BASELINE="${{ github.event.before }}"
           else
             BASELINE=$(git merge-base HEAD origin/master)
           fi
