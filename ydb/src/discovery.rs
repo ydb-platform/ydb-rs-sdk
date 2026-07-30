@@ -489,7 +489,6 @@ impl Waiter for DiscoverySharedState {
 mod test {
     use http::Uri;
 
-    use crate::GrpcOptions;
     use crate::client_common::{DBCredentials, TokenCache};
     use crate::discovery::{Discovery, DiscoverySharedState, DiscoveryState, NodeInfo};
     use crate::errors::YdbResult;
@@ -497,6 +496,7 @@ mod test {
     use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::test_helpers::test_client_builder;
+    use crate::{GrpcOptions, RetrySettings};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -545,10 +545,10 @@ mod test {
     async fn test_background_discovery() -> YdbResult<()> {
         let cred = DBCredentials {
             database: test_client_builder().database.clone(),
-            token_cache: tokio::task::spawn_blocking(|| {
-                TokenCache::new(test_client_builder().credentials.clone())
-            })
-            .await??,
+            token_cache: TokenCache::new(
+                test_client_builder().credentials.clone(),
+                RetrySettings::with_default_backoff(),
+            ),
         };
 
         let interceptor =

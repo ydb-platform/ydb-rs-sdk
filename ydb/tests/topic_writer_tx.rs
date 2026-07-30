@@ -150,12 +150,14 @@ fn record_tx_lifecycle(incoming: &Incoming, tx_lifecycle: &CapturedTxLifecycle) 
     }
 }
 
-fn make_client(server: &MockServer) -> YdbResult<Client> {
-    ClientBuilder::new_from_connection_string(format!(
+async fn make_client(server: &MockServer) -> YdbResult<Client> {
+    let client = ClientBuilder::new_from_connection_string(format!(
         "{}{DATABASE}?use_discovery=false",
         server.endpoint()
     ))?
-    .client()
+    .client()?;
+    client.wait().await?;
+    Ok(client)
 }
 
 fn test_message() -> TopicWriterMessage {
@@ -169,7 +171,7 @@ fn test_message() -> TopicWriterMessage {
 async fn write_single_message_written_in_tx() -> YdbResult<()> {
     let (handler, _, _, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     client
         .query_client()
@@ -193,7 +195,7 @@ async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
         offset: WRONG_ACK_OFFSET,
     });
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -230,7 +232,7 @@ async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
 async fn tx_identity_present_in_write_request() -> YdbResult<()> {
     let (handler, captured_tx, _, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     client
         .query_client()
@@ -260,7 +262,7 @@ async fn regular_writer_sends_no_tx_identity() -> YdbResult<()> {
     });
     let (server, _reply_tx) = MockServer::start(handler).await;
 
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
     let writer = client
         .topic_client()
         .create_writer(TOPIC_PATH.to_string())
@@ -288,7 +290,7 @@ async fn tx_writer_options_propagated_to_init_request() -> YdbResult<()> {
         .topic_path(TOPIC_PATH.to_string())
         .build()?;
 
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
     client
         .query_client()
         .retry_tx(closure!(
@@ -379,7 +381,7 @@ impl Handler for ReconnectHandler {
 async fn write_skipped_already_written_returns_error_and_rolls_back() -> YdbResult<()> {
     let (handler, _, _, tx_lifecycle) = AutoReplyHandler::new(AckMode::SkippedAlreadyWritten);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -414,7 +416,7 @@ async fn write_skipped_already_written_returns_error_and_rolls_back() -> YdbResu
 async fn write_returns_error_after_stream_close_and_rolls_back() -> YdbResult<()> {
     let (handler, _, captured_stream_id, tx_lifecycle) = ReconnectHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -546,7 +548,7 @@ impl Handler for CommitFailsHandler {
 async fn commit_failure_after_successful_write_is_not_retried() -> YdbResult<()> {
     let (handler, state) = CommitFailsHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()

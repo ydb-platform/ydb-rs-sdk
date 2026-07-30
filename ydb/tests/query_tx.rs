@@ -33,12 +33,14 @@ use crate::mock_server::server::MockServer;
 
 const DATABASE: &str = "/local";
 
-fn make_client(server: &MockServer) -> YdbResult<Client> {
-    ClientBuilder::new_from_connection_string(format!(
+async fn make_client(server: &MockServer) -> YdbResult<Client> {
+    let client = ClientBuilder::new_from_connection_string(format!(
         "{}{DATABASE}?use_discovery=false",
         server.endpoint()
     ))?
-    .client()
+    .client()?;
+    client.wait().await?;
+    Ok(client)
 }
 
 fn success_part(tx_id: Option<&str>) -> ExecuteQueryResponsePart {
@@ -281,7 +283,7 @@ impl Handler for CommitTransportFailsHandler {
 async fn happy_path_reports_committed() -> YdbResult<()> {
     let (handler, tx_lifecycle) = CountingHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -305,7 +307,7 @@ async fn happy_path_reports_committed() -> YdbResult<()> {
 async fn commit_rpc_failure_is_reported_and_not_retried() -> YdbResult<()> {
     let (handler, tx_lifecycle) = CommitTransportFailsHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -333,7 +335,7 @@ async fn commit_rpc_failure_is_reported_and_not_retried() -> YdbResult<()> {
 async fn commit_via_query_reports_committed() -> YdbResult<()> {
     let (handler, tx_lifecycle) = CountingHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -363,7 +365,7 @@ async fn invalidating_error_propagated_is_retried_until_success() -> YdbResult<(
     let (handler, tx_lifecycle) =
         ScriptedQueryHandler::new(vec![StatusCode::BadSession, StatusCode::Success], vec![]);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -395,7 +397,7 @@ async fn swallowed_invalidating_error_must_not_report_committed() -> YdbResult<(
         vec![],
     );
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -450,7 +452,7 @@ async fn transient_error_propagated_rolls_back_and_retries() -> YdbResult<()> {
         vec![],
     );
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -482,7 +484,7 @@ async fn transient_error_swallowed_falls_through_to_real_commit() -> YdbResult<(
     let (handler, tx_lifecycle) =
         ScriptedQueryHandler::new(vec![StatusCode::Success, StatusCode::Unavailable], vec![]);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -517,7 +519,7 @@ async fn transient_error_swallowed_falls_through_to_real_commit() -> YdbResult<(
 async fn explicit_rollback_reports_ok_with_real_rollback_rpc() -> YdbResult<()> {
     let (handler, tx_lifecycle) = CountingHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -548,7 +550,7 @@ async fn rollback_rpc_failure_propagated_is_retried_until_rollback_succeeds() ->
         vec![StatusCode::BadSession, StatusCode::Success],
     );
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -584,7 +586,7 @@ async fn swallowed_rollback_failure_must_not_report_committed() -> YdbResult<()>
     let (handler, tx_lifecycle) =
         ScriptedQueryHandler::new(vec![StatusCode::Success], vec![StatusCode::BadSession]);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
