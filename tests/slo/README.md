@@ -124,7 +124,7 @@ throughput counts committed batches.
 
 The topic transaction workload creates the configured number of fixed topic
 partitions and runs one worker per partition. Each partition starts with one
-unconsumed generation-0 event. A transaction reads one message, INSERTs its immutable
+unconsumed generation-0 event. A transaction reads one message, inserts its immutable
 transition, writes its successor to the same partition, and commits the consumer
 offset. Workers share the bounded query session pool; the defaults provide one
 query session per partition worker.
