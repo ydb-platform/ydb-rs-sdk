@@ -1,8 +1,6 @@
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use hdrhistogram::Histogram;
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Counter, Gauge, MeterProvider as _, UpDownCounter};
 use opentelemetry_otlp::WithExportConfig;
@@ -12,14 +10,13 @@ use opentelemetry_sdk::runtime;
 
 use crate::config::Config;
 
-const HDR_MIN_MICROSECONDS: u64 = 1;
-const HDR_MAX_MICROSECONDS: u64 = 60_000_000;
-const HDR_SIGNIFICANT_DIGITS: u8 = 5;
+use self::latency::LatencySeries;
+
+mod latency;
 
 pub type OperationType = &'static str;
 pub const OPERATION_READ: OperationType = "read";
 pub const OPERATION_WRITE: OperationType = "write";
-pub const OPERATION_MESSAGE_RTT: OperationType = "message_rtt";
 
 const STATUS_SUCCESS: &str = "success";
 const STATUS_FAILURE: &str = "failure";
@@ -31,242 +28,165 @@ pub struct Metrics {
 
 struct MetricsInner {
     ref_name: String,
-    provider: Option<SdkMeterProvider>,
-    latency: Arc<Mutex<LatencyHistogram>>,
-    operations_total: Option<Counter<u64>>,
-    retry_attempts_total: Option<Counter<u64>>,
-    retry_attempts: Option<Gauge<u64>>,
-    pending_operations: Option<UpDownCounter<i64>>,
-    errors_total: Option<Counter<u64>>,
-    timeouts_total: Option<Counter<u64>>,
-}
-
-struct LatencyHistogram {
-    by_attrs: HashMap<String, Histogram<u64>>,
-    cached_percentiles: HashMap<String, [f64; 3]>,
-}
-
-impl LatencyHistogram {
-    fn new() -> Self {
-        Self {
-            by_attrs: HashMap::new(),
-            cached_percentiles: HashMap::new(),
-        }
-    }
-
-    fn record(&mut self, latency_micros: u64, attrs_key: String) {
-        let hist = self.by_attrs.entry(attrs_key.clone()).or_insert_with(|| {
-            Histogram::new_with_bounds(
-                HDR_MIN_MICROSECONDS,
-                HDR_MAX_MICROSECONDS,
-                HDR_SIGNIFICANT_DIGITS,
-            )
-            .expect("valid hdr bounds")
-        });
-        hist.record(latency_micros).ok();
-        self.cached_percentiles.insert(
-            attrs_key,
-            [
-                hist.value_at_quantile(0.5) as f64 / 1_000_000.0,
-                hist.value_at_quantile(0.95) as f64 / 1_000_000.0,
-                hist.value_at_quantile(0.99) as f64 / 1_000_000.0,
-            ],
-        );
-    }
-
-    fn percentiles(&self) -> &HashMap<String, [f64; 3]> {
-        &self.cached_percentiles
-    }
+    operation_latency: Arc<Mutex<LatencySeries>>,
+    topic_e2e_latency: Arc<Mutex<LatencySeries>>,
+    operations_total: Counter<u64>,
+    retry_attempts_total: Counter<u64>,
+    retry_attempts: Gauge<u64>,
+    pending_operations: UpDownCounter<i64>,
+    errors_total: Counter<u64>,
+    timeouts_total: Counter<u64>,
+    // Keeps the provider alive until all metric instruments are dropped.
+    _provider: SdkMeterProvider,
 }
 
 pub struct Span {
     metrics: Metrics,
     operation_type: OperationType,
     started: Instant,
+    pending: bool,
 }
 
 impl Metrics {
     pub fn new(cfg: &Config) -> Result<Self, String> {
-        let latency = Arc::new(Mutex::new(LatencyHistogram::new()));
+        let operation_latency = Arc::new(Mutex::new(LatencySeries::new()));
+        let topic_e2e_latency = Arc::new(Mutex::new(LatencySeries::new()));
         let ref_name = cfg.ref_name.clone();
-        let label = cfg.label.clone();
-
-        let Some(endpoint) = cfg.otlp_endpoint.as_ref() else {
-            return Ok(Self {
-                inner: Arc::new(MetricsInner {
-                    ref_name,
-                    provider: None,
-                    latency,
-                    operations_total: None,
-                    retry_attempts_total: None,
-                    retry_attempts: None,
-                    pending_operations: None,
-                    errors_total: None,
-                    timeouts_total: None,
-                }),
-            });
-        };
-
-        let exporter = opentelemetry_otlp::MetricExporter::builder()
-            .with_http()
-            .with_endpoint(endpoint.clone())
-            .with_temporality(Temporality::Cumulative)
-            .build()
-            .map_err(|err| format!("failed to create OTLP exporter: {err}"))?;
-
-        let reader = PeriodicReader::builder(exporter, runtime::Tokio)
-            .with_interval(Duration::from_secs(1))
-            .build();
 
         let resource = Resource::new(vec![
-            KeyValue::new("service.name", label.clone()),
+            KeyValue::new("service.name", cfg.label.clone()),
             KeyValue::new("ref", ref_name.clone()),
             KeyValue::new("sdk", "rust"),
             KeyValue::new("sdk_version", env!("CARGO_PKG_VERSION")),
         ]);
 
-        let provider = SdkMeterProvider::builder()
-            .with_resource(resource)
-            .with_reader(reader)
-            .build();
+        let provider_builder = SdkMeterProvider::builder().with_resource(resource);
+        let provider = if let Some(endpoint) = &cfg.otlp_endpoint {
+            let exporter = opentelemetry_otlp::MetricExporter::builder()
+                .with_http()
+                .with_endpoint(endpoint.clone())
+                .with_temporality(Temporality::Cumulative)
+                .build()
+                .map_err(|err| format!("failed to create OTLP exporter: {err}"))?;
+
+            let reader = PeriodicReader::builder(exporter, runtime::Tokio)
+                .with_interval(Duration::from_secs(1))
+                .build();
+
+            provider_builder.with_reader(reader).build()
+        } else {
+            provider_builder.build()
+        };
 
         let meter = provider.meter("slo-workload");
 
-        let latency_p50 = latency.clone();
-        let _latency_p50 = meter
-            .f64_observable_gauge("sdk.operation.latency.p50.seconds")
-            .with_description("50th percentile latency of operations in seconds")
-            .with_unit("s")
-            .with_callback(move |observer| {
-                for (attrs_key, vals) in latency_p50.lock().unwrap().percentiles() {
-                    observer.observe(vals[0], &attrs_from_key(attrs_key));
-                }
-            })
-            .build();
-
-        let latency_p95 = latency.clone();
-        let _latency_p95 = meter
-            .f64_observable_gauge("sdk.operation.latency.p95.seconds")
-            .with_description("95th percentile latency of operations in seconds")
-            .with_unit("s")
-            .with_callback(move |observer| {
-                for (attrs_key, vals) in latency_p95.lock().unwrap().percentiles() {
-                    observer.observe(vals[1], &attrs_from_key(attrs_key));
-                }
-            })
-            .build();
-
-        let latency_p99 = latency.clone();
-        let _latency_p99 = meter
-            .f64_observable_gauge("sdk.operation.latency.p99.seconds")
-            .with_description("99th percentile latency of operations in seconds")
-            .with_unit("s")
-            .with_callback(move |observer| {
-                for (attrs_key, vals) in latency_p99.lock().unwrap().percentiles() {
-                    observer.observe(vals[2], &attrs_from_key(attrs_key));
-                }
-            })
-            .build();
+        if cfg.otlp_endpoint.is_some() {
+            latency::register_gauges(
+                &meter,
+                operation_latency.clone(),
+                "sdk.operation.latency",
+                "operation latency",
+            );
+            latency::register_gauges(
+                &meter,
+                topic_e2e_latency.clone(),
+                "sdk.topic.e2e.latency",
+                "topic end-to-end latency",
+            );
+        }
 
         Ok(Self {
             inner: Arc::new(MetricsInner {
                 ref_name,
-                provider: Some(provider),
-                latency,
-                operations_total: Some(
-                    meter
-                        .u64_counter("sdk.operations.total")
-                        .with_description("Total number of operations, categorized by type")
-                        .with_unit("{operation}")
-                        .build(),
-                ),
-                retry_attempts_total: Some(
-                    meter
-                        .u64_counter("sdk.retry.attempts.total")
-                        .with_description("Total number of retry attempts")
-                        .with_unit("{attempt}")
-                        .build(),
-                ),
-                retry_attempts: Some(
-                    meter
-                        .u64_gauge("sdk.retry.attempts")
-                        .with_description("Current retry attempts")
-                        .build(),
-                ),
-                pending_operations: Some(
-                    meter
-                        .i64_up_down_counter("sdk.pending.operations")
-                        .with_description("Current number of pending operations")
-                        .build(),
-                ),
-                errors_total: Some(
-                    meter
-                        .u64_counter("sdk.errors.total")
-                        .with_description("Total number of errors encountered")
-                        .with_unit("{error}")
-                        .build(),
-                ),
-                timeouts_total: Some(
-                    meter
-                        .u64_counter("sdk.timeouts.total")
-                        .with_description("Total number of timeout errors")
-                        .with_unit("{timeout}")
-                        .build(),
-                ),
+                operation_latency,
+                topic_e2e_latency,
+                operations_total: meter
+                    .u64_counter("sdk.operations.total")
+                    .with_description("Total number of operations, categorized by type")
+                    .with_unit("{operation}")
+                    .build(),
+                retry_attempts_total: meter
+                    .u64_counter("sdk.retry.attempts.total")
+                    .with_description("Total number of retry attempts")
+                    .with_unit("{attempt}")
+                    .build(),
+                retry_attempts: meter
+                    .u64_gauge("sdk.retry.attempts")
+                    .with_description("Current retry attempts")
+                    .build(),
+                pending_operations: meter
+                    .i64_up_down_counter("sdk.pending.operations")
+                    .with_description("Current number of pending operations")
+                    .build(),
+                errors_total: meter
+                    .u64_counter("sdk.errors.total")
+                    .with_description("Total number of errors encountered")
+                    .with_unit("{error}")
+                    .build(),
+                timeouts_total: meter
+                    .u64_counter("sdk.timeouts.total")
+                    .with_description("Total number of timeout errors")
+                    .with_unit("{timeout}")
+                    .build(),
+                _provider: provider,
             }),
         })
     }
 
     pub fn record_latency_with_attrs_key(&self, attrs_key: String, latency: Duration) {
-        self.inner
-            .latency
-            .lock()
-            .unwrap()
-            .record(latency.as_micros() as u64, attrs_key);
+        record_latency_series(&self.inner.operation_latency, latency, attrs_key);
     }
 
-    pub fn record_latency_with_operation(&self, operation_type: OperationType, latency: Duration) {
-        let attrs_key = format!(
-            "ref={};operation_type={};operation_status={}",
-            self.inner.ref_name, operation_type, STATUS_SUCCESS
-        );
+    pub fn record_topic_e2e_latency(&self, latency: Duration) {
+        let attrs_key = format!("ref={}", self.inner.ref_name);
+        record_latency_series(&self.inner.topic_e2e_latency, latency, attrs_key);
+    }
 
-        self.record_latency_with_attrs_key(attrs_key, latency);
+    pub(crate) fn check(&self) -> Result<(), String> {
+        check_latency_series(&self.inner.operation_latency, "operation latency")?;
+        check_latency_series(&self.inner.topic_e2e_latency, "topic end-to-end latency")
     }
 
     pub fn start(&self, operation_type: OperationType) -> Span {
-        if let Some(counter) = &self.inner.pending_operations {
-            counter.add(
-                1,
-                &[
-                    KeyValue::new("ref", self.inner.ref_name.clone()),
-                    KeyValue::new("operation_type", operation_type),
-                ],
-            );
-        }
+        self.inner.pending_operations.add(
+            1,
+            &[
+                KeyValue::new("ref", self.inner.ref_name.clone()),
+                KeyValue::new("operation_type", operation_type),
+            ],
+        );
 
         Span {
             metrics: self.clone(),
             operation_type,
             started: Instant::now(),
-        }
-    }
-
-    pub async fn push(&self) {
-        if let Some(provider) = &self.inner.provider {
-            let _ = provider.force_flush();
-        }
-    }
-
-    pub async fn close(&self) {
-        if let Some(provider) = &self.inner.provider {
-            let _ = provider.shutdown();
+            pending: true,
         }
     }
 }
 
+fn record_latency_series(series: &Mutex<LatencySeries>, latency: Duration, attrs_key: String) {
+    match series.lock() {
+        Ok(mut series) => series.record(latency, attrs_key),
+        Err(poisoned) => poisoned
+            .into_inner()
+            .fail("latency histogram lock is poisoned"),
+    }
+}
+
+fn check_latency_series(series: &Mutex<LatencySeries>, name: &str) -> Result<(), String> {
+    let series = series
+        .lock()
+        .map_err(|_| format!("{name} histogram lock is poisoned"))?;
+
+    match series.recording_error() {
+        Some(error) => Err(format!("{name} metrics failed: {error}")),
+        None => Ok(()),
+    }
+}
+
 impl Span {
-    pub fn finish(self, err: Option<&str>, attempts: u64) {
+    pub fn finish(mut self, err: Option<&str>, attempts: u64) {
         let status = if err.is_some() {
             STATUS_FAILURE
         } else {
@@ -282,50 +202,48 @@ impl Span {
         self.metrics
             .record_latency_with_attrs_key(attrs_key, self.started.elapsed());
 
-        if let Some(counter) = &self.metrics.inner.operations_total {
-            counter.add(1, &attrs);
-        }
-        if let Some(counter) = &self.metrics.inner.retry_attempts_total {
-            counter.add(attempts, &attrs);
-        }
-        if let Some(gauge) = &self.metrics.inner.retry_attempts {
-            gauge.record(attempts, &attrs);
-        }
-        if let Some(counter) = &self.metrics.inner.pending_operations {
-            counter.add(
-                -1,
-                &[
-                    KeyValue::new("ref", self.metrics.inner.ref_name.clone()),
-                    KeyValue::new("operation_type", self.operation_type),
-                ],
-            );
-        }
+        self.metrics.inner.operations_total.add(1, &attrs);
+        self.metrics
+            .inner
+            .retry_attempts_total
+            .add(attempts, &attrs);
+        self.metrics.inner.retry_attempts.record(attempts, &attrs);
+        self.finish_pending();
 
         if let Some(err_msg) = err {
-            if (err_msg.contains("timeout") || err_msg.contains("deadline"))
-                && let Some(counter) = &self.metrics.inner.timeouts_total
-            {
-                counter.add(1, &attrs);
+            if err_msg.contains("timeout") || err_msg.contains("deadline") {
+                self.metrics.inner.timeouts_total.add(1, &attrs);
             }
-            if let Some(counter) = &self.metrics.inner.errors_total {
-                let mut error_attrs = attrs;
-                error_attrs.push(KeyValue::new("error_category", "ydb"));
-                error_attrs.push(KeyValue::new("error_name", err_msg.to_string()));
-                counter.add(1, &error_attrs);
-            }
+            let mut error_attrs = attrs;
+            error_attrs.push(KeyValue::new("error_category", "ydb"));
+            error_attrs.push(KeyValue::new("error_name", err_msg.to_string()));
+            self.metrics.inner.errors_total.add(1, &error_attrs);
         }
     }
 
-    pub fn cancel(self) {
-        if let Some(counter) = &self.metrics.inner.pending_operations {
-            counter.add(
-                -1,
-                &[
-                    KeyValue::new("ref", self.metrics.inner.ref_name.clone()),
-                    KeyValue::new("operation_type", self.operation_type),
-                ],
-            );
+    pub fn cancel(mut self) {
+        self.finish_pending();
+    }
+
+    fn finish_pending(&mut self) {
+        if !self.pending {
+            return;
         }
+        self.pending = false;
+
+        self.metrics.inner.pending_operations.add(
+            -1,
+            &[
+                KeyValue::new("ref", self.metrics.inner.ref_name.clone()),
+                KeyValue::new("operation_type", self.operation_type),
+            ],
+        );
+    }
+}
+
+impl Drop for Span {
+    fn drop(&mut self) {
+        self.finish_pending();
     }
 }
 

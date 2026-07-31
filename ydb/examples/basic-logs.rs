@@ -12,10 +12,9 @@ async fn main() -> YdbResult<()> {
         // sets this to be the default, global collector for this application.
         .init();
 
-    let client =
-        ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.client()?;
+    let client_builder = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?;
 
-    match timeout(Duration::from_secs(3), client.wait()).await {
+    let _client = match timeout(Duration::from_secs(3), client_builder.build()).await {
         Ok(res) => res?,
         _ => {
             return Err(YdbError::from("Connection timeout"));

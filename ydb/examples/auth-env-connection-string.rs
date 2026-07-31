@@ -5,12 +5,10 @@ use ydb::{ClientBuilder, MetadataUrlCredentials, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let client =
+    let client_builder =
         ClientBuilder::new_from_connection_string(std::env::var("YDB_CONNECTION_STRING")?)?
-            .with_credentials(MetadataUrlCredentials::new())
-            .client()?;
-
-    match timeout(Duration::from_secs(3), client.wait()).await {
+            .with_credentials(MetadataUrlCredentials::new());
+    let client = match timeout(Duration::from_secs(3), client_builder.build()).await {
         Ok(res) => res?,
         _ => {
             return Err(YdbError::from("Connection timeout"));

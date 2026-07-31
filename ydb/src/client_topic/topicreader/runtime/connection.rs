@@ -23,6 +23,6 @@ impl Connection {
     pub(crate) fn send(&self, message: RawFromClientOneOf) -> YdbResult<()> {
         self.outgoing_tx
             .send(message)
-            .map_err(|err| YdbError::Transport(format!("topic reader commit send failed: {err}")))
+            .map_err(|err| YdbError::Transport(format!("topic reader send failed: {err}")))
     }
 }

@@ -81,6 +81,8 @@ impl PendingCommits {
     }
 
     fn ack_partition(&mut self, psid: PartitionSessionId, committed_offset: i64) {
+        // An ack may arrive after a graceful stop has already removed the session and
+        // failed its remaining pending commits. Such a late ack is safe to ignore.
         let Some(session) = self.sessions.get_mut(&psid) else {
             return;
         };

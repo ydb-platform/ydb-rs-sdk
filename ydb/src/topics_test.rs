@@ -1112,8 +1112,8 @@ async fn topic_writer_reconnects() -> YdbResult<()> {
         client.database()
     ))?
     .with_discovery(discovery)
-    .client()?;
-    proxied_client.wait().await?;
+    .build()
+    .await?;
 
     let mut proxied_topic_client = proxied_client.topic_client();
     let writer = proxied_topic_client
