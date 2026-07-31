@@ -1,15 +1,15 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use tokio::time::{Instant, sleep, timeout};
-use ydb::DescribeConsumerOptionsBuilder;
+use tokio::time::{Instant, sleep};
+use ydb::{DescribeConsumerOptionsBuilder, Transaction, YdbOrCustomerError, closure};
 
-use slo_framework::topic_tx::{PartitionId, TopicOffset};
+use slo_framework::topic_tx::{ChainTransition, PartitionId, TopicOffset};
 
 use super::TopicTxStorage;
-use super::queries::required_field;
+use super::queries::{read_next_transition, required_field};
+use super::transaction::{invalid_chain_state, reader_options};
 
-const STABLE_STATE_PERIOD: Duration = Duration::from_secs(1);
 const POOL_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 const POOL_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -24,40 +24,48 @@ impl TopicTxStorage {
     /// Verifies atomic chain state after workers stop, then checks that no query
     /// session remains in use or creation.
     pub(crate) async fn verify_shutdown_state(&self) -> Result<()> {
-        self.verify_after_quiet_period().await?;
+        self.verify_transactional_snapshots().await?;
         self.wait_for_pool_release().await
     }
 
-    async fn verify_after_quiet_period(&self) -> Result<()> {
-        timeout(self.params.operation_timeout, async {
-            loop {
-                let partition_offsets = self.wait_for_quiet_partition_offsets().await?;
-                // Delay a table failure until the second topic observation. If
-                // offsets moved during the scan, it was not a coherent snapshot.
-                let verification = self.verify_partitions(&partition_offsets).await;
-                let partition_offsets_after = self.read_partition_offsets().await?;
-
-                if partition_offsets == partition_offsets_after {
-                    return verification;
-                }
-            }
-        })
-        .await
-        .context("final transaction verification timed out")?
+    async fn verify_transactional_snapshots(&self) -> Result<()> {
+        for raw_partition_id in 0..self.params.partition_count {
+            let partition_id = PartitionId::new(raw_partition_id as i64);
+            self.verify_partition_snapshot(partition_id).await?;
+        }
+        Ok(())
     }
 
-    /// A late commit can advance a partition after its RPC fails. One unchanged
-    /// observation reduces that shutdown race but cannot resolve commit ambiguity.
-    async fn wait_for_quiet_partition_offsets(&self) -> Result<Vec<PartitionOffsets>> {
-        let mut previous = self.read_partition_offsets().await?;
-        loop {
-            sleep(STABLE_STATE_PERIOD).await;
-            let current = self.read_partition_offsets().await?;
-            if current == previous {
-                return Ok(current);
-            }
-            previous = current;
-        }
+    async fn verify_partition_snapshot(&self, partition_id: PartitionId) -> Result<()> {
+        let options = reader_options(partition_id, &self.params);
+        let mut reader = self
+            .topic_client
+            .clone()
+            .create_reader_with_params(options)
+            .await
+            .with_context(|| format!("open verification reader for partition {partition_id}"))?;
+        let timeout = self.params.operation_timeout;
+        let deadline = Instant::now() + timeout;
+        let table_path = &self.params.table_path;
+
+        self.query_client
+            .retry_tx(closure!(
+                [&mut reader, table_path, partition_id, &deadline],
+                async |tx: &mut Transaction| {
+                    // Observe both sides of the chain in one transaction, then
+                    // roll it back so verification does not advance the consumer.
+                    let transition =
+                        read_next_transition(reader, tx, *partition_id, *deadline).await?;
+                    verify_partition_table_state(tx, table_path, &transition).await?;
+                    tx.rollback().await?;
+                    Ok(())
+                }
+            ))
+            .idempotent(true)
+            .timeout(timeout)
+            .await
+            .map_err(anyhow::Error::new)
+            .with_context(|| format!("verify transaction snapshot for partition {partition_id}"))
     }
 
     pub(super) async fn read_partition_offsets(&self) -> Result<Vec<PartitionOffsets>> {
@@ -104,96 +112,6 @@ impl TopicTxStorage {
         Ok(partitions)
     }
 
-    async fn verify_partitions(&self, partitions: &[PartitionOffsets]) -> Result<()> {
-        ensure!(
-            partitions.len() == self.params.partition_count,
-            "expected {} topic partitions, found {}",
-            self.params.partition_count,
-            partitions.len(),
-        );
-
-        for (raw_partition_id, partition) in partitions.iter().enumerate() {
-            let partition_id = PartitionId::new(raw_partition_id as i64);
-            Self::verify_partition_topic_state(partition_id, partition)?;
-            self.verify_partition_table_state(partition).await?;
-        }
-        Ok(())
-    }
-
-    fn verify_partition_topic_state(
-        expected_partition_id: PartitionId,
-        partition: &PartitionOffsets,
-    ) -> Result<()> {
-        ensure!(
-            partition.partition_id == expected_partition_id,
-            "expected partition {expected_partition_id}, found {}",
-            partition.partition_id,
-        );
-        ensure!(
-            partition.committed_offset.value() > 0,
-            "partition {expected_partition_id} made no transaction progress",
-        );
-        let expected_end = TopicOffset::new(
-            partition
-                .committed_offset
-                .value()
-                .checked_add(1)
-                .context("committed topic offset overflow")?,
-        );
-        ensure!(
-            partition.end_offset == expected_end,
-            "partition {expected_partition_id} must contain one live chain event: committed offset {}, end offset {}",
-            partition.committed_offset,
-            partition.end_offset,
-        );
-        Ok(())
-    }
-
-    async fn verify_partition_table_state(&self, partition: &PartitionOffsets) -> Result<()> {
-        let partition_id = partition.partition_id;
-        let query = format!(
-            "SELECT
-                COUNT(*) AS transition_count,
-                COUNT_IF(
-                    input_offset >= 0
-                    AND input_offset < $committed_offset
-                    AND input_generation = CAST(input_offset AS Uint64)
-                    AND output_generation = CAST(input_offset + 1 AS Uint64)
-                ) AS valid_transition_count
-             FROM `{}`
-             WHERE partition_id = $partition_id",
-            self.params.table_path,
-        );
-        let mut row = self
-            .query_client
-            .clone()
-            .query_row(query)
-            .param("$partition_id", partition_id.value())
-            .param("$committed_offset", partition.committed_offset.value())
-            .idempotent(true)
-            .timeout(self.params.operation_timeout)
-            .await
-            .with_context(|| {
-                format!(
-                    "read partition {partition_id} from table {}",
-                    self.params.table_path,
-                )
-            })?;
-        let transition_count: u64 = required_field(&mut row, "transition_count")?;
-        let valid_transition_count: u64 = required_field(&mut row, "valid_transition_count")?;
-        let expected_count = partition.committed_offset.value() as u64;
-
-        ensure!(
-            transition_count == expected_count,
-            "partition {partition_id} has {transition_count} table transitions, expected {expected_count}",
-        );
-        ensure!(
-            valid_transition_count == expected_count,
-            "partition {partition_id} has {valid_transition_count} valid table transitions, expected {expected_count}",
-        );
-        Ok(())
-    }
-
     async fn wait_for_pool_release(&self) -> Result<()> {
         let timeout = self.params.operation_timeout.min(POOL_RELEASE_TIMEOUT);
         let deadline = Instant::now() + timeout;
@@ -217,4 +135,64 @@ impl TopicTxStorage {
             sleep(POOL_POLL_INTERVAL).await;
         }
     }
+}
+
+async fn verify_partition_table_state(
+    tx: &mut Transaction,
+    table_path: &str,
+    transition: &ChainTransition,
+) -> Result<(), YdbOrCustomerError> {
+    let partition_id = transition.coordinate.partition_id;
+    let next_offset = transition.coordinate.offset.value();
+    let query = format!(
+        "SELECT
+            COUNT(*) AS transition_count,
+            COUNT_IF(
+                input_offset >= 0
+                AND input_offset < $next_offset
+                AND input_generation = CAST(input_offset AS Uint64)
+                AND output_generation = CAST(input_offset + 1 AS Uint64)
+            ) AS valid_transition_count
+         FROM `{table_path}`
+         WHERE partition_id = $partition_id",
+    );
+    let mut row = tx
+        .query_row(query)
+        .param("$partition_id", partition_id.value())
+        .param("$next_offset", next_offset)
+        .await?;
+    let transition_count: u64 =
+        required_field(&mut row, "transition_count").map_err(invalid_chain_state)?;
+    let valid_transition_count: u64 =
+        required_field(&mut row, "valid_transition_count").map_err(invalid_chain_state)?;
+
+    validate_partition_table_counts(
+        partition_id,
+        next_offset,
+        transition_count,
+        valid_transition_count,
+    )
+    .map_err(invalid_chain_state)
+}
+
+fn validate_partition_table_counts(
+    partition_id: PartitionId,
+    next_offset: i64,
+    transition_count: u64,
+    valid_transition_count: u64,
+) -> Result<()> {
+    ensure!(
+        next_offset > 0,
+        "partition {partition_id} made no transaction progress",
+    );
+    let expected_count = u64::try_from(next_offset).context("next topic offset is negative")?;
+    ensure!(
+        transition_count == expected_count,
+        "partition {partition_id} has {transition_count} table transitions before live topic offset {next_offset}, expected {expected_count}",
+    );
+    ensure!(
+        valid_transition_count == expected_count,
+        "partition {partition_id} has {valid_transition_count} valid table transitions before live topic offset {next_offset}, expected {expected_count}",
+    );
+    Ok(())
 }
