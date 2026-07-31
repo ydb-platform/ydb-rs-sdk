@@ -5,9 +5,9 @@ use ydb::{ClientBuilder, Transaction, closure};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client =
-        ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.client()?;
-    client.wait().await?;
+    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
+        .build()
+        .await?;
 
     let qc = client.query_client();
 

@@ -6,10 +6,9 @@ use ydb::{ClientBuilder, Value, YdbError, YdbResult, ydb_params};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let client =
-        ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.client()?;
+    let client_builder = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?;
 
-    match timeout(Duration::from_secs(3), client.wait()).await {
+    let client = match timeout(Duration::from_secs(3), client_builder.build()).await {
         Ok(res) => res?,
         _ => {
             return Err(YdbError::from("Connection timeout"));

@@ -22,10 +22,9 @@ impl Storage {
     pub async fn new(fw: &Framework, params: &Params) -> Result<Self, String> {
         let client = ClientBuilder::new_from_connection_string(&fw.config.connection_string)
             .map_err(|err| err.to_string())?
-            .client()
+            .build()
+            .await
             .map_err(|err| err.to_string())?;
-
-        client.wait().await.map_err(|err| err.to_string())?;
 
         let pool_limit = params.pool_size() as usize;
         let session_rpc_timeout = params.read_timeout.max(params.write_timeout);

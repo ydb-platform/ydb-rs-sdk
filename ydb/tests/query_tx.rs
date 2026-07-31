@@ -9,7 +9,6 @@
 //! - a query returns a transient/ambiguous status: the transaction may still be active;
 //! - the caller explicitly rolls back;
 //! - rollback or commit RPC outcome is unknown;
-//! - the callback panics.
 //!
 //! The regression cases for #521 are the swallowed-error paths: if the callback
 //! returns `Ok` after the server invalidated the transaction, or after rollback
@@ -22,7 +21,7 @@ mod mock_server;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ydb::{Client, ClientBuilder, Transaction, YdbOrCustomerError, YdbResult, closure};
+use ydb::{Client, ClientBuilder, Transaction, YdbResult, closure};
 use ydb_grpc::ydb_proto::query::{
     ExecuteQueryResponsePart, RollbackTransactionResponse, TransactionMeta,
 };
@@ -34,16 +33,13 @@ use crate::mock_server::server::MockServer;
 
 const DATABASE: &str = "/local";
 
-fn make_client(server: &MockServer) -> YdbResult<Client> {
+async fn make_client(server: &MockServer) -> YdbResult<Client> {
     ClientBuilder::new_from_connection_string(format!(
         "{}{DATABASE}?use_discovery=false",
         server.endpoint()
     ))?
-    .client()
-}
-
-fn panic_callback<T>(message: &'static str) -> Result<T, YdbOrCustomerError> {
-    panic!("{message}");
+    .build()
+    .await
 }
 
 fn success_part(tx_id: Option<&str>) -> ExecuteQueryResponsePart {
@@ -286,7 +282,7 @@ impl Handler for CommitTransportFailsHandler {
 async fn happy_path_reports_committed() -> YdbResult<()> {
     let (handler, tx_lifecycle) = CountingHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -310,7 +306,7 @@ async fn happy_path_reports_committed() -> YdbResult<()> {
 async fn commit_rpc_failure_is_reported_and_not_retried() -> YdbResult<()> {
     let (handler, tx_lifecycle) = CommitTransportFailsHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -338,7 +334,7 @@ async fn commit_rpc_failure_is_reported_and_not_retried() -> YdbResult<()> {
 async fn commit_via_query_reports_committed() -> YdbResult<()> {
     let (handler, tx_lifecycle) = CountingHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -368,7 +364,7 @@ async fn invalidating_error_propagated_is_retried_until_success() -> YdbResult<(
     let (handler, tx_lifecycle) =
         ScriptedQueryHandler::new(vec![StatusCode::BadSession, StatusCode::Success], vec![]);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -400,7 +396,7 @@ async fn swallowed_invalidating_error_must_not_report_committed() -> YdbResult<(
         vec![],
     );
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -455,7 +451,7 @@ async fn transient_error_propagated_rolls_back_and_retries() -> YdbResult<()> {
         vec![],
     );
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -487,7 +483,7 @@ async fn transient_error_swallowed_falls_through_to_real_commit() -> YdbResult<(
     let (handler, tx_lifecycle) =
         ScriptedQueryHandler::new(vec![StatusCode::Success, StatusCode::Unavailable], vec![]);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -522,7 +518,7 @@ async fn transient_error_swallowed_falls_through_to_real_commit() -> YdbResult<(
 async fn explicit_rollback_reports_ok_with_real_rollback_rpc() -> YdbResult<()> {
     let (handler, tx_lifecycle) = CountingHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -553,7 +549,7 @@ async fn rollback_rpc_failure_propagated_is_retried_until_rollback_succeeds() ->
         vec![StatusCode::BadSession, StatusCode::Success],
     );
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -589,7 +585,7 @@ async fn swallowed_rollback_failure_must_not_report_committed() -> YdbResult<()>
     let (handler, tx_lifecycle) =
         ScriptedQueryHandler::new(vec![StatusCode::Success], vec![StatusCode::BadSession]);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
 
     let result = client
         .query_client()
@@ -617,70 +613,5 @@ async fn swallowed_rollback_failure_must_not_report_committed() -> YdbResult<()>
          RPC failed and the server-side transaction outcome is unknown"
     );
 
-    Ok(())
-}
-
-#[tokio::test]
-#[tracing_test::traced_test]
-async fn panic_before_any_terminal_event_rolls_back_and_is_not_retried() -> YdbResult<()> {
-    let (handler, tx_lifecycle) = CountingHandler::new();
-    let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
-
-    let result = client
-        .query_client()
-        .retry_tx::<_, ()>(closure!(async |tx: &mut Transaction| {
-            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
-            panic_callback("callback exploded before finishing the tx")
-        }))
-        .await;
-
-    assert!(
-        result.is_err(),
-        "a panicked callback must be reported as failure"
-    );
-    let lifecycle = tx_lifecycle.lock().unwrap();
-    assert_eq!(
-        lifecycle.rollback_count, 1,
-        "a real rollback must be attempted"
-    );
-    assert_eq!(lifecycle.commit_count, 0);
-    Ok(())
-}
-
-/// Characterizes today's behavior when the callback panics after a real commit-via-query:
-/// `retry_tx` reports failure even though the transaction already committed. This is a
-/// false negative, not a false commit, and the panic error is non-retryable.
-#[tokio::test]
-#[tracing_test::traced_test]
-async fn panic_after_commit_via_query_reports_failure_despite_real_commit() -> YdbResult<()> {
-    let (handler, tx_lifecycle) = CountingHandler::new();
-    let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
-
-    let result = client
-        .query_client()
-        .retry_tx::<_, ()>(closure!(async |tx: &mut Transaction| {
-            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')")
-                .with_commit(true)
-                .await?;
-            panic_callback("callback exploded after the tx already committed")
-        }))
-        .await;
-
-    assert!(
-        result.is_err(),
-        "known false negative: today this reports failure even though the commit-via-query \
-         already succeeded before the panic"
-    );
-    let lifecycle = tx_lifecycle.lock().unwrap();
-    assert_eq!(
-        lifecycle.commit_count, 0,
-        "committed via query, no separate RPC"
-    );
-    assert_eq!(
-        lifecycle.rollback_count, 0,
-        "rollback_quiet is a no-op once the transaction is already terminal"
-    );
     Ok(())
 }

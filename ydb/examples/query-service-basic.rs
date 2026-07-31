@@ -21,9 +21,9 @@ impl FromYdbRow for CounterRow {
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let client =
-        ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.client()?;
-    client.wait().await?;
+    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
+        .build()
+        .await?;
 
     let mut qc = client.query_client();
 
