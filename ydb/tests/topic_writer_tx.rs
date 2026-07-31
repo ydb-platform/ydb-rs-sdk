@@ -282,7 +282,7 @@ async fn regular_writer_sends_no_tx_identity() -> YdbResult<()> {
 
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn tx_writer_without_producer_generates_producer_id() -> YdbResult<()> {
+async fn tx_writer_without_producer_disables_deduplication() -> YdbResult<()> {
     let (handler, _, captured_init, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
     let (server, _reply_tx) = MockServer::start(handler).await;
 
@@ -309,8 +309,7 @@ async fn tx_writer_without_producer_generates_producer_id() -> YdbResult<()> {
     let init = captured_init.lock().unwrap().clone();
     let init = init.expect("InitRequest must be captured");
     assert_eq!(init.path, TOPIC_PATH);
-    assert_ne!(init.producer_id, "");
-    uuid::Uuid::parse_str(&init.producer_id).expect("generated producer ID must be a UUID");
+    assert_eq!(init.producer_id, "");
 
     Ok(())
 }
