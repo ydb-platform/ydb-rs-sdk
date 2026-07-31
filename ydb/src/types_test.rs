@@ -73,9 +73,7 @@ fn test_ydb_decimal_new_unchecked() {
 #[tokio::test]
 #[ignore] // need YDB access
 async fn test_decimal() -> YdbResult<()> {
-    let client = test_client_builder().client()?;
-
-    client.wait().await?;
+    let client = test_client_builder().build().await?;
 
     let db_value: Option<decimal_rs::Decimal> = {
         let mut row = client
@@ -875,8 +873,7 @@ fn value_roundtrip_eq(expected: &Value, actual: &Value) -> bool {
 #[tokio::test]
 #[ignore = "needs YDB access"]
 async fn test_type_serialization() -> YdbResult<()> {
-    let client = test_client_builder().client()?;
-    client.wait().await?;
+    let client = test_client_builder().build().await?;
 
     for case in type_cases() {
         check_type_roundtrip(&client, &case).await?;

@@ -199,8 +199,9 @@ async fn main() -> YdbResult<()> {
     let connection_string = std::env::var("YDB_CONNECTION_STRING")
         .unwrap_or_else(|_| "grpc://localhost:2136/local".to_string());
 
-    let client = ClientBuilder::new_from_connection_string(connection_string)?.client()?;
-    client.wait().await?;
+    let client = ClientBuilder::new_from_connection_string(connection_string)?
+        .build()
+        .await?;
 
     let mut qc = client.query_client();
 

@@ -34,13 +34,12 @@ use crate::mock_server::server::MockServer;
 const DATABASE: &str = "/local";
 
 async fn make_client(server: &MockServer) -> YdbResult<Client> {
-    let client = ClientBuilder::new_from_connection_string(format!(
+    ClientBuilder::new_from_connection_string(format!(
         "{}{DATABASE}?use_discovery=false",
         server.endpoint()
     ))?
-    .client()?;
-    client.wait().await?;
-    Ok(client)
+    .build()
+    .await
 }
 
 fn success_part(tx_id: Option<&str>) -> ExecuteQueryResponsePart {

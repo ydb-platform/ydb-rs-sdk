@@ -43,8 +43,7 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:9090/api/v1/otlp
 
 # Topic workload (set WORKLOAD_NAME=native-topic):
 ./target/release/slo-native-topic \
-  --read-rps 100 \
-  --write-rps 10
+  --write-rps 1000
 ```
 
 Or via cargo:
@@ -61,7 +60,7 @@ YDB_CONNECTION_STRING=grpc://localhost:2136/local \
 WORKLOAD_REF=local \
 WORKLOAD_NAME=native-topic \
 WORKLOAD_DURATION=60 \
-cargo run --release -p slo-native-topic -- --read-rps 100 --write-rps 10
+cargo run --release -p slo-native-topic -- --write-rps 1000
 ```
 
 ### CLI flags
@@ -76,6 +75,25 @@ cargo run --release -p slo-native-topic -- --read-rps 100 --write-rps 10
 | `--partition-size` | 1 | Auto-partition size (MB) |
 | `--min-partition-count` | 6 | Minimum partitions |
 | `--max-partition-count` | 1000 | Maximum partitions |
+
+### Topic CLI flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--write-rps` | 1000 | Total messages submitted per second |
+| `--write-timeout` | 5000 | Message submission and acknowledgement deadline (ms) |
+| `--delivery-timeout` | 5000 | Maximum wait for the next message batch (ms) |
+| `--commit-timeout` | 5000 | Commit acknowledgement deadline (ms) |
+| `--partition-count` | 10 | Topic partitions |
+| `--reader-count` | 5 | Topic readers |
+| `--writer-count` | 20 | Topic writers |
+
+For the topic workload, `write` is one message submission completed by a server
+acknowledgement. A successful `read` is one batch commit completed by a server
+acknowledgement; delivery timeouts, SDK read errors, and validation failures are
+also failed `read` operations. Successful read latency measures only commit
+acknowledgement time. Consequently, write throughput counts messages while read
+throughput counts committed batches.
 
 Table path: `{database}/{WORKLOAD_NAME}/{WORKLOAD_REF}` (e.g. `/local/native-query/local`).
 

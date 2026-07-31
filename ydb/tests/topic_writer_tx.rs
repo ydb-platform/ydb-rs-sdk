@@ -151,13 +151,12 @@ fn record_tx_lifecycle(incoming: &Incoming, tx_lifecycle: &CapturedTxLifecycle) 
 }
 
 async fn make_client(server: &MockServer) -> YdbResult<Client> {
-    let client = ClientBuilder::new_from_connection_string(format!(
+    ClientBuilder::new_from_connection_string(format!(
         "{}{DATABASE}?use_discovery=false",
         server.endpoint()
     ))?
-    .client()?;
-    client.wait().await?;
-    Ok(client)
+    .build()
+    .await
 }
 
 fn test_message() -> TopicWriterMessage {

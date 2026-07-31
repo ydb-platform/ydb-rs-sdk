@@ -13,18 +13,17 @@ async fn main() -> YdbResult<()> {
     let connection_string =
         env::var("YDB_CONNECTION_STRING").map_err(|_| "YDB_CONNECTION_STRING not set")?;
 
-    let client = ClientBuilder::new_from_connection_string(connection_string)?
+    let client_builder = ClientBuilder::new_from_connection_string(connection_string)?
         // get credentials from file located at path specified in YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS
-        .with_credentials(ServiceAccountCredentials::from_env()?)
-        //  or with credentials from env:
-        // .with_credentials(FromEnvCredentials::new()?)
-        // or you can use custom url
-        // .with_credentials(ServiceAccountCredentials::from_env()?.with_url("https://iam.api.cloud.yandex.net/iam/v1/tokens"))
-        .client()?;
+        .with_credentials(ServiceAccountCredentials::from_env()?);
+    //  or with credentials from env:
+    // .with_credentials(FromEnvCredentials::new()?)
+    // or you can use custom url
+    // .with_credentials(ServiceAccountCredentials::from_env()?.with_url("https://iam.api.cloud.yandex.net/iam/v1/tokens"))
 
     info!("Waiting for client");
 
-    match timeout(Duration::from_secs(3), client.wait()).await {
+    let client = match timeout(Duration::from_secs(3), client_builder.build()).await {
         Ok(res) => res?,
         _ => {
             return Err(YdbError::from("Connection timeout"));
