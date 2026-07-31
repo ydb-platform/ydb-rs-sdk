@@ -191,7 +191,13 @@ async fn forward_events(
     }
 }
 
-fn split_into_batches(resp: RawReadResponse, parallelism: NonZeroUsize) -> Vec<(i64, RawBatch)> {
+fn split_into_batches(
+    resp: RawReadResponse,
+    parallelism: NonZeroUsize,
+) -> Vec<(
+    crate::client_topic::topicreader::ids::PartitionSessionId,
+    RawBatch,
+)> {
     let total_messages: usize = resp
         .partition_data
         .iter()
