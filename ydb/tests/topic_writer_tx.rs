@@ -327,7 +327,7 @@ async fn tx_writer_with_producer_sends_producer_id() -> YdbResult<()> {
         .partitioning(PartitioningStrategy::PartitionId(PARTITION_ID))
         .build()?;
 
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
     client
         .query_client()
         .retry_tx(closure!(

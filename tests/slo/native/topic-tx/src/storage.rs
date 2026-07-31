@@ -24,9 +24,9 @@ impl TopicTxStorage {
     pub(super) async fn connect(framework: &Framework, params: Params) -> Result<Self> {
         let client = ClientBuilder::new_from_connection_string(&framework.config.connection_string)
             .context("parse YDB connection string")?
-            .client()
+            .build()
+            .await
             .context("create YDB client")?;
-        client.wait().await.context("wait for YDB discovery")?;
 
         let client = client
             .with_session_pool(
