@@ -1,21 +1,15 @@
 #![recursion_limit = "256"]
+
 use arrow_array::{Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use std::sync::Arc;
-use std::time::Duration;
-use tokio::time::timeout;
 use ydb::{ClientBuilder, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
     let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
-        .client()?;
-
-    if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
-        res?
-    } else {
-        return Err(YdbError::from("Connection timeout"));
-    };
+        .build()
+        .await?;
 
     let table_client = client.table_client();
     let table_name = "arrow_test";
