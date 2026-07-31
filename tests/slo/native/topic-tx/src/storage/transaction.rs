@@ -176,7 +176,7 @@ impl PartitionWorker {
     }
 }
 
-fn reader_options(partition_id: PartitionId, params: &Params) -> TopicReaderOptions {
+pub(super) fn reader_options(partition_id: PartitionId, params: &Params) -> TopicReaderOptions {
     let selector = TopicSelector::builder()
         .path(params.topic_path.clone())
         .partition_ids(vec![partition_id.value()])
