@@ -55,6 +55,9 @@ impl PartitionWorker {
             .with_context(|| format!("open transaction reader for partition {partition_id}"))?;
         let writer_options = TopicWriterTxOptionsBuilder::default()
             .topic_path(params.topic_path.clone())
+            // Each transaction needs a new writer, but the partition worker remains
+            // one logical producer whose sequence continues across transactions.
+            .producer_id(format!("slo-topic-tx-partition-{partition_id}"))
             .partitioning(PartitioningStrategy::PartitionId(partition_id.value()))
             .build()
             .with_context(|| {
