@@ -45,11 +45,6 @@ jobs:
       fail-fast: false
       matrix:
         sdk:
-          - name: native-query
-            path: native/query
-          - name: native-topic
-            path: native/topic
-            metrics_yaml_path: current/tests/slo/metrics-topic.yaml
           - name: native-topic-tx
             path: native/topic-tx
             metrics_yaml_path: current/tests/slo/metrics-topic-tx.yaml
