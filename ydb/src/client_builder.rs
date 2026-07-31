@@ -255,8 +255,12 @@ impl ClientBuilder {
     }
 
     pub async fn build(self) -> YdbResult<Client> {
+        let retry_settings = self
+            .retry_settings
+            .unwrap_or_else(RetrySettings::with_default_backoff);
+
         let db_cred = DBCredentials {
-            token_cache: TokenCache::new(self.credentials.clone())?,
+            token_cache: TokenCache::new(self.credentials.clone()),
             database: self.database.clone(),
         };
 
@@ -296,17 +300,13 @@ impl ClientBuilder {
             self.grpc_opts.clone(),
         );
 
-        let retry_control = self
-            .retry_settings
-            .unwrap_or_else(RetrySettings::with_default_backoff);
-
         Client::init(
             db_cred,
             discovery,
             connection_manager,
             load_balancer,
             self.executor,
-            retry_control,
+            retry_settings,
         )
         .await
     }

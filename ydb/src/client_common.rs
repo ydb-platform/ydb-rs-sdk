@@ -1,9 +1,13 @@
+use crate::RetrySettings;
+use crate::YdbError;
+use crate::closure;
 use crate::credentials::CredentialsRef;
+use crate::errors::Idempotency;
 use crate::errors::YdbResult;
 use crate::pub_traits::TokenInfo;
 use crate::waiter::Waiter;
 use secrecy::SecretString;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::watch;
 use tracing::trace;
@@ -14,91 +18,89 @@ pub(crate) struct DBCredentials {
     pub(crate) token_cache: TokenCache,
 }
 
-#[derive(Debug)]
-struct TokenCacheState {
+#[derive(Clone, Debug)]
+pub(crate) struct TokenCache {
     pub(crate) credentials: CredentialsRef,
-    token_info: TokenInfo,
-    token_renewing: Arc<Mutex<()>>,
-    token_received: watch::Receiver<bool>,
-    token_received_sender: watch::Sender<bool>,
+    renewing_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    token_info_sender: watch::Sender<Option<YdbResult<TokenInfo>>>,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct TokenCache(Arc<RwLock<TokenCacheState>>);
-
 impl TokenCache {
-    pub(crate) fn new(credentials: CredentialsRef) -> YdbResult<Self> {
-        let (token_received_sender, token_received) = watch::channel(false);
-        let token_cache = TokenCache(Arc::new(RwLock::new(TokenCacheState {
+    pub(crate) fn new(credentials: CredentialsRef) -> Self {
+        let (token_info_sender, _receiver) = watch::channel(None);
+        let initial_renew_task = {
+            let credentials = credentials.clone();
+            let sender = token_info_sender.clone();
+
+            tokio::spawn(async move { Self::renew_token_async(credentials, sender).await })
+        };
+
+        TokenCache {
+            renewing_task: Arc::new(Mutex::new(Some(initial_renew_task))),
+            token_info_sender,
             credentials,
-            token_info: TokenInfo::token("".to_string()),
-            token_renewing: Arc::new(Mutex::new(())),
-            token_received,
-            token_received_sender,
-        })));
-        let token_cache_clone = token_cache.clone();
-        tokio::task::spawn_blocking(move || token_cache_clone.renew_token_blocking());
-        Ok(token_cache)
+        }
     }
 
-    pub(crate) fn token(&self) -> SecretString {
+    pub(crate) fn token(&self) -> YdbResult<SecretString> {
         let now = Instant::now();
 
-        let read = self.0.read().unwrap();
-        if now > read.token_info.next_renew {
+        let token_info = self.token_info_sender.borrow().clone().unwrap_or_else(|| {
+            Err(YdbError::InternalError(
+                "token cache is not initialized yet".to_owned(),
+            ))
+        })?;
+        if now > token_info.next_renew {
             // if need renew and no renew background in process
-            if read.token_renewing.try_lock().is_ok() {
-                let self_clone = self.clone();
-                tokio::task::spawn_blocking(move || self_clone.renew_token_blocking());
+            let mut renewing_task = self.renewing_task.lock()?;
+            if renewing_task.as_ref().is_none_or(|task| task.is_finished()) {
+                *renewing_task = Some(self.renew_token_in_background());
             };
-        };
-        read.token_info.token.clone()
+        }
+        Ok(token_info.token)
     }
 
-    fn renew_token_blocking(self) {
-        let renew_arc = self.0.read().unwrap().token_renewing.clone();
-        let _renew_lock = match renew_arc.try_lock() {
-            Ok(lock) => lock,
-            _ => {
-                // other renew in process
-                return;
-            }
-        };
+    fn renew_token_in_background(&self) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(Self::renew_token_async(
+            self.credentials.clone(),
+            self.token_info_sender.clone(),
+        ))
+    }
 
-        let cred = { self.0.write().unwrap().credentials.clone() };
+    async fn renew_token_async(
+        credentials: CredentialsRef,
+        sender: watch::Sender<Option<YdbResult<TokenInfo>>>,
+    ) {
+        let result = RetrySettings::with_default_backoff()
+            .retry_on_retriable_errors(
+                Idempotency::Idempotent,
+                closure!([credentials], async |_| {
+                    let creds = credentials.clone();
+                    tokio::task::spawn_blocking(move || creds.create_token()).await?
+                }),
+            )
+            .await;
 
-        let res = std::thread::spawn(move || cred.create_token())
-            .join()
-            .unwrap();
-
-        // match cred.create_token() {
-        match res {
-            Ok(token_info) => {
-                trace!("token renewed");
-                let mut write = self.0.write().unwrap();
-                write.token_info = token_info;
-                if write.token_received_sender.send(true).is_err() {
-                    trace!("send token channel closed");
-                }
-            }
-            Err(err) => {
-                trace!("renew token error: {}", err)
-            }
-        };
+        sender.send_replace(Some(
+            result
+                .inspect(|_| trace!("token renewed"))
+                .inspect_err(|err| {
+                    trace!("renew token error: {}", err);
+                }),
+        ));
     }
 }
 
 #[async_trait::async_trait]
 impl Waiter for TokenCache {
     async fn wait(&self) -> YdbResult<()> {
-        let mut ch = self.0.read().unwrap().token_received.clone();
-        loop {
-            let received = *ch.borrow_and_update();
-            if received {
-                return Ok(());
-            }
+        self.token_info_sender
+            .subscribe()
+            .wait_for(Option::is_some)
+            .await?
+            .clone()
+            .transpose()?;
 
-            ch.changed().await?;
-        }
+        Ok(())
     }
 }

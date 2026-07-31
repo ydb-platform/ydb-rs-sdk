@@ -549,10 +549,7 @@ mod test {
     async fn test_background_discovery() -> YdbResult<()> {
         let cred = DBCredentials {
             database: test_client_builder().database.clone(),
-            token_cache: tokio::task::spawn_blocking(|| {
-                TokenCache::new(test_client_builder().credentials.clone())
-            })
-            .await??,
+            token_cache: TokenCache::new(test_client_builder().credentials.clone()),
         };
 
         let interceptor =

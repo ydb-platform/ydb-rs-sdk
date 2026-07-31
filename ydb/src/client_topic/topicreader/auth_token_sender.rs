@@ -64,7 +64,7 @@ async fn update_tokens(
 
     loop {
         interval.tick().await;
-        let token = token_cache.token();
+        let token = token_cache.token()?;
         let request = RawFromClientOneOf::UpdateTokenRequest(RawUpdateTokenRequest {
             token: token.expose_secret().to_string(),
         });
