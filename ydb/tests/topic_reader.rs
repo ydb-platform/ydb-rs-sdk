@@ -239,7 +239,8 @@ async fn make_reader_with_batch_size(
         "{}{DATABASE}?use_discovery=false",
         server.endpoint()
     ))?
-    .client()?;
+    .build()
+    .await?;
 
     client
         .topic_client()
@@ -385,7 +386,8 @@ topic_test!(
             driver.server.endpoint()
         ))?
         .with_executor(Arc::new(BlockingExecutor))
-        .client()?;
+        .build()
+        .await?;
         let mut reader = client
             .topic_client()
             .create_reader_with_params(

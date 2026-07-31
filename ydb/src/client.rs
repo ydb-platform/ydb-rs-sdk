@@ -38,7 +38,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub(crate) fn new(
+    pub(crate) async fn init(
         credentials: DBCredentials,
         discovery: Arc<dyn Discovery>,
         connection_manager: GrpcConnectionManager,
@@ -57,7 +57,7 @@ impl Client {
             default_session_pool_settings(),
         );
 
-        Ok(Client {
+        let client = Client {
             credentials,
             load_balancer,
             discovery,
@@ -65,7 +65,10 @@ impl Client {
             executor,
             session_pool,
             retry_settings,
-        })
+        };
+        client.wait().await?;
+
+        Ok(client)
     }
 
     /// Return a child driver that shares sessions and connections but uses a different retry budget.
@@ -164,7 +167,7 @@ impl Client {
     /// Wait all background process get first successfully result and client fully
     /// available to work.
     #[instrument(name = "ydb.Driver.Initialize", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database), err)]
-    pub async fn wait(&self) -> YdbResult<()> {
+    async fn wait(&self) -> YdbResult<()> {
         trace!("waiting_token");
         self.credentials.token_cache.wait().await?;
         trace!("wait discovery");
