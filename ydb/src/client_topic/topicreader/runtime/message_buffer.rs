@@ -436,6 +436,28 @@ mod tests {
     }
 
     #[test]
+    fn start_rejects_duplicate_partition_id() {
+        let mut buffer = MessageBuffer::default();
+        buffer.start(session(1, 10)).unwrap();
+
+        assert!(buffer.start(session(2, 10)).is_err());
+        assert!(buffer.is_active_session(psid(1)));
+        assert!(!buffer.is_active_session(psid(2)));
+        assert_eq!(buffer.partition_to_session.get(&pid(10)), Some(&psid(1)));
+    }
+
+    #[test]
+    fn start_rejects_duplicate_partition_session_id() {
+        let mut buffer = MessageBuffer::default();
+        buffer.start(session(1, 10)).unwrap();
+
+        assert!(buffer.start(session(1, 20)).is_err());
+        assert!(buffer.is_active_session(psid(1)));
+        assert!(!buffer.partition_to_session.contains_key(&pid(20)));
+        assert_eq!(buffer.partition_to_session.get(&pid(10)), Some(&psid(1)));
+    }
+
+    #[test]
     fn unopened_session_batch_returns_error() {
         let mut buffer = MessageBuffer::default();
 
