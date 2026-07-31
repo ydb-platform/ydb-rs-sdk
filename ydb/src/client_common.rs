@@ -22,28 +22,23 @@ pub(crate) struct DBCredentials {
 pub(crate) struct TokenCache {
     pub(crate) credentials: CredentialsRef,
     renewing_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    retry_settings: RetrySettings,
     token_info_sender: watch::Sender<Option<YdbResult<TokenInfo>>>,
 }
 
 impl TokenCache {
-    pub(crate) fn new(credentials: CredentialsRef, retry_settings: RetrySettings) -> Self {
+    pub(crate) fn new(credentials: CredentialsRef) -> Self {
         let (token_info_sender, _receiver) = watch::channel(None);
         let initial_renew_task = {
             let credentials = credentials.clone();
-            let retry_settings = retry_settings.clone();
             let sender = token_info_sender.clone();
 
-            tokio::spawn(async move {
-                Self::renew_token_async(retry_settings, credentials, sender).await
-            })
+            tokio::spawn(async move { Self::renew_token_async(credentials, sender).await })
         };
 
         TokenCache {
             renewing_task: Arc::new(Mutex::new(Some(initial_renew_task))),
             token_info_sender,
             credentials,
-            retry_settings,
         }
     }
 
@@ -67,18 +62,16 @@ impl TokenCache {
 
     fn renew_token_in_background(&self) -> tokio::task::JoinHandle<()> {
         tokio::spawn(Self::renew_token_async(
-            self.retry_settings.clone(),
             self.credentials.clone(),
             self.token_info_sender.clone(),
         ))
     }
 
     async fn renew_token_async(
-        retry_settings: RetrySettings,
         credentials: CredentialsRef,
         sender: watch::Sender<Option<YdbResult<TokenInfo>>>,
     ) {
-        let result = retry_settings
+        let result = RetrySettings::with_default_backoff()
             .retry_on_retriable_errors(
                 Idempotency::Idempotent,
                 closure!([credentials], async |_| {
