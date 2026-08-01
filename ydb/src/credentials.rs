@@ -173,10 +173,14 @@ fn get_credentials_from_env() -> YdbResult<Box<dyn Credentials>> {
 /// Example:
 /// ```no_run
 /// # use ydb::{ClientBuilder, AccessTokenCredentials, YdbResult};
-/// # fn main()->YdbResult<()>{
+/// # #[tokio::main]
+/// # async fn main() -> YdbResult<()> {
 /// let builder = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?;
-/// let client = builder.with_credentials(AccessTokenCredentials::from("asd")).client()?;
-/// # return Ok(());
+/// let client = builder
+///     .with_credentials(AccessTokenCredentials::from("asd"))
+///     .build()
+///     .await?;
+/// # Ok(())
 /// # }
 /// ```
 #[derive(Debug, Clone)]

@@ -108,6 +108,7 @@ async fn grpc_connect(
         topics_read_settings: options.topic.clone().into_topics_read_settings(),
         consumer: options.consumer.clone(),
         reader_name: "".to_string(),
+        auto_partitioning_support: options.auto_partitioning_support,
     };
 
     Ok(topic_service.stream_read(init_request).await?)

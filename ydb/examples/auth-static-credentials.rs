@@ -6,7 +6,7 @@ use ydb::{ClientBuilder, StaticCredentials, YdbError, YdbResult};
 #[tokio::main]
 async fn main() -> YdbResult<()> {
     println!("create client...");
-    let client =
+    let client_builder =
         ClientBuilder::new_from_connection_string("grpc://localhost:2136/local".to_string())
             .unwrap()
             .with_credentials(StaticCredentials::new(
@@ -14,10 +14,9 @@ async fn main() -> YdbResult<()> {
                 "1234".to_string(),
                 http::uri::Uri::from_static("grpc://localhost:2136/local"),
                 "local".to_string(),
-            ))
-            .client()?;
+            ));
 
-    match timeout(Duration::from_secs(3), client.wait()).await {
+    let client = match timeout(Duration::from_secs(3), client_builder.build()).await {
         Ok(res) => res?,
         _ => {
             return Err(YdbError::from("Connection timeout"));

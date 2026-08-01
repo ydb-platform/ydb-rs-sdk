@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use crate::closure;
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::result::ResultSet;
@@ -8,7 +9,7 @@ use crate::types::Value;
 
 use super::exec::{
     CallOptions, ClientExecContext, apply_stream_tx_id, client_begin_stream_once,
-    finish_pooled_query_stream, resolve_commit_tx, resolve_idempotent, run_with_retry,
+    finish_pooled_query_stream, resolve_commit_tx, resolve_idempotent,
     transaction_finish_committed_via_query, transaction_mark_invalidated_on_query_error,
 };
 use super::internal::ExecCoreRef;
@@ -110,11 +111,16 @@ pub(crate) async fn materialize_query(
 ) -> YdbResult<Vec<ResultSet>> {
     match core {
         ExecCoreRef::Client(ctx) => {
-            let idempotent = resolve_idempotent(&opts);
-            run_with_retry(&ctx.retry_control, &opts, idempotent, || {
-                materialize_client_once(ctx, &text, &params, &opts)
-            })
-            .await
+            ctx.retry_settings
+                .clone()
+                .with_deadline(opts.timeout)
+                .retry_on_retriable_errors(
+                    resolve_idempotent(&opts),
+                    closure!([&ctx, &text, &params, &opts], |_| {
+                        materialize_client_once(ctx, text, params, opts)
+                    }),
+                )
+                .await
         }
         ExecCoreRef::Transaction(_) => materialize_transaction_once(core, text, params, opts).await,
     }

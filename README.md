@@ -21,7 +21,7 @@ CI checks compatibility on Rust 1.88 and Rust 1.96. Linting, publishing, and SLO
 Add the YDB dependency to your project using `cargo add ydb` or add this your Cargo.toml:
 ```toml
 [dependencies]
-ydb = "0.17.0"
+ydb = "0.17.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -34,10 +34,8 @@ use ydb::{ClientBuilder, YdbResult};
 #[tokio::main]
 async fn main() -> YdbResult<()> {
     let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
-        .client()?;
-
-    // wait until the background initialization of the driver finishes
-    client.wait().await?;
+        .build()
+        .await?;
 
     let mut qc = client.query_client();
 
@@ -71,8 +69,8 @@ use ydb::{ydb_params, ClientBuilder, YdbResult};
 #[tokio::main]
 async fn main() -> YdbResult<()> {
     let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
-        .client()?;
-    client.wait().await?;
+        .build()
+        .await?;
 
     let mut qc = client.query_client();
 

@@ -62,9 +62,9 @@ async fn start_app() -> YdbResult<()> {
     let connection_string = std::env::var("YDB_CONNECTION_STRING")
         .unwrap_or_else(|_| "grpc://localhost:2136/local".to_string());
 
-    let client = ClientBuilder::new_from_connection_string(connection_string)?.client()?;
+    let client_builder = ClientBuilder::new_from_connection_string(connection_string)?;
 
-    if let Ok(res) = timeout(Duration::from_secs(3), client.wait()).await {
+    let client = if let Ok(res) = timeout(Duration::from_secs(3), client_builder.build()).await {
         res?
     } else {
         return Err(YdbError::from("Connection timeout"));

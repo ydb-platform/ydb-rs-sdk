@@ -11,10 +11,8 @@
 //!  // create driver
 //!  let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
 //!     .with_credentials(AccessTokenCredentials::from("asd"))
-//!     .client()?;
-//!
-//!  // wait until driver background initialization finish
-//!  client.wait().await?;
+//!     .build()
+//!     .await?;
 //!
 //!  // read query result via Query API
 //!  let mut row = client
@@ -68,8 +66,7 @@ mod load_balancer;
 mod pub_traits;
 pub(crate) mod query;
 pub(crate) mod result;
-mod retry;
-mod retry_budget;
+mod retry_settings;
 mod session;
 mod session_pool;
 mod sugar;
@@ -168,9 +165,9 @@ pub use client_topic::topicwriter::writer_tx_options::{
 // full enum pub types
 pub use client::{Client, SessionPoolSettings, SessionPoolStats};
 
-pub use retry_budget::{
-    LimitedRetryBudget, PercentOfRpsRetryBudget, PercentRetryBudget, RetryBudget, RetryBudgetError,
-    RetryMetrics,
+pub use retry_settings::{
+    DontRetry, ExponentialBackoff, RetriesPerSecond, RetryDeadline, RetryProbability,
+    RetrySettings, RetryState, RetryStrategy,
 };
 
 // full enum pub types

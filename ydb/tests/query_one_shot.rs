@@ -15,12 +15,13 @@ use crate::mock_server::server::MockServer;
 const DATABASE: &str = "/local";
 const BASIC_UPSERT: &str = "UPSERT INTO test (id, val) VALUES (1, 'x')";
 
-fn make_client(server: &MockServer) -> YdbResult<Client> {
+async fn make_client(server: &MockServer) -> YdbResult<Client> {
     ClientBuilder::new_from_connection_string(format!(
         "{}{DATABASE}?use_discovery=false",
         server.endpoint()
     ))?
-    .client()
+    .build()
+    .await
 }
 
 fn success_part(tx_id: Option<&str>) -> ExecuteQueryResponsePart {
@@ -104,7 +105,7 @@ async fn transport_mock(
 ) -> YdbResult<(Client, Arc<AtomicUsize>, MockServer)> {
     let (handler, execute_count) = FailThenSucceedHandlerMock::new(failure_code);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server)?;
+    let client = make_client(&server).await?;
     Ok((client, execute_count, server))
 }
 

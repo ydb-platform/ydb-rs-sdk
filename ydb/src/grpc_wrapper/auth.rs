@@ -35,7 +35,9 @@ impl GrpcInterceptor for AuthGrpcInterceptor {
         _metadata: &mut RequestMetadata,
         mut req: InterceptorRequest,
     ) -> InterceptorResult<InterceptorRequest> {
-        let token_secret = self.token_cache.token();
+        let token_secret = self.token_cache.token().map_err(|err| {
+            InterceptorError::custom(format!("failed to acquire access token: {err}"))
+        })?;
         let token_string = token_secret.expose_secret();
         let token = HeaderValue::from_str(token_string.as_str()).map_err(|err| {
             InterceptorError::custom(format!(
