@@ -96,20 +96,26 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
         self
     }
 
-    /// Wall-clock limit for the call. Retries transient errors until this deadline when
-    /// combined with [`.idempotent(true)`](Self::idempotent). Without `.timeout()`, retries
-    /// continue until a non-retryable error.
+    /// Wall-clock limit for the call.
     ///
-    /// On [`QueryClient`], retryable one-shot calls retry the full open+drain+close cycle.
-    /// Calls inside interactive transactions are materialized once; transaction retries are
-    /// owned by the [`QueryClient::retry_tx`] loop.
-    /// Inside [`retry_tx`](crate::QueryClient::retry_tx), per-call `.timeout()` is capped by
-    /// the remaining `retry_tx` deadline.
+    /// On [`QueryClient`], this sets the deadline for the retry loop (all attempts and
+    /// backoff). Without `.timeout()`, retries continue until a non-retryable error.
+    /// Materializing builders (`exec`, `query_result_set`, `query_row`) retry the full
+    /// open+drain+close cycle; streaming [`Self::query`] retries only stream open.
+    ///
+    /// Inside an interactive transaction this bounds a single attempt and is capped by the
+    /// remaining [`QueryClient::retry_tx`] `.timeout()` when set. There is no in-place
+    /// query retry; the outer `retry_tx` loop owns tx-scoped retries.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.opts.timeout = Some(timeout);
         self
     }
 
+    /// When `true`, also retry errors that are safe only for idempotent operations.
+    ///
+    /// Default is `false`. Always-retryable errors (for example `ABORTED`,
+    /// `RESOURCE_EXHAUSTED`) are retried regardless. Has no effect inside an interactive
+    /// transaction — use [`QueryClient::retry_tx`] `.idempotent(true)` instead.
     pub fn idempotent(mut self, idempotent: bool) -> Self {
         self.opts.idempotent = Some(idempotent);
         self
