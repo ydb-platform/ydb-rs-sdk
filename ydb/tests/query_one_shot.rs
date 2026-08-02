@@ -31,7 +31,7 @@ fn success_part(tx_id: Option<&str>) -> ExecuteQueryResponsePart {
         result_set_index: 0,
         result_set: None,
         exec_stats: None,
-        tx_meta: tx_id.map(|id| TransactionMeta { id: id.to_string() }),
+        tx_meta: tx_id.map(|id| TransactionMeta { id: id.to_owned() }),
     }
 }
 
@@ -42,16 +42,16 @@ struct FailThenSucceedHandlerMock {
 }
 
 impl FailThenSucceedHandlerMock {
-    fn new(failure_code: tonic::Code) -> (Self, Arc<AtomicUsize>) {
-        let execute_count = Arc::new(AtomicUsize::new(0));
-        (
-            Self {
-                replies: ReplySink::default(),
-                execute_count: execute_count.clone(),
-                failure_code,
-            },
-            execute_count,
-        )
+    fn new(failure_code: tonic::Code) -> Self {
+        Self {
+            replies: ReplySink::default(),
+            execute_count: Arc::new(AtomicUsize::new(0)),
+            failure_code,
+        }
+    }
+
+    fn execute_count_ref(&self) -> &Arc<AtomicUsize> {
+        &self.execute_count
     }
 }
 
@@ -65,7 +65,7 @@ impl Handler for FailThenSucceedHandlerMock {
             return Some(incoming);
         };
 
-        let call = self.execute_count.fetch_add(1, Ordering::SeqCst);
+        let call = self.execute_count.fetch_add(1, Ordering::Relaxed);
         if call == 0 {
             self.replies.send(QueryReply::ExecuteQueryFail {
                 stream_id,
@@ -86,7 +86,8 @@ impl Handler for FailThenSucceedHandlerMock {
 const ALWAYS_RETRYABLE_TRANSPORT_CODES: &[tonic::Code] =
     &[tonic::Code::ResourceExhausted, tonic::Code::Aborted];
 
-const IDEMPOTENT_ONLY_TRANSPORT_CODES: &[tonic::Code] = &[
+/// Transport codes that are retryable only when `.idempotent(true)` is set.
+const RETRYABLE_ONLY_IF_IDEMPOTENT: &[tonic::Code] = &[
     tonic::Code::Internal,
     tonic::Code::Cancelled,
     tonic::Code::Unavailable,
@@ -96,14 +97,15 @@ const IDEMPOTENT_ONLY_TRANSPORT_CODES: &[tonic::Code] = &[
 fn retryable_transport_codes() -> impl Iterator<Item = tonic::Code> {
     ALWAYS_RETRYABLE_TRANSPORT_CODES
         .iter()
-        .chain(IDEMPOTENT_ONLY_TRANSPORT_CODES)
+        .chain(RETRYABLE_ONLY_IF_IDEMPOTENT)
         .copied()
 }
 
 async fn transport_mock(
     failure_code: tonic::Code,
 ) -> YdbResult<(Client, Arc<AtomicUsize>, MockServer)> {
-    let (handler, execute_count) = FailThenSucceedHandlerMock::new(failure_code);
+    let handler = FailThenSucceedHandlerMock::new(failure_code);
+    let execute_count = handler.execute_count_ref().clone();
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
     Ok((client, execute_count, server))
@@ -126,7 +128,7 @@ async fn idempotent_one_shot_retries() -> YdbResult<()> {
             "expected success after retry for {failure_code:?}, got {result:?}"
         );
         assert_eq!(
-            execute_count.load(Ordering::SeqCst),
+            execute_count.load(Ordering::Relaxed),
             2,
             "expected a second ExecuteQuery after {failure_code:?}"
         );
@@ -137,7 +139,8 @@ async fn idempotent_one_shot_retries() -> YdbResult<()> {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn non_idempotent_one_shot_no_retries() -> YdbResult<()> {
-    for failure_code in IDEMPOTENT_ONLY_TRANSPORT_CODES.iter() {
+    // These codes retry only with `.idempotent(true)`; default one-shot must not retry them.
+    for failure_code in RETRYABLE_ONLY_IF_IDEMPOTENT.iter() {
         let (client, execute_count, _server) = transport_mock(*failure_code).await?;
 
         let result = client.query_client().exec(BASIC_UPSERT).await;
@@ -147,7 +150,7 @@ async fn non_idempotent_one_shot_no_retries() -> YdbResult<()> {
             "expected error for {failure_code:?}, got {result:?}"
         );
         assert_eq!(
-            execute_count.load(Ordering::SeqCst),
+            execute_count.load(Ordering::Relaxed),
             1,
             "expected a single ExecuteQuery for {failure_code:?}"
         );
@@ -158,7 +161,7 @@ async fn non_idempotent_one_shot_no_retries() -> YdbResult<()> {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn no_retries_in_place_inside_tx() -> YdbResult<()> {
-    for failure_code in IDEMPOTENT_ONLY_TRANSPORT_CODES.iter().copied() {
+    for failure_code in RETRYABLE_ONLY_IF_IDEMPOTENT.iter().copied() {
         let (client, execute_count, _server) = transport_mock(failure_code).await?;
 
         let result = client
@@ -174,7 +177,7 @@ async fn no_retries_in_place_inside_tx() -> YdbResult<()> {
             "expected error for {failure_code:?}, got {result:?}"
         );
         assert_eq!(
-            execute_count.load(Ordering::SeqCst),
+            execute_count.load(Ordering::Relaxed),
             1,
             "expected a single ExecuteQuery for {failure_code:?}"
         );

@@ -9,8 +9,8 @@ use crate::types::Value;
 
 use super::exec::{
     CallOptions, ClientExecContext, apply_stream_tx_id, client_begin_stream_once,
-    finish_pooled_query_stream, resolve_commit_tx, resolve_idempotent,
-    transaction_finish_committed_via_query, transaction_mark_invalidated_on_query_error,
+    finish_pooled_query_stream, resolve_commit_tx, transaction_finish_committed_via_query,
+    transaction_mark_invalidated_on_query_error,
 };
 use super::internal::ExecCoreRef;
 
@@ -115,7 +115,7 @@ pub(crate) async fn materialize_query(
                 .clone()
                 .with_deadline(opts.timeout)
                 .retry_on_retriable_errors(
-                    resolve_idempotent(&opts),
+                    opts.idempotency(),
                     closure!([&ctx, &text, &params, &opts], |_| {
                         materialize_client_once(ctx, text, params, opts)
                     }),
@@ -134,7 +134,7 @@ async fn materialize_client_once(
 ) -> YdbResult<Vec<ResultSet>> {
     let mut stream = client_begin_stream_once(ctx, text, params, opts, true).await?;
     let sets = collect_result_sets(&mut stream).await?;
-    stream.close().await.map_err(YdbError::from)?;
+    stream.close().await?;
     finish_pooled_query_stream(&mut stream);
     Ok(sets)
 }

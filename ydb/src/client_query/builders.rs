@@ -113,8 +113,8 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
 
     /// When `true`, also retry errors that are safe only for idempotent operations.
     ///
-    /// Default is `false`. Always-retryable errors (for example `ABORTED`,
-    /// `RESOURCE_EXHAUSTED`) are retried regardless. Has no effect inside an interactive
+    /// Default is `false`: only always-retryable errors (for example `ABORTED`,
+    /// `RESOURCE_EXHAUSTED`) are retried. Has no effect inside an interactive
     /// transaction — use [`QueryClient::retry_tx`] `.idempotent(true)` instead.
     pub fn idempotent(mut self, idempotent: bool) -> Self {
         self.opts.idempotent = Some(idempotent);

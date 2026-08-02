@@ -65,6 +65,12 @@ pub(crate) struct CallOptions {
     pub implicit_session: bool,
 }
 
+impl CallOptions {
+    pub(super) fn idempotency(&self) -> Idempotency {
+        self.idempotent.unwrap_or(false).into()
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct ClientExecContext {
     pub connection_manager: GrpcConnectionManager,
@@ -105,10 +111,6 @@ pub(crate) struct TransactionExecContext {
     pub hooks: Vec<Box<dyn QueryTxHook>>,
     /// Absolute deadline from [`QueryClient::retry_tx`] `.timeout()`, propagated to every RPC in the callback.
     pub retry_deadline: Option<Instant>,
-}
-
-pub(super) fn resolve_idempotent(opts: &CallOptions) -> Idempotency {
-    opts.idempotent.unwrap_or(false).into()
 }
 
 /// Per-call timeout capped by the parent [`retry_tx`](crate::QueryClient::retry_tx) deadline when set.
@@ -397,7 +399,7 @@ pub(crate) async fn client_begin_stream(
         .clone()
         .with_deadline(opts.timeout)
         .retry_on_retriable_errors(
-            resolve_idempotent(&opts),
+            opts.idempotency(),
             closure!([&ctx, &text, &params, &opts], |_| client_begin_stream_once(
                 ctx,
                 text,

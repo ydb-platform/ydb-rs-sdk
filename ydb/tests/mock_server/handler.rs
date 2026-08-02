@@ -55,13 +55,16 @@ pub struct ReplySink {
 
 impl ReplySink {
     pub fn set_channel(&self, tx: FromHandlerToService) {
-        *self.tx.lock().unwrap() = Some(tx);
+        *self
+            .tx
+            .lock()
+            .expect("poisoning shouldn't happen in reply channel mock (set_channel)") = Some(tx);
     }
 
     pub fn send(&self, reply: impl Into<Reply>) {
         self.tx
             .lock()
-            .unwrap()
+            .expect("poisoning shouldn't happen in reply channel mock (send)")
             .as_ref()
             .expect("mock reply channel must be set before replies are sent")
             .send(reply.into())
