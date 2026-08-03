@@ -5,7 +5,10 @@
 use std::collections::HashMap;
 
 use crate::errors::{YdbError, YdbResult};
-use crate::grpc_wrapper::raw_table_service::create_table::RawCreateTableColumn;
+use crate::grpc_wrapper::raw_table_service::create_table::{RawCreateTableColumn, RawPartitions};
+use crate::grpc_wrapper::raw_table_service::partitioning_settings::RawPartitioningSettings;
+use crate::grpc_wrapper::raw_table_service::value::r#type::{RawType, TupleType};
+use crate::grpc_wrapper::raw_table_service::value::{RawTypedValue, RawValue};
 use crate::types::Value;
 
 /// Column specification for [`CreateTableRequest`] and [`AlterTableRequest`].
@@ -49,6 +52,158 @@ impl TableColumn {
     }
 }
 
+/// Auto-partitioning policy and partition-count bounds for a table.
+///
+/// Every field is optional: an unset field leaves the server default in place
+/// on `CreateTable`, and leaves the current value untouched on `AlterTable`.
+/// This mirrors the tri-state feature flags used on the wire.
+///
+/// ```
+/// # use ydb::TablePartitioningSettings;
+/// let settings = TablePartitioningSettings::new()
+///     .with_partitioning_by_size(true)
+///     .with_partition_size_mb(256)
+///     .with_min_partitions_count(2)
+///     .with_max_partitions_count(64);
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TablePartitioningSettings {
+    /// Columns the table is partitioned by.
+    pub partition_by: Vec<String>,
+    /// Split and merge partitions automatically as they cross the size bounds.
+    pub partitioning_by_size: Option<bool>,
+    /// Preferred partition size in megabytes for auto partitioning by size.
+    pub partition_size_mb: Option<u64>,
+    /// Split partitions automatically based on their load.
+    pub partitioning_by_load: Option<bool>,
+    /// Auto-merge stops once the table is down to this many partitions.
+    pub min_partitions_count: Option<u64>,
+    /// Auto-split stops once the table reaches this many partitions.
+    pub max_partitions_count: Option<u64>,
+}
+
+impl TablePartitioningSettings {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_partitioning_by(
+        mut self,
+        columns: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.partition_by = columns.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn with_partitioning_by_size(mut self, enabled: bool) -> Self {
+        self.partitioning_by_size = Some(enabled);
+        self
+    }
+
+    pub fn with_partition_size_mb(mut self, partition_size_mb: u64) -> Self {
+        self.partition_size_mb = Some(partition_size_mb);
+        self
+    }
+
+    pub fn with_partitioning_by_load(mut self, enabled: bool) -> Self {
+        self.partitioning_by_load = Some(enabled);
+        self
+    }
+
+    pub fn with_min_partitions_count(mut self, min_partitions_count: u64) -> Self {
+        self.min_partitions_count = Some(min_partitions_count);
+        self
+    }
+
+    pub fn with_max_partitions_count(mut self, max_partitions_count: u64) -> Self {
+        self.max_partitions_count = Some(max_partitions_count);
+        self
+    }
+
+    pub(crate) fn into_raw(self) -> RawPartitioningSettings {
+        RawPartitioningSettings {
+            partition_by: self.partition_by,
+            partitioning_by_size: self.partitioning_by_size,
+            partition_size_mb: self.partition_size_mb,
+            partitioning_by_load: self.partitioning_by_load,
+            min_partitions_count: self.min_partitions_count,
+            max_partitions_count: self.max_partitions_count,
+        }
+    }
+}
+
+impl From<RawPartitioningSettings> for TablePartitioningSettings {
+    fn from(value: RawPartitioningSettings) -> Self {
+        Self {
+            partition_by: value.partition_by,
+            partitioning_by_size: value.partitioning_by_size,
+            partition_size_mb: value.partition_size_mb,
+            partitioning_by_load: value.partitioning_by_load,
+            min_partitions_count: value.min_partitions_count,
+            max_partitions_count: value.max_partitions_count,
+        }
+    }
+}
+
+/// Initial partition layout for a new table.
+///
+/// Only one layout can be requested; the two variants are mutually exclusive
+/// on the wire.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TablePartitions {
+    /// Split the key range into `count` equal parts.
+    ///
+    /// The leading primary key columns must be `Uint32` or `Uint64`.
+    Uniform(u64),
+    /// Use the given key prefixes as partition borders, in ascending order.
+    ///
+    /// Each split point is a prefix of the primary key: one value per leading
+    /// key column. The table gets one more partition than there are split
+    /// points.
+    AtKeys(Vec<Vec<Value>>),
+}
+
+/// Encode one split point as the `Tuple<Optional<T>, ...>` YDB expects.
+///
+/// A bare scalar is rejected by the server ("Partition ranges are not sorted"),
+/// because a split point describes a prefix of the primary key rather than a
+/// single value. The public [`Value`] has no tuple variant yet (see #309), so
+/// the tuple is built directly in the raw layer.
+fn split_point_to_typed_value(prefix: Vec<Value>) -> YdbResult<ydb_grpc::ydb_proto::TypedValue> {
+    if prefix.is_empty() {
+        return Err(YdbError::Custom(
+            "split point must contain at least one primary key value".to_string(),
+        ));
+    }
+
+    let mut elements = Vec::with_capacity(prefix.len());
+    let mut items = Vec::with_capacity(prefix.len());
+    for value in prefix {
+        let raw = RawTypedValue::try_from(value)?;
+        elements.push(RawType::Optional(Box::new(raw.r#type)));
+        items.push(raw.value);
+    }
+
+    Ok(ydb_grpc::ydb_proto::TypedValue::from(RawTypedValue {
+        r#type: RawType::Tuple(TupleType { elements }),
+        value: RawValue::Items(items),
+    }))
+}
+
+impl TablePartitions {
+    pub(crate) fn into_raw(self) -> YdbResult<RawPartitions> {
+        Ok(match self {
+            TablePartitions::Uniform(count) => RawPartitions::Uniform(count),
+            TablePartitions::AtKeys(split_points) => RawPartitions::AtKeys(
+                split_points
+                    .into_iter()
+                    .map(split_point_to_typed_value)
+                    .collect::<YdbResult<Vec<_>>>()?,
+            ),
+        })
+    }
+}
+
 /// CreateTable RPC request (go-sdk: `Session.CreateTable`).
 #[derive(Clone, Debug, Default)]
 pub struct CreateTableRequest {
@@ -56,6 +211,8 @@ pub struct CreateTableRequest {
     pub columns: Vec<TableColumn>,
     pub primary_key: Vec<String>,
     pub attributes: HashMap<String, String>,
+    pub partitioning_settings: Option<TablePartitioningSettings>,
+    pub partitions: Option<TablePartitions>,
 }
 
 impl CreateTableRequest {
@@ -85,6 +242,10 @@ impl CreateTableRequest {
                 primary_key: self.primary_key,
                 attributes: self.attributes,
                 operation_params,
+                partitioning_settings: self
+                    .partitioning_settings
+                    .map(TablePartitioningSettings::into_raw),
+                partitions: self.partitions.map(TablePartitions::into_raw).transpose()?,
             },
         )
     }
@@ -104,6 +265,46 @@ impl CreateTableRequest {
 
     pub fn with_attribute(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.attributes.insert(key.into(), value.into());
+        self
+    }
+
+    /// Set the auto-partitioning policy for the new table.
+    pub fn with_partitioning_settings(mut self, settings: TablePartitioningSettings) -> Self {
+        self.partitioning_settings = Some(settings);
+        self
+    }
+
+    /// Create the table with `count` uniformly split partitions.
+    ///
+    /// Replaces any previously set partition layout.
+    pub fn with_uniform_partitions(mut self, count: u64) -> Self {
+        self.partitions = Some(TablePartitions::Uniform(count));
+        self
+    }
+
+    /// Create the table split at the given primary key values.
+    ///
+    /// Replaces any previously set partition layout.
+    /// Each split point is a prefix of the primary key: one value per leading
+    /// key column, given in ascending order.
+    ///
+    /// ```
+    /// # use ydb::{CreateTableRequest, TableColumn, Value};
+    /// CreateTableRequest::new("/local/example")
+    ///     .with_column(TableColumn::new("id", Value::Uint64(0)))
+    ///     .with_primary_key(["id"])
+    ///     .with_partition_at_keys([vec![Value::Uint64(100)], vec![Value::Uint64(200)]]);
+    /// ```
+    pub fn with_partition_at_keys(
+        mut self,
+        split_points: impl IntoIterator<Item = impl IntoIterator<Item = Value>>,
+    ) -> Self {
+        self.partitions = Some(TablePartitions::AtKeys(
+            split_points
+                .into_iter()
+                .map(|prefix| prefix.into_iter().collect())
+                .collect(),
+        ));
         self
     }
 }
@@ -171,6 +372,7 @@ pub struct AlterTableRequest {
     pub drop_columns: Vec<String>,
     pub alter_columns: Vec<TableColumn>,
     pub alter_attributes: HashMap<String, String>,
+    pub alter_partitioning_settings: Option<TablePartitioningSettings>,
 }
 
 impl AlterTableRequest {
@@ -205,6 +407,9 @@ impl AlterTableRequest {
                 alter_columns,
                 alter_attributes: self.alter_attributes,
                 operation_params,
+                alter_partitioning_settings: self
+                    .alter_partitioning_settings
+                    .map(TablePartitioningSettings::into_raw),
             },
         )
     }
@@ -236,6 +441,15 @@ impl AlterTableRequest {
     /// Add a table attribute (go-sdk: `options.WithAddAttribute`).
     pub fn add_attribute(self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.alter_attribute(key, value)
+    }
+
+    /// Replace the auto-partitioning policy
+    /// (go-sdk: `options.WithAlterPartitionSettingsObject`).
+    ///
+    /// Fields left unset keep their current server-side value.
+    pub fn alter_partitioning_settings(mut self, settings: TablePartitioningSettings) -> Self {
+        self.alter_partitioning_settings = Some(settings);
+        self
     }
 
     /// Drop a table attribute (go-sdk: `options.WithDropAttribute`).

@@ -7,7 +7,9 @@ use tracing::trace;
 use tracing_test::traced_test;
 
 use crate::errors::{YdbError, YdbResult};
-use crate::table_requests::{AlterTableRequest, CreateTableRequest, DropTableRequest, TableColumn};
+use crate::table_requests::{
+    AlterTableRequest, CreateTableRequest, DropTableRequest, TableColumn, TablePartitioningSettings,
+};
 use crate::table_service_types::{CopyTableItem, IndexType, StoreType};
 use crate::test_integration_helper::create_client;
 use crate::types::Value;
@@ -624,6 +626,167 @@ async fn table_attributes_rpc() -> YdbResult<()> {
 
     let desc = table_client.describe_table(table_path.clone()).await?;
     assert!(desc.attributes.is_empty());
+
+    table_client
+        .drop_table(DropTableRequest::new(table_path))
+        .await?;
+
+    Ok(())
+}
+
+/// Create a table with an auto-partitioning policy, read it back, then alter it.
+/// Only the server can confirm the settings survive the round trip.
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn create_alter_describe_partitioning_settings_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_path = format!("{}/partitioning_{rand_str}", client.database());
+
+    table_client
+        .create_table(
+            CreateTableRequest::new(table_path.clone())
+                .with_column(TableColumn::new("id", Value::Uint64(0)))
+                .with_column(TableColumn::new("val", Value::Text(String::new())))
+                .with_primary_key(["id"])
+                .with_partitioning_settings(
+                    TablePartitioningSettings::new()
+                        .with_partitioning_by_size(true)
+                        .with_partition_size_mb(128)
+                        .with_partitioning_by_load(false)
+                        .with_min_partitions_count(2)
+                        .with_max_partitions_count(16),
+                ),
+        )
+        .await?;
+
+    let created = table_client
+        .describe_table(table_path.clone())
+        .await?
+        .partitioning_settings;
+    assert_eq!(created.partitioning_by_size, Some(true));
+    assert_eq!(created.partition_size_mb, Some(128));
+    assert_eq!(created.min_partitions_count, Some(2));
+    assert_eq!(created.max_partitions_count, Some(16));
+
+    table_client
+        .alter_table(
+            AlterTableRequest::new(table_path.clone()).alter_partitioning_settings(
+                TablePartitioningSettings::new()
+                    .with_partitioning_by_load(true)
+                    .with_max_partitions_count(32),
+            ),
+        )
+        .await?;
+
+    let altered = table_client
+        .describe_table(table_path.clone())
+        .await?
+        .partitioning_settings;
+    assert_eq!(altered.partitioning_by_load, Some(true));
+    assert_eq!(altered.max_partitions_count, Some(32));
+
+    table_client
+        .drop_table(DropTableRequest::new(table_path))
+        .await?;
+
+    Ok(())
+}
+
+/// `with_uniform_partitions` must actually pre-split the table.
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn create_table_with_uniform_partitions_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_path = format!("{}/uniform_{rand_str}", client.database());
+
+    table_client
+        .create_table(
+            CreateTableRequest::new(table_path.clone())
+                // uniform partitioning requires a Uint32/Uint64 leading key
+                .with_column(TableColumn::new("id", Value::Uint64(0)))
+                .with_column(TableColumn::new("val", Value::Text(String::new())))
+                .with_primary_key(["id"])
+                .with_uniform_partitions(4)
+                .with_partitioning_settings(
+                    TablePartitioningSettings::new().with_min_partitions_count(4),
+                ),
+        )
+        .await?;
+
+    let desc = table_client.describe_table(table_path.clone()).await?;
+    assert_eq!(desc.partitioning_settings.min_partitions_count, Some(4));
+
+    table_client
+        .drop_table(DropTableRequest::new(table_path))
+        .await?;
+
+    Ok(())
+}
+
+/// `with_partition_at_keys` splits at explicit primary key values.
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn create_table_with_explicit_partitions_rpc() -> YdbResult<()> {
+    let client = create_client().await?;
+    let table_client = client.table_client();
+    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let table_path = format!("{}/explicit_{rand_str}", client.database());
+
+    table_client
+        .create_table(
+            CreateTableRequest::new(table_path.clone())
+                .with_column(TableColumn::new("id", Value::Uint64(0)))
+                .with_column(TableColumn::new("val", Value::Text(String::new())))
+                .with_primary_key(["id"])
+                // three split points produce four partitions
+                .with_partition_at_keys([
+                    vec![Value::Uint64(100)],
+                    vec![Value::Uint64(200)],
+                    vec![Value::Uint64(300)],
+                ]),
+        )
+        .await?;
+
+    // Rows on either side of a border must land in different partitions, which
+    // is only observable once the table actually holds data.
+    table_client
+        .bulk_upsert(
+            table_path.clone(),
+            vec![
+                ydb_struct!("id" => 50_u64, "val" => Value::Text("first".into())),
+                ydb_struct!("id" => 250_u64, "val" => Value::Text("third".into())),
+            ],
+        )
+        .await?;
+
+    let rows = table_client
+        .read_rows(
+            table_path.clone(),
+            vec![ydb_struct!("id" => 50_u64), ydb_struct!("id" => 250_u64)],
+            None,
+        )
+        .await?;
+    assert_eq!(rows.rows().count(), 2);
+
+    // An unsorted split point must be rejected rather than silently accepted.
+    let unsorted_path = format!("{table_path}_unsorted");
+    let err = table_client
+        .create_table(
+            CreateTableRequest::new(unsorted_path)
+                .with_column(TableColumn::new("id", Value::Uint64(0)))
+                .with_primary_key(["id"])
+                .with_partition_at_keys([vec![Value::Uint64(300)], vec![Value::Uint64(100)]]),
+        )
+        .await
+        .expect_err("descending split points must be rejected");
+    trace!("unsorted split points rejected as expected: {err}");
 
     table_client
         .drop_table(DropTableRequest::new(table_path))

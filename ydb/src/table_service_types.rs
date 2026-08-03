@@ -64,6 +64,8 @@ pub struct TableDescription {
     pub store_type: StoreType,
     /// User-defined table attributes (key/value, up to 10 KB total).
     pub attributes: std::collections::HashMap<String, String>,
+    /// Auto-partitioning policy and partition-count bounds currently in effect.
+    pub partitioning_settings: crate::TablePartitioningSettings,
 }
 
 /// Error description of an unknown/unsupported column type
