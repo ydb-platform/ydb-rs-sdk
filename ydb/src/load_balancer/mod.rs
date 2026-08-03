@@ -15,13 +15,14 @@ pub mod static_balancer;
 pub(crate) use shared_balancer::SharedLoadBalancer;
 pub(crate) use static_balancer::StaticLoadBalancer;
 
-#[mockall::automock]
+#[cfg_attr(test, mockall::automock)]
 pub(crate) trait LoadBalancer: Send + Sync + Waiter {
     fn endpoint(&self, service: Service) -> YdbResult<Uri>;
     fn set_discovery_state(&mut self, discovery_state: &Arc<DiscoveryState>) -> YdbResult<()>;
     fn waiter(&self) -> Box<dyn Waiter>; // need for wait ready in without read lock
 }
 
+#[cfg(test)]
 #[async_trait::async_trait]
 impl Waiter for MockLoadBalancer {
     async fn wait(&self) -> YdbResult<()> {
