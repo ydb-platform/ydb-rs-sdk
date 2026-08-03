@@ -387,3 +387,45 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod racy_round_robin_state_tests {
+    use super::*;
+
+    /// `Debug` is hand-written because `ConnectionTask` is not `Debug`. Pin the
+    /// fields it reports, and that the two queues stay out of the output.
+    #[tokio::test]
+    async fn debug_reports_addrs_without_connection_queues() {
+        let addr: IpAddr = "127.0.0.1".parse().expect("valid address");
+        // `connect_lazy` does not touch the network.
+        let channel = Endpoint::from_static("http://127.0.0.1:2136").connect_lazy();
+
+        let state = RacyRoundRobinState {
+            addrs: HashSet::from([addr]),
+            connections: VecDeque::new(),
+            first_connection: (channel, addr),
+            tried_connections: VecDeque::new(),
+        };
+
+        let rendered = format!("{state:?}");
+
+        assert!(
+            rendered.starts_with("RacyRoundRobinState {"),
+            "unexpected shape: {rendered}"
+        );
+        assert!(rendered.contains("addrs"), "addrs missing: {rendered}");
+        assert!(
+            rendered.contains("127.0.0.1"),
+            "address missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("first_connection"),
+            "first_connection missing: {rendered}"
+        );
+
+        assert!(
+            !rendered.contains("tried_connections"),
+            "tried_connections must stay out of Debug: {rendered}"
+        );
+    }
+}
