@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::future;
 use std::ops::ControlFlow;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
@@ -242,11 +243,15 @@ impl Discovery for TimerDiscovery {
             .iter()
             .filter(|node| state.pessimized_nodes.contains(&node.uri))
             .count();
-        if pessimized_nodes_count > 0 && pessimized_nodes_count >= state.original_nodes.len() / 2 {
+        if pessimized_nodes_count > 0
+            && pessimized_nodes_count >= state.original_nodes.len() / 2
+            && self.state.claim_forced_discovery()
+        {
             let shared_state_for_discovery = Arc::downgrade(&self.state);
             tokio::spawn(async move {
                 if let Some(state) = shared_state_for_discovery.upgrade() {
                     let _ = state.discovery_now().await;
+                    state.complete_forced_discovery();
                 }
             });
         }
@@ -278,6 +283,7 @@ struct DiscoverySharedState {
     discovery_uri: Uri,
 
     discovery_lock: tokio::sync::Mutex<()>,
+    forced_discovery_in_flight: AtomicBool,
 
     /// Watch sender for the discovery state changes.
     ///
@@ -304,7 +310,19 @@ impl DiscoverySharedState {
             discovery_uri: http::Uri::from_str(endpoint)?,
             state_sender,
             discovery_lock: tokio::sync::Mutex::new(()),
+            forced_discovery_in_flight: AtomicBool::new(false),
         })
+    }
+
+    fn claim_forced_discovery(&self) -> bool {
+        self.forced_discovery_in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    fn complete_forced_discovery(&self) {
+        self.forced_discovery_in_flight
+            .store(false, Ordering::Release);
     }
 
     #[tracing::instrument(name = "ydb.Discovery.DiscoveryNow", skip_all, err)]
@@ -540,6 +558,21 @@ mod test {
             done_rx.recv_timeout(Duration::from_secs(1)).is_ok(),
             "endpoint pessimization deadlocked"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn forced_discovery_coalesces_requests_until_completion() -> YdbResult<()> {
+        let state = discovery_shared_state()?;
+
+        assert!(state.claim_forced_discovery());
+        assert!(
+            !state.claim_forced_discovery(),
+            "a refresh already in flight must absorb another request"
+        );
+        state.complete_forced_discovery();
+        assert!(state.claim_forced_discovery());
 
         Ok(())
     }
