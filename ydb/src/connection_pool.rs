@@ -1,11 +1,11 @@
 use crate::{GrpcOptions, YdbError, YdbResult};
-use derivative::Derivative;
 use futures_util::FutureExt;
 use futures_util::stream::FuturesUnordered;
 use http::Uri;
 use http::uri::{Authority, Scheme};
 use itertools::Either;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt::{Debug, Formatter};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::task::Poll;
@@ -92,16 +92,22 @@ pub(crate) struct RacyRoundRobin {
     state: tokio::sync::Mutex<RacyRoundRobinState>,
 }
 
-#[derive(Derivative)]
-#[derivative(Debug)]
 struct RacyRoundRobinState {
     addrs: HashSet<IpAddr>,
 
-    #[derivative(Debug = "ignore")]
     connections: VecDeque<ConnectionTask>,
     first_connection: ReadyConnection,
-    #[derivative(Debug = "ignore")]
     tried_connections: VecDeque<ConnectionTask>,
+}
+
+impl Debug for RacyRoundRobinState {
+    // The connection queues are skipped: `ConnectionTask` is not `Debug`.
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RacyRoundRobinState")
+            .field("addrs", &self.addrs)
+            .field("first_connection", &self.first_connection)
+            .finish()
+    }
 }
 
 type ConnectionTask = Either<PendingConnection, ReadyConnection>;
