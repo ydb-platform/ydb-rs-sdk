@@ -29,7 +29,6 @@ pub(crate) struct PartitionWorker {
 }
 
 enum ChainAdvanceOutcome {
-    Cancelled,
     Committed,
     CommitPhaseFailure(MessageCoordinate, anyhow::Error),
     OperationalFailure(anyhow::Error),
@@ -82,9 +81,11 @@ impl PartitionWorker {
         metrics: Metrics,
         logger: Arc<Logger>,
     ) -> Result<PartitionId> {
-        loop {
+        // Let an in-flight transaction resolve; cancellation only prevents the
+        // worker from starting the next one.
+        while !cancel.is_cancelled() {
             let span = metrics.start(OPERATION_TRANSACTION);
-            let ChainAdvanceReport { attempts, outcome } = self.advance_chain_once(&cancel).await;
+            let ChainAdvanceReport { attempts, outcome } = self.advance_chain_once().await;
 
             // TopicReaderTx discards buffered state and reconnects its reader in
             // the background whenever the transaction aborts.
@@ -92,7 +93,6 @@ impl PartitionWorker {
             // Non-terminal outcomes use bounded metric names; full errors
             // stay in logs. Invalid state propagates as a fatal error.
             match outcome {
-                ChainAdvanceOutcome::Cancelled => break,
                 ChainAdvanceOutcome::Committed => {
                     span.finish(None, attempts);
                 }
@@ -118,7 +118,7 @@ impl PartitionWorker {
         Ok(self.partition_id)
     }
 
-    async fn advance_chain_once(&mut self, cancel: &CancellationToken) -> ChainAdvanceReport {
+    async fn advance_chain_once(&mut self) -> ChainAdvanceReport {
         let timeout = self.operation_timeout;
         let deadline = Instant::now() + timeout;
         let query_client = &self.query_client;
@@ -140,7 +140,6 @@ impl PartitionWorker {
                     &table_path = &self.table_path,
                     partition_id = self.partition_id,
                     &deadline,
-                    cancel,
                 ],
                 async |tx: &mut Transaction| {
                     *attempts += 1;
@@ -148,18 +147,11 @@ impl PartitionWorker {
 
                     let batch = {
                         let mut reader_tx = reader.tx_reader(tx).await?;
-                        tokio::select! {
-                            _ = cancel.cancelled() => None,
-                            result = timeout_at(*deadline, reader_tx.read_batch()) => Some(
-                                result.map_err(|_| YdbError::Custom(
-                                    "transaction topic read timed out".to_string()
-                                ))??
-                            ),
-                        }
-                    };
-                    let Some(batch) = batch else {
-                        tx.rollback().await?;
-                        return Ok(ChainAdvanceOutcome::Cancelled);
+                        timeout_at(*deadline, reader_tx.read_batch())
+                            .await
+                            .map_err(|_| {
+                                YdbError::Custom("transaction topic read timed out".to_string())
+                            })??
                     };
                     let transition = transition_from_batch(batch, *partition_id).await?;
                     insert_transition(tx, table_path.as_str(), &transition).await?;
@@ -177,7 +169,6 @@ impl PartitionWorker {
             .idempotent(true)
             .timeout(timeout)
             .await;
-
         let outcome = match result {
             Ok(outcome) => outcome,
             Err(error) => match commit_phase_coordinate {
