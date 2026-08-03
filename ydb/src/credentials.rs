@@ -63,7 +63,7 @@ pub struct MetadataUrlCredentials {
 impl MetadataUrlCredentials {
     pub fn new() -> Self {
         Self {
-            inner: GCEMetadata::from_url(YC_METADATA_URL).unwrap(),
+            inner: GCEMetadata::from_static_url(YC_METADATA_URL),
         }
     }
 
@@ -263,10 +263,11 @@ impl Credentials for CommandLineCredentials {
         let result = self.command.lock()?.output()?;
         if !result.status.success() {
             let err = String::from_utf8(result.stderr)?;
+            // `status` is used instead of `status.code()`: the code is `None`
+            // when the child was terminated by a signal.
             return Err(YdbError::Custom(format!(
                 "can't execute yc ({}): {}",
-                result.status.code().unwrap(),
-                err
+                result.status, err
             )));
         }
         let token = String::from_utf8(result.stdout)?.trim().to_string();
@@ -396,7 +397,9 @@ impl ServiceAccountCredentials {
 
         let iat = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
+            .map_err(|err| {
+                YdbError::custom(format!("system clock is set before the UNIX epoch: {err}"))
+            })?
             .as_secs() as usize;
 
         let mut header = Header::new(Algorithm::PS256);
@@ -479,7 +482,17 @@ pub struct GCEMetadata {
 impl GCEMetadata {
     /// Create GCEMetadata with default url for receive token
     pub fn new() -> Self {
-        Self::from_url(GCE_METADATA_URL).unwrap()
+        Self::from_static_url(GCE_METADATA_URL)
+    }
+
+    /// Build from an url that is known to be well-formed at compile time.
+    ///
+    /// Used by the default constructors so they do not have to handle a
+    /// parse error that cannot happen.
+    fn from_static_url(url: &'static str) -> Self {
+        Self {
+            uri: url.to_string(),
+        }
     }
 
     /// Create GCEMetadata with custom url (may need for debug or spec infrastructure with non standard metadata)
@@ -552,8 +565,7 @@ impl StaticCredentials {
 
         let mut auth_client = empty_connection_manager
             .get_auth_service(RawAuthClient::new)
-            .await
-            .unwrap();
+            .await?;
 
         // TODO: add configurable authorization request timeout
         let raw_request = RawLoginRequest {

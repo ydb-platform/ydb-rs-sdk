@@ -3,8 +3,11 @@ use tracing::trace;
 use tracing_test::traced_test;
 
 use crate::{
-    YdbResult, credentials::StaticCredentials, pub_traits::Credentials,
-    test_helpers::CONNECTION_STRING, test_integration_helper::create_password_client,
+    YdbResult,
+    credentials::{CommandLineCredentials, StaticCredentials},
+    pub_traits::Credentials,
+    test_helpers::CONNECTION_STRING,
+    test_integration_helper::create_password_client,
 };
 
 #[test]
@@ -94,5 +97,36 @@ async fn password_client_test() -> YdbResult<()> {
     let two: i32 = row.remove_field(0)?.try_into()?;
 
     assert_eq!(two, 2);
+    Ok(())
+}
+
+/// `ExitStatus::code()` returns `None` when the child is terminated by a
+/// signal. `CommandLineCredentials::create_token` used to unwrap it, so a
+/// signal-killed helper panicked instead of returning an error.
+#[test]
+#[cfg(unix)]
+fn command_line_credentials_signal_killed_command() -> YdbResult<()> {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    let script_path =
+        std::env::temp_dir().join(format!("ydb-selfkill-{}.sh", uuid::Uuid::new_v4()));
+
+    let mut script = std::fs::File::create(&script_path)?;
+    script.write_all(b"#!/bin/sh\nkill -9 $$\n")?;
+    drop(script);
+    std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755))?;
+
+    let cred = CommandLineCredentials::from_cmd(script_path.to_string_lossy().as_ref())?;
+    let result = cred.create_token();
+
+    std::fs::remove_file(&script_path)?;
+
+    let err = result.expect_err("a signal-killed command must not produce a token");
+    assert!(
+        err.to_string().contains("can't execute"),
+        "unexpected error: {err}"
+    );
+
     Ok(())
 }
