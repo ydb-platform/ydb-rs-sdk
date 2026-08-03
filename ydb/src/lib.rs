@@ -127,9 +127,9 @@ pub use client_coordination::session::session_options::{SessionOptions, SessionO
 
 // full enum pub types
 pub use client_topic::client::{
-    AlterTopicOptions, AlterTopicOptionsBuilder, CreateTopicOptions, CreateTopicOptionsBuilder,
-    DescribeConsumerOptions, DescribeConsumerOptionsBuilder, DescribeTopicOptions,
-    DescribeTopicOptionsBuilder, TopicClient,
+    AlterTopicOptions, AlterTopicOptionsBuilder, CommitOffsetOptions, CommitOffsetOptionsBuilder,
+    CreateTopicOptions, CreateTopicOptionsBuilder, DescribeConsumerOptions,
+    DescribeConsumerOptionsBuilder, DescribeTopicOptions, DescribeTopicOptionsBuilder, TopicClient,
 };
 pub use client_topic::list_types::{
     AlterConsumer, AlterConsumerBuilder, Codec, Consumer, ConsumerBuilder, ConsumerDescription,
