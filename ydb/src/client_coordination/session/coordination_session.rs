@@ -46,6 +46,17 @@ struct MethodControllers {
     release_semaphore: Arc<RequestController<RawReleaseSemaphoreResult>>,
 }
 
+impl MethodControllers {
+    async fn close(&self) {
+        self.create_semaphore.close().await;
+        self.describe_semaphore.close().await;
+        self.acquire_semaphore.close().await;
+        self.update_semaphore.close().await;
+        self.delete_semaphore.close().await;
+        self.release_semaphore.close().await;
+    }
+}
+
 #[allow(dead_code)]
 pub struct CoordinationSession {
     id: u64,
@@ -128,6 +139,7 @@ impl CoordinationSession {
                 {
                     Ok(()) => {}
                     Err(_iteration_error) => {
+                        loop_controllers.close().await;
                         loop_token.cancel();
                         return;
                     }
@@ -276,7 +288,9 @@ impl CoordinationSession {
                 options.data,
             ))
             .await?;
-        let response = rx.recv().await.unwrap();
+        let response = rx.recv().await.ok_or_else(|| {
+            YdbError::Custom("coordination session closed while acquiring semaphore".to_string())
+        })?;
         if response.acquired {
             Ok(Lease::new(
                 self.method_controllers.release_semaphore.clone(),
