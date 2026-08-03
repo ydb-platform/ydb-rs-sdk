@@ -14,30 +14,52 @@ use crate::client_topic::topicwriter::message_write_status::{
 use crate::client_topic::topicwriter::reception_queue::{ReceptionQueue, ReceptionTicket};
 use crate::{YdbError, YdbResult};
 
+const DEFAULT_MAX_BUFFERED_MESSAGES: usize = 16_000;
+
 #[derive(Clone)]
 pub(crate) struct Queue {
     inner: Arc<Mutex<QueueInner>>,
 
     new_message_added: Arc<Notify>,
+    message_removed_or_closed: Arc<Notify>,
     last_acknowledged_seq_no: Arc<RwLock<Option<i64>>>,
     message_acknowledged: Arc<Notify>,
+    max_buffered_messages: usize,
 }
 
 impl Queue {
     #[cfg(test)]
     pub(crate) fn new() -> Self {
-        Self::new_with_status_validator(
+        Self::new_inner(
             crate::client_topic::topicwriter::message_write_status::accept_any_write_status,
+            DEFAULT_MAX_BUFFERED_MESSAGES,
         )
     }
 
     pub(crate) fn new_with_status_validator(status_validator: MessageWriteStatusValidator) -> Self {
+        Self::new_inner(status_validator, DEFAULT_MAX_BUFFERED_MESSAGES)
+    }
+
+    fn new_inner(
+        status_validator: MessageWriteStatusValidator,
+        max_buffered_messages: usize,
+    ) -> Self {
         Self {
             inner: Arc::new(Mutex::new(QueueInner::new(status_validator))),
             new_message_added: Arc::new(Notify::new()),
+            message_removed_or_closed: Arc::new(Notify::new()),
             last_acknowledged_seq_no: Arc::new(RwLock::new(None)),
             message_acknowledged: Arc::new(Notify::new()),
+            max_buffered_messages: max_buffered_messages.max(1),
         }
+    }
+
+    #[cfg(test)]
+    fn new_with_max_buffered_messages(max_buffered_messages: usize) -> Self {
+        Self::new_inner(
+            crate::client_topic::topicwriter::message_write_status::accept_any_write_status,
+            max_buffered_messages,
+        )
     }
 
     pub(crate) async fn add_message(
@@ -45,10 +67,25 @@ impl Queue {
         message: MessageData,
         ack_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     ) -> YdbResult<()> {
-        let mut inner = self.inner.lock().await;
-        inner.add_message(message, ack_sender)?;
-        self.new_message_added.notify_one();
-        Ok(())
+        loop {
+            let notified = self.message_removed_or_closed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+
+            {
+                let mut inner = self.inner.lock().await;
+                if !inner.is_open_for_new_messages {
+                    return Err(YdbError::custom("message queue is closed for new messages"));
+                }
+                if inner.message_queue.len() < self.max_buffered_messages {
+                    inner.add_message(message, ack_sender)?;
+                    self.new_message_added.notify_one();
+                    return Ok(());
+                }
+            }
+
+            notified.await;
+        }
     }
 
     pub(crate) async fn acknowledge_message(&self, write_ack: WriteAck) -> YdbResult<()> {
@@ -58,6 +95,7 @@ impl Queue {
 
         *self.last_acknowledged_seq_no.write().await = Some(seq_no);
         self.message_acknowledged.notify_one();
+        self.message_removed_or_closed.notify_one();
 
         Ok(())
     }
@@ -129,12 +167,17 @@ impl Queue {
 
     pub(crate) async fn notify_reception_tickets(&self, error: YdbError) {
         let mut inner = self.inner.lock().await;
+        inner.is_open_for_new_messages = false;
         inner.reception_queue.send_error_to_tickets_and_clear(error);
+        drop(inner);
+        self.message_removed_or_closed.notify_waiters();
     }
 
     pub(crate) async fn close_for_new_messages(&self) {
         let mut inner = self.inner.lock().await;
         inner.is_open_for_new_messages = false;
+        drop(inner);
+        self.message_removed_or_closed.notify_waiters();
     }
 
     pub(crate) async fn reset_progress(&self) {
@@ -248,6 +291,37 @@ mod tests {
             .unwrap_err();
 
         assert!(err.to_string().contains("closed for new messages"));
+    }
+
+    #[tokio::test]
+    async fn add_message_waits_for_capacity_until_an_ack_releases_a_slot() {
+        let q = Arc::new(Queue::new_with_max_buffered_messages(1));
+        q.add_message(create_message(1, vec![]), None)
+            .await
+            .unwrap();
+
+        let q_for_second_message = q.clone();
+        let mut second_message = tokio::spawn(async move {
+            q_for_second_message
+                .add_message(create_message(2, vec![]), None)
+                .await
+        });
+
+        assert!(
+            timeout(Duration::from_millis(20), &mut second_message)
+                .await
+                .is_err(),
+            "queue accepted a second in-flight message despite its capacity"
+        );
+
+        let sent = q.get_messages_to_send(1, Duration::ZERO).await;
+        assert_eq!(sent.len(), 1);
+        q.acknowledge_message(write_ack(1)).await.unwrap();
+
+        second_message
+            .await
+            .unwrap()
+            .expect("acknowledgement should release queue capacity");
     }
 
     #[tokio::test]

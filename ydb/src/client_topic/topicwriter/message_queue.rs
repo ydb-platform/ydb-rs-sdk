@@ -98,6 +98,10 @@ impl MessageQueue {
     pub(crate) fn last_added_seq_no(&self) -> Option<i64> {
         self.last_added_seq_no
     }
+
+    pub(crate) fn len(&self) -> usize {
+        self.messages.len() + self.sent_messages.len()
+    }
 }
 
 #[cfg(test)]
