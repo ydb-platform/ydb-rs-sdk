@@ -32,12 +32,12 @@ pub fn new_rate_limiter(rps: u32) -> RateLimiter {
     }
 }
 
-/// Keeps the first failure as the source and attaches a later failure as context.
+/// Keeps the first failure as context and the later failure as the source.
 pub fn preserve_primary_error(primary: Result<()>, additional: Result<()>) -> Result<()> {
     match (primary, additional) {
         (Ok(()), additional) => additional,
         (Err(primary), Ok(())) => Err(primary),
-        (Err(primary), Err(additional)) => Err(primary.context(format!("{additional:#}"))),
+        (Err(primary), Err(additional)) => Err(additional.context(format!("{primary:#}"))),
     }
 }
 
