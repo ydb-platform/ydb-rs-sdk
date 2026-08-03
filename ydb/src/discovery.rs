@@ -513,13 +513,20 @@ mod test {
 
     use crate::GrpcOptions;
     use crate::client_common::{DBCredentials, TokenCache};
-    use crate::discovery::{Discovery, DiscoverySharedState, DiscoveryState, NodeInfo};
-    use crate::errors::YdbResult;
+    use crate::discovery::{
+        Discovery, DiscoverySharedState, DiscoveryState, NodeInfo, StaticDiscovery, TimerDiscovery,
+    };
+    use crate::errors::{YdbError, YdbResult};
     use crate::grpc_connection_manager::{DiscoveryConnectionManager, NoBalancer};
     use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
+    use crate::grpc_wrapper::raw_discovery_client::EndpointInfo;
+    use crate::grpc_wrapper::raw_services::Service;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::test_helpers::test_client_builder;
+    use crate::waiter::Waiter;
+    use futures_util::StreamExt;
     use std::sync::Arc;
+    use std::sync::atomic::Ordering;
     use std::time::{Duration, Instant};
 
     fn discovery_shared_state() -> YdbResult<DiscoverySharedState> {
@@ -573,6 +580,382 @@ mod test {
         );
         state.complete_forced_discovery();
         assert!(state.claim_forced_discovery());
+
+        Ok(())
+    }
+
+    fn node(uri: &'static str) -> NodeInfo {
+        NodeInfo::new(Uri::from_static(uri), String::new())
+    }
+
+    fn state_with(nodes: Vec<NodeInfo>) -> DiscoveryState {
+        DiscoveryState::new(Instant::now(), nodes)
+    }
+
+    fn endpoint(fqdn: &str, port: u32, ssl: bool) -> EndpointInfo {
+        EndpointInfo {
+            fqdn: fqdn.to_string(),
+            port,
+            ssl,
+            location: "dc-1".to_string(),
+        }
+    }
+
+    /// Publish a ready state so pessimization and `try_state` have something
+    /// to act on - both are no-ops before the first discovery.
+    fn publish(state: &DiscoverySharedState, nodes: Vec<NodeInfo>) {
+        state
+            .state_sender
+            .send_replace(Some(Ok(Arc::new(state_with(nodes)))));
+    }
+
+    // ---- DiscoveryState -------------------------------------------------
+
+    #[test]
+    fn new_state_exposes_every_node() {
+        let state = state_with(vec![node("http://a:2136"), node("http://b:2136")]);
+
+        assert!(!state.is_empty());
+        assert_eq!(state.get_nodes(&Service::Table).map(<[_]>::len), Some(2));
+        assert_eq!(state.get_all_nodes().map(<[_]>::len), Some(2));
+    }
+
+    #[test]
+    fn default_state_is_empty() {
+        let state = DiscoveryState::default();
+
+        assert!(state.is_empty());
+        assert_eq!(state.get_all_nodes(), Some(&[][..]));
+    }
+
+    #[test]
+    fn pessimize_hides_the_node_and_is_idempotent() {
+        let bad = Uri::from_static("http://a:2136");
+        let mut state = state_with(vec![node("http://a:2136"), node("http://b:2136")]);
+
+        assert!(
+            state.pessimize(&bad),
+            "first pessimization must change state"
+        );
+        assert!(state.is_pessimized(&bad));
+        let remaining = state.get_all_nodes().expect("nodes");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].uri, Uri::from_static("http://b:2136"));
+
+        assert!(
+            !state.pessimize(&bad),
+            "pessimizing the same node twice must not change state"
+        );
+    }
+
+    /// Hiding every node would leave the balancer with nothing to pick, so the
+    /// full set is restored once all of them are pessimized.
+    #[test]
+    fn pessimizing_every_node_falls_back_to_the_full_set() {
+        let mut state = state_with(vec![node("http://a:2136"), node("http://b:2136")]);
+
+        state.pessimize(&Uri::from_static("http://a:2136"));
+        state.pessimize(&Uri::from_static("http://b:2136"));
+
+        assert_eq!(state.get_all_nodes().map(<[_]>::len), Some(2));
+        assert!(!state.is_empty());
+    }
+
+    #[test]
+    fn with_node_info_appends_each_node_once() {
+        let extra = node("http://c:2136");
+
+        let state = state_with(vec![node("http://a:2136")])
+            .with_node_info(Service::Table, extra.clone())
+            .with_node_info(Service::Table, extra);
+
+        assert_eq!(state.get_all_nodes().map(<[_]>::len), Some(2));
+    }
+
+    // ---- endpoint conversion --------------------------------------------
+
+    #[test]
+    fn endpoints_convert_to_uris_by_ssl_flag() -> YdbResult<()> {
+        let nodes = DiscoverySharedState::list_endpoints_to_node_infos(vec![
+            endpoint("plain.example.com", 2136, false),
+            endpoint("secure.example.com", 2135, true),
+        ])?;
+
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(
+            nodes[0].uri,
+            Uri::from_static("http://plain.example.com:2136/")
+        );
+        assert_eq!(
+            nodes[1].uri,
+            Uri::from_static("https://secure.example.com:2135/")
+        );
+        assert_eq!(nodes[0].location, "dc-1");
+
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_endpoint_is_rejected() {
+        let err = DiscoverySharedState::list_endpoints_to_node_infos(vec![endpoint(
+            "not a hostname",
+            2136,
+            false,
+        )])
+        .expect_err("an invalid authority must be reported");
+
+        assert!(!err.to_string().is_empty());
+    }
+
+    // ---- StaticDiscovery -------------------------------------------------
+
+    #[tokio::test]
+    async fn static_discovery_always_returns_its_endpoint() -> YdbResult<()> {
+        let discovery = StaticDiscovery::new_from_str("grpc://localhost:2136")?;
+
+        discovery.wait().await?;
+        let state = discovery.state().await;
+        assert_eq!(state.get_all_nodes().map(<[_]>::len), Some(1));
+
+        // pessimization is a no-op and the subscription is empty by design
+        discovery.pessimization(&Uri::from_static("grpc://localhost:2136"));
+        assert_eq!(
+            discovery
+                .try_state()
+                .map(|s| s.get_all_nodes().map(<[_]>::len)),
+            Some(Some(1))
+        );
+        assert!(discovery.subscribe().next().await.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn static_discovery_rejects_a_malformed_endpoint() {
+        assert!(StaticDiscovery::new_from_str("not a uri").is_err());
+    }
+
+    // ---- DiscoverySharedState state plumbing ------------------------------
+
+    #[tokio::test]
+    async fn state_is_unavailable_until_the_first_discovery() -> YdbResult<()> {
+        let state = discovery_shared_state()?;
+
+        assert!(state.try_state().is_none());
+        // pessimization before the first discovery is deliberately ignored
+        state.pessimization(&Uri::from_static("http://a:2136"));
+        assert!(state.try_state().is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn state_resolves_once_discovery_publishes() -> YdbResult<()> {
+        let state = Arc::new(discovery_shared_state()?);
+
+        let waiter = state.clone();
+        let pending = tokio::spawn(async move { waiter.state().await });
+
+        publish(&state, vec![node("http://a:2136")]);
+
+        let resolved = tokio::time::timeout(Duration::from_secs(1), pending)
+            .await
+            .expect("state() must resolve once a state is published")
+            .expect("task should not panic");
+        assert_eq!(resolved.get_all_nodes().map(<[_]>::len), Some(1));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wait_reports_the_first_discovery_error() -> YdbResult<()> {
+        let state = discovery_shared_state()?;
+        state
+            .state_sender
+            .send_replace(Some(Err(YdbError::custom("discovery failed"))));
+
+        let err = state.wait().await.expect_err("a stored error must surface");
+        assert!(err.to_string().contains("discovery failed"));
+        assert!(state.try_state().is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn wait_returns_once_a_state_exists() -> YdbResult<()> {
+        let state = discovery_shared_state()?;
+        publish(&state, vec![node("http://a:2136")]);
+
+        state.wait().await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn subscribe_yields_successful_states_only() -> YdbResult<()> {
+        let state = discovery_shared_state()?;
+        let mut updates = state.subscribe();
+
+        state
+            .state_sender
+            .send_replace(Some(Err(YdbError::custom("transient"))));
+        publish(&state, vec![node("http://a:2136")]);
+
+        let update = tokio::time::timeout(Duration::from_secs(1), updates.next())
+            .await
+            .expect("an update must arrive")
+            .expect("stream must not end while the sender is alive");
+        assert_eq!(update.get_all_nodes().map(<[_]>::len), Some(1));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pessimization_updates_the_published_state() -> YdbResult<()> {
+        let state = discovery_shared_state()?;
+        publish(&state, vec![node("http://a:2136"), node("http://b:2136")]);
+
+        state.pessimization(&Uri::from_static("http://a:2136"));
+
+        let current = state.try_state().expect("state was published");
+        assert_eq!(current.get_all_nodes().map(<[_]>::len), Some(1));
+
+        // repeating it leaves the state untouched
+        state.pessimization(&Uri::from_static("http://a:2136"));
+        assert_eq!(
+            state.try_state().map(|s| s.get_all_nodes().map(<[_]>::len)),
+            Some(Some(1))
+        );
+
+        Ok(())
+    }
+
+    // ---- forced rediscovery ----------------------------------------------
+
+    #[tokio::test]
+    async fn discovery_now_reports_an_unreachable_endpoint() -> YdbResult<()> {
+        const CLOSED_PORT: &str = "grpc://127.0.0.1:1";
+
+        let connection_manager = DiscoveryConnectionManager::new(
+            NoBalancer,
+            "/local".to_string(),
+            MultiInterceptor::new(),
+            GrpcOptions::default(),
+        );
+        let state = DiscoverySharedState::new(connection_manager, CLOSED_PORT)?;
+
+        // Loopback refuses immediately, so this needs no server and no network.
+        state
+            .discovery_now()
+            .await
+            .expect_err("an unreachable endpoint must not yield a state");
+        assert!(state.try_state().is_none());
+
+        Ok(())
+    }
+
+    fn timer_discovery_to_closed_port() -> YdbResult<TimerDiscovery> {
+        let connection_manager = DiscoveryConnectionManager::new(
+            NoBalancer,
+            "/local".to_string(),
+            MultiInterceptor::new(),
+            GrpcOptions::default(),
+        );
+
+        TimerDiscovery::new(
+            connection_manager,
+            "grpc://127.0.0.1:1",
+            // long enough that the periodic timer never fires during a test
+            Duration::from_secs(3600),
+            StaticDiscovery::new_from_str("grpc://127.0.0.1:1")?,
+        )
+    }
+
+    /// Wait until the spawned refresh has released the in-flight flag.
+    async fn await_forced_discovery(state: &DiscoverySharedState) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while state.forced_discovery_in_flight.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the spawned refresh must release the in-flight flag");
+    }
+
+    #[tokio::test]
+    async fn timer_discovery_ignores_pessimization_before_the_first_discovery() -> YdbResult<()> {
+        let discovery = timer_discovery_to_closed_port()?;
+
+        discovery.pessimization(&Uri::from_static("http://a:2136"));
+
+        assert!(discovery.try_state().is_none());
+        assert!(
+            !discovery
+                .state
+                .forced_discovery_in_flight
+                .load(Ordering::Acquire),
+            "no refresh should be scheduled before the first discovery"
+        );
+
+        Ok(())
+    }
+
+    /// A pessimization storm must schedule one refresh, not one per failure.
+    #[tokio::test]
+    async fn timer_discovery_pessimization_spawns_one_refresh() -> YdbResult<()> {
+        let discovery = timer_discovery_to_closed_port()?;
+        publish(
+            &discovery.state,
+            vec![node("http://a:2136"), node("http://b:2136")],
+        );
+
+        // Half the nodes pessimized is the threshold that triggers a refresh.
+        // The refresh targets a closed port, so it fails fast and releases the
+        // flag; that release is what proves the spawned task actually ran.
+        discovery.pessimization(&Uri::from_static("http://a:2136"));
+        await_forced_discovery(&discovery.state).await;
+
+        assert_eq!(
+            discovery
+                .try_state()
+                .map(|s| s.get_all_nodes().map(<[_]>::len)),
+            Some(Some(1))
+        );
+
+        // A second storm can schedule a fresh refresh once the first finished.
+        discovery.pessimization(&Uri::from_static("http://b:2136"));
+        await_forced_discovery(&discovery.state).await;
+
+        discovery.wait().await?;
+        assert_eq!(
+            discovery.state().await.get_all_nodes().map(<[_]>::len),
+            Some(2)
+        );
+
+        let mut updates = discovery.subscribe();
+        assert!(updates.next().await.is_some());
+
+        Ok(())
+    }
+
+    /// The background loop must stop once the shared state is gone rather than
+    /// retrying against a dropped driver forever.
+    #[tokio::test]
+    async fn background_discovery_stops_when_the_state_is_dropped() -> YdbResult<()> {
+        let state = Arc::new(discovery_shared_state()?);
+        let weak = Arc::downgrade(&state);
+        drop(state);
+
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            DiscoverySharedState::background_discovery(
+                weak,
+                Duration::from_secs(3600),
+                StaticDiscovery::new_from_str("grpc://127.0.0.1:1")?,
+            ),
+        )
+        .await
+        .expect("background discovery must exit once the state is dropped");
 
         Ok(())
     }
