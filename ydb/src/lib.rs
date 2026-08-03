@@ -208,7 +208,8 @@ pub use query::Query;
 pub use result::{ResultSet, ResultSetRowsIter, Row};
 pub use table_requests::{
     AlterTableRequest, CreateTableRequest, DropTableRequest, NamedPolicyDescription,
-    ReadRowsRequest, TableColumn, TableOptionsDescription,
+    ReadRowsRequest, TableColumn, TableOptionsDescription, TablePartitioningSettings,
+    TablePartitions,
 };
 // full enum pub types
 pub use waiter::Waiter;
