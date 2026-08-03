@@ -1,5 +1,5 @@
 #![recursion_limit = "256"]
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::time::timeout;
 use ydb::{ClientBuilder, Value, YdbError, YdbResult, ydb_params};
@@ -47,6 +47,29 @@ async fn main() -> YdbResult<()> {
 
         assert_eq!(source, res);
         println!("Struct: {res:?}");
+    }
+
+    // Set - YDB transfers Set<T> as Dict<T, Void>
+    {
+        let source: HashSet<i32> = HashSet::from([1, 2, 3]);
+
+        let mut row = qc
+            .query_row("SELECT $val AS res")
+            .params(ydb_params!("$val" => source.clone()))
+            .await?;
+        let res: HashSet<i32> = row.remove_field_by_name("res")?.try_into()?;
+
+        assert_eq!(source, res);
+
+        // the server sees a real set, not an opaque value
+        let mut row = qc
+            .query_row("SELECT DictContains($val, 2) AS has")
+            .params(ydb_params!("$val" => source))
+            .await?;
+        let has: bool = row.remove_field_by_name("has")?.try_into()?;
+
+        assert!(has);
+        println!("Set: {res:?}, contains 2: {has}");
     }
 
     println!("done");

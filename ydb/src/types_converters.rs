@@ -1,9 +1,10 @@
 use crate::errors::YdbError;
 use crate::types::{Bytes, Value, ValueOptional};
-use crate::{ValueList, ValueStruct, YdbResult};
+use crate::{ValueList, ValueSet, ValueStruct, YdbResult};
 use itertools::Itertools;
 use std::any::type_name;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::Hash;
 use std::time::SystemTime;
 
 macro_rules! simple_convert {
@@ -200,6 +201,58 @@ where
             .map(|item| item.try_into())
             .try_collect()?;
         Ok(res)
+    }
+}
+
+// From HashSet to Value::Set
+//
+// `FromIterator` already maps iterators to `Value::List`, so sets convert
+// through `From` on the concrete `HashSet` instead.
+impl<T> From<HashSet<T>> for Value
+where
+    T: Into<Value> + Default + Eq + Hash,
+{
+    fn from(from_value: HashSet<T>) -> Self {
+        let t: Value = T::default().into();
+        let values: Vec<Value> = from_value.into_iter().map(|item| item.into()).collect();
+
+        Value::Set(Box::new(ValueSet { t, values }))
+    }
+}
+
+// From Value::Set to HashSet
+impl<T> TryFrom<Value> for HashSet<T>
+where
+    T: TryFrom<Value, Error = YdbError> + Eq + Hash,
+{
+    type Error = YdbError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        let kind_name = value.kind_static();
+        let value_set = match value {
+            Value::Set(inner) => inner,
+            _ => {
+                return Err(YdbError::from_str(format!(
+                    "can't convert from {kind_name} to HashSet"
+                )));
+            }
+        };
+
+        // Check the element type up front so an empty set of the wrong type is
+        // not silently accepted.
+        let set_item_type = value_set.t.kind_static();
+        if TryInto::<T>::try_into(value_set.t).is_err() {
+            let target_item_type = type_name::<T>();
+            return Err(YdbError::from_str(format!(
+                "can't convert set item type '{set_item_type}' to hashset item type '{target_item_type}'"
+            )));
+        };
+
+        value_set
+            .values
+            .into_iter()
+            .map(|item| item.try_into())
+            .try_collect()
     }
 }
 
