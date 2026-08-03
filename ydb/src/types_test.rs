@@ -861,6 +861,113 @@ fn unwrap_optional(v: Value, yql_type: &str, text: &str) -> YdbResult<Value> {
     }
 }
 
+#[test]
+fn set_from_accepts_members_of_the_example_type() -> YdbResult<()> {
+    let set = Value::set_from(
+        Value::Int32(0),
+        vec![Value::Int32(1), Value::Int32(2), Value::Int32(3)],
+    )?;
+
+    match set {
+        Value::Set(inner) => {
+            assert_eq!(inner.t, Value::Int32(0));
+            assert_eq!(inner.values.len(), 3);
+        }
+        other => panic!("expected a set, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn set_from_rejects_a_member_of_another_type() {
+    let err = Value::set_from(
+        Value::Int32(0),
+        vec![Value::Int32(1), Value::Text("2".into())],
+    )
+    .expect_err("a text member must not be accepted into Set<Int32>");
+
+    assert!(
+        err.to_string().contains("failed set_from"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn set_from_rejects_structs_with_different_fields() {
+    let example = Value::struct_from_fields(vec![("a".to_string(), Value::Int32(0))]);
+    let other = Value::struct_from_fields(vec![("b".to_string(), Value::Int32(0))]);
+
+    let err = Value::set_from(example, vec![other])
+        .expect_err("struct members must share the example's field names");
+
+    assert!(
+        err.to_string().contains("failed set_from"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn set_from_allows_an_empty_set() -> YdbResult<()> {
+    let set = Value::set_from(Value::Int32(0), Vec::new())?;
+
+    match set {
+        Value::Set(inner) => {
+            assert_eq!(inner.t, Value::Int32(0));
+            assert!(inner.values.is_empty());
+        }
+        other => panic!("expected a set, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+#[test]
+fn hashset_converts_to_and_from_set_value() -> YdbResult<()> {
+    use std::collections::HashSet;
+
+    let source: HashSet<i32> = HashSet::from([1, 2, 3]);
+    let value: Value = source.clone().into();
+
+    assert!(matches!(value, Value::Set(_)), "expected a set: {value:?}");
+
+    let restored: HashSet<i32> = value.try_into()?;
+    assert_eq!(restored, source);
+
+    Ok(())
+}
+
+#[test]
+fn hashset_conversion_rejects_a_non_set_value() {
+    use std::collections::HashSet;
+
+    let err = TryInto::<HashSet<i32>>::try_into(Value::Int32(1))
+        .expect_err("a scalar must not convert to HashSet");
+
+    assert!(
+        err.to_string().contains("to HashSet"),
+        "unexpected error: {err}"
+    );
+}
+
+/// An empty `Set<Text>` must not quietly become an empty `HashSet<i32>`.
+#[test]
+fn hashset_conversion_rejects_a_mismatched_element_type() -> YdbResult<()> {
+    use std::collections::HashSet;
+
+    let text_set = Value::set_from(Value::Text(String::new()), Vec::new())?;
+
+    let err = TryInto::<HashSet<i32>>::try_into(text_set)
+        .expect_err("Set<Text> must not convert to HashSet<i32>");
+
+    assert!(
+        err.to_string().contains("hashset item type"),
+        "unexpected error: {err}"
+    );
+
+    Ok(())
+}
+
 /// Value equality that treats NaN as equal to NaN (PartialEq says they aren't).
 fn value_roundtrip_eq(expected: &Value, actual: &Value) -> bool {
     match (expected, actual) {
@@ -878,5 +985,64 @@ async fn test_type_serialization() -> YdbResult<()> {
     for case in type_cases() {
         check_type_roundtrip(&client, &case).await?;
     }
+    Ok(())
+}
+
+/// The unit tests only prove the SDK round-trips its own encoding. This one
+/// proves the server accepts `Dict<T, Void>` as `Set<T>` and treats it as a
+/// set rather than an opaque value.
+#[tokio::test]
+#[ignore = "needs YDB access"]
+async fn set_roundtrips_through_the_server() -> YdbResult<()> {
+    let client = test_client_builder().build().await?;
+    let mut query_client = client.query_client();
+
+    let members = vec![Value::Int32(1), Value::Int32(2), Value::Int32(3)];
+    let set = Value::set_from(Value::Int32(0), members)?;
+
+    let mut row = query_client
+        .query_row("SELECT $val AS db_result")
+        .params(ydb_params!("$val" => set.clone()))
+        .await?;
+    let restored = unwrap_optional(
+        row.remove_field_by_name("db_result")?,
+        "Set<Int32>",
+        "{1, 2, 3}",
+    )?;
+
+    match (&set, &restored) {
+        (Value::Set(sent), Value::Set(got)) => {
+            assert_eq!(sent.t, got.t, "element type changed on the way back");
+            assert_eq!(
+                sent.values.len(),
+                got.values.len(),
+                "member count changed: sent {:?}, got {:?}",
+                sent.values,
+                got.values
+            );
+            for member in &sent.values {
+                assert!(
+                    got.values.contains(member),
+                    "member {member:?} missing from {:?}",
+                    got.values
+                );
+            }
+        }
+        other => panic!("expected a set on both sides, got {other:?}"),
+    }
+
+    // DictContains only type-checks if the server really sees a dict/set.
+    let mut row = query_client
+        .query_row("SELECT DictContains($val, 2) AS has_member")
+        .params(ydb_params!("$val" => set))
+        .await?;
+    let has_member: bool = unwrap_optional(
+        row.remove_field_by_name("has_member")?,
+        "Bool",
+        "DictContains",
+    )?
+    .try_into()?;
+    assert!(has_member, "the server did not see 2 as a set member");
+
     Ok(())
 }
