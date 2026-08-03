@@ -23,7 +23,7 @@ pub(super) async fn read_next_transition(
     transition_from_batch(batch, expected_partition_id).await
 }
 
-async fn transition_from_batch(
+pub(super) async fn transition_from_batch(
     batch: TopicReaderBatch,
     expected_partition_id: PartitionId,
 ) -> Result<ChainTransition, YdbOrCustomerError> {

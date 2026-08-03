@@ -2,18 +2,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use tokio::time::Instant;
+use tokio::time::{Instant, timeout_at};
 use tokio_util::sync::CancellationToken;
 use ydb::{
     PartitioningStrategy, QueryClient, TopicClient, TopicReader, TopicReaderOptions, TopicSelector,
-    TopicWriterMessage, TopicWriterTxOptions, TopicWriterTxOptionsBuilder, Transaction,
+    TopicWriterMessage, TopicWriterTxOptions, TopicWriterTxOptionsBuilder, Transaction, YdbError,
     YdbOrCustomerError, closure,
 };
 
 use slo_framework::topic_tx::{MessageCoordinate, Params, PartitionId};
 use slo_framework::{Logger, Metrics};
 
-use super::queries::{insert_transition, read_next_transition};
+use super::queries::{insert_transition, transition_from_batch};
 
 const OPERATION_TRANSACTION: &str = "transaction";
 
@@ -29,6 +29,7 @@ pub(crate) struct PartitionWorker {
 }
 
 enum ChainAdvanceOutcome {
+    Cancelled,
     Committed,
     CommitPhaseFailure(MessageCoordinate, anyhow::Error),
     OperationalFailure(anyhow::Error),
@@ -81,28 +82,29 @@ impl PartitionWorker {
         metrics: Metrics,
         logger: Arc<Logger>,
     ) -> Result<PartitionId> {
-        while !cancel.is_cancelled() {
+        loop {
             let span = metrics.start(OPERATION_TRANSACTION);
-            let report = self.advance_chain_once().await;
+            let ChainAdvanceReport { attempts, outcome } = self.advance_chain_once(&cancel).await;
 
             // TopicReaderTx discards buffered state and reconnects its reader in
             // the background whenever the transaction aborts.
             //
             // Non-terminal outcomes use bounded metric names; full errors
             // stay in logs. Invalid state propagates as a fatal error.
-            match report.outcome {
+            match outcome {
+                ChainAdvanceOutcome::Cancelled => break,
                 ChainAdvanceOutcome::Committed => {
-                    span.finish(None, report.attempts);
+                    span.finish(None, attempts);
                 }
                 ChainAdvanceOutcome::CommitPhaseFailure(coordinate, error) => {
                     let message =
                         format!("transaction commit phase failed at {coordinate}: {error:#}");
-                    span.finish(Some("commit_phase_failure"), report.attempts);
+                    span.finish(Some("commit_phase_failure"), attempts);
                     logger.errorf(message);
                 }
                 ChainAdvanceOutcome::OperationalFailure(error) => {
                     let message = format!("{error:#}");
-                    span.finish(Some("operational_failure"), report.attempts);
+                    span.finish(Some("operational_failure"), attempts);
                     logger.errorf(message);
                 }
                 ChainAdvanceOutcome::InvalidChainState(error) => {
@@ -116,7 +118,7 @@ impl PartitionWorker {
         Ok(self.partition_id)
     }
 
-    async fn advance_chain_once(&mut self) -> ChainAdvanceReport {
+    async fn advance_chain_once(&mut self, cancel: &CancellationToken) -> ChainAdvanceReport {
         let timeout = self.operation_timeout;
         let deadline = Instant::now() + timeout;
         let query_client = &self.query_client;
@@ -138,13 +140,28 @@ impl PartitionWorker {
                     &table_path = &self.table_path,
                     partition_id = self.partition_id,
                     &deadline,
+                    cancel,
                 ],
                 async |tx: &mut Transaction| {
                     *attempts += 1;
                     *commit_phase_coordinate = None;
 
-                    let transition =
-                        read_next_transition(reader, tx, *partition_id, *deadline).await?;
+                    let batch = {
+                        let mut reader_tx = reader.tx_reader(tx).await?;
+                        tokio::select! {
+                            _ = cancel.cancelled() => None,
+                            result = timeout_at(*deadline, reader_tx.read_batch()) => Some(
+                                result.map_err(|_| YdbError::Custom(
+                                    "transaction topic read timed out".to_string()
+                                ))??
+                            ),
+                        }
+                    };
+                    let Some(batch) = batch else {
+                        tx.rollback().await?;
+                        return Ok(ChainAdvanceOutcome::Cancelled);
+                    };
+                    let transition = transition_from_batch(batch, *partition_id).await?;
                     insert_transition(tx, table_path.as_str(), &transition).await?;
                     let mut writer = topic_client
                         .create_writer_tx_with_params(writer_options.clone(), tx)
@@ -154,7 +171,7 @@ impl PartitionWorker {
                         .await?;
 
                     *commit_phase_coordinate = Some(transition.coordinate);
-                    Ok(())
+                    Ok(ChainAdvanceOutcome::Committed)
                 }
             ))
             .idempotent(true)
@@ -162,7 +179,7 @@ impl PartitionWorker {
             .await;
 
         let outcome = match result {
-            Ok(()) => ChainAdvanceOutcome::Committed,
+            Ok(outcome) => outcome,
             Err(error) => match commit_phase_coordinate {
                 Some(coordinate) => ChainAdvanceOutcome::CommitPhaseFailure(
                     coordinate,
