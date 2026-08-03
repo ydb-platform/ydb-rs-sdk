@@ -5,6 +5,7 @@ use tokio::sync::{Mutex, Notify, RwLock, oneshot};
 use tokio::time::{Instant, sleep_until};
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
+use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_queue::{
     AppendMessageToSendBufferResult, MessageQueue,
 };
@@ -28,21 +29,36 @@ impl Queue {
     pub(crate) fn new() -> Self {
         Self::new_with_status_validator(
             crate::client_topic::topicwriter::message_write_status::accept_any_write_status,
+            false,
         )
     }
 
-    pub(crate) fn new_with_status_validator(status_validator: MessageWriteStatusValidator) -> Self {
+    pub(crate) fn new_with_status_validator(
+        status_validator: MessageWriteStatusValidator,
+        auto_seq_no: bool,
+    ) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(QueueInner::new(status_validator))),
+            inner: Arc::new(Mutex::new(QueueInner::new(status_validator, auto_seq_no))),
             new_message_added: Arc::new(Notify::new()),
             last_acknowledged_seq_no: Arc::new(RwLock::new(None)),
             message_acknowledged: Arc::new(Notify::new()),
         }
     }
 
+    pub(crate) async fn initialize_last_seq_no(&self, last_seq_no: i64) -> YdbResult<()> {
+        let mut inner = self.inner.lock().await;
+        if inner.last_seq_no_assigned.is_some() {
+            return Err(YdbError::custom(
+                "message queue last sequence number is already initialized",
+            ));
+        }
+        inner.last_seq_no_assigned = Some(last_seq_no);
+        Ok(())
+    }
+
     pub(crate) async fn add_message(
         &self,
-        message: MessageData,
+        message: TopicWriterMessage,
         ack_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     ) -> YdbResult<()> {
         let mut inner = self.inner.lock().await;
@@ -160,19 +176,51 @@ struct QueueInner {
     reception_queue: ReceptionQueue,
     is_open_for_new_messages: bool,
     status_validator: MessageWriteStatusValidator,
+    auto_seq_no: bool,
+    last_seq_no_assigned: Option<i64>,
 }
 
 impl QueueInner {
-    fn new(status_validator: MessageWriteStatusValidator) -> Self {
+    fn new(status_validator: MessageWriteStatusValidator, auto_seq_no: bool) -> Self {
         Self {
             message_queue: MessageQueue::new(),
             reception_queue: ReceptionQueue::new(),
             is_open_for_new_messages: true,
             status_validator,
+            auto_seq_no,
+            last_seq_no_assigned: None,
         }
     }
 
     fn add_message(
+        &mut self,
+        mut message: TopicWriterMessage,
+        ack_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
+    ) -> YdbResult<()> {
+        let message_seq_no = match (self.auto_seq_no, message.seq_no) {
+            (true, Some(_)) => Err(YdbError::custom(
+                "explicitly specifying message.seq_no is only allowed if auto_seq_no is disabled",
+            )),
+            (true, None) => self
+                .last_seq_no_assigned
+                .ok_or_else(|| {
+                    YdbError::custom("message queue last sequence number is not initialized")
+                })?
+                .checked_add(1)
+                .ok_or_else(|| YdbError::custom("message sequence number overflow")),
+            (false, Some(seq_no)) => Ok(seq_no),
+            (false, None) => Err(YdbError::custom("empty message seq_no is provided")),
+        }?;
+        message.seq_no = Some(message_seq_no);
+
+        let message = message.try_into()?;
+        self.enqueue_message(message, ack_sender)?;
+        self.last_seq_no_assigned = Some(message_seq_no);
+
+        Ok(())
+    }
+
+    fn enqueue_message(
         &mut self,
         message: MessageData,
         ack_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
@@ -227,11 +275,44 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use futures_util::FutureExt;
     use tokio::time::timeout;
 
     use super::*;
     use crate::client_topic::topicwriter::message_write_status::expect_transactional_write_status;
-    use crate::client_topic::topicwriter::test_helpers::{create_message, write_ack};
+    use crate::client_topic::topicwriter::test_helpers::write_ack;
+
+    fn create_message(seq_no: i64, data: Vec<u8>) -> TopicWriterMessage {
+        TopicWriterMessage::builder()
+            .data(data)
+            .seq_no(seq_no)
+            .build()
+    }
+
+    #[tokio::test]
+    async fn add_message_is_cancellation_safe() {
+        let q = Queue::new_with_status_validator(
+            crate::client_topic::topicwriter::message_write_status::accept_any_write_status,
+            true,
+        );
+        q.initialize_last_seq_no(1).await.unwrap();
+
+        let queue_lock = q.inner.lock().await;
+        let message = TopicWriterMessage::builder().data(vec![]).build();
+        let result = q.add_message(message, None).now_or_never();
+        assert!(
+            result.is_none(),
+            "add_message unexpectedly completed: {result:?}"
+        );
+        drop(queue_lock);
+
+        let message = TopicWriterMessage::builder().data(vec![]).build();
+        q.add_message(message, None).await.unwrap();
+
+        let messages = q.get_messages_to_send(1, Duration::ZERO).await;
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].seq_no, 2);
+    }
 
     #[tokio::test]
     async fn add_message_rejects_when_queue_closed_for_new_messages() {
@@ -505,7 +586,7 @@ mod tests {
 
     #[tokio::test]
     async fn flush_returns_status_validation_error_observed_before_flush() {
-        let q = Queue::new_with_status_validator(expect_transactional_write_status);
+        let q = Queue::new_with_status_validator(expect_transactional_write_status, false);
         q.add_message(create_message(1, vec![]), None)
             .await
             .unwrap();
@@ -521,6 +602,7 @@ mod tests {
     async fn flush_returns_status_validation_error_observed_during_flush() {
         let q = Arc::new(Queue::new_with_status_validator(
             expect_transactional_write_status,
+            false,
         ));
         q.add_message(create_message(1, vec![]), None)
             .await
