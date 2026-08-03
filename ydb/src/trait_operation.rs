@@ -11,12 +11,11 @@ use ydb_grpc::ydb_proto::scheme::{
 };
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 use ydb_grpc::ydb_proto::table::{
-    AlterTableResponse, BulkUpsertResponse, CommitTransactionResponse, CopyTableResponse,
-    CopyTablesResponse, CreateSessionResponse, CreateTableResponse, DeleteSessionResponse,
+    AlterTableResponse, BulkUpsertResponse, CopyTableResponse, CopyTablesResponse,
+    CreateSessionResponse, CreateTableResponse, DeleteSessionResponse,
     DescribeTableOptionsResponse, DescribeTableResponse, DropTableResponse,
-    ExecuteDataQueryResponse, ExecuteSchemeQueryResponse, ExplainDataQueryResponse,
-    PrepareDataQueryResponse, ReadRowsResponse, ReadTableResponse, RenameTablesResponse,
-    RollbackTransactionResponse,
+    ExecuteSchemeQueryResponse, ExplainDataQueryResponse, PrepareDataQueryResponse,
+    ReadRowsResponse, ReadTableResponse, RenameTablesResponse,
 };
 use ydb_grpc::ydb_proto::topic::{
     AlterTopicResponse, CreateTopicResponse, DescribeConsumerResponse, DescribeTopicResponse,
@@ -106,14 +105,11 @@ macro_rules! operation_impl_for {
     };
 }
 
-operation_impl_for!(CommitTransactionResponse);
 operation_impl_for!(CreateSessionResponse);
 operation_impl_for!(DeleteSessionResponse);
-operation_impl_for!(ExecuteDataQueryResponse);
 operation_impl_for!(ExecuteSchemeQueryResponse);
 operation_impl_for!(ExplainDataQueryResponse);
 operation_impl_for!(ListEndpointsResponse);
-operation_impl_for!(RollbackTransactionResponse);
 operation_impl_for!(WhoAmIResponse);
 operation_impl_for!(MakeDirectoryResponse);
 operation_impl_for!(ListDirectoryResponse);
