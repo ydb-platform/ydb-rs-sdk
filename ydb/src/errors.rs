@@ -32,6 +32,10 @@ impl YdbOrCustomerError {
         Self::Customer(Arc::new(Box::new(err)))
     }
 
+    /// Flatten into a [`YdbError`]
+    ///
+    /// A customer error is rendered through its [`Display`] impl and wrapped
+    /// into [`YdbError::Custom`].
     pub fn to_ydb_error(self) -> YdbError {
         match self {
             Self::YDB(err) => err,
@@ -255,14 +259,34 @@ impl YdbStatusError {
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 pub enum YdbIssueSeverity {
+    /// Level 0, the most severe level the server defines
+    ///
+    /// The SDK does not tell it apart from [`Self::Error`]: neither level
+    /// takes part in any retry or error handling decision here, and both mean
+    /// the same thing to a caller - the issue is an error reported by the
+    /// server. Whether the operation itself failed is decided by
+    /// [`YdbStatusError::operation_status`], not by this field.
     #[default]
     Fatal,
+
+    /// Level 1, an error reported by the server
+    ///
+    /// See [`Self::Fatal`] on how the two relate.
     Error,
+
+    /// Level 2, the issue did not stop the operation
     Warning,
+
+    /// Level 3, informational message
     Info,
 
-    // no use Unknown for own logic (use for debug/log only) - for prevent broke your code when new level will be defined.
-    // use convert to u32 for temporary use int code and ask a maintainer to add new level as explicit value
+    /// A level this SDK version does not know about, with the raw number the
+    /// server sent
+    ///
+    /// Do not build own logic on it, use it for debug and logs only - that way
+    /// a newly defined level does not break your code. Convert to `u32` to
+    /// work with the raw number meanwhile, and ask a maintainer to add the new
+    /// level as an explicit variant.
     Unknown(u32),
 }
 
@@ -298,7 +322,15 @@ impl From<u32> for YdbIssueSeverity {
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 // Combine with YdbStatusError?
 pub struct YdbIssue {
+    /// Numeric code of the issue, as reported by the server
+    ///
+    /// A low level diagnostic value. It is more stable than the message, but
+    /// nothing guarantees that a given scenario keeps reporting a given code,
+    /// so do not build logic on it - use
+    /// [`YdbStatusError::operation_status`] for that.
     pub issue_code: u32,
+
+    /// Human readable description of the issue
     pub message: String,
 
     /// Recursive issues, explained current problems
