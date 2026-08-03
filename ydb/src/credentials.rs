@@ -221,6 +221,18 @@ impl Credentials for AccessTokenCredentials {
     }
 }
 
+/// Seconds elapsed from the UNIX epoch to `time`.
+///
+/// Fails instead of panicking when the system clock is set before the epoch,
+/// which `SystemTime::duration_since` reports as an error.
+pub(crate) fn unix_timestamp(time: SystemTime) -> YdbResult<usize> {
+    let elapsed = time.duration_since(UNIX_EPOCH).map_err(|err| {
+        YdbError::custom(format!("system clock is set before the UNIX epoch: {err}"))
+    })?;
+
+    Ok(elapsed.as_secs() as usize)
+}
+
 /// Get from stdout of command
 ///
 /// Example create token from yandex cloud command line utility:
@@ -395,12 +407,7 @@ impl ServiceAccountCredentials {
             iss: String, // Optional. Issuer
         }
 
-        let iat = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|err| {
-                YdbError::custom(format!("system clock is set before the UNIX epoch: {err}"))
-            })?
-            .as_secs() as usize;
+        let iat = unix_timestamp(SystemTime::now())?;
 
         let mut header = Header::new(Algorithm::PS256);
         header.kid = Some(self.key_id.clone());
