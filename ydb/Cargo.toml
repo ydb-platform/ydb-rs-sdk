@@ -5,8 +5,13 @@ version = "0.17.1"
 authors = ["rekby <timofey.koolin@gmail.com>"]
 edition.workspace = true
 license = "Apache-2.0"
-description = "Crate contains generated low-level grpc code from YDB API protobuf, used as base for ydb crate"
+description = "Official Rust SDK for YDB - an open-source distributed SQL database"
 repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb"
+homepage = "https://ydb.tech"
+documentation = "https://docs.rs/ydb"
+readme = "README.md"
+keywords = ["ydb", "database", "sql", "client", "async"]
+categories = ["database", "asynchronous", "api-bindings"]
 rust-version.workspace = true
 
 [lints]
