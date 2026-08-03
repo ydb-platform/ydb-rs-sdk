@@ -1044,5 +1044,65 @@ async fn set_roundtrips_through_the_server() -> YdbResult<()> {
     .try_into()?;
     assert!(has_member, "the server did not see 2 as a set member");
 
+    // An empty set arrives as an empty `Value` message - no pairs at all -
+    // which the decoder must read as an empty set rather than a malformed value.
+    let empty = Value::set_from(Value::Int32(0), Vec::new())?;
+    let mut row = query_client
+        .query_row("SELECT $val AS db_result")
+        .params(ydb_params!("$val" => empty.clone()))
+        .await?;
+    let restored_empty = unwrap_optional(
+        row.remove_field_by_name("db_result")?,
+        "Set<Int32>",
+        "empty set",
+    )?;
+    assert_eq!(restored_empty, empty);
+
+    // Non-numeric members go through the same path.
+    let text_set = Value::set_from(
+        Value::Text(String::new()),
+        vec![Value::Text("a".into()), Value::Text("b".into())],
+    )?;
+    let mut row = query_client
+        .query_row("SELECT $val AS db_result")
+        .params(ydb_params!("$val" => text_set.clone()))
+        .await?;
+    let restored_text = unwrap_optional(
+        row.remove_field_by_name("db_result")?,
+        "Set<Utf8>",
+        "{a, b}",
+    )?;
+    match (&text_set, &restored_text) {
+        (Value::Set(sent), Value::Set(got)) => {
+            assert_eq!(sent.t, got.t);
+            assert_eq!(sent.values.len(), got.values.len());
+        }
+        other => panic!("expected a set on both sides, got {other:?}"),
+    }
+
+    Ok(())
+}
+
+/// Empty containers arrive as an empty `Value` message too, so the same decode
+/// path has to serve `List`. This failed before `Set` was added.
+#[tokio::test]
+#[ignore = "needs YDB access"]
+async fn empty_list_roundtrips_through_the_server() -> YdbResult<()> {
+    let client = test_client_builder().build().await?;
+
+    let empty = Value::list_from(Value::Int32(0), Vec::new())?;
+    let mut row = client
+        .query_client()
+        .query_row("SELECT $val AS db_result")
+        .params(ydb_params!("$val" => empty.clone()))
+        .await?;
+    let restored = unwrap_optional(
+        row.remove_field_by_name("db_result")?,
+        "List<Int32>",
+        "empty list",
+    )?;
+
+    assert_eq!(restored, empty);
+
     Ok(())
 }
