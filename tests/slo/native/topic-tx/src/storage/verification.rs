@@ -25,6 +25,15 @@ impl TopicTxStorage {
     /// session remains in use or creation.
     pub(crate) async fn verify_shutdown_state(&self) -> Result<()> {
         self.verify_transactional_snapshots().await?;
+        for partition in self.read_partition_offsets().await? {
+            ensure!(
+                partition.end_offset.value() - partition.committed_offset.value() == 1,
+                "partition {} must have exactly one unconsumed event: committed offset {}, end offset {}",
+                partition.partition_id,
+                partition.committed_offset,
+                partition.end_offset,
+            );
+        }
         self.wait_for_pool_release().await
     }
 
