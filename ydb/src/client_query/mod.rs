@@ -4,6 +4,7 @@
 
 mod builders;
 mod exec;
+mod explain_query;
 pub(crate) mod hooks;
 mod internal;
 mod retry_tx;
@@ -304,6 +305,35 @@ impl QueryClient {
         }
     }
 
+    /// Analyze a query's execution plan without running it (`EXEC_MODE_EXPLAIN`).
+    ///
+    /// The server compiles the query — resolving types and schema, so a syntax error or a missing
+    /// table fails here — and returns the plan and MiniKQL AST as [`ExplainResult`]. Nothing is
+    /// executed and no data is touched.
+    ///
+    /// Statements with nothing to plan (DDL, for instance) come back without statistics and
+    /// produce an error rather than an empty [`ExplainResult`].
+    ///
+    /// One-shot only (implicit session, no transaction control, no parameters); not available
+    /// inside [`Transaction`]. Retried as idempotent; bound it with
+    /// [`.timeout()`](ExplainQueryBuilder::timeout).
+    ///
+    /// ```no_run
+    /// # use ydb::{ClientBuilder, YdbResult};
+    /// # #[tokio::main]
+    /// # async fn main() -> YdbResult<()> {
+    /// # let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
+    /// #     .build()
+    /// #     .await?;
+    /// let plan = client.query_client().explain("SELECT 1").await?;
+    /// println!("{}", plan.query_plan);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn explain(&self, text: impl Into<String>) -> ExplainQueryBuilder<'_> {
+        ExplainQueryBuilder::new(&self.ctx, text.into())
+    }
+
     /// Start a long-running script operation. Poll completion via
     /// [`crate::OperationClient::get_operation`], then read rows with
     /// [`Self::fetch_script_results`].
@@ -507,6 +537,7 @@ pub use builders::{
     OptionalRow, OptionalRowBuilder, QueryExecutor, QueryRowBuilder, QueryStreamBuilder,
     ResultSetBuilder, Streamed,
 };
+pub use explain_query::{ExplainQueryBuilder, ExplainResult};
 pub use retry_tx::{RetryTxAttempt, RetryTxBuilder};
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};

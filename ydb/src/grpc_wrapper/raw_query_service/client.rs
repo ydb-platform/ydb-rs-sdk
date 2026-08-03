@@ -7,6 +7,9 @@ use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryReques
 use crate::grpc_wrapper::raw_query_service::execute_script::{
     RawExecuteScriptRequest, parse_execute_script_operation,
 };
+use crate::grpc_wrapper::raw_query_service::explain_validate_parse_query::{
+    RawExplainValidateParseRequest, RawQueryStatsPlan, collect_stats_plan,
+};
 use crate::grpc_wrapper::raw_query_service::fetch_script_results::{
     RawFetchScriptResultsRequest, parse_response,
 };
@@ -65,6 +68,19 @@ impl RawQueryClient {
         let proto = req.into_proto()?;
         let response = self.service.execute_query(proto).await?;
         Ok(response.into_inner())
+    }
+
+    /// `ExecuteQuery` in a non-executing mode (`PARSE`, `VALIDATE`, `EXPLAIN`).
+    ///
+    /// Drains the response stream and returns the plan/AST when the server reported them.
+    #[instrument(name = "ydb.grpc.ExplainValidateParseQuery", skip_all, fields(db.system.name = "ydb", ydb.Query.exec_mode = ?req.mode), err)]
+    pub async fn explain_validate_parse_query(
+        &mut self,
+        req: RawExplainValidateParseRequest,
+    ) -> RawResult<Option<RawQueryStatsPlan>> {
+        let proto = req.into_proto();
+        let response = self.service.execute_query(proto).await?;
+        collect_stats_plan(&mut response.into_inner()).await
     }
 
     #[instrument(name = "ydb.grpc.ExecuteScript", skip_all, fields(db.system.name = "ydb"), err)]
