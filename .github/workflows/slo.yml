@@ -53,6 +53,7 @@ jobs:
           - name: native-topic-tx
             path: native/topic-tx
             metrics_yaml_path: current/tests/slo/metrics-topic-tx.yaml
+            thresholds_yaml_path: current/tests/slo/thresholds-topic-tx.yaml
 
     concurrency:
       group: slo-${{ github.ref }}-${{ matrix.sdk.name }}
@@ -179,4 +180,5 @@ jobs:
           workload_baseline_ref: ${{ steps.baseline-workload.outputs.available == 'true' && steps.baseline.outputs.ref || '' }}
           workload_baseline_image: ${{ steps.baseline-workload.outputs.available == 'true' && 'ydb-app-baseline' || '' }}
           metrics_yaml_path: ${{ matrix.sdk.metrics_yaml_path }}
+          thresholds_yaml_path: ${{ matrix.sdk.thresholds_yaml_path }}
           disable_compose_profiles: ${{ steps.baseline-workload.outputs.available != 'true' && 'workload-baseline' || '' }}
