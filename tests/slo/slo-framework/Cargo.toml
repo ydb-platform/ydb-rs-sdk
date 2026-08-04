@@ -6,6 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+anyhow = "1"
 async-trait = "0.1"
 base64 = "0.22.1"
 clap = { version = "=4.2.7", features = ["derive"] }
