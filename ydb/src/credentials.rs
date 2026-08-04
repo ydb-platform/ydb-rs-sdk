@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fmt::Debug;
 use std::ops::Add;
-use std::process::Command;
+use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, trace};
@@ -268,45 +268,51 @@ impl CommandLineCredentials {
             command: Arc::new(Mutex::new(command)),
         })
     }
-}
 
-impl Credentials for CommandLineCredentials {
-    fn create_token(&self) -> YdbResult<TokenInfo> {
-        let result = self.command.lock()?.output()?;
-        if !result.status.success() {
-            let err = String::from_utf8(result.stderr)?;
+    /// Convert the finished command into a token.
+    ///
+    /// Split out of [`Credentials::create_token`] so the failure paths can be
+    /// checked without spawning a child process.
+    pub(crate) fn token_from_output(output: Output) -> YdbResult<TokenInfo> {
+        if !output.status.success() {
+            let err = String::from_utf8(output.stderr)?;
             // `status` is used instead of `status.code()`: the code is `None`
             // when the child was terminated by a signal.
             return Err(YdbError::Custom(format!(
                 "can't execute yc ({}): {}",
-                result.status, err
+                output.status, err
             )));
         }
-        let token = String::from_utf8(result.stdout)?.trim().to_string();
+        let token = String::from_utf8(output.stdout)?.trim().to_string();
         Ok(TokenInfo::token(token))
     }
 
-    fn debug_string(&self) -> String {
-        let token_describe: String = match self.create_token() {
-            Ok(token_info) => {
-                let token = token_info.token.expose_secret();
-                let desc: String = if token.len() > 20 {
-                    format!(
-                        "{}..{}",
-                        &token.as_str()[0..3],
-                        &token.as_str()[(token.len() - 3)..token.len()]
-                    )
-                } else {
-                    "short_token".to_string()
-                };
-                desc
-            }
-            Err(err) => {
-                format!("err: {err}")
-            }
-        };
+    /// Describe the token for logs without printing it.
+    pub(crate) fn describe_token(token: &str) -> String {
+        if token.len() > 20 {
+            format!(
+                "{}..{}",
+                &token[0..3],
+                &token[(token.len() - 3)..token.len()]
+            )
+        } else {
+            "short_token".to_string()
+        }
+    }
+}
 
-        token_describe
+impl Credentials for CommandLineCredentials {
+    fn create_token(&self) -> YdbResult<TokenInfo> {
+        let output = self.command.lock()?.output()?;
+
+        Self::token_from_output(output)
+    }
+
+    fn debug_string(&self) -> String {
+        match self.create_token() {
+            Ok(token_info) => Self::describe_token(token_info.token.expose_secret()),
+            Err(err) => format!("err: {err}"),
+        }
     }
 }
 

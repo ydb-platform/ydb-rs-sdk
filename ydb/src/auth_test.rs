@@ -1,3 +1,5 @@
+use std::process::Output;
+
 use secrecy::ExposeSecret;
 use tracing::trace;
 use tracing_test::traced_test;
@@ -103,75 +105,65 @@ async fn password_client_test() -> YdbResult<()> {
     Ok(())
 }
 
-/// Write an executable shell script into a temp dir and wrap it into
-/// `CommandLineCredentials`.
-///
-/// `from_cmd` splits the command on whitespace, so the helper has to be a
-/// single path with no arguments - hence a script file rather than `sh -c`.
-#[cfg(unix)]
-struct ScriptCommand {
-    path: std::path::PathBuf,
-}
-
-#[cfg(unix)]
-impl ScriptCommand {
-    fn new(body: &str) -> YdbResult<Self> {
-        use std::io::Write;
-        use std::os::unix::fs::PermissionsExt;
-
-        let path = std::env::temp_dir().join(format!("ydb-cred-{}.sh", uuid::Uuid::new_v4()));
-        let mut file = std::fs::File::create(&path)?;
-        write!(file, "#!/bin/sh\n{body}\n")?;
-        drop(file);
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
-
-        Ok(Self { path })
-    }
-
-    fn credentials(&self) -> YdbResult<CommandLineCredentials> {
-        CommandLineCredentials::from_cmd(self.path.to_string_lossy().as_ref())
+/// `create_token` spawns the helper and hands its result to
+/// `token_from_output`. The tests below drive `token_from_output` directly, so
+/// every exit status - including the ones a real command cannot be asked for
+/// reliably - is covered without an external script.
+fn command_output(status: std::process::ExitStatus, stdout: &str, stderr: &str) -> Output {
+    Output {
+        status,
+        stdout: stdout.as_bytes().to_vec(),
+        stderr: stderr.as_bytes().to_vec(),
     }
 }
 
+/// Raw wait status of a process killed by SIGKILL: no exit code, only the
+/// signal number in the low bits.
 #[cfg(unix)]
-impl Drop for ScriptCommand {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
+const SIGKILL_WAIT_STATUS: i32 = 9;
+
+/// Raw wait status of a process that exited with code 3: unix keeps the exit
+/// code in the high byte.
+#[cfg(unix)]
+const EXIT_CODE_3_WAIT_STATUS: i32 = 3 << 8;
 
 /// `ExitStatus::code()` returns `None` when the child is terminated by a
 /// signal. `CommandLineCredentials::create_token` used to unwrap it, so a
 /// signal-killed helper panicked instead of returning an error.
 #[test]
-#[cfg(unix)]
-fn command_line_credentials_signal_killed_command() -> YdbResult<()> {
-    let script = ScriptCommand::new("kill -9 $$")?;
+#[cfg(unix)] // raw wait statuses are encoded per platform
+fn command_line_credentials_signal_killed_command() {
+    use std::os::unix::process::ExitStatusExt;
 
-    let err = script
-        .credentials()?
-        .create_token()
+    let killed = std::process::ExitStatus::from_raw(SIGKILL_WAIT_STATUS);
+    assert!(
+        killed.code().is_none(),
+        "a signal-killed status must carry no exit code"
+    );
+
+    let err = CommandLineCredentials::token_from_output(command_output(killed, "", ""))
         .expect_err("a signal-killed command must not produce a token");
 
     assert!(
         err.to_string().contains("can't execute"),
         "unexpected error: {err}"
     );
-
-    Ok(())
 }
 
 /// The same error path for an ordinary non-zero exit: the message must carry
 /// the status and whatever the helper wrote to stderr.
 #[test]
-#[cfg(unix)]
-fn command_line_credentials_failed_command_reports_stderr() -> YdbResult<()> {
-    let script = ScriptCommand::new("echo 'no active profile' >&2\nexit 3")?;
+#[cfg(unix)] // raw wait statuses are encoded per platform
+fn command_line_credentials_failed_command_reports_stderr() {
+    use std::os::unix::process::ExitStatusExt;
 
-    let err = script
-        .credentials()?
-        .create_token()
-        .expect_err("a failing command must not produce a token");
+    let failed = std::process::ExitStatus::from_raw(EXIT_CODE_3_WAIT_STATUS);
+    let err = CommandLineCredentials::token_from_output(command_output(
+        failed,
+        "",
+        "no active profile\n",
+    ))
+    .expect_err("a failing command must not produce a token");
     let message = err.to_string();
 
     assert!(message.contains("can't execute"), "unexpected: {message}");
@@ -180,16 +172,14 @@ fn command_line_credentials_failed_command_reports_stderr() -> YdbResult<()> {
         message.contains("no active profile"),
         "stderr missing from: {message}"
     );
-
-    Ok(())
 }
 
 #[test]
-#[cfg(unix)]
 fn command_line_credentials_returns_trimmed_token() -> YdbResult<()> {
-    let script = ScriptCommand::new("echo '  t0ken  '")?;
+    let succeeded = std::process::ExitStatus::default();
 
-    let token = script.credentials()?.create_token()?;
+    let token =
+        CommandLineCredentials::token_from_output(command_output(succeeded, "  t0ken  \n", ""))?;
 
     assert_eq!(token.token.expose_secret(), "t0ken");
 
@@ -198,20 +188,30 @@ fn command_line_credentials_returns_trimmed_token() -> YdbResult<()> {
 
 /// `debug_string` must describe the token, never print it.
 #[test]
-#[cfg(unix)]
-fn command_line_credentials_debug_string_hides_token() -> YdbResult<()> {
+fn command_line_credentials_description_hides_token() {
     let long = "0123456789abcdefghijklmnopqrstuvwxyz";
-    let script = ScriptCommand::new(&format!("echo '{long}'"))?;
 
-    let description = script.credentials()?.debug_string();
+    let description = CommandLineCredentials::describe_token(long);
 
     assert!(
         !description.contains(long),
         "token leaked into: {description}"
     );
     assert_eq!(description, "012..xyz");
+}
 
-    Ok(())
+/// A token short enough to be recognizable is not described at all.
+#[test]
+fn command_line_credentials_description_hides_short_token() {
+    let short = "t0ken";
+
+    let description = CommandLineCredentials::describe_token(short);
+
+    assert!(
+        !description.contains(short),
+        "token leaked into: {description}"
+    );
+    assert_eq!(description, "short_token");
 }
 
 #[test]
