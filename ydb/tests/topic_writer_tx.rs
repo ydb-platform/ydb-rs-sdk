@@ -11,7 +11,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::InitRequest;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage as WriteFromClient;
 use ydb_grpc::ydb_proto::topic::stream_write_message::init_request::Partitioning;
 
-use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply};
+use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply, ReplySink};
 use crate::mock_server::query::QueryIncoming;
 use crate::mock_server::server::MockServer;
 use crate::mock_server::topic::{TopicIncoming, builders};
@@ -44,23 +44,6 @@ enum AckMode {
     WrittenInTx,
     Written { offset: i64 },
     SkippedAlreadyWritten,
-}
-
-#[derive(Default)]
-struct ReplySink {
-    tx: Mutex<Option<FromHandlerToService>>,
-}
-
-impl ReplySink {
-    fn set_channel(&self, tx: FromHandlerToService) {
-        *self.tx.lock().unwrap() = Some(tx);
-    }
-
-    fn send(&self, reply: Reply) {
-        if let Some(tx) = self.tx.lock().unwrap().as_ref() {
-            tx.send(reply).expect("mock server failed to send reply");
-        }
-    }
 }
 
 struct AutoReplyHandler {
