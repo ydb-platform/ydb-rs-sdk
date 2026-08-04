@@ -1,0 +1,5 @@
+metrics:
+  - name: transaction_commit_phase_failure_percent
+    direction: lower_is_better
+    warning_max: 0.25
+    critical_max: 1.0
