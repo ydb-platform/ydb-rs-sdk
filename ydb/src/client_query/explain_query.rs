@@ -1,8 +1,10 @@
 //! One-shot `EXPLAIN`: compile a query and return its plan without running it.
 //!
-//! The request is deliberately minimal — implicit session, no transaction control, no
-//! parameters — see [`RawExplainValidateParseRequest`].
+//! Uses the ordinary [`RawExecuteQueryRequest`] / [`RawQueryClient::execute_query`] path with
+//! [`RawExecMode::Explain`], kept minimal: implicit session, no transaction control, no
+//! parameters. `EXPLAIN` responses carry no result sets — only the plan and AST in `exec_stats`.
 
+use std::collections::HashMap;
 use std::future::IntoFuture;
 use std::time::Duration;
 
@@ -12,9 +14,10 @@ use tracing::instrument;
 use crate::closure;
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
-use crate::grpc_wrapper::raw_query_service::explain_validate_parse_query::{
-    RawExecMode, RawExplainValidateParseRequest, RawQueryStatsPlan,
+use crate::grpc_wrapper::raw_query_service::execute_query::{
+    RawExecMode, RawExecuteQueryRequest, RawQueryStatsPlan,
 };
+use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::traces::helpers::ensure_len_string;
 
 use super::exec::ClientExecContext;
@@ -76,13 +79,16 @@ async fn explain_query_once(
         .connection_manager
         .get_auth_service(RawQueryClient::new)
         .await?;
-    client
-        .explain_validate_parse_query(RawExplainValidateParseRequest::new(
-            text,
-            RawExecMode::Explain,
-        ))
-        .await
-        .map_err(YdbError::from)
+
+    // Implicit session: EXPLAIN holds no server-side state, so no pool lease is taken.
+    let mut req = RawExecuteQueryRequest::new("", text, HashMap::new(), None, false);
+    req.exec_mode = RawExecMode::Explain;
+
+    let mut stream = ExecuteQueryStream::new(client.execute_query(req).await?);
+    // Drains the stream and checks every part's status. EXPLAIN sends no result sets, so the
+    // returned vector is empty; the plan arrives as stream metadata.
+    stream.materialize_all_result_sets().await?;
+    Ok(stream.take_query_plan())
 }
 
 #[instrument(name = "ydb.Query.Explain", skip_all, fields(db.system.name = "ydb", ydb.Query.text = %ensure_len_string(&text)), err)]
