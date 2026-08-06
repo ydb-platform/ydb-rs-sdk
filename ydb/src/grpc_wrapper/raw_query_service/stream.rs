@@ -21,30 +21,6 @@ struct PartialResultSet {
     truncated: bool,
 }
 
-/// Holds a pooled session lease until the stream is finished.
-struct SessionStreamGuard(Option<Box<dyn std::any::Any + Send>>);
-
-impl SessionStreamGuard {
-    fn hold<T: Send + 'static>(value: T) -> Self {
-        Self(Some(Box::new(value)))
-    }
-
-    fn finish_typed<T: Send + 'static>(&mut self, finish: impl FnOnce(&mut T)) {
-        let Some(holder) = self.0.take() else {
-            return;
-        };
-        match holder.downcast::<T>() {
-            Ok(mut typed) => {
-                finish(&mut typed);
-                self.0 = Some(typed);
-            }
-            Err(holder) => {
-                self.0 = Some(holder);
-            }
-        }
-    }
-}
-
 pub(crate) struct ExecuteQueryStream {
     grpc: Option<tonic::Streaming<ExecuteQueryResponsePart>>,
     next_index: i64,
@@ -52,9 +28,6 @@ pub(crate) struct ExecuteQueryStream {
     captured_tx_id: Option<String>,
     finished: bool,
     stats: Option<Duration>,
-    // Dropped last (after `grpc`) so the pooled lease outlives the stream.
-    // `Drop` also calls `cancel()` before field destructors run.
-    session_guard: SessionStreamGuard,
     #[cfg(test)]
     test_parts: Option<Vec<ExecuteQueryResponsePart>>,
 }
@@ -74,7 +47,6 @@ impl ExecuteQueryStream {
             captured_tx_id: None,
             finished: false,
             stats: None,
-            session_guard: SessionStreamGuard(None),
             #[cfg(test)]
             test_parts: None,
         }
@@ -90,18 +62,8 @@ impl ExecuteQueryStream {
             captured_tx_id: None,
             finished: false,
             stats: None,
-            session_guard: SessionStreamGuard(None),
             test_parts: Some(parts),
         }
-    }
-
-    pub fn with_session_guard(mut self, guard: impl Send + 'static) -> Self {
-        self.session_guard = SessionStreamGuard::hold(guard);
-        self
-    }
-
-    pub(crate) fn finish_session_guard<T: Send + 'static>(&mut self, finish: impl FnOnce(&mut T)) {
-        self.session_guard.finish_typed(finish);
     }
 
     pub fn stats(&self) -> Option<Duration> {

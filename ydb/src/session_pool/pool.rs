@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use http::Uri;
@@ -10,8 +10,9 @@ use crate::discovery::Discovery;
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
-use crate::grpc_wrapper::raw_query_service::session::AttachedQuerySession;
 use crate::grpc_wrapper::raw_services::Service;
+
+use super::session::{AttachedSession, CreatedSession, SessionCleanup};
 
 /// Default pool size for [`SessionPoolSettings::default()`] and the driver built-in pool.
 ///
@@ -165,89 +166,67 @@ impl SessionPoolSettings {
 }
 
 /// Pooled explicit session lease. Not concurrent-safe: one logical owner at a time.
+///
+/// Call [`Self::return_to_pool`] to make a healthy session reusable. Dropping a lease without
+/// returning it schedules session cleanup.
 pub(crate) struct SessionPoolLease {
-    item: Option<ExplicitIdleItem>,
+    /// One permit represents this lease's exclusive use of one pool-capacity slot.
+    permit: OwnedSemaphorePermit,
+    record: SessionRecord,
     pool: Arc<SessionPoolInner>,
-    permit: Option<OwnedSemaphorePermit>,
-    returned: bool,
-    use_guard: bool,
 }
 
 impl SessionPoolLease {
+    fn new(
+        session: IdleSession,
+        permit: OwnedSemaphorePermit,
+        pool: Arc<SessionPoolInner>,
+    ) -> Self {
+        Self {
+            permit,
+            record: session.record,
+            pool,
+        }
+    }
+
     pub fn session_id(&self) -> &str {
-        self.item.as_ref().expect("lease item").session.session_id()
+        self.record.session.session_id()
     }
 
     pub fn node_uri(&self) -> &Uri {
-        &self.item.as_ref().expect("lease item").node_uri
+        self.record.session.node_uri()
     }
 
-    pub fn ensure_alive(&self) -> YdbResult<()> {
-        self.item
-            .as_ref()
-            .expect("lease item")
-            .session
-            .ensure_alive()
-            .map_err(YdbError::from)
+    pub fn ensure_healthy(&self) -> YdbResult<()> {
+        self.record.session.ensure_healthy()
     }
 
-    pub fn begin_use(&mut self) {
-        if !self.use_guard {
-            self.item.as_ref().expect("lease item").session.begin_use();
-            self.use_guard = true;
-        }
-    }
-
-    pub fn end_use(&mut self) {
-        if self.use_guard {
-            self.item.as_ref().expect("lease item").session.end_use();
-            self.use_guard = false;
-        }
-    }
-
+    /// Consume this lease and offer its session back to the pool. Pool policy may still discard
+    /// an unhealthy, expired, or excess session.
     #[instrument(name = "ydb.SessionPool.ReturnSession", skip_all, fields(db.system.name = "ydb"))]
-    pub async fn return_to_pool(mut self) {
-        self.end_use();
-        self.returned = true;
-        let permit = self.permit.take();
-        if let Some(item) = self.item.take() {
-            self.pool.release_explicit_item(item, permit).await;
-        }
+    pub fn return_to_pool(self) {
+        let Self {
+            permit,
+            record,
+            pool,
+        } = self;
+        pool.release_explicit_session(record, permit);
     }
 
-    pub(crate) fn invalidate_session(&mut self) {
-        if let Some(item) = &self.item {
-            item.session.invalidate();
-        }
+    /// Mark a retained lease unusable. Returning it later will schedule session cleanup.
+    pub(crate) fn invalidate(&mut self) {
+        self.record.session.invalidate();
     }
 
-    /// Invalidate the pooled query session when an RPC error means it must not be reused.
-    pub(crate) fn handle_pool_error(&mut self, err: &YdbError) {
-        if crate::session::should_discard_session_from_pool(err) {
-            self.invalidate_session();
-        }
+    /// Consume this lease without returning its session to the pool. Dropping the owned session
+    /// schedules cleanup.
+    pub(crate) fn discard(self) {
+        drop(self);
     }
 
     #[cfg(test)]
     pub(crate) fn bench_invalidate_session(&mut self) {
-        self.invalidate_session();
-    }
-}
-
-impl Drop for SessionPoolLease {
-    fn drop(&mut self) {
-        if self.returned {
-            return;
-        }
-        self.end_use();
-        let pool = self.pool.clone();
-        let item = self.item.take();
-        let permit = self.permit.take();
-        if let Some(item) = item {
-            spawn_pool_release(async move {
-                pool.release_explicit_item(item, permit).await;
-            });
-        }
+        self.invalidate();
     }
 }
 
@@ -256,12 +235,35 @@ pub(crate) struct SessionPool {
     inner: Arc<SessionPoolInner>,
 }
 
-struct ExplicitIdleItem {
-    session: AttachedQuerySession,
-    node_uri: Uri,
+/// Session data shared by the pool ownership states below.
+struct SessionRecord {
+    session: AttachedSession,
     created: Instant,
     last_used: Instant,
     use_count: u64,
+}
+
+/// A session owned by the pool and available for checkout.
+struct IdleSession {
+    record: SessionRecord,
+}
+
+/// Receives AttachSession lifecycle events without giving listener tasks ownership of the pool.
+#[derive(Clone)]
+pub(super) struct SessionPoolObserver {
+    discovery: Arc<dyn Discovery>,
+    /// Weak ownership avoids a cycle through `SessionPoolInner::observer`.
+    pool: Weak<SessionPoolInner>,
+}
+
+impl SessionPoolObserver {
+    pub(super) fn node_shutdown(&self, node_uri: &Uri) {
+        self.discovery.pessimization(node_uri);
+        let Some(pool) = self.pool.upgrade() else {
+            return;
+        };
+        let _ = pool.drain_idle_for_node(node_uri);
+    }
 }
 
 struct SessionPoolInner {
@@ -269,8 +271,9 @@ struct SessionPoolInner {
     acquire_timeout_ms: AtomicU64,
     connection_manager: GrpcConnectionManager,
     semaphore: Arc<Semaphore>,
-    explicit_idle: Mutex<Vec<ExplicitIdleItem>>,
-    on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync>,
+    explicit_idle: Mutex<Vec<IdleSession>>,
+    cleanup: SessionCleanup,
+    observer: SessionPoolObserver,
     create_in_progress: AtomicUsize,
     sessions_created: AtomicU64,
     /// Stub create/close paths without RPC (see `session_pool_bench` and regression tests).
@@ -288,39 +291,29 @@ impl SessionPool {
     ) -> Self {
         let settings = normalize_pool_settings(settings);
         let limit = settings.limit;
-        let acquire_timeout = settings.acquire_timeout;
-        let inner = Arc::new_cyclic(|weak: &std::sync::Weak<SessionPoolInner>| {
-            let discovery_for_shutdown = discovery.clone();
-            let pool_weak = weak.clone();
-            SessionPoolInner {
+        let inner = Arc::new_cyclic(
+            |weak: &std::sync::Weak<SessionPoolInner>| SessionPoolInner {
                 settings: settings.clone(),
-                acquire_timeout_ms: AtomicU64::new(acquire_timeout.as_millis() as u64),
+                acquire_timeout_ms: AtomicU64::new(settings.acquire_timeout.as_millis() as u64),
                 connection_manager: connection_manager.clone(),
                 semaphore: Arc::new(Semaphore::new(limit)),
                 explicit_idle: Mutex::new(Vec::new()),
-                on_node_shutdown: Arc::new(move |uri: Uri| {
-                    discovery_for_shutdown.pessimization(&uri);
-                    let Some(inner) = pool_weak.upgrade() else {
-                        return;
-                    };
-                    let drained = inner.drain_idle_for_node(&uri);
-                    if drained.is_empty() {
-                        return;
-                    }
-                    spawn_pool_release(async move {
-                        for item in drained {
-                            inner.close_explicit_item(item).await;
-                        }
-                    });
-                }),
+                cleanup: SessionCleanup::new(
+                    connection_manager.clone(),
+                    settings.session_delete_timeout,
+                ),
+                observer: SessionPoolObserver {
+                    discovery: discovery.clone(),
+                    pool: weak.clone(),
+                },
                 create_in_progress: AtomicUsize::new(0),
                 sessions_created: AtomicU64::new(0),
                 #[cfg(test)]
                 bench_mode: false,
                 #[cfg(test)]
                 bench_create_failures_remaining: AtomicUsize::new(0),
-            }
-        });
+            },
+        );
 
         Self { inner }
     }
@@ -350,61 +343,30 @@ impl SessionPool {
     pub async fn acquire_explicit(&self) -> YdbResult<SessionPoolLease> {
         let permit = self.inner.acquire_permit().await?;
 
-        let mut stale_items = Vec::new();
         while let Some(item) = self.inner.pop_explicit_idle() {
-            if self.inner.should_close_explicit(&item) {
-                stale_items.push(item);
+            if self.inner.should_close_explicit(&item.record) {
+                drop(item);
                 continue;
             }
-            if item.session.ensure_alive().is_err() {
-                stale_items.push(item);
-                continue;
-            }
-            SessionPoolInner::spawn_close_stale_items(
-                self.inner.clone(),
-                std::mem::take(&mut stale_items),
-            );
             trace!(
-                session_id = item.session.session_id(),
+                session_id = item.record.session.session_id(),
                 "got query session from pool"
             );
-            return Ok(SessionPoolLease {
-                item: Some(item),
-                pool: self.inner.clone(),
-                permit: Some(permit),
-                returned: false,
-                use_guard: false,
-            });
+            return Ok(SessionPoolLease::new(item, permit, self.inner.clone()));
         }
-        SessionPoolInner::spawn_close_stale_items(self.inner.clone(), stale_items);
 
         let item = self.inner.create_explicit_session().await?;
         trace!(
-            session_id = item.session.session_id(),
+            session_id = item.record.session.session_id(),
             "created query session for pool"
         );
-        Ok(SessionPoolLease {
-            item: Some(item),
-            pool: self.inner.clone(),
-            permit: Some(permit),
-            returned: false,
-            use_guard: false,
-        })
+        Ok(SessionPoolLease::new(item, permit, self.inner.clone()))
     }
 }
 
 impl SessionPoolInner {
     fn acquire_timeout(&self) -> Duration {
         Duration::from_millis(self.acquire_timeout_ms.load(Ordering::Relaxed))
-    }
-
-    fn spawn_close_stale_items(inner: Arc<Self>, stale_items: Vec<ExplicitIdleItem>) {
-        for stale in stale_items {
-            let inner = inner.clone();
-            spawn_pool_release(async move {
-                inner.close_explicit_item(stale).await;
-            });
-        }
     }
 
     async fn acquire_permit(&self) -> YdbResult<OwnedSemaphorePermit> {
@@ -499,18 +461,18 @@ impl SessionPoolInner {
                 }
             };
             if let Some(item) = overflow {
-                inner.close_explicit_item(item).await;
+                drop(item);
             }
         }
         Ok(())
     }
 
-    fn drain_idle_for_node(&self, node_uri: &Uri) -> Vec<ExplicitIdleItem> {
+    fn drain_idle_for_node(&self, node_uri: &Uri) -> Vec<IdleSession> {
         let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
         let mut drained = Vec::new();
         let mut i = 0;
         while i < idle.len() {
-            if &idle[i].node_uri == node_uri {
+            if idle[i].record.session.node_uri() == node_uri {
                 drained.push(idle.swap_remove(i));
             } else {
                 i += 1;
@@ -519,14 +481,14 @@ impl SessionPoolInner {
         drained
     }
 
-    async fn create_explicit_session(&self) -> YdbResult<ExplicitIdleItem> {
+    async fn create_explicit_session(&self) -> YdbResult<IdleSession> {
         self.create_in_progress.fetch_add(1, Ordering::SeqCst);
         let _guard = CreateInProgressGuard(&self.create_in_progress);
         self.create_explicit_session_inner().await
     }
 
     #[instrument(name = "ydb.CreateSession", skip_all, fields(db.system.name = "ydb"), err)]
-    async fn create_explicit_session_inner(&self) -> YdbResult<ExplicitIdleItem> {
+    async fn create_explicit_session_inner(&self) -> YdbResult<IdleSession> {
         #[cfg(test)]
         if self.bench_mode {
             return self.create_explicit_session_bench().await;
@@ -538,59 +500,41 @@ impl SessionPoolInner {
             .get_auth_service_to_node(RawQueryClient::new, &node_uri)
             .await?;
         let create_timeout = self.settings.session_create_timeout;
-        let delete_timeout = self.settings.session_delete_timeout;
-        let on_node_shutdown = self.on_node_shutdown.clone();
-
         let created = tokio::time::timeout(create_timeout, client.create_session())
             .await
             .map_err(|_| {
                 YdbError::Transport(format!(
                     "create query session timed out after {create_timeout:?}"
                 ))
-            })?
-            .map_err(YdbError::from)?;
-        let session_id = created.session_id;
-
-        let session = match tokio::time::timeout(
+            })?;
+        let created = created?;
+        let created = CreatedSession::new(created.session_id, node_uri, self.cleanup.clone());
+        let session = tokio::time::timeout(
             create_timeout,
-            AttachedQuerySession::open(
-                &mut client,
-                node_uri.clone(),
-                session_id.clone(),
-                on_node_shutdown,
-                delete_timeout,
-            ),
+            created.attach(&mut client, self.observer.clone()),
         )
         .await
-        {
-            Ok(Ok(session)) => session,
-            Ok(Err(err)) => {
-                let _ =
-                    tokio::time::timeout(delete_timeout, client.delete_session(&session_id)).await;
-                return Err(YdbError::from(err));
-            }
-            Err(_) => {
-                let _ =
-                    tokio::time::timeout(delete_timeout, client.delete_session(&session_id)).await;
-                return Err(YdbError::Transport(format!(
-                    "attach query session timed out after {create_timeout:?}"
-                )));
-            }
-        };
+        .map_err(|_| {
+            YdbError::Transport(format!(
+                "attach query session timed out after {create_timeout:?}"
+            ))
+        })?;
+        let session = session?;
 
         let now = Instant::now();
         self.sessions_created.fetch_add(1, Ordering::Relaxed);
-        Ok(ExplicitIdleItem {
-            session,
-            node_uri,
-            created: now,
-            last_used: now,
-            use_count: 0,
+        Ok(IdleSession {
+            record: SessionRecord {
+                session,
+                created: now,
+                last_used: now,
+                use_count: 0,
+            },
         })
     }
 
     #[cfg(test)]
-    async fn create_explicit_session_bench(&self) -> YdbResult<ExplicitIdleItem> {
+    async fn create_explicit_session_bench(&self) -> YdbResult<IdleSession> {
         if self.bench_create_failures_remaining.load(Ordering::SeqCst) > 0 {
             self.bench_create_failures_remaining
                 .fetch_sub(1, Ordering::SeqCst);
@@ -603,127 +547,57 @@ impl SessionPoolInner {
         let node_uri = Uri::from_static("http://127.0.0.1/bench");
         let now = Instant::now();
         self.sessions_created.fetch_add(1, Ordering::Relaxed);
-        Ok(ExplicitIdleItem {
-            session: AttachedQuerySession::new_bench_stub(format!("bench-{id}"), node_uri.clone()),
-            node_uri,
-            created: now,
-            last_used: now,
-            use_count: 0,
+        Ok(IdleSession {
+            record: SessionRecord {
+                session: AttachedSession::new_bench_stub(
+                    format!("bench-{id}"),
+                    node_uri.clone(),
+                    self.cleanup.clone(),
+                ),
+                created: now,
+                last_used: now,
+                use_count: 0,
+            },
         })
     }
 
-    fn pop_explicit_idle(&self) -> Option<ExplicitIdleItem> {
+    fn pop_explicit_idle(&self) -> Option<IdleSession> {
         let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
         idle.pop()
     }
 
-    fn should_close_explicit(&self, item: &ExplicitIdleItem) -> bool {
+    fn should_close_explicit(&self, item: &SessionRecord) -> bool {
         session_should_close(
             &self.settings,
             item.use_count,
             item.created,
             item.last_used,
-            item.session.is_alive(),
+            item.session.is_healthy(),
         )
     }
 
-    async fn close_explicit_item(&self, item: ExplicitIdleItem) {
-        #[cfg(test)]
-        if self.bench_mode {
-            item.session.bench_close();
-            return;
-        }
-
-        match self
-            .connection_manager
-            .get_auth_service_to_node(RawQueryClient::new, &item.node_uri)
-            .await
-        {
-            Ok(mut client) => {
-                item.session.close(&mut client).await;
-            }
-            Err(err) => {
-                warn!(
-                    session_id = item.session.session_id(),
-                    error = %err,
-                    "failed to connect for DeleteSession; aborting attach listener"
-                );
-                item.session.abort_without_delete().await;
-            }
-        }
-    }
-
-    async fn release_explicit_item(
-        &self,
-        mut item: ExplicitIdleItem,
-        permit: Option<OwnedSemaphorePermit>,
-    ) {
+    fn release_explicit_session(&self, mut item: SessionRecord, permit: OwnedSemaphorePermit) {
         item.use_count += 1;
         item.last_used = Instant::now();
 
         if self.should_close_explicit(&item) {
-            // Drop permit first so other acquirers are not blocked during DeleteSession.
             drop(permit);
-            self.close_explicit_item(item).await;
+            drop(item);
         } else {
             let overflow = {
                 let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
                 if idle.len() < self.settings.limit {
-                    idle.push(item);
+                    idle.push(IdleSession { record: item });
                     None
                 } else {
                     Some(item)
                 }
             };
-            // Push to idle before dropping permit: a waiter may acquire the same session
-            // as soon as the semaphore slot is freed.
             drop(permit);
             if let Some(item) = overflow {
-                self.close_explicit_item(item).await;
+                drop(item);
             }
         }
-    }
-}
-
-impl Drop for SessionPoolInner {
-    fn drop(&mut self) {
-        let explicit: Vec<ExplicitIdleItem> = self
-            .explicit_idle
-            .lock()
-            .expect("explicit idle lock")
-            .drain(..)
-            .collect();
-        if explicit.is_empty() {
-            return;
-        }
-        #[cfg(test)]
-        if self.bench_mode {
-            for item in explicit {
-                item.session.bench_close();
-            }
-            return;
-        }
-        let connection_manager = self.connection_manager.clone();
-        spawn_pool_release(async move {
-            for item in explicit {
-                match connection_manager
-                    .get_auth_service_to_node(RawQueryClient::new, &item.node_uri)
-                    .await
-                {
-                    Ok(mut client) => {
-                        item.session.close(&mut client).await;
-                    }
-                    Err(err) => {
-                        warn!(
-                            session_id = item.session.session_id(),
-                            error = %err,
-                            "failed to connect for DeleteSession during pool shutdown; aborting attach listener"
-                        );
-                        item.session.abort_without_delete().await;
-                    }
-                }
-            }
-        });
     }
 }
 
@@ -732,9 +606,9 @@ fn session_should_close(
     use_count: u64,
     created: Instant,
     last_used: Instant,
-    is_alive: bool,
+    is_healthy: bool,
 ) -> bool {
-    if !is_alive {
+    if !is_healthy {
         return true;
     }
     if settings.item_usage_limit > 0 && use_count >= settings.item_usage_limit {
@@ -754,6 +628,7 @@ impl SessionPool {
     /// Explicit pool backed by in-memory stub sessions (no CreateSession / Attach / Delete RPC).
     pub(crate) fn new_explicit_bench(settings: SessionPoolSettings) -> Self {
         use crate::GrpcOptions;
+        use crate::discovery::StaticDiscovery;
         use crate::grpc_connection_manager::GrpcConnectionManager;
         use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
         use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
@@ -761,8 +636,6 @@ impl SessionPool {
         let settings = normalize_pool_settings(settings);
         let warm_up = settings.warm_up;
         let limit = settings.limit;
-        let on_node_shutdown: Arc<dyn Fn(Uri) + Send + Sync> = Arc::new(|_: Uri| {});
-
         let connection_manager = GrpcConnectionManager::new(
             SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
                 Uri::from_static("http://127.0.0.1/bench"),
@@ -772,13 +645,21 @@ impl SessionPool {
             GrpcOptions::default(),
         );
 
-        let inner = Arc::new(SessionPoolInner {
-            settings,
+        let discovery: Arc<dyn Discovery> = Arc::new(
+            StaticDiscovery::new_from_str("grpc://127.0.0.1:2136")
+                .expect("static bench discovery must be valid"),
+        );
+        let inner = Arc::new_cyclic(|weak| SessionPoolInner {
+            settings: settings.clone(),
             acquire_timeout_ms: AtomicU64::new(0),
-            connection_manager,
+            connection_manager: connection_manager.clone(),
             semaphore: Arc::new(Semaphore::new(limit)),
             explicit_idle: Mutex::new(Vec::new()),
-            on_node_shutdown,
+            cleanup: SessionCleanup::new(connection_manager.clone(), Duration::ZERO),
+            observer: SessionPoolObserver {
+                discovery: discovery.clone(),
+                pool: weak.clone(),
+            },
             create_in_progress: AtomicUsize::new(0),
             sessions_created: AtomicU64::new(0),
             bench_mode: true,
@@ -790,15 +671,17 @@ impl SessionPool {
             for i in 0..warm_up {
                 let node_uri = Uri::from_static("http://127.0.0.1/bench");
                 let now = Instant::now();
-                idle.push(ExplicitIdleItem {
-                    session: AttachedQuerySession::new_bench_stub(
-                        format!("bench-prefill-{i}"),
-                        node_uri.clone(),
-                    ),
-                    node_uri,
-                    created: now,
-                    last_used: now,
-                    use_count: 0,
+                idle.push(IdleSession {
+                    record: SessionRecord {
+                        session: AttachedSession::new_bench_stub(
+                            format!("bench-prefill-{i}"),
+                            node_uri.clone(),
+                            inner.cleanup.clone(),
+                        ),
+                        created: now,
+                        last_used: now,
+                        use_count: 0,
+                    },
                 });
             }
         }

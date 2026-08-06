@@ -1,4 +1,5 @@
 mod pool;
+mod session;
 mod table_pool;
 
 #[cfg(test)]

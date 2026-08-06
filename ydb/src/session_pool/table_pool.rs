@@ -4,9 +4,9 @@ use crate::client::TimeoutSettings;
 use crate::errors::YdbResult;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::retry_settings::RetrySettings;
-use crate::session::{NodePinnedTableClient, TableSession};
+use crate::session::TableSession;
 
-use super::pool::{SessionPool, spawn_pool_release};
+use super::pool::SessionPool;
 
 /// Table-side adapter over the driver session pool.
 #[derive(Clone)]
@@ -38,31 +38,14 @@ impl TableSessionPool {
     }
 
     pub(crate) async fn session(&self) -> YdbResult<TableSession> {
-        let mut lease = self.pool.acquire_explicit().await?;
-        lease.ensure_alive()?;
-        lease.begin_use();
-        let session_id = lease.session_id().to_string();
-        let node_uri = lease.node_uri().clone();
-
-        let mut session = TableSession::new(
-            session_id,
-            NodePinnedTableClient::new(self.connection_manager.clone(), node_uri),
+        let lease = self.pool.acquire_explicit().await?;
+        let session = TableSession::new(
+            lease,
+            self.connection_manager.clone(),
             TimeoutSettings::default(),
         );
 
-        session.on_drop(Box::new(move |s: &mut TableSession| {
-            if !s.can_pooled {
-                lease.invalidate_session();
-            }
-            // Drop the in-use guard synchronously so AttachSession close can drain in-flight
-            // table RPCs before async return_to_pool (return_to_pool also calls end_use).
-            lease.end_use();
-            spawn_pool_release(async move {
-                lease.return_to_pool().await;
-            });
-        }));
-
-        trace!("leased table session: {}", session.id);
+        trace!("leased table session: {}", session.session_id());
         Ok(session)
     }
 }
@@ -125,6 +108,23 @@ mod test {
 
         second_session_got_receiver.await?;
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicitly_returned_table_session_is_reused() -> YdbResult<()> {
+        let pool = TableSessionPool::from_shared(
+            bench_pool(),
+            bench_connection_manager(),
+            RetrySettings::with_default_backoff(),
+        );
+        let first = pool.session().await?;
+        let first_id = first.session_id().to_string();
+
+        first.return_to_pool();
+
+        let second = pool.session().await?;
+        assert_eq!(second.session_id(), first_id);
         Ok(())
     }
 }
