@@ -1,3 +1,4 @@
+mod cleanup_worker;
 mod pool;
 mod session;
 mod table_pool;

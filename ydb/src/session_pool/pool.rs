@@ -12,7 +12,8 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_services::Service;
 
-use super::session::{AttachedSession, CreatedSession, SessionCleanup};
+use super::cleanup_worker::{SessionCleanup, start_session_cleanup_worker};
+use super::session::{AttachedSession, CreatedSession};
 
 /// Default pool size for [`SessionPoolSettings::default()`] and the driver built-in pool.
 ///
@@ -303,7 +304,7 @@ impl SessionPool {
                 connection_manager: connection_manager.clone(),
                 semaphore: Arc::new(Semaphore::new(limit)),
                 explicit_idle: Mutex::new(Vec::new()),
-                cleanup: SessionCleanup::new(
+                cleanup: start_session_cleanup_worker(
                     connection_manager.clone(),
                     settings.session_delete_timeout,
                 ),
@@ -637,6 +638,7 @@ impl SessionPool {
         use crate::grpc_connection_manager::GrpcConnectionManager;
         use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
         use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+        use crate::session_pool::cleanup_worker::start_noop_session_cleanup_worker;
 
         let settings = normalize_pool_settings(settings);
         let warm_up = settings.warm_up;
@@ -654,13 +656,14 @@ impl SessionPool {
             StaticDiscovery::new_from_str("grpc://127.0.0.1:2136")
                 .expect("static bench discovery must be valid"),
         );
+        let cleanup = start_noop_session_cleanup_worker();
         let inner = Arc::new_cyclic(|weak| SessionPoolInner {
             settings: settings.clone(),
             acquire_timeout_ms: AtomicU64::new(0),
             connection_manager: connection_manager.clone(),
             semaphore: Arc::new(Semaphore::new(limit)),
             explicit_idle: Mutex::new(Vec::new()),
-            cleanup: SessionCleanup::new(connection_manager.clone(), Duration::ZERO),
+            cleanup: cleanup.clone(),
             observer: SessionPoolObserver {
                 discovery: discovery.clone(),
                 pool: weak.clone(),
