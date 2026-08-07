@@ -6,7 +6,6 @@
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 use futures_util::StreamExt;
 use http::Uri;
@@ -14,14 +13,19 @@ use tokio::task::JoinHandle;
 use tracing::warn;
 
 use crate::errors::{YdbError, YdbResult, YdbStatusError};
-use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::session_state::RawSessionState;
 use ydb_grpc::ydb_proto::query::SessionState;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
+use super::cleanup_worker::SessionCleanup;
 use super::pool::SessionPoolObserver;
-use super::spawn_pool_release;
+
+/// Immutable identity shared by the session owner, AttachSession listener, and cleanup worker.
+pub(super) struct SessionIdentity {
+    pub(super) session_id: String,
+    pub(super) node_uri: Uri,
+}
 
 /// A server session returned by CreateSession but not attached yet.
 pub(super) struct CreatedSession {
@@ -159,12 +163,6 @@ impl Drop for SessionResource {
     }
 }
 
-/// Immutable identity shared by the AttachSession listener and cleanup path.
-struct SessionIdentity {
-    session_id: String,
-    node_uri: Uri,
-}
-
 /// One-way health signal shared with the AttachSession listener.
 ///
 /// No other data is published through this flag, so relaxed ordering is sufficient.
@@ -196,57 +194,6 @@ impl Drop for AttachSessionListener {
             #[cfg(test)]
             Self::Stub => {}
         }
-    }
-}
-
-/// Submits best-effort deletion for a server-side session resource.
-#[derive(Clone)]
-pub(super) struct SessionCleanup {
-    connection_manager: GrpcConnectionManager,
-    delete_timeout: Duration,
-}
-
-impl SessionCleanup {
-    pub(super) fn new(connection_manager: GrpcConnectionManager, delete_timeout: Duration) -> Self {
-        Self {
-            connection_manager,
-            delete_timeout,
-        }
-    }
-
-    fn submit_delete(&self, identity: Arc<SessionIdentity>) {
-        if cfg!(test) {
-            // Cleanup submission remains suppressed in test binaries until it is routed through
-            // the cleanup worker's testable command channel.
-            return;
-        }
-
-        let connection_manager = self.connection_manager.clone();
-        let delete_timeout = self.delete_timeout;
-        spawn_pool_release(async move {
-            let mut client = match connection_manager
-                .get_auth_service_to_node(RawQueryClient::new, &identity.node_uri)
-                .await
-            {
-                Ok(client) => client,
-                Err(err) => {
-                    warn!(session_id = %identity.session_id, error = %err, "failed to connect for DeleteSession");
-                    return;
-                }
-            };
-
-            match tokio::time::timeout(delete_timeout, client.delete_session(&identity.session_id))
-                .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
-                    warn!(session_id = %identity.session_id, error = %err, "DeleteSession failed")
-                }
-                Err(_) => {
-                    warn!(session_id = %identity.session_id, ?delete_timeout, "DeleteSession timed out")
-                }
-            }
-        });
     }
 }
 
@@ -307,20 +254,8 @@ async fn listen_attach_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::GrpcOptions;
-    use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
-    use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-
-    fn connection_manager() -> GrpcConnectionManager {
-        GrpcConnectionManager::new(
-            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
-                Uri::from_static("http://127.0.0.1/bench"),
-            ))),
-            "bench".to_string(),
-            MultiInterceptor::new(),
-            GrpcOptions::default(),
-        )
-    }
+    use crate::session_pool::cleanup_worker::start_noop_session_cleanup_worker;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn attached_session_drop_aborts_its_listener() {
@@ -334,7 +269,7 @@ mod tests {
             }
         }
 
-        let cleanup = SessionCleanup::new(connection_manager(), Duration::ZERO);
+        let cleanup = start_noop_session_cleanup_worker();
         let (ready_sender, ready_receiver) = tokio::sync::oneshot::channel();
         let (dropped_sender, dropped_receiver) = tokio::sync::oneshot::channel();
         let listener = tokio::spawn(async move {
