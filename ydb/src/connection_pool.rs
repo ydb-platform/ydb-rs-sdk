@@ -298,7 +298,7 @@ impl RacyRoundRobin {
 
 fn ip_addr_to_authority(addr: IpAddr, port: Option<u16>) -> YdbResult<Authority> {
     let authority = match (addr, port) {
-        (IpAddr::V4(v4), None) => v4.to_string(),
+        (IpAddr::V4(v4), None) => format!("{v4}"),
         (IpAddr::V4(v4), Some(port)) => format!("{v4}:{port}"),
         (IpAddr::V6(v6), None) => format!("[{v6}]"),
         (IpAddr::V6(v6), Some(port)) => format!("[{v6}]:{port}"),
