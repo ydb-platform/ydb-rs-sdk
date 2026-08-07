@@ -3,7 +3,7 @@ use derivative::Derivative;
 use futures_util::FutureExt;
 use futures_util::stream::FuturesUnordered;
 use http::Uri;
-use http::uri::Scheme;
+use http::uri::{Authority, Scheme};
 use itertools::Either;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
@@ -236,14 +236,7 @@ impl RacyRoundRobin {
             // Connect to URI with replaced origin
             // to specify address
             let mut uri_parts = uri.clone().into_parts();
-            uri_parts.authority = Some(
-                if let Some(port) = uri.port() {
-                    format!("{addr}:{port}")
-                } else {
-                    addr.to_string()
-                }
-                .parse()?,
-            );
+            uri_parts.authority = Some(ip_addr_to_authority(addr, uri.port_u16())?);
             let resolved_uri = Uri::from_parts(uri_parts)?;
 
             endpoint(resolved_uri, Some(&uri), &opts)?
@@ -303,6 +296,17 @@ impl RacyRoundRobin {
     }
 }
 
+fn ip_addr_to_authority(addr: IpAddr, port: Option<u16>) -> YdbResult<Authority> {
+    let authority = match (addr, port) {
+        (IpAddr::V4(v4), None) => v4.to_string(),
+        (IpAddr::V4(v4), Some(port)) => format!("{v4}:{port}"),
+        (IpAddr::V6(v6), None) => format!("[{v6}]"),
+        (IpAddr::V6(v6), Some(port)) => format!("[{v6}]:{port}"),
+    };
+
+    Ok(authority.parse()?)
+}
+
 pub fn endpoint(uri: Uri, original_uri: Option<&Uri>, opts: &GrpcOptions) -> YdbResult<Endpoint> {
     let need_tls = uri.scheme() == Some(&Scheme::HTTPS);
     trace!("scheme is {:?}", uri.scheme());
@@ -348,4 +352,32 @@ pub fn configure_tls_endpoint(
             .domain_name(domain.to_owned())
             .with_native_roots()
     }))?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ip_addr_to_authority_ipv4() -> YdbResult<()> {
+        let addr: IpAddr = "192.0.2.1".parse().unwrap();
+
+        assert_eq!(ip_addr_to_authority(addr, Some(2135))?, "192.0.2.1:2135");
+        assert_eq!(ip_addr_to_authority(addr, None)?, "192.0.2.1");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ip_addr_to_authority_ipv6() -> YdbResult<()> {
+        let addr: IpAddr = "2001:db8::1".parse().unwrap();
+
+        assert_eq!(
+            ip_addr_to_authority(addr, Some(2135))?,
+            "[2001:db8::1]:2135"
+        );
+        assert_eq!(ip_addr_to_authority(addr, None)?, "[2001:db8::1]");
+
+        Ok(())
+    }
 }
