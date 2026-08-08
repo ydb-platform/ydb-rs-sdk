@@ -171,9 +171,11 @@ impl SessionPoolSettings {
 /// Call [`Self::return_to_pool`] to make a healthy session reusable. Dropping a lease without
 /// returning it schedules session cleanup.
 pub(crate) struct SessionPoolLease {
+    /// Drop the session before releasing the permit so shutdown cannot pass its lease barrier
+    /// before this lease has submitted cleanup.
+    record: SessionRecord,
     /// One permit represents this lease's exclusive use of one pool-capacity slot.
     permit: OwnedSemaphorePermit,
-    record: SessionRecord,
     pool: Arc<SessionPoolInner>,
 }
 
@@ -184,8 +186,8 @@ impl SessionPoolLease {
         pool: Arc<SessionPoolInner>,
     ) -> Self {
         Self {
-            permit,
             record: session.record,
+            permit,
             pool,
         }
     }
@@ -268,7 +270,7 @@ impl SessionPoolObserver {
         let Some(pool) = self.pool.upgrade() else {
             return;
         };
-        let _ = pool.drain_idle_for_node(node_uri);
+        pool.discard_idle_for_node(node_uri);
     }
 }
 
@@ -345,6 +347,17 @@ impl SessionPool {
         self.inner.stats()
     }
 
+    pub(crate) async fn shutdown(self) -> YdbResult<()> {
+        let _permits = self.inner.acquire_all_permits().await?;
+        self.inner.semaphore.close();
+        self.inner
+            .explicit_idle
+            .lock()
+            .expect("explicit idle lock")
+            .clear();
+        self.inner.cleanup.shutdown().await
+    }
+
     #[instrument(name = "ydb.SessionPool.AcquireSession", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn acquire_explicit(&self) -> YdbResult<SessionPoolLease> {
         let permit = self.inner.acquire_permit().await?;
@@ -371,6 +384,24 @@ impl SessionPool {
 }
 
 impl SessionPoolInner {
+    async fn acquire_all_permits(&self) -> YdbResult<OwnedSemaphorePermit> {
+        let permit_count = u32::try_from(self.settings.limit).map_err(|_| {
+            YdbError::InternalError(format!(
+                "session pool limit {} exceeds shutdown barrier capacity",
+                self.settings.limit
+            ))
+        })?;
+        self.semaphore
+            .clone()
+            .acquire_many_owned(permit_count)
+            .await
+            .map_err(|_| {
+                YdbError::InternalError(
+                    "session pool closed before shutdown acquired every lease".to_string(),
+                )
+            })
+    }
+
     fn acquire_timeout(&self) -> Duration {
         Duration::from_millis(self.acquire_timeout_ms.load(Ordering::Relaxed))
     }
@@ -473,18 +504,11 @@ impl SessionPoolInner {
         Ok(())
     }
 
-    fn drain_idle_for_node(&self, node_uri: &Uri) -> Vec<IdleSession> {
+    fn discard_idle_for_node(&self, node_uri: &Uri) {
         let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
-        let mut drained = Vec::new();
-        let mut i = 0;
-        while i < idle.len() {
-            if idle[i].record.session.node_uri() == node_uri {
-                drained.push(idle.swap_remove(i));
-            } else {
-                i += 1;
-            }
-        }
-        drained
+        // Removed sessions must submit cleanup before releasing this lock. Shutdown uses the same
+        // mutex to drain the remaining idle sessions before terminating the cleanup worker.
+        idle.retain(|item| item.record.session.node_uri() != node_uri);
     }
 
     async fn create_explicit_session(&self) -> YdbResult<IdleSession> {
@@ -587,7 +611,6 @@ impl SessionPoolInner {
         item.last_used = Instant::now();
 
         if self.should_close_explicit(&item) {
-            drop(permit);
             drop(item);
         } else {
             let overflow = {
@@ -599,11 +622,13 @@ impl SessionPoolInner {
                     Some(item)
                 }
             };
-            drop(permit);
             if let Some(item) = overflow {
                 drop(item);
             }
         }
+        // Releasing the permit is the final ownership step. Shutdown uses all permits as a
+        // barrier, so every discarded session must submit cleanup before this point.
+        drop(permit);
     }
 }
 
@@ -772,5 +797,52 @@ mod unit_tests {
         assert!(session_should_close(
             &settings, 0, created, last_used, false,
         ));
+    }
+
+    #[tokio::test]
+    async fn shutdown_discards_idle_sessions_and_closes_pool() {
+        let pool = SessionPool::new_explicit_bench(
+            SessionPoolSettings::new().with_limit(2).with_warm_up(2),
+        );
+        let observer = pool.clone();
+
+        pool.shutdown().await.expect("pool shutdown must succeed");
+
+        assert_eq!(observer.stats().idle, 0);
+        assert!(observer.acquire_explicit().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn shutdown_blocks_new_leases_and_waits_for_outstanding_leases() {
+        let pool = SessionPool::new_explicit_bench(
+            SessionPoolSettings::new().with_limit(2).with_warm_up(2),
+        );
+        let first_lease = pool
+            .acquire_explicit()
+            .await
+            .expect("bench lease must be available");
+        let second_lease = pool
+            .acquire_explicit()
+            .await
+            .expect("second bench lease must be available");
+        let observer = pool.clone();
+        let shutdown = tokio::spawn(pool.shutdown());
+
+        tokio::task::yield_now().await;
+        assert!(!shutdown.is_finished());
+
+        let late_acquire = tokio::spawn(async move { observer.acquire_explicit().await.is_ok() });
+        tokio::task::yield_now().await;
+        first_lease.return_to_pool();
+        tokio::task::yield_now().await;
+        second_lease.return_to_pool();
+        shutdown
+            .await
+            .expect("shutdown task must finish")
+            .expect("pool shutdown must succeed");
+        assert!(
+            !late_acquire.await.expect("late acquire task must finish"),
+            "session acquisition must not pass a pending shutdown barrier"
+        );
     }
 }
