@@ -2,13 +2,29 @@ use std::{collections::VecDeque, mem::swap};
 
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
+use crate::client_topic::topicwriter::capacity_limiter::CapacityPermit;
+use crate::client_topic::topicwriter::writer_options::AutoFlushSettings;
 use crate::{YdbError, YdbResult};
+
+pub(crate) struct QueuedMessage {
+    data: MessageData,
+    _capacity: CapacityPermit,
+}
+
+impl QueuedMessage {
+    pub(crate) fn new(data: MessageData, capacity: CapacityPermit) -> Self {
+        Self {
+            data,
+            _capacity: capacity,
+        }
+    }
+}
 
 pub(crate) struct MessageQueue {
     // Messages awaiting to be sent
-    messages: VecDeque<MessageData>,
+    messages: VecDeque<QueuedMessage>,
     // Messages awaiting to be acknowledged
-    sent_messages: VecDeque<MessageData>,
+    sent_messages: VecDeque<QueuedMessage>,
     // Sequence number of the last message that has been added to the queue
     last_added_seq_no: Option<i64>,
 }
@@ -29,8 +45,8 @@ impl MessageQueue {
         }
     }
 
-    pub(crate) fn add_message(&mut self, message: MessageData) -> YdbResult<()> {
-        let seq_no = message.seq_no;
+    pub(crate) fn add_message(&mut self, message: QueuedMessage) -> YdbResult<()> {
+        let seq_no = message.data.seq_no;
         self.check_message_seq_no(seq_no)?;
 
         self.last_added_seq_no = Some(seq_no);
@@ -54,18 +70,20 @@ impl MessageQueue {
     pub(crate) fn append_message_to_send_buffer(
         &mut self,
         send_buffer: &mut Vec<MessageData>,
-        threshold: usize,
+        send_buffer_bytes: &mut usize,
+        settings: AutoFlushSettings,
     ) -> AppendMessageToSendBufferResult {
         let Some(message) = self.messages.pop_front() else {
             return AppendMessageToSendBufferResult::CouldNotGetMessage;
         };
-        send_buffer.push(message.clone());
+        *send_buffer_bytes += message.data.data.len();
+        send_buffer.push(message.data.clone());
         self.sent_messages.push_back(message);
 
-        if send_buffer.len() < threshold {
-            AppendMessageToSendBufferResult::UnderThreshold
-        } else {
+        if send_buffer.len() >= settings.messages() || *send_buffer_bytes >= settings.bytes() {
             AppendMessageToSendBufferResult::Full
+        } else {
+            AppendMessageToSendBufferResult::UnderThreshold
         }
     }
 
@@ -76,10 +94,10 @@ impl MessageQueue {
             )));
         };
 
-        if message.seq_no != seq_no {
+        if message.data.seq_no != seq_no {
             return Err(YdbError::custom(format!(
                 "acknowledge_message: seq_no mismatch: expected_seq_no={} actual_seq_no={}",
-                message.seq_no, seq_no,
+                message.data.seq_no, seq_no,
             )));
         }
 
@@ -102,8 +120,25 @@ impl MessageQueue {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+    use std::time::Duration;
+
     use super::*;
-    use crate::client_topic::topicwriter::test_helpers::create_message;
+    use crate::client_topic::topicwriter::capacity_limiter::CapacityLimiter;
+    use crate::client_topic::topicwriter::test_helpers::{
+        auto_flush_settings, create_message as create_message_data,
+    };
+
+    fn create_message(seq_no: i64, data: Vec<u8>) -> QueuedMessage {
+        let limiter = CapacityLimiter::new(
+            NonZeroUsize::MIN,
+            NonZeroUsize::new(data.len()).unwrap_or(NonZeroUsize::MIN),
+        )
+        .unwrap();
+        let capacity = limiter.try_acquire(data.len()).unwrap();
+
+        QueuedMessage::new(create_message_data(seq_no, data), capacity)
+    }
 
     fn move_all_pending_to_sent(q: &mut MessageQueue) {
         q.sent_messages.append(&mut q.messages);
@@ -124,10 +159,10 @@ mod tests {
         q.add_message(create_message(11, vec![4, 5])).unwrap();
 
         assert_eq!(q.messages.len(), 2);
-        assert_eq!(q.messages[0].seq_no, 10);
-        assert_eq!(q.messages[0].data, vec![1, 2, 3]);
-        assert_eq!(q.messages[1].seq_no, 11);
-        assert_eq!(q.messages[1].data, vec![4, 5]);
+        assert_eq!(q.messages[0].data.seq_no, 10);
+        assert_eq!(q.messages[0].data.data, vec![1, 2, 3]);
+        assert_eq!(q.messages[1].data.seq_no, 11);
+        assert_eq!(q.messages[1].data.data, vec![4, 5]);
         assert_eq!(q.last_added_seq_no, Some(11));
     }
 
@@ -161,7 +196,12 @@ mod tests {
         q.add_message(create_message(1, vec![10])).unwrap();
 
         let mut buffer = Vec::new();
-        let result = q.append_message_to_send_buffer(&mut buffer, 10);
+        let mut buffer_bytes = 0;
+        let result = q.append_message_to_send_buffer(
+            &mut buffer,
+            &mut buffer_bytes,
+            auto_flush_settings(10, 10, Duration::ZERO),
+        );
 
         assert!(matches!(
             result,
@@ -170,17 +210,23 @@ mod tests {
         assert_eq!(buffer.len(), 1);
         assert_eq!(buffer[0].seq_no, 1);
         assert_eq!(buffer[0].data, vec![10]);
+        assert_eq!(buffer_bytes, 1);
         assert!(q.messages.is_empty());
         assert_eq!(q.sent_messages.len(), 1);
-        assert_eq!(q.sent_messages[0].seq_no, 1);
+        assert_eq!(q.sent_messages[0].data.seq_no, 1);
     }
 
     #[test]
     fn append_message_to_send_buffer_returns_could_not_get_message_when_empty() {
         let mut q = MessageQueue::new();
         let mut buffer = Vec::new();
+        let mut buffer_bytes = 0;
 
-        let result = q.append_message_to_send_buffer(&mut buffer, 10);
+        let result = q.append_message_to_send_buffer(
+            &mut buffer,
+            &mut buffer_bytes,
+            auto_flush_settings(10, 10, Duration::ZERO),
+        );
 
         assert!(matches!(
             result,
@@ -196,17 +242,69 @@ mod tests {
         q.add_message(create_message(2, vec![])).unwrap();
 
         let mut buffer = Vec::new();
+        let mut buffer_bytes = 0;
         assert!(matches!(
-            q.append_message_to_send_buffer(&mut buffer, 2),
+            q.append_message_to_send_buffer(
+                &mut buffer,
+                &mut buffer_bytes,
+                auto_flush_settings(2, 10, Duration::ZERO),
+            ),
             AppendMessageToSendBufferResult::UnderThreshold
         ));
         assert!(matches!(
-            q.append_message_to_send_buffer(&mut buffer, 2),
+            q.append_message_to_send_buffer(
+                &mut buffer,
+                &mut buffer_bytes,
+                auto_flush_settings(2, 10, Duration::ZERO),
+            ),
             AppendMessageToSendBufferResult::Full
         ));
         assert_eq!(buffer.len(), 2);
         assert_eq!(buffer[0].seq_no, 1);
         assert_eq!(buffer[1].seq_no, 2);
+    }
+
+    #[test]
+    fn append_message_to_send_buffer_returns_full_at_byte_threshold() {
+        let mut q = MessageQueue::new();
+        q.add_message(create_message(1, vec![0; 2])).unwrap();
+        q.add_message(create_message(2, vec![0; 3])).unwrap();
+
+        let mut buffer = Vec::new();
+        let mut buffer_bytes = 0;
+        let settings = auto_flush_settings(10, 5, Duration::ZERO);
+        assert!(matches!(
+            q.append_message_to_send_buffer(&mut buffer, &mut buffer_bytes, settings),
+            AppendMessageToSendBufferResult::UnderThreshold
+        ));
+        assert!(matches!(
+            q.append_message_to_send_buffer(&mut buffer, &mut buffer_bytes, settings),
+            AppendMessageToSendBufferResult::Full
+        ));
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(buffer_bytes, 5);
+    }
+
+    #[test]
+    fn append_message_to_send_buffer_flushes_after_crossing_byte_threshold() {
+        let mut q = MessageQueue::new();
+        q.add_message(create_message(1, vec![0; 3])).unwrap();
+        q.add_message(create_message(2, vec![0; 3])).unwrap();
+
+        let mut buffer = Vec::new();
+        let mut buffer_bytes = 0;
+        let settings = auto_flush_settings(10, 5, Duration::ZERO);
+        assert!(matches!(
+            q.append_message_to_send_buffer(&mut buffer, &mut buffer_bytes, settings),
+            AppendMessageToSendBufferResult::UnderThreshold
+        ));
+        assert!(matches!(
+            q.append_message_to_send_buffer(&mut buffer, &mut buffer_bytes, settings),
+            AppendMessageToSendBufferResult::Full
+        ));
+        assert_eq!(buffer.len(), 2);
+        assert_eq!(buffer_bytes, 6);
+        assert!(q.messages.is_empty());
     }
 
     #[test]
@@ -222,8 +320,8 @@ mod tests {
         assert_eq!(q.messages.len(), 0);
         assert!(q.messages.is_empty());
         assert_eq!(q.sent_messages.len(), 2);
-        assert_eq!(q.sent_messages[0].seq_no, 6);
-        assert_eq!(q.sent_messages[1].seq_no, 7);
+        assert_eq!(q.sent_messages[0].data.seq_no, 6);
+        assert_eq!(q.sent_messages[1].data.seq_no, 7);
         assert_eq!(q.last_added_seq_no, Some(7));
     }
 
@@ -278,10 +376,10 @@ mod tests {
 
         assert!(q.sent_messages.is_empty());
         assert_eq!(q.messages.len(), 5);
-        assert_eq!(q.messages[0].seq_no, 1);
-        assert_eq!(q.messages[1].seq_no, 2);
-        assert_eq!(q.messages[2].seq_no, 3);
-        assert_eq!(q.messages[3].seq_no, 4);
-        assert_eq!(q.messages[4].seq_no, 5);
+        assert_eq!(q.messages[0].data.seq_no, 1);
+        assert_eq!(q.messages[1].data.seq_no, 2);
+        assert_eq!(q.messages[2].data.seq_no, 3);
+        assert_eq!(q.messages[3].data.seq_no, 4);
+        assert_eq!(q.messages[4].data.seq_no, 5);
     }
 }

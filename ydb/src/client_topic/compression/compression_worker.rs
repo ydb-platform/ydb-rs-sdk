@@ -7,18 +7,23 @@ use crate::{YdbError, YdbResult};
 use std::{num::NonZeroUsize, sync::Arc};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
-use ydb_grpc::ydb_proto::topic::stream_write_message::WriteRequest;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
-type ChunkResult = YdbResult<WriteRequest>;
+type ChunkResult = YdbResult<CompressedChunk>;
 type InputRx = mpsc::UnboundedReceiver<Vec<MessageData>>;
 type OutputTx = mpsc::UnboundedSender<ChunkResult>;
+
+pub(crate) struct CompressedChunk {
+    pub(crate) messages: Vec<MessageData>,
+    pub(crate) codec: Codec,
+    pub(crate) ends_batch: bool,
+}
 
 pub(crate) struct CompressionWorker {
     codec_selector: CodecSelector,
     codec_registry: Arc<CodecRegistry>,
-    queue: OrderedTaskQueue<WriteRequest>,
-    results_rx: ordered_task_queue::TaskResultRx<WriteRequest>,
+    queue: OrderedTaskQueue<CompressedChunk>,
+    results_rx: ordered_task_queue::TaskResultRx<CompressedChunk>,
     parallelism: NonZeroUsize,
 }
 
@@ -67,11 +72,14 @@ impl CompressionWorker {
                 while !batch.is_empty() {
                     let chunk: Vec<MessageData> =
                         batch.drain(..chunk_size.min(batch.len())).collect();
+                    let ends_batch = batch.is_empty();
 
                     let registry = codec_registry.clone();
 
                     queue
-                        .submit(Box::new(move || compress_batch(chunk, codec, registry)))
+                        .submit(Box::new(move || {
+                            compress_chunk(chunk, codec, ends_batch, registry)
+                        }))
                         .await;
                 }
             }
@@ -91,9 +99,10 @@ impl CompressionWorker {
     }
 }
 
-fn compress_batch(
-    mut batch: Vec<MessageData>,
+fn compress_chunk(
+    mut messages: Vec<MessageData>,
     codec: Codec,
+    ends_batch: bool,
     registry: Arc<CodecRegistry>,
 ) -> ChunkResult {
     if codec != Codec::RAW {
@@ -104,7 +113,7 @@ fn compress_batch(
             )));
         };
 
-        for message in batch.iter_mut() {
+        for message in messages.iter_mut() {
             message.data = encoder.encode(message.data.as_slice()).map_err(|err| {
                 YdbError::custom(format!(
                     "{encoder:?} failed to encode: {err}, message seq_no: {}",
@@ -114,9 +123,9 @@ fn compress_batch(
         }
     }
 
-    Ok(WriteRequest {
-        messages: batch,
-        codec: codec.code,
-        tx: None,
+    Ok(CompressedChunk {
+        messages,
+        codec,
+        ends_batch,
     })
 }
