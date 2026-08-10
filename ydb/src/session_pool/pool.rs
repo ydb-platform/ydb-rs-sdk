@@ -741,6 +741,10 @@ impl SessionPool {
 
 #[cfg(test)]
 mod unit_tests {
+    use std::task::Poll;
+
+    use futures_util::poll;
+
     use super::*;
 
     #[test]
@@ -826,22 +830,20 @@ mod unit_tests {
             .await
             .expect("second bench lease must be available");
         let observer = pool.clone();
-        let shutdown = tokio::spawn(pool.shutdown());
+        let mut shutdown = Box::pin(pool.shutdown());
 
-        tokio::task::yield_now().await;
-        assert!(!shutdown.is_finished());
+        // Queue the all-permits shutdown barrier before the late single-permit acquisition.
+        assert!(matches!(poll!(shutdown.as_mut()), Poll::Pending));
 
-        let late_acquire = tokio::spawn(async move { observer.acquire_explicit().await.is_ok() });
-        tokio::task::yield_now().await;
+        let mut late_acquire = Box::pin(observer.acquire_explicit());
+        assert!(matches!(poll!(late_acquire.as_mut()), Poll::Pending));
+
         first_lease.return_to_pool();
-        tokio::task::yield_now().await;
         second_lease.return_to_pool();
-        shutdown
-            .await
-            .expect("shutdown task must finish")
-            .expect("pool shutdown must succeed");
+
+        shutdown.await.expect("pool shutdown must succeed");
         assert!(
-            !late_acquire.await.expect("late acquire task must finish"),
+            late_acquire.await.is_err(),
             "session acquisition must not pass a pending shutdown barrier"
         );
     }
