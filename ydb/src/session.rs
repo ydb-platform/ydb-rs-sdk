@@ -52,34 +52,16 @@ impl TableSession {
             connection_manager,
             timeouts,
         } = self;
-        let mut table = match connection_manager
-            .get_auth_service_to_node(RawTableClient::new, lease.node_uri())
-            .await
-        {
-            Ok(client) => client.with_timeout(timeouts),
-            Err(err) => {
-                if err.requires_session_discard() {
-                    lease.discard();
-                } else {
-                    lease.return_to_pool();
-                }
-                return Err(err);
-            }
-        };
-        match rpc(&mut table).await.map_err(YdbError::from) {
-            Ok(value) => {
-                lease.return_to_pool();
-                Ok(value)
-            }
-            Err(err) => {
-                if err.requires_session_discard() {
-                    lease.discard();
-                } else {
-                    lease.return_to_pool();
-                }
-                Err(err)
-            }
+        let result = async {
+            lease.ensure_healthy()?;
+            let mut table = connection_manager
+                .get_auth_service_to_node(RawTableClient::new, lease.node_uri())
+                .await?
+                .with_timeout(timeouts);
+            rpc(&mut table).await.map_err(YdbError::from)
         }
+        .await;
+        lease.finish(result)
     }
 
     pub fn with_timeouts(mut self, timeouts: TimeoutSettings) -> Self {

@@ -35,7 +35,7 @@ async fn bench_pool_once(pool: &SessionPool, ops: &AtomicU64) {
         .await
         .expect("acquire explicit session");
     if force_delete {
-        lease.bench_invalidate_session();
+        lease.invalidate();
     }
     lease.return_to_pool();
 }

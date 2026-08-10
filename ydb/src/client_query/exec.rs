@@ -311,70 +311,44 @@ pub(super) async fn client_begin_stream_once(
         });
     }
 
-    let tx_control = tx_control_for_client(opts)?;
-    let lease = ctx.session_pool.acquire_explicit().await?;
-
-    let (mut client, req) = match client_pooled_explicit_request(
-        ctx,
-        &lease,
-        text,
-        params,
-        tx_control,
-        opts.collect_stats,
-        concurrent_result_sets,
-    )
-    .await
-    {
-        Ok(prepared) => prepared,
-        Err(err) => {
-            if err.requires_session_discard() {
-                lease.discard();
-            } else {
-                lease.return_to_pool();
-            }
-            return Err(err);
-        }
-    };
-    let stream = match client.execute_query(req).await.map_err(YdbError::from) {
-        Ok(stream) => stream,
-        Err(err) => {
-            if err.requires_session_discard() {
-                lease.discard();
-            } else {
-                lease.return_to_pool();
-            }
-            return Err(err);
-        }
-    };
-    Ok(OpenedQueryStream {
-        stream: ExecuteQueryStream::new(stream),
-        owned_lease: Some(lease),
-    })
+    open_pooled_query_stream(ctx, text, params, opts, concurrent_result_sets).await
 }
 
-async fn client_pooled_explicit_request(
+async fn open_pooled_query_stream(
     ctx: &ClientExecContext,
-    lease: &SessionPoolLease,
     text: &str,
     params: &HashMap<String, Value>,
-    tx_control: Option<ydb_grpc::ydb_proto::query::TransactionControl>,
-    collect_stats: bool,
+    opts: &CallOptions,
     concurrent_result_sets: bool,
-) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
-    let node_uri = lease.node_uri().clone();
-    let client = ctx
-        .connection_manager
-        .get_auth_service_to_node(RawQueryClient::new, &node_uri)
-        .await?;
-    let mut req = RawExecuteQueryRequest::new(
-        lease.session_id(),
-        text,
-        params.clone(),
-        tx_control,
-        collect_stats,
-    );
-    req.concurrent_result_sets = concurrent_result_sets;
-    Ok((client, req))
+) -> YdbResult<OpenedQueryStream> {
+    let tx_control = tx_control_for_client(opts)?;
+    let lease = ctx.session_pool.acquire_explicit().await?;
+    let result = async {
+        lease.ensure_healthy()?;
+        let mut client = ctx
+            .connection_manager
+            .get_auth_service_to_node(RawQueryClient::new, lease.node_uri())
+            .await?;
+        let mut req = RawExecuteQueryRequest::new(
+            lease.session_id(),
+            text,
+            params.clone(),
+            tx_control,
+            opts.collect_stats,
+        );
+        req.concurrent_result_sets = concurrent_result_sets;
+        let stream = client.execute_query(req).await.map_err(YdbError::from)?;
+        Ok(ExecuteQueryStream::new(stream))
+    }
+    .await;
+
+    match result {
+        Ok(stream) => Ok(OpenedQueryStream {
+            stream,
+            owned_lease: Some(lease),
+        }),
+        Err(err) => lease.finish(Err(err)),
+    }
 }
 
 #[instrument(name = "ydb.Query.BeginStream", skip_all, fields(db.system.name = "ydb", ydb.Query.text = %ensure_len_string(&text), ydb.Query.params = ?params, ydb.Query.opts = ?opts), err)]

@@ -68,7 +68,7 @@ async fn acquire_skips_invalidated_idle_session() {
 
     let mut lease = pool.acquire_explicit().await.expect("first acquire");
     let first_id = lease.session_id().to_string();
-    lease.bench_invalidate_session();
+    lease.invalidate();
     lease.return_to_pool();
 
     let second = pool.acquire_explicit().await.expect("second acquire");

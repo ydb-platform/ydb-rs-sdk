@@ -213,20 +213,30 @@ impl SessionPoolLease {
         pool.release_explicit_session(record, permit);
     }
 
+    /// Resolve this lease after a terminal operation and return the operation result unchanged.
+    pub(crate) fn finish<T>(self, result: YdbResult<T>) -> YdbResult<T> {
+        match result {
+            Ok(value) => {
+                self.return_to_pool();
+                Ok(value)
+            }
+            Err(err) => {
+                if !err.requires_session_discard() {
+                    self.return_to_pool();
+                }
+                Err(err)
+            }
+        }
+    }
+
     /// Mark a retained lease unusable. Returning it later will schedule session cleanup.
     pub(crate) fn invalidate(&mut self) {
         self.record.session.invalidate();
     }
-
     /// Consume this lease without returning its session to the pool. Dropping the owned session
     /// schedules cleanup.
     pub(crate) fn discard(self) {
         drop(self);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn bench_invalidate_session(&mut self) {
-        self.invalidate();
     }
 }
 
