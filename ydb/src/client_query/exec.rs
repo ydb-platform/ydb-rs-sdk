@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use http::Uri;
 use tokio::time::timeout;
 
-use crate::errors::{YdbError, YdbResult};
+use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryRequest;
@@ -63,6 +63,12 @@ pub(crate) struct CallOptions {
     pub tx_mode: Option<TxMode>,
     /// One-shot [`QueryClient`] only: send `ExecuteQuery` with an empty `session_id`.
     pub implicit_session: bool,
+}
+
+impl CallOptions {
+    pub(super) fn idempotency(&self) -> Idempotency {
+        self.idempotent.unwrap_or(false).into()
+    }
 }
 
 #[derive(Clone)]
@@ -305,7 +311,7 @@ async fn client_implicit_session_request(
 }
 
 #[instrument(name = "ydb.Query.BeginStreamOnce", skip_all, fields(db.system.name = "ydb"), err)]
-async fn client_begin_stream_once(
+pub(super) async fn client_begin_stream_once(
     ctx: &ClientExecContext,
     text: &str,
     params: &HashMap<String, Value>,
@@ -320,23 +326,39 @@ async fn client_begin_stream_once(
         return Ok(ExecuteQueryStream::new(stream));
     }
 
-    let lease = ctx.session_pool.acquire_explicit().await?;
-    let mut pooled_lease = Some(lease);
-    let lease_ref = pooled_lease
-        .as_mut()
-        .expect("lease set on successful acquire");
-    let (mut client, req) =
-        client_pooled_explicit_request(ctx, lease_ref, text, params, opts, concurrent_result_sets)
-            .await?;
-    let stream = client.execute_query(req).await.map_err(YdbError::from)?;
-    let mut stream = ExecuteQueryStream::new(stream);
-    if let Some(lease) = pooled_lease.take() {
-        stream = stream.with_session_guard(PooledQuerySessionGuard {
+    let mut lease = ctx.session_pool.acquire_explicit().await?;
+
+    let (mut client, req) = match client_pooled_explicit_request(
+        ctx,
+        &mut lease,
+        text,
+        params,
+        opts,
+        concurrent_result_sets,
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(err) => {
+            lease.handle_pool_error(&err);
+            lease.end_use();
+            return Err(err);
+        }
+    };
+    let stream = match client.execute_query(req).await.map_err(YdbError::from) {
+        Ok(stream) => stream,
+        Err(err) => {
+            lease.handle_pool_error(&err);
+            lease.end_use();
+            return Err(err);
+        }
+    };
+    Ok(
+        ExecuteQueryStream::new(stream).with_session_guard(PooledQuerySessionGuard {
             lease,
             rpc_finished: false,
-        });
-    }
-    Ok(stream)
+        }),
+    )
 }
 
 async fn client_pooled_explicit_request(
@@ -377,7 +399,7 @@ pub(crate) async fn client_begin_stream(
         .clone()
         .with_deadline(opts.timeout)
         .retry_on_retriable_errors(
-            opts.idempotent.unwrap_or(false).into(),
+            opts.idempotency(),
             closure!([&ctx, &text, &params, &opts], |_| client_begin_stream_once(
                 ctx,
                 text,

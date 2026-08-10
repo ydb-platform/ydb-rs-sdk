@@ -153,7 +153,9 @@ pub use client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMess
 // full enum pub types
 pub use client_topic::topicwriter::partitioning::PartitioningStrategy;
 // full enum pub types
-pub use client_topic::compression::{CompressionDecoder, CompressionEncoder, Executor};
+pub use client_topic::compression::{
+    CodecSelection, CompressionDecoder, CompressionEncoder, Executor,
+};
 pub use client_topic::topicwriter::writer::TopicWriter;
 pub use client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
