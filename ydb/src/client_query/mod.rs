@@ -433,32 +433,16 @@ impl Transaction {
     }
 
     pub(crate) async fn tx_identity(&mut self) -> YdbResult<QueryTxIdentity> {
-        transaction_ensure_begin(&mut self.ctx, false).await?;
-
-        let transaction_id = self
-            .ctx
-            .tx_id
-            .as_ref()
-            .ok_or(YdbError::custom("no transaction id"))?
-            .to_string();
-
-        let session_id = self
-            .ctx
-            .pooled_lease
-            .as_ref()
-            .ok_or(YdbError::custom("no session id"))?
-            .session_id()
-            .to_string();
-
+        let (session_id, transaction_id) = transaction_identity(&mut self.ctx).await?;
         Ok(QueryTxIdentity {
             transaction_id,
             session_id,
         })
     }
 
-    pub(crate) async fn uri(&mut self) -> YdbResult<Option<&Uri>> {
+    pub(crate) async fn uri(&mut self) -> YdbResult<&Uri> {
         transaction_ensure_begin(&mut self.ctx, false).await?;
-        Ok(self.ctx.query_node.as_ref())
+        Ok(self.ctx.session_lease()?.node_uri())
     }
 
     #[cfg(test)]

@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::time::{Duration, Instant};
 
-use http::Uri;
 use tokio::time::timeout;
 
 use crate::errors::{Idempotency, YdbError, YdbResult};
@@ -87,12 +86,19 @@ pub(crate) struct TransactionExecContext {
     /// When set, the first operation calls `BeginTransaction` RPC instead of lazy `BeginTx` in `ExecuteQuery`.
     pub begin: bool,
     pub pooled_lease: Option<SessionPoolLease>,
-    pub query_node: Option<Uri>,
     pub tx_id: Option<String>,
     pub state: TxState,
     pub hooks: Vec<Box<dyn QueryTxHook>>,
     /// Absolute deadline from [`QueryClient::retry_tx`] `.timeout()`, propagated to every RPC in the callback.
     pub retry_deadline: Option<Instant>,
+}
+
+impl TransactionExecContext {
+    pub(super) fn session_lease(&self) -> YdbResult<&SessionPoolLease> {
+        self.pooled_lease.as_ref().ok_or_else(|| {
+            YdbError::InternalError("query transaction session is not initialized".to_string())
+        })
+    }
 }
 
 /// Per-call timeout capped by the parent [`retry_tx`](crate::QueryClient::retry_tx) deadline when set.
@@ -138,15 +144,9 @@ where
 }
 
 async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQueryClient> {
-    if let Some(uri) = &tx.query_node {
-        tx.connection_manager
-            .get_auth_service_to_node(RawQueryClient::new, uri)
-            .await
-    } else {
-        tx.connection_manager
-            .get_auth_service(RawQueryClient::new)
-            .await
-    }
+    tx.connection_manager
+        .get_auth_service_to_node(RawQueryClient::new, tx.session_lease()?.node_uri())
+        .await
 }
 
 fn tx_mode_to_raw(mode: TxMode) -> YdbResult<RawTxMode> {
@@ -383,16 +383,8 @@ async fn ensure_tx_session(tx: &mut TransactionExecContext) -> YdbResult<()> {
         return Ok(());
     }
     let lease = tx.session_pool.acquire_explicit().await?;
-    tx.query_node = Some(lease.node_uri().clone());
     tx.pooled_lease = Some(lease);
     Ok(())
-}
-
-fn tx_session_id(tx: &TransactionExecContext) -> YdbResult<&str> {
-    tx.pooled_lease
-        .as_ref()
-        .map(|lease| lease.session_id())
-        .ok_or_else(|| YdbError::Custom("query transaction session is not initialized".to_string()))
 }
 
 /// Session and transaction ids for cross-service RPCs (e.g. topic `UpdateOffsetsInTransaction`).
@@ -400,7 +392,7 @@ pub(crate) async fn transaction_identity(
     tx: &mut TransactionExecContext,
 ) -> YdbResult<(String, String)> {
     transaction_ensure_begin(tx, false).await?;
-    let session_id = tx_session_id(tx)?.to_string();
+    let session_id = tx.session_lease()?.session_id().to_string();
     let transaction_id = tx
         .tx_id
         .as_deref()
@@ -415,17 +407,14 @@ pub(super) fn release_tx_session(tx: &mut TransactionExecContext) {
     if let Some(lease) = tx.pooled_lease.take() {
         lease.return_to_pool();
     }
-    tx.query_node = None;
 }
 
 #[instrument(name = "ydb.Query.ReleaseTxSession", skip_all, fields(db.system.name = "ydb"))]
 fn finish_tx_session<T>(tx: &mut TransactionExecContext, result: YdbResult<T>) -> YdbResult<T> {
-    let result = match tx.pooled_lease.take() {
+    match tx.pooled_lease.take() {
         Some(lease) => lease.finish(result),
         None => result,
-    };
-    tx.query_node = None;
-    result
+    }
 }
 
 #[instrument(name = "ydb.ExecuteQuery", skip_all, fields(db.system.name = "ydb", ydb.Query.text = %ensure_len_string(&yql_text), ydb.Query.params = ?parameters, ydb.Query.opts = ?opts))]
@@ -436,7 +425,7 @@ async fn transaction_execute_request(
     opts: &CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
-    let session_id = tx_session_id(tx)?.to_string();
+    let session_id = tx.session_lease()?.session_id().to_string();
     let client = query_client_from_tx(tx).await?;
     let mut req = RawExecuteQueryRequest::new(
         session_id,
@@ -467,7 +456,7 @@ pub(crate) async fn transaction_ensure_begin(
     if !session_ready {
         ensure_tx_session(tx).await?;
     }
-    let session_id = tx_session_id(tx)?.to_string();
+    let session_id = tx.session_lease()?.session_id().to_string();
     tracing::Span::current().record("ydb.session.id", &session_id);
     let mut client = query_client_from_tx(tx).await?;
     let tx_id =
@@ -530,9 +519,7 @@ pub(crate) async fn transaction_begin_stream(
     let result: YdbResult<OpenedQueryStream> =
         maybe_with_operation_timeout(effective_timeout, async {
             ensure_tx_session(tx).await?;
-            if let Ok(session_id) = tx_session_id(tx) {
-                tracing::Span::current().record("ydb.session.id", session_id);
-            }
+            tracing::Span::current().record("ydb.session.id", tx.session_lease()?.session_id());
             if tx.begin {
                 transaction_ensure_begin(tx, true).await?;
             }
@@ -576,7 +563,7 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
     }
     ensure_tx_session(tx).await?;
     let tx_id = tx.tx_id.take().expect("checked Some");
-    let session_id = tx_session_id(tx)?.to_string();
+    let session_id = tx.session_lease()?.session_id().to_string();
     tracing::Span::current()
         .record("ydb.session.id", &session_id)
         .record("ydb.tx.id", &tx_id);
@@ -606,7 +593,7 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
     let mut rollback_err: Option<YdbError> = None;
     if tx.tx_id.as_ref().is_some_and(|id| !id.is_empty()) && tx.pooled_lease.is_some() {
         let tx_id = tx.tx_id.take().expect("checked Some");
-        if let Ok(session_id) = tx_session_id(tx)
+        if let Ok(session_id) = tx.session_lease().map(|lease| lease.session_id())
             && let Ok(mut client) = query_client_from_tx(tx).await
         {
             tracing::Span::current()
@@ -641,30 +628,21 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
 pub(crate) fn spawn_query_tx_rollback_on_drop(ctx: &mut TransactionExecContext) {
     let tx_id = ctx.tx_id.take().filter(|id| !id.is_empty());
     let Some(lease) = ctx.pooled_lease.take() else {
-        ctx.query_node = None;
         return;
     };
     let connection_manager = ctx.connection_manager.clone();
-    let query_node = ctx.query_node.take();
 
     let Some(tx_id) = tx_id else {
         return;
     };
 
     spawn_pool_release(async move {
-        let session_id = lease.session_id().to_string();
-        let client_result = if let Some(uri) = query_node {
-            connection_manager
-                .get_auth_service_to_node(RawQueryClient::new, &uri)
-                .await
-        } else {
-            connection_manager
-                .get_auth_service(RawQueryClient::new)
-                .await
-        };
+        let client_result = connection_manager
+            .get_auth_service_to_node(RawQueryClient::new, lease.node_uri())
+            .await;
         let rollback_ok = match client_result {
             Ok(mut client) => client
-                .rollback_transaction(&session_id, &tx_id)
+                .rollback_transaction(lease.session_id(), &tx_id)
                 .await
                 .is_ok(),
             Err(_) => false,
@@ -687,7 +665,6 @@ pub(crate) fn transaction_exec_context(
         tx_mode: options.mode(),
         begin: options.begin(),
         pooled_lease: None,
-        query_node: None,
         tx_id: None,
         state: TxState::Active,
         hooks: Vec::new(),
