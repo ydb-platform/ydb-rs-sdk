@@ -68,10 +68,13 @@ pub(crate) struct Reconnector {
 
 impl Reconnector {
     pub(crate) async fn new(params: ReconnectorParams) -> YdbResult<Self> {
+        let inflight_limits = params.writer_options.inflight_limits()?;
         let queue = Queue::new_with_status_validator(
             params.status_validator,
             params.writer_options.auto_seq_no,
-        );
+            inflight_limits.messages,
+            inflight_limits.bytes,
+        )?;
         let cancellation_token = params.cancellation_token;
 
         let (init_tx, init_rx) = oneshot::channel();
@@ -341,6 +344,7 @@ impl ReconnectionLoop {
 
         if let Some(final_error) = final_result {
             self.update_status(ReconnectorStatus::FinishedWithError(final_error.clone()));
+            self.helper.queue.close_for_new_messages().await;
             self.helper
                 .queue
                 .notify_reception_tickets(final_error.clone())

@@ -42,6 +42,10 @@ impl StreamWriter {
         tx_identity: Option<TransactionIdentity>,
     ) -> YdbResult<Self> {
         let cancellation_token = CancellationToken::new();
+        // The chunk size is also the flush threshold, so it must not exceed inflight capacity.
+        let message_chunk_size = writer_options
+            .write_request_messages_chunk_size
+            .clamp(1, writer_options.max_inflight_messages);
 
         // Both loops share the same oneshot error channel.
         let shared_error_tx = Arc::new(Mutex::new(Some(error_tx)));
@@ -69,7 +73,7 @@ impl StreamWriter {
             cancellation_token.clone(),
             shared_error_tx.clone(),
             queue.clone(),
-            writer_options.write_request_messages_chunk_size,
+            message_chunk_size,
             writer_options.write_request_send_messages_period,
             batch_tx,
         ));
