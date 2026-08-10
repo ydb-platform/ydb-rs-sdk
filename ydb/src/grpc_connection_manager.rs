@@ -87,4 +87,8 @@ impl<BalancerT, ConnectionT: Connection> GrpcConnectionManagerGeneric<BalancerT,
     pub(crate) fn database(&self) -> &String {
         &self.database
     }
+
+    pub(crate) fn max_message_size(&self) -> usize {
+        self.opts.max_message_size
+    }
 }

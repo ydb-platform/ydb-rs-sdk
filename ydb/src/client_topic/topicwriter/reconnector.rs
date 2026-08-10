@@ -18,6 +18,7 @@ use crate::client_topic::topicwriter::message_write_status::{
 };
 use crate::client_topic::topicwriter::queue::Queue;
 use crate::client_topic::topicwriter::stream_writer::StreamWriter;
+use crate::client_topic::topicwriter::write_request::WriteRequestSettings;
 use crate::client_topic::topicwriter::writer_options::{TopicWriterOptions, WriterFlowControl};
 use crate::errors::NeedRetry;
 use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -69,6 +70,10 @@ pub(crate) struct Reconnector {
 impl Reconnector {
     pub(crate) async fn new(params: ReconnectorParams) -> YdbResult<Self> {
         let flow_control = WriterFlowControl::try_from(&params.writer_options)?;
+        let write_request_settings = WriteRequestSettings::new(
+            params.tx_identity,
+            params.connection_manager.max_message_size(),
+        )?;
         let queue = Queue::new_with_status_validator(
             params.status_validator,
             params.writer_options.auto_seq_no,
@@ -88,7 +93,7 @@ impl Reconnector {
                 producer_id: params.producer_id,
                 queue: queue.clone(),
                 executor: params.executor,
-                tx_identity: params.tx_identity,
+                write_request_settings,
             },
             params.fatal_error_tx,
             init_tx,
@@ -194,7 +199,7 @@ struct ReconnectionHelper {
     cancellation_token: CancellationToken,
     producer_id: String,
     executor: Arc<dyn Executor>,
-    tx_identity: Option<TransactionIdentity>,
+    write_request_settings: WriteRequestSettings,
 }
 
 struct RecreateStreamWriterResult {
@@ -221,7 +226,7 @@ impl ReconnectionHelper {
                 error_sender,
                 server_codecs,
                 self.executor.clone(),
-                self.tx_identity.clone(),
+                self.write_request_settings.clone(),
             )
             .await?,
             connection_info: init_response,
