@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinSet;
@@ -36,19 +35,15 @@ impl StreamWriter {
             stream_write_message::FromServer,
         >,
         queue: Queue,
-        error_tx: oneshot::Sender<YdbError>,
+        error_sender: oneshot::Sender<YdbError>,
         server_codecs: Vec<Codec>,
         executor: Arc<dyn Executor>,
         tx_identity: Option<TransactionIdentity>,
     ) -> YdbResult<Self> {
         let cancellation_token = CancellationToken::new();
-        // The chunk size is also the flush threshold, so it must not exceed inflight capacity.
-        let message_chunk_size = writer_options
-            .write_request_messages_chunk_size
-            .clamp(1, writer_options.max_inflight_messages);
 
         // Both loops share the same oneshot error channel.
-        let shared_error_tx = Arc::new(Mutex::new(Some(error_tx)));
+        let shared_error_tx = Arc::new(Mutex::new(Some(error_sender)));
 
         let mut codec_registry = CodecRegistry::new();
         for enc in &writer_options.extra_encoders {
@@ -73,8 +68,6 @@ impl StreamWriter {
             cancellation_token.clone(),
             shared_error_tx.clone(),
             queue.clone(),
-            message_chunk_size,
-            writer_options.write_request_send_messages_period,
             batch_tx,
         ));
 
@@ -105,14 +98,12 @@ impl StreamWriter {
         cancellation_token: CancellationToken,
         error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
         queue: Queue,
-        chunk_size: usize,
-        period: Duration,
         batch_tx: mpsc::UnboundedSender<Vec<MessageData>>,
     ) {
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => { return; }
-                messages = queue.get_messages_to_send(chunk_size, period) => {
+                messages = queue.get_messages_to_send() => {
                     if messages.is_empty() {
                         continue;
                     }

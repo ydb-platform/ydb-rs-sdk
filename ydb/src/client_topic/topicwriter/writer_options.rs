@@ -3,17 +3,67 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::YdbError;
 use crate::client_topic::compression::{CodecSelection, CompressionEncoder};
 use crate::client_topic::topicwriter::partitioning::PartitioningStrategy;
 use crate::retry_settings::RetrySettings;
-use crate::{YdbError, YdbResult};
 
 pub(crate) const DEFAULT_MAX_INFLIGHT_MESSAGES: usize = 1000;
 pub(crate) const DEFAULT_MAX_INFLIGHT_BYTES: usize = 20 * 1024 * 1024;
+pub(crate) const DEFAULT_AUTO_FLUSH_MESSAGES: usize = 1000;
+pub(crate) const DEFAULT_AUTO_FLUSH_BYTES: usize = 20 * 1024 * 1024;
 
+#[derive(Clone, Copy)]
 pub(crate) struct InflightLimits {
-    pub(crate) messages: NonZeroUsize,
-    pub(crate) bytes: NonZeroUsize,
+    messages: NonZeroUsize,
+    bytes: NonZeroUsize,
+}
+
+impl InflightLimits {
+    pub(crate) fn messages(self) -> NonZeroUsize {
+        self.messages
+    }
+
+    pub(crate) fn bytes(self) -> NonZeroUsize {
+        self.bytes
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct AutoFlushSettings {
+    messages: NonZeroUsize,
+    bytes: NonZeroUsize,
+    interval: Duration,
+}
+
+impl AutoFlushSettings {
+    pub(crate) fn messages(self) -> usize {
+        self.messages.get()
+    }
+
+    pub(crate) fn bytes(self) -> usize {
+        self.bytes.get()
+    }
+
+    pub(crate) fn interval(self) -> Duration {
+        self.interval
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct WriterFlowControl {
+    inflight: InflightLimits,
+    auto_flush: AutoFlushSettings,
+}
+
+impl WriterFlowControl {
+    pub(crate) fn inflight(self) -> InflightLimits {
+        self.inflight
+    }
+
+    pub(crate) fn auto_flush(self) -> AutoFlushSettings {
+        self.auto_flush
+    }
 }
 
 #[derive(bon::Builder, Clone)]
@@ -38,11 +88,18 @@ pub struct TopicWriterOptions {
     #[builder(default)]
     pub(crate) codec_selector: CodecSelection,
 
-    // internal write-loop tuning
-    #[builder(default = 1000)]
-    pub(crate) write_request_messages_chunk_size: usize,
+    // automatic flushing
+    /// Number of buffered messages that triggers an automatic flush. Must be greater than zero
+    /// and must not exceed `max_inflight_messages`. The default is **1,000**.
+    #[builder(default = DEFAULT_AUTO_FLUSH_MESSAGES)]
+    pub(crate) auto_flush_messages: usize,
+    /// Total payload size of buffered messages that triggers an automatic flush. Must be greater
+    /// than zero and must not exceed `max_inflight_bytes`. The default is **20 MiB**.
+    #[builder(default = DEFAULT_AUTO_FLUSH_BYTES)]
+    pub(crate) auto_flush_bytes: usize,
+    /// Maximum interval before a partial batch is flushed automatically. The default is **1 ms**.
     #[builder(default = Duration::from_millis(1))]
-    pub(crate) write_request_send_messages_period: Duration,
+    pub(crate) auto_flush_interval: Duration,
     #[builder(default = Duration::from_secs(3))]
     pub(crate) flush_timeout: Duration,
 
@@ -70,14 +127,43 @@ impl<S: topic_writer_options_builder::State> TopicWriterOptionsBuilder<S> {
     }
 }
 
-impl TopicWriterOptions {
-    pub(crate) fn inflight_limits(&self) -> YdbResult<InflightLimits> {
-        let messages = NonZeroUsize::new(self.max_inflight_messages)
-            .ok_or_else(|| YdbError::custom("max_inflight_messages must be greater than zero"))?;
-        let bytes = NonZeroUsize::new(self.max_inflight_bytes)
-            .ok_or_else(|| YdbError::custom("max_inflight_bytes must be greater than zero"))?;
+impl TryFrom<&TopicWriterOptions> for WriterFlowControl {
+    type Error = YdbError;
 
-        Ok(InflightLimits { messages, bytes })
+    fn try_from(options: &TopicWriterOptions) -> Result<Self, Self::Error> {
+        let inflight_messages = NonZeroUsize::new(options.max_inflight_messages)
+            .ok_or_else(|| YdbError::custom("max_inflight_messages must be greater than zero"))?;
+        let inflight_bytes = NonZeroUsize::new(options.max_inflight_bytes)
+            .ok_or_else(|| YdbError::custom("max_inflight_bytes must be greater than zero"))?;
+        let auto_flush_messages = NonZeroUsize::new(options.auto_flush_messages)
+            .ok_or_else(|| YdbError::custom("auto_flush_messages must be greater than zero"))?;
+        let auto_flush_bytes = NonZeroUsize::new(options.auto_flush_bytes)
+            .ok_or_else(|| YdbError::custom("auto_flush_bytes must be greater than zero"))?;
+
+        if auto_flush_messages > inflight_messages {
+            return Err(YdbError::custom(format!(
+                "auto_flush_messages must not exceed max_inflight_messages: auto_flush_messages={}, max_inflight_messages={}",
+                auto_flush_messages, inflight_messages,
+            )));
+        }
+        if auto_flush_bytes > inflight_bytes {
+            return Err(YdbError::custom(format!(
+                "auto_flush_bytes must not exceed max_inflight_bytes: auto_flush_bytes={}, max_inflight_bytes={}",
+                auto_flush_bytes, inflight_bytes,
+            )));
+        }
+
+        Ok(Self {
+            inflight: InflightLimits {
+                messages: inflight_messages,
+                bytes: inflight_bytes,
+            },
+            auto_flush: AutoFlushSettings {
+                messages: auto_flush_messages,
+                bytes: auto_flush_bytes,
+                interval: options.auto_flush_interval,
+            },
+        })
     }
 }
 
@@ -92,8 +178,11 @@ mod tests {
             .max_inflight_messages(0)
             .build();
 
-        let err = options.inflight_limits().err().unwrap();
-        assert!(err.to_string().contains("max_inflight_messages"));
+        assert!(matches!(
+            WriterFlowControl::try_from(&options),
+            Err(YdbError::Custom(message))
+                if message == "max_inflight_messages must be greater than zero"
+        ));
     }
 
     #[test]
@@ -103,7 +192,68 @@ mod tests {
             .max_inflight_bytes(0)
             .build();
 
-        let err = options.inflight_limits().err().unwrap();
-        assert!(err.to_string().contains("max_inflight_bytes"));
+        assert!(matches!(
+            WriterFlowControl::try_from(&options),
+            Err(YdbError::Custom(message))
+                if message == "max_inflight_bytes must be greater than zero"
+        ));
+    }
+
+    #[test]
+    fn rejects_zero_auto_flush_messages() {
+        let options = TopicWriterOptions::builder()
+            .topic_path("topic")
+            .auto_flush_messages(0)
+            .build();
+
+        assert!(matches!(
+            WriterFlowControl::try_from(&options),
+            Err(YdbError::Custom(message))
+                if message == "auto_flush_messages must be greater than zero"
+        ));
+    }
+
+    #[test]
+    fn rejects_zero_auto_flush_bytes() {
+        let options = TopicWriterOptions::builder()
+            .topic_path("topic")
+            .auto_flush_bytes(0)
+            .build();
+
+        assert!(matches!(
+            WriterFlowControl::try_from(&options),
+            Err(YdbError::Custom(message))
+                if message == "auto_flush_bytes must be greater than zero"
+        ));
+    }
+
+    #[test]
+    fn rejects_auto_flush_messages_above_inflight_limit() {
+        let options = TopicWriterOptions::builder()
+            .topic_path("topic")
+            .auto_flush_messages(11)
+            .max_inflight_messages(10)
+            .build();
+
+        assert!(matches!(
+            WriterFlowControl::try_from(&options),
+            Err(YdbError::Custom(message))
+                if message == "auto_flush_messages must not exceed max_inflight_messages: auto_flush_messages=11, max_inflight_messages=10"
+        ));
+    }
+
+    #[test]
+    fn rejects_auto_flush_bytes_above_inflight_limit() {
+        let options = TopicWriterOptions::builder()
+            .topic_path("topic")
+            .auto_flush_bytes(11)
+            .max_inflight_bytes(10)
+            .build();
+
+        assert!(matches!(
+            WriterFlowControl::try_from(&options),
+            Err(YdbError::Custom(message))
+                if message == "auto_flush_bytes must not exceed max_inflight_bytes: auto_flush_bytes=11, max_inflight_bytes=10"
+        ));
     }
 }

@@ -18,7 +18,7 @@ use crate::client_topic::topicwriter::message_write_status::{
 };
 use crate::client_topic::topicwriter::queue::Queue;
 use crate::client_topic::topicwriter::stream_writer::StreamWriter;
-use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
+use crate::client_topic::topicwriter::writer_options::{TopicWriterOptions, WriterFlowControl};
 use crate::errors::NeedRetry;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
@@ -68,12 +68,11 @@ pub(crate) struct Reconnector {
 
 impl Reconnector {
     pub(crate) async fn new(params: ReconnectorParams) -> YdbResult<Self> {
-        let inflight_limits = params.writer_options.inflight_limits()?;
+        let flow_control = WriterFlowControl::try_from(&params.writer_options)?;
         let queue = Queue::new_with_status_validator(
             params.status_validator,
             params.writer_options.auto_seq_no,
-            inflight_limits.messages,
-            inflight_limits.bytes,
+            flow_control,
         )?;
         let cancellation_token = params.cancellation_token;
 
