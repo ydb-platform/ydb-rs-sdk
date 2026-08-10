@@ -1,11 +1,9 @@
 use std::ops::ControlFlow;
 use std::sync::Arc;
-use std::time::Duration;
 
 use futures_util::FutureExt;
 use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, trace};
 use ydb_grpc::ydb_proto::topic::stream_write_message;
@@ -36,7 +34,6 @@ pub(crate) struct ReconnectorParams {
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) retry_settings: RetrySettings,
     pub(crate) fatal_error_tx: oneshot::Sender<YdbError>,
-    pub(crate) flush_timeout: Duration,
     pub(crate) executor: Arc<dyn Executor>,
     pub(crate) tx_identity: Option<TransactionIdentity>,
     pub(crate) status_validator: MessageWriteStatusValidator,
@@ -63,7 +60,6 @@ pub(crate) struct Reconnector {
     cancellation_token: CancellationToken,
     reconnect_loop: JoinHandle<()>,
     queue: Queue,
-    flush_timeout: Duration,
     status_rx: watch::Receiver<ReconnectorStatus>,
 }
 
@@ -117,7 +113,6 @@ impl Reconnector {
             cancellation_token: cancellation_token.clone(),
             reconnect_loop,
             queue,
-            flush_timeout: params.flush_timeout,
             status_rx,
         })
     }
@@ -146,10 +141,7 @@ impl Reconnector {
 
     pub(crate) async fn flush(&self) -> YdbResult<()> {
         self.check_working()?;
-        match timeout(self.flush_timeout, self.queue.flush()).await {
-            Ok(result) => result,
-            Err(_) => Err(YdbError::custom("flush: timed out")),
-        }
+        self.queue.flush().await
     }
 
     pub(crate) async fn stop(self) -> YdbResult<()> {

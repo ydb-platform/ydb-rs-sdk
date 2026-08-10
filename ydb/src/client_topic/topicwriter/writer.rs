@@ -99,7 +99,6 @@ impl TopicWriter {
             cancellation_token: cancellation_token.clone(),
             retry_settings: retrier,
             fatal_error_tx,
-            flush_timeout: writer_options.flush_timeout,
             executor,
             tx_identity,
             status_validator,

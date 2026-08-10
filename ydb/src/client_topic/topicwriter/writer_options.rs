@@ -96,8 +96,6 @@ pub struct TopicWriterOptions {
     /// Maximum interval before a partial batch is flushed automatically. The default is **1 ms**.
     #[builder(default = Duration::from_millis(1))]
     pub(crate) auto_flush_interval: Duration,
-    #[builder(default = Duration::from_secs(3))]
-    pub(crate) flush_timeout: Duration,
 
     // write buffer limits
     /// Maximum number of messages accepted by the writer but not yet acknowledged by the
