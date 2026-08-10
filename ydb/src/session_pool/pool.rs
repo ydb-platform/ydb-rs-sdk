@@ -233,11 +233,6 @@ impl SessionPoolLease {
     pub(crate) fn invalidate(&mut self) {
         self.record.session.invalidate();
     }
-    /// Consume this lease without returning its session to the pool. Dropping the owned session
-    /// schedules cleanup.
-    pub(crate) fn discard(self) {
-        drop(self);
-    }
 }
 
 #[derive(Clone)]

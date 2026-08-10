@@ -10,8 +10,7 @@ use crate::types::Value;
 
 use super::exec::{
     CallOptions, ClientExecContext, apply_stream_tx_id, client_begin_stream_once,
-    resolve_commit_tx, transaction_finish_committed_via_query,
-    transaction_mark_invalidated_on_query_error,
+    resolve_commit_tx, transaction_finish_committed_via_query, transaction_handle_query_error,
 };
 use super::internal::ExecCoreRef;
 
@@ -54,7 +53,7 @@ impl QueryStream<'_> {
             Err(err) => {
                 let ydb_err = YdbError::from(err);
                 if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-                    transaction_mark_invalidated_on_query_error(ctx, &ydb_err);
+                    transaction_handle_query_error(ctx, &ydb_err);
                 }
                 return Err(ydb_err);
             }
@@ -91,7 +90,7 @@ impl QueryStream<'_> {
             Err(err) => {
                 let ydb_err = YdbError::from(err);
                 if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-                    transaction_mark_invalidated_on_query_error(ctx, &ydb_err);
+                    transaction_handle_query_error(ctx, &ydb_err);
                 }
                 Err(ydb_err)
             }
@@ -157,7 +156,7 @@ async fn materialize_transaction_once(
             Ok(sets) => sets,
             Err(ydb_err) => {
                 if let ExecCoreRef::Transaction(ctx) = core {
-                    transaction_mark_invalidated_on_query_error(ctx, &ydb_err);
+                    transaction_handle_query_error(ctx, &ydb_err);
                 }
                 return Err(ydb_err);
             }
@@ -177,7 +176,7 @@ async fn materialize_transaction_once(
             Err(err) => {
                 let ydb_err = YdbError::from(err);
                 if let ExecCoreRef::Transaction(ctx) = core {
-                    transaction_mark_invalidated_on_query_error(ctx, &ydb_err);
+                    transaction_handle_query_error(ctx, &ydb_err);
                 }
                 return Err(ydb_err);
             }

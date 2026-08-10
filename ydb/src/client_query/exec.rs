@@ -411,21 +411,21 @@ pub(crate) async fn transaction_identity(
 }
 
 #[instrument(name = "ydb.Query.ReleaseTxSession", skip_all, fields(db.system.name = "ydb"))]
-fn release_tx_session(tx: &mut TransactionExecContext) {
+pub(super) fn release_tx_session(tx: &mut TransactionExecContext) {
     if let Some(lease) = tx.pooled_lease.take() {
         lease.return_to_pool();
     }
     tx.query_node = None;
 }
 
-fn release_tx_session_handling_error(tx: &mut TransactionExecContext, err: Option<&YdbError>) {
-    if let Some(err) = err
-        && let Some(lease) = &mut tx.pooled_lease
-        && err.requires_session_discard()
-    {
-        lease.invalidate();
-    }
-    release_tx_session(tx);
+#[instrument(name = "ydb.Query.ReleaseTxSession", skip_all, fields(db.system.name = "ydb"))]
+fn finish_tx_session<T>(tx: &mut TransactionExecContext, result: YdbResult<T>) -> YdbResult<T> {
+    let result = match tx.pooled_lease.take() {
+        Some(lease) => lease.finish(result),
+        None => result,
+    };
+    tx.query_node = None;
+    result
 }
 
 #[instrument(name = "ydb.ExecuteQuery", skip_all, fields(db.system.name = "ydb", ydb.Query.text = %ensure_len_string(&yql_text), ydb.Query.params = ?parameters, ydb.Query.opts = ?opts))]
@@ -496,11 +496,13 @@ async fn transaction_before_commit(tx: &mut TransactionExecContext) -> YdbResult
     Ok(())
 }
 
-/// Server ended the transaction after a definitive operation error on a query.
-pub(crate) fn transaction_mark_invalidated_on_query_error(
-    tx: &mut TransactionExecContext,
-    err: &YdbError,
-) {
+/// Apply a query error to the retained session and transaction state.
+pub(crate) fn transaction_handle_query_error(tx: &mut TransactionExecContext, err: &YdbError) {
+    if err.requires_session_discard()
+        && let Some(lease) = &mut tx.pooled_lease
+    {
+        lease.invalidate();
+    }
     if tx.state.is_active() && err.invalidates_server_transaction() {
         tx.state = TxState::Invalidated(err.clone());
         tx.tx_id = None;
@@ -553,12 +555,7 @@ pub(crate) async fn transaction_begin_stream(
         })
         .await;
     if let Err(err) = &result {
-        transaction_mark_invalidated_on_query_error(tx, err);
-        if let Some(lease) = &mut tx.pooled_lease
-            && err.requires_session_discard()
-        {
-            lease.invalidate();
-        }
+        transaction_handle_query_error(tx, err);
     }
     result
 }
@@ -592,7 +589,7 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
                 .map_err(Into::into)
         })
         .await;
-    release_tx_session_handling_error(tx, result.as_ref().err());
+    let result = finish_tx_session(tx, result);
     tx.state = match &result {
         Ok(()) => TxState::Committed,
         Err(err) => TxState::Ambiguous(err.clone()),
@@ -632,20 +629,18 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
     } else {
         tx.tx_id = None;
     }
-    release_tx_session_handling_error(tx, rollback_err.as_ref());
-    if let Some(err) = rollback_err {
-        tx.state = TxState::Ambiguous(err.clone());
-        Err(err)
-    } else {
-        tx.state = TxState::RolledBack;
-        Ok(())
-    }
+    let result = finish_tx_session(tx, rollback_err.map_or(Ok(()), Err));
+    tx.state = match &result {
+        Ok(()) => TxState::RolledBack,
+        Err(err) => TxState::Ambiguous(err.clone()),
+    };
+    result
 }
 
 /// Best-effort rollback when [`super::Transaction`] is dropped without `commit`/`rollback`.
 pub(crate) fn spawn_query_tx_rollback_on_drop(ctx: &mut TransactionExecContext) {
     let tx_id = ctx.tx_id.take().filter(|id| !id.is_empty());
-    let Some(mut lease) = ctx.pooled_lease.take() else {
+    let Some(lease) = ctx.pooled_lease.take() else {
         ctx.query_node = None;
         return;
     };
@@ -674,10 +669,9 @@ pub(crate) fn spawn_query_tx_rollback_on_drop(ctx: &mut TransactionExecContext) 
                 .is_ok(),
             Err(_) => false,
         };
-        if !rollback_ok {
-            lease.invalidate();
+        if rollback_ok {
+            lease.return_to_pool();
         }
-        lease.return_to_pool();
     });
 }
 
@@ -773,7 +767,7 @@ mod unit_tests {
             None,
         );
         ctx.tx_id = Some("tx-1".into());
-        transaction_mark_invalidated_on_query_error(
+        transaction_handle_query_error(
             &mut ctx,
             &YdbError::YdbStatusError(crate::errors::YdbStatusError {
                 message: "bad".into(),

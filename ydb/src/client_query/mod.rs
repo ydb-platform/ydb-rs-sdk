@@ -46,8 +46,9 @@ use crate::retry_settings::{RetrySettings, RetryState};
 use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{
-    ClientExecContext, TransactionExecContext, spawn_query_tx_rollback_on_drop, transaction_commit,
-    transaction_ensure_begin, transaction_exec_context, transaction_identity, transaction_rollback,
+    ClientExecContext, TransactionExecContext, release_tx_session, spawn_query_tx_rollback_on_drop,
+    transaction_commit, transaction_ensure_begin, transaction_exec_context, transaction_identity,
+    transaction_rollback,
 };
 use hooks::{QueryTxCommitStatus, QueryTxHook};
 
@@ -473,17 +474,8 @@ pub(crate) struct QueryTxIdentity {
 
 impl Drop for Transaction {
     fn drop(&mut self) {
-        if let TxState::Invalidated(err) = &self.ctx.state {
-            let discard = err.requires_session_discard();
-            let lease = self.ctx.pooled_lease.take();
-            self.ctx.query_node = None;
-            if let Some(lease) = lease {
-                if discard {
-                    lease.discard();
-                } else {
-                    lease.return_to_pool();
-                }
-            }
+        if matches!(self.ctx.state, TxState::Invalidated(_)) {
+            release_tx_session(&mut self.ctx);
             return;
         }
         if !self.ctx.state.is_active() {
@@ -581,7 +573,7 @@ mod unit_tests {
             None,
         );
         tx.ctx.pooled_lease = Some(lease);
-        exec::transaction_mark_invalidated_on_query_error(
+        exec::transaction_handle_query_error(
             &mut tx.ctx,
             &YdbError::YdbStatusError(YdbStatusError {
                 message: "transaction failed".to_string(),
