@@ -146,8 +146,19 @@ async fn delete_session(
 
 #[cfg(test)]
 pub(super) fn start_noop_session_cleanup_worker() -> SessionCleanup {
+    start_test_session_cleanup_worker(|_| async {})
+}
+
+#[cfg(test)]
+pub(super) fn start_test_session_cleanup_worker<Delete, DeleteFuture>(
+    delete: Delete,
+) -> SessionCleanup
+where
+    Delete: Fn(Arc<SessionIdentity>) -> DeleteFuture + Send + 'static,
+    DeleteFuture: Future<Output = ()> + Send + 'static,
+{
     let (sender, receiver) = mpsc::unbounded_channel();
-    tokio::spawn(run_cleanup_worker(receiver, |_| async {}));
+    tokio::spawn(run_cleanup_worker(receiver, delete));
     SessionCleanup { sender }
 }
 

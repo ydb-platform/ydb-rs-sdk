@@ -658,12 +658,20 @@ fn session_should_close(
 impl SessionPool {
     /// Explicit pool backed by in-memory stub sessions (no CreateSession / Attach / Delete RPC).
     pub(crate) fn new_explicit_bench(settings: SessionPoolSettings) -> Self {
+        use crate::session_pool::cleanup_worker::start_noop_session_cleanup_worker;
+
+        Self::new_explicit_bench_with_cleanup(settings, start_noop_session_cleanup_worker())
+    }
+
+    fn new_explicit_bench_with_cleanup(
+        settings: SessionPoolSettings,
+        cleanup: SessionCleanup,
+    ) -> Self {
         use crate::GrpcOptions;
         use crate::discovery::StaticDiscovery;
         use crate::grpc_connection_manager::GrpcConnectionManager;
         use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
         use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-        use crate::session_pool::cleanup_worker::start_noop_session_cleanup_worker;
 
         let settings = normalize_pool_settings(settings);
         let warm_up = settings.warm_up;
@@ -681,7 +689,6 @@ impl SessionPool {
             StaticDiscovery::new_from_str("grpc://127.0.0.1:2136")
                 .expect("static bench discovery must be valid"),
         );
-        let cleanup = start_noop_session_cleanup_worker();
         let inner = Arc::new_cyclic(|weak| SessionPoolInner {
             settings: settings.clone(),
             acquire_timeout_ms: AtomicU64::new(0),
@@ -744,6 +751,9 @@ mod unit_tests {
     use std::task::Poll;
 
     use futures_util::poll;
+    use tokio::sync::mpsc;
+
+    use crate::session_pool::cleanup_worker::start_test_session_cleanup_worker;
 
     use super::*;
 
@@ -814,6 +824,49 @@ mod unit_tests {
 
         assert_eq!(observer.stats().idle, 0);
         assert!(observer.acquire_explicit().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_idle_and_dropped_lease_cleanup() {
+        let (deleted_sender, mut deleted_receiver) = mpsc::unbounded_channel();
+        let cleanup = start_test_session_cleanup_worker(move |identity| {
+            let deleted_sender = deleted_sender.clone();
+            async move {
+                deleted_sender
+                    .send(identity.session_id.clone())
+                    .expect("delete observer must remain open");
+            }
+        });
+        let pool = SessionPool::new_explicit_bench_with_cleanup(
+            SessionPoolSettings::new().with_limit(2).with_warm_up(2),
+            cleanup,
+        );
+        let lease = pool
+            .acquire_explicit()
+            .await
+            .expect("bench lease must be available");
+        let leased_session_id = lease.session_id().to_string();
+        assert_eq!(pool.stats().idle, 1);
+
+        let mut shutdown = Box::pin(pool.shutdown());
+        assert!(matches!(poll!(shutdown.as_mut()), Poll::Pending));
+
+        drop(lease);
+        shutdown.await.expect("pool shutdown must succeed");
+
+        let mut deleted = Vec::with_capacity(2);
+        for _ in 0..2 {
+            deleted.push(
+                deleted_receiver
+                    .try_recv()
+                    .expect("shutdown must finish both session deletions"),
+            );
+        }
+        assert!(deleted_receiver.try_recv().is_err());
+        assert!(deleted.contains(&leased_session_id));
+        deleted.sort();
+        deleted.dedup();
+        assert_eq!(deleted.len(), 2, "each session must be deleted once");
     }
 
     #[tokio::test]
