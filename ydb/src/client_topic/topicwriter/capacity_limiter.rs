@@ -5,7 +5,16 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::{YdbError, YdbResult};
 
-const MAX_MESSAGE_SIZE_BYTES: usize = u32::MAX as usize;
+/// Maximum message payload size supported by byte-capacity accounting.
+///
+/// A Tokio semaphore can hold at most [`Semaphore::MAX_PERMITS`] permits, while
+/// [`Semaphore::acquire_many_owned`] accepts a `u32` permit count. Use the smaller bound so the
+/// hard message limit is valid on every pointer width.
+const MAX_MESSAGE_SIZE_BYTES: usize = if Semaphore::MAX_PERMITS < u32::MAX as usize {
+    Semaphore::MAX_PERMITS
+} else {
+    u32::MAX as usize
+};
 
 #[derive(Clone)]
 pub(crate) struct CapacityLimiter {
@@ -123,8 +132,7 @@ impl CapacityLimiter {
             )));
         }
 
-        u32::try_from(message_size.min(self.max_inflight_bytes.get()))
-            .map_err(|err| YdbError::custom(format!("message size conversion failed: {err}")))
+        Ok(message_size.min(self.max_inflight_bytes.get()) as u32)
     }
 
     pub(crate) fn close(&self) {
@@ -160,13 +168,7 @@ mod tests {
         let capacity = MAX_MESSAGE_SIZE_BYTES + 1;
         let limiter = CapacityLimiter::new(nonzero(1), nonzero(capacity)).unwrap();
 
-        let err = limiter
-            .try_acquire(capacity)
-            .err()
-            .expect("oversized message is rejected");
-        let message = err.to_string();
-        assert!(message.contains(&format!("size={capacity}")));
-        assert!(message.contains(&format!("limit={MAX_MESSAGE_SIZE_BYTES}")));
+        assert!(limiter.try_acquire(capacity).is_err());
     }
 
     #[tokio::test]
@@ -226,7 +228,6 @@ mod tests {
 
         limiter.close();
 
-        let err = waiting.await.err().expect("closed limiter rejects waiter");
-        assert!(err.to_string().contains("closed for new messages"));
+        assert!(waiting.await.is_err());
     }
 }

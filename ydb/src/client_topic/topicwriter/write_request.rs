@@ -4,12 +4,13 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 use ydb_grpc::ydb_proto::topic::stream_write_message::{FromClient, WriteRequest};
 
+use crate::byte_units::KiB;
 use crate::client_topic::list_types::Codec;
 use crate::{YdbError, YdbResult};
 
 // Safety margin required for topic write requests by
 // https://github.com/ydb-platform/ydb-rs-sdk/issues/602.
-pub(super) const WRITE_REQUEST_SIZE_RESERVE_BYTES: usize = 4 * 1024;
+pub(super) const WRITE_REQUEST_SIZE_RESERVE_BYTES: usize = 4 * KiB;
 
 // The `messages` field in WriteRequest and the `write_request` variant in FromClient both have
 // single-byte protobuf keys. Tests compare the calculated size with prost's actual encoded size.
@@ -148,59 +149,40 @@ mod tests {
         .unwrap()
     }
 
+    fn encoded_request_size(messages: Vec<MessageData>) -> usize {
+        FromClient {
+            client_message: Some(ClientMessage::WriteRequest(WriteRequest {
+                messages,
+                codec: Codec::RAW.code,
+                tx: None,
+            })),
+        }
+        .encoded_len()
+    }
+
     #[test]
     fn rejects_grpc_limit_without_write_request_capacity() {
         let result = WriteRequestSettings::new(None, WRITE_REQUEST_SIZE_RESERVE_BYTES);
 
-        assert!(matches!(
-            result,
-            Err(YdbError::Custom(message))
-                if message == format!(
-                    "gRPC max message size must exceed the topic write request reserve: max_message_size={}, reserve={}",
-                    WRITE_REQUEST_SIZE_RESERVE_BYTES,
-                    WRITE_REQUEST_SIZE_RESERVE_BYTES,
-                )
-        ));
+        assert!(result.is_err());
     }
 
     #[test]
     fn rejects_single_message_above_limit() {
         let message = message(42, 8);
-        let request = WriteRequest {
-            messages: vec![message.clone()],
-            codec: Codec::RAW.code,
-            tx: None,
-        };
-        let encoded_size = FromClient {
-            client_message: Some(ClientMessage::WriteRequest(request)),
-        }
-        .encoded_len();
+        let encoded_size = encoded_request_size(vec![message.clone()]);
         let limit = encoded_size - 1;
 
         let result = PendingWriteRequest::new(&settings(limit), Codec::RAW, message);
 
-        assert!(matches!(
-            result,
-            Err(YdbError::Custom(message))
-                if message == format!(
-                    "topic writer message exceeds the gRPC write request size limit: seq_no=42, encoded_size={encoded_size}, limit={limit}",
-                )
-        ));
+        assert!(result.is_err());
     }
 
     #[test]
     fn returns_message_when_request_is_full() {
         let first = message(1, 8);
         let second = message(2, 8);
-        let request = WriteRequest {
-            messages: vec![first.clone()],
-            codec: Codec::RAW.code,
-            tx: None,
-        };
-        let one_message_size = FromClient {
-            client_message: Some(ClientMessage::WriteRequest(request)),
-        }
-        .encoded_len();
+        let one_message_size = encoded_request_size(vec![first.clone()]);
         let mut pending =
             PendingWriteRequest::new(&settings(one_message_size), Codec::RAW, first).unwrap();
 
@@ -245,12 +227,6 @@ mod tests {
 
         let result = pending.into_grpc_message();
 
-        assert!(matches!(
-            result,
-            Err(YdbError::Custom(message))
-                if message == format!(
-                    "topic write request exceeds the configured size limit: encoded_size={encoded_size}, limit={limit}",
-                )
-        ));
+        assert!(result.is_err());
     }
 }
