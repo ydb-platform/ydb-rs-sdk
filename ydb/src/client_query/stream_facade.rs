@@ -11,9 +11,8 @@ use crate::types::Value;
 
 use super::exec::{
     CallOptions, ClientExecContext, ClientQuerySession, OpenedClientQueryStream,
-    TransactionExecContext, apply_stream_tx_id, client_begin_stream_once, resolve_commit_tx,
-    transaction_begin_stream, transaction_finish_query, transaction_handle_query_error,
-    transaction_invalidate_session,
+    TransactionExecContext, apply_stream_tx_id, client_begin_stream_once, transaction_begin_stream,
+    transaction_finish_query, transaction_handle_query_error, transaction_invalidate_session,
 };
 use super::internal::ExecCoreRef;
 
@@ -180,7 +179,7 @@ pub(crate) async fn materialize_query(
     params: HashMap<String, Value>,
     opts: CallOptions,
 ) -> YdbResult<Vec<ResultSet>> {
-    let commit_at_end = resolve_commit_tx(core, &opts);
+    let commit_at_end = opts.commit_tx;
     match core {
         ExecCoreRef::Client(ctx) => {
             ctx.retry_settings
