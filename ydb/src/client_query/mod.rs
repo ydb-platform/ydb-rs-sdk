@@ -540,10 +540,11 @@ pub use stream_facade::{QueryStats, QueryStream};
 mod unit_tests {
     use super::*;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use crate::GrpcOptions;
     use crate::errors::YdbStatusError;
+    use crate::grpc_wrapper::raw_query_service::transaction_control::TransactionId;
     use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
     use crate::grpc_wrapper::raw_table_service::value::{RawColumn, RawResultSet, RawValue};
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
@@ -554,6 +555,16 @@ mod unit_tests {
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
     use builders::{exactly_one_set, take_single_row};
+
+    struct AbortCounter(Arc<AtomicUsize>);
+
+    impl QueryTxHook for AbortCounter {
+        fn after_commit(&mut self, status: QueryTxCommitStatus) {
+            if status == QueryTxCommitStatus::Aborted {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
 
     fn int64_set(values: Vec<i64>) -> ResultSet {
         RawResultSet {
@@ -732,6 +743,26 @@ mod unit_tests {
 
         result.expect("session acquisition must be retried before user code runs");
         assert!(callback_called.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn unhealthy_transaction_notifies_abort_hooks_once() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let client = QueryClient::new(test_connection_manager(), pool, RetrySettings::dont_retry());
+        let aborts = Arc::new(AtomicUsize::new(0));
+        let observed_aborts = aborts.clone();
+
+        let result: YdbResultWithCustomerErr<()> = client
+            .retry_tx(closure!([observed_aborts], async |tx: &mut Transaction| {
+                exec::apply_stream_tx_id(&mut tx.ctx, TransactionId::from_server("tx-1".into()));
+                exec::transaction_invalidate_session(&mut tx.ctx);
+                tx.register_hook(AbortCounter(observed_aborts.clone()));
+                Ok(())
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(aborts.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]

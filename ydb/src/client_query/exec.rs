@@ -662,7 +662,10 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
             return Ok(());
         }
         Some(id) => {
-            tx.active()?.lease.ensure_healthy()?;
+            if let Err(err) = tx.active()?.lease.ensure_healthy() {
+                let active = tx.take_active(TxState::Ambiguous(err.clone()))?;
+                return active.lease.finish(Err(err));
+            }
             tx.active_mut()?.server = ServerTransaction::CommitInFlight(id);
         }
     }
@@ -988,6 +991,6 @@ mod unit_tests {
             panic!("expected BadSession, got {err:?}");
         };
         assert_eq!(status.operation_status, StatusCode::BadSession as i32);
-        assert!(ctx.state.is_active());
+        assert!(matches!(ctx.state, TxState::Ambiguous(_)));
     }
 }
