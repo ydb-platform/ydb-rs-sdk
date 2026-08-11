@@ -367,7 +367,7 @@ fn resolve_post_callback_action(state: &TxState) -> PostCallbackAction {
     match state {
         TxState::RolledBack => PostCallbackAction::Return(QueryTxCommitStatus::Aborted),
         TxState::Committed => PostCallbackAction::Return(QueryTxCommitStatus::Committed),
-        TxState::Invalidated { error, .. } => PostCallbackAction::Retry(error.clone()),
+        TxState::Invalidated(error) => PostCallbackAction::Retry(error.clone()),
         TxState::Ambiguous(err) => PostCallbackAction::Fail(err.clone()),
         TxState::Active(_) => PostCallbackAction::Commit,
     }
@@ -496,8 +496,10 @@ impl Drop for Transaction {
             TxState::Active(active) => {
                 finish_query_tx_on_drop(self.ctx.connection_manager.clone(), active);
             }
-            TxState::Invalidated { lease, .. } => lease.return_to_pool(),
-            TxState::Committed | TxState::RolledBack | TxState::Ambiguous(_) => {}
+            TxState::Committed
+            | TxState::RolledBack
+            | TxState::Invalidated(_)
+            | TxState::Ambiguous(_) => {}
         }
     }
 }
@@ -599,7 +601,7 @@ mod unit_tests {
                 issues: Vec::new(),
             }),
         );
-        assert!(matches!(tx.ctx.state, TxState::Invalidated { .. }));
+        assert!(matches!(tx.ctx.state, TxState::Invalidated(_)));
         (tx, session_id)
     }
 
@@ -617,14 +619,9 @@ mod unit_tests {
         assert!(take_single_row(int64_set(vec![1, 2])).is_err());
     }
 
-    #[tokio::test]
-    async fn invalidated_state_fails_instead_of_committing() {
-        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
-        let lease = pool.acquire_explicit().await.expect("acquire test session");
-        let state = TxState::Invalidated {
-            error: YdbError::Custom("server aborted".into()),
-            lease,
-        };
+    #[test]
+    fn invalidated_state_fails_instead_of_committing() {
+        let state = TxState::Invalidated(YdbError::Custom("server aborted".into()));
         assert!(matches!(
             resolve_post_callback_action(&state),
             PostCallbackAction::Retry(_)
@@ -712,11 +709,9 @@ mod unit_tests {
     }
 
     #[tokio::test]
-    async fn invalidated_transaction_returns_healthy_session_on_drop() {
+    async fn invalidated_transaction_immediately_returns_healthy_session() {
         let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
-        let (tx, session_id) = invalidated_transaction(&pool, StatusCode::Aborted).await;
-
-        drop(tx);
+        let (_tx, session_id) = invalidated_transaction(&pool, StatusCode::Aborted).await;
 
         let lease = pool
             .acquire_explicit()
@@ -727,11 +722,9 @@ mod unit_tests {
     }
 
     #[tokio::test]
-    async fn invalidated_transaction_discards_broken_session_on_drop() {
+    async fn invalidated_transaction_immediately_discards_broken_session() {
         let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
-        let (tx, session_id) = invalidated_transaction(&pool, StatusCode::BadSession).await;
-
-        drop(tx);
+        let (_tx, session_id) = invalidated_transaction(&pool, StatusCode::BadSession).await;
 
         let lease = pool
             .acquire_explicit()

@@ -23,23 +23,37 @@ use crate::session_pool::{SessionPool, SessionPoolLease, spawn_pool_release};
 
 use super::hooks::QueryTxHook;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct CallOptions {
     pub timeout: Option<Duration>,
-    pub idempotent: bool,
+    pub idempotency: Idempotency,
     pub collect_stats: bool,
-    /// Override Query Service `commit_tx`. `None` uses context default.
-    pub commit_tx: Option<bool>,
-    /// Per-call isolation override. `None` → [`TxMode::Implicit`] on client,
-    /// [`TransactionExecContext::tx_mode`] in interactive transactions.
-    pub tx_mode: Option<TxMode>,
+    pub commit_tx: bool,
+    /// Explicit per-call transaction mode. `None` uses the surrounding context default.
+    pub tx_mode_override: Option<TxMode>,
     /// One-shot [`QueryClient`] only: send `ExecuteQuery` with an empty `session_id`.
     pub implicit_session: bool,
 }
 
 impl CallOptions {
-    pub(super) fn idempotency(&self) -> Idempotency {
-        self.idempotent.into()
+    pub(super) fn for_transaction() -> Self {
+        Self {
+            commit_tx: false,
+            ..Self::default()
+        }
+    }
+}
+
+impl Default for CallOptions {
+    fn default() -> Self {
+        Self {
+            timeout: None,
+            idempotency: Idempotency::NonIdempotent,
+            collect_stats: false,
+            commit_tx: true,
+            tx_mode_override: None,
+            implicit_session: false,
+        }
     }
 }
 
@@ -77,11 +91,7 @@ pub(crate) enum TxState {
     /// Rollback path was chosen and the SDK must not report a commit.
     RolledBack,
     /// The server ended the transaction after a definitive status on a query.
-    Invalidated {
-        error: YdbError,
-        /// Retained until the attempt observes this state; pool policy decides whether to reuse it.
-        lease: SessionPoolLease,
-    },
+    Invalidated(YdbError),
     /// A commit or rollback RPC returned an error, so the local end attempt was not confirmed.
     Ambiguous(YdbError),
 }
@@ -250,7 +260,7 @@ fn reject_per_call_tx_mode_override(
     tx: &TransactionExecContext,
     opts: &CallOptions,
 ) -> YdbResult<()> {
-    if let Some(override_mode) = opts.tx_mode
+    if let Some(override_mode) = opts.tx_mode_override
         && override_mode != tx.tx_mode
     {
         return Err(YdbError::Custom(format!(
@@ -261,19 +271,10 @@ fn reject_per_call_tx_mode_override(
     Ok(())
 }
 
-fn client_tx_mode(opts: &CallOptions) -> TxMode {
-    opts.tx_mode.unwrap_or(TxMode::Implicit)
-}
-
 fn interactive_tx_mode(tx: &TransactionExecContext, opts: &CallOptions) -> YdbResult<TxMode> {
     reject_per_call_tx_mode_override(tx, opts)?;
-    ensure_interactive_tx_mode(opts.tx_mode.unwrap_or(tx.tx_mode))?;
+    ensure_interactive_tx_mode(tx.tx_mode)?;
     Ok(tx.tx_mode)
-}
-
-fn default_commit_tx_client(_mode: TxMode) -> bool {
-    // All one-shot modes auto-commit today; revisit if a future mode should not.
-    true
 }
 
 /// Build `tx_control` for an interactive transaction.
@@ -289,16 +290,15 @@ fn tx_control_for_transaction(
     tx: &TransactionExecContext,
     opts: &CallOptions,
 ) -> YdbResult<Option<ydb_grpc::ydb_proto::query::TransactionControl>> {
-    let commit_tx = opts.commit_tx.unwrap_or(false);
     Ok(Some(match &tx.active()?.server {
         ServerTransaction::Started(id) => {
             interactive_tx_mode(tx, opts)?;
-            tx_id_control(id, commit_tx)
+            tx_id_control(id, opts.commit_tx)
         }
         ServerTransaction::NotStarted => {
             reject_per_call_tx_mode_override(tx, opts)?;
             ensure_interactive_tx_mode(tx.tx_mode)?;
-            begin_tx_control(tx_mode_to_raw(tx.tx_mode)?, commit_tx)
+            begin_tx_control(tx_mode_to_raw(tx.tx_mode)?, opts.commit_tx)
         }
         ServerTransaction::BeginInFlight
         | ServerTransaction::CommitInFlight(_)
@@ -310,30 +310,20 @@ fn tx_control_for_transaction(
     }))
 }
 
-pub(crate) fn resolve_commit_tx(core: &super::internal::ExecCoreRef, opts: &CallOptions) -> bool {
-    if let Some(v) = opts.commit_tx {
-        return v;
-    }
-    match core {
-        super::internal::ExecCoreRef::Client(_) => default_commit_tx_client(client_tx_mode(opts)),
-        super::internal::ExecCoreRef::Transaction(_) => false,
-    }
-}
-
 /// Build `tx_control` for one-shot [`QueryClient`] calls.
 ///
 /// Default [`TxMode::Implicit`] omits `tx_control` (server-side inference).
 fn tx_control_for_client(
     opts: &CallOptions,
 ) -> YdbResult<Option<ydb_grpc::ydb_proto::query::TransactionControl>> {
-    let mode = client_tx_mode(opts);
-    if mode == TxMode::Implicit {
+    let tx_mode = opts.tx_mode_override.unwrap_or(TxMode::Implicit);
+    if tx_mode == TxMode::Implicit {
         return Ok(None);
     }
-    let commit_tx = opts
-        .commit_tx
-        .unwrap_or_else(|| default_commit_tx_client(mode));
-    Ok(Some(begin_tx_control(tx_mode_to_raw(mode)?, commit_tx)))
+    Ok(Some(begin_tx_control(
+        tx_mode_to_raw(tx_mode)?,
+        opts.commit_tx,
+    )))
 }
 
 async fn client_implicit_session_request(
@@ -429,7 +419,7 @@ pub(crate) async fn client_begin_stream(
         .clone()
         .with_deadline(opts.timeout)
         .retry_on_retriable_errors(
-            opts.idempotency(),
+            opts.idempotency,
             closure!([&ctx, &text, &params, &opts], |_| client_begin_stream_once(
                 ctx,
                 text,
@@ -561,20 +551,20 @@ async fn transaction_before_commit(tx: &mut TransactionExecContext) -> YdbResult
 
 /// Apply a query error to the retained session and transaction state.
 pub(crate) fn transaction_handle_query_error(tx: &mut TransactionExecContext, err: &YdbError) {
-    if let TxState::Active(active) = &mut tx.state
+    if err.invalidates_server_transaction() && tx.state.is_active() {
+        let previous = std::mem::replace(&mut tx.state, TxState::Invalidated(err.clone()));
+        let TxState::Active(mut active) = previous else {
+            tx.state = previous;
+            return;
+        };
+        if err.requires_session_discard() {
+            active.lease.invalidate();
+        }
+        active.lease.return_to_pool();
+    } else if let TxState::Active(active) = &mut tx.state
         && err.requires_session_discard()
     {
         active.lease.invalidate();
-    }
-    if tx.state.is_active() && err.invalidates_server_transaction() {
-        let previous = std::mem::replace(&mut tx.state, TxState::Ambiguous(err.clone()));
-        tx.state = match previous {
-            TxState::Active(active) => TxState::Invalidated {
-                error: err.clone(),
-                lease: active.lease,
-            },
-            state => state,
-        };
     }
 }
 
@@ -605,7 +595,7 @@ pub(crate) async fn transaction_begin_stream(
             if tx.begin {
                 transaction_ensure_begin(tx).await?;
             }
-            if opts.commit_tx.unwrap_or(false) {
+            if opts.commit_tx {
                 transaction_before_commit(tx).await?;
             }
             let (mut client, req) =

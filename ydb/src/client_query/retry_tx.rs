@@ -10,7 +10,7 @@ use crate::TxMode;
 use crate::async_closure::AsyncFnMut;
 use crate::async_closure::DynAsyncFnMut;
 use crate::async_closure::with_lifetime::MutWithLifetime;
-use crate::errors::YdbResultWithCustomerErr;
+use crate::errors::{Idempotency, YdbResultWithCustomerErr};
 
 use super::QueryClient;
 
@@ -20,7 +20,7 @@ pub struct RetryTxBuilder<'a, F, T> {
     callback: F,
     options: TransactionOptions,
     timeout: Option<Duration>,
-    idempotent: bool,
+    idempotency: Idempotency,
     _phantom: PhantomData<fn() -> T>,
 }
 
@@ -50,7 +50,7 @@ impl<'a, F, T> RetryTxBuilder<'a, F, T> {
             callback,
             options: TransactionOptions::default(),
             timeout: None,
-            idempotent: false,
+            idempotency: Idempotency::NonIdempotent,
             _phantom: PhantomData,
         }
     }
@@ -74,7 +74,7 @@ impl<'a, F, T> RetryTxBuilder<'a, F, T> {
 
     /// Also retry errors that require idempotency (see [`crate::CallBuilder::idempotent`]).
     pub fn idempotent(mut self, idempotent: bool) -> Self {
-        self.idempotent = idempotent;
+        self.idempotency = idempotent.into();
         self
     }
 
@@ -99,7 +99,7 @@ where
             self.callback,
             self.options,
             self.timeout,
-            self.idempotent.into(),
+            self.idempotency,
         ))
     }
 }

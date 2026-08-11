@@ -10,7 +10,7 @@ use crate::types::Value;
 
 use super::FromYdbRow;
 use super::exec::{
-    CallOptions, ClientExecContext, TransactionExecContext, client_begin_stream, resolve_commit_tx,
+    CallOptions, ClientExecContext, TransactionExecContext, client_begin_stream,
     transaction_begin_stream,
 };
 use super::internal::ExecCoreRef;
@@ -70,7 +70,7 @@ impl<'a, K> CallBuilder<'a, K, Interactive> {
             core: ExecCoreRef::Transaction(ctx),
             text,
             params: HashMap::new(),
-            opts: CallOptions::default(),
+            opts: CallOptions::for_transaction(),
             _kind: PhantomData,
             _scope: PhantomData,
         }
@@ -120,7 +120,7 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
     /// `RESOURCE_EXHAUSTED`) are retried. Has no effect inside an interactive
     /// transaction — use [`QueryClient::retry_tx`] `.idempotent(true)` instead.
     pub fn idempotent(mut self, idempotent: bool) -> Self {
-        self.opts.idempotent = idempotent;
+        self.opts.idempotency = idempotent.into();
         self
     }
 
@@ -139,7 +139,7 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
     /// fully drain the stream or call [`QueryStream::close`] — dropping the stream early cancels
     /// the gRPC call and does not commit.
     pub fn with_commit(mut self, commit: bool) -> Self {
-        self.opts.commit_tx = Some(commit);
+        self.opts.commit_tx = commit;
         self
     }
 
@@ -152,7 +152,7 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
     /// [`TxMode::Implicit`] inside [`Transaction`] returns a runtime error — DDL and
     /// other non-transactional statements must run on [`QueryClient`], not inside a transaction.
     pub fn with_tx_mode(mut self, mode: TxMode) -> Self {
-        self.opts.tx_mode = Some(mode);
+        self.opts.tx_mode_override = Some(mode);
         self
     }
 
@@ -256,7 +256,7 @@ impl<'a, S> IntoFuture for CallBuilder<'a, Streamed, S> {
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let commit_at_end = resolve_commit_tx(&self.core, &self.opts);
+            let commit_at_end = self.opts.commit_tx;
             match self.core {
                 ExecCoreRef::Client(context) => {
                     let opened =
