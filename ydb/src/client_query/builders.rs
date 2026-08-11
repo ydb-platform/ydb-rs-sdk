@@ -121,7 +121,7 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
     /// `RESOURCE_EXHAUSTED`) are retried. Has no effect inside an interactive
     /// transaction — use [`QueryClient::retry_tx`] `.idempotent(true)` instead.
     pub fn idempotent(mut self, idempotent: bool) -> Self {
-        self.opts.idempotent = idempotent;
+        self.opts.idempotency = idempotent.into();
         self
     }
 

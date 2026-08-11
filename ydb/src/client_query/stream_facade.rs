@@ -186,7 +186,7 @@ pub(crate) async fn materialize_query(
                 .clone()
                 .with_deadline(opts.timeout)
                 .retry_on_retriable_errors(
-                    opts.idempotency(),
+                    opts.idempotency,
                     closure!([&ctx, &text, &params, &opts], |_| {
                         materialize_client_once(ctx, text, params, opts)
                     }),

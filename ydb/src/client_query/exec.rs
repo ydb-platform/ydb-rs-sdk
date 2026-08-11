@@ -26,7 +26,7 @@ use super::hooks::QueryTxHook;
 #[derive(Clone, Debug)]
 pub(crate) struct CallOptions {
     pub timeout: Option<Duration>,
-    pub idempotent: bool,
+    pub idempotency: Idempotency,
     pub collect_stats: bool,
     pub commit_tx: bool,
     pub tx_mode: TxMode,
@@ -42,17 +42,13 @@ impl CallOptions {
             ..Self::default()
         }
     }
-
-    pub(super) fn idempotency(&self) -> Idempotency {
-        self.idempotent.into()
-    }
 }
 
 impl Default for CallOptions {
     fn default() -> Self {
         Self {
             timeout: None,
-            idempotent: false,
+            idempotency: Idempotency::NonIdempotent,
             collect_stats: false,
             commit_tx: true,
             tx_mode: TxMode::Implicit,
@@ -420,7 +416,7 @@ pub(crate) async fn client_begin_stream(
         .clone()
         .with_deadline(opts.timeout)
         .retry_on_retriable_errors(
-            opts.idempotency(),
+            opts.idempotency,
             closure!([&ctx, &text, &params, &opts], |_| client_begin_stream_once(
                 ctx,
                 text,
