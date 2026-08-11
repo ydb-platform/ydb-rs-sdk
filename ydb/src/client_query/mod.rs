@@ -289,7 +289,8 @@ impl QueryClient {
                     let lease = match client.ctx.session_pool.acquire_explicit().await {
                         Ok(lease) => lease,
                         Err(err) => {
-                            return YdbOrCustomerError::from(err).retry_flow(idempotency);
+                            return YdbOrCustomerError::from(err)
+                                .retry_flow(Idempotency::Idempotent);
                         }
                     };
                     let tx = Transaction::new(
@@ -706,6 +707,31 @@ mod unit_tests {
 
         assert!(result.is_err());
         assert!(!callback_called.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn retry_transaction_retries_session_acquisition_before_user_code() {
+        let pool = SessionPool::new_explicit_bench_with_create_failures(
+            SessionPoolSettings::new().with_limit(1),
+            1,
+        );
+        let client = QueryClient::new(
+            test_connection_manager(),
+            pool,
+            RetrySettings::with_default_backoff().with_deadline(Duration::from_secs(1)),
+        );
+        let callback_called = Arc::new(AtomicBool::new(false));
+        let observed_called = callback_called.clone();
+
+        let result: YdbResultWithCustomerErr<()> = client
+            .retry_tx(closure!([observed_called], async |_tx| {
+                observed_called.store(true, Ordering::Relaxed);
+                Ok(())
+            }))
+            .await;
+
+        result.expect("session acquisition must be retried before user code runs");
+        assert!(callback_called.load(Ordering::Relaxed));
     }
 
     #[tokio::test]

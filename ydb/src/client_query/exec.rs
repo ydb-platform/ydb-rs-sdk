@@ -662,6 +662,7 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
             return Ok(());
         }
         Some(id) => {
+            tx.active()?.lease.ensure_healthy()?;
             tx.active_mut()?.server = ServerTransaction::CommitInFlight(id);
         }
     }
@@ -948,5 +949,45 @@ mod unit_tests {
             .expect("acquire replacement session");
         assert_ne!(replacement.session_id(), session_id);
         replacement.return_to_pool();
+    }
+
+    #[tokio::test]
+    async fn transaction_commit_rejects_an_unhealthy_session() {
+        use crate::client_query::TransactionOptions;
+        use crate::grpc_connection_manager::GrpcConnectionManager;
+        use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+        use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+        use crate::session_pool::{SessionPool, SessionPoolSettings};
+        use http::Uri;
+        use ydb_grpc::ydb_proto::status_ids::StatusCode;
+
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let mut lease = pool.acquire_explicit().await.expect("acquire test session");
+        lease.invalidate();
+        let mut ctx = transaction_exec_context(
+            GrpcConnectionManager::new(
+                SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
+                    Uri::from_static("http://127.0.0.1/bench"),
+                ))),
+                "bench".to_string(),
+                MultiInterceptor::new(),
+                GrpcOptions::default(),
+            ),
+            lease,
+            TransactionOptions::default(),
+            None,
+        );
+        ctx.active_mut().expect("active transaction").server = ServerTransaction::Started(
+            TransactionId::from_server("tx-1".into()).expect("non-empty transaction id"),
+        );
+
+        let err = transaction_commit(&mut ctx)
+            .await
+            .expect_err("an unhealthy session must not be committed");
+        let YdbError::YdbStatusError(status) = err else {
+            panic!("expected BadSession, got {err:?}");
+        };
+        assert_eq!(status.operation_status, StatusCode::BadSession as i32);
+        assert!(ctx.state.is_active());
     }
 }
