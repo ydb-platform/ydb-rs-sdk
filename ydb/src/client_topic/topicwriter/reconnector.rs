@@ -1,11 +1,9 @@
 use std::ops::ControlFlow;
 use std::sync::Arc;
-use std::time::Duration;
 
 use futures_util::FutureExt;
-use tokio::sync::{Mutex, oneshot, watch};
+use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, trace};
 use ydb_grpc::ydb_proto::topic::stream_write_message;
@@ -18,7 +16,8 @@ use crate::client_topic::topicwriter::message_write_status::{
 };
 use crate::client_topic::topicwriter::queue::Queue;
 use crate::client_topic::topicwriter::stream_writer::StreamWriter;
-use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
+use crate::client_topic::topicwriter::write_request::WriteRequestSettings;
+use crate::client_topic::topicwriter::writer_options::{TopicWriterOptions, WriterFlowControl};
 use crate::errors::NeedRetry;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
@@ -35,7 +34,6 @@ pub(crate) struct ReconnectorParams {
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) retry_settings: RetrySettings,
     pub(crate) fatal_error_tx: oneshot::Sender<YdbError>,
-    pub(crate) flush_timeout: Duration,
     pub(crate) executor: Arc<dyn Executor>,
     pub(crate) tx_identity: Option<TransactionIdentity>,
     pub(crate) status_validator: MessageWriteStatusValidator,
@@ -58,25 +56,26 @@ impl ReconnectorStatus {
     }
 }
 
-struct ReconnectorState {
-    connection_info: ConnectionInfo,
-}
-
 pub(crate) struct Reconnector {
-    state: Arc<Mutex<ReconnectorState>>,
     cancellation_token: CancellationToken,
     reconnect_loop: JoinHandle<()>,
     queue: Queue,
-    auto_seq_no: bool,
-    flush_timeout: Duration,
     status_rx: watch::Receiver<ReconnectorStatus>,
 }
 
 impl Reconnector {
     pub(crate) async fn new(params: ReconnectorParams) -> YdbResult<Self> {
-        let queue = Queue::new_with_status_validator(params.status_validator);
+        let flow_control = WriterFlowControl::try_from(&params.writer_options)?;
+        let write_request_settings = WriteRequestSettings::new(
+            params.tx_identity,
+            params.connection_manager.max_message_size(),
+        )?;
+        let queue = Queue::new_with_status_validator(
+            params.status_validator,
+            params.writer_options.auto_seq_no,
+            flow_control,
+        )?;
         let cancellation_token = params.cancellation_token;
-        let auto_seq_no = params.writer_options.auto_seq_no;
 
         let (init_tx, init_rx) = oneshot::channel();
         let (status_tx, status_rx) = watch::channel(ReconnectorStatus::Working);
@@ -90,7 +89,7 @@ impl Reconnector {
                 producer_id: params.producer_id,
                 queue: queue.clone(),
                 executor: params.executor,
-                tx_identity: params.tx_identity,
+                write_request_settings,
             },
             params.fatal_error_tx,
             init_tx,
@@ -106,14 +105,14 @@ impl Reconnector {
                 return Err(YdbError::from(err));
             }
         };
+        queue
+            .initialize_last_seq_no(connection_info.last_seq_no_assigned)
+            .await?;
 
         Ok(Reconnector {
-            state: Arc::new(Mutex::new(ReconnectorState { connection_info })),
             cancellation_token: cancellation_token.clone(),
             reconnect_loop,
             queue,
-            auto_seq_no,
-            flush_timeout: params.flush_timeout,
             status_rx,
         })
     }
@@ -133,46 +132,16 @@ impl Reconnector {
 
     pub(crate) async fn add_message(
         &self,
-        mut message: TopicWriterMessage,
+        message: TopicWriterMessage,
         ack_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     ) -> YdbResult<()> {
         self.check_working()?;
-
-        // Here we take a lock across the whole function.
-        // Updating last_seq_no_assigned and putting a new message to the queue must be transactional.
-        //
-        // Example of a race condition that we prevent here (two threads):
-        // 1. Thread1: last_seq_no_assigned = 1
-        // 2. Thread2: last_seq_no_assigned = 2
-        // 3. Thread2: add message<seq_no=2> to queue
-        // 4. Thread1: add message<seq_no=1> to queue <--- ERROR: Message seq_no order is violated.
-        let mut state_guard = self.state.lock().await;
-
-        if self.auto_seq_no {
-            if message.seq_no.is_some() {
-                return Err(YdbError::custom(
-                    "explicitly specifying message.seq_no is only allowed if auto_seq_no is disabled",
-                ));
-            }
-            let last_seq_no_assigned = state_guard.connection_info.last_seq_no_assigned;
-            message.seq_no = Some(last_seq_no_assigned + 1);
-        }
-
-        let Some(message_seq_no) = message.seq_no else {
-            return Err(YdbError::custom("empty message seq_no is provided"));
-        };
-        state_guard.connection_info.last_seq_no_assigned = message_seq_no;
-
-        let message = message.try_into()?;
         self.queue.add_message(message, ack_sender).await
     }
 
     pub(crate) async fn flush(&self) -> YdbResult<()> {
         self.check_working()?;
-        match timeout(self.flush_timeout, self.queue.flush()).await {
-            Ok(result) => result,
-            Err(_) => Err(YdbError::custom("flush: timed out")),
-        }
+        self.queue.flush().await
     }
 
     pub(crate) async fn stop(self) -> YdbResult<()> {
@@ -222,7 +191,7 @@ struct ReconnectionHelper {
     cancellation_token: CancellationToken,
     producer_id: String,
     executor: Arc<dyn Executor>,
-    tx_identity: Option<TransactionIdentity>,
+    write_request_settings: WriteRequestSettings,
 }
 
 struct RecreateStreamWriterResult {
@@ -249,7 +218,7 @@ impl ReconnectionHelper {
                 error_sender,
                 server_codecs,
                 self.executor.clone(),
-                self.tx_identity.clone(),
+                self.write_request_settings.clone(),
             )
             .await?,
             connection_info: init_response,
@@ -371,6 +340,7 @@ impl ReconnectionLoop {
 
         if let Some(final_error) = final_result {
             self.update_status(ReconnectorStatus::FinishedWithError(final_error.clone()));
+            self.helper.queue.close_for_new_messages().await;
             self.helper
                 .queue
                 .notify_reception_tickets(final_error.clone())

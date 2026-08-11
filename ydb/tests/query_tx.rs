@@ -27,7 +27,7 @@ use ydb_grpc::ydb_proto::query::{
 };
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
-use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply};
+use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, ReplySink};
 use crate::mock_server::query::{QUERY_TX_ID, QueryIncoming, QueryReply};
 use crate::mock_server::server::MockServer;
 
@@ -80,27 +80,6 @@ struct TxLifecycle {
 }
 
 type SharedTxLifecycle = Arc<Mutex<TxLifecycle>>;
-
-#[derive(Default)]
-struct ReplySink {
-    tx: Mutex<Option<FromHandlerToService>>,
-}
-
-impl ReplySink {
-    fn set_channel(&self, tx: FromHandlerToService) {
-        *self.tx.lock().unwrap() = Some(tx);
-    }
-
-    fn send(&self, reply: QueryReply) {
-        self.tx
-            .lock()
-            .unwrap()
-            .as_ref()
-            .expect("mock query reply channel must be set before replies are sent")
-            .send(Reply::Query(reply))
-            .expect("mock server failed to send query reply");
-    }
-}
 
 /// Every `ExecuteQuery` succeeds (handing back `QUERY_TX_ID`); `CommitTransaction` and
 /// `RollbackTransaction` are counted and then passed through to the mock's default handler,

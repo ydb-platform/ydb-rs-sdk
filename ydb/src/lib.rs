@@ -41,6 +41,7 @@
 
 extern crate core;
 
+mod byte_units;
 pub(crate) mod client;
 mod client_builder;
 pub(crate) mod client_common;
@@ -153,7 +154,9 @@ pub use client_topic::topicwriter::message::{TopicWriterMessage, TopicWriterMess
 // full enum pub types
 pub use client_topic::topicwriter::partitioning::PartitioningStrategy;
 // full enum pub types
-pub use client_topic::compression::{CompressionDecoder, CompressionEncoder, Executor};
+pub use client_topic::compression::{
+    CodecSelection, CompressionDecoder, CompressionEncoder, Executor,
+};
 pub use client_topic::topicwriter::writer::TopicWriter;
 pub use client_topic::topicwriter::writer_options::{
     TopicWriterOptions, TopicWriterOptionsBuilder,
@@ -177,10 +180,11 @@ pub use grpc_options::{GrpcOptions, HasGrpcOptions};
 // full enum pub types
 pub use client_query::{
     CallBuilder, ClientOneShot, ExecBuilder, ExecCall, ExecuteScriptBuilder,
-    ExecuteScriptOperation, FetchScriptResult, FetchScriptResultsBuilder, FromYdbRow, Interactive,
-    OneResultSet, OneRow, OptionalRow, OptionalRowBuilder, QueryClient, QueryExecutor,
-    QueryRowBuilder, QueryStats, QueryStream, QueryStreamBuilder, ResultSetBuilder, RetryTxAttempt,
-    RetryTxBuilder, Streamed, Transaction, TransactionOptions, TxMode,
+    ExecuteScriptOperation, ExplainQueryBuilder, ExplainResult, FetchScriptResult,
+    FetchScriptResultsBuilder, FromYdbRow, Interactive, OneResultSet, OneRow, OptionalRow,
+    OptionalRowBuilder, QueryClient, QueryExecutor, QueryRowBuilder, QueryStats, QueryStream,
+    QueryStreamBuilder, ResultSetBuilder, RetryTxAttempt, RetryTxBuilder, Streamed, Transaction,
+    TransactionOptions, TxMode,
 };
 
 // full enum pub types

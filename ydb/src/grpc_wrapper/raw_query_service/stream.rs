@@ -5,7 +5,8 @@ use tracing::warn;
 
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_query_service::execute_query::{
-    append_rows_from_part, check_part, stats_from_part, tx_id_from_part,
+    RawQueryStatsPlan, append_rows_from_part, check_part, plan_from_part, stats_from_part,
+    tx_id_from_part,
 };
 use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
 use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
@@ -52,6 +53,7 @@ pub(crate) struct ExecuteQueryStream {
     captured_tx_id: Option<String>,
     finished: bool,
     stats: Option<Duration>,
+    plan: Option<RawQueryStatsPlan>,
     // Dropped last (after `grpc`) so the pooled lease outlives the stream.
     // `Drop` also calls `cancel()` before field destructors run.
     session_guard: SessionStreamGuard,
@@ -74,6 +76,7 @@ impl ExecuteQueryStream {
             captured_tx_id: None,
             finished: false,
             stats: None,
+            plan: None,
             session_guard: SessionStreamGuard(None),
             #[cfg(test)]
             test_parts: None,
@@ -90,6 +93,7 @@ impl ExecuteQueryStream {
             captured_tx_id: None,
             finished: false,
             stats: None,
+            plan: None,
             session_guard: SessionStreamGuard(None),
             test_parts: Some(parts),
         }
@@ -108,9 +112,20 @@ impl ExecuteQueryStream {
         self.stats
     }
 
+    /// Query plan and AST from `exec_stats`, whichever the server filled in.
+    ///
+    /// In practice only `EXPLAIN` responses carry them: `collect_stats` sends `STATS_MODE_BASIC`,
+    /// which reports neither. See [`RawQueryStatsPlan`] for the full matrix.
+    pub(crate) fn take_query_plan(&mut self) -> Option<RawQueryStatsPlan> {
+        self.plan.take()
+    }
+
     fn absorb_part_metadata(&mut self, part: &ExecuteQueryResponsePart) -> Option<String> {
         if let Some(duration) = stats_from_part(part) {
             self.stats = Some(duration);
+        }
+        if let Some(plan) = plan_from_part(part) {
+            self.plan = Some(plan);
         }
         if let Some(id) = tx_id_from_part(part) {
             self.captured_tx_id = Some(id.clone());
