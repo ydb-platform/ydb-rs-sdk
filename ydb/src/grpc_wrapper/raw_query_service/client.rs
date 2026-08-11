@@ -12,7 +12,7 @@ use crate::grpc_wrapper::raw_query_service::fetch_script_results::{
 };
 use crate::grpc_wrapper::raw_query_service::status::check_status;
 use crate::grpc_wrapper::raw_query_service::transaction_control::{
-    RawTxMode, tx_settings_for_mode,
+    RawTxMode, TransactionId, tx_settings_for_mode,
 };
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
@@ -137,7 +137,7 @@ impl RawQueryClient {
         &mut self,
         session_id: &str,
         mode: RawTxMode,
-    ) -> RawResult<String> {
+    ) -> RawResult<TransactionId> {
         let response = self
             .service
             .begin_transaction(BeginTransactionRequest {
@@ -150,7 +150,7 @@ impl RawQueryClient {
         inner
             .tx_meta
             .map(|meta| meta.id)
-            .filter(|id| !id.is_empty())
+            .and_then(TransactionId::from_server)
             .ok_or_else(|| RawError::custom("BeginTransaction response missing tx_meta.id"))
     }
 
