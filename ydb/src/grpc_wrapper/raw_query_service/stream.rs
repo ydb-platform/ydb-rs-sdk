@@ -8,12 +8,13 @@ use crate::grpc_wrapper::raw_query_service::execute_query::{
     RawQueryStatsPlan, append_rows_from_part, check_part, plan_from_part, stats_from_part,
     tx_id_from_part,
 };
+use crate::grpc_wrapper::raw_query_service::transaction_control::TransactionId;
 use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
 use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
 
 #[derive(Debug)]
 pub(crate) struct StreamCloseMeta {
-    pub tx_id: Option<String>,
+    pub tx_id: Option<TransactionId>,
 }
 
 enum QueryResponseSource {
@@ -35,7 +36,7 @@ enum QueryResponseState {
 
 #[derive(Default)]
 struct QueryResponseMetadata {
-    tx_id: Option<String>,
+    tx_id: Option<TransactionId>,
     stats: Option<Duration>,
     plan: Option<RawQueryStatsPlan>,
 }
@@ -96,7 +97,7 @@ impl ExecuteQueryStream {
         self.metadata.plan.take()
     }
 
-    fn absorb_part_metadata(&mut self, part: &ExecuteQueryResponsePart) -> Option<String> {
+    fn absorb_part_metadata(&mut self, part: &ExecuteQueryResponsePart) -> Option<TransactionId> {
         if let Some(duration) = stats_from_part(part) {
             self.metadata.stats = Some(duration);
         }
@@ -110,7 +111,7 @@ impl ExecuteQueryStream {
         None
     }
 
-    fn ingest_part(&mut self, part: &ExecuteQueryResponsePart) -> RawResult<Option<String>> {
+    fn ingest_part(&mut self, part: &ExecuteQueryResponsePart) -> RawResult<Option<TransactionId>> {
         let tx_id = self.absorb_part_metadata(part);
         check_part(part)?;
         Ok(tx_id)
@@ -202,7 +203,9 @@ impl ExecuteQueryStream {
         Ok(())
     }
 
-    pub async fn next_result_set(&mut self) -> RawResult<Option<(RawResultSet, Option<String>)>> {
+    pub async fn next_result_set(
+        &mut self,
+    ) -> RawResult<Option<(RawResultSet, Option<TransactionId>)>> {
         if !matches!(self.state, QueryResponseState::Active(_)) {
             return Ok(None);
         }
@@ -271,7 +274,7 @@ impl ExecuteQueryStream {
         }
     }
 
-    pub fn take_captured_tx_id(&mut self) -> Option<String> {
+    pub fn take_captured_tx_id(&mut self) -> Option<TransactionId> {
         self.metadata.tx_id.take()
     }
 
@@ -522,7 +525,10 @@ mod tests {
 
         let metadata = stream.close().await.expect("close stream");
 
-        assert_eq!(metadata.tx_id.as_deref(), Some("tx-1"));
+        assert_eq!(
+            metadata.tx_id.as_ref().map(TransactionId::as_str),
+            Some("tx-1")
+        );
         assert!(matches!(stream.state, QueryResponseState::Exhausted));
     }
 

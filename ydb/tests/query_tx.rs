@@ -81,11 +81,12 @@ struct TxLifecycle {
 
 type SharedTxLifecycle = Arc<Mutex<TxLifecycle>>;
 
-/// Every `ExecuteQuery` succeeds (handing back `QUERY_TX_ID`); `CommitTransaction` and
-/// `RollbackTransaction` are counted and then passed through to the mock's default handler,
-/// which replies success for both. Covers T0 (happy path), T1 (commit-via-query), T4
-/// (explicit rollback succeeds), and T6 (panic, before/after a real terminal event) — the
-/// mock behavior needed is identical across those; only the callback differs.
+/// Every `ExecuteQuery` succeeds. A lazy transaction ID arrives after the first response part;
+/// a query that commits the transaction omits it. `CommitTransaction` and `RollbackTransaction`
+/// are counted and then passed through to the mock's default handler, which replies success for
+/// both. Covers T0 (happy path), T1 (commit-via-query), T4 (explicit rollback succeeds), and T6
+/// (panic, before/after a real terminal event) — the mock behavior needed is identical across
+/// those; only the callback differs.
 #[derive(Default)]
 struct CountingHandler {
     replies: ReplySink,
@@ -119,13 +120,23 @@ impl Handler for CountingHandler {
             _ => {}
         }
 
-        let Incoming::Query(QueryIncoming::ExecuteQuery(_, stream_id)) = incoming else {
+        let Incoming::Query(QueryIncoming::ExecuteQuery(request, stream_id)) = incoming else {
             return Some(incoming);
         };
         self.replies.send(QueryReply::ExecuteQuery {
             stream_id,
-            part: success_part(Some(QUERY_TX_ID)),
+            part: success_part(None),
         });
+        if request
+            .tx_control
+            .as_ref()
+            .is_none_or(|control| !control.commit_tx)
+        {
+            self.replies.send(QueryReply::ExecuteQuery {
+                stream_id,
+                part: success_part(Some(QUERY_TX_ID)),
+            });
+        }
         self.replies
             .send(QueryReply::ExecuteQueryClose { stream_id });
         None

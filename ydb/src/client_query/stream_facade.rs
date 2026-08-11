@@ -11,6 +11,7 @@ use crate::types::Value;
 use super::exec::{
     CallOptions, ClientExecContext, apply_stream_tx_id, client_begin_stream_once,
     resolve_commit_tx, transaction_finish_committed_via_query, transaction_handle_query_error,
+    transaction_invalidate_session,
 };
 use super::internal::ExecCoreRef;
 
@@ -38,10 +39,9 @@ impl Drop for QueryStream<'_> {
         let dropped_mid_stream = self.stream.in_progress();
         self.stream.cancel();
         if let ExecCoreRef::Transaction(ctx) = &mut self.core
-            && let Some(lease) = &mut ctx.pooled_lease
             && dropped_mid_stream
         {
-            lease.invalidate();
+            transaction_invalidate_session(ctx);
         }
     }
 }
@@ -82,7 +82,7 @@ impl QueryStream<'_> {
                 if let ExecCoreRef::Transaction(ctx) = &mut self.core {
                     apply_stream_tx_id(ctx, meta.tx_id);
                     if self.commit_tx {
-                        transaction_finish_committed_via_query(ctx);
+                        transaction_finish_committed_via_query(ctx)?;
                     }
                 }
                 Ok(())
@@ -169,7 +169,7 @@ async fn materialize_transaction_once(
                 if let ExecCoreRef::Transaction(ctx) = core {
                     apply_stream_tx_id(ctx, meta.tx_id);
                     if commit_tx {
-                        transaction_finish_committed_via_query(ctx);
+                        transaction_finish_committed_via_query(ctx)?;
                     }
                 }
             }

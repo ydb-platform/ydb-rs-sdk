@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_query_service::status::check_status;
+use crate::grpc_wrapper::raw_query_service::transaction_control::TransactionId;
 use crate::grpc_wrapper::raw_table_service::value::{
     RawColumn, RawResultSet, RawTypedValue, RawValue,
 };
@@ -102,11 +103,11 @@ pub(crate) fn check_part(part: &ExecuteQueryResponsePart) -> RawResult<()> {
     check_status(part.status, &part.issues)
 }
 
-pub(crate) fn tx_id_from_part(part: &ExecuteQueryResponsePart) -> Option<String> {
+pub(crate) fn tx_id_from_part(part: &ExecuteQueryResponsePart) -> Option<TransactionId> {
     part.tx_meta
         .as_ref()
         .map(|m| m.id.clone())
-        .filter(|id| !id.is_empty())
+        .and_then(TransactionId::from_server)
 }
 
 pub(crate) fn stats_from_part(part: &ExecuteQueryResponsePart) -> Option<Duration> {

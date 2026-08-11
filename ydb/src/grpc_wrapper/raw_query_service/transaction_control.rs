@@ -4,6 +4,19 @@ use ydb_grpc::ydb_proto::query::{
     transaction_settings,
 };
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TransactionId(String);
+
+impl TransactionId {
+    pub(crate) fn from_server(value: String) -> Option<Self> {
+        (!value.is_empty()).then_some(Self(value))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RawTxMode {
     SerializableReadWrite,
@@ -21,10 +34,12 @@ pub(crate) fn begin_tx_control(mode: RawTxMode, commit_tx: bool) -> TransactionC
     }
 }
 
-pub(crate) fn tx_id_control(tx_id: &str, commit_tx: bool) -> TransactionControl {
+pub(crate) fn tx_id_control(tx_id: &TransactionId, commit_tx: bool) -> TransactionControl {
     TransactionControl {
         commit_tx,
-        tx_selector: Some(transaction_control::TxSelector::TxId(tx_id.to_string())),
+        tx_selector: Some(transaction_control::TxSelector::TxId(
+            tx_id.as_str().to_string(),
+        )),
     }
 }
 
