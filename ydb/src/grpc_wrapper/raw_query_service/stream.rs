@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
+use std::pin::Pin;
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
-use tracing::warn;
+use futures_util::{Stream, TryStreamExt};
 
-use crate::grpc_wrapper::raw_errors::RawResult;
+use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::grpc_wrapper::raw_query_service::execute_query::{
-    RawQueryStatsPlan, append_result_set_part, append_rows_from_part, check_part, plan_from_part,
-    stats_from_part, tx_id_from_part,
+    RawQueryStatsPlan, append_result_set_part, check_part, plan_from_part, stats_from_part,
+    tx_id_from_part,
 };
 use crate::grpc_wrapper::raw_query_service::transaction_control::TransactionId;
 use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
@@ -49,13 +51,67 @@ struct PartialResultSet {
 
 pub(crate) struct ExecuteQueryStream {
     state: QueryResponseState,
-    next_index: i64,
     metadata: QueryResponseMetadata,
 }
 
 impl Drop for ExecuteQueryStream {
     fn drop(&mut self) {
         self.cancel();
+    }
+}
+
+impl Stream for ExecuteQueryStream {
+    type Item = RawResult<RawQueryResultPart>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        loop {
+            let received = match &mut this.state {
+                QueryResponseState::Active(active) => {
+                    if let Some(part) = active.pending_part.take() {
+                        Some(Ok(part))
+                    } else {
+                        ready!(Pin::new(&mut active.stream).poll_next(cx))
+                    }
+                }
+                QueryResponseState::Exhausted | QueryResponseState::Cancelled => {
+                    return Poll::Ready(None);
+                }
+            };
+
+            let Some(received) = received else {
+                this.state = QueryResponseState::Exhausted;
+                return Poll::Ready(None);
+            };
+            let part = match received {
+                Ok(part) => part,
+                Err(status) => {
+                    this.state = QueryResponseState::Cancelled;
+                    return Poll::Ready(Some(Err(RawError::from(status))));
+                }
+            };
+
+            if let Err(err) = this.ingest_part(&part) {
+                this.state = QueryResponseState::Cancelled;
+                return Poll::Ready(Some(Err(err)));
+            }
+
+            let result_set_index = part.result_set_index;
+            let Some(result_set) = part.result_set else {
+                continue;
+            };
+            let result_set = match RawResultSet::try_from(result_set) {
+                Ok(result_set) => result_set,
+                Err(err) => {
+                    this.state = QueryResponseState::Cancelled;
+                    return Poll::Ready(Some(Err(err)));
+                }
+            };
+            return Poll::Ready(Some(Ok(RawQueryResultPart {
+                result_set_index,
+                result_set,
+            })));
+        }
     }
 }
 
@@ -66,7 +122,6 @@ impl ExecuteQueryStream {
                 stream,
                 pending_part: None,
             })),
-            next_index: 0,
             metadata: QueryResponseMetadata::default(),
         }
     }
@@ -122,18 +177,7 @@ impl ExecuteQueryStream {
     ///
     /// Status-, statistics-, and transaction-only protocol messages are absorbed internally.
     pub(crate) async fn next_part(&mut self) -> RawResult<Option<RawQueryResultPart>> {
-        while let Some(part) = self.recv_part().await? {
-            self.ingest_part(&part)?;
-            let result_set_index = part.result_set_index;
-            let Some(result_set) = part.result_set else {
-                continue;
-            };
-            return Ok(Some(RawQueryResultPart {
-                result_set_index,
-                result_set: RawResultSet::try_from(result_set)?,
-            }));
-        }
-        Ok(None)
+        self.try_next().await
     }
 
     fn set_pending_part(&mut self, part: ExecuteQueryResponsePart) {
@@ -196,77 +240,6 @@ impl ExecuteQueryStream {
             self.set_pending_part(part);
         }
         Ok(())
-    }
-
-    pub async fn next_result_set(
-        &mut self,
-    ) -> RawResult<Option<(RawResultSet, Option<TransactionId>)>> {
-        if !matches!(self.state, QueryResponseState::Active(_)) {
-            return Ok(None);
-        }
-
-        let mut columns = Vec::new();
-        let mut rows = Vec::new();
-        let mut truncated = false;
-        let mut tx_id = None;
-
-        loop {
-            let target_index = self.next_index;
-            let Some(part) = self.recv_part().await? else {
-                if rows.is_empty() && columns.is_empty() {
-                    return Ok(None);
-                }
-                self.next_index += 1;
-                return Ok(Some((
-                    RawResultSet {
-                        columns,
-                        rows,
-                        truncated,
-                    },
-                    tx_id,
-                )));
-            };
-
-            let tx_id_from_part = self.ingest_part(&part)?;
-            if tx_id_from_part.is_some() {
-                tx_id = tx_id_from_part;
-            }
-
-            if part.result_set_index < target_index {
-                warn!(
-                    got = part.result_set_index,
-                    expected = target_index,
-                    "dropping stream part with stale result_set_index"
-                );
-                continue;
-            }
-
-            if part.result_set_index > target_index {
-                if rows.is_empty() && columns.is_empty() {
-                    if part.result_set_index > self.next_index + 1 {
-                        warn!(
-                            from = self.next_index,
-                            to = part.result_set_index,
-                            "skipping result set indices in stream"
-                        );
-                    }
-                    self.next_index = part.result_set_index;
-                } else {
-                    self.set_pending_part(part);
-                    self.next_index += 1;
-                    return Ok(Some((
-                        RawResultSet {
-                            columns,
-                            rows,
-                            truncated,
-                        },
-                        tx_id,
-                    )));
-                }
-            }
-
-            append_rows_from_part(&mut columns, &mut rows, &mut truncated, part)?;
-        }
     }
 
     pub fn take_captured_tx_id(&mut self) -> Option<TransactionId> {

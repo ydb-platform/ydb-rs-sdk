@@ -1,6 +1,7 @@
 use std::fmt::Write;
 use std::time::{Duration, SystemTime};
 
+use futures_util::TryStreamExt;
 use ydb::{
     Bytes, ExecBuilder, QueryClient, QueryStreamBuilder, TxMode, Value, YdbResult, ydb_struct,
 };
@@ -120,8 +121,8 @@ pub async fn read_series(qc: &mut QueryClient, prefix: &str) -> YdbResult<()> {
 
     let mut stream = idem_query(qc.query(sql).with_tx_mode(TxMode::SnapshotReadOnly)).await?;
 
-    while let Some(result_set) = stream.next_result_set().await? {
-        for mut row in result_set {
+    while let Some(part) = stream.try_next().await? {
+        for mut row in part.into_result_set() {
             let series_id: Option<Bytes> = row.remove_field_by_name("series_id")?.try_into()?;
             let series_bytes: Vec<u8> = series_id.expect("series_id present").into();
             let title: Option<String> = row.remove_field_by_name("title")?.try_into()?;
@@ -135,7 +136,6 @@ pub async fn read_series(qc: &mut QueryClient, prefix: &str) -> YdbResult<()> {
             );
         }
     }
-    stream.close().await?;
     Ok(())
 }
 

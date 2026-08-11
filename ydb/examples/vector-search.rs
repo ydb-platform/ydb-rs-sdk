@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use futures_util::TryStreamExt;
 use ydb::{Bytes, ClientBuilder, ExecBuilder, QueryStreamBuilder, Value, YdbResult, ydb_struct};
 
 const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -168,8 +169,8 @@ async fn search_items_as_bytes(
     .await?;
 
     let mut hits = Vec::new();
-    while let Some(result_set) = stream.next_result_set().await? {
-        for mut row in result_set {
+    while let Some(part) = stream.try_next().await? {
+        for mut row in part.into_result_set() {
             let id: Option<String> = row.remove_field_by_name("id")?.try_into()?;
             let document: Option<String> = row.remove_field_by_name("document")?.try_into()?;
             let score: Option<f32> = row.remove_field_by_name("score")?.try_into()?;
@@ -180,7 +181,6 @@ async fn search_items_as_bytes(
             });
         }
     }
-    stream.close().await?;
     Ok(hits)
 }
 

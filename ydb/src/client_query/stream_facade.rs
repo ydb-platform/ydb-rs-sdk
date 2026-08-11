@@ -1,9 +1,15 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::pin::Pin;
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
+
+use futures_util::stream::FusedStream;
+use futures_util::{Stream, TryStreamExt};
 
 use crate::closure;
 use crate::errors::{YdbError, YdbResult};
-use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
+use crate::grpc_wrapper::raw_query_service::execute_query::append_result_set_part;
+use crate::grpc_wrapper::raw_query_service::stream::{ExecuteQueryStream, RawQueryResultPart};
 use crate::grpc_wrapper::raw_query_service::transaction_control::TransactionId;
 use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
 use crate::result::ResultSet;
@@ -16,11 +22,55 @@ use super::exec::{
 };
 use super::internal::ExecCoreRef;
 
-/// Streaming query result. Reaching EOF returns an owned pooled session for reuse;
-/// [`Self::close`] safely drains any unread response parts first. Dropping before EOF cancels the
-/// stream and discards its session. Inside a transaction, [`CallBuilder::with_commit(true)`]
-/// commits only after EOF is observed by iteration or `close`.
-#[must_use = "QueryStream must be fully consumed or closed"]
+/// One chunk of a logical result set returned by YDB.
+///
+/// A query may produce multiple result sets, and each result set may be split into multiple parts.
+/// Parts are identified by [`Self::result_set_index`] and may be interleaved when concurrent result
+/// sets are enabled.
+#[derive(Debug)]
+pub struct QueryResultPart {
+    result_set_index: i64,
+    result_set: ResultSet,
+}
+
+impl QueryResultPart {
+    /// Zero-based index of the logical result set produced by the query.
+    pub fn result_set_index(&self) -> i64 {
+        self.result_set_index
+    }
+
+    /// Rows and column metadata carried by this response part.
+    pub fn result_set(&self) -> &ResultSet {
+        &self.result_set
+    }
+
+    /// Consume the part and return its rows and column metadata.
+    pub fn into_result_set(self) -> ResultSet {
+        self.result_set
+    }
+
+    fn into_raw(self) -> (i64, RawResultSet) {
+        (self.result_set_index, self.result_set.into_raw())
+    }
+}
+
+impl TryFrom<RawQueryResultPart> for QueryResultPart {
+    type Error = YdbError;
+
+    fn try_from(part: RawQueryResultPart) -> YdbResult<Self> {
+        Ok(Self {
+            result_set_index: part.result_set_index,
+            result_set: ResultSet::try_from(part.result_set)?,
+        })
+    }
+}
+
+/// Streaming query result parts.
+///
+/// Poll the stream until it returns `None` to confirm successful query completion and release its
+/// session. [`Self::finish`] drains unread parts when their rows are not needed. Dropping the
+/// stream earlier cancels the gRPC call and discards or invalidates the session.
+#[must_use = "QueryStream must be fully consumed or finished"]
 pub struct QueryStream<'a> {
     stream: ExecuteQueryStream,
     lifecycle: QueryStreamLifecycle<'a>,
@@ -45,15 +95,55 @@ impl Drop for QueryStream<'_> {
     }
 }
 
+impl Stream for QueryStream<'_> {
+    type Item = YdbResult<QueryResultPart>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let next = ready!(Pin::new(&mut this.stream).poll_next(cx));
+
+        match next {
+            Some(Ok(part)) => {
+                this.apply_captured_transaction_id();
+                match QueryResultPart::try_from(part) {
+                    Ok(part) => Poll::Ready(Some(Ok(part))),
+                    Err(err) => {
+                        this.terminate_with_error(&err);
+                        Poll::Ready(Some(Err(err)))
+                    }
+                }
+            }
+            Some(Err(err)) => {
+                let ydb_err = YdbError::from(err);
+                this.terminate_with_error(&ydb_err);
+                Poll::Ready(Some(Err(ydb_err)))
+            }
+            None => {
+                this.apply_captured_transaction_id();
+                match this.complete() {
+                    Ok(()) => Poll::Ready(None),
+                    Err(err) => Poll::Ready(Some(Err(err))),
+                }
+            }
+        }
+    }
+}
+
+impl FusedStream for QueryStream<'_> {
+    fn is_terminated(&self) -> bool {
+        matches!(self.lifecycle, QueryStreamLifecycle::Finished)
+    }
+}
+
 impl QueryStream<'_> {
     fn cancel_active(&mut self) {
         self.apply_captured_transaction_id();
-        let dropped_mid_stream = self.stream.in_progress();
+        let completion_unconfirmed = self.stream.completion_unconfirmed();
         self.stream.cancel();
         let lifecycle = std::mem::replace(&mut self.lifecycle, QueryStreamLifecycle::Finished);
         if let QueryStreamLifecycle::Active(QueryStreamOwner::Transaction { context, .. }) =
             lifecycle
-            && dropped_mid_stream
+            && completion_unconfirmed
         {
             transaction_invalidate_session(context);
         }
@@ -95,15 +185,18 @@ impl<'a> QueryStream<'a> {
         self.apply_transaction_id(transaction_id);
     }
 
-    fn handle_error(&mut self, error: &YdbError) {
+    fn terminate_with_error(&mut self, error: &YdbError) {
         if let QueryStreamLifecycle::Active(QueryStreamOwner::Transaction { context, .. }) =
             &mut self.lifecycle
         {
             transaction_handle_query_error(context, error);
         }
+        // If the error did not already end the transaction, unconfirmed stream completion makes
+        // its retained session unsafe to reuse.
+        self.cancel_active();
     }
 
-    fn finish(&mut self) -> YdbResult<()> {
+    fn complete(&mut self) -> YdbResult<()> {
         let lifecycle = std::mem::replace(&mut self.lifecycle, QueryStreamLifecycle::Finished);
         match lifecycle {
             QueryStreamLifecycle::Active(QueryStreamOwner::Client(session)) => {
@@ -118,51 +211,18 @@ impl<'a> QueryStream<'a> {
         }
     }
 
-    pub async fn next_result_set(&mut self) -> YdbResult<Option<ResultSet>> {
-        let next = match self.stream.next_result_set().await {
-            Ok(v) => v,
-            Err(err) => {
-                let ydb_err = YdbError::from(err);
-                self.handle_error(&ydb_err);
-                self.cancel_active();
-                return Err(ydb_err);
-            }
-        };
-        match next {
-            Some((raw, transaction_id)) => {
-                self.apply_transaction_id(transaction_id);
-                let result_set = ResultSet::try_from(raw);
-                if !self.stream.in_progress() {
-                    self.finish()?;
-                }
-                result_set.map(Some)
-            }
-            None => {
-                self.apply_captured_transaction_id();
-                self.finish()?;
-                Ok(None)
-            }
-        }
-    }
-
     pub fn stats(&self) -> Option<QueryStats> {
         self.stream
             .stats()
             .map(|total_duration| QueryStats { total_duration })
     }
 
-    pub async fn close(mut self) -> YdbResult<()> {
-        match self.stream.close().await {
-            Ok(meta) => {
-                self.apply_transaction_id(meta.tx_id);
-                self.finish()
-            }
-            Err(err) => {
-                let ydb_err = YdbError::from(err);
-                self.handle_error(&ydb_err);
-                Err(ydb_err)
-            }
-        }
+    /// Drain unread result parts and wait for successful query completion.
+    ///
+    /// This returns a pooled session only after YDB closes the response stream successfully.
+    pub async fn finish(mut self) -> YdbResult<()> {
+        while self.try_next().await?.is_some() {}
+        Ok(())
     }
 }
 
@@ -205,20 +265,8 @@ async fn materialize_client_once(
     params: &HashMap<String, Value>,
     opts: &CallOptions,
 ) -> YdbResult<Vec<ResultSet>> {
-    let mut opened = client_begin_stream_once(ctx, text, params, opts, true).await?;
-    let result: YdbResult<Vec<RawResultSet>> = async {
-        let raw_sets = drain_result_sets(&mut opened.stream).await?;
-        opened.stream.close().await?;
-        Ok(raw_sets)
-    }
-    .await;
-    match result {
-        Ok(raw_sets) => {
-            opened.session.complete();
-            convert_result_sets(raw_sets)
-        }
-        Err(error) => Err(error),
-    }
+    let opened = client_begin_stream_once(ctx, text, params, opts, true).await?;
+    materialize_stream(QueryStream::from_client(opened)).await
 }
 
 async fn materialize_transaction_once(
@@ -228,41 +276,45 @@ async fn materialize_transaction_once(
     opts: CallOptions,
     commit_at_end: bool,
 ) -> YdbResult<Vec<ResultSet>> {
-    let mut stream = transaction_begin_stream(context, text, params, opts, true).await?;
-    let raw_sets = match drain_result_sets(&mut stream).await {
-        Ok(raw_sets) => raw_sets,
-        Err(ydb_err) => {
-            transaction_handle_query_error(context, &ydb_err);
-            return Err(ydb_err);
-        }
-    };
-    match stream.close().await {
-        Ok(meta) => {
-            apply_stream_tx_id(context, meta.tx_id);
-            transaction_finish_query(context, commit_at_end)?;
-        }
-        Err(err) => {
-            let ydb_err = YdbError::from(err);
-            transaction_handle_query_error(context, &ydb_err);
-            return Err(ydb_err);
-        }
-    }
-    convert_result_sets(raw_sets)
+    let stream = transaction_begin_stream(context, text, params, opts, true).await?;
+    materialize_stream(QueryStream::from_transaction(
+        stream,
+        context,
+        commit_at_end,
+    ))
+    .await
 }
 
-async fn drain_result_sets(stream: &mut ExecuteQueryStream) -> YdbResult<Vec<RawResultSet>> {
-    stream
-        .materialize_all_result_sets()
-        .await
-        .map_err(YdbError::from)
+#[derive(Default)]
+struct PartialResultSet {
+    columns: Vec<crate::grpc_wrapper::raw_table_service::value::RawColumn>,
+    rows: Vec<Vec<crate::grpc_wrapper::raw_table_service::value::RawValue>>,
+    truncated: bool,
 }
 
-fn convert_result_sets(raw_sets: Vec<RawResultSet>) -> YdbResult<Vec<ResultSet>> {
-    let mut sets = Vec::with_capacity(raw_sets.len());
-    for raw in raw_sets {
-        sets.push(ResultSet::try_from(raw)?);
+async fn materialize_stream(mut stream: QueryStream<'_>) -> YdbResult<Vec<ResultSet>> {
+    let mut by_index: BTreeMap<i64, PartialResultSet> = BTreeMap::new();
+    while let Some(part) = stream.try_next().await? {
+        let (index, result_set) = part.into_raw();
+        let partial = by_index.entry(index).or_default();
+        append_result_set_part(
+            &mut partial.columns,
+            &mut partial.rows,
+            &mut partial.truncated,
+            result_set,
+        )?;
     }
-    Ok(sets)
+
+    by_index
+        .into_values()
+        .map(|partial| {
+            ResultSet::try_from(RawResultSet {
+                columns: partial.columns,
+                rows: partial.rows,
+                truncated: partial.truncated,
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug, Default)]

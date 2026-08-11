@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 //! Multi-result-set streaming inside `retry_tx` (lazy tx on implicit session).
 
+use futures_util::TryStreamExt;
 use ydb::{ClientBuilder, Transaction, closure};
 
 #[tokio::main]
@@ -27,16 +28,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             //
             // The single-stream-per-transaction invariant comes for free.
 
-            let mut set_count = 0;
-            while let Some(result_set) = stream.next_result_set().await? {
-                for mut row in result_set {
+            let mut result_set_indices = std::collections::BTreeSet::new();
+            while let Some(part) = stream.try_next().await? {
+                result_set_indices.insert(part.result_set_index());
+                for mut row in part.into_result_set() {
                     let _ = row.remove_field_by_name("a");
                 }
-                set_count += 1;
             }
-            stream.close().await?;
 
-            Ok(set_count)
+            Ok(result_set_indices.len())
         }))
         .await?;
 

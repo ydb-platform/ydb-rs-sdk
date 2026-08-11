@@ -4,6 +4,7 @@ use crate::session_pool::SessionPoolSettings;
 use crate::test_integration_helper::{create_client, create_client_with_session_pool};
 use crate::types::Value;
 use crate::{Transaction, closure, ydb_struct};
+use futures_util::TryStreamExt;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 use tracing_test::traced_test;
@@ -97,12 +98,11 @@ async fn query_client_multi_result_set() -> YdbResult<()> {
     let set_count = qc
         .retry_tx(closure!(async |tx: &mut Transaction| {
             let mut stream = tx.query("SELECT 42 AS a; SELECT 1 AS b, 2 AS c;").await?;
-            let mut count = 0usize;
-            while stream.next_result_set().await?.is_some() {
-                count += 1;
+            let mut indices = std::collections::BTreeSet::new();
+            while let Some(part) = stream.try_next().await? {
+                indices.insert(part.result_set_index());
             }
-            stream.close().await?;
-            Ok(count)
+            Ok(indices.len())
         }))
         .timeout(TEST_TIMEOUT)
         .await?;

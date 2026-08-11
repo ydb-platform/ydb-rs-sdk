@@ -4,6 +4,7 @@ mod mock_server;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
+use futures_util::TryStreamExt;
 use ydb::{Client, ClientBuilder, SessionPoolSettings, Value, YdbResult};
 use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
@@ -177,14 +178,16 @@ async fn final_result_set_returns_the_pooled_session() -> YdbResult<()> {
     let mut stream = query.query("SELECT 1").await?;
     assert_eq!(client.session_pool_stats().in_use, 1);
 
-    let result_set = stream
-        .next_result_set()
+    let part = stream
+        .try_next()
         .await?
-        .expect("query must return one result set");
-    assert_eq!(result_values(result_set, "value")?, vec![1]);
+        .expect("query must return one result part");
+    assert_eq!(part.result_set_index(), 0);
+    assert_eq!(result_values(part.into_result_set(), "value")?, vec![1]);
+    assert_eq!(client.session_pool_stats().in_use, 1);
+    assert!(stream.try_next().await?.is_none());
     assert_eq!(client.session_pool_stats().in_use, 0);
     assert_eq!(client.session_pool_stats().idle, 1);
-    assert!(stream.next_result_set().await?.is_none());
     Ok(())
 }
 
@@ -222,8 +225,8 @@ async fn response_status_error_discards_the_pooled_session() -> YdbResult<()> {
     let mut query = client.query_client();
     {
         let mut stream = query.query("SELECT broken").await?;
-        assert!(stream.next_result_set().await.is_err());
-        assert!(stream.next_result_set().await?.is_none());
+        assert!(stream.try_next().await.is_err());
+        assert!(stream.try_next().await?.is_none());
     }
     assert_eq!(client.session_pool_stats().idle, 0);
 
@@ -275,14 +278,14 @@ async fn transport_error_discards_the_pooled_session() -> YdbResult<()> {
     let mut query = client.query_client();
     let mut stream = query.query("SELECT broken").await?;
 
-    assert!(stream.next_result_set().await.is_err());
+    assert!(stream.try_next().await.is_err());
     assert_eq!(client.session_pool_stats().in_use, 0);
     assert_eq!(client.session_pool_stats().idle, 0);
     Ok(())
 }
 
 #[tokio::test]
-async fn streamed_result_sets_preserve_order_and_continuations() -> YdbResult<()> {
+async fn stream_yields_result_parts_without_materializing() -> YdbResult<()> {
     let (client, _server) = make_client([StreamScript::closed(vec![
         result_part(0, Some("first"), &[10]),
         result_part(0, None, &[]),
@@ -293,10 +296,21 @@ async fn streamed_result_sets_preserve_order_and_continuations() -> YdbResult<()
     let mut query = client.query_client();
     let mut stream = query.query("SELECT 1; SELECT 2").await?;
 
-    let first = stream.next_result_set().await?.expect("first result set");
-    let second = stream.next_result_set().await?.expect("second result set");
-    assert_eq!(result_values(first, "first")?, vec![10, 11]);
-    assert_eq!(result_values(second, "second")?, vec![20, 21]);
-    assert!(stream.next_result_set().await?.is_none());
+    let first = stream.try_next().await?.expect("first result part");
+    let continuation = stream.try_next().await?.expect("continuation part");
+    let second = stream.try_next().await?.expect("second result part");
+    assert_eq!(first.result_set_index(), 0);
+    assert_eq!(continuation.result_set_index(), 0);
+    assert_eq!(second.result_set_index(), 1);
+    assert_eq!(result_values(first.into_result_set(), "first")?, vec![10]);
+    assert_eq!(
+        result_values(continuation.into_result_set(), "first")?,
+        vec![11]
+    );
+    assert_eq!(
+        result_values(second.into_result_set(), "second")?,
+        vec![20, 21]
+    );
+    assert!(stream.try_next().await?.is_none());
     Ok(())
 }

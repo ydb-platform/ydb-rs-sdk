@@ -173,18 +173,6 @@ pub(crate) fn append_result_set_part(
     Ok(())
 }
 
-pub(crate) fn append_rows_from_part(
-    columns: &mut Vec<RawColumn>,
-    rows: &mut Vec<Vec<RawValue>>,
-    truncated: &mut bool,
-    part: ExecuteQueryResponsePart,
-) -> RawResult<()> {
-    let Some(proto_set) = part.result_set else {
-        return Ok(());
-    };
-    append_result_set_part(columns, rows, truncated, RawResultSet::try_from(proto_set)?)
-}
-
 fn columns_compatible(existing: &[RawColumn], new_cols: &[RawColumn]) -> bool {
     existing.len() == new_cols.len()
         && existing

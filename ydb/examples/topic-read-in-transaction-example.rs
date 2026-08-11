@@ -105,6 +105,7 @@ Topic Status: test_topic
 
 */
 
+use futures_util::TryStreamExt;
 use std::time::Duration;
 use tokio::time::timeout;
 use ydb::{
@@ -451,8 +452,8 @@ async fn main() -> YdbResult<()> {
                 .await?;
 
             let mut rows = Vec::new();
-            if let Some(result_set) = stream.next_result_set().await? {
-                for mut row in result_set {
+            while let Some(part) = stream.try_next().await? {
+                for mut row in part.into_result_set() {
                     let topic: String = row.remove_field_by_name("topic")?.try_into()?;
                     let partition: i64 = row.remove_field_by_name("partition")?.try_into()?;
                     let offset: i64 = row.remove_field_by_name("offset")?.try_into()?;
@@ -466,8 +467,6 @@ async fn main() -> YdbResult<()> {
                     });
                 }
             }
-            stream.close().await?;
-
             Ok(rows)
         }))
         .await;

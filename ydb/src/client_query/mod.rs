@@ -534,7 +534,7 @@ pub use explain_query::{ExplainQueryBuilder, ExplainResult};
 pub use retry_tx::{RetryTxAttempt, RetryTxBuilder};
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};
-pub use stream_facade::{QueryStats, QueryStream};
+pub use stream_facade::{QueryResultPart, QueryStats, QueryStream};
 
 #[cfg(test)]
 mod unit_tests {
