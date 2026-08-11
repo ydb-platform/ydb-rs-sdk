@@ -883,7 +883,25 @@ pub(super) fn build_client_execute_request_for_test(
 mod unit_tests {
     use super::*;
     use crate::GrpcOptions;
+    use crate::client_query::TransactionOptions;
     use crate::errors::{Idempotency, YdbError, YdbOrCustomerError};
+    use crate::grpc_connection_manager::GrpcConnectionManager;
+    use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+    use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+    use crate::session_pool::{SessionPool, SessionPoolSettings};
+    use http::Uri;
+    use ydb_grpc::ydb_proto::status_ids::StatusCode;
+
+    fn test_connection_manager() -> GrpcConnectionManager {
+        GrpcConnectionManager::new(
+            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
+                Uri::from_static("http://127.0.0.1/bench"),
+            ))),
+            "bench".to_string(),
+            MultiInterceptor::new(),
+            GrpcOptions::default(),
+        )
+    }
 
     #[test]
     fn retry_helpers_and_wait() {
@@ -896,25 +914,10 @@ mod unit_tests {
 
     #[tokio::test]
     async fn transaction_rollback_is_nop_when_finished() {
-        use crate::client_query::TransactionOptions;
-        use crate::grpc_connection_manager::GrpcConnectionManager;
-        use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
-        use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-        use crate::session_pool::{SessionPool, SessionPoolSettings};
-        use http::Uri;
-        use ydb_grpc::ydb_proto::status_ids::StatusCode;
-
         let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
         let lease = pool.acquire_explicit().await.expect("acquire test session");
         let mut ctx = transaction_exec_context(
-            GrpcConnectionManager::new(
-                SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
-                    Uri::from_static("http://127.0.0.1/bench"),
-                ))),
-                "bench".to_string(),
-                MultiInterceptor::new(),
-                GrpcOptions::default(),
-            ),
+            test_connection_manager(),
             lease,
             TransactionOptions::default(),
             None,
@@ -934,21 +937,7 @@ mod unit_tests {
 
     #[tokio::test]
     async fn in_flight_transaction_cleanup_discards_its_session() {
-        use crate::client_query::TransactionOptions;
-        use crate::grpc_connection_manager::GrpcConnectionManager;
-        use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
-        use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-        use crate::session_pool::{SessionPool, SessionPoolSettings};
-        use http::Uri;
-
-        let manager = GrpcConnectionManager::new(
-            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
-                Uri::from_static("http://127.0.0.1/bench"),
-            ))),
-            "bench".to_string(),
-            MultiInterceptor::new(),
-            GrpcOptions::default(),
-        );
+        let manager = test_connection_manager();
         let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
         let lease = pool.acquire_explicit().await.expect("acquire test session");
         let session_id = lease.session_id().to_string();
@@ -971,26 +960,11 @@ mod unit_tests {
 
     #[tokio::test]
     async fn transaction_commit_rejects_an_unhealthy_session() {
-        use crate::client_query::TransactionOptions;
-        use crate::grpc_connection_manager::GrpcConnectionManager;
-        use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
-        use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-        use crate::session_pool::{SessionPool, SessionPoolSettings};
-        use http::Uri;
-        use ydb_grpc::ydb_proto::status_ids::StatusCode;
-
         let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
         let mut lease = pool.acquire_explicit().await.expect("acquire test session");
         lease.invalidate();
         let mut ctx = transaction_exec_context(
-            GrpcConnectionManager::new(
-                SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
-                    Uri::from_static("http://127.0.0.1/bench"),
-                ))),
-                "bench".to_string(),
-                MultiInterceptor::new(),
-                GrpcOptions::default(),
-            ),
+            test_connection_manager(),
             lease,
             TransactionOptions::default(),
             None,
