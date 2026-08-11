@@ -82,8 +82,8 @@ impl QueryTxHook for StatsHook {
     }
 }
 
-fn register_stats_hook(tx: &mut Transaction, stats: &Arc<HookStats>) {
-    tx.register_hook(stats.hook());
+fn register_stats_hook(tx: &mut Transaction, stats: &Arc<HookStats>) -> YdbResult<()> {
+    tx.register_hook(stats.hook())
 }
 
 #[tokio::test]
@@ -96,7 +96,7 @@ async fn commit_implicit_calls_before_commit_once() -> YdbResult<()> {
     client
         .query_client()
         .retry_tx(closure!([&stats], async |tx: &mut Transaction| {
-            register_stats_hook(tx, stats);
+            register_stats_hook(tx, stats)?;
             tx.exec("SELECT 1").await?;
             Ok(())
         }))
@@ -117,7 +117,7 @@ async fn rollback_explicit_skips_before_commit() -> YdbResult<()> {
     client
         .query_client()
         .retry_tx(closure!([&stats], async |tx: &mut Transaction| {
-            register_stats_hook(tx, stats);
+            register_stats_hook(tx, stats)?;
             tx.exec("SELECT 1").await?;
             tx.rollback().await?;
             Ok(())
@@ -139,7 +139,7 @@ async fn rollback_on_callback_error_skips_before_commit() -> YdbResult<()> {
     let result: YdbResultWithCustomerErr<()> = client
         .query_client()
         .retry_tx(closure!([&stats], async |tx: &mut Transaction| {
-            register_stats_hook(tx, stats);
+            register_stats_hook(tx, stats)?;
             tx.exec("SELECT 1").await?;
             Err(YdbError::custom("callback failed").into())
         }))
@@ -161,7 +161,7 @@ async fn commit_with_commit_calls_before_commit_once() -> YdbResult<()> {
     client
         .query_client()
         .retry_tx(closure!([&stats], async |tx: &mut Transaction| {
-            register_stats_hook(tx, stats);
+            register_stats_hook(tx, stats)?;
             tx.exec("SELECT 1").with_commit(true).await?;
             Ok(())
         }))
@@ -182,7 +182,7 @@ async fn finished_tx_rejects_second_with_commit_without_before_commit() -> YdbRe
     client
         .query_client()
         .retry_tx(closure!([&stats], async |tx: &mut Transaction| {
-            register_stats_hook(tx, stats);
+            register_stats_hook(tx, stats)?;
             tx.exec("SELECT 1").with_commit(true).await?;
 
             assert!(tx.exec("SELECT 1").with_commit(true).await.is_err());
@@ -207,7 +207,7 @@ async fn before_commit_error_aborts_transaction() -> YdbResult<()> {
     let result: YdbResultWithCustomerErr<()> = client
         .query_client()
         .retry_tx(closure!([&stats], async |tx: &mut Transaction| {
-            register_stats_hook(tx, stats);
+            register_stats_hook(tx, stats)?;
             tx.exec("SELECT 1").await?;
             Ok(())
         }))

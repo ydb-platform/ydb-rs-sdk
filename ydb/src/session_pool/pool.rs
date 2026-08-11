@@ -221,13 +221,18 @@ impl SessionPoolLease {
                 Ok(value)
             }
             Err(err) => {
-                if !err.requires_session_discard() {
+                if err.requires_session_discard() {
+                    self.discard();
+                } else {
                     self.return_to_pool();
                 }
                 Err(err)
             }
         }
     }
+
+    /// Consume this lease without returning its session to the pool.
+    pub(crate) fn discard(self) {}
 
     /// Mark a retained lease unusable. Returning it later will schedule session cleanup.
     pub(crate) fn invalidate(&mut self) {

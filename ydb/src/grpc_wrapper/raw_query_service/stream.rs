@@ -12,11 +12,6 @@ use crate::grpc_wrapper::raw_query_service::transaction_control::TransactionId;
 use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
 use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
 
-#[derive(Debug)]
-pub(crate) struct StreamCloseMeta {
-    pub tx_id: Option<TransactionId>,
-}
-
 struct ActiveQueryResponse {
     stream: tonic::Streaming<ExecuteQueryResponsePart>,
     pending_part: Option<ExecuteQueryResponsePart>,
@@ -24,8 +19,7 @@ struct ActiveQueryResponse {
 
 enum QueryResponseState {
     Active(Box<ActiveQueryResponse>),
-    Exhausted,
-    Cancelled,
+    Finished,
 }
 
 #[derive(Default)]
@@ -78,7 +72,7 @@ impl ExecuteQueryStream {
         self.metadata.plan.take()
     }
 
-    fn absorb_part_metadata(&mut self, part: &ExecuteQueryResponsePart) -> Option<TransactionId> {
+    fn absorb_part_metadata(&mut self, part: &ExecuteQueryResponsePart) {
         if let Some(duration) = stats_from_part(part) {
             self.metadata.stats = Some(duration);
         }
@@ -86,16 +80,14 @@ impl ExecuteQueryStream {
             self.metadata.plan = Some(plan);
         }
         if let Some(id) = tx_id_from_part(part) {
-            self.metadata.tx_id = Some(id.clone());
-            return Some(id);
+            self.metadata.tx_id = Some(id);
         }
-        None
     }
 
-    fn ingest_part(&mut self, part: &ExecuteQueryResponsePart) -> RawResult<Option<TransactionId>> {
-        let tx_id = self.absorb_part_metadata(part);
+    fn ingest_part(&mut self, part: &ExecuteQueryResponsePart) -> RawResult<()> {
+        self.absorb_part_metadata(part);
         check_part(part)?;
-        Ok(tx_id)
+        Ok(())
     }
 
     async fn recv_part(&mut self) -> RawResult<Option<ExecuteQueryResponsePart>> {
@@ -104,11 +96,11 @@ impl ExecuteQueryStream {
                 return Ok(active.pending_part.take());
             }
             QueryResponseState::Active(active) => active.stream.message().await?,
-            QueryResponseState::Exhausted | QueryResponseState::Cancelled => return Ok(None),
+            QueryResponseState::Finished => return Ok(None),
         };
 
         if received.is_none() {
-            self.state = QueryResponseState::Exhausted;
+            self.state = QueryResponseState::Finished;
         }
         Ok(received)
     }
@@ -180,9 +172,7 @@ impl ExecuteQueryStream {
         Ok(())
     }
 
-    pub async fn next_result_set(
-        &mut self,
-    ) -> RawResult<Option<(RawResultSet, Option<TransactionId>)>> {
+    pub async fn next_result_set(&mut self) -> RawResult<Option<RawResultSet>> {
         if !matches!(self.state, QueryResponseState::Active(_)) {
             return Ok(None);
         }
@@ -190,8 +180,6 @@ impl ExecuteQueryStream {
         let mut columns = Vec::new();
         let mut rows = Vec::new();
         let mut truncated = false;
-        let mut tx_id = None;
-
         loop {
             let target_index = self.next_index;
             let Some(part) = self.recv_part().await? else {
@@ -199,20 +187,14 @@ impl ExecuteQueryStream {
                     return Ok(None);
                 }
                 self.next_index += 1;
-                return Ok(Some((
-                    RawResultSet {
-                        columns,
-                        rows,
-                        truncated,
-                    },
-                    tx_id,
-                )));
+                return Ok(Some(RawResultSet {
+                    columns,
+                    rows,
+                    truncated,
+                }));
             };
 
-            let tx_id_from_part = self.ingest_part(&part)?;
-            if tx_id_from_part.is_some() {
-                tx_id = tx_id_from_part;
-            }
+            self.ingest_part(&part)?;
 
             if part.result_set_index < target_index {
                 warn!(
@@ -236,14 +218,11 @@ impl ExecuteQueryStream {
                 } else {
                     self.set_pending_part(part);
                     self.next_index += 1;
-                    return Ok(Some((
-                        RawResultSet {
-                            columns,
-                            rows,
-                            truncated,
-                        },
-                        tx_id,
-                    )));
+                    return Ok(Some(RawResultSet {
+                        columns,
+                        rows,
+                        truncated,
+                    }));
                 }
             }
 
@@ -261,14 +240,11 @@ impl ExecuteQueryStream {
 
     /// Drop the gRPC stream without draining unread parts (sends RST_STREAM).
     pub fn cancel(&mut self) {
-        let old_state = std::mem::replace(&mut self.state, QueryResponseState::Cancelled);
-        match old_state {
-            QueryResponseState::Active(mut active) => {
-                if let Some(part) = active.pending_part.take() {
-                    self.absorb_part_metadata(&part);
-                }
-            }
-            terminal => self.state = terminal,
+        let state = std::mem::replace(&mut self.state, QueryResponseState::Finished);
+        if let QueryResponseState::Active(mut active) = state
+            && let Some(part) = active.pending_part.take()
+        {
+            self.absorb_part_metadata(&part);
         }
     }
 
@@ -286,11 +262,9 @@ impl ExecuteQueryStream {
         result
     }
 
-    pub async fn close(&mut self) -> RawResult<StreamCloseMeta> {
+    pub async fn close(&mut self) -> RawResult<Option<TransactionId>> {
         self.drain_to_end().await?;
-        Ok(StreamCloseMeta {
-            tx_id: self.metadata.tx_id.take(),
-        })
+        Ok(self.metadata.tx_id.take())
     }
 }
 

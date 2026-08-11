@@ -50,7 +50,9 @@ use exec::{
     ClientExecContext, TransactionExecContext, finish_query_tx_on_drop, transaction_commit,
     transaction_ensure_begin, transaction_exec_context, transaction_identity, transaction_rollback,
 };
-use hooks::{QueryTxCommitStatus, QueryTxHook};
+#[cfg(test)]
+use hooks::QueryTxCommitStatus;
+use hooks::QueryTxHook;
 
 /// Row-to-struct mapping (the sqlx `FromRow` analogue).
 pub trait FromYdbRow: Sized {
@@ -230,38 +232,18 @@ impl QueryClient {
         }
 
         match try_attempt(callback, &mut tx).await {
-            Ok(value) => match resolve_post_callback_action(&tx.ctx.state) {
-                PostCallbackAction::Return(status) => {
-                    tx.notify_hooks(status);
-                    ControlFlow::Break(Ok(value))
-                }
-                PostCallbackAction::Commit => {
-                    ControlFlow::Break(match tx.commit().await {
-                        Ok(()) => {
-                            tx.notify_hooks(QueryTxCommitStatus::Committed);
-                            Ok(value)
-                        }
-                        // Commit outcome is ambiguous on transport errors; never retry.
-                        Err(e) => {
-                            tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                            Err(e.into())
-                        }
-                    })
-                }
-                PostCallbackAction::Retry(err) => {
-                    tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                    ControlFlow::Continue(err.into())
-                }
-                PostCallbackAction::Fail(err) => {
-                    tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                    ControlFlow::Break(Err(err.into()))
+            Ok(value) => match tx.finish_successful_attempt().await {
+                AttemptCompletion::Return => ControlFlow::Break(Ok(value)),
+                AttemptCompletion::Retry(error) => ControlFlow::Continue(error.into()),
+                AttemptCompletion::Fail(error) => ControlFlow::Break(Err(error.into())),
+            },
+            Err(err) => match tx.finish_failed_attempt().await {
+                FailedAttemptCompletion::Retry => ControlFlow::Continue(err),
+                FailedAttemptCompletion::FailCallback => ControlFlow::Break(Err(err)),
+                FailedAttemptCompletion::FailTransaction(error) => {
+                    ControlFlow::Break(Err(error.into()))
                 }
             },
-            Err(err) => {
-                tx.rollback_quiet().await;
-                tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                ControlFlow::Continue(err)
-            }
         }?
         .retry_flow(idempotency)
     }
@@ -289,7 +271,8 @@ impl QueryClient {
                     let lease = match client.ctx.session_pool.acquire_explicit().await {
                         Ok(lease) => lease,
                         Err(err) => {
-                            return YdbOrCustomerError::from(err).retry_flow(idempotency);
+                            return YdbOrCustomerError::from(err)
+                                .retry_flow(Idempotency::Idempotent);
                         }
                     };
                     let tx = Transaction::new(
@@ -356,21 +339,16 @@ impl QueryClient {
     }
 }
 
-enum PostCallbackAction {
-    Return(QueryTxCommitStatus),
-    Commit,
+enum AttemptCompletion {
+    Return,
     Retry(YdbError),
     Fail(YdbError),
 }
 
-fn resolve_post_callback_action(state: &TxState) -> PostCallbackAction {
-    match state {
-        TxState::RolledBack => PostCallbackAction::Return(QueryTxCommitStatus::Aborted),
-        TxState::Committed => PostCallbackAction::Return(QueryTxCommitStatus::Committed),
-        TxState::Invalidated(error) => PostCallbackAction::Retry(error.clone()),
-        TxState::Ambiguous(err) => PostCallbackAction::Fail(err.clone()),
-        TxState::Active(_) => PostCallbackAction::Commit,
-    }
+enum FailedAttemptCompletion {
+    Retry,
+    FailCallback,
+    FailTransaction(YdbError),
 }
 
 impl QueryExecutor for QueryClient {
@@ -415,8 +393,8 @@ impl Transaction {
         self.ctx.tx_mode
     }
 
-    pub(crate) fn register_hook(&mut self, hook: impl QueryTxHook) {
-        self.ctx.hooks.push(Box::new(hook));
+    pub(crate) fn register_hook(&mut self, hook: impl QueryTxHook) -> YdbResult<()> {
+        self.ctx.register_hook(Box::new(hook))
     }
 
     /// Explicitly open the transaction via `BeginTransaction` RPC.
@@ -425,24 +403,15 @@ impl Transaction {
     /// need `tx_id` before any YQL, or configure [`TransactionOptions::with_begin`]
     /// on the client so the first operation does this automatically.
     pub async fn begin(&mut self) -> YdbResult<()> {
-        if !self.ctx.state.is_active() {
-            return Err(YdbError::Custom("transaction already finished".to_string()));
-        }
         transaction_ensure_begin(&mut self.ctx).await
     }
 
     /// Session and transaction ids for topic offset updates inside a transaction.
     pub(crate) async fn identity(&mut self) -> YdbResult<(String, String)> {
-        if !self.ctx.state.is_active() {
-            return Err(YdbError::Custom("transaction already finished".to_string()));
-        }
         transaction_identity(&mut self.ctx).await
     }
 
     pub async fn rollback(&mut self) -> YdbResult<()> {
-        if !self.ctx.state.is_active() {
-            return Ok(());
-        }
         transaction_rollback(&mut self.ctx).await
     }
 
@@ -450,15 +419,59 @@ impl Transaction {
         transaction_commit(&mut self.ctx).await
     }
 
-    async fn rollback_quiet(&mut self) {
-        if self.ctx.state.is_active() {
-            let _ = transaction_rollback(&mut self.ctx).await;
+    async fn finish_successful_attempt(&mut self) -> AttemptCompletion {
+        match &self.ctx.state {
+            TxState::Committed | TxState::RolledBack => return AttemptCompletion::Return,
+            TxState::Invalidated(error) => return AttemptCompletion::Retry(error.clone()),
+            TxState::Ambiguous(error) => return AttemptCompletion::Fail(error.clone()),
+            TxState::Live(_) => {}
+        }
+
+        if self.ctx.state.operation_is_in_flight() {
+            let error = YdbError::InternalError(
+                "query transaction callback ended while an operation was still in progress"
+                    .to_string(),
+            );
+            return match self.ctx.abort_unconfirmed(error.clone()) {
+                Ok(()) => AttemptCompletion::Fail(error),
+                Err(invariant) => AttemptCompletion::Fail(invariant),
+            };
+        }
+
+        match self.commit().await {
+            Ok(()) => AttemptCompletion::Return,
+            // Commit outcome is ambiguous on transport errors; never retry.
+            Err(error) => AttemptCompletion::Fail(error),
         }
     }
 
-    fn notify_hooks(&mut self, status: QueryTxCommitStatus) {
-        for hook in &mut self.ctx.hooks {
-            hook.after_commit(status);
+    async fn finish_failed_attempt(&mut self) -> FailedAttemptCompletion {
+        match &self.ctx.state {
+            TxState::RolledBack | TxState::Invalidated(_) => {
+                return FailedAttemptCompletion::Retry;
+            }
+            TxState::Committed => return FailedAttemptCompletion::FailCallback,
+            TxState::Ambiguous(error) if error.invalidates_server_transaction() => {
+                return FailedAttemptCompletion::Retry;
+            }
+            TxState::Ambiguous(error) => {
+                return FailedAttemptCompletion::FailTransaction(error.clone());
+            }
+            TxState::Live(_) => {}
+        }
+        if self.ctx.state.operation_is_in_flight() {
+            let error = YdbError::InternalError(
+                "query transaction callback failed while an operation was still in progress"
+                    .to_string(),
+            );
+            return match self.ctx.abort_unconfirmed(error.clone()) {
+                Ok(()) => FailedAttemptCompletion::FailTransaction(error),
+                Err(invariant) => FailedAttemptCompletion::FailTransaction(invariant),
+            };
+        }
+        match transaction_rollback(&mut self.ctx).await {
+            Ok(()) => FailedAttemptCompletion::Retry,
+            Err(error) => FailedAttemptCompletion::FailTransaction(error),
         }
     }
 
@@ -488,13 +501,10 @@ pub(crate) struct QueryTxIdentity {
 
 impl Drop for Transaction {
     fn drop(&mut self) {
-        if self.ctx.state.is_active() {
-            self.notify_hooks(QueryTxCommitStatus::Aborted);
-        }
         let state = std::mem::replace(&mut self.ctx.state, TxState::RolledBack);
         match state {
-            TxState::Active(active) => {
-                finish_query_tx_on_drop(self.ctx.connection_manager.clone(), active);
+            TxState::Live(live) => {
+                finish_query_tx_on_drop(self.ctx.connection_manager.clone(), live);
             }
             TxState::Committed
             | TxState::RolledBack
@@ -539,7 +549,7 @@ pub use stream_facade::{QueryStats, QueryStream};
 mod unit_tests {
     use super::*;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use crate::GrpcOptions;
     use crate::errors::YdbStatusError;
@@ -553,6 +563,16 @@ mod unit_tests {
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
     use builders::{exactly_one_set, take_single_row};
+
+    struct AbortCounter(Arc<AtomicUsize>);
+
+    impl QueryTxHook for AbortCounter {
+        fn after_commit(&mut self, status: QueryTxCommitStatus) {
+            if status == QueryTxCommitStatus::Aborted {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
 
     fn int64_set(values: Vec<i64>) -> ResultSet {
         RawResultSet {
@@ -593,14 +613,13 @@ mod unit_tests {
             TransactionOptions::default(),
             None,
         );
-        exec::transaction_handle_query_error(
-            &mut tx.ctx,
-            &YdbError::YdbStatusError(YdbStatusError {
+        tx.ctx
+            .handle_query_error(&YdbError::YdbStatusError(YdbStatusError {
                 message: "transaction failed".to_string(),
                 operation_status: status as i32,
                 issues: Vec::new(),
-            }),
-        );
+            }))
+            .expect("apply transaction error");
         assert!(matches!(tx.ctx.state, TxState::Invalidated(_)));
         (tx, session_id)
     }
@@ -617,53 +636,6 @@ mod unit_tests {
                 .is_none()
         );
         assert!(take_single_row(int64_set(vec![1, 2])).is_err());
-    }
-
-    #[test]
-    fn invalidated_state_fails_instead_of_committing() {
-        let state = TxState::Invalidated(YdbError::Custom("server aborted".into()));
-        assert!(matches!(
-            resolve_post_callback_action(&state),
-            PostCallbackAction::Retry(_)
-        ));
-    }
-
-    #[test]
-    fn ambiguous_state_fails_instead_of_committing() {
-        let state = TxState::Ambiguous(YdbError::Custom("rollback rpc failed".into()));
-        assert!(matches!(
-            resolve_post_callback_action(&state),
-            PostCallbackAction::Fail(_)
-        ));
-    }
-
-    #[test]
-    fn committed_and_rolled_back_states_are_done_not_failed() {
-        assert!(matches!(
-            resolve_post_callback_action(&TxState::Committed),
-            PostCallbackAction::Return(QueryTxCommitStatus::Committed)
-        ));
-        assert!(matches!(
-            resolve_post_callback_action(&TxState::RolledBack),
-            PostCallbackAction::Return(QueryTxCommitStatus::Aborted)
-        ));
-    }
-
-    #[tokio::test]
-    async fn active_state_needs_a_real_commit() {
-        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
-        let lease = pool.acquire_explicit().await.expect("acquire test session");
-        let state = transaction_exec_context(
-            test_connection_manager(),
-            lease,
-            TransactionOptions::default(),
-            None,
-        )
-        .state;
-        assert!(matches!(
-            resolve_post_callback_action(&state),
-            PostCallbackAction::Commit
-        ));
     }
 
     #[tokio::test]
@@ -706,6 +678,100 @@ mod unit_tests {
 
         assert!(result.is_err());
         assert!(!callback_called.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn retry_transaction_retries_session_acquisition_before_user_code() {
+        let pool = SessionPool::new_explicit_bench_with_create_failures(
+            SessionPoolSettings::new().with_limit(1),
+            1,
+        );
+        let client = QueryClient::new(
+            test_connection_manager(),
+            pool,
+            RetrySettings::with_default_backoff().with_deadline(Duration::from_secs(1)),
+        );
+        let callback_called = Arc::new(AtomicBool::new(false));
+        let observed_called = callback_called.clone();
+
+        let result: YdbResultWithCustomerErr<()> = client
+            .retry_tx(closure!([observed_called], async |_tx| {
+                observed_called.store(true, Ordering::Relaxed);
+                Ok(())
+            }))
+            .await;
+
+        result.expect("session acquisition must be retried before user code runs");
+        assert!(callback_called.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn in_flight_transaction_notifies_abort_hooks_once() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let client = QueryClient::new(test_connection_manager(), pool, RetrySettings::dont_retry());
+        let aborts = Arc::new(AtomicUsize::new(0));
+        let observed_aborts = aborts.clone();
+
+        let result: YdbResultWithCustomerErr<()> = client
+            .retry_tx(closure!([observed_aborts], async |tx: &mut Transaction| {
+                exec::mark_begin_in_flight_for_test(&mut tx.ctx);
+                tx.register_hook(AbortCounter(observed_aborts.clone()))?;
+                Ok(())
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(aborts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn failed_in_flight_transaction_notifies_abort_hooks_once() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let client = QueryClient::new(test_connection_manager(), pool, RetrySettings::dont_retry());
+        let aborts = Arc::new(AtomicUsize::new(0));
+        let observed_aborts = aborts.clone();
+
+        let result: YdbResultWithCustomerErr<()> = client
+            .retry_tx(closure!([observed_aborts], async |tx: &mut Transaction| {
+                exec::mark_begin_in_flight_for_test(&mut tx.ctx);
+                tx.register_hook(AbortCounter(observed_aborts.clone()))?;
+                Err(YdbError::custom("callback failed").into())
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(aborts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn ambiguous_transaction_is_not_retried_after_callback_error() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let client = QueryClient::new(
+            test_connection_manager(),
+            pool,
+            RetrySettings::with_default_backoff().with_deadline(Duration::from_secs(1)),
+        );
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let observed_attempts = attempts.clone();
+
+        let result: YdbResultWithCustomerErr<()> = client
+            .retry_tx(closure!(
+                [observed_attempts],
+                async |tx: &mut Transaction| {
+                    let attempt = observed_attempts.fetch_add(1, Ordering::Relaxed);
+                    if attempt == 0 {
+                        tx.ctx.abort_unconfirmed(YdbError::InternalError(
+                            "transaction outcome is ambiguous".to_string(),
+                        ))?;
+                        return Err(YdbError::Transport("callback failed".to_string()).into());
+                    }
+                    Ok(())
+                }
+            ))
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
