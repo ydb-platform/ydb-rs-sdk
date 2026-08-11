@@ -113,19 +113,21 @@ async fn make_client(
 }
 
 fn result_part(index: i64, column: Option<&str>, values: &[i64]) -> ExecuteQueryResponsePart {
-    let columns = column.map(|name| {
-        vec![Column {
-            name: name.to_string(),
-            r#type: Some(Type {
-                r#type: Some(r#type::Type::TypeId(r#type::PrimitiveTypeId::Int64 as i32)),
-            }),
-        }]
-    });
+    let columns = column
+        .map(|name| {
+            vec![Column {
+                name: name.to_string(),
+                r#type: Some(Type {
+                    r#type: Some(r#type::Type::TypeId(r#type::PrimitiveTypeId::Int64 as i32)),
+                }),
+            }]
+        })
+        .unwrap_or_default();
     ExecuteQueryResponsePart {
         status: StatusCode::Success as i32,
         issues: Vec::new(),
         result_set_index: index,
-        result_set: columns.map(|columns| ResultSet {
+        result_set: Some(ResultSet {
             columns,
             rows: values
                 .iter()
@@ -139,6 +141,17 @@ fn result_part(index: i64, column: Option<&str>, values: &[i64]) -> ExecuteQuery
                 .collect(),
             ..Default::default()
         }),
+        exec_stats: None,
+        tx_meta: None,
+    }
+}
+
+fn no_result_part(index: i64) -> ExecuteQueryResponsePart {
+    ExecuteQueryResponsePart {
+        status: StatusCode::Success as i32,
+        issues: Vec::new(),
+        result_set_index: index,
+        result_set: None,
         exec_stats: None,
         tx_meta: None,
     }
@@ -291,8 +304,8 @@ async fn transport_error_discards_the_pooled_session() -> YdbResult<()> {
 async fn stream_yields_result_parts_without_materializing() -> YdbResult<()> {
     let (client, _server) = make_client([StreamScript::closed(vec![
         result_part(0, Some("first"), &[10]),
-        result_part(0, None, &[]),
-        result_part(0, Some("first"), &[11]),
+        no_result_part(0),
+        result_part(0, None, &[11]),
         result_part(1, Some("second"), &[20, 21]),
     ])])
     .await?;

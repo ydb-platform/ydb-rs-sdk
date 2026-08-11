@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
@@ -6,10 +7,11 @@ use futures_util::{Stream, TryStreamExt};
 
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::grpc_wrapper::raw_query_service::execute_query::{
-    RawQueryStatsPlan, check_part, plan_from_part, stats_from_part, tx_id_from_part,
+    RawQueryStatsPlan, check_part, columns_compatible, plan_from_part, stats_from_part,
+    tx_id_from_part,
 };
 use crate::grpc_wrapper::raw_query_service::transaction_control::TransactionId;
-use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
+use crate::grpc_wrapper::raw_table_service::value::{RawColumn, RawResultSet};
 use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
 
 pub(crate) struct RawQueryResultPart {
@@ -25,6 +27,7 @@ struct ActiveQueryResponse {
 enum QueryResponseState {
     Active(Box<ActiveQueryResponse>),
     Exhausted,
+    StatusError,
     Cancelled,
 }
 
@@ -34,6 +37,7 @@ struct QueryResponseMetadata {
     stats: Option<Duration>,
     plan: Option<RawQueryStatsPlan>,
     received_part: bool,
+    columns_by_result_set: HashMap<i64, Vec<RawColumn>>,
 }
 
 pub(crate) struct ExecuteQueryStream {
@@ -61,7 +65,9 @@ impl Stream for ExecuteQueryStream {
                         ready!(Pin::new(&mut active.stream).poll_next(cx))
                     }
                 }
-                QueryResponseState::Exhausted | QueryResponseState::Cancelled => {
+                QueryResponseState::Exhausted
+                | QueryResponseState::StatusError
+                | QueryResponseState::Cancelled => {
                     return Poll::Ready(None);
                 }
             };
@@ -82,7 +88,7 @@ impl Stream for ExecuteQueryStream {
                 Ok(Some(part)) => return Poll::Ready(Some(Ok(part))),
                 Ok(None) => continue,
                 Err(err) => {
-                    this.state = QueryResponseState::Cancelled;
+                    this.stop_after_error(&err);
                     return Poll::Ready(Some(Err(err)));
                 }
             }
@@ -136,16 +142,53 @@ impl ExecuteQueryStream {
         let Some(result_set) = part.result_set else {
             return Ok(None);
         };
+        let mut result_set = RawResultSet::try_from(result_set)?;
+        self.apply_result_set_columns(result_set_index, &mut result_set)?;
         Ok(Some(RawQueryResultPart {
             result_set_index,
-            result_set: RawResultSet::try_from(result_set)?,
+            result_set,
         }))
+    }
+
+    fn apply_result_set_columns(
+        &mut self,
+        result_set_index: i64,
+        result_set: &mut RawResultSet,
+    ) -> RawResult<()> {
+        if let Some(columns) = self.metadata.columns_by_result_set.get(&result_set_index) {
+            if result_set.columns.is_empty() {
+                result_set.columns = columns.clone();
+            } else if !columns_compatible(columns, &result_set.columns) {
+                return Err(RawError::custom(format!(
+                    "column metadata mismatch for result set {result_set_index}"
+                )));
+            }
+        } else if !result_set.columns.is_empty() {
+            self.metadata
+                .columns_by_result_set
+                .insert(result_set_index, result_set.columns.clone());
+        } else if !result_set.rows.is_empty() {
+            return Err(RawError::custom(format!(
+                "result set {result_set_index} contains rows before column metadata"
+            )));
+        }
+        Ok(())
+    }
+
+    fn stop_after_error(&mut self, error: &RawError) {
+        self.state = if matches!(error, RawError::YdbStatus(_)) {
+            QueryResponseState::StatusError
+        } else {
+            QueryResponseState::Cancelled
+        };
     }
 
     async fn recv_part(&mut self) -> RawResult<Option<ExecuteQueryResponsePart>> {
         let received = match &mut self.state {
             QueryResponseState::Active(active) => active.stream.message().await?,
-            QueryResponseState::Exhausted | QueryResponseState::Cancelled => return Ok(None),
+            QueryResponseState::Exhausted
+            | QueryResponseState::StatusError
+            | QueryResponseState::Cancelled => return Ok(None),
         };
 
         if received.is_none() {
@@ -180,10 +223,15 @@ impl ExecuteQueryStream {
         ) {
             return Ok(());
         }
-        if let Some(part) = self.recv_part().await?
-            && let Some(part) = self.decode_part(part)?
-        {
-            self.set_pending_result(part);
+        if let Some(part) = self.recv_part().await? {
+            match self.decode_part(part) {
+                Ok(Some(part)) => self.set_pending_result(part),
+                Ok(None) => {}
+                Err(error) => {
+                    self.stop_after_error(&error);
+                    return Err(error);
+                }
+            }
         }
         Ok(())
     }
@@ -201,7 +249,10 @@ impl ExecuteQueryStream {
     }
 
     pub(crate) fn completion_unconfirmed(&self) -> bool {
-        !matches!(self.state, QueryResponseState::Exhausted)
+        !matches!(
+            self.state,
+            QueryResponseState::Exhausted | QueryResponseState::StatusError
+        )
     }
 
     /// Drop the gRPC stream without draining unread parts (sends RST_STREAM).

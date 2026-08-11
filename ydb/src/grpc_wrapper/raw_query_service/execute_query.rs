@@ -173,7 +173,7 @@ pub(crate) fn append_result_set_part(
     Ok(())
 }
 
-fn columns_compatible(existing: &[RawColumn], new_cols: &[RawColumn]) -> bool {
+pub(super) fn columns_compatible(existing: &[RawColumn], new_cols: &[RawColumn]) -> bool {
     existing.len() == new_cols.len()
         && existing
             .iter()

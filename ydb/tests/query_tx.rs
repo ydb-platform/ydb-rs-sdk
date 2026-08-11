@@ -90,14 +90,13 @@ enum ExecuteResponse {
     Success,
     Empty,
     MalformedSecond,
+    LateTransientSecond,
 }
 
-/// Every `ExecuteQuery` succeeds. A lazy transaction ID arrives after the first response part;
-/// a query that commits the transaction omits it. `CommitTransaction` and `RollbackTransaction`
-/// are counted and then passed through to the mock's default handler, which replies success for
-/// both. Covers T0 (happy path), T1 (commit-via-query), T4 (explicit rollback succeeds), and T6
-/// (panic, before/after a real terminal event) — the mock behavior needed is identical across
-/// those; only the callback differs.
+/// `ExecuteQuery` follows one reusable response scenario. A lazy transaction ID normally arrives
+/// after the first response part; a query that commits the transaction omits it.
+/// `CommitTransaction` and `RollbackTransaction` are counted and then passed through to the mock's
+/// default handler, which replies success for both.
 #[derive(Default)]
 struct CountingHandler {
     replies: ReplySink,
@@ -121,6 +120,10 @@ impl CountingHandler {
 
     fn with_malformed_second_response() -> (Self, SharedTxLifecycle) {
         Self::with_execute_response(ExecuteResponse::MalformedSecond)
+    }
+
+    fn with_late_transient_second_response() -> (Self, SharedTxLifecycle) {
+        Self::with_execute_response(ExecuteResponse::LateTransientSecond)
     }
 
     fn with_execute_response(execute_response: ExecuteResponse) -> (Self, SharedTxLifecycle) {
@@ -182,7 +185,15 @@ impl Handler for CountingHandler {
             };
             self.replies
                 .send(QueryReply::ExecuteQuery { stream_id, part });
+            if matches!(self.execute_response, ExecuteResponse::LateTransientSecond) && call == 1 {
+                self.replies.send(QueryReply::ExecuteQuery {
+                    stream_id,
+                    part: failing_part(StatusCode::Unavailable),
+                });
+            }
             if !malformed_response
+                && !(matches!(self.execute_response, ExecuteResponse::LateTransientSecond)
+                    && call == 1)
                 && request
                     .tx_control
                     .as_ref()
@@ -766,6 +777,30 @@ async fn transient_error_propagated_rolls_back_and_retries() -> YdbResult<()> {
         lifecycle.commit_count, 1,
         "the successful retry attempt must commit"
     );
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn late_transient_error_rolls_back_and_retries() -> YdbResult<()> {
+    let (handler, tx_lifecycle) = CountingHandler::with_late_transient_second_response();
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+            tx.exec("UPSERT INTO t (id, val) VALUES (2, 'y')").await?;
+            Ok(())
+        }))
+        .await;
+
+    assert!(result.is_ok(), "expected eventual success, got {result:?}");
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.execute_count, 4);
+    assert_eq!(lifecycle.rollback_count, 1);
+    assert_eq!(lifecycle.commit_count, 1);
     Ok(())
 }
 
