@@ -5,8 +5,8 @@ use tracing::warn;
 
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_query_service::execute_query::{
-    RawQueryStatsPlan, append_rows_from_part, check_part, plan_from_part, stats_from_part,
-    tx_id_from_part,
+    RawQueryStatsPlan, append_result_set_part, append_rows_from_part, check_part, plan_from_part,
+    stats_from_part, tx_id_from_part,
 };
 use crate::grpc_wrapper::raw_query_service::transaction_control::TransactionId;
 use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
@@ -15,6 +15,11 @@ use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
 #[derive(Debug)]
 pub(crate) struct StreamCloseMeta {
     pub tx_id: Option<TransactionId>,
+}
+
+pub(crate) struct RawQueryResultPart {
+    pub(crate) result_set_index: i64,
+    pub(crate) result_set: RawResultSet,
 }
 
 struct ActiveQueryResponse {
@@ -113,6 +118,24 @@ impl ExecuteQueryStream {
         Ok(received)
     }
 
+    /// Read and validate the next response part containing result rows.
+    ///
+    /// Status-, statistics-, and transaction-only protocol messages are absorbed internally.
+    pub(crate) async fn next_part(&mut self) -> RawResult<Option<RawQueryResultPart>> {
+        while let Some(part) = self.recv_part().await? {
+            self.ingest_part(&part)?;
+            let result_set_index = part.result_set_index;
+            let Some(result_set) = part.result_set else {
+                continue;
+            };
+            return Ok(Some(RawQueryResultPart {
+                result_set_index,
+                result_set: RawResultSet::try_from(result_set)?,
+            }));
+        }
+        Ok(None)
+    }
+
     fn set_pending_part(&mut self, part: ExecuteQueryResponsePart) {
         if let QueryResponseState::Active(active) = &mut self.state {
             active.pending_part = Some(part);
@@ -121,18 +144,14 @@ impl ExecuteQueryStream {
 
     fn append_part_to_index(
         by_index: &mut BTreeMap<i64, PartialResultSet>,
-        part: ExecuteQueryResponsePart,
+        part: RawQueryResultPart,
     ) -> RawResult<()> {
-        if part.result_set.is_none() {
-            return Ok(());
-        }
-        let index = part.result_set_index;
-        let partial = by_index.entry(index).or_default();
-        append_rows_from_part(
+        let partial = by_index.entry(part.result_set_index).or_default();
+        append_result_set_part(
             &mut partial.columns,
             &mut partial.rows,
             &mut partial.truncated,
-            part,
+            part.result_set,
         )
     }
 
@@ -143,8 +162,7 @@ impl ExecuteQueryStream {
         let mut by_index: BTreeMap<i64, PartialResultSet> = BTreeMap::new();
 
         let result: RawResult<Vec<RawResultSet>> = async {
-            while let Some(part) = self.recv_part().await? {
-                self.ingest_part(&part)?;
+            while let Some(part) = self.next_part().await? {
                 Self::append_part_to_index(&mut by_index, part)?;
             }
 
@@ -365,8 +383,16 @@ mod tests {
         ];
         let mut by_index = BTreeMap::new();
         for part in parts {
-            ExecuteQueryStream::append_part_to_index(&mut by_index, part)
+            if let Some(result_set) = part.result_set {
+                ExecuteQueryStream::append_part_to_index(
+                    &mut by_index,
+                    RawQueryResultPart {
+                        result_set_index: part.result_set_index,
+                        result_set: result_set.try_into().expect("decode result set"),
+                    },
+                )
                 .expect("append response part");
+            }
         }
 
         assert_eq!(by_index.len(), 2);

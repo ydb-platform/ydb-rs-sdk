@@ -151,16 +151,12 @@ pub(crate) fn plan_from_part(part: &ExecuteQueryResponsePart) -> Option<RawQuery
     })
 }
 
-pub(crate) fn append_rows_from_part(
+pub(crate) fn append_result_set_part(
     columns: &mut Vec<RawColumn>,
     rows: &mut Vec<Vec<RawValue>>,
     truncated: &mut bool,
-    part: ExecuteQueryResponsePart,
+    part_set: RawResultSet,
 ) -> RawResult<()> {
-    let Some(proto_set) = part.result_set else {
-        return Ok(());
-    };
-    let part_set = RawResultSet::try_from(proto_set)?;
     *truncated |= part_set.truncated;
     if !columns.is_empty()
         && !part_set.columns.is_empty()
@@ -175,6 +171,18 @@ pub(crate) fn append_rows_from_part(
     }
     rows.extend(part_set.rows);
     Ok(())
+}
+
+pub(crate) fn append_rows_from_part(
+    columns: &mut Vec<RawColumn>,
+    rows: &mut Vec<Vec<RawValue>>,
+    truncated: &mut bool,
+    part: ExecuteQueryResponsePart,
+) -> RawResult<()> {
+    let Some(proto_set) = part.result_set else {
+        return Ok(());
+    };
+    append_result_set_part(columns, rows, truncated, RawResultSet::try_from(proto_set)?)
 }
 
 fn columns_compatible(existing: &[RawColumn], new_cols: &[RawColumn]) -> bool {
