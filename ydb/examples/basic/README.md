@@ -6,7 +6,7 @@ data via `AS_TABLE`, and reads series rows with snapshot read-only streaming.
 
 ```bash
 export YDB_CONNECTION_STRING=grpc://localhost:2136/local
-cargo run --example basic_query_series
+cargo run --example basic
 ```
 
-Requires a local YDB (see repository `docker-compose.yaml`) and Rust 1.85+.
+Requires a local YDB (see repository `docker-compose.yaml`) and Rust 1.88+.
