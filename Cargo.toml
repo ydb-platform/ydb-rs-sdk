@@ -7,6 +7,7 @@ members = [
     "tests/slo/slo-framework",
     "tests/slo/native/query",
     "tests/slo/native/topic",
+    "tests/slo/native/topic-tx",
 ]
 
 [workspace.package]

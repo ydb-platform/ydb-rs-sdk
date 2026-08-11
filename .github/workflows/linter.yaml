@@ -57,6 +57,11 @@ jobs:
           cargo fmt --all
           git diff --exit-code
 
+      - name: Library check
+        run: |
+          cargo check -p ydb --lib --locked
+          cargo check -p ydb --lib --locked --all-features
+
       - name: Clippy check
         run: |
           cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings

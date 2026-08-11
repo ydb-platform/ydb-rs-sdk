@@ -3,6 +3,7 @@ use std::sync::Arc;
 use derive_builder::Builder;
 
 use crate::client_topic::compression::{CodecSelection, CompressionEncoder};
+use crate::client_topic::topicwriter::partitioning::PartitioningStrategy;
 use crate::retry_settings::RetrySettings;
 use crate::{TopicWriterOptions, errors};
 
@@ -10,6 +11,15 @@ use crate::{TopicWriterOptions, errors};
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct TopicWriterTxOptions {
     pub topic_path: String,
+
+    /// Producer identifier used for server-side ordering and deduplication.
+    /// When omitted, an empty producer identifier disables server-side deduplication.
+    #[builder(setter(into, strip_option), default)]
+    pub(crate) producer_id: Option<String>,
+
+    /// Selects the topic partition for this transactional writer.
+    #[builder(default)]
+    pub(crate) partitioning: PartitioningStrategy,
 
     #[builder(default)]
     pub(crate) codec_selector: CodecSelection,
@@ -31,10 +41,13 @@ impl TopicWriterTxOptionsBuilder {
 
 impl TopicWriterTxOptions {
     pub(crate) fn into_non_tx_options(self) -> TopicWriterOptions {
+        // Transaction retries repeat the complete atomic operation, so writer-level
+        // deduplication is unnecessary unless the caller explicitly requests it.
+        let producer_id = self.producer_id.unwrap_or_default();
         let mut options = TopicWriterOptions::builder()
             .topic_path(self.topic_path)
-            // Writers in transaction should have empty producer_id!
-            .producer_id("".to_string())
+            .producer_id(producer_id)
+            .partitioning(self.partitioning)
             // Current WriterTx should not reconnect
             .retry_settings(RetrySettings::dont_retry())
             .codec_selector(self.codec_selector)

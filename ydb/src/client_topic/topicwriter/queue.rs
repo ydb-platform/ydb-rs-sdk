@@ -1,53 +1,86 @@
 use std::sync::Arc;
-use std::time::Duration;
 
+use futures_util::FutureExt;
 use tokio::sync::{Mutex, Notify, RwLock, oneshot};
 use tokio::time::{Instant, sleep_until};
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
+use crate::client_topic::topicwriter::capacity_limiter::{
+    AdmittedMessage, CapacityLimiter, CapacityPermit,
+};
+use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_queue::{
-    AppendMessageToSendBufferResult, MessageQueue,
+    AppendMessageToSendBufferResult, MessageQueue, QueuedMessage,
 };
 use crate::client_topic::topicwriter::message_write_status::{
     MessageWriteStatus, MessageWriteStatusValidator, WriteAck,
 };
 use crate::client_topic::topicwriter::reception_queue::{ReceptionQueue, ReceptionTicket};
+use crate::client_topic::topicwriter::writer_options::{AutoFlushSettings, WriterFlowControl};
 use crate::{YdbError, YdbResult};
 
 #[derive(Clone)]
 pub(crate) struct Queue {
     inner: Arc<Mutex<QueueInner>>,
+    capacity_limiter: CapacityLimiter,
+    auto_flush: AutoFlushSettings,
 
     new_message_added: Arc<Notify>,
+    flush_requested: Arc<Notify>,
     last_acknowledged_seq_no: Arc<RwLock<Option<i64>>>,
     message_acknowledged: Arc<Notify>,
 }
 
 impl Queue {
-    #[cfg(test)]
-    pub(crate) fn new() -> Self {
-        Self::new_with_status_validator(
-            crate::client_topic::topicwriter::message_write_status::accept_any_write_status,
-        )
-    }
-
-    pub(crate) fn new_with_status_validator(status_validator: MessageWriteStatusValidator) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(QueueInner::new(status_validator))),
+    pub(crate) fn new_with_status_validator(
+        status_validator: MessageWriteStatusValidator,
+        auto_seq_no: bool,
+        flow_control: WriterFlowControl,
+    ) -> YdbResult<Self> {
+        let inflight = flow_control.inflight();
+        Ok(Self {
+            inner: Arc::new(Mutex::new(QueueInner::new(status_validator, auto_seq_no))),
+            capacity_limiter: CapacityLimiter::new(inflight.messages(), inflight.bytes())?,
+            auto_flush: flow_control.auto_flush(),
             new_message_added: Arc::new(Notify::new()),
+            flush_requested: Arc::new(Notify::new()),
             last_acknowledged_seq_no: Arc::new(RwLock::new(None)),
             message_acknowledged: Arc::new(Notify::new()),
+        })
+    }
+
+    pub(crate) async fn initialize_last_seq_no(&self, last_seq_no: i64) -> YdbResult<()> {
+        let mut inner = self.inner.lock().await;
+        if inner.last_seq_no_assigned.is_some() {
+            return Err(YdbError::custom(
+                "message queue last sequence number is already initialized",
+            ));
         }
+        inner.last_seq_no_assigned = Some(last_seq_no);
+        Ok(())
     }
 
     pub(crate) async fn add_message(
         &self,
-        message: MessageData,
+        message: TopicWriterMessage,
         ack_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
     ) -> YdbResult<()> {
+        let admission = self.capacity_limiter.admit(message);
+        tokio::pin!(admission);
+        let (message, was_blocked) = match admission.as_mut().now_or_never() {
+            Some(result) => (result?, false),
+            None => {
+                self.flush_requested.notify_one();
+                (admission.await?, true)
+            }
+        };
         let mut inner = self.inner.lock().await;
         inner.add_message(message, ack_sender)?;
         self.new_message_added.notify_one();
+        if was_blocked {
+            // Send this message while later capacity waiters are still blocked.
+            self.flush_requested.notify_one();
+        }
         Ok(())
     }
 
@@ -84,30 +117,26 @@ impl Queue {
     async fn append_message_to_send_buffer(
         &self,
         send_buffer: &mut Vec<MessageData>,
-        threshold: usize,
+        send_buffer_bytes: &mut usize,
     ) -> AppendMessageToSendBufferResult {
         let mut inner = self.inner.lock().await;
-        inner
-            .message_queue
-            .append_message_to_send_buffer(send_buffer, threshold)
+        inner.message_queue.append_message_to_send_buffer(
+            send_buffer,
+            send_buffer_bytes,
+            self.auto_flush,
+        )
     }
 
-    pub(crate) async fn get_messages_to_send(
-        &self,
-        threshold: usize,
-        duration: Duration,
-    ) -> Vec<MessageData> {
+    pub(crate) async fn get_messages_to_send(&self) -> Vec<MessageData> {
         let mut messages = Vec::new();
-        if threshold == 0 {
-            return messages;
-        }
+        let mut message_bytes = 0;
 
-        let timeout = Instant::now() + duration;
+        let timeout = Instant::now() + self.auto_flush.interval();
         loop {
             // Append while we can
             loop {
                 match self
-                    .append_message_to_send_buffer(&mut messages, threshold)
+                    .append_message_to_send_buffer(&mut messages, &mut message_bytes)
                     .await
                 {
                     AppendMessageToSendBufferResult::Full => return messages,
@@ -119,6 +148,7 @@ impl Queue {
             // Wait for new messages or timeout
             tokio::select! {
                 biased;
+                _ = self.flush_requested.notified() => break,
                 _ = self.new_message_added.notified() => {}
                 _ = sleep_until(timeout) => break,
             }
@@ -135,6 +165,7 @@ impl Queue {
     pub(crate) async fn close_for_new_messages(&self) {
         let mut inner = self.inner.lock().await;
         inner.is_open_for_new_messages = false;
+        self.capacity_limiter.close();
     }
 
     pub(crate) async fn reset_progress(&self) {
@@ -155,27 +186,103 @@ impl Queue {
     }
 }
 
+#[cfg(test)]
+const TEST_INFLIGHT_MESSAGES: usize = 1000;
+#[cfg(test)]
+const TEST_INFLIGHT_BYTES: usize = 20 * crate::byte_units::MiB;
+
+#[cfg(test)]
+impl Queue {
+    fn new() -> Self {
+        Self::with_flow_control(
+            false,
+            TEST_INFLIGHT_MESSAGES,
+            TEST_INFLIGHT_BYTES,
+            10,
+            TEST_INFLIGHT_BYTES,
+            std::time::Duration::from_millis(20),
+        )
+    }
+
+    fn with_flow_control(
+        auto_seq_no: bool,
+        inflight_messages: usize,
+        inflight_bytes: usize,
+        auto_flush_messages: usize,
+        auto_flush_bytes: usize,
+        auto_flush_interval: std::time::Duration,
+    ) -> Self {
+        Self::new_with_status_validator(
+            crate::client_topic::topicwriter::message_write_status::accept_any_write_status,
+            auto_seq_no,
+            crate::client_topic::topicwriter::test_helpers::writer_flow_control(
+                inflight_messages,
+                inflight_bytes,
+                auto_flush_messages,
+                auto_flush_bytes,
+                auto_flush_interval,
+            ),
+        )
+        .unwrap()
+    }
+}
+
 struct QueueInner {
     message_queue: MessageQueue,
     reception_queue: ReceptionQueue,
     is_open_for_new_messages: bool,
     status_validator: MessageWriteStatusValidator,
+    auto_seq_no: bool,
+    last_seq_no_assigned: Option<i64>,
 }
 
 impl QueueInner {
-    fn new(status_validator: MessageWriteStatusValidator) -> Self {
+    fn new(status_validator: MessageWriteStatusValidator, auto_seq_no: bool) -> Self {
         Self {
             message_queue: MessageQueue::new(),
             reception_queue: ReceptionQueue::new(),
             is_open_for_new_messages: true,
             status_validator,
+            auto_seq_no,
+            last_seq_no_assigned: None,
         }
     }
 
     fn add_message(
         &mut self,
+        mut admitted: AdmittedMessage,
+        ack_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
+    ) -> YdbResult<()> {
+        let message = admitted.message_mut();
+        let message_seq_no = match (self.auto_seq_no, message.seq_no) {
+            (true, Some(_)) => Err(YdbError::custom(
+                "explicitly specifying message.seq_no is only allowed if auto_seq_no is disabled",
+            )),
+            (true, None) => self
+                .last_seq_no_assigned
+                .ok_or_else(|| {
+                    YdbError::custom("message queue last sequence number is not initialized")
+                })?
+                .checked_add(1)
+                .ok_or_else(|| YdbError::custom("message sequence number overflow")),
+            (false, Some(seq_no)) => Ok(seq_no),
+            (false, None) => Err(YdbError::custom("empty message seq_no is provided")),
+        }?;
+        message.seq_no = Some(message_seq_no);
+
+        let (message, capacity) = admitted.into_parts();
+        let message = message.try_into()?;
+        self.enqueue_message(message, ack_sender, capacity)?;
+        self.last_seq_no_assigned = Some(message_seq_no);
+
+        Ok(())
+    }
+
+    fn enqueue_message(
+        &mut self,
         message: MessageData,
         ack_sender: Option<oneshot::Sender<YdbResult<MessageWriteStatus>>>,
+        capacity: CapacityPermit,
     ) -> YdbResult<()> {
         if !self.is_open_for_new_messages {
             return Err(YdbError::custom("message queue is closed for new messages"));
@@ -183,7 +290,8 @@ impl QueueInner {
 
         let seq_no = message.seq_no;
 
-        self.message_queue.add_message(message)?;
+        self.message_queue
+            .add_message(QueuedMessage::new(message, capacity))?;
 
         self.reception_queue
             .add_ticket(ReceptionTicket::new(seq_no, ack_sender));
@@ -227,11 +335,147 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use futures_util::FutureExt;
     use tokio::time::timeout;
 
     use super::*;
     use crate::client_topic::topicwriter::message_write_status::expect_transactional_write_status;
-    use crate::client_topic::topicwriter::test_helpers::{create_message, write_ack};
+    use crate::client_topic::topicwriter::test_helpers::{write_ack, writer_flow_control};
+
+    fn create_message(seq_no: i64, data: Vec<u8>) -> TopicWriterMessage {
+        TopicWriterMessage::builder()
+            .data(data)
+            .seq_no(seq_no)
+            .build()
+    }
+
+    #[tokio::test]
+    async fn add_message_is_cancellation_safe() {
+        let q = Queue::with_flow_control(
+            true,
+            TEST_INFLIGHT_MESSAGES,
+            TEST_INFLIGHT_BYTES,
+            1,
+            TEST_INFLIGHT_BYTES,
+            Duration::ZERO,
+        );
+        q.initialize_last_seq_no(1).await.unwrap();
+
+        let queue_lock = q.inner.lock().await;
+        let message = TopicWriterMessage::builder().data(vec![]).build();
+        let result = q.add_message(message, None).now_or_never();
+        assert!(
+            result.is_none(),
+            "add_message unexpectedly completed: {result:?}"
+        );
+        drop(queue_lock);
+
+        let message = TopicWriterMessage::builder().data(vec![]).build();
+        q.add_message(message, None).await.unwrap();
+
+        let messages = q.get_messages_to_send().await;
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].seq_no, 2);
+    }
+
+    #[tokio::test]
+    async fn capacity_is_held_until_acknowledgement() {
+        let q = Queue::with_flow_control(false, 2, 5, 1, 5, Duration::ZERO);
+        q.add_message(create_message(1, vec![0; 3]), None)
+            .await
+            .unwrap();
+        let messages = q.get_messages_to_send().await;
+        assert_eq!(messages.len(), 1);
+
+        let mut blocked_write = Box::pin(q.add_message(create_message(2, vec![0; 3]), None));
+        assert!(blocked_write.as_mut().now_or_never().is_none());
+
+        q.acknowledge_message(write_ack(1)).await.unwrap();
+        blocked_write.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn capacity_waiter_flushes_partial_batches() {
+        let q = Queue::with_flow_control(false, 10, 10, 10, 10, Duration::from_secs(3600));
+        q.add_message(create_message(1, vec![0; 7]), None)
+            .await
+            .unwrap();
+
+        let mut blocked_write = Box::pin(q.add_message(create_message(2, vec![0; 4]), None));
+        assert!(blocked_write.as_mut().now_or_never().is_none());
+
+        let first_batch = timeout(Duration::from_millis(100), q.get_messages_to_send())
+            .await
+            .expect("capacity pressure must flush the buffered partial batch");
+        assert_eq!(first_batch.len(), 1);
+        assert_eq!(first_batch[0].seq_no, 1);
+
+        q.acknowledge_message(write_ack(1)).await.unwrap();
+        blocked_write.await.unwrap();
+
+        let second_batch = timeout(Duration::from_millis(100), q.get_messages_to_send())
+            .await
+            .expect("the admitted capacity waiter must flush without waiting for the interval");
+        assert_eq!(second_batch.len(), 1);
+        assert_eq!(second_batch[0].seq_no, 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn capacity_waiters_keep_flushing_partial_batches() {
+        let q = Queue::with_flow_control(false, 10, 10, 10, 10, Duration::from_secs(3600));
+        q.add_message(create_message(1, vec![0; 10]), None)
+            .await
+            .unwrap();
+
+        let first_batch = q.get_messages_to_send().await;
+        assert_eq!(first_batch.len(), 1);
+        assert_eq!(first_batch[0].seq_no, 1);
+
+        let mut second_write = Box::pin(q.add_message(create_message(2, vec![0; 7]), None));
+        assert!(second_write.as_mut().now_or_never().is_none());
+        let mut third_write = Box::pin(q.add_message(create_message(3, vec![0; 7]), None));
+        assert!(third_write.as_mut().now_or_never().is_none());
+
+        let empty_batch = timeout(Duration::from_millis(100), q.get_messages_to_send())
+            .await
+            .expect("capacity waiters must request a flush");
+        assert!(empty_batch.is_empty());
+
+        q.acknowledge_message(write_ack(1)).await.unwrap();
+        second_write.await.unwrap();
+
+        let second_batch = timeout(Duration::from_millis(100), q.get_messages_to_send())
+            .await
+            .expect("the admitted capacity waiter must request another flush");
+        assert_eq!(second_batch.len(), 1);
+        assert_eq!(second_batch[0].seq_no, 2);
+
+        assert!(third_write.as_mut().now_or_never().is_none());
+        q.acknowledge_message(write_ack(2)).await.unwrap();
+        third_write.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_messages_to_send_flushes_at_byte_threshold() {
+        let q = Queue::with_flow_control(false, 10, 10, 10, 5, Duration::from_secs(3600));
+        let q_collect = q.clone();
+        let collect_handle = tokio::spawn(async move { q_collect.get_messages_to_send().await });
+
+        q.add_message(create_message(1, vec![0; 2]), None)
+            .await
+            .unwrap();
+        q.add_message(create_message(2, vec![0; 3]), None)
+            .await
+            .unwrap();
+
+        let messages = timeout(Duration::from_millis(100), collect_handle)
+            .await
+            .expect("byte threshold must flush without waiting for the interval")
+            .expect("collector task must not panic");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].seq_no, 1);
+        assert_eq!(messages[1].seq_no, 2);
+    }
 
     #[tokio::test]
     async fn add_message_rejects_when_queue_closed_for_new_messages() {
@@ -255,11 +499,7 @@ mod tests {
         let q = Arc::new(Queue::new());
 
         let q_collect = Arc::clone(&q);
-        let collect_handle = tokio::spawn(async move {
-            q_collect
-                .get_messages_to_send(10, Duration::from_millis(50))
-                .await
-        });
+        let collect_handle = tokio::spawn(async move { q_collect.get_messages_to_send().await });
         q.add_message(create_message(1, vec![10]), None)
             .await
             .unwrap();
@@ -279,7 +519,7 @@ mod tests {
     #[tokio::test]
     async fn get_messages_to_send_empty_queue_times_out_empty() {
         let q = Queue::new();
-        let msgs = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        let msgs = q.get_messages_to_send().await;
         assert!(msgs.is_empty());
     }
 
@@ -293,7 +533,7 @@ mod tests {
             .await
             .unwrap();
 
-        let msgs = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        let msgs = q.get_messages_to_send().await;
 
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].seq_no, 1);
@@ -302,48 +542,29 @@ mod tests {
 
     #[tokio::test]
     async fn get_messages_to_send_with_zero_duration_drains_messages() {
-        let q = Queue::new();
+        let q = Queue::with_flow_control(
+            false,
+            TEST_INFLIGHT_MESSAGES,
+            TEST_INFLIGHT_BYTES,
+            10,
+            TEST_INFLIGHT_BYTES,
+            Duration::ZERO,
+        );
         q.add_message(create_message(1, vec![]), None)
             .await
             .unwrap();
 
-        let msgs = q.get_messages_to_send(10, Duration::ZERO).await;
+        let msgs = q.get_messages_to_send().await;
 
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].seq_no, 1);
     }
 
     #[tokio::test]
-    async fn get_messages_to_send_with_zero_threshold_doesnt_move_messages_to_sent() {
-        let q = Queue::new();
-        q.add_message(create_message(1, vec![]), None)
-            .await
-            .unwrap();
-        q.add_message(create_message(2, vec![]), None)
-            .await
-            .unwrap();
-
-        let msgs = q.get_messages_to_send(0, Duration::from_millis(50)).await;
-        assert!(msgs.is_empty());
-
-        let err = q.acknowledge_message(write_ack(1)).await.unwrap_err();
-        assert!(err.to_string().contains("queue is empty"));
-
-        let msgs = q.get_messages_to_send(10, Duration::from_millis(20)).await;
-        assert_eq!(msgs.len(), 2);
-        assert_eq!(msgs[0].seq_no, 1);
-        assert_eq!(msgs[1].seq_no, 2);
-    }
-
-    #[tokio::test]
     async fn get_messages_to_send_collects_messages_added_during_call() {
         let q = Arc::new(Queue::new());
         let q_collect = Arc::clone(&q);
-        let collect_handle = tokio::spawn(async move {
-            q_collect
-                .get_messages_to_send(10, Duration::from_millis(50))
-                .await
-        });
+        let collect_handle = tokio::spawn(async move { q_collect.get_messages_to_send().await });
         q.add_message(create_message(1, vec![]), None)
             .await
             .unwrap();
@@ -355,13 +576,16 @@ mod tests {
 
     #[tokio::test]
     async fn get_messages_to_send_respects_threshold() {
-        let q = Arc::new(Queue::new());
+        let q = Arc::new(Queue::with_flow_control(
+            false,
+            TEST_INFLIGHT_MESSAGES,
+            TEST_INFLIGHT_BYTES,
+            2,
+            TEST_INFLIGHT_BYTES,
+            Duration::from_millis(50),
+        ));
         let q_collect = Arc::clone(&q);
-        let collect_handle = tokio::spawn(async move {
-            q_collect
-                .get_messages_to_send(2, Duration::from_millis(50))
-                .await
-        });
+        let collect_handle = tokio::spawn(async move { q_collect.get_messages_to_send().await });
         q.add_message(create_message(1, vec![]), None)
             .await
             .unwrap();
@@ -380,12 +604,16 @@ mod tests {
 
     #[tokio::test]
     async fn get_messages_to_send_second_call_drains_remaining() {
-        let q = Arc::new(Queue::new());
+        let q = Arc::new(Queue::with_flow_control(
+            false,
+            TEST_INFLIGHT_MESSAGES,
+            TEST_INFLIGHT_BYTES,
+            2,
+            TEST_INFLIGHT_BYTES,
+            Duration::from_millis(50),
+        ));
         let q1 = Arc::clone(&q);
-        let h1 =
-            tokio::spawn(
-                async move { q1.get_messages_to_send(2, Duration::from_millis(50)).await },
-            );
+        let h1 = tokio::spawn(async move { q1.get_messages_to_send().await });
         q.add_message(create_message(11, vec![]), None)
             .await
             .unwrap();
@@ -399,10 +627,7 @@ mod tests {
         assert_eq!(first.len(), 2);
 
         let q2 = Arc::clone(&q);
-        let h2 =
-            tokio::spawn(
-                async move { q2.get_messages_to_send(10, Duration::from_millis(50)).await },
-            );
+        let h2 = tokio::spawn(async move { q2.get_messages_to_send().await });
         let second = h2.await.unwrap();
         assert_eq!(second.len(), 1);
         assert_eq!(second[0].seq_no, 13);
@@ -423,7 +648,7 @@ mod tests {
         q.add_message(create_message(1, vec![]), None)
             .await
             .unwrap();
-        let messages = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        let messages = q.get_messages_to_send().await;
         assert_eq!(messages.len(), 1);
 
         let err = q.acknowledge_message(write_ack(99)).await.unwrap_err();
@@ -442,12 +667,12 @@ mod tests {
         q.add_message(create_message(2, vec![]), None)
             .await
             .unwrap();
-        let first_batch = q.get_messages_to_send(1, Duration::from_millis(20)).await;
-        assert_eq!(first_batch.len(), 1);
+        let first_batch = q.get_messages_to_send().await;
+        assert_eq!(first_batch.len(), 2);
 
         q.reset_progress().await;
 
-        let msgs = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        let msgs = q.get_messages_to_send().await;
         assert_eq!(msgs.len(), 2);
         assert_eq!(msgs[0].seq_no, 1);
         assert_eq!(msgs[1].seq_no, 2);
@@ -467,7 +692,7 @@ mod tests {
             q_wait.wait_for_messages_to_be_acknowledged().await;
         });
 
-        let messages = q.get_messages_to_send(20, Duration::from_millis(50)).await;
+        let messages = q.get_messages_to_send().await;
         assert_eq!(messages.len(), 5);
 
         for i in 1..=5 {
@@ -491,7 +716,7 @@ mod tests {
         q.add_message(create_message(1, vec![]), None)
             .await
             .unwrap();
-        let msgs = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        let msgs = q.get_messages_to_send().await;
         assert_eq!(msgs.len(), 1);
 
         q.acknowledge_message(write_ack(1)).await.unwrap();
@@ -505,11 +730,22 @@ mod tests {
 
     #[tokio::test]
     async fn flush_returns_status_validation_error_observed_before_flush() {
-        let q = Queue::new_with_status_validator(expect_transactional_write_status);
+        let q = Queue::new_with_status_validator(
+            expect_transactional_write_status,
+            false,
+            writer_flow_control(
+                TEST_INFLIGHT_MESSAGES,
+                TEST_INFLIGHT_BYTES,
+                10,
+                TEST_INFLIGHT_BYTES,
+                Duration::from_millis(20),
+            ),
+        )
+        .unwrap();
         q.add_message(create_message(1, vec![]), None)
             .await
             .unwrap();
-        let messages = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        let messages = q.get_messages_to_send().await;
         assert_eq!(messages.len(), 1);
 
         q.acknowledge_message(write_ack(1)).await.unwrap();
@@ -519,13 +755,24 @@ mod tests {
 
     #[tokio::test]
     async fn flush_returns_status_validation_error_observed_during_flush() {
-        let q = Arc::new(Queue::new_with_status_validator(
-            expect_transactional_write_status,
-        ));
+        let q = Arc::new(
+            Queue::new_with_status_validator(
+                expect_transactional_write_status,
+                false,
+                writer_flow_control(
+                    TEST_INFLIGHT_MESSAGES,
+                    TEST_INFLIGHT_BYTES,
+                    10,
+                    TEST_INFLIGHT_BYTES,
+                    Duration::from_millis(20),
+                ),
+            )
+            .unwrap(),
+        );
         q.add_message(create_message(1, vec![]), None)
             .await
             .unwrap();
-        let messages = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        let messages = q.get_messages_to_send().await;
         assert_eq!(messages.len(), 1);
 
         let q_flush = Arc::clone(&q);
@@ -547,7 +794,7 @@ mod tests {
         q.add_message(create_message(1, vec![]), None)
             .await
             .unwrap();
-        let messages = q.get_messages_to_send(10, Duration::from_millis(20)).await;
+        let messages = q.get_messages_to_send().await;
         assert_eq!(messages.len(), 1);
 
         let q_flush = Arc::clone(&q);

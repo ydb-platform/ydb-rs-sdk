@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 use super::{
     query::{QueryIncoming, QueryReply},
     scheme::{SchemeIncoming, SchemeReply},
@@ -26,6 +28,48 @@ pub enum Reply {
     Topic(TopicReply),
     Scheme(SchemeReply),
     Query(QueryReply),
+}
+
+impl From<QueryReply> for Reply {
+    fn from(reply: QueryReply) -> Self {
+        Self::Query(reply)
+    }
+}
+
+impl From<TopicReply> for Reply {
+    fn from(reply: TopicReply) -> Self {
+        Self::Topic(reply)
+    }
+}
+
+impl From<SchemeReply> for Reply {
+    fn from(reply: SchemeReply) -> Self {
+        Self::Scheme(reply)
+    }
+}
+
+#[derive(Default)]
+pub struct ReplySink {
+    tx: Mutex<Option<FromHandlerToService>>,
+}
+
+impl ReplySink {
+    pub fn set_channel(&self, tx: FromHandlerToService) {
+        *self
+            .tx
+            .lock()
+            .expect("poisoning shouldn't happen in reply channel mock (set_channel)") = Some(tx);
+    }
+
+    pub fn send(&self, reply: impl Into<Reply>) {
+        self.tx
+            .lock()
+            .expect("poisoning shouldn't happen in reply channel mock (send)")
+            .as_ref()
+            .expect("mock reply channel must be set before replies are sent")
+            .send(reply.into())
+            .expect("mock server failed to send reply");
+    }
 }
 
 pub trait Handler: Send + 'static {
