@@ -3,15 +3,15 @@ use crate::grpc_wrapper::raw_query_service::status::check_status;
 use ydb_grpc::ydb_proto::query::SessionState;
 use ydb_grpc::ydb_proto::query::session_state::SessionHint;
 
-/// Meaning of one successful `AttachSession` stream message.
+/// Validated meaning of one Query Service `SessionState` message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RawAttachSessionEvent {
+pub(crate) enum RawSessionState {
     Active,
     SessionShutdown,
     NodeShutdown,
 }
 
-impl TryFrom<SessionState> for RawAttachSessionEvent {
+impl TryFrom<SessionState> for RawSessionState {
     type Error = RawError;
 
     fn try_from(message: SessionState) -> RawResult<Self> {
@@ -40,37 +40,37 @@ mod tests {
     }
 
     #[test]
-    fn decodes_successful_attach_events() {
+    fn decodes_successful_session_states() {
         assert_eq!(
-            RawAttachSessionEvent::try_from(message(StatusCode::Success, None))
+            RawSessionState::try_from(message(StatusCode::Success, None))
                 .expect("successful state without a hint must be active"),
-            RawAttachSessionEvent::Active
+            RawSessionState::Active
         );
         assert_eq!(
-            RawAttachSessionEvent::try_from(message(
+            RawSessionState::try_from(message(
                 StatusCode::Success,
                 Some(SessionHint::SessionShutdown(SessionShutdownHint {})),
             ))
             .expect("successful session shutdown hint must be decoded"),
-            RawAttachSessionEvent::SessionShutdown
+            RawSessionState::SessionShutdown
         );
         assert_eq!(
-            RawAttachSessionEvent::try_from(message(
+            RawSessionState::try_from(message(
                 StatusCode::Success,
                 Some(SessionHint::NodeShutdown(NodeShutdownHint {})),
             ))
             .expect("successful node shutdown hint must be decoded"),
-            RawAttachSessionEvent::NodeShutdown
+            RawSessionState::NodeShutdown
         );
     }
 
     #[test]
     fn failed_status_takes_precedence_over_shutdown_hint() {
-        let err = RawAttachSessionEvent::try_from(message(
+        let err = RawSessionState::try_from(message(
             StatusCode::BadSession,
             Some(SessionHint::NodeShutdown(NodeShutdownHint {})),
         ))
-        .expect_err("failed status must not be decoded as a successful attach event");
+        .expect_err("failed status must not be decoded as a successful session state");
 
         assert!(matches!(
             err,

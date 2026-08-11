@@ -15,8 +15,8 @@ use tracing::warn;
 
 use crate::errors::{YdbError, YdbResult, YdbStatusError};
 use crate::grpc_connection_manager::GrpcConnectionManager;
-use crate::grpc_wrapper::raw_query_service::attach_session::RawAttachSessionEvent;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
+use crate::grpc_wrapper::raw_query_service::session_state::RawSessionState;
 use ydb_grpc::ydb_proto::query::SessionState;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
@@ -46,12 +46,12 @@ impl CreatedSession {
             .message()
             .await?
             .ok_or_else(|| YdbError::custom("attach session stream closed before initial state"))?;
-        match RawAttachSessionEvent::try_from(first)? {
-            RawAttachSessionEvent::Active => {}
-            RawAttachSessionEvent::SessionShutdown => {
+        match RawSessionState::try_from(first)? {
+            RawSessionState::Active => {}
+            RawSessionState::SessionShutdown => {
                 return Err(YdbError::custom("query session shutdown hint received"));
             }
-            RawAttachSessionEvent::NodeShutdown => {
+            RawSessionState::NodeShutdown => {
                 observer.node_shutdown(&identity.node_uri);
                 return Err(YdbError::custom("query node shutdown hint received"));
             }
@@ -258,23 +258,23 @@ async fn listen_attach_stream(
     let mut events = stream.map(|message| {
         message
             .map_err(YdbError::from)
-            .and_then(|message| RawAttachSessionEvent::try_from(message).map_err(YdbError::from))
+            .and_then(|message| RawSessionState::try_from(message).map_err(YdbError::from))
     });
     let node_shutdown = loop {
         match events.next().await {
-            Some(Ok(RawAttachSessionEvent::Active)) => {}
-            Some(Ok(RawAttachSessionEvent::SessionShutdown)) => {
+            Some(Ok(RawSessionState::Active)) => {}
+            Some(Ok(RawSessionState::SessionShutdown)) => {
                 warn!(
                     session_id = %identity.session_id,
-                    hint = ?RawAttachSessionEvent::SessionShutdown,
+                    hint = ?RawSessionState::SessionShutdown,
                     "query session attach listener received a shutdown hint"
                 );
                 break false;
             }
-            Some(Ok(RawAttachSessionEvent::NodeShutdown)) => {
+            Some(Ok(RawSessionState::NodeShutdown)) => {
                 warn!(
                     session_id = %identity.session_id,
-                    hint = ?RawAttachSessionEvent::NodeShutdown,
+                    hint = ?RawSessionState::NodeShutdown,
                     "query session attach listener received a shutdown hint"
                 );
                 break true;
