@@ -554,7 +554,7 @@ impl TableClient {
         .await
     }
 
-    /// Describe cluster-wide table option presets.
+    /// Describe cluster-wide table option presets without opening a table session.
     pub fn describe_table_options(&self) -> DescribeTableOptionsBuilder<'_> {
         DescribeTableOptionsBuilder {
             client: self,
@@ -571,13 +571,11 @@ impl TableClient {
             &opts,
             Idempotency::NonIdempotent,
             closure!([&client = self, &opts], async |_| {
-                let session = client.create_session_with_opts(opts).await?;
                 let req = RawDescribeTableOptionsRequest {
-                    operation_params: session.operation_params(),
+                    operation_params: resolve_timeouts(opts).operation_params(),
                 };
-                let raw: RawDescribeTableOptionsResult = session
-                    .in_flight_rpc(async |table| table.describe_table_options(req).await)
-                    .await?;
+                let mut table = client.sessionless_table_client(opts).await?;
+                let raw: RawDescribeTableOptionsResult = table.describe_table_options(req).await?;
                 Ok(raw.into())
             }),
         )
