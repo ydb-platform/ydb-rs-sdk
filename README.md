@@ -61,6 +61,11 @@ For a single YQL statement you usually do not need `retry_tx` — call a builder
 | [`query_result_set`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html) | one [`ResultSet`](https://docs.rs/ydb/latest/ydb/struct.ResultSet.html) | all rows of one result set |
 | [`query`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html) | [`QueryStream`](https://docs.rs/ydb/latest/ydb/struct.QueryStream.html) | multiple result sets, large reads |
 
+`QueryStream` is a standard Rust `Stream` of `QueryResultPart` chunks. Each part identifies its
+logical result set by index, so rows can be processed without buffering the complete result set.
+Consume the stream through `None`, or call `finish()` to drain unread rows and confirm completion.
+Dropping it early cancels the query and discards its pooled session.
+
 Parameters chain at the call site:
 
 ```rust
