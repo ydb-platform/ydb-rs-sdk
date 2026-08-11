@@ -412,14 +412,14 @@ mod test {
 
     #[test]
     fn database_from_path() -> YdbResult<()> {
-        let builder = ClientBuilder::new_from_connection_string("http://asd:222/qwe1")?;
+        let builder = ClientBuilder::new_from_connection_string("grpc://asd:222/qwe1")?;
         assert_eq!(builder.database, "/qwe1".to_string());
         Ok(())
     }
 
     #[test]
     fn database_from_arg() -> YdbResult<()> {
-        let builder = ClientBuilder::new_from_connection_string("http://asd:222/qwe2")?;
+        let builder = ClientBuilder::new_from_connection_string("grpcs://asd:222/qwe2")?;
         assert_eq!(builder.database, "/qwe2".to_string());
         Ok(())
     }
@@ -438,6 +438,16 @@ mod test {
             ClientBuilder::new_from_connection_string("grpc://localhost?database=/Root/test");
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn connection_string_with_unsupported_scheme_returns_error() {
+        for scheme in ["http", "https", "foo"] {
+            let result = ClientBuilder::new_from_connection_string(format!(
+                "{scheme}://localhost:2136?database=/Root/test"
+            ));
+            assert!(result.is_err());
+        }
     }
 
     #[test]
@@ -510,7 +520,7 @@ mod test {
     #[test]
     fn password_without_username() -> YdbResult<()> {
         let builder = ClientBuilder::new_from_connection_string(
-            "http://asd:222/qwe1?token_static_password=hello",
+            "grpc://asd:222/qwe1?token_static_password=hello",
         );
 
         match builder {
