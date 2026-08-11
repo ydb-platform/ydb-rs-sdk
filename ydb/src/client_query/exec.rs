@@ -615,50 +615,59 @@ pub(crate) async fn transaction_begin_stream(
         !opts.implicit_session,
         "implicit_session is only available on QueryClient one-shot builders"
     );
-    tx.active()?;
     let effective_timeout = resolve_effective_timeout(tx.retry_deadline, opts.timeout);
-    let result: YdbResult<ExecuteQueryStream> =
-        maybe_with_operation_timeout(effective_timeout, async {
-            tx.session_lease()?.ensure_healthy()?;
-            tracing::Span::current().record("ydb.session.id", tx.session_lease()?.session_id());
-            if tx.begin {
-                transaction_ensure_begin(tx).await?;
-            }
-            if opts.commit_tx {
-                transaction_before_commit(tx).await?;
-            }
-            let (mut client, req) =
-                transaction_execute_request(tx, text, params, &opts, concurrent_result_sets)
-                    .await?;
-            let starts_transaction = matches!(tx.active()?.server, ServerTransaction::NotStarted);
-            if starts_transaction {
-                tx.active_mut()?.server = ServerTransaction::BeginInFlight;
-            }
-            let stream = client.execute_query(req).await.map_err(YdbError::from)?;
-            let mut stream = ExecuteQueryStream::new(stream);
-            stream.prime_first_part().await?;
-            if !stream.is_active() {
-                let error = YdbError::InternalError(
-                    "ExecuteQuery response stream closed before the first part".to_string(),
-                );
-                let mut active = tx.take_active(TxState::Ambiguous(error.clone()))?;
-                active.lease.invalidate();
-                return Err(error);
-            }
-            let tx_id = stream.take_captured_tx_id();
-            apply_stream_tx_id(tx, tx_id);
-            Ok(stream)
-        })
-        .await;
+    let result = maybe_with_operation_timeout(
+        effective_timeout,
+        open_transaction_stream(tx, text, params, &opts, concurrent_result_sets),
+    )
+    .await;
+    resolve_transaction_stream_open(tx, result)
+}
+
+async fn open_transaction_stream(
+    tx: &mut TransactionExecContext,
+    text: String,
+    params: HashMap<String, Value>,
+    opts: &CallOptions,
+    concurrent_result_sets: bool,
+) -> YdbResult<ExecuteQueryStream> {
+    tx.session_lease()?.ensure_healthy()?;
+    tracing::Span::current().record("ydb.session.id", tx.session_lease()?.session_id());
+    if tx.begin {
+        transaction_ensure_begin(tx).await?;
+    }
+    if opts.commit_tx {
+        transaction_before_commit(tx).await?;
+    }
+    let (mut client, req) =
+        transaction_execute_request(tx, text, params, opts, concurrent_result_sets).await?;
+    if matches!(tx.active()?.server, ServerTransaction::NotStarted) {
+        tx.active_mut()?.server = ServerTransaction::BeginInFlight;
+    }
+    let stream = client.execute_query(req).await.map_err(YdbError::from)?;
+    let mut stream = ExecuteQueryStream::new(stream);
+    stream.prime_first_part().await?;
+    if !stream.is_active() {
+        let error = YdbError::InternalError(
+            "ExecuteQuery response stream closed before the first part".to_string(),
+        );
+        let mut active = tx.take_active(TxState::Ambiguous(error.clone()))?;
+        active.lease.invalidate();
+        return Err(error);
+    }
+    apply_stream_tx_id(tx, stream.take_captured_tx_id());
+    Ok(stream)
+}
+
+fn resolve_transaction_stream_open(
+    tx: &mut TransactionExecContext,
+    result: YdbResult<ExecuteQueryStream>,
+) -> YdbResult<ExecuteQueryStream> {
     if let Err(err) = &result {
-        if matches!(
-            tx.state,
-            TxState::Active(ActiveTransaction {
-                server: ServerTransaction::BeginInFlight,
-                ..
-            })
-        ) {
-            tx.active_mut()?.server = ServerTransaction::NotStarted;
+        if let TxState::Active(active) = &mut tx.state
+            && matches!(active.server, ServerTransaction::BeginInFlight)
+        {
+            active.server = ServerTransaction::NotStarted;
         }
         tx.apply_query_error(err);
     }
