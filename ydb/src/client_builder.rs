@@ -424,6 +424,22 @@ mod test {
     }
 
     #[test]
+    fn connection_string_without_scheme_returns_error() {
+        let result =
+            ClientBuilder::new_from_connection_string("localhost:2136?database=/Root/test");
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn connection_string_without_port_returns_error() {
+        let result =
+            ClientBuilder::new_from_connection_string("grpc://localhost?database=/Root/test");
+
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn use_discovery_default_true() -> YdbResult<()> {
         let builder = ClientBuilder::new_from_connection_string("grpc://asd:222/qwe")?;
         assert!(builder.discovery_enabled);
