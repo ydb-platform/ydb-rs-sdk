@@ -9,7 +9,10 @@ use crate::result::{ResultSet, Row};
 use crate::types::Value;
 
 use super::FromYdbRow;
-use super::exec::{CallOptions, ClientExecContext, TransactionExecContext, resolve_commit_tx};
+use super::exec::{
+    CallOptions, ClientExecContext, TransactionExecContext, client_begin_stream, resolve_commit_tx,
+    transaction_begin_stream,
+};
 use super::internal::ExecCoreRef;
 use super::stream_facade::{QueryStream, materialize_query};
 
@@ -251,19 +254,27 @@ impl<'a, S> IntoFuture for CallBuilder<'a, Streamed, S> {
     type Output = YdbResult<QueryStream<'a>>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
-    fn into_future(mut self) -> Self::IntoFuture {
+    fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let commit_tx = resolve_commit_tx(&self.core, &self.opts);
-            let opened = self
-                .core
-                .begin_stream(self.text, self.params, self.opts, false)
-                .await?;
-            Ok(QueryStream {
-                core: self.core,
-                stream: opened.stream,
-                owned_lease: opened.owned_lease,
-                commit_tx,
-            })
+            let commit_at_end = resolve_commit_tx(&self.core, &self.opts);
+            match self.core {
+                ExecCoreRef::Client(context) => {
+                    let opened =
+                        client_begin_stream(context, self.text, self.params, self.opts, false)
+                            .await?;
+                    Ok(QueryStream::from_client(opened))
+                }
+                ExecCoreRef::Transaction(context) => {
+                    let stream =
+                        transaction_begin_stream(context, self.text, self.params, self.opts, false)
+                            .await?;
+                    Ok(QueryStream::from_transaction(
+                        stream,
+                        context,
+                        commit_at_end,
+                    ))
+                }
+            }
         })
     }
 }

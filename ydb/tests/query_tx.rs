@@ -81,23 +81,30 @@ struct TxLifecycle {
 
 type SharedTxLifecycle = Arc<Mutex<TxLifecycle>>;
 
-/// Every `ExecuteQuery` succeeds (handing back `QUERY_TX_ID`); `CommitTransaction` and
-/// `RollbackTransaction` are counted and then passed through to the mock's default handler,
-/// which replies success for both. Covers T0 (happy path), T1 (commit-via-query), T4
-/// (explicit rollback succeeds), and T6 (panic, before/after a real terminal event) — the
-/// mock behavior needed is identical across those; only the callback differs.
+/// Every `ExecuteQuery` succeeds. A lazy transaction ID arrives after the first response part;
+/// a query that commits the transaction omits it. `CommitTransaction` and `RollbackTransaction`
+/// are counted and then passed through to the mock's default handler, which replies success for
+/// both. Covers T0 (happy path), T1 (commit-via-query), T4 (explicit rollback succeeds), and T6
+/// (panic, before/after a real terminal event) — the mock behavior needed is identical across
+/// those; only the callback differs.
 #[derive(Default)]
 struct CountingHandler {
     replies: ReplySink,
     tx_lifecycle: SharedTxLifecycle,
+    empty_execute_response: bool,
 }
 
 impl CountingHandler {
     fn new() -> (Self, SharedTxLifecycle) {
+        Self::with_empty_execute_response(false)
+    }
+
+    fn with_empty_execute_response(empty_execute_response: bool) -> (Self, SharedTxLifecycle) {
         let tx_lifecycle = Arc::new(Mutex::new(TxLifecycle::default()));
         let handler = Self {
             replies: ReplySink::default(),
             tx_lifecycle: tx_lifecycle.clone(),
+            empty_execute_response,
         };
         (handler, tx_lifecycle)
     }
@@ -119,13 +126,25 @@ impl Handler for CountingHandler {
             _ => {}
         }
 
-        let Incoming::Query(QueryIncoming::ExecuteQuery(_, stream_id)) = incoming else {
+        let Incoming::Query(QueryIncoming::ExecuteQuery(request, stream_id)) = incoming else {
             return Some(incoming);
         };
-        self.replies.send(QueryReply::ExecuteQuery {
-            stream_id,
-            part: success_part(Some(QUERY_TX_ID)),
-        });
+        if !self.empty_execute_response {
+            self.replies.send(QueryReply::ExecuteQuery {
+                stream_id,
+                part: success_part(None),
+            });
+            if request
+                .tx_control
+                .as_ref()
+                .is_none_or(|control| !control.commit_tx)
+            {
+                self.replies.send(QueryReply::ExecuteQuery {
+                    stream_id,
+                    part: success_part(Some(QUERY_TX_ID)),
+                });
+            }
+        }
         self.replies
             .send(QueryReply::ExecuteQueryClose { stream_id });
         None
@@ -331,6 +350,91 @@ async fn commit_via_query_reports_committed() -> YdbResult<()> {
         lifecycle.commit_count, 0,
         "commit already happened via the query; no separate RPC expected"
     );
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn empty_commit_via_query_response_is_not_committed() -> YdbResult<()> {
+    let (handler, tx_lifecycle) = CountingHandler::with_empty_execute_response(true);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')")
+                .with_commit(true)
+                .await?;
+            Ok(())
+        }))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "an empty ExecuteQuery response must not confirm commit"
+    );
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 0);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn swallowed_empty_commit_via_query_response_is_not_committed() -> YdbResult<()> {
+    let (handler, tx_lifecycle) = CountingHandler::with_empty_execute_response(true);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            let commit = tx
+                .exec("UPSERT INTO t (id, val) VALUES (1, 'x')")
+                .with_commit(true)
+                .await;
+            assert!(commit.is_err(), "empty response must fail the query");
+            Ok(())
+        }))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "swallowing an ambiguous commit error must not report success"
+    );
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 0);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+/// Once the first `ExecuteQuery` has been dispatched, a failed response can leave a server-side
+/// transaction whose ID the SDK never received. Swallowing that error must not turn the local
+/// transaction back into an unstarted transaction that can be "committed" without an RPC.
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn swallowed_first_query_failure_is_not_committed_locally() -> YdbResult<()> {
+    let (handler, tx_lifecycle) = ScriptedQueryHandler::new(vec![StatusCode::Unavailable], vec![]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            let query = tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await;
+            assert!(query.is_err(), "the first query must fail");
+            Ok(())
+        }))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "an unconfirmed first query must leave the transaction ambiguous"
+    );
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 0);
     assert_eq!(lifecycle.rollback_count, 0);
     Ok(())
 }
