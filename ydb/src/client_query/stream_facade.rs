@@ -3,8 +3,8 @@ use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
+use futures_util::Stream;
 use futures_util::stream::FusedStream;
-use futures_util::{Stream, TryStreamExt};
 
 use crate::closure;
 use crate::errors::{YdbError, YdbResult};
@@ -47,10 +47,6 @@ impl QueryResultPart {
     /// Consume the part and return its rows and column metadata.
     pub fn into_result_set(self) -> ResultSet {
         self.result_set
-    }
-
-    fn into_raw(self) -> (i64, RawResultSet) {
-        (self.result_set_index, self.result_set.into_raw())
     }
 }
 
@@ -100,31 +96,16 @@ impl Stream for QueryStream<'_> {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        let next = ready!(Pin::new(&mut this.stream).poll_next(cx));
-
-        match next {
-            Some(Ok(part)) => {
-                this.apply_captured_transaction_id();
-                match QueryResultPart::try_from(part) {
-                    Ok(part) => Poll::Ready(Some(Ok(part))),
-                    Err(err) => {
-                        this.terminate_with_error(&err);
-                        Poll::Ready(Some(Err(err)))
-                    }
+        match ready!(this.poll_next_raw(cx)) {
+            Some(Ok(part)) => match QueryResultPart::try_from(part) {
+                Ok(part) => Poll::Ready(Some(Ok(part))),
+                Err(err) => {
+                    this.terminate_with_error(&err);
+                    Poll::Ready(Some(Err(err)))
                 }
-            }
-            Some(Err(err)) => {
-                let ydb_err = YdbError::from(err);
-                this.terminate_with_error(&ydb_err);
-                Poll::Ready(Some(Err(ydb_err)))
-            }
-            None => {
-                this.apply_captured_transaction_id();
-                match this.complete() {
-                    Ok(()) => Poll::Ready(None),
-                    Err(err) => Poll::Ready(Some(Err(err))),
-                }
-            }
+            },
+            Some(Err(err)) => Poll::Ready(Some(Err(err))),
+            None => Poll::Ready(None),
         }
     }
 }
@@ -136,6 +117,36 @@ impl FusedStream for QueryStream<'_> {
 }
 
 impl QueryStream<'_> {
+    fn poll_next_raw(
+        &mut self,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<YdbResult<RawQueryResultPart>>> {
+        match ready!(Pin::new(&mut self.stream).poll_next(cx)) {
+            Some(Ok(part)) => {
+                self.apply_captured_transaction_id();
+                Poll::Ready(Some(Ok(part)))
+            }
+            Some(Err(err)) => {
+                let error = YdbError::from(err);
+                self.terminate_with_error(&error);
+                Poll::Ready(Some(Err(error)))
+            }
+            None => {
+                self.apply_captured_transaction_id();
+                match self.complete() {
+                    Ok(()) => Poll::Ready(None),
+                    Err(error) => Poll::Ready(Some(Err(error))),
+                }
+            }
+        }
+    }
+
+    async fn next_raw(&mut self) -> YdbResult<Option<RawQueryResultPart>> {
+        std::future::poll_fn(|cx| self.poll_next_raw(cx))
+            .await
+            .transpose()
+    }
+
     fn cancel_active(&mut self, error: Option<YdbError>) {
         self.apply_captured_transaction_id();
         let completion_unconfirmed = self.stream.completion_unconfirmed();
@@ -223,7 +234,7 @@ impl<'a> QueryStream<'a> {
     ///
     /// This returns a pooled session only after YDB closes the response stream successfully.
     pub async fn finish(mut self) -> YdbResult<()> {
-        while self.try_next().await?.is_some() {}
+        while self.next_raw().await?.is_some() {}
         Ok(())
     }
 }
@@ -296,14 +307,13 @@ struct PartialResultSet {
 
 async fn materialize_stream(mut stream: QueryStream<'_>) -> YdbResult<Vec<ResultSet>> {
     let mut by_index: BTreeMap<i64, PartialResultSet> = BTreeMap::new();
-    while let Some(part) = stream.try_next().await? {
-        let (index, result_set) = part.into_raw();
-        let partial = by_index.entry(index).or_default();
+    while let Some(part) = stream.next_raw().await? {
+        let partial = by_index.entry(part.result_set_index).or_default();
         append_result_set_part(
             &mut partial.columns,
             &mut partial.rows,
             &mut partial.truncated,
-            result_set,
+            part.result_set,
         )?;
     }
 
