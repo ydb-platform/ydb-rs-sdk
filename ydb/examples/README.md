@@ -17,7 +17,7 @@ Examples read `YDB_CONNECTION_STRING` where noted; the rest connect to `grpc://l
 |---------|-------|-----|
 | `basic-read-rows`, `basic-bulk-upsert` | `TableClient` + `QueryClient` | DDL via `QueryClient::exec`; data via sessionless `ReadRows` / `BulkUpsert` |
 | `basic-select-upsert`, `basic-upsert-many-rows`, `container-types` | `QueryClient` | YQL queries and transactions |
-| `query-service-*` | `QueryClient` | Query Service (implicit sessions, streaming, tx modes) |
+| `query-service-*` | `QueryClient` | Query Service (implicit sessions, streaming, tx modes, analysis modes) |
 
 YQL (including DDL) and multi-statement transactions use [`QueryClient`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html) with default [`TxMode::Implicit`](https://docs.rs/ydb/latest/ydb/enum.TxMode.html). `TableClient` covers typed DDL RPCs (`create_table`, …), describe, copy/rename, and sessionless `ReadRows` / `BulkUpsert`.
 
