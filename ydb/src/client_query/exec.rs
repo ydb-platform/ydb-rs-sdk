@@ -50,13 +50,23 @@ pub(crate) struct ClientExecContext {
     pub retry_settings: RetrySettings,
 }
 
-/// Query stream together with a pooled session lease when the stream itself owns that lease.
-pub(crate) struct OpenedQueryStream {
+/// Opened client stream and its explicit session ownership mode.
+pub(crate) struct OpenedClientQueryStream {
     pub(crate) stream: ExecuteQueryStream,
-    /// `Some` for a pooled `QueryClient` query: the stream must return or discard this lease.
-    /// `None` means the stream owns no lease: an implicit query has none, while a transaction
-    /// keeps its lease in [`TransactionExecContext`].
-    pub(crate) owned_lease: Option<SessionPoolLease>,
+    pub(crate) session: ClientQuerySession,
+}
+
+pub(crate) enum ClientQuerySession {
+    ServerImplicit,
+    Pooled(SessionPoolLease),
+}
+
+impl ClientQuerySession {
+    pub(crate) fn complete(self) {
+        if let Self::Pooled(lease) = self {
+            lease.return_to_pool();
+        }
+    }
 }
 
 pub(crate) enum TxState {
@@ -355,15 +365,15 @@ pub(super) async fn client_begin_stream_once(
     params: &HashMap<String, Value>,
     opts: &CallOptions,
     concurrent_result_sets: bool,
-) -> YdbResult<OpenedQueryStream> {
+) -> YdbResult<OpenedClientQueryStream> {
     if opts.implicit_session {
         let (mut client, req) =
             client_implicit_session_request(ctx, text, params, opts, concurrent_result_sets)
                 .await?;
         let stream = client.execute_query(req).await.map_err(YdbError::from)?;
-        return Ok(OpenedQueryStream {
+        return Ok(OpenedClientQueryStream {
             stream: ExecuteQueryStream::new(stream),
-            owned_lease: None,
+            session: ClientQuerySession::ServerImplicit,
         });
     }
 
@@ -376,7 +386,7 @@ async fn open_pooled_query_stream(
     params: &HashMap<String, Value>,
     opts: &CallOptions,
     concurrent_result_sets: bool,
-) -> YdbResult<OpenedQueryStream> {
+) -> YdbResult<OpenedClientQueryStream> {
     let tx_control = tx_control_for_client(opts)?;
     let lease = ctx.session_pool.acquire_explicit().await?;
     let result = async {
@@ -399,9 +409,9 @@ async fn open_pooled_query_stream(
     .await;
 
     match result {
-        Ok(stream) => Ok(OpenedQueryStream {
+        Ok(stream) => Ok(OpenedClientQueryStream {
             stream,
-            owned_lease: Some(lease),
+            session: ClientQuerySession::Pooled(lease),
         }),
         Err(err) => lease.finish(Err(err)),
     }
@@ -414,7 +424,7 @@ pub(crate) async fn client_begin_stream(
     params: HashMap<String, Value>,
     opts: CallOptions,
     concurrent_result_sets: bool,
-) -> YdbResult<OpenedQueryStream> {
+) -> YdbResult<OpenedClientQueryStream> {
     ctx.retry_settings
         .clone()
         .with_deadline(opts.timeout)
@@ -517,12 +527,29 @@ pub(crate) async fn transaction_ensure_begin(tx: &mut TransactionExecContext) ->
     }
 }
 
-/// Mark the transaction committed by the server as part of the last `ExecuteQuery` (`commit_tx: true`).
-pub(crate) fn transaction_finish_committed_via_query(
+/// Finish a successful transaction query after its response stream reaches EOF.
+pub(crate) fn transaction_finish_query(
     tx: &mut TransactionExecContext,
+    commit_at_end: bool,
 ) -> YdbResult<()> {
-    tx.take_active(TxState::Committed)?.lease.return_to_pool();
-    Ok(())
+    if commit_at_end {
+        tx.take_active(TxState::Committed)?.lease.return_to_pool();
+        return Ok(());
+    }
+
+    let message = match &tx.active()?.server {
+        ServerTransaction::Started(_) => return Ok(()),
+        ServerTransaction::BeginInFlight => "ExecuteQuery response missing transaction id",
+        ServerTransaction::NotStarted
+        | ServerTransaction::CommitInFlight(_)
+        | ServerTransaction::RollbackInFlight(_) => {
+            "query transaction reached an invalid state after ExecuteQuery"
+        }
+    };
+    let error = YdbError::InternalError(message.to_string());
+    let mut active = tx.take_active(TxState::Ambiguous(error.clone()))?;
+    active.lease.invalidate();
+    Err(error)
 }
 
 async fn transaction_before_commit(tx: &mut TransactionExecContext) -> YdbResult<()> {
@@ -564,14 +591,14 @@ pub(crate) async fn transaction_begin_stream(
     params: HashMap<String, Value>,
     opts: CallOptions,
     concurrent_result_sets: bool,
-) -> YdbResult<OpenedQueryStream> {
+) -> YdbResult<ExecuteQueryStream> {
     debug_assert!(
         !opts.implicit_session,
         "implicit_session is only available on QueryClient one-shot builders"
     );
     tx.active()?;
     let effective_timeout = resolve_effective_timeout(tx.retry_deadline, opts.timeout);
-    let result: YdbResult<OpenedQueryStream> =
+    let result: YdbResult<ExecuteQueryStream> =
         maybe_with_operation_timeout(effective_timeout, async {
             tx.session_lease()?.ensure_healthy()?;
             tracing::Span::current().record("ydb.session.id", tx.session_lease()?.session_id());
@@ -591,12 +618,17 @@ pub(crate) async fn transaction_begin_stream(
             let stream = client.execute_query(req).await.map_err(YdbError::from)?;
             let mut stream = ExecuteQueryStream::new(stream);
             stream.prime_first_part().await?;
+            if !stream.in_progress() {
+                let error = YdbError::InternalError(
+                    "ExecuteQuery response stream closed before the first part".to_string(),
+                );
+                let mut active = tx.take_active(TxState::Ambiguous(error.clone()))?;
+                active.lease.invalidate();
+                return Err(error);
+            }
             let tx_id = stream.take_captured_tx_id();
             apply_stream_tx_id(tx, tx_id);
-            Ok(OpenedQueryStream {
-                stream,
-                owned_lease: None,
-            })
+            Ok(stream)
         })
         .await;
     if let Err(err) = &result {
