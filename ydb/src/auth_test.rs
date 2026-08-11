@@ -7,8 +7,8 @@ use tracing_test::traced_test;
 use crate::{
     YdbResult,
     credentials::{
-        AnonymousCredentials, CommandLineCredentials, GCEMetadata, MetadataUrlCredentials,
-        ServiceAccountCredentials, StaticCredentials, unix_timestamp,
+        AccessTokenCredentials, AnonymousCredentials, CommandLineCredentials, GCEMetadata,
+        MetadataUrlCredentials, ServiceAccountCredentials, StaticCredentials, unix_timestamp,
     },
     pub_traits::Credentials,
     test_helpers::CONNECTION_STRING,
@@ -212,6 +212,57 @@ fn command_line_credentials_description_hides_short_token() {
         "token leaked into: {description}"
     );
     assert_eq!(description, "short_token");
+}
+
+/// The command is arbitrary, so its output may contain multi-byte characters.
+/// Describing such a token must not panic on a byte index that falls inside a
+/// character.
+#[test]
+fn command_line_credentials_description_handles_multibyte_token() {
+    // 24 characters, 48 bytes: long enough to be truncated, and every cut
+    // point of the byte-based implementation lands inside a character.
+    let token = "абвгдежзийклмнопрстуфхцч";
+
+    let description = CommandLineCredentials::describe_token(token);
+
+    assert!(
+        !description.contains(token),
+        "token leaked into: {description}"
+    );
+    assert_eq!(description, "абв..хцч");
+}
+
+/// A token that is short in characters but long in bytes must still be treated
+/// as short.
+#[test]
+fn command_line_credentials_description_counts_characters_not_bytes() {
+    let token = "абвгдежзийк"; // 11 characters, 22 bytes
+
+    let description = CommandLineCredentials::describe_token(token);
+
+    assert_eq!(description, "short_token");
+}
+
+/// `AccessTokenCredentials` describes its token through the same helper, so
+/// the multi-byte token must not panic there either.
+#[test]
+fn access_token_credentials_description_hides_multibyte_token() {
+    let token = "абвгдежзийклмнопрстуфхцч"; // 24 characters, 48 bytes
+
+    let description = AccessTokenCredentials::from(token).debug_string();
+
+    assert!(
+        !description.contains(token),
+        "token leaked into: {description}"
+    );
+    assert_eq!(description, "static token: абв...хцч");
+}
+
+#[test]
+fn access_token_credentials_description_hides_short_token() {
+    let description = AccessTokenCredentials::from("абвгдежзийк").debug_string();
+
+    assert_eq!(description, "static token: xxx...xxx");
 }
 
 #[test]

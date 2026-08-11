@@ -209,14 +209,9 @@ impl Credentials for AccessTokenCredentials {
     }
 
     fn debug_string(&self) -> String {
-        let (begin, end) = if self.token.len() > 20 {
-            (
-                &self.token.as_str()[0..3],
-                &self.token.as_str()[(self.token.len() - 3)..self.token.len()],
-            )
-        } else {
-            ("xxx", "xxx")
-        };
+        let (begin, end) = token_edges(self.token.as_str())
+            .unwrap_or_else(|| ("xxx".to_string(), "xxx".to_string()));
+
         format!("static token: {begin}...{end}")
     }
 }
@@ -225,12 +220,36 @@ impl Credentials for AccessTokenCredentials {
 ///
 /// Fails instead of panicking when the system clock is set before the epoch,
 /// which `SystemTime::duration_since` reports as an error.
-pub(crate) fn unix_timestamp(time: SystemTime) -> YdbResult<usize> {
+pub(crate) fn unix_timestamp(time: SystemTime) -> YdbResult<u64> {
     let elapsed = time.duration_since(UNIX_EPOCH).map_err(|err| {
         YdbError::custom(format!("system clock is set before the UNIX epoch: {err}"))
     })?;
 
-    Ok(elapsed.as_secs() as usize)
+    Ok(elapsed.as_secs())
+}
+
+/// First and last characters of the token, for describing it in logs without
+/// printing it.
+///
+/// Returns `None` when the token is short enough to be recognizable from its
+/// edges, so the caller must decide what to show instead.
+///
+/// Length and slicing are counted in characters, not bytes: a token may come
+/// from an arbitrary source, and byte indexing could split a multi-byte
+/// character and panic.
+fn token_edges(token: &str) -> Option<(String, String)> {
+    const VISIBLE_CHARS: usize = 3;
+    const SHORT_TOKEN_CHARS: usize = 20;
+
+    let chars: Vec<char> = token.chars().collect();
+    if chars.len() <= SHORT_TOKEN_CHARS {
+        return None;
+    }
+
+    let head: String = chars[..VISIBLE_CHARS].iter().collect();
+    let tail: String = chars[chars.len() - VISIBLE_CHARS..].iter().collect();
+
+    Some((head, tail))
 }
 
 /// Get from stdout of command
@@ -279,7 +298,7 @@ impl CommandLineCredentials {
             // `status` is used instead of `status.code()`: the code is `None`
             // when the child was terminated by a signal.
             return Err(YdbError::Custom(format!(
-                "can't execute yc ({}): {}",
+                "can't execute command ({}): {}",
                 output.status, err
             )));
         }
@@ -289,14 +308,9 @@ impl CommandLineCredentials {
 
     /// Describe the token for logs without printing it.
     pub(crate) fn describe_token(token: &str) -> String {
-        if token.len() > 20 {
-            format!(
-                "{}..{}",
-                &token[0..3],
-                &token[(token.len() - 3)..token.len()]
-            )
-        } else {
-            "short_token".to_string()
+        match token_edges(token) {
+            Some((begin, end)) => format!("{begin}..{end}"),
+            None => "short_token".to_string(),
         }
     }
 }
@@ -400,7 +414,7 @@ impl ServiceAccountCredentials {
     }
 
     const IAM_TOKEN_DEFAULT: &'static str = "https://iam.api.cloud.yandex.net/iam/v1/tokens";
-    const JWT_TOKEN_LIFE_TIME: usize = 720; // max 3600
+    const JWT_TOKEN_LIFE_TIME: u64 = 720; // max 3600
 
     fn build_jwt(&self) -> YdbResult<String> {
         let private_key = self.private_key.expose_secret().as_bytes();
@@ -408,8 +422,8 @@ impl ServiceAccountCredentials {
         #[derive(Debug, Serialize, Deserialize)]
         struct Claims {
             aud: String, // Optional. Audience
-            exp: usize, // Required (validate_exp defaults to true in validation). Expiration time (as UTC timestamp)
-            iat: usize, // Optional. Issued at (as UTC timestamp)
+            exp: u64, // Required (validate_exp defaults to true in validation). Expiration time (as UTC timestamp)
+            iat: u64, // Optional. Issued at (as UTC timestamp)
             iss: String, // Optional. Issuer
         }
 
@@ -498,10 +512,6 @@ impl GCEMetadata {
         Self::from_static_url(GCE_METADATA_URL)
     }
 
-    /// Build from an url that is known to be well-formed at compile time.
-    ///
-    /// Used by the default constructors so they do not have to handle a
-    /// parse error that cannot happen.
     fn from_static_url(url: &'static str) -> Self {
         Self {
             uri: url.to_string(),
