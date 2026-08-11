@@ -11,8 +11,33 @@ use crate::grpc_wrapper::raw_query_service::execute_query::{
 use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
 use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
 
+#[derive(Debug)]
 pub(crate) struct StreamCloseMeta {
     pub tx_id: Option<String>,
+}
+
+enum QueryResponseSource {
+    Grpc(Box<tonic::Streaming<ExecuteQueryResponsePart>>),
+    #[cfg(test)]
+    Parts(Vec<ExecuteQueryResponsePart>),
+}
+
+struct ActiveQueryResponse {
+    source: QueryResponseSource,
+    pending_part: Option<ExecuteQueryResponsePart>,
+}
+
+enum QueryResponseState {
+    Active(Box<ActiveQueryResponse>),
+    Exhausted,
+    Cancelled,
+}
+
+#[derive(Default)]
+struct QueryResponseMetadata {
+    tx_id: Option<String>,
+    stats: Option<Duration>,
+    plan: Option<RawQueryStatsPlan>,
 }
 
 #[derive(Default)]
@@ -23,15 +48,9 @@ struct PartialResultSet {
 }
 
 pub(crate) struct ExecuteQueryStream {
-    grpc: Option<tonic::Streaming<ExecuteQueryResponsePart>>,
+    state: QueryResponseState,
     next_index: i64,
-    pending_part: Option<ExecuteQueryResponsePart>,
-    captured_tx_id: Option<String>,
-    finished: bool,
-    stats: Option<Duration>,
-    plan: Option<RawQueryStatsPlan>,
-    #[cfg(test)]
-    test_parts: Option<Vec<ExecuteQueryResponsePart>>,
+    metadata: QueryResponseMetadata,
 }
 
 impl Drop for ExecuteQueryStream {
@@ -43,15 +62,12 @@ impl Drop for ExecuteQueryStream {
 impl ExecuteQueryStream {
     pub fn new(stream: tonic::Streaming<ExecuteQueryResponsePart>) -> Self {
         Self {
-            grpc: Some(stream),
+            state: QueryResponseState::Active(Box::new(ActiveQueryResponse {
+                source: QueryResponseSource::Grpc(Box::new(stream)),
+                pending_part: None,
+            })),
             next_index: 0,
-            pending_part: None,
-            captured_tx_id: None,
-            finished: false,
-            stats: None,
-            plan: None,
-            #[cfg(test)]
-            test_parts: None,
+            metadata: QueryResponseMetadata::default(),
         }
     }
 
@@ -59,19 +75,17 @@ impl ExecuteQueryStream {
     pub(crate) fn from_test_parts(mut parts: Vec<ExecuteQueryResponsePart>) -> Self {
         parts.reverse();
         Self {
-            grpc: None,
+            state: QueryResponseState::Active(Box::new(ActiveQueryResponse {
+                source: QueryResponseSource::Parts(parts),
+                pending_part: None,
+            })),
             next_index: 0,
-            pending_part: None,
-            captured_tx_id: None,
-            finished: false,
-            stats: None,
-            plan: None,
-            test_parts: Some(parts),
+            metadata: QueryResponseMetadata::default(),
         }
     }
 
     pub fn stats(&self) -> Option<Duration> {
-        self.stats
+        self.metadata.stats
     }
 
     /// Query plan and AST from `exec_stats`, whichever the server filled in.
@@ -79,18 +93,18 @@ impl ExecuteQueryStream {
     /// In practice only `EXPLAIN` responses carry them: `collect_stats` sends `STATS_MODE_BASIC`,
     /// which reports neither. See [`RawQueryStatsPlan`] for the full matrix.
     pub(crate) fn take_query_plan(&mut self) -> Option<RawQueryStatsPlan> {
-        self.plan.take()
+        self.metadata.plan.take()
     }
 
     fn absorb_part_metadata(&mut self, part: &ExecuteQueryResponsePart) -> Option<String> {
         if let Some(duration) = stats_from_part(part) {
-            self.stats = Some(duration);
+            self.metadata.stats = Some(duration);
         }
         if let Some(plan) = plan_from_part(part) {
-            self.plan = Some(plan);
+            self.metadata.plan = Some(plan);
         }
         if let Some(id) = tx_id_from_part(part) {
-            self.captured_tx_id = Some(id.clone());
+            self.metadata.tx_id = Some(id.clone());
             return Some(id);
         }
         None
@@ -103,34 +117,27 @@ impl ExecuteQueryStream {
     }
 
     async fn recv_part(&mut self) -> RawResult<Option<ExecuteQueryResponsePart>> {
-        if self.finished {
-            return Ok(None);
-        }
-        if let Some(part) = self.pending_part.take() {
-            return Ok(Some(part));
-        }
-        #[cfg(test)]
-        if let Some(parts) = &mut self.test_parts {
-            return match parts.pop() {
-                Some(part) => Ok(Some(part)),
-                None => {
-                    self.finished = true;
-                    Ok(None)
-                }
-            };
-        }
-        match self.grpc.as_mut() {
-            Some(stream) => match stream.message().await? {
-                Some(part) => Ok(Some(part)),
-                None => {
-                    self.finished = true;
-                    Ok(None)
-                }
-            },
-            None => {
-                self.finished = true;
-                Ok(None)
+        let received = match &mut self.state {
+            QueryResponseState::Active(active) if active.pending_part.is_some() => {
+                return Ok(active.pending_part.take());
             }
+            QueryResponseState::Active(active) => match &mut active.source {
+                QueryResponseSource::Grpc(stream) => stream.message().await?,
+                #[cfg(test)]
+                QueryResponseSource::Parts(parts) => parts.pop(),
+            },
+            QueryResponseState::Exhausted | QueryResponseState::Cancelled => return Ok(None),
+        };
+
+        if received.is_none() {
+            self.state = QueryResponseState::Exhausted;
+        }
+        Ok(received)
+    }
+
+    fn set_pending_part(&mut self, part: ExecuteQueryResponsePart) {
+        if let QueryResponseState::Active(active) = &mut self.state {
+            active.pending_part = Some(part);
         }
     }
 
@@ -174,31 +181,29 @@ impl ExecuteQueryStream {
         }
         .await;
 
-        drop(self.grpc.take());
-        self.finished = true;
+        if result.is_err() {
+            self.cancel();
+        }
         result
     }
 
     /// Read the first response part so transaction `tx_id` is captured before iteration.
     pub async fn prime_first_part(&mut self) -> RawResult<()> {
-        if self.pending_part.is_some() || self.grpc.is_none() || self.finished {
+        if !matches!(
+            self.state,
+            QueryResponseState::Active(ref active) if active.pending_part.is_none()
+        ) {
             return Ok(());
         }
-        let Some(stream) = self.grpc.as_mut() else {
-            return Ok(());
-        };
-        match stream.message().await? {
-            Some(part) => {
-                self.ingest_part(&part)?;
-                self.pending_part = Some(part);
-            }
-            None => self.finished = true,
+        if let Some(part) = self.recv_part().await? {
+            self.ingest_part(&part)?;
+            self.set_pending_part(part);
         }
         Ok(())
     }
 
     pub async fn next_result_set(&mut self) -> RawResult<Option<(RawResultSet, Option<String>)>> {
-        if self.grpc.is_none() || self.finished {
+        if !matches!(self.state, QueryResponseState::Active(_)) {
             return Ok(None);
         }
 
@@ -209,32 +214,19 @@ impl ExecuteQueryStream {
 
         loop {
             let target_index = self.next_index;
-            let part = if let Some(part) = self.pending_part.take() {
-                part
-            } else {
-                match self.grpc.as_mut() {
-                    Some(stream) => match stream.message().await? {
-                        Some(part) => part,
-                        None => {
-                            self.finished = true;
-                            if rows.is_empty() && columns.is_empty() {
-                                return Ok(None);
-                            }
-                            return Ok(Some((
-                                RawResultSet {
-                                    columns,
-                                    rows,
-                                    truncated,
-                                },
-                                tx_id,
-                            )));
-                        }
-                    },
-                    None => {
-                        self.finished = true;
-                        return Ok(None);
-                    }
+            let Some(part) = self.recv_part().await? else {
+                if rows.is_empty() && columns.is_empty() {
+                    return Ok(None);
                 }
+                self.next_index += 1;
+                return Ok(Some((
+                    RawResultSet {
+                        columns,
+                        rows,
+                        truncated,
+                    },
+                    tx_id,
+                )));
             };
 
             let tx_id_from_part = self.ingest_part(&part)?;
@@ -262,7 +254,7 @@ impl ExecuteQueryStream {
                     }
                     self.next_index = part.result_set_index;
                 } else {
-                    self.pending_part = Some(part);
+                    self.set_pending_part(part);
                     self.next_index += 1;
                     return Ok(Some((
                         RawResultSet {
@@ -276,84 +268,48 @@ impl ExecuteQueryStream {
             }
 
             append_rows_from_part(&mut columns, &mut rows, &mut truncated, part)?;
-
-            let stream = self.grpc.as_mut().expect("grpc stream");
-            let collecting_index = self.next_index;
-            match stream.message().await? {
-                Some(next) => {
-                    let tx_id_from_part = self.ingest_part(&next)?;
-                    if tx_id_from_part.is_some() {
-                        tx_id = tx_id_from_part;
-                    }
-                    if next.result_set_index > collecting_index {
-                        self.pending_part = Some(next);
-                        self.next_index += 1;
-                        return Ok(Some((
-                            RawResultSet {
-                                columns,
-                                rows,
-                                truncated,
-                            },
-                            tx_id,
-                        )));
-                    }
-                    if next.result_set_index < collecting_index {
-                        warn!(
-                            got = next.result_set_index,
-                            expected = collecting_index,
-                            "dropping stream part with stale result_set_index"
-                        );
-                        continue;
-                    }
-                    append_rows_from_part(&mut columns, &mut rows, &mut truncated, next)?;
-                }
-                None => {
-                    self.finished = true;
-                    self.next_index += 1;
-                    if rows.is_empty() && columns.is_empty() {
-                        return Ok(None);
-                    }
-                    return Ok(Some((
-                        RawResultSet {
-                            columns,
-                            rows,
-                            truncated,
-                        },
-                        tx_id,
-                    )));
-                }
-            }
         }
     }
 
     pub fn take_captured_tx_id(&mut self) -> Option<String> {
-        if let Some(id) = self.captured_tx_id.take() {
-            return Some(id);
-        }
-        self.pending_part.as_ref().and_then(tx_id_from_part)
+        self.metadata.tx_id.take()
     }
 
     pub(crate) fn in_progress(&self) -> bool {
-        !self.finished
+        matches!(self.state, QueryResponseState::Active(_))
     }
 
     /// Drop the gRPC stream without draining unread parts (sends RST_STREAM).
     pub fn cancel(&mut self) {
-        if let Some(part) = self.pending_part.take() {
-            self.absorb_part_metadata(&part);
+        let old_state = std::mem::replace(&mut self.state, QueryResponseState::Cancelled);
+        match old_state {
+            QueryResponseState::Active(mut active) => {
+                if let Some(part) = active.pending_part.take() {
+                    self.absorb_part_metadata(&part);
+                }
+            }
+            terminal => self.state = terminal,
         }
-        drop(self.grpc.take());
-        self.finished = true;
+    }
+
+    async fn drain_to_end(&mut self) -> RawResult<()> {
+        let result = async {
+            while let Some(part) = self.recv_part().await? {
+                self.ingest_part(&part)?;
+            }
+            Ok(())
+        }
+        .await;
+        if result.is_err() {
+            self.cancel();
+        }
+        result
     }
 
     pub async fn close(&mut self) -> RawResult<StreamCloseMeta> {
-        if let Some(part) = self.pending_part.take() {
-            self.absorb_part_metadata(&part);
-        }
-        drop(self.grpc.take());
-        self.finished = true;
+        self.drain_to_end().await?;
         Ok(StreamCloseMeta {
-            tx_id: self.captured_tx_id.take(),
+            tx_id: self.metadata.tx_id.take(),
         })
     }
 }
@@ -423,6 +379,17 @@ mod tests {
         }
     }
 
+    fn transaction_part(id: &str) -> ExecuteQueryResponsePart {
+        ExecuteQueryResponsePart {
+            status: StatusCode::Success as i32,
+            issues: vec![],
+            result_set_index: 0,
+            result_set: None,
+            exec_stats: None,
+            tx_meta: Some(ydb_grpc::ydb_proto::query::TransactionMeta { id: id.to_string() }),
+        }
+    }
+
     fn row_values(set: &RawResultSet) -> Vec<i64> {
         set.rows
             .iter()
@@ -478,8 +445,7 @@ mod tests {
 
         assert_eq!(sets.len(), 1);
         assert_eq!(row_values(&sets[0]), vec![10, 11]);
-        assert!(stream.finished);
-        assert!(stream.grpc.is_none());
+        assert!(matches!(stream.state, QueryResponseState::Exhausted));
     }
 
     #[tokio::test]
@@ -496,8 +462,7 @@ mod tests {
             err,
             crate::grpc_wrapper::raw_errors::RawError::YdbStatus(_)
         ));
-        assert!(stream.finished);
-        assert!(stream.grpc.is_none());
+        assert!(matches!(stream.state, QueryResponseState::Cancelled));
     }
 
     #[tokio::test]
@@ -515,5 +480,63 @@ mod tests {
 
         assert_eq!(sets.len(), 1);
         assert_eq!(row_values(&sets[0]), vec![10]);
+    }
+
+    #[tokio::test]
+    async fn next_result_set_advances_until_the_stream_is_exhausted() {
+        let mut stream = ExecuteQueryStream::from_test_parts(vec![
+            part_with_row(0, "a", 10),
+            part_with_row(0, "a", 11),
+            part_with_row(1, "b", 20),
+        ]);
+
+        let first = stream
+            .next_result_set()
+            .await
+            .expect("read first result set")
+            .expect("first result set");
+        let second = stream
+            .next_result_set()
+            .await
+            .expect("read second result set")
+            .expect("second result set");
+
+        assert_eq!(row_values(&first.0), vec![10, 11]);
+        assert_eq!(row_values(&second.0), vec![20]);
+        assert!(
+            stream
+                .next_result_set()
+                .await
+                .expect("observe end of stream")
+                .is_none()
+        );
+        assert!(matches!(stream.state, QueryResponseState::Exhausted));
+    }
+
+    #[tokio::test]
+    async fn close_drains_unread_parts_before_reporting_success() {
+        let mut stream = ExecuteQueryStream::from_test_parts(vec![
+            part_with_row(0, "a", 10),
+            transaction_part("tx-1"),
+        ]);
+
+        let metadata = stream.close().await.expect("close stream");
+
+        assert_eq!(metadata.tx_id.as_deref(), Some("tx-1"));
+        assert!(matches!(stream.state, QueryResponseState::Exhausted));
+    }
+
+    #[tokio::test]
+    async fn close_cancels_after_an_unread_part_error() {
+        let mut stream =
+            ExecuteQueryStream::from_test_parts(vec![part_with_row(0, "a", 10), error_part(0)]);
+
+        let error = stream.close().await.expect_err("close must validate parts");
+
+        assert!(matches!(
+            error,
+            crate::grpc_wrapper::raw_errors::RawError::YdbStatus(_)
+        ));
+        assert!(matches!(stream.state, QueryResponseState::Cancelled));
     }
 }
