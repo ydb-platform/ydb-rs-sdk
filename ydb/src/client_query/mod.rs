@@ -231,36 +231,47 @@ impl QueryClient {
 
         match try_attempt(callback, &mut tx).await {
             Ok(value) => match resolve_post_callback_action(&tx.ctx.state) {
-                PostCallbackAction::Return(status) => {
-                    tx.notify_hooks(status);
+                PostCallbackAction::Return => {
+                    tx.notify_hooks();
                     ControlFlow::Break(Ok(value))
                 }
                 PostCallbackAction::Commit => {
                     ControlFlow::Break(match tx.commit().await {
                         Ok(()) => {
-                            tx.notify_hooks(QueryTxCommitStatus::Committed);
+                            tx.notify_hooks();
                             Ok(value)
                         }
                         // Commit outcome is ambiguous on transport errors; never retry.
                         Err(e) => {
-                            tx.notify_hooks(QueryTxCommitStatus::Aborted);
+                            tx.notify_hooks();
                             Err(e.into())
                         }
                     })
                 }
                 PostCallbackAction::Retry(err) => {
-                    tx.notify_hooks(QueryTxCommitStatus::Aborted);
+                    tx.notify_hooks();
                     ControlFlow::Continue(err.into())
                 }
                 PostCallbackAction::Fail(err) => {
-                    tx.notify_hooks(QueryTxCommitStatus::Aborted);
+                    tx.notify_hooks();
                     ControlFlow::Break(Err(err.into()))
                 }
             },
             Err(err) => {
                 tx.rollback_quiet().await;
-                tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                ControlFlow::Continue(err)
+                let outcome = match &tx.ctx.state {
+                    TxState::Committed => ControlFlow::Break(Err(err)),
+                    TxState::Ambiguous(transaction_error) => {
+                        ControlFlow::Break(Err(transaction_error.clone().into()))
+                    }
+                    TxState::RolledBack | TxState::Invalidated(_) => ControlFlow::Continue(err),
+                    TxState::Active(_) => ControlFlow::Break(Err(YdbError::InternalError(
+                        "transaction remained active after rollback".to_string(),
+                    )
+                    .into())),
+                };
+                tx.notify_hooks();
+                outcome
             }
         }?
         .retry_flow(idempotency)
@@ -358,7 +369,7 @@ impl QueryClient {
 }
 
 enum PostCallbackAction {
-    Return(QueryTxCommitStatus),
+    Return,
     Commit,
     Retry(YdbError),
     Fail(YdbError),
@@ -366,8 +377,7 @@ enum PostCallbackAction {
 
 fn resolve_post_callback_action(state: &TxState) -> PostCallbackAction {
     match state {
-        TxState::RolledBack => PostCallbackAction::Return(QueryTxCommitStatus::Aborted),
-        TxState::Committed => PostCallbackAction::Return(QueryTxCommitStatus::Committed),
+        TxState::RolledBack | TxState::Committed => PostCallbackAction::Return,
         TxState::Invalidated(error) => PostCallbackAction::Retry(error.clone()),
         TxState::Ambiguous(err) => PostCallbackAction::Fail(err.clone()),
         TxState::Active(_) => PostCallbackAction::Commit,
@@ -457,8 +467,15 @@ impl Transaction {
         }
     }
 
-    fn notify_hooks(&mut self, status: QueryTxCommitStatus) {
-        for hook in &mut self.ctx.hooks {
+    fn notify_hooks(&mut self) {
+        let status = if matches!(self.ctx.state, TxState::Committed) {
+            QueryTxCommitStatus::Committed
+        } else {
+            QueryTxCommitStatus::Aborted
+        };
+        // Transaction state selects the outcome; consuming the hooks records delivery separately,
+        // so cancellation can resolve every registered hook exactly once from any state.
+        for mut hook in self.ctx.hooks.drain(..) {
             hook.after_commit(status);
         }
     }
@@ -489,9 +506,7 @@ pub(crate) struct QueryTxIdentity {
 
 impl Drop for Transaction {
     fn drop(&mut self) {
-        if self.ctx.state.is_active() {
-            self.notify_hooks(QueryTxCommitStatus::Aborted);
-        }
+        self.notify_hooks();
         let state = std::mem::replace(&mut self.ctx.state, TxState::RolledBack);
         match state {
             TxState::Active(active) => {
@@ -561,6 +576,16 @@ mod unit_tests {
     impl QueryTxHook for AbortCounter {
         fn after_commit(&mut self, status: QueryTxCommitStatus) {
             if status == QueryTxCommitStatus::Aborted {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    struct CommitCounter(Arc<AtomicUsize>);
+
+    impl QueryTxHook for CommitCounter {
+        fn after_commit(&mut self, status: QueryTxCommitStatus) {
+            if status == QueryTxCommitStatus::Committed {
                 self.0.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -651,11 +676,11 @@ mod unit_tests {
     fn committed_and_rolled_back_states_are_done_not_failed() {
         assert!(matches!(
             resolve_post_callback_action(&TxState::Committed),
-            PostCallbackAction::Return(QueryTxCommitStatus::Committed)
+            PostCallbackAction::Return
         ));
         assert!(matches!(
             resolve_post_callback_action(&TxState::RolledBack),
-            PostCallbackAction::Return(QueryTxCommitStatus::Aborted)
+            PostCallbackAction::Return
         ));
     }
 
@@ -754,7 +779,7 @@ mod unit_tests {
             .retry_tx(closure!([observed_aborts], async |tx: &mut Transaction| {
                 exec::apply_stream_tx_id(&mut tx.ctx, TransactionId::from_server("tx-1".into()));
                 tx.ctx
-                    .abort_unconfirmed_stream(YdbError::Transport("stream failed".into()));
+                    .abort_unconfirmed(YdbError::Transport("stream failed".into()));
                 tx.register_hook(AbortCounter(observed_aborts.clone()));
                 Ok(())
             }))
@@ -762,6 +787,64 @@ mod unit_tests {
 
         assert!(result.is_err());
         assert_eq!(aborts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn dropping_terminal_transaction_notifies_abort_hooks() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let lease = pool.acquire_explicit().await.expect("acquire test session");
+        let aborts = Arc::new(AtomicUsize::new(0));
+        let mut tx = Transaction::new(
+            test_connection_manager(),
+            lease,
+            TransactionOptions::default(),
+            None,
+        );
+        tx.register_hook(AbortCounter(aborts.clone()));
+        tx.ctx
+            .abort_unconfirmed(YdbError::Transport("stream failed".into()));
+
+        drop(tx);
+
+        assert_eq!(aborts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn dropping_transaction_does_not_notify_hooks_twice() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let lease = pool.acquire_explicit().await.expect("acquire test session");
+        let aborts = Arc::new(AtomicUsize::new(0));
+        let mut tx = Transaction::new(
+            test_connection_manager(),
+            lease,
+            TransactionOptions::default(),
+            None,
+        );
+        tx.register_hook(AbortCounter(aborts.clone()));
+        tx.notify_hooks();
+
+        drop(tx);
+
+        assert_eq!(aborts.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn dropping_committed_transaction_preserves_hook_status() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let lease = pool.acquire_explicit().await.expect("acquire test session");
+        let commits = Arc::new(AtomicUsize::new(0));
+        let mut tx = Transaction::new(
+            test_connection_manager(),
+            lease,
+            TransactionOptions::default(),
+            None,
+        );
+        tx.register_hook(CommitCounter(commits.clone()));
+        exec::transaction_finish_query(&mut tx.ctx, true).expect("commit via query");
+
+        drop(tx);
+
+        assert_eq!(commits.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]

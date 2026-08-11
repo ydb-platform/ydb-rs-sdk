@@ -134,6 +134,8 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
     /// One-shot defaults depend on [`Self::with_tx_mode`]: implicit mode relies on the server;
     /// explicit modes default to `commit_tx: true`. Interactive transactions default to
     /// `commit_tx: false` unless [`Self::with_commit(true)`] is set on the last query.
+    /// A one-shot explicit transaction rejects `with_commit(false)` because no
+    /// [`Transaction`] exists to own and later finalize it.
     ///
     /// When using [`Self::query`] with `with_commit(true)` inside a transaction, you must
     /// fully drain the stream or call [`QueryStream::finish`] — dropping the stream early cancels

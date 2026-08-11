@@ -145,7 +145,7 @@ impl QueryStream<'_> {
             lifecycle
             && completion_unconfirmed
         {
-            context.abort_unconfirmed_stream(error.unwrap_or_else(|| {
+            context.abort_unconfirmed(error.unwrap_or_else(|| {
                 YdbError::Custom("query stream dropped before completion was confirmed".to_string())
             }));
         }

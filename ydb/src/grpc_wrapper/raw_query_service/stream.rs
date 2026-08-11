@@ -19,7 +19,7 @@ pub(crate) struct RawQueryResultPart {
 
 struct ActiveQueryResponse {
     stream: tonic::Streaming<ExecuteQueryResponsePart>,
-    pending_part: Option<ExecuteQueryResponsePart>,
+    pending_result: Option<RawQueryResultPart>,
 }
 
 enum QueryResponseState {
@@ -33,6 +33,7 @@ struct QueryResponseMetadata {
     tx_id: Option<TransactionId>,
     stats: Option<Duration>,
     plan: Option<RawQueryStatsPlan>,
+    received_part: bool,
 }
 
 pub(crate) struct ExecuteQueryStream {
@@ -54,8 +55,8 @@ impl Stream for ExecuteQueryStream {
         loop {
             let received = match &mut this.state {
                 QueryResponseState::Active(active) => {
-                    if let Some(part) = active.pending_part.take() {
-                        Some(Ok(part))
+                    if let Some(part) = active.pending_result.take() {
+                        return Poll::Ready(Some(Ok(part)));
                     } else {
                         ready!(Pin::new(&mut active.stream).poll_next(cx))
                     }
@@ -77,26 +78,14 @@ impl Stream for ExecuteQueryStream {
                 }
             };
 
-            if let Err(err) = this.ingest_part(&part) {
-                this.state = QueryResponseState::Cancelled;
-                return Poll::Ready(Some(Err(err)));
-            }
-
-            let result_set_index = part.result_set_index;
-            let Some(result_set) = part.result_set else {
-                continue;
-            };
-            let result_set = match RawResultSet::try_from(result_set) {
-                Ok(result_set) => result_set,
+            match this.decode_part(part) {
+                Ok(Some(part)) => return Poll::Ready(Some(Ok(part))),
+                Ok(None) => continue,
                 Err(err) => {
                     this.state = QueryResponseState::Cancelled;
                     return Poll::Ready(Some(Err(err)));
                 }
-            };
-            return Poll::Ready(Some(Ok(RawQueryResultPart {
-                result_set_index,
-                result_set,
-            })));
+            }
         }
     }
 }
@@ -106,7 +95,7 @@ impl ExecuteQueryStream {
         Self {
             state: QueryResponseState::Active(Box::new(ActiveQueryResponse {
                 stream,
-                pending_part: None,
+                pending_result: None,
             })),
             metadata: QueryResponseMetadata::default(),
         }
@@ -124,7 +113,8 @@ impl ExecuteQueryStream {
         self.metadata.plan.take()
     }
 
-    fn absorb_part_metadata(&mut self, part: &ExecuteQueryResponsePart) -> Option<TransactionId> {
+    fn absorb_part_metadata(&mut self, part: &ExecuteQueryResponsePart) {
+        self.metadata.received_part = true;
         if let Some(duration) = stats_from_part(part) {
             self.metadata.stats = Some(duration);
         }
@@ -132,23 +122,28 @@ impl ExecuteQueryStream {
             self.metadata.plan = Some(plan);
         }
         if let Some(id) = tx_id_from_part(part) {
-            self.metadata.tx_id = Some(id.clone());
-            return Some(id);
+            self.metadata.tx_id = Some(id);
         }
-        None
     }
 
-    fn ingest_part(&mut self, part: &ExecuteQueryResponsePart) -> RawResult<Option<TransactionId>> {
-        let tx_id = self.absorb_part_metadata(part);
-        check_part(part)?;
-        Ok(tx_id)
+    fn decode_part(
+        &mut self,
+        part: ExecuteQueryResponsePart,
+    ) -> RawResult<Option<RawQueryResultPart>> {
+        self.absorb_part_metadata(&part);
+        check_part(&part)?;
+        let result_set_index = part.result_set_index;
+        let Some(result_set) = part.result_set else {
+            return Ok(None);
+        };
+        Ok(Some(RawQueryResultPart {
+            result_set_index,
+            result_set: RawResultSet::try_from(result_set)?,
+        }))
     }
 
     async fn recv_part(&mut self) -> RawResult<Option<ExecuteQueryResponsePart>> {
         let received = match &mut self.state {
-            QueryResponseState::Active(active) if active.pending_part.is_some() => {
-                return Ok(active.pending_part.take());
-            }
             QueryResponseState::Active(active) => active.stream.message().await?,
             QueryResponseState::Exhausted | QueryResponseState::Cancelled => return Ok(None),
         };
@@ -166,9 +161,9 @@ impl ExecuteQueryStream {
         self.try_next().await
     }
 
-    fn set_pending_part(&mut self, part: ExecuteQueryResponsePart) {
+    fn set_pending_result(&mut self, part: RawQueryResultPart) {
         if let QueryResponseState::Active(active) = &mut self.state {
-            active.pending_part = Some(part);
+            active.pending_result = Some(part);
         }
     }
 
@@ -181,19 +176,24 @@ impl ExecuteQueryStream {
     pub async fn prime_first_part(&mut self) -> RawResult<()> {
         if !matches!(
             self.state,
-            QueryResponseState::Active(ref active) if active.pending_part.is_none()
+            QueryResponseState::Active(ref active) if active.pending_result.is_none()
         ) {
             return Ok(());
         }
-        if let Some(part) = self.recv_part().await? {
-            self.ingest_part(&part)?;
-            self.set_pending_part(part);
+        if let Some(part) = self.recv_part().await?
+            && let Some(part) = self.decode_part(part)?
+        {
+            self.set_pending_result(part);
         }
         Ok(())
     }
 
     pub fn take_captured_tx_id(&mut self) -> Option<TransactionId> {
         self.metadata.tx_id.take()
+    }
+
+    pub(crate) fn received_part(&self) -> bool {
+        self.metadata.received_part
     }
 
     pub(crate) fn is_active(&self) -> bool {
@@ -208,11 +208,7 @@ impl ExecuteQueryStream {
     pub fn cancel(&mut self) {
         let old_state = std::mem::replace(&mut self.state, QueryResponseState::Cancelled);
         match old_state {
-            QueryResponseState::Active(mut active) => {
-                if let Some(part) = active.pending_part.take() {
-                    self.absorb_part_metadata(&part);
-                }
-            }
+            QueryResponseState::Active(_) => {}
             terminal => self.state = terminal,
         }
     }

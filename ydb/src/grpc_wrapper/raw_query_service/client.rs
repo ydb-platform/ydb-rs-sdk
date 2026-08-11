@@ -19,7 +19,8 @@ use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use ydb_grpc::ydb_proto::query::v1::query_service_client::QueryServiceClient;
 use ydb_grpc::ydb_proto::query::{
     AttachSessionRequest, BeginTransactionRequest, CommitTransactionRequest, CreateSessionRequest,
-    DeleteSessionRequest, ExecuteQueryResponsePart, RollbackTransactionRequest, SessionState,
+    DeleteSessionRequest, ExecuteQueryRequest, ExecuteQueryResponsePart,
+    RollbackTransactionRequest, SessionState,
 };
 
 /// gRPC metadata: enable server-side session balancing on CreateSession.
@@ -57,13 +58,20 @@ impl RawQueryClient {
         }
     }
 
-    #[instrument(name = "ydb.grpc.ExecuteQuery", skip_all, fields(db.system.name = "ydb", ydb.session.id = %req.session_id), err)]
     pub async fn execute_query(
         &mut self,
         req: RawExecuteQueryRequest,
     ) -> RawResult<tonic::Streaming<ExecuteQueryResponsePart>> {
         let proto = req.into_proto()?;
-        let response = self.service.execute_query(proto).await?;
+        self.execute_query_proto(proto).await
+    }
+
+    #[instrument(name = "ydb.grpc.ExecuteQuery", skip_all, fields(db.system.name = "ydb", ydb.session.id = %req.session_id), err)]
+    pub(crate) async fn execute_query_proto(
+        &mut self,
+        req: ExecuteQueryRequest,
+    ) -> RawResult<tonic::Streaming<ExecuteQueryResponsePart>> {
+        let response = self.service.execute_query(req).await?;
         Ok(response.into_inner())
     }
 

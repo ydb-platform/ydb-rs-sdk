@@ -20,12 +20,14 @@ mod mock_server;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
-use ydb::{Client, ClientBuilder, Transaction, YdbResult, closure};
+use ydb::{Client, ClientBuilder, Transaction, Value, YdbError, YdbResult, closure};
 use ydb_grpc::ydb_proto::query::{
     ExecuteQueryResponsePart, RollbackTransactionResponse, TransactionMeta,
 };
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
+use ydb_grpc::ydb_proto::{Column, ResultSet};
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, ReplySink};
 use crate::mock_server::query::{QUERY_TX_ID, QueryIncoming, QueryReply};
@@ -75,11 +77,20 @@ fn scripted_status(script: &[StatusCode], call: usize) -> StatusCode {
 
 #[derive(Default)]
 struct TxLifecycle {
+    execute_count: usize,
     commit_count: usize,
     rollback_count: usize,
 }
 
 type SharedTxLifecycle = Arc<Mutex<TxLifecycle>>;
+
+#[derive(Clone, Copy, Default)]
+enum ExecuteResponse {
+    #[default]
+    Success,
+    Empty,
+    MalformedSecond,
+}
 
 /// Every `ExecuteQuery` succeeds. A lazy transaction ID arrives after the first response part;
 /// a query that commits the transaction omits it. `CommitTransaction` and `RollbackTransaction`
@@ -91,7 +102,7 @@ type SharedTxLifecycle = Arc<Mutex<TxLifecycle>>;
 struct CountingHandler {
     replies: ReplySink,
     tx_lifecycle: SharedTxLifecycle,
-    empty_execute_response: bool,
+    execute_response: ExecuteResponse,
 }
 
 impl CountingHandler {
@@ -100,11 +111,24 @@ impl CountingHandler {
     }
 
     fn with_empty_execute_response(empty_execute_response: bool) -> (Self, SharedTxLifecycle) {
+        let execute_response = if empty_execute_response {
+            ExecuteResponse::Empty
+        } else {
+            ExecuteResponse::Success
+        };
+        Self::with_execute_response(execute_response)
+    }
+
+    fn with_malformed_second_response() -> (Self, SharedTxLifecycle) {
+        Self::with_execute_response(ExecuteResponse::MalformedSecond)
+    }
+
+    fn with_execute_response(execute_response: ExecuteResponse) -> (Self, SharedTxLifecycle) {
         let tx_lifecycle = Arc::new(Mutex::new(TxLifecycle::default()));
         let handler = Self {
             replies: ReplySink::default(),
             tx_lifecycle: tx_lifecycle.clone(),
-            empty_execute_response,
+            execute_response,
         };
         (handler, tx_lifecycle)
     }
@@ -129,15 +153,40 @@ impl Handler for CountingHandler {
         let Incoming::Query(QueryIncoming::ExecuteQuery(request, stream_id)) = incoming else {
             return Some(incoming);
         };
-        if !self.empty_execute_response {
-            self.replies.send(QueryReply::ExecuteQuery {
-                stream_id,
-                part: success_part(None),
-            });
-            if request
-                .tx_control
-                .as_ref()
-                .is_none_or(|control| !control.commit_tx)
+        let call = {
+            let mut lifecycle = self.tx_lifecycle.lock().unwrap();
+            let call = lifecycle.execute_count;
+            lifecycle.execute_count += 1;
+            call
+        };
+        if !matches!(self.execute_response, ExecuteResponse::Empty) {
+            let malformed_response =
+                matches!(self.execute_response, ExecuteResponse::MalformedSecond) && call == 1;
+            let part = if malformed_response {
+                ExecuteQueryResponsePart {
+                    status: StatusCode::Success as i32,
+                    issues: vec![],
+                    result_set_index: 0,
+                    result_set: Some(ResultSet {
+                        columns: vec![Column {
+                            name: "broken".to_string(),
+                            r#type: None,
+                        }],
+                        ..Default::default()
+                    }),
+                    exec_stats: None,
+                    tx_meta: None,
+                }
+            } else {
+                success_part(None)
+            };
+            self.replies
+                .send(QueryReply::ExecuteQuery { stream_id, part });
+            if !malformed_response
+                && request
+                    .tx_control
+                    .as_ref()
+                    .is_none_or(|control| !control.commit_tx)
             {
                 self.replies.send(QueryReply::ExecuteQuery {
                     stream_id,
@@ -275,6 +324,41 @@ impl Handler for CommitTransportFailsHandler {
     }
 }
 
+#[derive(Default)]
+struct BeginTransportFailsHandler {
+    tx_lifecycle: SharedTxLifecycle,
+}
+
+impl BeginTransportFailsHandler {
+    fn new() -> (Self, SharedTxLifecycle) {
+        let tx_lifecycle = Arc::new(Mutex::new(TxLifecycle::default()));
+        let handler = Self {
+            tx_lifecycle: tx_lifecycle.clone(),
+        };
+        (handler, tx_lifecycle)
+    }
+}
+
+impl Handler for BeginTransportFailsHandler {
+    fn set_channel(&mut self, _tx: FromHandlerToService) {}
+
+    fn handle(&self, incoming: Incoming) -> Option<Incoming> {
+        match incoming {
+            Incoming::Query(QueryIncoming::BeginTransaction(_, reply_tx)) => {
+                let _ = reply_tx.send(Err(tonic::Status::unavailable(
+                    "mock begin transport failure",
+                )));
+                None
+            }
+            Incoming::Query(QueryIncoming::CommitTransaction(_, _)) => {
+                self.tx_lifecycle.lock().unwrap().commit_count += 1;
+                Some(incoming)
+            }
+            other => Some(other),
+        }
+    }
+}
+
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn happy_path_reports_committed() -> YdbResult<()> {
@@ -329,6 +413,31 @@ async fn commit_rpc_failure_is_reported_and_not_retried() -> YdbResult<()> {
 
 #[tokio::test]
 #[tracing_test::traced_test]
+async fn swallowed_begin_transport_failure_remains_ambiguous() -> YdbResult<()> {
+    let (handler, tx_lifecycle) = BeginTransportFailsHandler::new();
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            let _ = tx.begin().await;
+            Ok(())
+        }))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "a lost BeginTransaction response must not become an empty committed transaction"
+    );
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 0);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
 async fn commit_via_query_reports_committed() -> YdbResult<()> {
     let (handler, tx_lifecycle) = CountingHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
@@ -350,6 +459,137 @@ async fn commit_via_query_reports_committed() -> YdbResult<()> {
         lifecycle.commit_count, 0,
         "commit already happened via the query; no separate RPC expected"
     );
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn callback_error_after_commit_via_query_is_not_retried() -> YdbResult<()> {
+    let (handler, tx_lifecycle) = CountingHandler::new();
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let callback_attempts = attempts.clone();
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(
+            [callback_attempts],
+            async |tx: &mut Transaction| {
+                let attempt = callback_attempts.fetch_add(1, Ordering::SeqCst);
+                tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')")
+                    .with_commit(true)
+                    .await?;
+                if attempt == 0 {
+                    return Err(YdbError::DeadlineExceeded.into());
+                }
+                Ok(())
+            }
+        ))
+        .idempotent(true)
+        .await;
+
+    assert!(result.is_err(), "the callback error must be reported");
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.execute_count, 1, "committed work must not repeat");
+    assert_eq!(lifecycle.commit_count, 0);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn callback_error_cannot_override_an_ambiguous_transaction() -> YdbResult<()> {
+    let (handler, tx_lifecycle) = BeginTransportFailsHandler::new();
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let callback_attempts = attempts.clone();
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(
+            [callback_attempts],
+            async |tx: &mut Transaction| {
+                let attempt = callback_attempts.fetch_add(1, Ordering::SeqCst);
+                assert!(tx.begin().await.is_err());
+                if attempt == 0 {
+                    return Err(YdbError::DeadlineExceeded.into());
+                }
+                Ok(())
+            }
+        ))
+        .idempotent(true)
+        .await;
+
+    assert!(result.is_err());
+    assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 0);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn local_request_conversion_error_keeps_transaction_usable() -> YdbResult<()> {
+    let (handler, tx_lifecycle) = CountingHandler::new();
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+            let invalid_datetime =
+                SystemTime::UNIX_EPOCH + Duration::from_secs(u64::from(u32::MAX) + 1);
+            assert!(
+                tx.exec("SELECT $value")
+                    .param("$value", Value::DateTime(invalid_datetime))
+                    .await
+                    .is_err()
+            );
+            tx.exec("UPSERT INTO t (id, val) VALUES (2, 'y')").await?;
+            Ok(())
+        }))
+        .await;
+
+    assert!(result.is_ok(), "local conversion did not dispatch an RPC");
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.execute_count, 2);
+    assert_eq!(lifecycle.commit_count, 1);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn malformed_first_response_keeps_transaction_ambiguous() -> YdbResult<()> {
+    let (handler, tx_lifecycle) = CountingHandler::with_malformed_second_response();
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+            assert!(tx.exec("SELECT broken").await.is_err());
+            assert!(
+                tx.exec("UPSERT INTO t (id, val) VALUES (2, 'y')")
+                    .await
+                    .is_err(),
+                "an unconfirmed dispatched query must make the transaction unusable"
+            );
+            Ok(())
+        }))
+        .await;
+
+    assert!(result.is_err());
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.execute_count, 2);
+    assert_eq!(lifecycle.commit_count, 0);
     assert_eq!(lifecycle.rollback_count, 0);
     Ok(())
 }
@@ -569,6 +809,31 @@ async fn transient_error_swallowed_falls_through_to_real_commit() -> YdbResult<(
 
 #[tokio::test]
 #[tracing_test::traced_test]
+async fn swallowed_lazy_begin_failure_remains_ambiguous() -> YdbResult<()> {
+    let (handler, tx_lifecycle) = ScriptedQueryHandler::new(vec![StatusCode::Unavailable], vec![]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            let _ = tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await;
+            Ok(())
+        }))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "a failed lazy begin must not become an empty committed transaction"
+    );
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 0);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
 async fn explicit_rollback_reports_ok_with_real_rollback_rpc() -> YdbResult<()> {
     let (handler, tx_lifecycle) = CountingHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
@@ -593,15 +858,13 @@ async fn explicit_rollback_reports_ok_with_real_rollback_rpc() -> YdbResult<()> 
     Ok(())
 }
 
-/// If `tx.rollback()` fails and the callback propagates that error, `retry_tx`
-/// applies the normal retry policy; here the retried rollback succeeds.
+/// A failed `RollbackTransaction` has an ambiguous server-side outcome, so propagating the error
+/// must not retry the whole transaction.
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn rollback_rpc_failure_propagated_is_retried_until_rollback_succeeds() -> YdbResult<()> {
-    let (handler, tx_lifecycle) = ScriptedQueryHandler::new(
-        vec![StatusCode::Success],
-        vec![StatusCode::BadSession, StatusCode::Success],
-    );
+async fn rollback_rpc_failure_propagated_is_not_retried() -> YdbResult<()> {
+    let (handler, tx_lifecycle) =
+        ScriptedQueryHandler::new(vec![StatusCode::Success], vec![StatusCode::BadSession]);
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
 
@@ -615,14 +878,13 @@ async fn rollback_rpc_failure_propagated_is_retried_until_rollback_succeeds() ->
         .await;
 
     assert!(
-        result.is_ok(),
-        "the retried attempt's rollback succeeds, so this reflects the caller's own \
-         rollback decision: {result:?}"
+        result.is_err(),
+        "an ambiguous rollback must be reported without retry: {result:?}"
     );
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(
-        lifecycle.rollback_count, 2,
-        "first attempt's rollback fails, second attempt's rollback succeeds"
+        lifecycle.rollback_count, 1,
+        "a failed rollback must not repeat the whole transaction"
     );
     assert_eq!(lifecycle.commit_count, 0);
     Ok(())
