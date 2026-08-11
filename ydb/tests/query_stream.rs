@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::sync::Mutex;
 
 use futures_util::TryStreamExt;
+use futures_util::stream::FusedStream;
 use ydb::{Client, ClientBuilder, SessionPoolSettings, Value, YdbResult};
 use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
@@ -186,6 +187,7 @@ async fn final_result_set_returns_the_pooled_session() -> YdbResult<()> {
     assert_eq!(result_values(part.into_result_set(), "value")?, vec![1]);
     assert_eq!(client.session_pool_stats().in_use, 1);
     assert!(stream.try_next().await?.is_none());
+    assert!(stream.is_terminated());
     assert_eq!(client.session_pool_stats().in_use, 0);
     assert_eq!(client.session_pool_stats().idle, 1);
     Ok(())
@@ -226,6 +228,7 @@ async fn response_status_error_discards_the_pooled_session() -> YdbResult<()> {
     {
         let mut stream = query.query("SELECT broken").await?;
         assert!(stream.try_next().await.is_err());
+        assert!(stream.is_terminated());
         assert!(stream.try_next().await?.is_none());
     }
     assert_eq!(client.session_pool_stats().idle, 0);
@@ -236,7 +239,7 @@ async fn response_status_error_discards_the_pooled_session() -> YdbResult<()> {
 }
 
 #[tokio::test]
-async fn close_drains_unread_parts_and_returns_the_pooled_session() -> YdbResult<()> {
+async fn finish_drains_unread_parts_and_returns_the_pooled_session() -> YdbResult<()> {
     let (client, _server) = make_client([StreamScript::closed(vec![result_part(
         0,
         Some("value"),
@@ -246,14 +249,14 @@ async fn close_drains_unread_parts_and_returns_the_pooled_session() -> YdbResult
     let mut query = client.query_client();
     let stream = query.query("SELECT 1").await?;
 
-    stream.close().await?;
+    stream.finish().await?;
     assert_eq!(client.session_pool_stats().in_use, 0);
     assert_eq!(client.session_pool_stats().idle, 1);
     Ok(())
 }
 
 #[tokio::test]
-async fn close_propagates_unread_status_error_and_discards_session() -> YdbResult<()> {
+async fn finish_propagates_unread_status_error_and_discards_session() -> YdbResult<()> {
     let (client, _server) = make_client([StreamScript::closed(vec![
         result_part(0, Some("value"), &[1]),
         failed_part(StatusCode::BadRequest),
@@ -262,7 +265,7 @@ async fn close_propagates_unread_status_error_and_discards_session() -> YdbResul
     let mut query = client.query_client();
     let stream = query.query("SELECT broken").await?;
 
-    assert!(stream.close().await.is_err());
+    assert!(stream.finish().await.is_err());
     assert_eq!(client.session_pool_stats().in_use, 0);
     assert_eq!(client.session_pool_stats().idle, 0);
     Ok(())

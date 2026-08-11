@@ -136,7 +136,7 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
     /// `commit_tx: false` unless [`Self::with_commit(true)`] is set on the last query.
     ///
     /// When using [`Self::query`] with `with_commit(true)` inside a transaction, you must
-    /// fully drain the stream or call [`QueryStream::close`] — dropping the stream early cancels
+    /// fully drain the stream or call [`QueryStream::finish`] — dropping the stream early cancels
     /// the gRPC call and does not commit.
     pub fn with_commit(mut self, commit: bool) -> Self {
         self.opts.commit_tx = commit;

@@ -196,8 +196,12 @@ impl ExecuteQueryStream {
         self.metadata.tx_id.take()
     }
 
-    pub(crate) fn in_progress(&self) -> bool {
+    pub(crate) fn is_active(&self) -> bool {
         matches!(self.state, QueryResponseState::Active(_))
+    }
+
+    pub(crate) fn completion_unconfirmed(&self) -> bool {
+        !matches!(self.state, QueryResponseState::Exhausted)
     }
 
     /// Drop the gRPC stream without draining unread parts (sends RST_STREAM).

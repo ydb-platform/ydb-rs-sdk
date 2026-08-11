@@ -608,7 +608,7 @@ pub(crate) async fn transaction_begin_stream(
             let stream = client.execute_query(req).await.map_err(YdbError::from)?;
             let mut stream = ExecuteQueryStream::new(stream);
             stream.prime_first_part().await?;
-            if !stream.in_progress() {
+            if !stream.is_active() {
                 let error = YdbError::InternalError(
                     "ExecuteQuery response stream closed before the first part".to_string(),
                 );
