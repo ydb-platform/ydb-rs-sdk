@@ -29,16 +29,16 @@ pub(crate) struct CallOptions {
     pub idempotency: Idempotency,
     pub collect_stats: bool,
     pub commit_tx: bool,
-    pub tx_mode: TxMode,
+    /// Explicit per-call transaction mode. `None` uses the surrounding context default.
+    pub tx_mode_override: Option<TxMode>,
     /// One-shot [`QueryClient`] only: send `ExecuteQuery` with an empty `session_id`.
     pub implicit_session: bool,
 }
 
 impl CallOptions {
-    pub(super) fn for_transaction(tx_mode: TxMode) -> Self {
+    pub(super) fn for_transaction() -> Self {
         Self {
             commit_tx: false,
-            tx_mode,
             ..Self::default()
         }
     }
@@ -51,7 +51,7 @@ impl Default for CallOptions {
             idempotency: Idempotency::NonIdempotent,
             collect_stats: false,
             commit_tx: true,
-            tx_mode: TxMode::Implicit,
+            tx_mode_override: None,
             implicit_session: false,
         }
     }
@@ -260,10 +260,12 @@ fn reject_per_call_tx_mode_override(
     tx: &TransactionExecContext,
     opts: &CallOptions,
 ) -> YdbResult<()> {
-    if opts.tx_mode != tx.tx_mode {
+    if let Some(override_mode) = opts.tx_mode_override
+        && override_mode != tx.tx_mode
+    {
         return Err(YdbError::Custom(format!(
             "per-call tx_mode {:?} does not match transaction mode {:?}",
-            opts.tx_mode, tx.tx_mode
+            override_mode, tx.tx_mode
         )));
     }
     Ok(())
@@ -271,7 +273,7 @@ fn reject_per_call_tx_mode_override(
 
 fn interactive_tx_mode(tx: &TransactionExecContext, opts: &CallOptions) -> YdbResult<TxMode> {
     reject_per_call_tx_mode_override(tx, opts)?;
-    ensure_interactive_tx_mode(opts.tx_mode)?;
+    ensure_interactive_tx_mode(tx.tx_mode)?;
     Ok(tx.tx_mode)
 }
 
@@ -295,8 +297,8 @@ fn tx_control_for_transaction(
         }
         ServerTransaction::NotStarted => {
             reject_per_call_tx_mode_override(tx, opts)?;
-            ensure_interactive_tx_mode(opts.tx_mode)?;
-            begin_tx_control(tx_mode_to_raw(opts.tx_mode)?, opts.commit_tx)
+            ensure_interactive_tx_mode(tx.tx_mode)?;
+            begin_tx_control(tx_mode_to_raw(tx.tx_mode)?, opts.commit_tx)
         }
         ServerTransaction::BeginInFlight
         | ServerTransaction::CommitInFlight(_)
@@ -314,11 +316,12 @@ fn tx_control_for_transaction(
 fn tx_control_for_client(
     opts: &CallOptions,
 ) -> YdbResult<Option<ydb_grpc::ydb_proto::query::TransactionControl>> {
-    if opts.tx_mode == TxMode::Implicit {
+    let tx_mode = opts.tx_mode_override.unwrap_or(TxMode::Implicit);
+    if tx_mode == TxMode::Implicit {
         return Ok(None);
     }
     Ok(Some(begin_tx_control(
-        tx_mode_to_raw(opts.tx_mode)?,
+        tx_mode_to_raw(tx_mode)?,
         opts.commit_tx,
     )))
 }

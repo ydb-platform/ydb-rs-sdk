@@ -66,12 +66,11 @@ impl<'a, K> CallBuilder<'a, K, ClientOneShot> {
 
 impl<'a, K> CallBuilder<'a, K, Interactive> {
     pub(crate) fn new_transaction(ctx: &'a mut TransactionExecContext, text: String) -> Self {
-        let opts = CallOptions::for_transaction(ctx.tx_mode);
         Self {
             core: ExecCoreRef::Transaction(ctx),
             text,
             params: HashMap::new(),
-            opts,
+            opts: CallOptions::for_transaction(),
             _kind: PhantomData,
             _scope: PhantomData,
         }
@@ -153,7 +152,7 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
     /// [`TxMode::Implicit`] inside [`Transaction`] returns a runtime error — DDL and
     /// other non-transactional statements must run on [`QueryClient`], not inside a transaction.
     pub fn with_tx_mode(mut self, mode: TxMode) -> Self {
-        self.opts.tx_mode = mode;
+        self.opts.tx_mode_override = Some(mode);
         self
     }
 
