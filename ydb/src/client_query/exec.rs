@@ -26,7 +26,7 @@ use super::hooks::QueryTxHook;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CallOptions {
     pub timeout: Option<Duration>,
-    pub idempotent: Option<bool>,
+    pub idempotent: bool,
     pub collect_stats: bool,
     /// Override Query Service `commit_tx`. `None` uses context default.
     pub commit_tx: Option<bool>,
@@ -39,7 +39,7 @@ pub(crate) struct CallOptions {
 
 impl CallOptions {
     pub(super) fn idempotency(&self) -> Idempotency {
-        self.idempotent.unwrap_or(false).into()
+        self.idempotent.into()
     }
 }
 
