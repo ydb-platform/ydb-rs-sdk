@@ -77,11 +77,7 @@ pub(crate) enum TxState {
     /// Rollback path was chosen and the SDK must not report a commit.
     RolledBack,
     /// The server ended the transaction after a definitive status on a query.
-    Invalidated {
-        error: YdbError,
-        /// Retained until the attempt observes this state; pool policy decides whether to reuse it.
-        lease: SessionPoolLease,
-    },
+    Invalidated(YdbError),
     /// A commit or rollback RPC returned an error, so the local end attempt was not confirmed.
     Ambiguous(YdbError),
 }
@@ -561,20 +557,20 @@ async fn transaction_before_commit(tx: &mut TransactionExecContext) -> YdbResult
 
 /// Apply a query error to the retained session and transaction state.
 pub(crate) fn transaction_handle_query_error(tx: &mut TransactionExecContext, err: &YdbError) {
-    if let TxState::Active(active) = &mut tx.state
+    if err.invalidates_server_transaction() && tx.state.is_active() {
+        let previous = std::mem::replace(&mut tx.state, TxState::Invalidated(err.clone()));
+        let TxState::Active(mut active) = previous else {
+            tx.state = previous;
+            return;
+        };
+        if err.requires_session_discard() {
+            active.lease.invalidate();
+        }
+        active.lease.return_to_pool();
+    } else if let TxState::Active(active) = &mut tx.state
         && err.requires_session_discard()
     {
         active.lease.invalidate();
-    }
-    if tx.state.is_active() && err.invalidates_server_transaction() {
-        let previous = std::mem::replace(&mut tx.state, TxState::Ambiguous(err.clone()));
-        tx.state = match previous {
-            TxState::Active(active) => TxState::Invalidated {
-                error: err.clone(),
-                lease: active.lease,
-            },
-            state => state,
-        };
     }
 }
 
