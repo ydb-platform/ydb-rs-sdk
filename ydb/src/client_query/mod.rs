@@ -47,9 +47,8 @@ use crate::retry_settings::{RetrySettings, RetryState};
 use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{
-    ClientExecContext, TransactionExecContext, release_tx_session, spawn_query_tx_rollback_on_drop,
-    transaction_commit, transaction_ensure_begin, transaction_exec_context, transaction_identity,
-    transaction_rollback,
+    ClientExecContext, TransactionExecContext, finish_query_tx_on_drop, transaction_commit,
+    transaction_ensure_begin, transaction_exec_context, transaction_identity, transaction_rollback,
 };
 use hooks::{QueryTxCommitStatus, QueryTxHook};
 
@@ -289,9 +288,15 @@ impl QueryClient {
             .retry(closure!(
                 [&client = self, callback, &options],
                 async |retry: &RetryState| {
+                    let lease = match client.ctx.session_pool.acquire_explicit().await {
+                        Ok(lease) => lease,
+                        Err(err) => {
+                            return YdbOrCustomerError::from(err).retry_flow(idempotency);
+                        }
+                    };
                     let tx = Transaction::new(
                         client.ctx.connection_manager.clone(),
-                        client.ctx.session_pool.clone(),
+                        lease,
                         options.clone(),
                         wall_timeout.map(|d| retry.start_time + d),
                         client.ctx.metrics_names.clone(),
@@ -365,9 +370,9 @@ fn resolve_post_callback_action(state: &TxState) -> PostCallbackAction {
     match state {
         TxState::RolledBack => PostCallbackAction::Return(QueryTxCommitStatus::Aborted),
         TxState::Committed => PostCallbackAction::Return(QueryTxCommitStatus::Committed),
-        TxState::Invalidated(err) => PostCallbackAction::Retry(err.clone()),
+        TxState::Invalidated(error) => PostCallbackAction::Retry(error.clone()),
         TxState::Ambiguous(err) => PostCallbackAction::Fail(err.clone()),
-        TxState::Active => PostCallbackAction::Commit,
+        TxState::Active(_) => PostCallbackAction::Commit,
     }
 }
 
@@ -401,7 +406,7 @@ impl Transaction {
 
     fn new(
         connection_manager: GrpcConnectionManager,
-        session_pool: SessionPool,
+        lease: crate::session_pool::SessionPoolLease,
         options: TransactionOptions,
         retry_deadline: Option<Instant>,
         metrics_names: MetricsNames,
@@ -409,7 +414,7 @@ impl Transaction {
         Self {
             ctx: transaction_exec_context(
                 connection_manager,
-                session_pool,
+                lease,
                 options,
                 retry_deadline,
                 metrics_names,
@@ -434,7 +439,7 @@ impl Transaction {
         if !self.ctx.state.is_active() {
             return Err(YdbError::Custom("transaction already finished".to_string()));
         }
-        transaction_ensure_begin(&mut self.ctx, false).await
+        transaction_ensure_begin(&mut self.ctx).await
     }
 
     /// Session and transaction ids for topic offset updates inside a transaction.
@@ -477,13 +482,13 @@ impl Transaction {
     }
 
     pub(crate) async fn uri(&mut self) -> YdbResult<&Uri> {
-        transaction_ensure_begin(&mut self.ctx, false).await?;
+        transaction_ensure_begin(&mut self.ctx).await?;
         Ok(self.ctx.session_lease()?.node_uri())
     }
 
     #[cfg(test)]
     pub(crate) fn tx_id_for_test(&self) -> Option<&str> {
-        self.ctx.tx_id.as_deref()
+        self.ctx.transaction_id()
     }
 }
 
@@ -494,16 +499,19 @@ pub(crate) struct QueryTxIdentity {
 
 impl Drop for Transaction {
     fn drop(&mut self) {
-        if matches!(self.ctx.state, TxState::Invalidated(_)) {
-            release_tx_session(&mut self.ctx);
-            return;
+        if self.ctx.state.is_active() {
+            self.notify_hooks(QueryTxCommitStatus::Aborted);
         }
-        if !self.ctx.state.is_active() {
-            return;
+        let state = std::mem::replace(&mut self.ctx.state, TxState::RolledBack);
+        match state {
+            TxState::Active(active) => {
+                finish_query_tx_on_drop(self.ctx.connection_manager.clone(), active);
+            }
+            TxState::Committed
+            | TxState::RolledBack
+            | TxState::Invalidated(_)
+            | TxState::Ambiguous(_) => {}
         }
-        self.ctx.state = TxState::RolledBack;
-        self.notify_hooks(QueryTxCommitStatus::Aborted);
-        spawn_query_tx_rollback_on_drop(&mut self.ctx);
     }
 }
 
@@ -550,6 +558,9 @@ pub use stream_facade::{QueryStats, QueryStream};
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use crate::GrpcOptions;
     use crate::errors::YdbStatusError;
     use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
@@ -598,12 +609,11 @@ mod unit_tests {
         let session_id = lease.session_id().to_string();
         let mut tx = Transaction::new(
             test_connection_manager(),
-            pool.clone(),
+            lease,
             TransactionOptions::default(),
             None,
             MetricsNames::new(None),
         );
-        tx.ctx.pooled_lease = Some(lease);
         exec::transaction_handle_query_error(
             &mut tx.ctx,
             &YdbError::YdbStatusError(YdbStatusError::new(
@@ -660,20 +670,69 @@ mod unit_tests {
         ));
     }
 
-    #[test]
-    fn active_state_needs_a_real_commit() {
+    #[tokio::test]
+    async fn active_state_needs_a_real_commit() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let lease = pool.acquire_explicit().await.expect("acquire test session");
+        let state = transaction_exec_context(
+            test_connection_manager(),
+            lease,
+            TransactionOptions::default(),
+            None,
+        )
+        .state;
         assert!(matches!(
-            resolve_post_callback_action(&TxState::Active),
+            resolve_post_callback_action(&state),
             PostCallbackAction::Commit
         ));
     }
 
     #[tokio::test]
-    async fn invalidated_transaction_returns_healthy_session_on_drop() {
+    async fn retry_transaction_owns_a_session_before_the_callback() {
         let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
-        let (tx, session_id) = invalidated_transaction(&pool, StatusCode::Aborted).await;
+        let client = QueryClient::new(
+            test_connection_manager(),
+            pool.clone(),
+            RetrySettings::dont_retry(),
+        );
+        let observed_pool = pool.clone();
 
-        drop(tx);
+        let result: YdbResultWithCustomerErr<()> = client
+            .retry_tx(closure!([&observed_pool], async |_tx| {
+                assert_eq!(observed_pool.stats().in_use, 1);
+                Ok(())
+            }))
+            .await;
+
+        result.expect("transaction without queries must commit locally");
+        assert_eq!(pool.stats().in_use, 0);
+    }
+
+    #[tokio::test]
+    async fn retry_transaction_does_not_call_user_code_without_a_session() {
+        let pool = SessionPool::new_explicit_bench_with_create_failures(
+            SessionPoolSettings::new().with_limit(1),
+            1,
+        );
+        let client = QueryClient::new(test_connection_manager(), pool, RetrySettings::dont_retry());
+        let callback_called = Arc::new(AtomicBool::new(false));
+        let observed_called = callback_called.clone();
+
+        let result: YdbResultWithCustomerErr<()> = client
+            .retry_tx(closure!([observed_called], async |_tx| {
+                observed_called.store(true, Ordering::Relaxed);
+                Ok(())
+            }))
+            .await;
+
+        assert!(result.is_err());
+        assert!(!callback_called.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn invalidated_transaction_immediately_returns_healthy_session() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let (_tx, session_id) = invalidated_transaction(&pool, StatusCode::Aborted).await;
 
         let lease = pool
             .acquire_explicit()
@@ -684,11 +743,9 @@ mod unit_tests {
     }
 
     #[tokio::test]
-    async fn invalidated_transaction_discards_broken_session_on_drop() {
+    async fn invalidated_transaction_immediately_discards_broken_session() {
         let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
-        let (tx, session_id) = invalidated_transaction(&pool, StatusCode::BadSession).await;
-
-        drop(tx);
+        let (_tx, session_id) = invalidated_transaction(&pool, StatusCode::BadSession).await;
 
         let lease = pool
             .acquire_explicit()

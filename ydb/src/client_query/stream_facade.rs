@@ -4,13 +4,15 @@ use std::time::Duration;
 use crate::closure;
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
+use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
 use crate::result::ResultSet;
-use crate::session_pool::SessionPoolLease;
 use crate::types::Value;
 
 use super::exec::{
-    CallOptions, ClientExecContext, apply_stream_tx_id, client_begin_stream_once,
-    resolve_commit_tx, transaction_finish_committed_via_query, transaction_handle_query_error,
+    CallOptions, ClientExecContext, ClientQuerySession, OpenedClientQueryStream,
+    TransactionExecContext, apply_stream_tx_id, client_begin_stream_once, resolve_commit_tx,
+    transaction_begin_stream, transaction_finish_query, transaction_handle_query_error,
+    transaction_invalidate_session,
 };
 use super::internal::ExecCoreRef;
 
@@ -19,52 +21,130 @@ use super::internal::ExecCoreRef;
 /// Inside a transaction, [`CallBuilder::with_commit(true)`] commits only on successful close.
 #[must_use = "QueryStream must be fully consumed and closed"]
 pub struct QueryStream<'a> {
-    pub(crate) core: ExecCoreRef<'a>,
-    pub(crate) stream: ExecuteQueryStream,
-    /// Lease owned by this stream for a pooled `QueryClient` query.
-    pub(crate) owned_lease: Option<SessionPoolLease>,
-    pub(crate) commit_tx: bool,
+    stream: ExecuteQueryStream,
+    lifecycle: QueryStreamLifecycle<'a>,
+}
+
+enum QueryStreamLifecycle<'a> {
+    Active(QueryStreamOwner<'a>),
+    Finished,
+}
+
+enum QueryStreamOwner<'a> {
+    Client(ClientQuerySession),
+    Transaction {
+        context: &'a mut TransactionExecContext,
+        commit_at_end: bool,
+    },
 }
 
 impl Drop for QueryStream<'_> {
     fn drop(&mut self) {
-        if let Some(tx_id) = self.stream.take_captured_tx_id()
-            && let ExecCoreRef::Transaction(ctx) = &mut self.core
-        {
-            apply_stream_tx_id(ctx, Some(tx_id));
-        }
-        // Do not mark the transaction finished here: with_commit(true) requires
-        // draining the stream and calling close() so the server can commit.
-        let dropped_mid_stream = self.stream.in_progress();
-        self.stream.cancel();
-        if let ExecCoreRef::Transaction(ctx) = &mut self.core
-            && let Some(lease) = &mut ctx.pooled_lease
-            && dropped_mid_stream
-        {
-            lease.invalidate();
-        }
+        self.cancel_active();
     }
 }
 
 impl QueryStream<'_> {
+    fn cancel_active(&mut self) {
+        self.apply_captured_transaction_id();
+        let dropped_mid_stream = self.stream.in_progress();
+        self.stream.cancel();
+        let lifecycle = std::mem::replace(&mut self.lifecycle, QueryStreamLifecycle::Finished);
+        if let QueryStreamLifecycle::Active(QueryStreamOwner::Transaction { context, .. }) =
+            lifecycle
+            && dropped_mid_stream
+        {
+            transaction_invalidate_session(context);
+        }
+    }
+}
+
+impl<'a> QueryStream<'a> {
+    pub(crate) fn from_client(opened: OpenedClientQueryStream) -> Self {
+        Self {
+            stream: opened.stream,
+            lifecycle: QueryStreamLifecycle::Active(QueryStreamOwner::Client(opened.session)),
+        }
+    }
+
+    pub(crate) fn from_transaction(
+        stream: ExecuteQueryStream,
+        context: &'a mut TransactionExecContext,
+        commit_at_end: bool,
+    ) -> Self {
+        Self {
+            stream,
+            lifecycle: QueryStreamLifecycle::Active(QueryStreamOwner::Transaction {
+                context,
+                commit_at_end,
+            }),
+        }
+    }
+
+    fn apply_transaction_id(&mut self, transaction_id: Option<String>) {
+        if let QueryStreamLifecycle::Active(QueryStreamOwner::Transaction { context, .. }) =
+            &mut self.lifecycle
+        {
+            apply_stream_tx_id(context, transaction_id);
+        }
+    }
+
+    fn apply_captured_transaction_id(&mut self) {
+        let transaction_id = self.stream.take_captured_tx_id();
+        self.apply_transaction_id(transaction_id);
+    }
+
+    fn handle_error(&mut self, error: &YdbError) {
+        if let QueryStreamLifecycle::Active(QueryStreamOwner::Transaction { context, .. }) =
+            &mut self.lifecycle
+        {
+            transaction_handle_query_error(context, error);
+        }
+    }
+
+    fn finish(&mut self) -> YdbResult<()> {
+        let lifecycle = std::mem::replace(&mut self.lifecycle, QueryStreamLifecycle::Finished);
+        match lifecycle {
+            QueryStreamLifecycle::Active(QueryStreamOwner::Client(session)) => {
+                session.complete();
+                Ok(())
+            }
+            QueryStreamLifecycle::Active(QueryStreamOwner::Transaction {
+                context,
+                commit_at_end,
+            }) => transaction_finish_query(context, commit_at_end),
+            QueryStreamLifecycle::Finished => Ok(()),
+        }
+    }
+
     pub async fn next_result_set(&mut self) -> YdbResult<Option<ResultSet>> {
         let next = match self.stream.next_result_set().await {
             Ok(v) => v,
             Err(err) => {
                 let ydb_err = YdbError::from(err);
-                if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-                    transaction_handle_query_error(ctx, &ydb_err);
+                self.handle_error(&ydb_err);
+                if matches!(
+                    &self.lifecycle,
+                    QueryStreamLifecycle::Active(QueryStreamOwner::Client(_))
+                ) && !ydb_err.requires_session_discard()
+                {
+                    self.stream.cancel();
+                    return Err(ydb_err);
                 }
+                self.cancel_active();
                 return Err(ydb_err);
             }
         };
-        let Some((raw, tx_id)) = next else {
-            return Ok(None);
-        };
-        if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-            apply_stream_tx_id(ctx, tx_id);
+        match next {
+            Some((raw, transaction_id)) => {
+                self.apply_transaction_id(transaction_id);
+                ResultSet::try_from(raw).map(Some)
+            }
+            None => {
+                self.apply_captured_transaction_id();
+                Ok(None)
+            }
         }
-        Ok(Some(ResultSet::try_from(raw)?))
     }
 
     pub fn stats(&self) -> Option<QueryStats> {
@@ -76,22 +156,12 @@ impl QueryStream<'_> {
     pub async fn close(mut self) -> YdbResult<()> {
         match self.stream.close().await {
             Ok(meta) => {
-                if let Some(lease) = self.owned_lease.take() {
-                    lease.return_to_pool();
-                }
-                if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-                    apply_stream_tx_id(ctx, meta.tx_id);
-                    if self.commit_tx {
-                        transaction_finish_committed_via_query(ctx);
-                    }
-                }
-                Ok(())
+                self.apply_transaction_id(meta.tx_id);
+                self.finish()
             }
             Err(err) => {
                 let ydb_err = YdbError::from(err);
-                if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-                    transaction_handle_query_error(ctx, &ydb_err);
-                }
+                self.handle_error(&ydb_err);
                 Err(ydb_err)
             }
         }
@@ -111,6 +181,7 @@ pub(crate) async fn materialize_query(
     params: HashMap<String, Value>,
     opts: CallOptions,
 ) -> YdbResult<Vec<ResultSet>> {
+    let commit_at_end = resolve_commit_tx(core, &opts);
     match core {
         ExecCoreRef::Client(ctx) => {
             ctx.retry_settings
@@ -124,7 +195,9 @@ pub(crate) async fn materialize_query(
                 )
                 .await
         }
-        ExecCoreRef::Transaction(_) => materialize_transaction_once(core, text, params, opts).await,
+        ExecCoreRef::Transaction(context) => {
+            materialize_transaction_once(context, text, params, opts, commit_at_end).await
+        }
     }
 }
 
@@ -135,64 +208,58 @@ async fn materialize_client_once(
     opts: &CallOptions,
 ) -> YdbResult<Vec<ResultSet>> {
     let mut opened = client_begin_stream_once(ctx, text, params, opts, true).await?;
-    let sets = collect_result_sets(&mut opened.stream).await?;
-    opened.stream.close().await?;
-    if let Some(lease) = opened.owned_lease.take() {
-        lease.return_to_pool();
+    let result: YdbResult<Vec<RawResultSet>> = async {
+        let raw_sets = drain_result_sets(&mut opened.stream).await?;
+        opened.stream.close().await?;
+        Ok(raw_sets)
     }
-    Ok(sets)
+    .await;
+    match result {
+        Ok(raw_sets) => {
+            opened.session.complete();
+            convert_result_sets(raw_sets)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 async fn materialize_transaction_once(
-    core: &mut ExecCoreRef<'_>,
+    context: &mut TransactionExecContext,
     text: String,
     params: HashMap<String, Value>,
     opts: CallOptions,
+    commit_at_end: bool,
 ) -> YdbResult<Vec<ResultSet>> {
-    let commit_tx = resolve_commit_tx(core, &opts);
-    let result: YdbResult<Vec<ResultSet>> = async {
-        let mut opened = core.begin_stream(text, params, opts, true).await?;
-        let sets = match collect_result_sets(&mut opened.stream).await {
-            Ok(sets) => sets,
-            Err(ydb_err) => {
-                if let ExecCoreRef::Transaction(ctx) = core {
-                    transaction_handle_query_error(ctx, &ydb_err);
-                }
-                return Err(ydb_err);
-            }
-        };
-        match opened.stream.close().await {
-            Ok(meta) => {
-                if let Some(lease) = opened.owned_lease.take() {
-                    lease.return_to_pool();
-                }
-                if let ExecCoreRef::Transaction(ctx) = core {
-                    apply_stream_tx_id(ctx, meta.tx_id);
-                    if commit_tx {
-                        transaction_finish_committed_via_query(ctx);
-                    }
-                }
-            }
-            Err(err) => {
-                let ydb_err = YdbError::from(err);
-                if let ExecCoreRef::Transaction(ctx) = core {
-                    transaction_handle_query_error(ctx, &ydb_err);
-                }
-                return Err(ydb_err);
-            }
+    let mut stream = transaction_begin_stream(context, text, params, opts, true).await?;
+    let raw_sets = match drain_result_sets(&mut stream).await {
+        Ok(raw_sets) => raw_sets,
+        Err(ydb_err) => {
+            transaction_handle_query_error(context, &ydb_err);
+            return Err(ydb_err);
         }
-        Ok(sets)
+    };
+    match stream.close().await {
+        Ok(meta) => {
+            apply_stream_tx_id(context, meta.tx_id);
+            transaction_finish_query(context, commit_at_end)?;
+        }
+        Err(err) => {
+            let ydb_err = YdbError::from(err);
+            transaction_handle_query_error(context, &ydb_err);
+            return Err(ydb_err);
+        }
     }
-    .await;
-
-    result
+    convert_result_sets(raw_sets)
 }
 
-async fn collect_result_sets(stream: &mut ExecuteQueryStream) -> YdbResult<Vec<ResultSet>> {
-    let raw_sets = stream
+async fn drain_result_sets(stream: &mut ExecuteQueryStream) -> YdbResult<Vec<RawResultSet>> {
+    stream
         .materialize_all_result_sets()
         .await
-        .map_err(YdbError::from)?;
+        .map_err(YdbError::from)
+}
+
+fn convert_result_sets(raw_sets: Vec<RawResultSet>) -> YdbResult<Vec<ResultSet>> {
     let mut sets = Vec::with_capacity(raw_sets.len());
     for raw in raw_sets {
         sets.push(ResultSet::try_from(raw)?);

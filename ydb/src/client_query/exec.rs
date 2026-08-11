@@ -30,8 +30,7 @@ pub(crate) struct CallOptions {
     pub collect_stats: bool,
     /// Override Query Service `commit_tx`. `None` uses context default.
     pub commit_tx: Option<bool>,
-    /// Per-call isolation override. `None` → [`TxMode::Implicit`] on client,
-    /// [`TransactionExecContext::tx_mode`] in interactive transactions.
+    /// Per-call isolation override. `None` uses the surrounding context default.
     pub tx_mode: Option<TxMode>,
     /// One-shot [`QueryClient`] only: send `ExecuteQuery` with an empty `session_id`.
     pub implicit_session: bool,
@@ -51,19 +50,28 @@ pub(crate) struct ClientExecContext {
     pub metrics_names: MetricsNames,
 }
 
-/// Query stream together with a pooled session lease when the stream itself owns that lease.
-pub(crate) struct OpenedQueryStream {
+/// Opened client stream and its explicit session ownership mode.
+pub(crate) struct OpenedClientQueryStream {
     pub(crate) stream: ExecuteQueryStream,
-    /// `Some` for a pooled `QueryClient` query: the stream must return or discard this lease.
-    /// `None` means the stream owns no lease: an implicit query has none, while a transaction
-    /// keeps its lease in [`TransactionExecContext`].
-    pub(crate) owned_lease: Option<SessionPoolLease>,
+    pub(crate) session: ClientQuerySession,
 }
 
-#[derive(Clone, Debug)]
+pub(crate) enum ClientQuerySession {
+    ServerImplicit,
+    Pooled(SessionPoolLease),
+}
+
+impl ClientQuerySession {
+    pub(crate) fn complete(self) {
+        if let Self::Pooled(lease) = self {
+            lease.return_to_pool();
+        }
+    }
+}
+
 pub(crate) enum TxState {
-    /// Still going: further queries are allowed, and a final commit is still pending.
-    Active,
+    /// An unfinished transaction always owns exactly one exclusive session lease.
+    Active(ActiveTransaction),
     /// Real, confirmed commit: either `CommitTransaction` succeeded or `commit_tx` completed.
     Committed,
     /// Rollback path was chosen and the SDK must not report a commit.
@@ -76,18 +84,32 @@ pub(crate) enum TxState {
 
 impl TxState {
     pub(crate) fn is_active(&self) -> bool {
-        matches!(self, Self::Active)
+        matches!(self, Self::Active(_))
     }
+}
+
+pub(crate) struct ActiveTransaction {
+    lease: SessionPoolLease,
+    server: ServerTransaction,
+}
+
+/// Server-side progress within an active transaction.
+///
+/// In-flight states retain the lease in the transaction so cancellation is conservative: dropping
+/// the transaction discards the session instead of issuing a second finalization RPC.
+enum ServerTransaction {
+    NotStarted,
+    BeginInFlight,
+    Started(String),
+    CommitInFlight(String),
+    RollbackInFlight(String),
 }
 
 pub(crate) struct TransactionExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub tx_mode: TxMode,
-    pub session_pool: SessionPool,
     /// When set, the first operation calls `BeginTransaction` RPC instead of lazy `BeginTx` in `ExecuteQuery`.
     pub begin: bool,
-    pub pooled_lease: Option<SessionPoolLease>,
-    pub tx_id: Option<String>,
     pub state: TxState,
     pub hooks: Vec<Box<dyn QueryTxHook>>,
     /// Absolute deadline from [`QueryClient::retry_tx`] `.timeout()`, propagated to every RPC in the callback.
@@ -96,11 +118,48 @@ pub(crate) struct TransactionExecContext {
 }
 
 impl TransactionExecContext {
-    pub(super) fn session_lease(&self) -> YdbResult<&SessionPoolLease> {
-        self.pooled_lease.as_ref().ok_or_else(|| {
-            YdbError::InternalError("query transaction session is not initialized".to_string())
-        })
+    fn active(&self) -> YdbResult<&ActiveTransaction> {
+        match &self.state {
+            TxState::Active(active) => Ok(active),
+            _ => Err(transaction_finished_error()),
+        }
     }
+
+    fn active_mut(&mut self) -> YdbResult<&mut ActiveTransaction> {
+        match &mut self.state {
+            TxState::Active(active) => Ok(active),
+            _ => Err(transaction_finished_error()),
+        }
+    }
+
+    pub(super) fn session_lease(&self) -> YdbResult<&SessionPoolLease> {
+        Ok(&self.active()?.lease)
+    }
+
+    pub(super) fn transaction_id(&self) -> Option<&str> {
+        match &self.state {
+            TxState::Active(ActiveTransaction {
+                server: ServerTransaction::Started(id),
+                ..
+            }) => Some(id),
+            _ => None,
+        }
+    }
+
+    fn take_active(&mut self, replacement: TxState) -> YdbResult<ActiveTransaction> {
+        let previous = std::mem::replace(&mut self.state, replacement);
+        match previous {
+            TxState::Active(active) => Ok(active),
+            state => {
+                self.state = state;
+                Err(transaction_finished_error())
+            }
+        }
+    }
+}
+
+fn transaction_finished_error() -> YdbError {
+    YdbError::Custom("transaction already finished (committed or rolled back)".to_string())
 }
 
 /// Per-call timeout capped by the parent [`retry_tx`](crate::QueryClient::retry_tx) deadline when set.
@@ -201,18 +260,17 @@ fn reject_per_call_tx_mode_override(
     Ok(())
 }
 
-fn client_tx_mode(opts: &CallOptions) -> TxMode {
-    opts.tx_mode.unwrap_or(TxMode::Implicit)
-}
-
 fn interactive_tx_mode(tx: &TransactionExecContext, opts: &CallOptions) -> YdbResult<TxMode> {
     reject_per_call_tx_mode_override(tx, opts)?;
     ensure_interactive_tx_mode(opts.tx_mode.unwrap_or(tx.tx_mode))?;
     Ok(tx.tx_mode)
 }
 
+fn client_tx_mode(opts: &CallOptions) -> TxMode {
+    opts.tx_mode.unwrap_or(TxMode::Implicit)
+}
+
 fn default_commit_tx_client(_mode: TxMode) -> bool {
-    // All one-shot modes auto-commit today; revisit if a future mode should not.
     true
 }
 
@@ -229,28 +287,30 @@ fn tx_control_for_transaction(
     tx: &TransactionExecContext,
     opts: &CallOptions,
 ) -> YdbResult<Option<ydb_grpc::ydb_proto::query::TransactionControl>> {
-    if !tx.state.is_active() {
-        return Err(YdbError::Custom(
-            "transaction already finished (committed or rolled back)".to_string(),
-        ));
-    }
     let commit_tx = opts.commit_tx.unwrap_or(false);
-    Ok(Some(match &tx.tx_id {
-        Some(id) => {
+    Ok(Some(match &tx.active()?.server {
+        ServerTransaction::Started(id) => {
             interactive_tx_mode(tx, opts)?;
             tx_id_control(id, commit_tx)
         }
-        None => {
+        ServerTransaction::NotStarted => {
             reject_per_call_tx_mode_override(tx, opts)?;
             ensure_interactive_tx_mode(tx.tx_mode)?;
             begin_tx_control(tx_mode_to_raw(tx.tx_mode)?, commit_tx)
+        }
+        ServerTransaction::BeginInFlight
+        | ServerTransaction::CommitInFlight(_)
+        | ServerTransaction::RollbackInFlight(_) => {
+            return Err(YdbError::InternalError(
+                "query transaction operation is already in progress".to_string(),
+            ));
         }
     }))
 }
 
 pub(crate) fn resolve_commit_tx(core: &super::internal::ExecCoreRef, opts: &CallOptions) -> bool {
-    if let Some(v) = opts.commit_tx {
-        return v;
+    if let Some(commit_tx) = opts.commit_tx {
+        return commit_tx;
     }
     match core {
         super::internal::ExecCoreRef::Client(_) => default_commit_tx_client(client_tx_mode(opts)),
@@ -264,14 +324,14 @@ pub(crate) fn resolve_commit_tx(core: &super::internal::ExecCoreRef, opts: &Call
 fn tx_control_for_client(
     opts: &CallOptions,
 ) -> YdbResult<Option<ydb_grpc::ydb_proto::query::TransactionControl>> {
-    let mode = client_tx_mode(opts);
-    if mode == TxMode::Implicit {
+    let tx_mode = client_tx_mode(opts);
+    if tx_mode == TxMode::Implicit {
         return Ok(None);
     }
     let commit_tx = opts
         .commit_tx
-        .unwrap_or_else(|| default_commit_tx_client(mode));
-    Ok(Some(begin_tx_control(tx_mode_to_raw(mode)?, commit_tx)))
+        .unwrap_or_else(|| default_commit_tx_client(tx_mode));
+    Ok(Some(begin_tx_control(tx_mode_to_raw(tx_mode)?, commit_tx)))
 }
 
 async fn client_implicit_session_request(
@@ -303,15 +363,15 @@ pub(super) async fn client_begin_stream_once(
     params: &HashMap<String, Value>,
     opts: &CallOptions,
     concurrent_result_sets: bool,
-) -> YdbResult<OpenedQueryStream> {
+) -> YdbResult<OpenedClientQueryStream> {
     if opts.implicit_session {
         let (mut client, req) =
             client_implicit_session_request(ctx, text, params, opts, concurrent_result_sets)
                 .await?;
         let stream = client.execute_query(req).await.map_err(YdbError::from)?;
-        return Ok(OpenedQueryStream {
+        return Ok(OpenedClientQueryStream {
             stream: ExecuteQueryStream::new(stream),
-            owned_lease: None,
+            session: ClientQuerySession::ServerImplicit,
         });
     }
 
@@ -324,7 +384,7 @@ async fn open_pooled_query_stream(
     params: &HashMap<String, Value>,
     opts: &CallOptions,
     concurrent_result_sets: bool,
-) -> YdbResult<OpenedQueryStream> {
+) -> YdbResult<OpenedClientQueryStream> {
     let tx_control = tx_control_for_client(opts)?;
     let lease = Box::pin(ctx.session_pool.acquire_explicit()).await?;
     let result = async {
@@ -348,9 +408,9 @@ async fn open_pooled_query_stream(
     .await;
 
     match result {
-        Ok(stream) => Ok(OpenedQueryStream {
+        Ok(stream) => Ok(OpenedClientQueryStream {
             stream,
-            owned_lease: Some(lease),
+            session: ClientQuerySession::Pooled(lease),
         }),
         Err(err) => lease.finish(Err(err)),
     }
@@ -363,7 +423,7 @@ pub(crate) async fn client_begin_stream(
     params: HashMap<String, Value>,
     opts: CallOptions,
     concurrent_result_sets: bool,
-) -> YdbResult<OpenedQueryStream> {
+) -> YdbResult<OpenedClientQueryStream> {
     ctx.retry_settings
         .clone()
         .with_deadline(opts.timeout)
@@ -380,46 +440,17 @@ pub(crate) async fn client_begin_stream(
         .await
 }
 
-/// Interactive transactions need a stable attached session from the driver pool.
-#[instrument(name = "ydb.Query.EnsureTxSession", skip_all, fields(db.system.name = "ydb"), err)]
-async fn ensure_tx_session(tx: &mut TransactionExecContext) -> YdbResult<()> {
-    if let Some(lease) = &tx.pooled_lease {
-        lease.ensure_healthy()?;
-        return Ok(());
-    }
-    let lease = Box::pin(tx.session_pool.acquire_explicit()).await?;
-    tx.pooled_lease = Some(lease);
-    Ok(())
-}
-
 /// Session and transaction ids for cross-service RPCs (e.g. topic `UpdateOffsetsInTransaction`).
 pub(crate) async fn transaction_identity(
     tx: &mut TransactionExecContext,
 ) -> YdbResult<(String, String)> {
-    transaction_ensure_begin(tx, false).await?;
+    transaction_ensure_begin(tx).await?;
     let session_id = tx.session_lease()?.session_id().to_string();
     let transaction_id = tx
-        .tx_id
-        .as_deref()
-        .filter(|id| !id.is_empty())
+        .transaction_id()
         .ok_or_else(|| YdbError::Custom("query transaction id is not available".to_string()))?
         .to_string();
     Ok((session_id, transaction_id))
-}
-
-#[instrument(name = "ydb.Query.ReleaseTxSession", skip_all, fields(db.system.name = "ydb"))]
-pub(super) fn release_tx_session(tx: &mut TransactionExecContext) {
-    if let Some(lease) = tx.pooled_lease.take() {
-        lease.return_to_pool();
-    }
-}
-
-#[instrument(name = "ydb.Query.ReleaseTxSession", skip_all, fields(db.system.name = "ydb"))]
-fn finish_tx_session<T>(tx: &mut TransactionExecContext, result: YdbResult<T>) -> YdbResult<T> {
-    match tx.pooled_lease.take() {
-        Some(lease) => lease.finish(result),
-        None => result,
-    }
 }
 
 #[instrument(name = "ydb.ExecuteQuery", skip_all, fields(db.system.name = "ydb", ydb.Query.text = %ensure_len_string(&yql_text), ydb.Query.params = ?parameters, ydb.Query.opts = ?opts))]
@@ -430,10 +461,9 @@ async fn transaction_execute_request(
     opts: &CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
-    let session_id = tx.session_lease()?.session_id().to_string();
     let client = query_client_from_tx(tx).await?;
     let mut req = RawExecuteQueryRequest::new(
-        session_id,
+        tx.session_lease()?.session_id(),
         yql_text,
         parameters,
         tx_control_for_transaction(tx, opts)?,
@@ -445,45 +475,82 @@ async fn transaction_execute_request(
 
 /// Open the transaction via `BeginTransaction` RPC (explicit begin).
 #[instrument(name = "ydb.Query.TransactionEnsureBegin", skip_all, fields(db.system.name = "ydb", ydb.tx.mode = ?tx.tx_mode, ydb.session.id = tracing::field::Empty), err)]
-pub(crate) async fn transaction_ensure_begin(
-    tx: &mut TransactionExecContext,
-    session_ready: bool,
-) -> YdbResult<()> {
-    if !tx.state.is_active() {
-        return Err(YdbError::Custom(
-            "transaction already finished (committed or rolled back)".to_string(),
-        ));
-    }
-    if tx.tx_id.as_ref().is_some_and(|id| !id.is_empty()) {
-        return Ok(());
+pub(crate) async fn transaction_ensure_begin(tx: &mut TransactionExecContext) -> YdbResult<()> {
+    match &tx.active()?.server {
+        ServerTransaction::Started(_) => return Ok(()),
+        ServerTransaction::NotStarted => {}
+        ServerTransaction::BeginInFlight
+        | ServerTransaction::CommitInFlight(_)
+        | ServerTransaction::RollbackInFlight(_) => {
+            return Err(YdbError::InternalError(
+                "query transaction operation is already in progress".to_string(),
+            ));
+        }
     }
     ensure_interactive_tx_mode(tx.tx_mode)?;
-    if !session_ready {
-        ensure_tx_session(tx).await?;
-    }
-    let session_id = tx.session_lease()?.session_id().to_string();
-    tracing::Span::current().record("ydb.session.id", &session_id);
-    let mut client = query_client_from_tx(tx).await?;
-    let tx_id =
+    tx.session_lease()?.ensure_healthy()?;
+    tx.active_mut()?.server = ServerTransaction::BeginInFlight;
+
+    let result = async {
+        let active = tx.active()?;
+        let session_id = active.lease.session_id();
+        tracing::Span::current().record("ydb.session.id", session_id);
+        let mut client = tx
+            .connection_manager
+            .get_auth_service_to_node(RawQueryClient::new, active.lease.node_uri())
+            .await?;
         maybe_with_operation_timeout(resolve_effective_timeout(tx.retry_deadline, None), async {
             client
-                .begin_transaction(&session_id, tx_mode_to_raw(tx.tx_mode)?)
+                .begin_transaction(session_id, tx_mode_to_raw(tx.tx_mode)?)
                 .await
                 .map_err(Into::into)
         })
-        .await?;
-    apply_stream_tx_id(tx, Some(tx_id));
-    Ok(())
+        .await
+    }
+    .await;
+
+    match result {
+        Ok(tx_id) => {
+            tx.active_mut()?.server = ServerTransaction::Started(tx_id);
+            Ok(())
+        }
+        Err(err) => {
+            let active = tx.active_mut()?;
+            active.server = ServerTransaction::NotStarted;
+            if err.requires_session_discard() {
+                active.lease.invalidate();
+            }
+            Err(err)
+        }
+    }
 }
 
-/// Mark the transaction committed by the server as part of the last `ExecuteQuery` (`commit_tx: true`).
-pub(crate) fn transaction_finish_committed_via_query(tx: &mut TransactionExecContext) {
-    tx.metrics_names
-        .client_transaction_commit_counter
-        .increment(1);
-    tx.state = TxState::Committed;
-    tx.tx_id = None;
-    release_tx_session(tx);
+/// Finish a successful transaction query after its response stream reaches EOF.
+pub(crate) fn transaction_finish_query(
+    tx: &mut TransactionExecContext,
+    commit_at_end: bool,
+) -> YdbResult<()> {
+    if commit_at_end {
+        tx.metrics_names
+            .client_transaction_commit_counter
+            .increment(1);
+        tx.take_active(TxState::Committed)?.lease.return_to_pool();
+        return Ok(());
+    }
+
+    let message = match &tx.active()?.server {
+        ServerTransaction::Started(_) => return Ok(()),
+        ServerTransaction::BeginInFlight => "ExecuteQuery response missing transaction id",
+        ServerTransaction::NotStarted
+        | ServerTransaction::CommitInFlight(_)
+        | ServerTransaction::RollbackInFlight(_) => {
+            "query transaction reached an invalid state after ExecuteQuery"
+        }
+    };
+    let error = YdbError::InternalError(message.to_string());
+    let mut active = tx.take_active(TxState::Ambiguous(error.clone()))?;
+    active.lease.invalidate();
+    Err(error)
 }
 
 async fn transaction_before_commit(tx: &mut TransactionExecContext) -> YdbResult<()> {
@@ -495,14 +562,26 @@ async fn transaction_before_commit(tx: &mut TransactionExecContext) -> YdbResult
 
 /// Apply a query error to the retained session and transaction state.
 pub(crate) fn transaction_handle_query_error(tx: &mut TransactionExecContext, err: &YdbError) {
-    if err.requires_session_discard()
-        && let Some(lease) = &mut tx.pooled_lease
+    if err.invalidates_server_transaction() && tx.state.is_active() {
+        let previous = std::mem::replace(&mut tx.state, TxState::Invalidated(err.clone()));
+        let TxState::Active(mut active) = previous else {
+            tx.state = previous;
+            return;
+        };
+        if err.requires_session_discard() {
+            active.lease.invalidate();
+        }
+        active.lease.return_to_pool();
+    } else if let TxState::Active(active) = &mut tx.state
+        && err.requires_session_discard()
     {
-        lease.invalidate();
+        active.lease.invalidate();
     }
-    if tx.state.is_active() && err.invalidates_server_transaction() {
-        tx.state = TxState::Invalidated(err.clone());
-        tx.tx_id = None;
+}
+
+pub(crate) fn transaction_invalidate_session(tx: &mut TransactionExecContext) {
+    if let TxState::Active(active) = &mut tx.state {
+        active.lease.invalidate();
     }
 }
 
@@ -513,23 +592,19 @@ pub(crate) async fn transaction_begin_stream(
     params: HashMap<String, Value>,
     opts: CallOptions,
     concurrent_result_sets: bool,
-) -> YdbResult<OpenedQueryStream> {
+) -> YdbResult<ExecuteQueryStream> {
     debug_assert!(
         !opts.implicit_session,
         "implicit_session is only available on QueryClient one-shot builders"
     );
-    if !tx.state.is_active() {
-        return Err(YdbError::Custom(
-            "transaction already finished (committed or rolled back)".to_string(),
-        ));
-    }
+    tx.active()?;
     let effective_timeout = resolve_effective_timeout(tx.retry_deadline, opts.timeout);
-    let result: YdbResult<OpenedQueryStream> =
+    let result: YdbResult<ExecuteQueryStream> =
         maybe_with_operation_timeout(effective_timeout, async {
-            ensure_tx_session(tx).await?;
+            tx.session_lease()?.ensure_healthy()?;
             tracing::Span::current().record("ydb.session.id", tx.session_lease()?.session_id());
             if tx.begin {
-                transaction_ensure_begin(tx, true).await?;
+                transaction_ensure_begin(tx).await?;
             }
             if opts.commit_tx.unwrap_or(false) {
                 transaction_before_commit(tx).await?;
@@ -537,20 +612,40 @@ pub(crate) async fn transaction_begin_stream(
             let (mut client, req) =
                 transaction_execute_request(tx, text, params, &opts, concurrent_result_sets)
                     .await?;
+            let starts_transaction = matches!(tx.active()?.server, ServerTransaction::NotStarted);
+            if starts_transaction {
+                tx.active_mut()?.server = ServerTransaction::BeginInFlight;
+            }
             let stream = client.execute_query(req).await.map_err(YdbError::from)?;
             let mut stream = ExecuteQueryStream::new(stream);
             stream.prime_first_part().await?;
-            if let Some(id) = stream.take_captured_tx_id() {
-                apply_stream_tx_id(tx, Some(id));
+            if !stream.in_progress() {
+                let error = YdbError::InternalError(
+                    "ExecuteQuery response stream closed before the first part".to_string(),
+                );
+                let mut active = tx.take_active(TxState::Ambiguous(error.clone()))?;
+                active.lease.invalidate();
+                return Err(error);
             }
-            Ok(OpenedQueryStream {
-                stream,
-                owned_lease: None,
-            })
+            let tx_id = stream.take_captured_tx_id();
+            apply_stream_tx_id(tx, tx_id);
+            Ok(stream)
         })
         .await;
     if let Err(err) = &result {
-        transaction_handle_query_error(tx, err);
+        if matches!(
+            tx.state,
+            TxState::Active(ActiveTransaction {
+                server: ServerTransaction::BeginInFlight,
+                ..
+            })
+        ) {
+            let mut active = tx.take_active(TxState::Ambiguous(err.clone()))?;
+            active.lease.invalidate();
+            active.lease.return_to_pool();
+        } else {
+            transaction_handle_query_error(tx, err);
+        }
     }
     result
 }
@@ -564,37 +659,61 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
         let _ = transaction_rollback(tx).await;
         return Err(err);
     }
-    if tx.tx_id.as_ref().is_none_or(String::is_empty) {
-        tx.state = TxState::Committed;
-        release_tx_session(tx);
-        return Ok(());
+    let transaction_id = match &tx.active()?.server {
+        ServerTransaction::Started(id) => Some(id.clone()),
+        ServerTransaction::NotStarted => None,
+        ServerTransaction::BeginInFlight
+        | ServerTransaction::CommitInFlight(_)
+        | ServerTransaction::RollbackInFlight(_) => {
+            return Err(YdbError::InternalError(
+                "query transaction operation is already in progress".to_string(),
+            ));
+        }
+    };
+    match transaction_id {
+        None => {
+            tx.take_active(TxState::Committed)?.lease.return_to_pool();
+            return Ok(());
+        }
+        Some(id) => {
+            tx.active_mut()?.server = ServerTransaction::CommitInFlight(id);
+        }
     }
     tx.metrics_names
         .client_transaction_commit_counter
         .increment(1);
-
-    ensure_tx_session(tx).await?;
-    let tx_id = tx.tx_id.take().expect("checked Some");
-    let session_id = tx.session_lease()?.session_id().to_string();
-    tracing::Span::current()
-        .record("ydb.session.id", &session_id)
-        .record("ydb.tx.id", &tx_id);
-    let mut client = query_client_from_tx(tx).await?;
-    let result =
+    let result = async {
+        let active = tx.active()?;
+        let ServerTransaction::CommitInFlight(tx_id) = &active.server else {
+            return Err(YdbError::InternalError(
+                "query transaction is not committing".to_string(),
+            ));
+        };
+        let session_id = active.lease.session_id();
+        tracing::Span::current()
+            .record("ydb.session.id", session_id)
+            .record("ydb.tx.id", tx_id.as_str());
+        let mut client = tx
+            .connection_manager
+            .get_auth_service_to_node(RawQueryClient::new, active.lease.node_uri())
+            .await?;
         maybe_with_operation_timeout(resolve_effective_timeout(tx.retry_deadline, None), async {
             client
-                .commit_transaction(&session_id, &tx_id)
+                .commit_transaction(session_id, tx_id.as_str())
                 .await
                 .map_err(Into::into)
         })
-        .await;
-    let result = finish_tx_session(tx, result);
-    tx.state = match &result {
+        .await
+    }
+    .await;
+
+    let terminal = match &result {
         Ok(()) => TxState::Committed,
         Err(err) => TxState::Ambiguous(err.clone()),
     };
+    let active = tx.take_active(terminal)?;
     // Do not retry commit: a transport timeout may mean the commit succeeded server-side.
-    result
+    active.lease.finish(result)
 }
 
 #[instrument(name = "ydb.Rollback", skip_all, fields(db.system.name = "ydb", ydb.tx.id = tracing::field::Empty, ydb.session.id = tracing::field::Empty), err)]
@@ -605,50 +724,75 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
     tx.metrics_names
         .client_transaction_rollback_counter
         .increment(1);
-    let mut rollback_err: Option<YdbError> = None;
-    if tx.tx_id.as_ref().is_some_and(|id| !id.is_empty()) && tx.pooled_lease.is_some() {
-        let tx_id = tx.tx_id.take().expect("checked Some");
-        if let Ok(session_id) = tx.session_lease().map(|lease| lease.session_id())
-            && let Ok(mut client) = query_client_from_tx(tx).await
-        {
-            tracing::Span::current()
-                .record("ydb.session.id", session_id)
-                .record("ydb.tx.id", &tx_id);
-            let rollback_result = maybe_with_operation_timeout(
-                resolve_effective_timeout(tx.retry_deadline, None),
-                async {
-                    client
-                        .rollback_transaction(session_id, &tx_id)
-                        .await
-                        .map_err(Into::into)
-                },
-            )
-            .await;
-            if let Err(err) = rollback_result {
-                rollback_err = Some(err);
-            }
+    let transaction_id = match &tx.active()?.server {
+        ServerTransaction::Started(id) => Some(id.clone()),
+        ServerTransaction::NotStarted => None,
+        ServerTransaction::BeginInFlight
+        | ServerTransaction::CommitInFlight(_)
+        | ServerTransaction::RollbackInFlight(_) => {
+            return Err(YdbError::InternalError(
+                "query transaction operation is already in progress".to_string(),
+            ));
         }
-    } else {
-        tx.tx_id = None;
+    };
+    match transaction_id {
+        None => {
+            tx.take_active(TxState::RolledBack)?.lease.return_to_pool();
+            return Ok(());
+        }
+        Some(id) => {
+            tx.active_mut()?.server = ServerTransaction::RollbackInFlight(id);
+        }
     }
-    let result = finish_tx_session(tx, rollback_err.map_or(Ok(()), Err));
-    tx.state = match &result {
+
+    let result = async {
+        let active = tx.active()?;
+        let ServerTransaction::RollbackInFlight(tx_id) = &active.server else {
+            return Err(YdbError::InternalError(
+                "query transaction is not rolling back".to_string(),
+            ));
+        };
+        let session_id = active.lease.session_id();
+        tracing::Span::current()
+            .record("ydb.session.id", session_id)
+            .record("ydb.tx.id", tx_id.as_str());
+        let mut client = tx
+            .connection_manager
+            .get_auth_service_to_node(RawQueryClient::new, active.lease.node_uri())
+            .await?;
+        maybe_with_operation_timeout(resolve_effective_timeout(tx.retry_deadline, None), async {
+            client
+                .rollback_transaction(session_id, tx_id.as_str())
+                .await
+                .map_err(Into::into)
+        })
+        .await
+    }
+    .await;
+
+    let terminal = match &result {
         Ok(()) => TxState::RolledBack,
         Err(err) => TxState::Ambiguous(err.clone()),
     };
-    result
+    let active = tx.take_active(terminal)?;
+    active.lease.finish(result)
 }
 
 /// Best-effort rollback when [`super::Transaction`] is dropped without `commit`/`rollback`.
-pub(crate) fn spawn_query_tx_rollback_on_drop(ctx: &mut TransactionExecContext) {
-    let tx_id = ctx.tx_id.take().filter(|id| !id.is_empty());
-    let Some(lease) = ctx.pooled_lease.take() else {
-        return;
-    };
-    let connection_manager = ctx.connection_manager.clone();
-
-    let Some(tx_id) = tx_id else {
-        return;
+pub(crate) fn finish_query_tx_on_drop(
+    connection_manager: GrpcConnectionManager,
+    active: ActiveTransaction,
+) {
+    let ActiveTransaction { lease, server } = active;
+    let tx_id = match server {
+        ServerTransaction::NotStarted => {
+            lease.return_to_pool();
+            return;
+        }
+        ServerTransaction::Started(tx_id) => tx_id,
+        ServerTransaction::BeginInFlight
+        | ServerTransaction::CommitInFlight(_)
+        | ServerTransaction::RollbackInFlight(_) => return,
     };
 
     spawn_pool_release(async move {
@@ -657,7 +801,7 @@ pub(crate) fn spawn_query_tx_rollback_on_drop(ctx: &mut TransactionExecContext) 
             .await;
         let rollback_ok = match client_result {
             Ok(mut client) => client
-                .rollback_transaction(lease.session_id(), &tx_id)
+                .rollback_transaction(lease.session_id(), tx_id.as_str())
                 .await
                 .is_ok(),
             Err(_) => false,
@@ -670,19 +814,19 @@ pub(crate) fn spawn_query_tx_rollback_on_drop(ctx: &mut TransactionExecContext) 
 
 pub(crate) fn transaction_exec_context(
     connection_manager: GrpcConnectionManager,
-    session_pool: SessionPool,
+    lease: SessionPoolLease,
     options: TransactionOptions,
     retry_deadline: Option<Instant>,
     metrics_names: MetricsNames,
 ) -> TransactionExecContext {
     TransactionExecContext {
         connection_manager,
-        session_pool,
         tx_mode: options.mode(),
         begin: options.begin(),
-        pooled_lease: None,
-        tx_id: None,
-        state: TxState::Active,
+        state: TxState::Active(ActiveTransaction {
+            lease,
+            server: ServerTransaction::NotStarted,
+        }),
         hooks: Vec::new(),
         retry_deadline,
         metrics_names,
@@ -690,20 +834,33 @@ pub(crate) fn transaction_exec_context(
 }
 
 pub(crate) fn apply_stream_tx_id(tx: &mut TransactionExecContext, tx_id: Option<String>) {
-    let Some(id) = tx_id.filter(|id| !id.is_empty()) else {
+    let Some(id) = tx_id else {
         return;
     };
-    if let Some(existing) = &tx.tx_id {
-        if *existing != id {
+    let Ok(active) = tx.active_mut() else {
+        tracing::warn!("query transaction received tx_id after it finished");
+        return;
+    };
+    match &active.server {
+        ServerTransaction::NotStarted | ServerTransaction::BeginInFlight => {
+            active.server = ServerTransaction::Started(id);
+        }
+        ServerTransaction::Started(existing) => {
+            if existing != &id {
+                tracing::warn!(
+                    existing = existing.as_str(),
+                    incoming = id.as_str(),
+                    "query transaction tx_id changed in stream; keeping first value"
+                );
+            }
+        }
+        ServerTransaction::CommitInFlight(_) | ServerTransaction::RollbackInFlight(_) => {
             tracing::warn!(
-                existing = existing.as_str(),
                 incoming = id.as_str(),
-                "query transaction tx_id changed in stream; keeping first value"
+                "query transaction received tx_id while finalization was in progress"
             );
         }
-        return;
     }
-    tx.tx_id = Some(id);
 }
 
 #[cfg(test)]
@@ -747,6 +904,8 @@ mod unit_tests {
         use http::Uri;
         use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let lease = pool.acquire_explicit().await.expect("acquire test session");
         let mut ctx = transaction_exec_context(
             GrpcConnectionManager::new(
                 SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
@@ -756,12 +915,13 @@ mod unit_tests {
                 MultiInterceptor::new(),
                 GrpcOptions::default(),
             ),
-            SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
+            lease,
             TransactionOptions::default(),
             None,
             MetricsNames::new(None),
         );
-        ctx.tx_id = Some("tx-1".into());
+        ctx.active_mut().expect("active transaction").server =
+            ServerTransaction::Started("tx-1".to_string());
         transaction_handle_query_error(
             &mut ctx,
             &YdbError::YdbStatusError(crate::errors::YdbStatusError::new(
@@ -771,7 +931,44 @@ mod unit_tests {
             )),
         );
         assert!(!ctx.state.is_active());
-        assert!(ctx.tx_id.is_none());
+        assert!(ctx.transaction_id().is_none());
         transaction_rollback(&mut ctx).await.expect("rollback nop");
+    }
+
+    #[tokio::test]
+    async fn in_flight_transaction_cleanup_discards_its_session() {
+        use crate::client_query::TransactionOptions;
+        use crate::grpc_connection_manager::GrpcConnectionManager;
+        use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+        use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+        use crate::session_pool::{SessionPool, SessionPoolSettings};
+        use http::Uri;
+
+        let manager = GrpcConnectionManager::new(
+            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
+                Uri::from_static("http://127.0.0.1/bench"),
+            ))),
+            "bench".to_string(),
+            MultiInterceptor::new(),
+            GrpcOptions::default(),
+        );
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let lease = pool.acquire_explicit().await.expect("acquire test session");
+        let session_id = lease.session_id().to_string();
+        let mut ctx =
+            transaction_exec_context(manager.clone(), lease, TransactionOptions::default(), None);
+        ctx.active_mut().expect("active transaction").server = ServerTransaction::BeginInFlight;
+        let active = ctx
+            .take_active(TxState::RolledBack)
+            .expect("take active transaction");
+
+        finish_query_tx_on_drop(manager, active);
+
+        let replacement = pool
+            .acquire_explicit()
+            .await
+            .expect("acquire replacement session");
+        assert_ne!(replacement.session_id(), session_id);
+        replacement.return_to_pool();
     }
 }
