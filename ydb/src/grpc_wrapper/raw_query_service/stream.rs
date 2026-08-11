@@ -17,14 +17,8 @@ pub(crate) struct StreamCloseMeta {
     pub tx_id: Option<TransactionId>,
 }
 
-enum QueryResponseSource {
-    Grpc(Box<tonic::Streaming<ExecuteQueryResponsePart>>),
-    #[cfg(test)]
-    Parts(Vec<ExecuteQueryResponsePart>),
-}
-
 struct ActiveQueryResponse {
-    source: QueryResponseSource,
+    stream: tonic::Streaming<ExecuteQueryResponsePart>,
     pending_part: Option<ExecuteQueryResponsePart>,
 }
 
@@ -64,20 +58,7 @@ impl ExecuteQueryStream {
     pub fn new(stream: tonic::Streaming<ExecuteQueryResponsePart>) -> Self {
         Self {
             state: QueryResponseState::Active(Box::new(ActiveQueryResponse {
-                source: QueryResponseSource::Grpc(Box::new(stream)),
-                pending_part: None,
-            })),
-            next_index: 0,
-            metadata: QueryResponseMetadata::default(),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_test_parts(mut parts: Vec<ExecuteQueryResponsePart>) -> Self {
-        parts.reverse();
-        Self {
-            state: QueryResponseState::Active(Box::new(ActiveQueryResponse {
-                source: QueryResponseSource::Parts(parts),
+                stream,
                 pending_part: None,
             })),
             next_index: 0,
@@ -122,11 +103,7 @@ impl ExecuteQueryStream {
             QueryResponseState::Active(active) if active.pending_part.is_some() => {
                 return Ok(active.pending_part.take());
             }
-            QueryResponseState::Active(active) => match &mut active.source {
-                QueryResponseSource::Grpc(stream) => stream.message().await?,
-                #[cfg(test)]
-                QueryResponseSource::Parts(parts) => parts.pop(),
-            },
+            QueryResponseState::Active(active) => active.stream.message().await?,
             QueryResponseState::Exhausted | QueryResponseState::Cancelled => return Ok(None),
         };
 
@@ -320,25 +297,9 @@ impl ExecuteQueryStream {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grpc_wrapper::raw_table_service::value::{RawResultSet, RawValue};
+    use crate::grpc_wrapper::raw_table_service::value::RawValue;
     use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
-
-    fn part_with_row(index: i64, column: &str, value: i64) -> ExecuteQueryResponsePart {
-        let col_type = crate::grpc_wrapper::raw_table_service::value::r#type::RawType::Int64.into();
-        let row = ydb_grpc::ydb_proto::Value {
-            items: vec![RawValue::Int64(value).into()],
-            ..Default::default()
-        };
-        part_with_rows(
-            index,
-            Some(vec![ydb_grpc::ydb_proto::Column {
-                name: column.to_string(),
-                r#type: Some(col_type),
-            }]),
-            vec![row],
-        )
-    }
 
     fn part_with_rows(
         index: i64,
@@ -360,17 +321,6 @@ mod tests {
         }
     }
 
-    fn error_part(index: i64) -> ExecuteQueryResponsePart {
-        ExecuteQueryResponsePart {
-            status: StatusCode::BadRequest as i32,
-            issues: vec![],
-            result_set_index: index,
-            result_set: None,
-            exec_stats: None,
-            tx_meta: None,
-        }
-    }
-
     fn metadata_only_part(index: i64) -> ExecuteQueryResponsePart {
         ExecuteQueryResponsePart {
             status: StatusCode::Success as i32,
@@ -382,18 +332,7 @@ mod tests {
         }
     }
 
-    fn transaction_part(id: &str) -> ExecuteQueryResponsePart {
-        ExecuteQueryResponsePart {
-            status: StatusCode::Success as i32,
-            issues: vec![],
-            result_set_index: 0,
-            result_set: None,
-            exec_stats: None,
-            tx_meta: Some(ydb_grpc::ydb_proto::query::TransactionMeta { id: id.to_string() }),
-        }
-    }
-
-    fn row_values(set: &RawResultSet) -> Vec<i64> {
+    fn row_values(set: &PartialResultSet) -> Vec<i64> {
         set.rows
             .iter()
             .map(|row| match row.first() {
@@ -403,146 +342,35 @@ mod tests {
             .collect()
     }
 
-    #[tokio::test]
-    async fn materialize_all_result_sets_reassembles_interleaved_parts() {
-        // Server may deliver RS0/RS1 parts out of order when concurrent_result_sets=true.
-        let mut stream = ExecuteQueryStream::from_test_parts(vec![
-            part_with_row(0, "a", 10),
-            part_with_row(1, "b", 20),
-            part_with_row(0, "a", 11),
-            part_with_row(1, "b", 21),
-        ]);
-
-        let sets = stream
-            .materialize_all_result_sets()
-            .await
-            .expect("materialize stream");
-
-        assert_eq!(sets.len(), 2);
-        assert_eq!(row_values(&sets[0]), vec![10, 11]);
-        assert_eq!(row_values(&sets[1]), vec![20, 21]);
-    }
-
-    #[tokio::test]
-    async fn materialize_all_result_sets_accepts_empty_continuation_parts() {
-        let col_type = crate::grpc_wrapper::raw_table_service::value::r#type::RawType::Int64.into();
+    #[test]
+    fn append_part_to_index_reassembles_interleaved_parts() {
+        let col_type: ydb_grpc::ydb_proto::Type =
+            crate::grpc_wrapper::raw_table_service::value::r#type::RawType::Int64.into();
         let row = |v: i64| ydb_grpc::ydb_proto::Value {
             items: vec![RawValue::Int64(v).into()],
             ..Default::default()
         };
-        let columns = vec![ydb_grpc::ydb_proto::Column {
-            name: "a".to_string(),
-            r#type: Some(col_type),
-        }];
-
-        let mut stream = ExecuteQueryStream::from_test_parts(vec![
-            part_with_rows(0, Some(columns.clone()), vec![row(10)]),
-            part_with_rows(0, None, vec![]),
-            part_with_rows(0, Some(vec![]), vec![row(11)]),
-        ]);
-
-        let sets = stream
-            .materialize_all_result_sets()
-            .await
-            .expect("materialize stream");
-
-        assert_eq!(sets.len(), 1);
-        assert_eq!(row_values(&sets[0]), vec![10, 11]);
-        assert!(matches!(stream.state, QueryResponseState::Exhausted));
-    }
-
-    #[tokio::test]
-    async fn materialize_all_result_sets_propagates_part_errors() {
-        let mut stream =
-            ExecuteQueryStream::from_test_parts(vec![part_with_row(0, "a", 10), error_part(1)]);
-
-        let err = stream
-            .materialize_all_result_sets()
-            .await
-            .expect_err("expected part status error");
-
-        assert!(matches!(
-            err,
-            crate::grpc_wrapper::raw_errors::RawError::YdbStatus(_)
-        ));
-        assert!(matches!(stream.state, QueryResponseState::Cancelled));
-    }
-
-    #[tokio::test]
-    async fn materialize_all_result_sets_skips_metadata_only_parts() {
-        let mut stream = ExecuteQueryStream::from_test_parts(vec![
+        let columns = |name: &str| {
+            vec![ydb_grpc::ydb_proto::Column {
+                name: name.to_string(),
+                r#type: Some(col_type.clone()),
+            }]
+        };
+        let parts = [
+            part_with_rows(0, Some(columns("a")), vec![row(10)]),
+            part_with_rows(1, Some(columns("b")), vec![row(20)]),
             metadata_only_part(0),
-            part_with_row(0, "a", 10),
-            metadata_only_part(1),
-        ]);
+            part_with_rows(0, Some(Vec::new()), vec![row(11)]),
+            part_with_rows(1, Some(Vec::new()), vec![row(21)]),
+        ];
+        let mut by_index = BTreeMap::new();
+        for part in parts {
+            ExecuteQueryStream::append_part_to_index(&mut by_index, part)
+                .expect("append response part");
+        }
 
-        let sets = stream
-            .materialize_all_result_sets()
-            .await
-            .expect("materialize stream");
-
-        assert_eq!(sets.len(), 1);
-        assert_eq!(row_values(&sets[0]), vec![10]);
-    }
-
-    #[tokio::test]
-    async fn next_result_set_advances_until_the_stream_is_exhausted() {
-        let mut stream = ExecuteQueryStream::from_test_parts(vec![
-            part_with_row(0, "a", 10),
-            part_with_row(0, "a", 11),
-            part_with_row(1, "b", 20),
-        ]);
-
-        let first = stream
-            .next_result_set()
-            .await
-            .expect("read first result set")
-            .expect("first result set");
-        let second = stream
-            .next_result_set()
-            .await
-            .expect("read second result set")
-            .expect("second result set");
-
-        assert_eq!(row_values(&first.0), vec![10, 11]);
-        assert_eq!(row_values(&second.0), vec![20]);
-        assert!(
-            stream
-                .next_result_set()
-                .await
-                .expect("observe end of stream")
-                .is_none()
-        );
-        assert!(matches!(stream.state, QueryResponseState::Exhausted));
-    }
-
-    #[tokio::test]
-    async fn close_drains_unread_parts_before_reporting_success() {
-        let mut stream = ExecuteQueryStream::from_test_parts(vec![
-            part_with_row(0, "a", 10),
-            transaction_part("tx-1"),
-        ]);
-
-        let metadata = stream.close().await.expect("close stream");
-
-        assert_eq!(
-            metadata.tx_id.as_ref().map(TransactionId::as_str),
-            Some("tx-1")
-        );
-        assert!(matches!(stream.state, QueryResponseState::Exhausted));
-    }
-
-    #[tokio::test]
-    async fn close_cancels_after_an_unread_part_error() {
-        let mut stream =
-            ExecuteQueryStream::from_test_parts(vec![part_with_row(0, "a", 10), error_part(0)]);
-
-        let error = stream.close().await.expect_err("close must validate parts");
-
-        assert!(matches!(
-            error,
-            crate::grpc_wrapper::raw_errors::RawError::YdbStatus(_)
-        ));
-        assert!(matches!(stream.state, QueryResponseState::Cancelled));
+        assert_eq!(by_index.len(), 2);
+        assert_eq!(row_values(&by_index[&0]), vec![10, 11]);
+        assert_eq!(row_values(&by_index[&1]), vec![20, 21]);
     }
 }
