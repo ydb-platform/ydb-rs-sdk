@@ -376,13 +376,14 @@ impl ClientBuilder {
 
     fn parse_host_and_path(&mut self, s: &str) -> YdbResult<()> {
         let url = url::Url::parse(s)?;
+        let host = url.host().ok_or_else(|| {
+            YdbError::custom("connection string has no host; expected '<scheme>://<host>:<port>'")
+        })?;
+        let port = url.port().ok_or_else(|| {
+            YdbError::custom("connection string has no port; expected '<scheme>://<host>:<port>'")
+        })?;
 
-        self.endpoint = format!(
-            "{}://{}:{}",
-            url.scheme(),
-            url.host().unwrap(),
-            url.port().unwrap()
-        );
+        self.endpoint = format!("{}://{}:{}", url.scheme(), host, port);
         self.database = url.path().to_string();
         Ok(())
     }
