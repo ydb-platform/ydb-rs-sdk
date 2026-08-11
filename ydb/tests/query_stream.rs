@@ -314,3 +314,18 @@ async fn stream_yields_result_parts_without_materializing() -> YdbResult<()> {
     assert!(stream.try_next().await?.is_none());
     Ok(())
 }
+
+#[tokio::test]
+async fn materialized_result_set_combines_streamed_parts() -> YdbResult<()> {
+    let (client, _server) = make_client([StreamScript::closed(vec![
+        result_part(0, Some("value"), &[10]),
+        result_part(0, Some("value"), &[11, 12]),
+    ])])
+    .await?;
+    let mut query = client.query_client();
+
+    let result_set = query.query_result_set("SELECT 1").await?;
+
+    assert_eq!(result_values(result_set, "value")?, vec![10, 11, 12]);
+    Ok(())
+}

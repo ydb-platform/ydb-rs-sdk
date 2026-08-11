@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
@@ -7,17 +6,11 @@ use futures_util::{Stream, TryStreamExt};
 
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 use crate::grpc_wrapper::raw_query_service::execute_query::{
-    RawQueryStatsPlan, append_result_set_part, check_part, plan_from_part, stats_from_part,
-    tx_id_from_part,
+    RawQueryStatsPlan, check_part, plan_from_part, stats_from_part, tx_id_from_part,
 };
 use crate::grpc_wrapper::raw_query_service::transaction_control::TransactionId;
 use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
 use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
-
-#[derive(Debug)]
-pub(crate) struct StreamCloseMeta {
-    pub tx_id: Option<TransactionId>,
-}
 
 pub(crate) struct RawQueryResultPart {
     pub(crate) result_set_index: i64,
@@ -40,13 +33,6 @@ struct QueryResponseMetadata {
     tx_id: Option<TransactionId>,
     stats: Option<Duration>,
     plan: Option<RawQueryStatsPlan>,
-}
-
-#[derive(Default)]
-struct PartialResultSet {
-    columns: Vec<crate::grpc_wrapper::raw_table_service::value::RawColumn>,
-    rows: Vec<Vec<crate::grpc_wrapper::raw_table_service::value::RawValue>>,
-    truncated: bool,
 }
 
 pub(crate) struct ExecuteQueryStream {
@@ -186,45 +172,9 @@ impl ExecuteQueryStream {
         }
     }
 
-    fn append_part_to_index(
-        by_index: &mut BTreeMap<i64, PartialResultSet>,
-        part: RawQueryResultPart,
-    ) -> RawResult<()> {
-        let partial = by_index.entry(part.result_set_index).or_default();
-        append_result_set_part(
-            &mut partial.columns,
-            &mut partial.rows,
-            &mut partial.truncated,
-            part.result_set,
-        )
-    }
-
-    /// Drain the stream and assemble all result sets, buffering parts by
-    /// `result_set_index`. Required when `concurrent_result_sets=true` because
-    /// the server may interleave parts from different result sets.
-    pub async fn materialize_all_result_sets(&mut self) -> RawResult<Vec<RawResultSet>> {
-        let mut by_index: BTreeMap<i64, PartialResultSet> = BTreeMap::new();
-
-        let result: RawResult<Vec<RawResultSet>> = async {
-            while let Some(part) = self.next_part().await? {
-                Self::append_part_to_index(&mut by_index, part)?;
-            }
-
-            Ok(by_index
-                .into_values()
-                .map(|partial| RawResultSet {
-                    columns: partial.columns,
-                    rows: partial.rows,
-                    truncated: partial.truncated,
-                })
-                .collect())
-        }
-        .await;
-
-        if result.is_err() {
-            self.cancel();
-        }
-        result
+    pub(crate) async fn drain(&mut self) -> RawResult<()> {
+        while self.next_part().await?.is_some() {}
+        Ok(())
     }
 
     /// Read the first response part so transaction `tx_id` is captured before iteration.
@@ -261,115 +211,5 @@ impl ExecuteQueryStream {
             }
             terminal => self.state = terminal,
         }
-    }
-
-    async fn drain_to_end(&mut self) -> RawResult<()> {
-        let result = async {
-            while let Some(part) = self.recv_part().await? {
-                self.ingest_part(&part)?;
-            }
-            Ok(())
-        }
-        .await;
-        if result.is_err() {
-            self.cancel();
-        }
-        result
-    }
-
-    pub async fn close(&mut self) -> RawResult<StreamCloseMeta> {
-        self.drain_to_end().await?;
-        Ok(StreamCloseMeta {
-            tx_id: self.metadata.tx_id.take(),
-        })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::grpc_wrapper::raw_table_service::value::RawValue;
-    use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
-    use ydb_grpc::ydb_proto::status_ids::StatusCode;
-
-    fn part_with_rows(
-        index: i64,
-        columns: Option<Vec<ydb_grpc::ydb_proto::Column>>,
-        rows: Vec<ydb_grpc::ydb_proto::Value>,
-    ) -> ExecuteQueryResponsePart {
-        ExecuteQueryResponsePart {
-            status: StatusCode::Success as i32,
-            issues: vec![],
-            result_set_index: index,
-            result_set: columns.map(|columns| ydb_grpc::ydb_proto::ResultSet {
-                columns,
-                rows,
-                truncated: false,
-                ..Default::default()
-            }),
-            exec_stats: None,
-            tx_meta: None,
-        }
-    }
-
-    fn metadata_only_part(index: i64) -> ExecuteQueryResponsePart {
-        ExecuteQueryResponsePart {
-            status: StatusCode::Success as i32,
-            issues: vec![],
-            result_set_index: index,
-            result_set: None,
-            exec_stats: None,
-            tx_meta: None,
-        }
-    }
-
-    fn row_values(set: &PartialResultSet) -> Vec<i64> {
-        set.rows
-            .iter()
-            .map(|row| match row.first() {
-                Some(RawValue::Int64(v)) => *v,
-                other => panic!("unexpected cell: {other:?}"),
-            })
-            .collect()
-    }
-
-    #[test]
-    fn append_part_to_index_reassembles_interleaved_parts() {
-        let col_type: ydb_grpc::ydb_proto::Type =
-            crate::grpc_wrapper::raw_table_service::value::r#type::RawType::Int64.into();
-        let row = |v: i64| ydb_grpc::ydb_proto::Value {
-            items: vec![RawValue::Int64(v).into()],
-            ..Default::default()
-        };
-        let columns = |name: &str| {
-            vec![ydb_grpc::ydb_proto::Column {
-                name: name.to_string(),
-                r#type: Some(col_type.clone()),
-            }]
-        };
-        let parts = [
-            part_with_rows(0, Some(columns("a")), vec![row(10)]),
-            part_with_rows(1, Some(columns("b")), vec![row(20)]),
-            metadata_only_part(0),
-            part_with_rows(0, Some(Vec::new()), vec![row(11)]),
-            part_with_rows(1, Some(Vec::new()), vec![row(21)]),
-        ];
-        let mut by_index = BTreeMap::new();
-        for part in parts {
-            if let Some(result_set) = part.result_set {
-                ExecuteQueryStream::append_part_to_index(
-                    &mut by_index,
-                    RawQueryResultPart {
-                        result_set_index: part.result_set_index,
-                        result_set: result_set.try_into().expect("decode result set"),
-                    },
-                )
-                .expect("append response part");
-            }
-        }
-
-        assert_eq!(by_index.len(), 2);
-        assert_eq!(row_values(&by_index[&0]), vec![10, 11]);
-        assert_eq!(row_values(&by_index[&1]), vec![20, 21]);
     }
 }

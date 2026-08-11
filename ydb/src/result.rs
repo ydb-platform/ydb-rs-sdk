@@ -32,6 +32,10 @@ impl ResultSet {
     pub fn is_truncated(&self) -> bool {
         self.raw_result_set.truncated
     }
+
+    pub(crate) fn into_raw(self) -> RawResultSet {
+        self.raw_result_set
+    }
 }
 
 impl TryFrom<RawResultSet> for ResultSet {
