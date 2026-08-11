@@ -239,16 +239,32 @@ pub struct ClientBuilder {
 
 impl ClientBuilder {
     pub fn new_from_connection_string<T: Into<String>>(s: T) -> Result<Self, YdbError> {
-        let s = s.into();
-        let s = s.as_str();
+        let connection_string = s.into();
+        let url = url::Url::parse(&connection_string)?;
+        match url.scheme() {
+            "grpc" | "grpcs" => {}
+            scheme => {
+                return Err(YdbError::custom(format!(
+                    "unsupported connection string scheme '{scheme}'; expected 'grpc' or 'grpcs'"
+                )));
+            }
+        }
+        let host = url.host().ok_or_else(|| {
+            YdbError::custom("connection string has no host; expected '<scheme>://<host>:<port>'")
+        })?;
+        let port = url.port().ok_or_else(|| {
+            YdbError::custom("connection string has no port; expected '<scheme>://<host>:<port>'")
+        })?;
+
         let mut client_builder = ClientBuilder::new();
-        client_builder.parse_host_and_path(s)?;
+        client_builder.endpoint = format!("{}://{}:{}", url.scheme(), host, port);
+        client_builder.database = url.path().to_string();
 
         let handlers = PARAM_HANDLERS.lock()?;
 
-        for (key, _) in url::Url::parse(s)?.query_pairs() {
+        for (key, _) in url.query_pairs() {
             if let Some(handler) = handlers.get(key.as_ref()) {
-                client_builder = handler(s, client_builder)?;
+                client_builder = handler(url.as_str(), client_builder)?;
             }
         }
         Ok(client_builder)
@@ -372,20 +388,6 @@ impl ClientBuilder {
             executor: None,
             retry_settings: None,
         }
-    }
-
-    fn parse_host_and_path(&mut self, s: &str) -> YdbResult<()> {
-        let url = url::Url::parse(s)?;
-        let host = url.host().ok_or_else(|| {
-            YdbError::custom("connection string has no host; expected '<scheme>://<host>:<port>'")
-        })?;
-        let port = url.port().ok_or_else(|| {
-            YdbError::custom("connection string has no port; expected '<scheme>://<host>:<port>'")
-        })?;
-
-        self.endpoint = format!("{}://{}:{}", url.scheme(), host, port);
-        self.database = url.path().to_string();
-        Ok(())
     }
 }
 
