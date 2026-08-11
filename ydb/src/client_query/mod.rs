@@ -47,7 +47,7 @@ use crate::retry_settings::{RetrySettings, RetryState};
 use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{
-    ClientExecContext, TransactionExecContext, finish_query_tx_on_drop, transaction_commit,
+    ClientExecContext, TransactionExecContext, schedule_transaction_rollback, transaction_commit,
     transaction_ensure_begin, transaction_exec_context, transaction_identity, transaction_rollback,
 };
 use hooks::{QueryTxCommitStatus, QueryTxHook};
@@ -495,7 +495,7 @@ impl Drop for Transaction {
         let state = std::mem::replace(&mut self.ctx.state, TxState::RolledBack);
         match state {
             TxState::Active(active) => {
-                finish_query_tx_on_drop(self.ctx.connection_manager.clone(), active);
+                schedule_transaction_rollback(self.ctx.connection_manager.clone(), active);
             }
             TxState::Committed
             | TxState::RolledBack
@@ -605,14 +605,12 @@ mod unit_tests {
             TransactionOptions::default(),
             None,
         );
-        exec::transaction_handle_query_error(
-            &mut tx.ctx,
-            &YdbError::YdbStatusError(YdbStatusError {
+        tx.ctx
+            .apply_query_error(&YdbError::YdbStatusError(YdbStatusError {
                 message: "transaction failed".to_string(),
                 operation_status: status as i32,
                 issues: Vec::new(),
-            }),
-        );
+            }));
         assert!(matches!(tx.ctx.state, TxState::Invalidated(_)));
         (tx, session_id)
     }
@@ -746,7 +744,7 @@ mod unit_tests {
     }
 
     #[tokio::test]
-    async fn unhealthy_transaction_notifies_abort_hooks_once() {
+    async fn cancelled_transaction_stream_fails_and_notifies_abort_hooks_once() {
         let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
         let client = QueryClient::new(test_connection_manager(), pool, RetrySettings::dont_retry());
         let aborts = Arc::new(AtomicUsize::new(0));
@@ -755,7 +753,8 @@ mod unit_tests {
         let result: YdbResultWithCustomerErr<()> = client
             .retry_tx(closure!([observed_aborts], async |tx: &mut Transaction| {
                 exec::apply_stream_tx_id(&mut tx.ctx, TransactionId::from_server("tx-1".into()));
-                exec::transaction_invalidate_session(&mut tx.ctx);
+                tx.ctx
+                    .abort_unconfirmed_stream(YdbError::Transport("stream failed".into()));
                 tx.register_hook(AbortCounter(observed_aborts.clone()));
                 Ok(())
             }))

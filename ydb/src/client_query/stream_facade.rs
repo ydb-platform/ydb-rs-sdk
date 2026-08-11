@@ -18,7 +18,7 @@ use crate::types::Value;
 use super::exec::{
     CallOptions, ClientExecContext, ClientQuerySession, OpenedClientQueryStream,
     TransactionExecContext, apply_stream_tx_id, client_begin_stream_once, transaction_begin_stream,
-    transaction_finish_query, transaction_handle_query_error, transaction_invalidate_session,
+    transaction_finish_query,
 };
 use super::internal::ExecCoreRef;
 
@@ -91,7 +91,7 @@ enum QueryStreamOwner<'a> {
 
 impl Drop for QueryStream<'_> {
     fn drop(&mut self) {
-        self.cancel_active();
+        self.cancel_active(None);
     }
 }
 
@@ -136,7 +136,7 @@ impl FusedStream for QueryStream<'_> {
 }
 
 impl QueryStream<'_> {
-    fn cancel_active(&mut self) {
+    fn cancel_active(&mut self, error: Option<YdbError>) {
         self.apply_captured_transaction_id();
         let completion_unconfirmed = self.stream.completion_unconfirmed();
         self.stream.cancel();
@@ -145,7 +145,9 @@ impl QueryStream<'_> {
             lifecycle
             && completion_unconfirmed
         {
-            transaction_invalidate_session(context);
+            context.abort_unconfirmed_stream(error.unwrap_or_else(|| {
+                YdbError::Custom("query stream dropped before completion was confirmed".to_string())
+            }));
         }
     }
 }
@@ -189,11 +191,11 @@ impl<'a> QueryStream<'a> {
         if let QueryStreamLifecycle::Active(QueryStreamOwner::Transaction { context, .. }) =
             &mut self.lifecycle
         {
-            transaction_handle_query_error(context, error);
+            context.apply_query_error(error);
         }
         // If the error did not already end the transaction, unconfirmed stream completion makes
         // its retained session unsafe to reuse.
-        self.cancel_active();
+        self.cancel_active(Some(error.clone()));
     }
 
     fn complete(&mut self) -> YdbResult<()> {

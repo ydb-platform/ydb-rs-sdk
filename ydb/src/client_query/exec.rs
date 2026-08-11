@@ -119,6 +119,20 @@ enum ServerTransaction {
     RollbackInFlight(TransactionId),
 }
 
+impl ServerTransaction {
+    fn id_for_finalization(&self) -> YdbResult<Option<&TransactionId>> {
+        match self {
+            Self::NotStarted => Ok(None),
+            Self::Started(id) => Ok(Some(id)),
+            Self::BeginInFlight | Self::CommitInFlight(_) | Self::RollbackInFlight(_) => {
+                Err(YdbError::InternalError(
+                    "query transaction operation is already in progress".to_string(),
+                ))
+            }
+        }
+    }
+}
+
 pub(crate) struct TransactionExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub tx_mode: TxMode,
@@ -167,6 +181,46 @@ impl TransactionExecContext {
                 self.state = state;
                 Err(transaction_finished_error())
             }
+        }
+    }
+
+    /// Apply a query error to the retained session and transaction state.
+    ///
+    /// A definitive server status means that the server already ended the transaction, so no
+    /// rollback is needed and the lease is resolved immediately. Ambiguous errors leave the
+    /// transaction active for the explicit rollback or `Drop` path; session-breaking errors mark
+    /// its retained lease as non-reusable.
+    pub(super) fn apply_query_error(&mut self, err: &YdbError) {
+        let discard_session = err.requires_session_discard();
+        if !err.invalidates_server_transaction() {
+            if let TxState::Active(active) = &mut self.state
+                && discard_session
+            {
+                active.lease.invalidate();
+            }
+            return;
+        }
+
+        let previous = std::mem::replace(&mut self.state, TxState::Invalidated(err.clone()));
+        match previous {
+            TxState::Active(active) => {
+                if !discard_session {
+                    active.lease.return_to_pool();
+                }
+            }
+            terminal => self.state = terminal,
+        }
+    }
+
+    /// Abort a transaction whose query stream ended without confirmed completion.
+    pub(super) fn abort_unconfirmed_stream(&mut self, error: YdbError) {
+        let previous = std::mem::replace(&mut self.state, TxState::Ambiguous(error));
+        match previous {
+            TxState::Active(mut active) => {
+                active.lease.invalidate();
+                schedule_transaction_rollback(self.connection_manager.clone(), active);
+            }
+            terminal => self.state = terminal,
         }
     }
 }
@@ -549,31 +603,6 @@ async fn transaction_before_commit(tx: &mut TransactionExecContext) -> YdbResult
     Ok(())
 }
 
-/// Apply a query error to the retained session and transaction state.
-pub(crate) fn transaction_handle_query_error(tx: &mut TransactionExecContext, err: &YdbError) {
-    if err.invalidates_server_transaction() && tx.state.is_active() {
-        let previous = std::mem::replace(&mut tx.state, TxState::Invalidated(err.clone()));
-        let TxState::Active(mut active) = previous else {
-            tx.state = previous;
-            return;
-        };
-        if err.requires_session_discard() {
-            active.lease.invalidate();
-        }
-        active.lease.return_to_pool();
-    } else if let TxState::Active(active) = &mut tx.state
-        && err.requires_session_discard()
-    {
-        active.lease.invalidate();
-    }
-}
-
-pub(crate) fn transaction_invalidate_session(tx: &mut TransactionExecContext) {
-    if let TxState::Active(active) = &mut tx.state {
-        active.lease.invalidate();
-    }
-}
-
 #[instrument(name = "ydb.Query.TransactionBeginStream", skip_all, fields(db.system.name = "ydb", ydb.tx.mode = ?tx.tx_mode, ydb.session.id = tracing::field::Empty), err)]
 pub(crate) async fn transaction_begin_stream(
     tx: &mut TransactionExecContext,
@@ -631,7 +660,7 @@ pub(crate) async fn transaction_begin_stream(
         ) {
             tx.active_mut()?.server = ServerTransaction::NotStarted;
         }
-        transaction_handle_query_error(tx, err);
+        tx.apply_query_error(err);
     }
     result
 }
@@ -645,17 +674,7 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
         let _ = transaction_rollback(tx).await;
         return Err(err);
     }
-    let transaction_id = match &tx.active()?.server {
-        ServerTransaction::Started(id) => Some(id.clone()),
-        ServerTransaction::NotStarted => None,
-        ServerTransaction::BeginInFlight
-        | ServerTransaction::CommitInFlight(_)
-        | ServerTransaction::RollbackInFlight(_) => {
-            return Err(YdbError::InternalError(
-                "query transaction operation is already in progress".to_string(),
-            ));
-        }
-    };
+    let transaction_id = tx.active()?.server.id_for_finalization()?.cloned();
     match transaction_id {
         None => {
             tx.take_active(TxState::Committed)?.lease.return_to_pool();
@@ -708,17 +727,7 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
     if !tx.state.is_active() {
         return Ok(());
     }
-    let transaction_id = match &tx.active()?.server {
-        ServerTransaction::Started(id) => Some(id.clone()),
-        ServerTransaction::NotStarted => None,
-        ServerTransaction::BeginInFlight
-        | ServerTransaction::CommitInFlight(_)
-        | ServerTransaction::RollbackInFlight(_) => {
-            return Err(YdbError::InternalError(
-                "query transaction operation is already in progress".to_string(),
-            ));
-        }
-    };
+    let transaction_id = tx.active()?.server.id_for_finalization()?.cloned();
     match transaction_id {
         None => {
             tx.take_active(TxState::RolledBack)?.lease.return_to_pool();
@@ -762,8 +771,8 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
     active.lease.finish(result)
 }
 
-/// Best-effort rollback when [`super::Transaction`] is dropped without `commit`/`rollback`.
-pub(crate) fn finish_query_tx_on_drop(
+/// Schedule best-effort rollback for a transaction terminated without explicit finalization.
+pub(crate) fn schedule_transaction_rollback(
     connection_manager: GrpcConnectionManager,
     active: ActiveTransaction,
 ) {
@@ -904,14 +913,11 @@ mod unit_tests {
         ctx.active_mut().expect("active transaction").server = ServerTransaction::Started(
             TransactionId::from_server("tx-1".into()).expect("non-empty transaction id"),
         );
-        transaction_handle_query_error(
-            &mut ctx,
-            &YdbError::YdbStatusError(crate::errors::YdbStatusError {
-                message: "bad".into(),
-                operation_status: StatusCode::GenericError as i32,
-                issues: vec![],
-            }),
-        );
+        ctx.apply_query_error(&YdbError::YdbStatusError(crate::errors::YdbStatusError {
+            message: "bad".into(),
+            operation_status: StatusCode::GenericError as i32,
+            issues: vec![],
+        }));
         assert!(!ctx.state.is_active());
         assert!(ctx.transaction_id().is_none());
         transaction_rollback(&mut ctx).await.expect("rollback nop");
@@ -944,7 +950,7 @@ mod unit_tests {
             .take_active(TxState::RolledBack)
             .expect("take active transaction");
 
-        finish_query_tx_on_drop(manager, active);
+        schedule_transaction_rollback(manager, active);
 
         let replacement = pool
             .acquire_explicit()
