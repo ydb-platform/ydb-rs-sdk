@@ -57,7 +57,7 @@ impl<'a> TopicReaderTx<'a> {
             .get_auth_service_to_node(RawTopicClient::new, uri)
             .await?;
 
-        let tx_identity = tx.tx_identity().await?;
+        let tx_identity = tx.identity().await?;
         let runtime = reader.runtime_handle();
 
         tx.register_hook(ReaderTxHook {
@@ -93,7 +93,7 @@ impl<'a> TopicReaderTx<'a> {
                 Duration::from_secs(60),
             ),
             tx: RawTransactionIdentity {
-                id: self.tx_identity.transaction_id.clone(),
+                id: self.tx_identity.transaction_id.clone().into_string(),
                 session: self.tx_identity.session_id.clone(),
             },
             topics: vec![RawTopicOffsets {

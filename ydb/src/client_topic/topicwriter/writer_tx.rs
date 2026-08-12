@@ -49,11 +49,11 @@ impl TopicWriterTx {
         executor: Arc<dyn Executor>,
         tx: &mut Transaction,
     ) -> YdbResult<Self> {
-        let (session_id, transaction_id) = tx.identity().await?;
+        let identity = tx.identity().await?;
 
         let tx_identity = TransactionIdentity {
-            id: transaction_id,
-            session: session_id,
+            id: identity.transaction_id.into_string(),
+            session: identity.session_id,
         };
 
         // All validation and configuration, specific for `TopicWriterTx` should be done in

@@ -9,12 +9,10 @@ use crate::result::{ResultSet, Row};
 use crate::types::Value;
 
 use super::FromYdbRow;
-use super::exec::{
-    CallOptions, ClientExecContext, TransactionExecContext, client_begin_stream,
-    transaction_begin_stream,
-};
+use super::exec::{CallOptions, ClientExecContext, client_begin_stream};
 use super::internal::ExecCoreRef;
 use super::stream_facade::{QueryStream, materialize_query};
+use super::transaction::TransactionExecContext;
 
 use futures_util::future::BoxFuture;
 
@@ -265,9 +263,9 @@ impl<'a, S> IntoFuture for CallBuilder<'a, Streamed, S> {
                     Ok(QueryStream::from_client(opened))
                 }
                 ExecCoreRef::Transaction(context) => {
-                    let stream =
-                        transaction_begin_stream(context, self.text, self.params, self.opts, false)
-                            .await?;
+                    let stream = context
+                        .begin_stream(self.text, self.params, self.opts, false)
+                        .await?;
                     Ok(QueryStream::from_transaction(
                         stream,
                         context,

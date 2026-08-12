@@ -10,6 +10,7 @@ mod internal;
 mod retry_tx;
 mod script;
 mod stream_facade;
+mod transaction;
 
 #[cfg(test)]
 mod integration_test;
@@ -30,12 +31,9 @@ mod tx_modes_integration_test;
 mod concurrent_result_sets_test;
 
 use std::ops::ControlFlow;
-use std::time::{Duration, Instant};
-
-use http::Uri;
+use std::time::Duration;
 use tracing::instrument;
 
-use crate::client_query::exec::TxState;
 use crate::closure;
 use crate::errors::{
     Idempotency, YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr,
@@ -45,14 +43,13 @@ use crate::result::Row;
 
 use crate::retry_settings::{RetrySettings, RetryState};
 use crate::session_pool::SessionPool;
-use builders::{impl_client_query_methods, impl_transaction_query_methods};
-use exec::{
-    ClientExecContext, TransactionExecContext, finish_query_tx_on_drop, transaction_commit,
-    transaction_ensure_begin, transaction_exec_context, transaction_identity, transaction_rollback,
-};
+use builders::impl_client_query_methods;
+use exec::ClientExecContext;
 #[cfg(test)]
 use hooks::QueryTxCommitStatus;
+#[cfg(test)]
 use hooks::QueryTxHook;
+use transaction::{AttemptCompletion, FailedAttemptCompletion};
 
 /// Row-to-struct mapping (the sqlx `FromRow` analogue).
 pub trait FromYdbRow: Sized {
@@ -339,18 +336,6 @@ impl QueryClient {
     }
 }
 
-enum AttemptCompletion {
-    Return,
-    Retry(YdbError),
-    Fail(YdbError),
-}
-
-enum FailedAttemptCompletion {
-    Retry,
-    FailCallback,
-    FailTransaction(YdbError),
-}
-
 impl QueryExecutor for QueryClient {
     type Scope = builders::ClientOneShot;
 
@@ -371,169 +356,6 @@ impl QueryExecutor for QueryClient {
     }
 }
 
-pub struct Transaction {
-    ctx: TransactionExecContext,
-}
-
-impl Transaction {
-    impl_transaction_query_methods!();
-
-    fn new(
-        connection_manager: GrpcConnectionManager,
-        lease: crate::session_pool::SessionPoolLease,
-        options: TransactionOptions,
-        retry_deadline: Option<Instant>,
-    ) -> Self {
-        Self {
-            ctx: transaction_exec_context(connection_manager, lease, options, retry_deadline),
-        }
-    }
-
-    pub fn mode(&self) -> TxMode {
-        self.ctx.tx_mode
-    }
-
-    pub(crate) fn register_hook(&mut self, hook: impl QueryTxHook) -> YdbResult<()> {
-        self.ctx.register_hook(Box::new(hook))
-    }
-
-    /// Explicitly open the transaction via `BeginTransaction` RPC.
-    ///
-    /// By default (lazy tx) the transaction materializes on the first query. Call this when you
-    /// need `tx_id` before any YQL, or configure [`TransactionOptions::with_begin`]
-    /// on the client so the first operation does this automatically.
-    pub async fn begin(&mut self) -> YdbResult<()> {
-        transaction_ensure_begin(&mut self.ctx).await
-    }
-
-    /// Session and transaction ids for topic offset updates inside a transaction.
-    pub(crate) async fn identity(&mut self) -> YdbResult<(String, String)> {
-        transaction_identity(&mut self.ctx).await
-    }
-
-    pub async fn rollback(&mut self) -> YdbResult<()> {
-        transaction_rollback(&mut self.ctx).await
-    }
-
-    async fn commit(&mut self) -> YdbResult<()> {
-        transaction_commit(&mut self.ctx).await
-    }
-
-    async fn finish_successful_attempt(&mut self) -> AttemptCompletion {
-        match &self.ctx.state {
-            TxState::Committed | TxState::RolledBack => return AttemptCompletion::Return,
-            TxState::Invalidated(error) => return AttemptCompletion::Retry(error.clone()),
-            TxState::Ambiguous(error) => return AttemptCompletion::Fail(error.clone()),
-            TxState::Live(_) => {}
-        }
-
-        if self.ctx.state.operation_is_in_flight() {
-            let error = YdbError::InternalError(
-                "query transaction callback ended while an operation was still in progress"
-                    .to_string(),
-            );
-            return match self.ctx.abort_unconfirmed(error.clone()) {
-                Ok(()) => AttemptCompletion::Fail(error),
-                Err(invariant) => AttemptCompletion::Fail(invariant),
-            };
-        }
-
-        match self.commit().await {
-            Ok(()) => AttemptCompletion::Return,
-            // Commit outcome is ambiguous on transport errors; never retry.
-            Err(error) => AttemptCompletion::Fail(error),
-        }
-    }
-
-    async fn finish_failed_attempt(&mut self) -> FailedAttemptCompletion {
-        match &self.ctx.state {
-            TxState::RolledBack | TxState::Invalidated(_) => {
-                return FailedAttemptCompletion::Retry;
-            }
-            TxState::Committed => return FailedAttemptCompletion::FailCallback,
-            TxState::Ambiguous(error) if error.invalidates_server_transaction() => {
-                return FailedAttemptCompletion::Retry;
-            }
-            TxState::Ambiguous(error) => {
-                return FailedAttemptCompletion::FailTransaction(error.clone());
-            }
-            TxState::Live(_) => {}
-        }
-        if self.ctx.state.operation_is_in_flight() {
-            let error = YdbError::InternalError(
-                "query transaction callback failed while an operation was still in progress"
-                    .to_string(),
-            );
-            return match self.ctx.abort_unconfirmed(error.clone()) {
-                Ok(()) => FailedAttemptCompletion::FailTransaction(error),
-                Err(invariant) => FailedAttemptCompletion::FailTransaction(invariant),
-            };
-        }
-        match transaction_rollback(&mut self.ctx).await {
-            Ok(()) => FailedAttemptCompletion::Retry,
-            Err(error) => FailedAttemptCompletion::FailTransaction(error),
-        }
-    }
-
-    pub(crate) async fn tx_identity(&mut self) -> YdbResult<QueryTxIdentity> {
-        let (session_id, transaction_id) = transaction_identity(&mut self.ctx).await?;
-        Ok(QueryTxIdentity {
-            transaction_id,
-            session_id,
-        })
-    }
-
-    pub(crate) async fn uri(&mut self) -> YdbResult<&Uri> {
-        transaction_ensure_begin(&mut self.ctx).await?;
-        Ok(self.ctx.session_lease()?.node_uri())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn tx_id_for_test(&self) -> Option<&str> {
-        self.ctx.transaction_id().map(|id| id.as_str())
-    }
-}
-
-pub(crate) struct QueryTxIdentity {
-    pub(crate) transaction_id: String,
-    pub(crate) session_id: String,
-}
-
-impl Drop for Transaction {
-    fn drop(&mut self) {
-        let state = std::mem::replace(&mut self.ctx.state, TxState::RolledBack);
-        match state {
-            TxState::Live(live) => {
-                finish_query_tx_on_drop(self.ctx.connection_manager.clone(), live);
-            }
-            TxState::Committed
-            | TxState::RolledBack
-            | TxState::Invalidated(_)
-            | TxState::Ambiguous(_) => {}
-        }
-    }
-}
-
-impl QueryExecutor for Transaction {
-    type Scope = builders::Interactive;
-
-    fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_, Self::Scope> {
-        Transaction::exec(self, text)
-    }
-
-    fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_, Self::Scope> {
-        Transaction::query(self, text)
-    }
-
-    fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_, Self::Scope> {
-        Transaction::query_result_set(self, text)
-    }
-
-    fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row, Self::Scope> {
-        Transaction::query_row(self, text)
-    }
-}
-
 pub use builders::{
     CallBuilder, ClientOneShot, ExecBuilder, ExecCall, Interactive, OneResultSet, OneRow,
     OptionalRow, OptionalRowBuilder, QueryExecutor, QueryRowBuilder, QueryStreamBuilder,
@@ -544,6 +366,8 @@ pub use retry_tx::{RetryTxAttempt, RetryTxBuilder};
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};
 pub use stream_facade::{QueryStats, QueryStream};
+pub(crate) use transaction::QueryTxIdentity;
+pub use transaction::Transaction;
 
 #[cfg(test)]
 mod unit_tests {
@@ -620,7 +444,6 @@ mod unit_tests {
                 issues: Vec::new(),
             }))
             .expect("apply transaction error");
-        assert!(matches!(tx.ctx.state, TxState::Invalidated(_)));
         (tx, session_id)
     }
 
@@ -714,7 +537,7 @@ mod unit_tests {
 
         let result: YdbResultWithCustomerErr<()> = client
             .retry_tx(closure!([observed_aborts], async |tx: &mut Transaction| {
-                exec::mark_begin_in_flight_for_test(&mut tx.ctx);
+                transaction::mark_begin_in_flight_for_test(&mut tx.ctx);
                 tx.register_hook(AbortCounter(observed_aborts.clone()))?;
                 Ok(())
             }))
@@ -733,7 +556,7 @@ mod unit_tests {
 
         let result: YdbResultWithCustomerErr<()> = client
             .retry_tx(closure!([observed_aborts], async |tx: &mut Transaction| {
-                exec::mark_begin_in_flight_for_test(&mut tx.ctx);
+                transaction::mark_begin_in_flight_for_test(&mut tx.ctx);
                 tx.register_hook(AbortCounter(observed_aborts.clone()))?;
                 Err(YdbError::custom("callback failed").into())
             }))

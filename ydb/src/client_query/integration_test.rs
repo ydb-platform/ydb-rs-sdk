@@ -215,7 +215,7 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
 
     qc.retry_tx(closure!([&table_name], async |tx: &mut Transaction| {
         assert!(
-            tx.tx_id_for_test().is_none(),
+            tx.transaction_id_for_test().is_none(),
             "lazy transaction must not have tx_id before the first query"
         );
 
@@ -227,8 +227,7 @@ async fn query_lazy_tx_materializes_on_first_query() -> YdbResult<()> {
         .await?;
 
         let _tx_id = tx
-            .tx_id_for_test()
-            .filter(|id| !id.is_empty())
+            .transaction_id_for_test()
             .expect("lazy transaction must receive tx_id from the first ExecuteQuery");
 
         let mut row = tx
@@ -259,7 +258,7 @@ async fn query_lazy_tx_commit_without_queries() -> YdbResult<()> {
 
     let value = qc
         .retry_tx(closure!(async |tx: &mut Transaction| {
-            assert!(tx.tx_id_for_test().is_none());
+            assert!(tx.transaction_id_for_test().is_none());
             Ok(7_i32)
         }))
         .timeout(TEST_TIMEOUT)
@@ -278,12 +277,12 @@ async fn query_explicit_begin_via_begin() -> YdbResult<()> {
 
     qc.retry_tx(closure!(async |tx: &mut Transaction| {
         assert!(
-            tx.tx_id_for_test().is_none(),
+            tx.transaction_id_for_test().is_none(),
             "lazy transaction must not have tx_id before begin()"
         );
         tx.begin().await?;
         assert!(
-            tx.tx_id_for_test().is_some_and(|id| !id.is_empty()),
+            tx.transaction_id_for_test().is_some(),
             "explicit begin() must set tx_id before the first query"
         );
 
@@ -308,7 +307,7 @@ async fn query_explicit_begin_via_client_option() -> YdbResult<()> {
     qc.retry_tx(closure!(async |tx: &mut Transaction| {
         tx.exec("SELECT 1 AS v").await?;
         assert!(
-            tx.tx_id_for_test().is_some_and(|id| !id.is_empty()),
+            tx.transaction_id_for_test().is_some(),
             "with_begin must obtain tx_id on the first operation via BeginTransaction RPC"
         );
         Ok(())

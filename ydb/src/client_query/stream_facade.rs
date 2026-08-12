@@ -11,9 +11,10 @@ use crate::types::Value;
 
 use super::exec::{
     CallOptions, ClientExecContext, ClientQuerySession, OpenedClientQueryStream,
-    TransactionExecContext, client_begin_stream_once, transaction_begin_stream,
+    client_begin_stream_once,
 };
 use super::internal::ExecCoreRef;
+use super::transaction::TransactionExecContext;
 
 /// Streaming query result. Reaching EOF returns an owned pooled session for reuse;
 /// [`Self::close`] safely drains any unread response parts first. Dropping before EOF cancels the
@@ -253,7 +254,7 @@ async fn materialize_transaction_once(
     opts: CallOptions,
     commit_at_end: bool,
 ) -> YdbResult<Vec<ResultSet>> {
-    let stream = transaction_begin_stream(context, text, params, opts, true).await?;
+    let stream = context.begin_stream(text, params, opts, true).await?;
     let mut stream = QueryStream::from_transaction(stream, context, commit_at_end);
     let result_sets = stream.materialize_all_result_sets().await?;
     stream.close().await?;

@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::client_common::TokenCache;
-use crate::client_query::Transaction;
+use crate::client_query::{QueryTxIdentity, Transaction};
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
 use crate::client_topic::topicreader::messages::TopicReaderBatch;
@@ -89,10 +89,9 @@ impl TopicReader {
     /// Offsets are committed when the query transaction commits.
     #[instrument(name = "ydb.TopicReader.PopBatchInTx", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn pop_batch_in_tx(&mut self, tx: &mut Transaction) -> YdbResult<TopicReaderBatch> {
-        let (session_id, transaction_id) = tx.identity().await?;
+        let identity = tx.identity().await?;
         let batch = self.read_batch_inner().await?;
-        self.update_offsets_in_transaction(&batch, session_id, transaction_id)
-            .await?;
+        self.update_offsets_in_transaction(&batch, identity).await?;
         Ok(batch)
     }
 
@@ -154,8 +153,7 @@ impl TopicReader {
     async fn update_offsets_in_transaction(
         &self,
         batch: &TopicReaderBatch,
-        session_id: String,
-        transaction_id: String,
+        identity: QueryTxIdentity,
     ) -> YdbResult<()> {
         let commit_marker = batch.get_commit_marker();
 
@@ -165,8 +163,8 @@ impl TopicReader {
                 Duration::from_secs(60),
             ),
             tx: RawTransactionIdentity {
-                id: transaction_id,
-                session: session_id,
+                id: identity.transaction_id.into_string(),
+                session: identity.session_id,
             },
             topics: vec![RawTopicOffsets {
                 path: commit_marker.topic.clone(),
