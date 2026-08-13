@@ -21,7 +21,7 @@ use crate::types::Value;
 use crate::{TransactionOptions, TxMode, closure};
 use tracing::instrument;
 
-use crate::session_pool::{SessionPool, SessionPoolLease, spawn_pool_release};
+use crate::session_pool::{SessionPool, SessionPoolLease};
 
 use super::hooks::{QueryTxCommitStatus, QueryTxHook};
 
@@ -330,29 +330,15 @@ impl Drop for TxExecContext {
 
         active.notify_hooks(QueryTxCommitStatus::Aborted);
         let ActiveTx {
-            mut client,
             lease,
             server_progress,
             ..
         } = active;
-        let tx_id = match (server_progress.operation, server_progress.tx_id) {
-            (TxOperationState::Ready, None) => {
-                lease.return_to_pool();
-                return;
-            }
-            (TxOperationState::Ready, Some(tx_id)) => tx_id,
-            (TxOperationState::InFlight, _) => return,
-        };
-
-        let cleanup_timeout = lease.cleanup_timeout();
-        let session_id = lease.session_id().to_string();
-
-        spawn_pool_release(async move {
-            let rollback = client
-                .rollback_transaction(&session_id, tx_id.as_str())
-                .map_err(YdbError::from);
-            finish_rollback_cleanup(lease, cleanup_timeout, rollback).await;
-        });
+        match (server_progress.operation, server_progress.tx_id) {
+            (TxOperationState::Ready, None) => lease.return_to_pool(),
+            (TxOperationState::Ready, Some(tx_id)) => lease.schedule_rollback(tx_id),
+            (TxOperationState::InFlight, _) => {}
+        }
     }
 }
 

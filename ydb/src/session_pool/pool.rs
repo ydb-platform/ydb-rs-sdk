@@ -1,3 +1,4 @@
+use std::fmt;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -40,20 +41,6 @@ fn normalize_pool_settings(mut settings: SessionPoolSettings) -> SessionPoolSett
     settings.limit = settings.limit.max(1);
     settings.warm_up = settings.warm_up.min(settings.limit);
     settings
-}
-
-pub(crate) fn spawn_pool_release<F>(future: F)
-where
-    F: std::future::Future<Output = ()> + Send + 'static,
-{
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => {
-            handle.spawn(future);
-        }
-        Err(_) => {
-            warn!("no active tokio runtime; skipping async session pool release during shutdown");
-        }
-    }
 }
 
 /// Settings for the driver session pool (CreateSession + AttachSession).
@@ -155,7 +142,7 @@ impl SessionPoolSettings {
         self
     }
 
-    /// Maximum time for a best-effort session cleanup RPC.
+    /// Maximum time for a best-effort `RollbackTransaction` or `DeleteSession` cleanup RPC.
     pub fn with_session_delete_timeout(mut self, timeout: Duration) -> Self {
         self.session_delete_timeout = timeout;
         self
@@ -179,6 +166,16 @@ pub(crate) struct SessionPoolLease {
     /// One permit represents this lease's exclusive use of one pool-capacity slot.
     permit: OwnedSemaphorePermit,
     pool: Arc<SessionPoolInner>,
+}
+
+impl fmt::Debug for SessionPoolLease {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SessionPoolLease")
+            .field("session_id", &self.session_id())
+            .field("node_uri", &self.node_uri())
+            .finish_non_exhaustive()
+    }
 }
 
 impl SessionPoolLease {
@@ -241,6 +238,12 @@ impl SessionPoolLease {
     #[cfg(test)]
     pub(crate) fn invalidate(&mut self) {
         self.record.session.invalidate();
+    }
+
+    /// Submit best-effort transaction rollback while preserving this lease until it finishes.
+    pub(crate) fn schedule_rollback(self, transaction_id: String) {
+        let cleanup = self.pool.cleanup.clone();
+        cleanup.submit_rollback(self, transaction_id);
     }
 }
 
@@ -356,11 +359,14 @@ impl SessionPool {
     pub(crate) async fn shutdown(self) -> YdbResult<()> {
         let _permits = self.inner.acquire_all_permits().await?;
         self.inner.semaphore.close();
-        self.inner
-            .explicit_idle
-            .lock()
-            .expect("explicit idle lock")
-            .clear();
+        {
+            let mut idle = self.inner.explicit_idle.lock().map_err(|_| {
+                YdbError::InternalError(
+                    "session pool idle lock was poisoned during shutdown".to_string(),
+                )
+            })?;
+            idle.clear();
+        }
         self.inner.cleanup.shutdown().await
     }
 
@@ -759,7 +765,7 @@ mod unit_tests {
     use futures_util::poll;
     use tokio::sync::mpsc;
 
-    use crate::session_pool::cleanup_worker::start_test_session_cleanup_worker;
+    use crate::session_pool::cleanup_worker::{CleanupTask, start_test_session_cleanup_worker};
 
     use super::*;
 
@@ -835,12 +841,19 @@ mod unit_tests {
     #[tokio::test]
     async fn shutdown_waits_for_idle_and_dropped_lease_cleanup() {
         let (deleted_sender, mut deleted_receiver) = mpsc::unbounded_channel();
-        let cleanup = start_test_session_cleanup_worker(move |identity| {
+        let cleanup = start_test_session_cleanup_worker(move |task| {
             let deleted_sender = deleted_sender.clone();
             async move {
-                deleted_sender
-                    .send(identity.session_id.clone())
-                    .expect("delete observer must remain open");
+                match task {
+                    CleanupTask::DeleteSession(identity) => {
+                        deleted_sender
+                            .send(identity.session_id.clone())
+                            .expect("delete observer must remain open");
+                    }
+                    CleanupTask::RollbackTransaction { lease, .. } => {
+                        lease.return_to_pool();
+                    }
+                }
             }
         });
         let pool = SessionPool::new_explicit_bench_with_cleanup(

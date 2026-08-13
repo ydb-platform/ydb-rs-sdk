@@ -18,8 +18,11 @@ mod mock_server;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::task::Poll;
 use std::time::Duration;
 
+use futures_util::poll;
+use tokio::sync::{Semaphore, mpsc};
 use ydb::{
     Client, ClientBuilder, Transaction, YdbError, YdbOrCustomerError, YdbResult, YdbStatusError,
     closure,
@@ -172,6 +175,53 @@ impl Handler for CountingHandler {
         self.replies
             .send(QueryReply::ExecuteQueryClose { stream_id });
         None
+    }
+}
+
+struct BlockingRollbackHandler {
+    replies: ReplySink,
+    rollback_started: mpsc::UnboundedSender<()>,
+    rollback_release: Arc<Semaphore>,
+    rollback_count: Arc<AtomicUsize>,
+}
+
+impl Handler for BlockingRollbackHandler {
+    fn set_channel(&mut self, tx: FromHandlerToService) {
+        self.replies.set_channel(tx);
+    }
+
+    fn handle(&self, incoming: Incoming) -> Option<Incoming> {
+        match incoming {
+            Incoming::Query(QueryIncoming::ExecuteQuery(_, stream_id)) => {
+                self.replies.send(QueryReply::ExecuteQuery {
+                    stream_id,
+                    part: success_part(Some(QUERY_TX_ID)),
+                });
+                self.replies
+                    .send(QueryReply::ExecuteQueryClose { stream_id });
+                None
+            }
+            Incoming::Query(QueryIncoming::RollbackTransaction(_, reply_tx)) => {
+                self.rollback_count.fetch_add(1, Ordering::SeqCst);
+                self.rollback_started
+                    .send(())
+                    .expect("rollback observer must remain open");
+                let rollback_release = self.rollback_release.clone();
+                tokio::spawn(async move {
+                    rollback_release
+                        .acquire()
+                        .await
+                        .expect("rollback release must remain open")
+                        .forget();
+                    let _ = reply_tx.send(Ok(tonic::Response::new(RollbackTransactionResponse {
+                        status: StatusCode::Success as i32,
+                        issues: Vec::new(),
+                    })));
+                });
+                None
+            }
+            other => Some(other),
+        }
     }
 }
 
@@ -1082,5 +1132,57 @@ async fn swallowed_rollback_failure_must_not_report_committed() -> YdbResult<()>
          RPC failed and the server-side transaction outcome is unknown"
     );
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn shutdown_waits_for_dropped_transaction_rollback() -> YdbResult<()> {
+    let (rollback_started, mut rollback_started_receiver) = mpsc::unbounded_channel();
+    let rollback_release = Arc::new(Semaphore::new(0));
+    let rollback_count = Arc::new(AtomicUsize::new(0));
+    let handler = BlockingRollbackHandler {
+        replies: ReplySink::default(),
+        rollback_started,
+        rollback_release: rollback_release.clone(),
+        rollback_count: rollback_count.clone(),
+    };
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let query = client.query_client();
+    let (attempt_ready, mut attempt_ready_receiver) = mpsc::unbounded_channel();
+    let attempt = tokio::spawn(async move {
+        query
+            .retry_tx(closure!([attempt_ready], async |tx: &mut Transaction| {
+                tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+                attempt_ready
+                    .send(())
+                    .expect("attempt observer must remain open");
+                std::future::pending::<ydb::YdbResultWithCustomerErr<()>>().await
+            }))
+            .await
+    });
+    attempt_ready_receiver
+        .recv()
+        .await
+        .expect("transaction attempt must start");
+
+    attempt.abort();
+    assert!(
+        attempt
+            .await
+            .expect_err("transaction attempt must be cancelled")
+            .is_cancelled()
+    );
+    tokio::time::timeout(Duration::from_secs(1), rollback_started_receiver.recv())
+        .await
+        .expect("rollback must start before the cleanup timeout")
+        .expect("rollback observer must remain open");
+
+    let mut shutdown = Box::pin(client.shutdown());
+    assert!(matches!(poll!(shutdown.as_mut()), Poll::Pending));
+
+    rollback_release.add_permits(1);
+    shutdown.await?;
+    assert_eq!(rollback_count.load(Ordering::SeqCst), 1);
     Ok(())
 }
