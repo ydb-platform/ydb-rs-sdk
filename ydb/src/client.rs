@@ -115,7 +115,7 @@ impl Client {
         self.session_pool.stats()
     }
 
-    /// Stop the shared session pool and wait for all accepted DeleteSession attempts to finish.
+    /// Stop the shared session pool and wait for accepted session cleanup attempts to finish.
     ///
     /// This consumes the driver and stops new session acquisition. Existing session leases may
     /// finish; shutdown waits for them before deleting idle sessions. Do not use clients,

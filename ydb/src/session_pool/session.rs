@@ -22,6 +22,7 @@ use super::cleanup_worker::SessionCleanup;
 use super::pool::SessionPoolObserver;
 
 /// Immutable identity shared by the session owner, AttachSession listener, and cleanup worker.
+#[derive(Debug)]
 pub(super) struct SessionIdentity {
     pub(super) session_id: String,
     pub(super) node_uri: Uri,

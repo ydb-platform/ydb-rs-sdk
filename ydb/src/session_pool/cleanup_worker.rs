@@ -10,10 +10,21 @@ use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 
+use super::SessionPoolLease;
 use super::session::SessionIdentity;
 
-enum CleanupCommand {
+#[derive(Debug)]
+pub(super) enum CleanupTask {
     DeleteSession(Arc<SessionIdentity>),
+    RollbackTransaction {
+        lease: SessionPoolLease,
+        transaction_id: String,
+    },
+}
+
+#[derive(Debug)]
+enum CleanupCommand {
+    Run(CleanupTask),
     Shutdown { completed: oneshot::Sender<()> },
 }
 
@@ -25,20 +36,23 @@ pub(super) struct SessionCleanup {
 
 impl SessionCleanup {
     pub(super) fn submit_delete(&self, identity: Arc<SessionIdentity>) {
-        if self
-            .sender
-            .send(CleanupCommand::DeleteSession(identity.clone()))
-            .is_err()
-        {
-            error!(
-                session_id = %identity.session_id,
-                node_uri = %identity.node_uri,
-                "session cleanup worker is stopped; DeleteSession was not submitted"
-            );
+        self.submit(CleanupTask::DeleteSession(identity));
+    }
+
+    pub(super) fn submit_rollback(&self, lease: SessionPoolLease, transaction_id: String) {
+        self.submit(CleanupTask::RollbackTransaction {
+            lease,
+            transaction_id,
+        });
+    }
+
+    fn submit(&self, task: CleanupTask) {
+        if let Err(error) = self.sender.send(CleanupCommand::Run(task)) {
+            error!(command = ?error.0, "session cleanup worker is stopped; cleanup was not submitted");
         }
     }
 
-    /// Stop accepting cleanup requests and wait for every accepted deletion to finish.
+    /// Stop accepting cleanup requests and wait for every accepted task to finish.
     pub(super) async fn shutdown(&self) -> YdbResult<()> {
         let (completed, completion) = oneshot::channel();
         self.sender
@@ -58,31 +72,31 @@ impl SessionCleanup {
 
 pub(super) fn start_session_cleanup_worker(
     connection_manager: GrpcConnectionManager,
-    delete_timeout: Duration,
+    cleanup_timeout: Duration,
 ) -> SessionCleanup {
     let (sender, receiver) = mpsc::unbounded_channel();
-    let delete = move |identity| {
+    let execute = move |task| {
         let connection_manager = connection_manager.clone();
-        async move { delete_session(connection_manager, delete_timeout, identity).await }
+        async move { execute_cleanup_task(connection_manager, cleanup_timeout, task).await }
     };
-    tokio::spawn(run_cleanup_worker(receiver, delete));
+    tokio::spawn(run_cleanup_worker(receiver, execute));
     SessionCleanup { sender }
 }
 
-async fn run_cleanup_worker<Delete, DeleteFuture>(
+async fn run_cleanup_worker<Execute, ExecuteFuture>(
     mut receiver: mpsc::UnboundedReceiver<CleanupCommand>,
-    delete: Delete,
+    execute: Execute,
 ) where
-    Delete: Fn(Arc<SessionIdentity>) -> DeleteFuture + Send + 'static,
-    DeleteFuture: Future<Output = ()> + Send + 'static,
+    Execute: Fn(CleanupTask) -> ExecuteFuture + Send + 'static,
+    ExecuteFuture: Future<Output = ()> + Send + 'static,
 {
     let mut tasks = JoinSet::new();
 
     let shutdown_completion = loop {
         tokio::select! {
             command = receiver.recv() => match command {
-                Some(CleanupCommand::DeleteSession(identity)) => {
-                    tasks.spawn(delete(identity));
+                Some(CleanupCommand::Run(task)) => {
+                    tasks.spawn(execute(task));
                 }
                 Some(CleanupCommand::Shutdown { completed }) => {
                     break Some(completed);
@@ -92,12 +106,12 @@ async fn run_cleanup_worker<Delete, DeleteFuture>(
                 }
             },
             Some(result) = tasks.join_next(), if !tasks.is_empty() => {
-                report_delete_task_result(result);
+                report_cleanup_task_result(result);
             }
         }
     };
 
-    drain_delete_tasks(&mut tasks).await;
+    drain_cleanup_tasks(&mut tasks).await;
     if let Some(completed) = shutdown_completion
         && completed.send(()).is_err()
     {
@@ -105,15 +119,33 @@ async fn run_cleanup_worker<Delete, DeleteFuture>(
     }
 }
 
-async fn drain_delete_tasks(tasks: &mut JoinSet<()>) {
+async fn drain_cleanup_tasks(tasks: &mut JoinSet<()>) {
     while let Some(result) = tasks.join_next().await {
-        report_delete_task_result(result);
+        report_cleanup_task_result(result);
     }
 }
 
-fn report_delete_task_result(result: Result<(), tokio::task::JoinError>) {
+fn report_cleanup_task_result(result: Result<(), tokio::task::JoinError>) {
     if let Err(err) = result {
         error!(error = %err, "session cleanup task failed");
+    }
+}
+
+async fn execute_cleanup_task(
+    connection_manager: GrpcConnectionManager,
+    cleanup_timeout: Duration,
+    task: CleanupTask,
+) {
+    match task {
+        CleanupTask::DeleteSession(identity) => {
+            delete_session(connection_manager, cleanup_timeout, identity).await;
+        }
+        CleanupTask::RollbackTransaction {
+            lease,
+            transaction_id,
+        } => {
+            rollback_transaction(connection_manager, cleanup_timeout, lease, transaction_id).await;
+        }
     }
 }
 
@@ -144,21 +176,62 @@ async fn delete_session(
     }
 }
 
-#[cfg(test)]
-pub(super) fn start_noop_session_cleanup_worker() -> SessionCleanup {
-    start_test_session_cleanup_worker(|_| async {})
+async fn rollback_transaction(
+    connection_manager: GrpcConnectionManager,
+    cleanup_timeout: Duration,
+    lease: SessionPoolLease,
+    transaction_id: String,
+) {
+    let rollback = async {
+        let mut client = connection_manager
+            .get_auth_service_to_node(RawQueryClient::new, lease.node_uri())
+            .await?;
+        client
+            .rollback_transaction(lease.session_id(), &transaction_id)
+            .await
+            .map_err(YdbError::from)
+    };
+
+    match tokio::time::timeout(cleanup_timeout, rollback).await {
+        Ok(Ok(())) => lease.return_to_pool(),
+        Ok(Err(err)) => {
+            warn!(
+                session_id = lease.session_id(),
+                transaction_id,
+                error = %err,
+                "RollbackTransaction during session cleanup failed"
+            );
+        }
+        Err(_) => {
+            warn!(
+                session_id = lease.session_id(),
+                transaction_id,
+                ?cleanup_timeout,
+                "RollbackTransaction during session cleanup timed out"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
-pub(super) fn start_test_session_cleanup_worker<Delete, DeleteFuture>(
-    delete: Delete,
+pub(super) fn start_noop_session_cleanup_worker() -> SessionCleanup {
+    start_test_session_cleanup_worker(|task| async move {
+        if let CleanupTask::RollbackTransaction { lease, .. } = task {
+            lease.return_to_pool();
+        }
+    })
+}
+
+#[cfg(test)]
+pub(super) fn start_test_session_cleanup_worker<Execute, ExecuteFuture>(
+    execute: Execute,
 ) -> SessionCleanup
 where
-    Delete: Fn(Arc<SessionIdentity>) -> DeleteFuture + Send + 'static,
-    DeleteFuture: Future<Output = ()> + Send + 'static,
+    Execute: Fn(CleanupTask) -> ExecuteFuture + Send + 'static,
+    ExecuteFuture: Future<Output = ()> + Send + 'static,
 {
     let (sender, receiver) = mpsc::unbounded_channel();
-    tokio::spawn(run_cleanup_worker(receiver, delete));
+    tokio::spawn(run_cleanup_worker(receiver, execute));
     SessionCleanup { sender }
 }
 
@@ -179,15 +252,15 @@ mod tests {
         })
     }
 
-    fn start_test_worker<Delete, DeleteFuture>(
-        delete: Delete,
+    fn start_test_worker<Execute, ExecuteFuture>(
+        execute: Execute,
     ) -> (SessionCleanup, tokio::task::JoinHandle<()>)
     where
-        Delete: Fn(Arc<SessionIdentity>) -> DeleteFuture + Send + 'static,
-        DeleteFuture: Future<Output = ()> + Send + 'static,
+        Execute: Fn(CleanupTask) -> ExecuteFuture + Send + 'static,
+        ExecuteFuture: Future<Output = ()> + Send + 'static,
     {
         let (sender, receiver) = mpsc::unbounded_channel();
-        let worker = tokio::spawn(run_cleanup_worker(receiver, delete));
+        let worker = tokio::spawn(run_cleanup_worker(receiver, execute));
         (SessionCleanup { sender }, worker)
     }
 
@@ -197,13 +270,20 @@ mod tests {
         let release = Arc::new(Semaphore::new(0));
         let (cleanup, worker) = start_test_worker({
             let release = release.clone();
-            move |identity| {
+            move |task| {
                 let started_sender = started_sender.clone();
                 let release = release.clone();
                 async move {
-                    let _ = started_sender.send(identity.session_id.clone());
-                    if let Ok(permit) = release.acquire().await {
-                        permit.forget();
+                    match task {
+                        CleanupTask::DeleteSession(identity) => {
+                            let _ = started_sender.send(identity.session_id.clone());
+                            if let Ok(permit) = release.acquire().await {
+                                permit.forget();
+                            }
+                        }
+                        CleanupTask::RollbackTransaction { lease, .. } => {
+                            lease.return_to_pool();
+                        }
                     }
                 }
             }
@@ -239,7 +319,9 @@ mod tests {
         assert!(
             cleanup
                 .sender
-                .send(CleanupCommand::DeleteSession(identity("late")))
+                .send(CleanupCommand::Run(CleanupTask::DeleteSession(identity(
+                    "late",
+                ))))
                 .is_err()
         );
     }
@@ -249,13 +331,20 @@ mod tests {
         let completed = Arc::new(Mutex::new(Vec::new()));
         let (cleanup, worker) = start_test_worker({
             let completed = completed.clone();
-            move |identity| {
+            move |task| {
                 let completed = completed.clone();
                 async move {
-                    completed
-                        .lock()
-                        .expect("completed lock must not be poisoned")
-                        .push(identity.session_id.clone());
+                    match task {
+                        CleanupTask::DeleteSession(identity) => {
+                            completed
+                                .lock()
+                                .expect("completed lock must not be poisoned")
+                                .push(identity.session_id.clone());
+                        }
+                        CleanupTask::RollbackTransaction { lease, .. } => {
+                            lease.return_to_pool();
+                        }
+                    }
                 }
             }
         });
