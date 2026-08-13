@@ -1,4 +1,3 @@
-#![recursion_limit = "256"]
 //! Query Service `EXPLAIN` — inspect how YDB would run a query, without running it.
 //!
 //! The server compiles the query (resolving types and schema) and returns its execution plan as

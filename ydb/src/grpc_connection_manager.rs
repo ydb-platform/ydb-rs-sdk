@@ -70,7 +70,7 @@ impl<BalancerT, ConnectionT: Connection> GrpcConnectionManagerGeneric<BalancerT,
         new: F,
         uri: &Uri,
     ) -> YdbResult<T> {
-        let channel = self.connections_pool.connection(uri).await?;
+        let channel = Box::pin(self.connections_pool.connection(uri)).await?;
 
         let intercepted_channel = InterceptedChannel::new(channel, self.interceptor.clone());
         Ok(new(intercepted_channel).with_grpc_max_message_size(self.opts.max_message_size))

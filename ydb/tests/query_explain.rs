@@ -3,7 +3,6 @@
 //! These assert the wire contract that a real server cannot: that `EXEC_MODE_EXPLAIN` is sent,
 //! that the request stays minimal (implicit session, no tx control, no parameters, no pool), and
 //! how the SDK folds the response — plan and AST out of `exec_stats`.
-#![recursion_limit = "256"]
 mod mock_server;
 
 use std::sync::{Arc, Mutex};
