@@ -115,6 +115,17 @@ impl Client {
         self.session_pool.stats()
     }
 
+    /// Stop the shared session pool and wait for all accepted DeleteSession attempts to finish.
+    ///
+    /// This consumes the driver and stops new session acquisition. Existing session leases may
+    /// finish; shutdown waits for them before deleting idle sessions. Do not use clients,
+    /// sessions, transactions, or streams derived from this driver after shutdown begins.
+    /// Shutdown must run while the Tokio runtime that created the driver is still alive.
+    #[instrument(name = "ydb.Driver.Shutdown", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database), err)]
+    pub async fn shutdown(self) -> YdbResult<()> {
+        self.session_pool.shutdown().await
+    }
+
     pub fn database(&self) -> String {
         self.credentials.database.clone()
     }

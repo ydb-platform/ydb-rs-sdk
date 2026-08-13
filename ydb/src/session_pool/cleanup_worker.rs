@@ -2,10 +2,11 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
-use tracing::{error, warn};
+use tracing::{error, trace, warn};
 
+use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 
@@ -13,6 +14,7 @@ use super::session::SessionIdentity;
 
 enum CleanupCommand {
     DeleteSession(Arc<SessionIdentity>),
+    Shutdown { completed: oneshot::Sender<()> },
 }
 
 /// Submits server-side session resources to the cleanup worker.
@@ -35,6 +37,23 @@ impl SessionCleanup {
             );
         }
     }
+
+    /// Stop accepting cleanup requests and wait for every accepted deletion to finish.
+    pub(super) async fn shutdown(&self) -> YdbResult<()> {
+        let (completed, completion) = oneshot::channel();
+        self.sender
+            .send(CleanupCommand::Shutdown { completed })
+            .map_err(|_| {
+                YdbError::InternalError(
+                    "session cleanup worker stopped before shutdown was submitted".to_string(),
+                )
+            })?;
+        completion.await.map_err(|_| {
+            YdbError::InternalError(
+                "session cleanup worker stopped before shutdown completed".to_string(),
+            )
+        })
+    }
 }
 
 pub(super) fn start_session_cleanup_worker(
@@ -54,28 +73,35 @@ async fn run_cleanup_worker<Delete, DeleteFuture>(
     mut receiver: mpsc::UnboundedReceiver<CleanupCommand>,
     delete: Delete,
 ) where
-    Delete: Fn(Arc<SessionIdentity>) -> DeleteFuture,
+    Delete: Fn(Arc<SessionIdentity>) -> DeleteFuture + Send + 'static,
     DeleteFuture: Future<Output = ()> + Send + 'static,
 {
     let mut tasks = JoinSet::new();
 
-    loop {
+    let shutdown_completion = loop {
         tokio::select! {
             command = receiver.recv() => match command {
                 Some(CleanupCommand::DeleteSession(identity)) => {
                     tasks.spawn(delete(identity));
                 }
+                Some(CleanupCommand::Shutdown { completed }) => {
+                    break Some(completed);
+                }
                 None => {
-                    drain_delete_tasks(&mut tasks).await;
-                    return;
+                    break None;
                 }
             },
-            result = tasks.join_next(), if !tasks.is_empty() => {
-                if let Some(result) = result {
-                    report_delete_task_result(result);
-                }
+            Some(result) = tasks.join_next(), if !tasks.is_empty() => {
+                report_delete_task_result(result);
             }
         }
+    };
+
+    drain_delete_tasks(&mut tasks).await;
+    if let Some(completed) = shutdown_completion
+        && completed.send(()).is_err()
+    {
+        trace!("session cleanup shutdown caller was dropped");
     }
 }
 
@@ -120,7 +146,133 @@ async fn delete_session(
 
 #[cfg(test)]
 pub(super) fn start_noop_session_cleanup_worker() -> SessionCleanup {
+    start_test_session_cleanup_worker(|_| async {})
+}
+
+#[cfg(test)]
+pub(super) fn start_test_session_cleanup_worker<Delete, DeleteFuture>(
+    delete: Delete,
+) -> SessionCleanup
+where
+    Delete: Fn(Arc<SessionIdentity>) -> DeleteFuture + Send + 'static,
+    DeleteFuture: Future<Output = ()> + Send + 'static,
+{
     let (sender, receiver) = mpsc::unbounded_channel();
-    tokio::spawn(run_cleanup_worker(receiver, |_| async {}));
+    tokio::spawn(run_cleanup_worker(receiver, delete));
     SessionCleanup { sender }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use http::Uri;
+    use tokio::sync::{Semaphore, mpsc};
+
+    use super::*;
+
+    fn identity(session_id: &str) -> Arc<SessionIdentity> {
+        Arc::new(SessionIdentity {
+            session_id: session_id.to_string(),
+            node_uri: Uri::from_static("http://127.0.0.1/test"),
+        })
+    }
+
+    fn start_test_worker<Delete, DeleteFuture>(
+        delete: Delete,
+    ) -> (SessionCleanup, tokio::task::JoinHandle<()>)
+    where
+        Delete: Fn(Arc<SessionIdentity>) -> DeleteFuture + Send + 'static,
+        DeleteFuture: Future<Output = ()> + Send + 'static,
+    {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let worker = tokio::spawn(run_cleanup_worker(receiver, delete));
+        (SessionCleanup { sender }, worker)
+    }
+
+    #[tokio::test]
+    async fn shutdown_waits_for_all_concurrent_deletes_and_stops_worker() {
+        let (started_sender, mut started_receiver) = mpsc::unbounded_channel();
+        let release = Arc::new(Semaphore::new(0));
+        let (cleanup, worker) = start_test_worker({
+            let release = release.clone();
+            move |identity| {
+                let started_sender = started_sender.clone();
+                let release = release.clone();
+                async move {
+                    let _ = started_sender.send(identity.session_id.clone());
+                    if let Ok(permit) = release.acquire().await {
+                        permit.forget();
+                    }
+                }
+            }
+        });
+
+        for session_id in ["one", "two", "three"] {
+            cleanup.submit_delete(identity(session_id));
+        }
+
+        let shutdown_cleanup = cleanup.clone();
+        let shutdown = tokio::spawn(async move { shutdown_cleanup.shutdown().await });
+
+        let mut started = Vec::new();
+        for _ in 0..3 {
+            started.push(
+                tokio::time::timeout(Duration::from_secs(1), started_receiver.recv())
+                    .await
+                    .expect("all deletes must start concurrently")
+                    .expect("delete observer must remain open"),
+            );
+        }
+        started.sort();
+        assert_eq!(started, ["one", "three", "two"]);
+        assert!(!shutdown.is_finished());
+
+        release.add_permits(3);
+        shutdown
+            .await
+            .expect("shutdown task must finish")
+            .expect("cleanup shutdown must succeed");
+        worker.await.expect("cleanup worker must stop");
+        assert!(cleanup.sender.is_closed());
+        assert!(
+            cleanup
+                .sender
+                .send(CleanupCommand::DeleteSession(identity("late")))
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn closing_channel_drains_queued_deletes() {
+        let completed = Arc::new(Mutex::new(Vec::new()));
+        let (cleanup, worker) = start_test_worker({
+            let completed = completed.clone();
+            move |identity| {
+                let completed = completed.clone();
+                async move {
+                    completed
+                        .lock()
+                        .expect("completed lock must not be poisoned")
+                        .push(identity.session_id.clone());
+                }
+            }
+        });
+
+        cleanup.submit_delete(identity("one"));
+        cleanup.submit_delete(identity("two"));
+        drop(cleanup);
+
+        tokio::time::timeout(Duration::from_secs(1), worker)
+            .await
+            .expect("cleanup worker must drain and stop")
+            .expect("cleanup worker task must succeed");
+        let mut completed = completed
+            .lock()
+            .expect("completed lock must not be poisoned")
+            .clone();
+        completed.sort();
+        assert_eq!(completed, ["one", "two"]);
+    }
 }
