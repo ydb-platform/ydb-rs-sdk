@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
 use crate::errors::YdbResult;
-use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::types::Value;
 
 use super::exec::{
-    CallOptions, ClientExecContext, TransactionExecContext, client_begin_stream,
+    CallOptions, ClientExecContext, OpenedQueryStream, TransactionExecContext, client_begin_stream,
     transaction_begin_stream,
 };
 
@@ -21,7 +20,7 @@ impl ExecCoreRef<'_> {
         params: HashMap<String, Value>,
         opts: CallOptions,
         concurrent_result_sets: bool,
-    ) -> YdbResult<ExecuteQueryStream> {
+    ) -> YdbResult<OpenedQueryStream> {
         match self {
             ExecCoreRef::Client(ctx) => {
                 client_begin_stream(ctx, text, params, opts, concurrent_result_sets).await

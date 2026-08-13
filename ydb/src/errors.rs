@@ -330,6 +330,73 @@ impl YdbError {
         )
     }
 
+    /// Whether an operation error makes a pooled session unsafe to reuse.
+    ///
+    /// This is deliberately separate from retry classification: retryability describes
+    /// whether the operation may be repeated, while this describes ownership of the session
+    /// on which the failed operation ran.
+    pub(crate) fn requires_session_discard(&self) -> bool {
+        match self {
+            Self::Custom(_)
+            | Self::Convert(_)
+            | Self::NoRows
+            | Self::EndpointHasNoHost(_)
+            | Self::InternalError(_) => false,
+            Self::TransportDial(_) | Self::Transport(_) | Self::DeadlineExceeded => true,
+            Self::TransportGRPCStatus(status) => {
+                use tonic::Code;
+
+                // Match go-sdk `xerrors.MustDeleteTableOrQuerySession`: these gRPC
+                // transport failures can leave server-side query or transaction work in
+                // flight, so the session must not be reused.
+                match status.code() {
+                    Code::Ok | Code::ResourceExhausted | Code::OutOfRange => false,
+                    Code::Cancelled
+                    | Code::Unknown
+                    | Code::InvalidArgument
+                    | Code::DeadlineExceeded
+                    | Code::NotFound
+                    | Code::AlreadyExists
+                    | Code::PermissionDenied
+                    | Code::FailedPrecondition
+                    | Code::Aborted
+                    | Code::Unimplemented
+                    | Code::Internal
+                    | Code::Unavailable
+                    | Code::DataLoss
+                    | Code::Unauthenticated => true,
+                }
+            }
+            Self::YdbStatusError(status) => match StatusCode::try_from(status.operation_status) {
+                Ok(
+                    StatusCode::BadSession | StatusCode::SessionBusy | StatusCode::SessionExpired,
+                ) => true,
+                Ok(
+                    StatusCode::Unspecified
+                    | StatusCode::Success
+                    | StatusCode::BadRequest
+                    | StatusCode::Unauthorized
+                    | StatusCode::InternalError
+                    | StatusCode::Aborted
+                    | StatusCode::Unavailable
+                    | StatusCode::Overloaded
+                    | StatusCode::SchemeError
+                    | StatusCode::GenericError
+                    | StatusCode::Timeout
+                    | StatusCode::PreconditionFailed
+                    | StatusCode::AlreadyExists
+                    | StatusCode::NotFound
+                    | StatusCode::Cancelled
+                    | StatusCode::Undetermined
+                    | StatusCode::Unsupported
+                    | StatusCode::ExternalError,
+                ) => false,
+                // An unknown server status is not evidence that the session is reusable.
+                Err(_) => true,
+            },
+        }
+    }
+
     pub(crate) fn need_retry(&self) -> NeedRetry {
         match self {
             Self::Convert(_)
@@ -409,8 +476,10 @@ macro_rules! to_custom_ydb_err {
 impl std::error::Error for YdbError {}
 
 #[cfg(test)]
-mod invalidate_tx_tests {
+mod error_classification_tests {
     use super::*;
+    use std::sync::Arc;
+    use tonic::{Code, Status};
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
     fn ydb_status(status: StatusCode) -> YdbError {
@@ -450,6 +519,48 @@ mod invalidate_tx_tests {
             issues: vec![],
         });
         assert!(!err.invalidates_server_transaction());
+    }
+
+    #[test]
+    fn session_discard_is_separate_from_retry_classification() {
+        assert!(ydb_status(StatusCode::BadSession).requires_session_discard());
+        assert!(ydb_status(StatusCode::SessionBusy).requires_session_discard());
+        assert!(ydb_status(StatusCode::SessionExpired).requires_session_discard());
+        assert!(!ydb_status(StatusCode::PreconditionFailed).requires_session_discard());
+        assert!(!YdbError::Custom("customer".into()).requires_session_discard());
+    }
+
+    #[test]
+    fn transport_failures_that_can_leave_work_in_flight_discard_session() {
+        assert!(YdbError::Transport("connection lost".into()).requires_session_discard());
+        assert!(
+            YdbError::TransportGRPCStatus(Arc::new(Status::new(Code::Unavailable, "node down")))
+                .requires_session_discard()
+        );
+        assert!(
+            YdbError::TransportGRPCStatus(Arc::new(Status::new(
+                Code::InvalidArgument,
+                "bad request"
+            )))
+            .requires_session_discard()
+        );
+        assert!(
+            !YdbError::TransportGRPCStatus(Arc::new(Status::new(
+                Code::ResourceExhausted,
+                "rate limited"
+            )))
+            .requires_session_discard()
+        );
+    }
+
+    #[test]
+    fn unknown_operation_status_discards_session_conservatively() {
+        let err = YdbError::YdbStatusError(YdbStatusError {
+            message: "unknown".into(),
+            operation_status: -1,
+            issues: vec![],
+        });
+        assert!(err.requires_session_discard());
     }
 }
 

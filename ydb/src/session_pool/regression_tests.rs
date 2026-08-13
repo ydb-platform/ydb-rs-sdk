@@ -1,7 +1,6 @@
 //! Regression tests for session-pool corner cases found during PR #501 / native-table SLO work.
 
 use super::pool::{SessionPool, SessionPoolSettings};
-use crate::{GrpcOptions, errors::YdbError, retry_settings::RetrySettings};
 
 #[tokio::test]
 async fn warm_up_partial_keeps_successful_sessions() {
@@ -41,11 +40,24 @@ async fn acquire_reuses_idle_session() {
         SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(2).with_warm_up(1));
     let first = pool.acquire_explicit().await.expect("first acquire");
     let session_id = first.session_id().to_string();
-    first.return_to_pool().await;
+    first.return_to_pool();
 
     let second = pool.acquire_explicit().await.expect("second acquire");
     assert_eq!(second.session_id(), session_id);
-    second.return_to_pool().await;
+    second.return_to_pool();
+}
+
+#[tokio::test]
+async fn dropped_lease_is_not_reused() {
+    let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+    let first = pool.acquire_explicit().await.expect("first acquire");
+    let first_id = first.session_id().to_string();
+
+    drop(first);
+
+    let second = pool.acquire_explicit().await.expect("second acquire");
+    assert_ne!(second.session_id(), first_id);
+    second.return_to_pool();
 }
 
 #[tokio::test]
@@ -56,8 +68,8 @@ async fn acquire_skips_invalidated_idle_session() {
 
     let mut lease = pool.acquire_explicit().await.expect("first acquire");
     let first_id = lease.session_id().to_string();
-    lease.bench_invalidate_session();
-    lease.return_to_pool().await;
+    lease.invalidate();
+    lease.return_to_pool();
 
     let second = pool.acquire_explicit().await.expect("second acquire");
     assert_ne!(
@@ -69,39 +81,7 @@ async fn acquire_skips_invalidated_idle_session() {
         pool.stats().sessions_created > created_before,
         "pool should create a replacement session"
     );
-    second.return_to_pool().await;
-}
-
-#[tokio::test]
-async fn bad_session_marks_table_session_non_poolable() {
-    use crate::grpc_connection_manager::GrpcConnectionManager;
-    use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
-    use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-    use crate::session_pool::TableSessionPool;
-    use http::Uri;
-    use ydb_grpc::ydb_proto::status_ids::StatusCode;
-
-    let pool = TableSessionPool::from_shared(
-        SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(2).with_warm_up(1)),
-        GrpcConnectionManager::new(
-            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
-                Uri::from_static("http://127.0.0.1/bench"),
-            ))),
-            "bench".to_string(),
-            MultiInterceptor::new(),
-            GrpcOptions::default(),
-        ),
-        RetrySettings::with_default_backoff(),
-    );
-
-    let mut session = pool.session().await.expect("lease table session");
-    assert!(session.can_pooled);
-    session.handle_error(&YdbError::YdbStatusError(crate::errors::YdbStatusError {
-        message: "bad".into(),
-        operation_status: StatusCode::BadSession as i32,
-        issues: vec![],
-    }));
-    assert!(!session.can_pooled);
+    second.return_to_pool();
 }
 
 #[tokio::test]
@@ -115,7 +95,7 @@ async fn item_usage_limit_closes_session_on_return() {
 
     let lease = pool.acquire_explicit().await.expect("first acquire");
     let first_id = lease.session_id().to_string();
-    lease.return_to_pool().await;
+    lease.return_to_pool();
 
     assert_eq!(pool.stats().idle, 0, "session must be closed after one use");
 
@@ -125,7 +105,7 @@ async fn item_usage_limit_closes_session_on_return() {
         pool.stats().sessions_created > created_before,
         "pool should create a replacement session"
     );
-    lease.return_to_pool().await;
+    lease.return_to_pool();
 }
 
 #[tokio::test]
@@ -138,15 +118,4 @@ async fn warm_up_overflow_respects_pool_limit() {
     let stats = pool.stats();
     assert_eq!(stats.idle, 2, "idle stack must not exceed pool limit");
     assert_eq!(stats.sessions_created, 5);
-}
-
-#[tokio::test]
-async fn lease_begin_end_use_is_idempotent() {
-    let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
-    let mut lease = pool.acquire_explicit().await.expect("acquire");
-    lease.begin_use();
-    lease.begin_use();
-    lease.end_use();
-    lease.end_use();
-    lease.return_to_pool().await;
 }

@@ -47,8 +47,9 @@ use crate::retry_settings::{RetrySettings, RetryState};
 use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_transaction_query_methods};
 use exec::{
-    ClientExecContext, TransactionExecContext, spawn_query_tx_rollback_on_drop, transaction_commit,
-    transaction_ensure_begin, transaction_exec_context, transaction_identity, transaction_rollback,
+    ClientExecContext, TransactionExecContext, release_tx_session, spawn_query_tx_rollback_on_drop,
+    transaction_commit, transaction_ensure_begin, transaction_exec_context, transaction_identity,
+    transaction_rollback,
 };
 use hooks::{QueryTxCommitStatus, QueryTxHook};
 
@@ -462,32 +463,16 @@ impl Transaction {
     }
 
     pub(crate) async fn tx_identity(&mut self) -> YdbResult<QueryTxIdentity> {
-        transaction_ensure_begin(&mut self.ctx, false).await?;
-
-        let transaction_id = self
-            .ctx
-            .tx_id
-            .as_ref()
-            .ok_or(YdbError::custom("no transaction id"))?
-            .to_string();
-
-        let session_id = self
-            .ctx
-            .pooled_lease
-            .as_ref()
-            .ok_or(YdbError::custom("no session id"))?
-            .session_id()
-            .to_string();
-
+        let (session_id, transaction_id) = transaction_identity(&mut self.ctx).await?;
         Ok(QueryTxIdentity {
             transaction_id,
             session_id,
         })
     }
 
-    pub(crate) async fn uri(&mut self) -> YdbResult<Option<&Uri>> {
+    pub(crate) async fn uri(&mut self) -> YdbResult<&Uri> {
         transaction_ensure_begin(&mut self.ctx, false).await?;
-        Ok(self.ctx.query_node.as_ref())
+        Ok(self.ctx.session_lease()?.node_uri())
     }
 
     #[cfg(test)]
@@ -503,6 +488,10 @@ pub(crate) struct QueryTxIdentity {
 
 impl Drop for Transaction {
     fn drop(&mut self) {
+        if matches!(self.ctx.state, TxState::Invalidated(_)) {
+            release_tx_session(&mut self.ctx);
+            return;
+        }
         if !self.ctx.state.is_active() {
             return;
         }
@@ -546,9 +535,16 @@ pub use stream_facade::{QueryStats, QueryStream};
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+    use crate::GrpcOptions;
+    use crate::errors::YdbStatusError;
     use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
     use crate::grpc_wrapper::raw_table_service::value::{RawColumn, RawResultSet, RawValue};
+    use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+    use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
     use crate::result::ResultSet;
+    use crate::session_pool::SessionPoolSettings;
+    use http::Uri;
+    use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
     use builders::{exactly_one_set, take_single_row};
 
@@ -566,6 +562,42 @@ mod unit_tests {
         }
         .try_into()
         .expect("valid result set")
+    }
+
+    fn test_connection_manager() -> GrpcConnectionManager {
+        GrpcConnectionManager::new(
+            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
+                Uri::from_static("http://127.0.0.1/bench"),
+            ))),
+            "bench".to_string(),
+            MultiInterceptor::new(),
+            GrpcOptions::default(),
+        )
+    }
+
+    async fn invalidated_transaction(
+        pool: &SessionPool,
+        status: StatusCode,
+    ) -> (Transaction, String) {
+        let lease = pool.acquire_explicit().await.expect("acquire test session");
+        let session_id = lease.session_id().to_string();
+        let mut tx = Transaction::new(
+            test_connection_manager(),
+            pool.clone(),
+            TransactionOptions::default(),
+            None,
+        );
+        tx.ctx.pooled_lease = Some(lease);
+        exec::transaction_handle_query_error(
+            &mut tx.ctx,
+            &YdbError::YdbStatusError(YdbStatusError {
+                message: "transaction failed".to_string(),
+                operation_status: status as i32,
+                issues: Vec::new(),
+            }),
+        );
+        assert!(matches!(tx.ctx.state, TxState::Invalidated(_)));
+        (tx, session_id)
     }
 
     #[test]
@@ -618,5 +650,35 @@ mod unit_tests {
             resolve_post_callback_action(&TxState::Active),
             PostCallbackAction::Commit
         ));
+    }
+
+    #[tokio::test]
+    async fn invalidated_transaction_returns_healthy_session_on_drop() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let (tx, session_id) = invalidated_transaction(&pool, StatusCode::Aborted).await;
+
+        drop(tx);
+
+        let lease = pool
+            .acquire_explicit()
+            .await
+            .expect("reacquire test session");
+        assert_eq!(lease.session_id(), session_id);
+        lease.return_to_pool();
+    }
+
+    #[tokio::test]
+    async fn invalidated_transaction_discards_broken_session_on_drop() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let (tx, session_id) = invalidated_transaction(&pool, StatusCode::BadSession).await;
+
+        drop(tx);
+
+        let lease = pool
+            .acquire_explicit()
+            .await
+            .expect("acquire replacement session");
+        assert_ne!(lease.session_id(), session_id);
+        lease.return_to_pool();
     }
 }

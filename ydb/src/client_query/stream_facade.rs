@@ -5,22 +5,24 @@ use crate::closure;
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
 use crate::result::ResultSet;
+use crate::session_pool::SessionPoolLease;
 use crate::types::Value;
 
 use super::exec::{
     CallOptions, ClientExecContext, apply_stream_tx_id, client_begin_stream_once,
-    finish_pooled_query_stream, resolve_commit_tx, transaction_finish_committed_via_query,
-    transaction_mark_invalidated_on_query_error,
+    resolve_commit_tx, transaction_finish_committed_via_query, transaction_handle_query_error,
 };
 use super::internal::ExecCoreRef;
 
-/// Streaming query result. When obtained with [`CallBuilder::with_commit(true)`] inside a
-/// transaction, you must drain all result sets and call [`Self::close`]; dropping early
-/// cancels the gRPC stream and does not commit.
-#[must_use = "QueryStream must be fully consumed; call close() when using with_commit(true)"]
+/// Streaming query result. Drain all result sets and call [`Self::close`] to return an owned
+/// pooled session for reuse. Dropping the stream cancels it and discards that session.
+/// Inside a transaction, [`CallBuilder::with_commit(true)`] commits only on successful close.
+#[must_use = "QueryStream must be fully consumed and closed"]
 pub struct QueryStream<'a> {
     pub(crate) core: ExecCoreRef<'a>,
     pub(crate) stream: ExecuteQueryStream,
+    /// Lease owned by this stream for a pooled `QueryClient` query.
+    pub(crate) owned_lease: Option<SessionPoolLease>,
     pub(crate) commit_tx: bool,
 }
 
@@ -37,11 +39,9 @@ impl Drop for QueryStream<'_> {
         self.stream.cancel();
         if let ExecCoreRef::Transaction(ctx) = &mut self.core
             && let Some(lease) = &mut ctx.pooled_lease
+            && dropped_mid_stream
         {
-            if dropped_mid_stream {
-                lease.invalidate_session();
-            }
-            lease.end_use();
+            lease.invalidate();
         }
     }
 }
@@ -53,7 +53,7 @@ impl QueryStream<'_> {
             Err(err) => {
                 let ydb_err = YdbError::from(err);
                 if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-                    transaction_mark_invalidated_on_query_error(ctx, &ydb_err);
+                    transaction_handle_query_error(ctx, &ydb_err);
                 }
                 return Err(ydb_err);
             }
@@ -76,11 +76,13 @@ impl QueryStream<'_> {
     pub async fn close(mut self) -> YdbResult<()> {
         match self.stream.close().await {
             Ok(meta) => {
-                finish_pooled_query_stream(&mut self.stream);
+                if let Some(lease) = self.owned_lease.take() {
+                    lease.return_to_pool();
+                }
                 if let ExecCoreRef::Transaction(ctx) = &mut self.core {
                     apply_stream_tx_id(ctx, meta.tx_id);
                     if self.commit_tx {
-                        transaction_finish_committed_via_query(ctx).await;
+                        transaction_finish_committed_via_query(ctx);
                     }
                 }
                 Ok(())
@@ -88,7 +90,7 @@ impl QueryStream<'_> {
             Err(err) => {
                 let ydb_err = YdbError::from(err);
                 if let ExecCoreRef::Transaction(ctx) = &mut self.core {
-                    transaction_mark_invalidated_on_query_error(ctx, &ydb_err);
+                    transaction_handle_query_error(ctx, &ydb_err);
                 }
                 Err(ydb_err)
             }
@@ -132,10 +134,12 @@ async fn materialize_client_once(
     params: &HashMap<String, Value>,
     opts: &CallOptions,
 ) -> YdbResult<Vec<ResultSet>> {
-    let mut stream = client_begin_stream_once(ctx, text, params, opts, true).await?;
-    let sets = collect_result_sets(&mut stream).await?;
-    stream.close().await?;
-    finish_pooled_query_stream(&mut stream);
+    let mut opened = client_begin_stream_once(ctx, text, params, opts, true).await?;
+    let sets = collect_result_sets(&mut opened.stream).await?;
+    opened.stream.close().await?;
+    if let Some(lease) = opened.owned_lease.take() {
+        lease.return_to_pool();
+    }
     Ok(sets)
 }
 
@@ -147,30 +151,32 @@ async fn materialize_transaction_once(
 ) -> YdbResult<Vec<ResultSet>> {
     let commit_tx = resolve_commit_tx(core, &opts);
     let result: YdbResult<Vec<ResultSet>> = async {
-        let mut stream = core.begin_stream(text, params, opts, true).await?;
-        let sets = match collect_result_sets(&mut stream).await {
+        let mut opened = core.begin_stream(text, params, opts, true).await?;
+        let sets = match collect_result_sets(&mut opened.stream).await {
             Ok(sets) => sets,
             Err(ydb_err) => {
                 if let ExecCoreRef::Transaction(ctx) = core {
-                    transaction_mark_invalidated_on_query_error(ctx, &ydb_err);
+                    transaction_handle_query_error(ctx, &ydb_err);
                 }
                 return Err(ydb_err);
             }
         };
-        match stream.close().await {
+        match opened.stream.close().await {
             Ok(meta) => {
-                finish_pooled_query_stream(&mut stream);
+                if let Some(lease) = opened.owned_lease.take() {
+                    lease.return_to_pool();
+                }
                 if let ExecCoreRef::Transaction(ctx) = core {
                     apply_stream_tx_id(ctx, meta.tx_id);
                     if commit_tx {
-                        transaction_finish_committed_via_query(ctx).await;
+                        transaction_finish_committed_via_query(ctx);
                     }
                 }
             }
             Err(err) => {
                 let ydb_err = YdbError::from(err);
                 if let ExecCoreRef::Transaction(ctx) = core {
-                    transaction_mark_invalidated_on_query_error(ctx, &ydb_err);
+                    transaction_handle_query_error(ctx, &ydb_err);
                 }
                 return Err(ydb_err);
             }
@@ -178,12 +184,6 @@ async fn materialize_transaction_once(
         Ok(sets)
     }
     .await;
-
-    if let ExecCoreRef::Transaction(ctx) = core
-        && let Some(lease) = &mut ctx.pooled_lease
-    {
-        lease.end_use();
-    }
 
     result
 }

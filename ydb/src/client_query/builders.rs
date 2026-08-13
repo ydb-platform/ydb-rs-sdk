@@ -254,13 +254,14 @@ impl<'a, S> IntoFuture for CallBuilder<'a, Streamed, S> {
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
             let commit_tx = resolve_commit_tx(&self.core, &self.opts);
-            let stream = self
+            let opened = self
                 .core
                 .begin_stream(self.text, self.params, self.opts, false)
                 .await?;
             Ok(QueryStream {
                 core: self.core,
-                stream,
+                stream: opened.stream,
+                owned_lease: opened.owned_lease,
                 commit_tx,
             })
         })
