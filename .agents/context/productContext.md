@@ -25,7 +25,7 @@
 | Client | Use for | Do **not** use for |
 |--------|---------|-------------------|
 | `TableClient` | DDL (`create_table`, `alter_table`, …), `describe_table`, `read_rows`, `bulk_upsert` | Arbitrary SQL/YQL |
-| `QueryClient` | YQL (`exec`, `query_row`, streams), `retry_tx`, `execute_script` | Table DDL (use table client) |
+| `QueryClient` | YQL (`exec`, `query_row`, streams), `retry_tx`, `execute_script`, `explain` | Table DDL (use table client) |
 
 Both share one **session pool** on the driver (`Client::with_session_pool`). Automatic retries apply on both; per-call `.timeout()` and `.idempotent()` are set on builders, not via `clone_with_*`.
 

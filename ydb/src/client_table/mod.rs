@@ -30,7 +30,6 @@ use crate::grpc_wrapper::raw_table_service::rename_tables::{
     RawRenameTableItem, RawRenameTablesRequest,
 };
 use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
-use crate::session::CreateTableClient;
 use crate::table_requests::{
     AlterTableRequest, CreateTableRequest, DropTableRequest, ReadRowsRequest,
     TableOptionsDescription,
@@ -95,8 +94,9 @@ impl TableClient {
     async fn sessionless_table_client(&self, opts: &TableCallOptions) -> YdbResult<RawTableClient> {
         self.session_pool
             .connection_manager()
-            .create_table_client(resolve_timeouts(opts))
+            .get_auth_service(RawTableClient::new)
             .await
+            .map(|client| client.with_timeout(resolve_timeouts(opts)))
     }
 
     async fn bulk_upsert_once(
@@ -259,8 +259,8 @@ impl TableClient {
             closure!(
                 [&client = self, &source_path, &destination_path, &opts],
                 async |_| {
-                    let mut session = client.create_session_with_opts(opts).await?;
-                    let session_id = session.id.clone();
+                    let session = client.create_session_with_opts(opts).await?;
+                    let session_id = session.session_id().to_string();
                     let operation_params = session.operation_params();
                     session
                         .in_flight_rpc(async |table| {
@@ -298,8 +298,8 @@ impl TableClient {
             &opts,
             Idempotency::NonIdempotent,
             closure!([&client = self, &tables, &opts], async |_| {
-                let mut session = client.create_session_with_opts(opts).await?;
-                let session_id = session.id.clone();
+                let session = client.create_session_with_opts(opts).await?;
+                let session_id = session.session_id().to_string();
                 let operation_params = session.operation_params();
                 session
                     .in_flight_rpc(async |table| {
@@ -346,8 +346,8 @@ impl TableClient {
             closure!(
                 [&client = self, &opts, &source_path, &destination_path],
                 async |_| {
-                    let mut session = client.create_session_with_opts(opts).await?;
-                    let session_id = session.id.clone();
+                    let session = client.create_session_with_opts(opts).await?;
+                    let session_id = session.session_id().to_string();
                     let operation_params = session.operation_params();
                     session
                         .in_flight_rpc(async |table| {
@@ -388,8 +388,8 @@ impl TableClient {
             &opts,
             Idempotency::NonIdempotent,
             closure!([&client = self, &tables, &opts], async |_| {
-                let mut session = client.create_session_with_opts(opts).await?;
-                let session_id = session.id.clone();
+                let session = client.create_session_with_opts(opts).await?;
+                let session_id = session.session_id().to_string();
                 let operation_params = session.operation_params();
                 session
                     .in_flight_rpc(async |table| {
@@ -425,8 +425,8 @@ impl TableClient {
             &opts,
             Idempotency::NonIdempotent,
             closure!([&client = self, &path, &opts], async |_| {
-                let mut session = client.create_session_with_opts(opts).await?;
-                let session_id = session.id.clone();
+                let session = client.create_session_with_opts(opts).await?;
+                let session_id = session.session_id().to_string();
                 let operation_params = session.operation_params();
                 let raw = session
                     .in_flight_rpc(async |table| {
@@ -464,10 +464,17 @@ impl TableClient {
             &opts,
             Idempotency::NonIdempotent,
             closure!([&client = self, &request, &opts], async |_| {
-                let mut session = client.create_session_with_opts(opts).await?;
-                let raw = request
+                let session = client.create_session_with_opts(opts).await?;
+                let raw = match request
                     .clone()
-                    .into_raw(session.id.clone(), session.operation_params())?;
+                    .into_raw(session.session_id().to_string(), session.operation_params())
+                {
+                    Ok(raw) => raw,
+                    Err(err) => {
+                        session.return_to_pool();
+                        return Err(err);
+                    }
+                };
                 session
                     .in_flight_rpc(async |table| table.create_table(raw).await)
                     .await
@@ -495,9 +502,9 @@ impl TableClient {
             &opts,
             Idempotency::NonIdempotent,
             closure!([&client = self, &request, &opts], async |_| {
-                let mut session = client.create_session_with_opts(opts).await?;
+                let session = client.create_session_with_opts(opts).await?;
                 let req = RawDropTableRequest {
-                    session_id: session.id.clone(),
+                    session_id: session.session_id().to_string(),
                     path: request.path.clone(),
                     operation_params: session.operation_params(),
                 };
@@ -528,10 +535,17 @@ impl TableClient {
             &opts,
             Idempotency::NonIdempotent,
             closure!([&client = self, &request, &opts], async |_| {
-                let mut session = client.create_session_with_opts(opts).await?;
-                let raw = request
+                let session = client.create_session_with_opts(opts).await?;
+                let raw = match request
                     .clone()
-                    .into_raw(session.id.clone(), session.operation_params())?;
+                    .into_raw(session.session_id().to_string(), session.operation_params())
+                {
+                    Ok(raw) => raw,
+                    Err(err) => {
+                        session.return_to_pool();
+                        return Err(err);
+                    }
+                };
                 session
                     .in_flight_rpc(async |table| table.alter_table(raw).await)
                     .await
@@ -557,7 +571,7 @@ impl TableClient {
             &opts,
             Idempotency::NonIdempotent,
             closure!([&client = self, &opts], async |_| {
-                let mut session = client.create_session_with_opts(opts).await?;
+                let session = client.create_session_with_opts(opts).await?;
                 let req = RawDescribeTableOptionsRequest {
                     operation_params: session.operation_params(),
                 };

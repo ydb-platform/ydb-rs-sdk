@@ -1,5 +1,5 @@
 use super::TxMode;
-use crate::errors::YdbResult;
+use crate::errors::{YdbError, YdbResult};
 use crate::session_pool::SessionPoolSettings;
 use crate::test_integration_helper::{create_client, create_client_with_session_pool};
 use crate::types::Value;
@@ -458,5 +458,91 @@ async fn query_execute_script() -> YdbResult<()> {
 
     op_client.forget_operation(&op.id).await?;
     idem!(qc.exec(format!("DROP TABLE {table_name}"))).await?;
+    Ok(())
+}
+
+/// A read-only system table: present on every YDB instance, no fixture setup needed.
+const SYSTEM_QUERY: &str = "SELECT * FROM `.sys/nodes`";
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_client_explain_returns_plan_and_ast() -> YdbResult<()> {
+    let client = create_client().await?;
+    let qc = client.query_client();
+
+    let explained = qc.explain(SYSTEM_QUERY).timeout(TEST_TIMEOUT).await?;
+
+    // Plan is JSON and AST is MiniKQL; both are server-version dependent, so assert only that
+    // the server filled them in.
+    assert!(
+        !explained.query_plan.is_empty(),
+        "query_plan must not be empty"
+    );
+    assert!(
+        !explained.query_ast.is_empty(),
+        "query_ast must not be empty"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_client_explain_rejects_invalid_syntax() -> YdbResult<()> {
+    let client = create_client().await?;
+    let qc = client.query_client();
+
+    let err = qc
+        .explain("SELECT FROM WHERE")
+        .timeout(TEST_TIMEOUT)
+        .await
+        .expect_err("explain must reject invalid syntax");
+    assert!(
+        matches!(err, YdbError::YdbStatusError(_)),
+        "expected a server status error, got {err:?}"
+    );
+    Ok(())
+}
+
+/// EXPLAIN compiles the query, so it resolves schema too — a missing table fails here.
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_client_explain_rejects_missing_table() -> YdbResult<()> {
+    let client = create_client().await?;
+    let qc = client.query_client();
+
+    let table = unique_table_name("no_such_table");
+    let err = qc
+        .explain(format!("SELECT * FROM `{table}`"))
+        .timeout(TEST_TIMEOUT)
+        .await
+        .expect_err("explain must reject a missing table");
+    assert!(
+        matches!(err, YdbError::YdbStatusError(_)),
+        "expected a server status error, got {err:?}"
+    );
+    Ok(())
+}
+
+/// Statements with nothing to plan (DDL) come back without `exec_stats`.
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn query_client_explain_reports_statement_without_plan() -> YdbResult<()> {
+    let client = create_client().await?;
+    let qc = client.query_client();
+
+    let table = unique_table_name("explain_ddl");
+    let err = qc
+        .explain(format!("CREATE TABLE {table} (id Int64, PRIMARY KEY(id))"))
+        .timeout(TEST_TIMEOUT)
+        .await
+        .expect_err("DDL has no plan to return");
+    assert!(
+        matches!(err, YdbError::Custom(message) if message.contains("no query plan")),
+        "expected the no-plan error"
+    );
     Ok(())
 }

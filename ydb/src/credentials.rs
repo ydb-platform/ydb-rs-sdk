@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fmt::Debug;
 use std::ops::Add;
-use std::process::Command;
+use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, trace};
@@ -63,7 +63,7 @@ pub struct MetadataUrlCredentials {
 impl MetadataUrlCredentials {
     pub fn new() -> Self {
         Self {
-            inner: GCEMetadata::from_url(YC_METADATA_URL).unwrap(),
+            inner: GCEMetadata::from_static_url(YC_METADATA_URL),
         }
     }
 
@@ -209,16 +209,47 @@ impl Credentials for AccessTokenCredentials {
     }
 
     fn debug_string(&self) -> String {
-        let (begin, end) = if self.token.len() > 20 {
-            (
-                &self.token.as_str()[0..3],
-                &self.token.as_str()[(self.token.len() - 3)..self.token.len()],
-            )
-        } else {
-            ("xxx", "xxx")
-        };
+        let (begin, end) = token_edges(self.token.as_str())
+            .unwrap_or_else(|| ("xxx".to_string(), "xxx".to_string()));
+
         format!("static token: {begin}...{end}")
     }
+}
+
+/// Seconds elapsed from the UNIX epoch to `time`.
+///
+/// Fails instead of panicking when the system clock is set before the epoch,
+/// which `SystemTime::duration_since` reports as an error.
+pub(crate) fn unix_timestamp(time: SystemTime) -> YdbResult<u64> {
+    let elapsed = time.duration_since(UNIX_EPOCH).map_err(|err| {
+        YdbError::custom(format!("system clock is set before the UNIX epoch: {err}"))
+    })?;
+
+    Ok(elapsed.as_secs())
+}
+
+/// First and last characters of the token, for describing it in logs without
+/// printing it.
+///
+/// Returns `None` when the token is short enough to be recognizable from its
+/// edges, so the caller must decide what to show instead.
+///
+/// Length and slicing are counted in characters, not bytes: a token may come
+/// from an arbitrary source, and byte indexing could split a multi-byte
+/// character and panic.
+fn token_edges(token: &str) -> Option<(String, String)> {
+    const VISIBLE_CHARS: usize = 3;
+    const SHORT_TOKEN_CHARS: usize = 20;
+
+    let chars: Vec<char> = token.chars().collect();
+    if chars.len() <= SHORT_TOKEN_CHARS {
+        return None;
+    }
+
+    let head: String = chars[..VISIBLE_CHARS].iter().collect();
+    let tail: String = chars[chars.len() - VISIBLE_CHARS..].iter().collect();
+
+    Some((head, tail))
 }
 
 /// Get from stdout of command
@@ -256,44 +287,46 @@ impl CommandLineCredentials {
             command: Arc::new(Mutex::new(command)),
         })
     }
+
+    /// Convert the finished command into a token.
+    ///
+    /// Split out of [`Credentials::create_token`] so the failure paths can be
+    /// checked without spawning a child process.
+    pub(crate) fn token_from_output(output: Output) -> YdbResult<TokenInfo> {
+        if !output.status.success() {
+            let err = String::from_utf8(output.stderr)?;
+            // `status` is used instead of `status.code()`: the code is `None`
+            // when the child was terminated by a signal.
+            return Err(YdbError::Custom(format!(
+                "can't execute command ({}): {}",
+                output.status, err
+            )));
+        }
+        let token = String::from_utf8(output.stdout)?.trim().to_string();
+        Ok(TokenInfo::token(token))
+    }
+
+    /// Describe the token for logs without printing it.
+    pub(crate) fn describe_token(token: &str) -> String {
+        match token_edges(token) {
+            Some((begin, end)) => format!("{begin}..{end}"),
+            None => "short_token".to_string(),
+        }
+    }
 }
 
 impl Credentials for CommandLineCredentials {
     fn create_token(&self) -> YdbResult<TokenInfo> {
-        let result = self.command.lock()?.output()?;
-        if !result.status.success() {
-            let err = String::from_utf8(result.stderr)?;
-            return Err(YdbError::Custom(format!(
-                "can't execute yc ({}): {}",
-                result.status.code().unwrap(),
-                err
-            )));
-        }
-        let token = String::from_utf8(result.stdout)?.trim().to_string();
-        Ok(TokenInfo::token(token))
+        let output = self.command.lock()?.output()?;
+
+        Self::token_from_output(output)
     }
 
     fn debug_string(&self) -> String {
-        let token_describe: String = match self.create_token() {
-            Ok(token_info) => {
-                let token = token_info.token.expose_secret();
-                let desc: String = if token.len() > 20 {
-                    format!(
-                        "{}..{}",
-                        &token.as_str()[0..3],
-                        &token.as_str()[(token.len() - 3)..token.len()]
-                    )
-                } else {
-                    "short_token".to_string()
-                };
-                desc
-            }
-            Err(err) => {
-                format!("err: {err}")
-            }
-        };
-
-        token_describe
+        match self.create_token() {
+            Ok(token_info) => Self::describe_token(token_info.token.expose_secret()),
+            Err(err) => format!("err: {err}"),
+        }
     }
 }
 
@@ -381,7 +414,7 @@ impl ServiceAccountCredentials {
     }
 
     const IAM_TOKEN_DEFAULT: &'static str = "https://iam.api.cloud.yandex.net/iam/v1/tokens";
-    const JWT_TOKEN_LIFE_TIME: usize = 720; // max 3600
+    const JWT_TOKEN_LIFE_TIME: u64 = 720; // max 3600
 
     fn build_jwt(&self) -> YdbResult<String> {
         let private_key = self.private_key.expose_secret().as_bytes();
@@ -389,15 +422,12 @@ impl ServiceAccountCredentials {
         #[derive(Debug, Serialize, Deserialize)]
         struct Claims {
             aud: String, // Optional. Audience
-            exp: usize, // Required (validate_exp defaults to true in validation). Expiration time (as UTC timestamp)
-            iat: usize, // Optional. Issued at (as UTC timestamp)
+            exp: u64, // Required (validate_exp defaults to true in validation). Expiration time (as UTC timestamp)
+            iat: u64, // Optional. Issued at (as UTC timestamp)
             iss: String, // Optional. Issuer
         }
 
-        let iat = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_secs() as usize;
+        let iat = unix_timestamp(SystemTime::now())?;
 
         let mut header = Header::new(Algorithm::PS256);
         header.kid = Some(self.key_id.clone());
@@ -479,7 +509,13 @@ pub struct GCEMetadata {
 impl GCEMetadata {
     /// Create GCEMetadata with default url for receive token
     pub fn new() -> Self {
-        Self::from_url(GCE_METADATA_URL).unwrap()
+        Self::from_static_url(GCE_METADATA_URL)
+    }
+
+    fn from_static_url(url: &'static str) -> Self {
+        Self {
+            uri: url.to_string(),
+        }
     }
 
     /// Create GCEMetadata with custom url (may need for debug or spec infrastructure with non standard metadata)
@@ -552,8 +588,7 @@ impl StaticCredentials {
 
         let mut auth_client = empty_connection_manager
             .get_auth_service(RawAuthClient::new)
-            .await
-            .unwrap();
+            .await?;
 
         // TODO: add configurable authorization request timeout
         let raw_request = RawLoginRequest {

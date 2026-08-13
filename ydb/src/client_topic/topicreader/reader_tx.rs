@@ -50,7 +50,7 @@ pub struct TopicReaderTx<'a> {
 
 impl<'a> TopicReaderTx<'a> {
     pub(super) async fn new(reader: &'a mut TopicReader, tx: &mut Transaction) -> YdbResult<Self> {
-        let uri = tx.uri().await?.ok_or(YdbError::custom("no node Uri"))?;
+        let uri = tx.uri().await?;
 
         let client = reader
             .manager

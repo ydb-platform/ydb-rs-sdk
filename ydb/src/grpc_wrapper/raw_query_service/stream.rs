@@ -5,7 +5,8 @@ use tracing::warn;
 
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_query_service::execute_query::{
-    append_rows_from_part, check_part, stats_from_part, tx_id_from_part,
+    RawQueryStatsPlan, append_rows_from_part, check_part, plan_from_part, stats_from_part,
+    tx_id_from_part,
 };
 use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
 use ydb_grpc::ydb_proto::query::ExecuteQueryResponsePart;
@@ -21,30 +22,6 @@ struct PartialResultSet {
     truncated: bool,
 }
 
-/// Holds a pooled session lease until the stream is finished.
-struct SessionStreamGuard(Option<Box<dyn std::any::Any + Send>>);
-
-impl SessionStreamGuard {
-    fn hold<T: Send + 'static>(value: T) -> Self {
-        Self(Some(Box::new(value)))
-    }
-
-    fn finish_typed<T: Send + 'static>(&mut self, finish: impl FnOnce(&mut T)) {
-        let Some(holder) = self.0.take() else {
-            return;
-        };
-        match holder.downcast::<T>() {
-            Ok(mut typed) => {
-                finish(&mut typed);
-                self.0 = Some(typed);
-            }
-            Err(holder) => {
-                self.0 = Some(holder);
-            }
-        }
-    }
-}
-
 pub(crate) struct ExecuteQueryStream {
     grpc: Option<tonic::Streaming<ExecuteQueryResponsePart>>,
     next_index: i64,
@@ -52,9 +29,7 @@ pub(crate) struct ExecuteQueryStream {
     captured_tx_id: Option<String>,
     finished: bool,
     stats: Option<Duration>,
-    // Dropped last (after `grpc`) so the pooled lease outlives the stream.
-    // `Drop` also calls `cancel()` before field destructors run.
-    session_guard: SessionStreamGuard,
+    plan: Option<RawQueryStatsPlan>,
     #[cfg(test)]
     test_parts: Option<Vec<ExecuteQueryResponsePart>>,
 }
@@ -74,7 +49,7 @@ impl ExecuteQueryStream {
             captured_tx_id: None,
             finished: false,
             stats: None,
-            session_guard: SessionStreamGuard(None),
+            plan: None,
             #[cfg(test)]
             test_parts: None,
         }
@@ -90,27 +65,29 @@ impl ExecuteQueryStream {
             captured_tx_id: None,
             finished: false,
             stats: None,
-            session_guard: SessionStreamGuard(None),
+            plan: None,
             test_parts: Some(parts),
         }
-    }
-
-    pub fn with_session_guard(mut self, guard: impl Send + 'static) -> Self {
-        self.session_guard = SessionStreamGuard::hold(guard);
-        self
-    }
-
-    pub(crate) fn finish_session_guard<T: Send + 'static>(&mut self, finish: impl FnOnce(&mut T)) {
-        self.session_guard.finish_typed(finish);
     }
 
     pub fn stats(&self) -> Option<Duration> {
         self.stats
     }
 
+    /// Query plan and AST from `exec_stats`, whichever the server filled in.
+    ///
+    /// In practice only `EXPLAIN` responses carry them: `collect_stats` sends `STATS_MODE_BASIC`,
+    /// which reports neither. See [`RawQueryStatsPlan`] for the full matrix.
+    pub(crate) fn take_query_plan(&mut self) -> Option<RawQueryStatsPlan> {
+        self.plan.take()
+    }
+
     fn absorb_part_metadata(&mut self, part: &ExecuteQueryResponsePart) -> Option<String> {
         if let Some(duration) = stats_from_part(part) {
             self.stats = Some(duration);
+        }
+        if let Some(plan) = plan_from_part(part) {
+            self.plan = Some(plan);
         }
         if let Some(id) = tx_id_from_part(part) {
             self.captured_tx_id = Some(id.clone());
