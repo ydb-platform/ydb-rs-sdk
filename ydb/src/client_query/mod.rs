@@ -50,7 +50,7 @@ use exec::{
     ClientExecContext, TransactionExecContext, finish_query_tx_on_drop, transaction_commit,
     transaction_ensure_begin, transaction_exec_context, transaction_identity, transaction_rollback,
 };
-use hooks::{QueryTxCommitStatus, QueryTxHook};
+use hooks::QueryTxHook;
 
 /// Row-to-struct mapping (the sqlx `FromRow` analogue).
 pub trait FromYdbRow: Sized {
@@ -231,35 +231,19 @@ impl QueryClient {
 
         match try_attempt(callback, &mut tx).await {
             Ok(value) => match resolve_post_callback_action(&tx.ctx.state) {
-                PostCallbackAction::Return(status) => {
-                    tx.notify_hooks(status);
-                    ControlFlow::Break(Ok(value))
-                }
+                PostCallbackAction::Return => ControlFlow::Break(Ok(value)),
                 PostCallbackAction::Commit => {
                     ControlFlow::Break(match tx.commit().await {
-                        Ok(()) => {
-                            tx.notify_hooks(QueryTxCommitStatus::Committed);
-                            Ok(value)
-                        }
+                        Ok(()) => Ok(value),
                         // Commit outcome is ambiguous on transport errors; never retry.
-                        Err(e) => {
-                            tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                            Err(e.into())
-                        }
+                        Err(e) => Err(e.into()),
                     })
                 }
-                PostCallbackAction::Retry(err) => {
-                    tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                    ControlFlow::Continue(err.into())
-                }
-                PostCallbackAction::Fail(err) => {
-                    tx.notify_hooks(QueryTxCommitStatus::Aborted);
-                    ControlFlow::Break(Err(err.into()))
-                }
+                PostCallbackAction::Retry(err) => ControlFlow::Continue(err.into()),
+                PostCallbackAction::Fail(err) => ControlFlow::Break(Err(err.into())),
             },
             Err(err) => {
                 tx.rollback_quiet().await;
-                tx.notify_hooks(QueryTxCommitStatus::Aborted);
                 ControlFlow::Continue(err)
             }
         }?
@@ -357,7 +341,7 @@ impl QueryClient {
 }
 
 enum PostCallbackAction {
-    Return(QueryTxCommitStatus),
+    Return,
     Commit,
     Retry(YdbError),
     Fail(YdbError),
@@ -365,8 +349,7 @@ enum PostCallbackAction {
 
 fn resolve_post_callback_action(state: &TxState) -> PostCallbackAction {
     match state {
-        TxState::RolledBack => PostCallbackAction::Return(QueryTxCommitStatus::Aborted),
-        TxState::Committed => PostCallbackAction::Return(QueryTxCommitStatus::Committed),
+        TxState::RolledBack | TxState::Committed => PostCallbackAction::Return,
         TxState::Invalidated(error) => PostCallbackAction::Retry(error.clone()),
         TxState::Ambiguous(err) => PostCallbackAction::Fail(err.clone()),
         TxState::Active(_) => PostCallbackAction::Commit,
@@ -415,8 +398,8 @@ impl Transaction {
         self.ctx.tx_mode
     }
 
-    pub(crate) fn register_hook(&mut self, hook: impl QueryTxHook) {
-        self.ctx.hooks.push(Box::new(hook));
+    pub(crate) fn register_hook(&mut self, hook: impl QueryTxHook) -> YdbResult<()> {
+        self.ctx.register_hook(Box::new(hook))
     }
 
     /// Explicitly open the transaction via `BeginTransaction` RPC.
@@ -425,24 +408,15 @@ impl Transaction {
     /// need `tx_id` before any YQL, or configure [`TransactionOptions::with_begin`]
     /// on the client so the first operation does this automatically.
     pub async fn begin(&mut self) -> YdbResult<()> {
-        if !self.ctx.state.is_active() {
-            return Err(YdbError::Custom("transaction already finished".to_string()));
-        }
         transaction_ensure_begin(&mut self.ctx).await
     }
 
     /// Session and transaction ids for topic offset updates inside a transaction.
     pub(crate) async fn identity(&mut self) -> YdbResult<(String, String)> {
-        if !self.ctx.state.is_active() {
-            return Err(YdbError::Custom("transaction already finished".to_string()));
-        }
         transaction_identity(&mut self.ctx).await
     }
 
     pub async fn rollback(&mut self) -> YdbResult<()> {
-        if !self.ctx.state.is_active() {
-            return Ok(());
-        }
         transaction_rollback(&mut self.ctx).await
     }
 
@@ -451,15 +425,7 @@ impl Transaction {
     }
 
     async fn rollback_quiet(&mut self) {
-        if self.ctx.state.is_active() {
-            let _ = transaction_rollback(&mut self.ctx).await;
-        }
-    }
-
-    fn notify_hooks(&mut self, status: QueryTxCommitStatus) {
-        for hook in &mut self.ctx.hooks {
-            hook.after_commit(status);
-        }
+        let _ = transaction_rollback(&mut self.ctx).await;
     }
 
     pub(crate) async fn tx_identity(&mut self) -> YdbResult<QueryTxIdentity> {
@@ -488,9 +454,6 @@ pub(crate) struct QueryTxIdentity {
 
 impl Drop for Transaction {
     fn drop(&mut self) {
-        if self.ctx.state.is_active() {
-            self.notify_hooks(QueryTxCommitStatus::Aborted);
-        }
         let state = std::mem::replace(&mut self.ctx.state, TxState::RolledBack);
         match state {
             TxState::Active(active) => {
@@ -539,7 +502,7 @@ pub use stream_facade::{QueryStats, QueryStream};
 mod unit_tests {
     use super::*;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use crate::GrpcOptions;
     use crate::errors::YdbStatusError;
@@ -553,6 +516,17 @@ mod unit_tests {
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
     use builders::{exactly_one_set, take_single_row};
+
+    struct AbortCounterHook(Arc<AtomicUsize>);
+
+    #[async_trait::async_trait]
+    impl QueryTxHook for AbortCounterHook {
+        fn after_commit(&mut self, status: hooks::QueryTxCommitStatus) {
+            if status == hooks::QueryTxCommitStatus::Aborted {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
 
     fn int64_set(values: Vec<i64>) -> ResultSet {
         RawResultSet {
@@ -593,6 +567,7 @@ mod unit_tests {
             TransactionOptions::default(),
             None,
         );
+        tx.ctx.mark_query_in_flight_for_test("tx-1");
         exec::transaction_handle_query_error(
             &mut tx.ctx,
             &YdbError::YdbStatusError(YdbStatusError {
@@ -600,7 +575,8 @@ mod unit_tests {
                 operation_status: status as i32,
                 issues: Vec::new(),
             }),
-        );
+        )
+        .expect("in-flight query error must invalidate the transaction");
         assert!(matches!(tx.ctx.state, TxState::Invalidated(_)));
         (tx, session_id)
     }
@@ -641,11 +617,11 @@ mod unit_tests {
     fn committed_and_rolled_back_states_are_done_not_failed() {
         assert!(matches!(
             resolve_post_callback_action(&TxState::Committed),
-            PostCallbackAction::Return(QueryTxCommitStatus::Committed)
+            PostCallbackAction::Return
         ));
         assert!(matches!(
             resolve_post_callback_action(&TxState::RolledBack),
-            PostCallbackAction::Return(QueryTxCommitStatus::Aborted)
+            PostCallbackAction::Return
         ));
     }
 
@@ -732,5 +708,27 @@ mod unit_tests {
             .expect("acquire replacement session");
         assert_ne!(lease.session_id(), session_id);
         lease.return_to_pool();
+    }
+
+    #[tokio::test]
+    async fn cancelled_query_notifies_hooks_once_before_transaction_drop() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let lease = pool.acquire_explicit().await.expect("acquire test session");
+        let mut tx = Transaction::new(
+            test_connection_manager(),
+            lease,
+            TransactionOptions::default(),
+            None,
+        );
+        let aborted = Arc::new(AtomicUsize::new(0));
+        tx.register_hook(AbortCounterHook(Arc::clone(&aborted)))
+            .expect("active transaction must accept a hook");
+        tx.ctx.mark_query_in_flight_for_test("tx-1");
+
+        exec::transaction_cancel_query(&mut tx.ctx);
+        assert_eq!(aborted.load(Ordering::Relaxed), 1);
+
+        drop(tx);
+        assert_eq!(aborted.load(Ordering::Relaxed), 1);
     }
 }

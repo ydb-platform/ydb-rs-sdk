@@ -11,8 +11,8 @@ use crate::types::Value;
 use super::exec::{
     CallOptions, ClientExecContext, ClientQuerySession, OpenedClientQueryStream,
     TransactionExecContext, apply_stream_tx_id, client_begin_stream_once, resolve_commit_tx,
-    transaction_begin_stream, transaction_finish_query, transaction_handle_query_error,
-    transaction_invalidate_session,
+    transaction_begin_stream, transaction_cancel_query, transaction_finish_query,
+    transaction_handle_query_error,
 };
 use super::internal::ExecCoreRef;
 
@@ -46,15 +46,21 @@ impl Drop for QueryStream<'_> {
 
 impl QueryStream<'_> {
     fn cancel_active(&mut self) {
-        self.apply_captured_transaction_id();
+        if let Err(error) = self.apply_captured_transaction_id() {
+            tracing::warn!(%error, "failed to capture transaction id while cancelling query stream");
+        }
         let dropped_mid_stream = self.stream.in_progress();
         self.stream.cancel();
+        self.finish_cancelled_lifecycle(dropped_mid_stream);
+    }
+
+    fn finish_cancelled_lifecycle(&mut self, dropped_mid_stream: bool) {
         let lifecycle = std::mem::replace(&mut self.lifecycle, QueryStreamLifecycle::Finished);
         if let QueryStreamLifecycle::Active(QueryStreamOwner::Transaction { context, .. }) =
             lifecycle
             && dropped_mid_stream
         {
-            transaction_invalidate_session(context);
+            transaction_cancel_query(context);
         }
     }
 }
@@ -81,25 +87,27 @@ impl<'a> QueryStream<'a> {
         }
     }
 
-    fn apply_transaction_id(&mut self, transaction_id: Option<String>) {
+    fn apply_transaction_id(&mut self, transaction_id: Option<String>) -> YdbResult<()> {
         if let QueryStreamLifecycle::Active(QueryStreamOwner::Transaction { context, .. }) =
             &mut self.lifecycle
         {
-            apply_stream_tx_id(context, transaction_id);
+            apply_stream_tx_id(context, transaction_id)?;
         }
+        Ok(())
     }
 
-    fn apply_captured_transaction_id(&mut self) {
+    fn apply_captured_transaction_id(&mut self) -> YdbResult<()> {
         let transaction_id = self.stream.take_captured_tx_id();
-        self.apply_transaction_id(transaction_id);
+        self.apply_transaction_id(transaction_id)
     }
 
-    fn handle_error(&mut self, error: &YdbError) {
+    fn handle_error(&mut self, error: &YdbError) -> YdbResult<()> {
         if let QueryStreamLifecycle::Active(QueryStreamOwner::Transaction { context, .. }) =
             &mut self.lifecycle
         {
-            transaction_handle_query_error(context, error);
+            transaction_handle_query_error(context, error)?;
         }
+        Ok(())
     }
 
     fn finish(&mut self) -> YdbResult<()> {
@@ -122,26 +130,26 @@ impl<'a> QueryStream<'a> {
             Ok(v) => v,
             Err(err) => {
                 let ydb_err = YdbError::from(err);
-                self.handle_error(&ydb_err);
+                self.stream.cancel();
+                self.handle_error(&ydb_err)?;
                 if matches!(
                     &self.lifecycle,
                     QueryStreamLifecycle::Active(QueryStreamOwner::Client(_))
                 ) && !ydb_err.requires_session_discard()
                 {
-                    self.stream.cancel();
                     return Err(ydb_err);
                 }
-                self.cancel_active();
+                self.lifecycle = QueryStreamLifecycle::Finished;
                 return Err(ydb_err);
             }
         };
         match next {
             Some((raw, transaction_id)) => {
-                self.apply_transaction_id(transaction_id);
+                self.apply_transaction_id(transaction_id)?;
                 ResultSet::try_from(raw).map(Some)
             }
             None => {
-                self.apply_captured_transaction_id();
+                self.apply_captured_transaction_id()?;
                 Ok(None)
             }
         }
@@ -156,12 +164,13 @@ impl<'a> QueryStream<'a> {
     pub async fn close(mut self) -> YdbResult<()> {
         match self.stream.close().await {
             Ok(meta) => {
-                self.apply_transaction_id(meta.tx_id);
+                self.apply_transaction_id(meta.tx_id)?;
                 self.finish()
             }
             Err(err) => {
                 let ydb_err = YdbError::from(err);
-                self.handle_error(&ydb_err);
+                self.handle_error(&ydb_err)?;
+                self.lifecycle = QueryStreamLifecycle::Finished;
                 Err(ydb_err)
             }
         }
@@ -234,18 +243,18 @@ async fn materialize_transaction_once(
     let raw_sets = match drain_result_sets(&mut stream).await {
         Ok(raw_sets) => raw_sets,
         Err(ydb_err) => {
-            transaction_handle_query_error(context, &ydb_err);
+            transaction_handle_query_error(context, &ydb_err)?;
             return Err(ydb_err);
         }
     };
     match stream.close().await {
         Ok(meta) => {
-            apply_stream_tx_id(context, meta.tx_id);
+            apply_stream_tx_id(context, meta.tx_id)?;
             transaction_finish_query(context, commit_at_end)?;
         }
         Err(err) => {
             let ydb_err = YdbError::from(err);
-            transaction_handle_query_error(context, &ydb_err);
+            transaction_handle_query_error(context, &ydb_err)?;
             return Err(ydb_err);
         }
     }

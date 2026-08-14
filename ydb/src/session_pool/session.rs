@@ -98,6 +98,7 @@ impl AttachedSession {
         self.health.is_healthy()
     }
 
+    #[cfg(test)]
     pub(super) fn invalidate(&self) {
         self.health.mark_broken();
     }
