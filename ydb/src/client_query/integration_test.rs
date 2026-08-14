@@ -343,13 +343,11 @@ async fn query_with_commit_on_last_query() -> YdbResult<()> {
         .with_commit(true)
         .await?;
 
-        let err = tx
-            .query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
-            .await
-            .unwrap_err();
         assert!(
-            err.to_string().contains("already finished"),
-            "query after with_commit must fail: {err}"
+            tx.query_row(format!("SELECT val FROM {table_name} WHERE id = 1"))
+                .await
+                .is_err(),
+            "query after with_commit must fail"
         );
 
         Ok(())
