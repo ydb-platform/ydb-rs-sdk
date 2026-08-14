@@ -232,13 +232,13 @@ impl QueryClient {
         match try_attempt(callback, &mut tx).await {
             Ok(value) => match resolve_post_callback_action(&tx.ctx.state) {
                 PostCallbackAction::Return => ControlFlow::Break(Ok(value)),
-                PostCallbackAction::Commit => {
-                    ControlFlow::Break(match tx.commit().await {
-                        Ok(()) => Ok(value),
-                        // Commit outcome is ambiguous on transport errors; never retry.
-                        Err(e) => Err(e.into()),
-                    })
-                }
+                PostCallbackAction::Commit => match tx.commit().await {
+                    Ok(()) => ControlFlow::Break(Ok(value)),
+                    Err(error) if matches!(&tx.ctx.state, TxState::Invalidated(_)) => {
+                        ControlFlow::Continue(error.into())
+                    }
+                    Err(error) => ControlFlow::Break(Err(error.into())),
+                },
                 PostCallbackAction::Retry(err) => ControlFlow::Continue(err.into()),
                 PostCallbackAction::Fail(err) => ControlFlow::Break(Err(err.into())),
             },

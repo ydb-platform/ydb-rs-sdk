@@ -22,7 +22,8 @@ use std::sync::{Arc, Mutex};
 
 use ydb::{Client, ClientBuilder, Transaction, YdbResult, closure};
 use ydb_grpc::ydb_proto::query::{
-    ExecuteQueryResponsePart, RollbackTransactionResponse, TransactionMeta,
+    CommitTransactionResponse, ExecuteQueryResponsePart, RollbackTransactionResponse,
+    TransactionMeta,
 };
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
@@ -274,6 +275,58 @@ impl Handler for CommitTransportFailsHandler {
     }
 }
 
+/// Every `ExecuteQuery` succeeds; `CommitTransaction` follows a per-call status script.
+struct ScriptedCommitHandler {
+    replies: ReplySink,
+    tx_lifecycle: SharedTxLifecycle,
+    commit_call: AtomicUsize,
+    commit_statuses: Vec<StatusCode>,
+}
+
+impl ScriptedCommitHandler {
+    fn new(commit_statuses: Vec<StatusCode>) -> (Self, SharedTxLifecycle) {
+        let tx_lifecycle = Arc::new(Mutex::new(TxLifecycle::default()));
+        let handler = Self {
+            replies: ReplySink::default(),
+            tx_lifecycle: tx_lifecycle.clone(),
+            commit_call: AtomicUsize::new(0),
+            commit_statuses,
+        };
+        (handler, tx_lifecycle)
+    }
+}
+
+impl Handler for ScriptedCommitHandler {
+    fn set_channel(&mut self, tx: FromHandlerToService) {
+        self.replies.set_channel(tx);
+    }
+
+    fn handle(&self, incoming: Incoming) -> Option<Incoming> {
+        match incoming {
+            Incoming::Query(QueryIncoming::ExecuteQuery(_, stream_id)) => {
+                self.replies.send(QueryReply::ExecuteQuery {
+                    stream_id,
+                    part: success_part(Some(QUERY_TX_ID)),
+                });
+                self.replies
+                    .send(QueryReply::ExecuteQueryClose { stream_id });
+                None
+            }
+            Incoming::Query(QueryIncoming::CommitTransaction(_, reply_tx)) => {
+                self.tx_lifecycle.lock().unwrap().commit_count += 1;
+                let call = self.commit_call.fetch_add(1, Ordering::SeqCst);
+                let status = scripted_status(&self.commit_statuses, call);
+                let _ = reply_tx.send(Ok(tonic::Response::new(CommitTransactionResponse {
+                    status: status as i32,
+                    issues: vec![],
+                })));
+                None
+            }
+            other => Some(other),
+        }
+    }
+}
+
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn happy_path_reports_committed() -> YdbResult<()> {
@@ -321,6 +374,32 @@ async fn commit_rpc_failure_is_reported_and_not_retried() -> YdbResult<()> {
     assert_eq!(
         lifecycle.commit_count, 1,
         "commit outcome is ambiguous, so the whole tx must not be retried"
+    );
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn definitive_commit_failure_retries_whole_transaction() -> YdbResult<()> {
+    let (handler, tx_lifecycle) =
+        ScriptedCommitHandler::new(vec![StatusCode::Aborted, StatusCode::Success]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+            Ok(())
+        }))
+        .await;
+
+    assert!(result.is_ok(), "expected successful retry, got {result:?}");
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(
+        lifecycle.commit_count, 2,
+        "the definitive commit failure must retry the whole transaction"
     );
     assert_eq!(lifecycle.rollback_count, 0);
     Ok(())
