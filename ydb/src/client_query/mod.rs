@@ -506,6 +506,7 @@ mod unit_tests {
 
     use crate::GrpcOptions;
     use crate::errors::YdbStatusError;
+    use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
     use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
     use crate::grpc_wrapper::raw_table_service::value::{RawColumn, RawResultSet, RawValue};
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
@@ -730,5 +731,35 @@ mod unit_tests {
 
         drop(tx);
         assert_eq!(aborted.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn dropping_drained_unclosed_stream_finishes_transaction() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let lease = pool.acquire_explicit().await.expect("acquire test session");
+        let mut tx = Transaction::new(
+            test_connection_manager(),
+            lease,
+            TransactionOptions::default(),
+            None,
+        );
+        tx.ctx.mark_query_in_flight_for_test("tx-1");
+
+        {
+            let mut stream = QueryStream::from_transaction(
+                ExecuteQueryStream::from_test_parts(Vec::new()),
+                &mut tx.ctx,
+                false,
+            );
+            assert!(
+                stream
+                    .next_result_set()
+                    .await
+                    .expect("drain test stream")
+                    .is_none()
+            );
+        }
+
+        assert!(matches!(tx.ctx.state, TxState::Ambiguous(_)));
     }
 }

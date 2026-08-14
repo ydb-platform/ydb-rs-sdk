@@ -49,16 +49,14 @@ impl QueryStream<'_> {
         if let Err(error) = self.apply_captured_transaction_id() {
             tracing::warn!(%error, "failed to capture transaction id while cancelling query stream");
         }
-        let dropped_mid_stream = self.stream.in_progress();
         self.stream.cancel();
-        self.finish_cancelled_lifecycle(dropped_mid_stream);
+        self.finish_cancelled_lifecycle();
     }
 
-    fn finish_cancelled_lifecycle(&mut self, dropped_mid_stream: bool) {
+    fn finish_cancelled_lifecycle(&mut self) {
         let lifecycle = std::mem::replace(&mut self.lifecycle, QueryStreamLifecycle::Finished);
         if let QueryStreamLifecycle::Active(QueryStreamOwner::Transaction { context, .. }) =
             lifecycle
-            && dropped_mid_stream
         {
             transaction_cancel_query(context);
         }
