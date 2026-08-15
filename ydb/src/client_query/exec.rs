@@ -196,6 +196,14 @@ impl ServerTransaction {
         )
     }
 
+    fn finalization_requires_rpc(&self) -> YdbResult<bool> {
+        match self {
+            Self::NotStarted => Ok(false),
+            Self::Ready(_) => Ok(true),
+            Self::InFlight(_) => Err(Self::operation_in_progress_error()),
+        }
+    }
+
     fn prepare_commit(&mut self) -> YdbResult<FinalizationAction> {
         self.prepare_finalization(InFlightOperation::Commit)
     }
@@ -809,18 +817,22 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
     if !tx.state.is_active() {
         return Ok(());
     }
+    let send_rpc = tx.active()?.server.finalization_requires_rpc()?;
     if let Err(err) = transaction_before_commit(tx).await {
         let _ = transaction_rollback(tx).await;
         return Err(err);
     }
-    match tx.active_mut()?.server.prepare_commit()? {
-        FinalizationAction::CompleteLocally => {
-            tx.finish_transaction(TxState::Committed, QueryTxCommitStatus::Committed)?
-                .return_to_pool();
-            return Ok(());
-        }
-        FinalizationAction::SendRpc => {}
+    if !send_rpc {
+        tx.finish_transaction(TxState::Committed, QueryTxCommitStatus::Committed)?
+            .return_to_pool();
+        return Ok(());
     }
+    let mut client = query_client_from_tx(tx).await?;
+    let FinalizationAction::SendRpc = tx.active_mut()?.server.prepare_commit()? else {
+        return Err(YdbError::InternalError(
+            "query transaction no longer requires a commit RPC".to_string(),
+        ));
+    };
     let result = async {
         let active = tx.active()?;
         let ServerTransaction::InFlight(InFlightOperation::Commit(tx_id)) = &active.server else {
@@ -832,10 +844,6 @@ pub(crate) async fn transaction_commit(tx: &mut TransactionExecContext) -> YdbRe
         tracing::Span::current()
             .record("ydb.session.id", session_id)
             .record("ydb.tx.id", tx_id.as_str());
-        let mut client = tx
-            .connection_manager
-            .get_auth_service_to_node(RawQueryClient::new, active.lease.node_uri())
-            .await?;
         maybe_with_operation_timeout(resolve_effective_timeout(tx.retry_deadline, None), async {
             client
                 .commit_transaction(session_id, tx_id.as_str())
@@ -864,14 +872,17 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
     if !tx.state.is_active() {
         return Ok(());
     }
-    match tx.active_mut()?.server.prepare_rollback()? {
-        FinalizationAction::CompleteLocally => {
-            tx.finish_transaction(TxState::RolledBack, QueryTxCommitStatus::Aborted)?
-                .return_to_pool();
-            return Ok(());
-        }
-        FinalizationAction::SendRpc => {}
+    if !tx.active()?.server.finalization_requires_rpc()? {
+        tx.finish_transaction(TxState::RolledBack, QueryTxCommitStatus::Aborted)?
+            .return_to_pool();
+        return Ok(());
     }
+    let mut client = query_client_from_tx(tx).await?;
+    let FinalizationAction::SendRpc = tx.active_mut()?.server.prepare_rollback()? else {
+        return Err(YdbError::InternalError(
+            "query transaction no longer requires a rollback RPC".to_string(),
+        ));
+    };
 
     let result = async {
         let active = tx.active()?;
@@ -884,10 +895,6 @@ pub(crate) async fn transaction_rollback(tx: &mut TransactionExecContext) -> Ydb
         tracing::Span::current()
             .record("ydb.session.id", session_id)
             .record("ydb.tx.id", tx_id.as_str());
-        let mut client = tx
-            .connection_manager
-            .get_auth_service_to_node(RawQueryClient::new, active.lease.node_uri())
-            .await?;
         maybe_with_operation_timeout(resolve_effective_timeout(tx.retry_deadline, None), async {
             client
                 .rollback_transaction(session_id, tx_id.as_str())
