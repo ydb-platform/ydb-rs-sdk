@@ -5,16 +5,15 @@
 //!
 //! - no query fails: `retry_tx` sends `CommitTransaction`;
 //! - the last query uses `.with_commit(true)`: the query commits the transaction;
-//! - a query returns an invalidating status: the server has already ended the transaction;
-//! - a query returns a transient/ambiguous status: the transaction may still be active;
+//! - a query returns a concrete failure: the whole transaction attempt is retried;
+//! - a query returns an ambiguous status: the transaction outcome is unknown;
 //! - the caller explicitly rolls back;
 //! - rollback or commit RPC outcome is unknown;
 //!
 //! The regression cases for #521 are the swallowed-error paths: if the callback
 //! returns `Ok` after the server invalidated the transaction, or after rollback
-//! failed, `retry_tx` must not report a successful commit. Swallowing a transient
-//! query error is different: the transaction is not known to be invalidated, so a
-//! real commit attempt decides the outcome.
+//! failed, `retry_tx` must not report a successful commit. A concrete transient query
+//! failure ends the current attempt and retries the whole transaction.
 #![recursion_limit = "256"]
 mod mock_server;
 
@@ -416,7 +415,7 @@ async fn swallowed_empty_commit_via_query_response_is_not_committed() -> YdbResu
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn swallowed_first_query_failure_is_not_committed_locally() -> YdbResult<()> {
-    let (handler, tx_lifecycle) = ScriptedQueryHandler::new(vec![StatusCode::Unavailable], vec![]);
+    let (handler, tx_lifecycle) = ScriptedQueryHandler::new(vec![StatusCode::Undetermined], vec![]);
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
 
@@ -519,11 +518,11 @@ async fn swallowed_invalidating_error_must_not_report_committed() -> YdbResult<(
     Ok(())
 }
 
-/// A transient query error does not prove the server ended the transaction, so a
-/// propagated error must trigger a real rollback before retrying.
+/// A concrete transient query failure ends the current attempt and retries the whole
+/// transaction rather than continuing or rolling back that attempt.
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn transient_error_propagated_rolls_back_and_retries() -> YdbResult<()> {
+async fn transient_error_propagated_retries_whole_transaction() -> YdbResult<()> {
     let (handler, tx_lifecycle) = ScriptedQueryHandler::new(
         vec![
             StatusCode::Success,     // attempt 0, 1st query: establishes tx_id
@@ -548,8 +547,8 @@ async fn transient_error_propagated_rolls_back_and_retries() -> YdbResult<()> {
     assert!(result.is_ok(), "expected eventual success, got {result:?}");
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(
-        lifecycle.rollback_count, 1,
-        "the failed first attempt must be rolled back for real"
+        lifecycle.rollback_count, 0,
+        "the failed query already ended the local transaction attempt"
     );
     assert_eq!(
         lifecycle.commit_count, 1,
@@ -558,13 +557,19 @@ async fn transient_error_propagated_rolls_back_and_retries() -> YdbResult<()> {
     Ok(())
 }
 
-/// Swallowing a transient query error is safe from false-commit reporting because
-/// `retry_tx` still verifies the final outcome with a real commit attempt.
+/// Swallowing a concrete transient query error still retries the whole transaction attempt.
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn transient_error_swallowed_falls_through_to_real_commit() -> YdbResult<()> {
-    let (handler, tx_lifecycle) =
-        ScriptedQueryHandler::new(vec![StatusCode::Success, StatusCode::Unavailable], vec![]);
+async fn transient_error_swallowed_retries_whole_transaction() -> YdbResult<()> {
+    let (handler, tx_lifecycle) = ScriptedQueryHandler::new(
+        vec![
+            StatusCode::Success,
+            StatusCode::Unavailable,
+            StatusCode::Success,
+            StatusCode::Success,
+        ],
+        vec![],
+    );
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
 
@@ -582,17 +587,43 @@ async fn transient_error_swallowed_falls_through_to_real_commit() -> YdbResult<(
 
     assert!(
         result.is_ok(),
-        "the tx was never invalidated, so a real commit should decide the outcome: {result:?}"
+        "the retried transaction should succeed: {result:?}"
     );
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(
         lifecycle.commit_count, 1,
-        "retry_tx must still attempt a real commit rather than trusting the swallowed error"
+        "only the successful retry attempt should commit"
     );
     assert_eq!(
         lifecycle.rollback_count, 0,
-        "single attempt, no retry expected"
+        "the concrete query failure ends its transaction attempt"
     );
+    Ok(())
+}
+
+/// `UNDETERMINED` does not establish whether the dispatched query took effect. Even if the
+/// callback swallows it, the SDK must not continue or commit that transaction.
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn swallowed_undetermined_query_error_is_ambiguous() -> YdbResult<()> {
+    let (handler, tx_lifecycle) =
+        ScriptedQueryHandler::new(vec![StatusCode::Success, StatusCode::Undetermined], vec![]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+            let _ = tx.exec("UPSERT INTO t (id, val) VALUES (2, 'y')").await;
+            Ok(())
+        }))
+        .await;
+
+    assert!(result.is_err(), "an unknown transaction outcome must fail");
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 0);
+    assert_eq!(lifecycle.rollback_count, 0);
     Ok(())
 }
 
@@ -666,7 +697,7 @@ async fn rollback_rpc_failure_propagated_is_retried_until_rollback_succeeds() ->
 #[tracing_test::traced_test]
 async fn swallowed_rollback_failure_must_not_report_committed() -> YdbResult<()> {
     let (handler, tx_lifecycle) =
-        ScriptedQueryHandler::new(vec![StatusCode::Success], vec![StatusCode::BadSession]);
+        ScriptedQueryHandler::new(vec![StatusCode::Success], vec![StatusCode::Undetermined]);
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
 
