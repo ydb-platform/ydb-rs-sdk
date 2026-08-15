@@ -94,6 +94,14 @@ pub(crate) enum NeedRetry {
     False,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TransactionErrorOutcome {
+    /// The server returned a concrete failure for the dispatched operation.
+    AttemptFailed,
+    /// The SDK cannot determine the outcome of the dispatched operation.
+    OutcomeUnknown,
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Idempotency {
     Idempotent,
@@ -323,37 +331,44 @@ impl YdbError {
         YdbError::Custom(s.into())
     }
 
-    /// Definitive YDB operation status on a transactional statement: the server has
-    /// ended the transaction (explicit commit/rollback would return NOT_FOUND).
-    ///
-    /// Transport and ambiguous statuses (`UNDETERMINED`, `UNAVAILABLE`, `OVERLOADED`,
-    /// `SUCCESS`, `UNSPECIFIED`) are excluded — the transaction may still be active.
-    pub(crate) fn invalidates_server_transaction(&self) -> bool {
-        let Self::YdbStatusError(status) = self else {
-            return false;
-        };
-        let Ok(code) = status.operation_status() else {
-            return false;
-        };
-        matches!(
-            code,
-            StatusCode::BadRequest
-                | StatusCode::Unauthorized
-                | StatusCode::InternalError
-                | StatusCode::Aborted
-                | StatusCode::SchemeError
-                | StatusCode::GenericError
-                | StatusCode::Timeout
-                | StatusCode::BadSession
-                | StatusCode::PreconditionFailed
-                | StatusCode::AlreadyExists
-                | StatusCode::NotFound
-                | StatusCode::SessionExpired
-                | StatusCode::Cancelled
-                | StatusCode::Unsupported
-                | StatusCode::SessionBusy
-                | StatusCode::ExternalError
-        )
+    /// Classify the outcome of a dispatched transaction operation independently from retry and
+    /// session-health policy.
+    pub(crate) fn transaction_error_outcome(&self) -> TransactionErrorOutcome {
+        match self {
+            Self::YdbStatusError(status) => match status.operation_status() {
+                Ok(StatusCode::Undetermined | StatusCode::Unspecified | StatusCode::Success)
+                | Err(_) => TransactionErrorOutcome::OutcomeUnknown,
+                Ok(
+                    StatusCode::BadRequest
+                    | StatusCode::Unauthorized
+                    | StatusCode::InternalError
+                    | StatusCode::Aborted
+                    | StatusCode::Unavailable
+                    | StatusCode::Overloaded
+                    | StatusCode::SchemeError
+                    | StatusCode::GenericError
+                    | StatusCode::Timeout
+                    | StatusCode::BadSession
+                    | StatusCode::PreconditionFailed
+                    | StatusCode::AlreadyExists
+                    | StatusCode::NotFound
+                    | StatusCode::SessionExpired
+                    | StatusCode::Cancelled
+                    | StatusCode::Unsupported
+                    | StatusCode::SessionBusy
+                    | StatusCode::ExternalError,
+                ) => TransactionErrorOutcome::AttemptFailed,
+            },
+            Self::Custom(_)
+            | Self::Convert(_)
+            | Self::NoRows
+            | Self::EndpointHasNoHost(_)
+            | Self::InternalError(_)
+            | Self::TransportDial(_)
+            | Self::Transport(_)
+            | Self::TransportGRPCStatus(_)
+            | Self::DeadlineExceeded => TransactionErrorOutcome::OutcomeUnknown,
+        }
     }
 
     /// Whether an operation error makes a pooled session unsafe to reuse.
@@ -568,30 +583,50 @@ mod error_classification_tests {
     }
 
     #[test]
-    fn success_does_not_invalidate_server_transaction() {
-        assert!(!ydb_status(StatusCode::Success).invalidates_server_transaction());
+    fn malformed_success_status_has_unknown_transaction_outcome() {
+        assert_eq!(
+            ydb_status(StatusCode::Success).transaction_error_outcome(),
+            TransactionErrorOutcome::OutcomeUnknown
+        );
     }
 
     #[test]
-    fn operational_errors_invalidate_server_transaction() {
-        assert!(ydb_status(StatusCode::PreconditionFailed).invalidates_server_transaction());
-        assert!(ydb_status(StatusCode::Aborted).invalidates_server_transaction());
-        assert!(ydb_status(StatusCode::BadSession).invalidates_server_transaction());
+    fn concrete_ydb_failures_end_the_transaction_attempt() {
+        for status in [
+            StatusCode::PreconditionFailed,
+            StatusCode::Aborted,
+            StatusCode::Unavailable,
+            StatusCode::Overloaded,
+            StatusCode::BadSession,
+        ] {
+            assert_eq!(
+                ydb_status(status).transaction_error_outcome(),
+                TransactionErrorOutcome::AttemptFailed
+            );
+        }
     }
 
     #[test]
-    fn ambiguous_and_transport_errors_do_not_invalidate() {
-        assert!(!ydb_status(StatusCode::Undetermined).invalidates_server_transaction());
-        assert!(!ydb_status(StatusCode::Unavailable).invalidates_server_transaction());
-        assert!(!ydb_status(StatusCode::Overloaded).invalidates_server_transaction());
-        assert!(!YdbError::Transport("timeout".into()).invalidates_server_transaction());
-        assert!(!YdbError::Custom("x".into()).invalidates_server_transaction());
+    fn ambiguous_and_transport_errors_have_unknown_transaction_outcome() {
+        for error in [
+            ydb_status(StatusCode::Undetermined),
+            YdbError::Transport("timeout".into()),
+            YdbError::Custom("malformed response".into()),
+        ] {
+            assert_eq!(
+                error.transaction_error_outcome(),
+                TransactionErrorOutcome::OutcomeUnknown
+            );
+        }
     }
 
     #[test]
-    fn unknown_status_code_does_not_invalidate() {
+    fn unknown_status_code_has_unknown_transaction_outcome() {
         let err = YdbError::YdbStatusError(YdbStatusError::new("unknown", -1, vec![]));
-        assert!(!err.invalidates_server_transaction());
+        assert_eq!(
+            err.transaction_error_outcome(),
+            TransactionErrorOutcome::OutcomeUnknown
+        );
     }
 
     #[test]

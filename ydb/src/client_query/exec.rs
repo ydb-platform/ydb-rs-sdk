@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use tokio::time::timeout;
 
-use crate::errors::{Idempotency, YdbError, YdbResult};
+use crate::errors::{Idempotency, TransactionErrorOutcome, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryRequest;
@@ -155,6 +155,19 @@ impl TransactionExecContext {
                 Err(transaction_finished_error())
             }
         }
+    }
+
+    fn finish_dispatched_error(&mut self, error: &YdbError) -> YdbResult<()> {
+        let outcome = error.transaction_error_outcome();
+        let replacement = match outcome {
+            TransactionErrorOutcome::AttemptFailed => TxState::Invalidated(error.clone()),
+            TransactionErrorOutcome::OutcomeUnknown => TxState::Ambiguous(error.clone()),
+        };
+        let active = self.take_active(replacement)?;
+        if outcome == TransactionErrorOutcome::AttemptFailed && !error.requires_session_discard() {
+            active.lease.return_to_pool();
+        }
+        Ok(())
     }
 }
 
@@ -489,25 +502,22 @@ pub(crate) async fn transaction_ensure_begin(tx: &mut TransactionExecContext) ->
     }
     ensure_interactive_tx_mode(tx.tx_mode)?;
     tx.session_lease()?.ensure_healthy()?;
+    let raw_tx_mode = tx_mode_to_raw(tx.tx_mode)?;
+    let mut client = query_client_from_tx(tx).await?;
     tx.active_mut()?.server = ServerTransaction::BeginInFlight;
 
-    let result = async {
+    let result = {
         let active = tx.active()?;
         let session_id = active.lease.session_id();
         tracing::Span::current().record("ydb.session.id", session_id);
-        let mut client = tx
-            .connection_manager
-            .get_auth_service_to_node(RawQueryClient::new, active.lease.node_uri())
-            .await?;
         maybe_with_operation_timeout(resolve_effective_timeout(tx.retry_deadline, None), async {
             client
-                .begin_transaction(session_id, tx_mode_to_raw(tx.tx_mode)?)
+                .begin_transaction(session_id, raw_tx_mode)
                 .await
                 .map_err(Into::into)
         })
         .await
-    }
-    .await;
+    };
 
     match result {
         Ok(tx_id) => {
@@ -515,11 +525,7 @@ pub(crate) async fn transaction_ensure_begin(tx: &mut TransactionExecContext) ->
             Ok(())
         }
         Err(err) => {
-            let active = tx.active_mut()?;
-            active.server = ServerTransaction::NotStarted;
-            if err.requires_session_discard() {
-                active.lease.invalidate();
-            }
+            tx.finish_dispatched_error(&err)?;
             Err(err)
         }
     }
@@ -562,20 +568,10 @@ async fn transaction_before_commit(tx: &mut TransactionExecContext) -> YdbResult
 
 /// Apply a query error to the retained session and transaction state.
 pub(crate) fn transaction_handle_query_error(tx: &mut TransactionExecContext, err: &YdbError) {
-    if err.invalidates_server_transaction() && tx.state.is_active() {
-        let previous = std::mem::replace(&mut tx.state, TxState::Invalidated(err.clone()));
-        let TxState::Active(mut active) = previous else {
-            tx.state = previous;
-            return;
-        };
-        if err.requires_session_discard() {
-            active.lease.invalidate();
-        }
-        active.lease.return_to_pool();
-    } else if let TxState::Active(active) = &mut tx.state
-        && err.requires_session_discard()
+    if tx.state.is_active()
+        && let Err(error) = tx.finish_dispatched_error(err)
     {
-        active.lease.invalidate();
+        tracing::error!(%error, "failed to finish transaction after query error");
     }
 }
 
@@ -599,6 +595,7 @@ pub(crate) async fn transaction_begin_stream(
     );
     tx.active()?;
     let effective_timeout = resolve_effective_timeout(tx.retry_deadline, opts.timeout);
+    let mut query_dispatched = false;
     let result: YdbResult<ExecuteQueryStream> =
         maybe_with_operation_timeout(effective_timeout, async {
             tx.session_lease()?.ensure_healthy()?;
@@ -616,6 +613,7 @@ pub(crate) async fn transaction_begin_stream(
             if starts_transaction {
                 tx.active_mut()?.server = ServerTransaction::BeginInFlight;
             }
+            query_dispatched = true;
             let stream = client.execute_query(req).await.map_err(YdbError::from)?;
             let mut stream = ExecuteQueryStream::new(stream);
             stream.prime_first_part().await?;
@@ -633,18 +631,12 @@ pub(crate) async fn transaction_begin_stream(
         })
         .await;
     if let Err(err) = &result {
-        if matches!(
-            tx.state,
-            TxState::Active(ActiveTransaction {
-                server: ServerTransaction::BeginInFlight,
-                ..
-            })
-        ) {
-            let mut active = tx.take_active(TxState::Ambiguous(err.clone()))?;
-            active.lease.invalidate();
-            active.lease.return_to_pool();
-        } else {
+        if query_dispatched {
             transaction_handle_query_error(tx, err);
+        } else if let TxState::Active(active) = &mut tx.state
+            && err.requires_session_discard()
+        {
+            active.lease.invalidate();
         }
     }
     result
@@ -882,8 +874,27 @@ pub(super) fn build_client_execute_request_for_test(
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+    use http::Uri;
+    use ydb_grpc::ydb_proto::status_ids::StatusCode;
+
     use crate::GrpcOptions;
+    use crate::client_query::TransactionOptions;
     use crate::errors::{Idempotency, YdbError, YdbOrCustomerError};
+    use crate::grpc_connection_manager::GrpcConnectionManager;
+    use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+    use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+    use crate::session_pool::{SessionPool, SessionPoolSettings};
+
+    fn test_connection_manager() -> GrpcConnectionManager {
+        GrpcConnectionManager::new(
+            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
+                Uri::from_static("http://127.0.0.1/bench"),
+            ))),
+            "bench".to_string(),
+            MultiInterceptor::new(),
+            GrpcOptions::default(),
+        )
+    }
 
     #[test]
     fn retry_helpers_and_wait() {
@@ -896,25 +907,10 @@ mod unit_tests {
 
     #[tokio::test]
     async fn transaction_rollback_is_nop_when_finished() {
-        use crate::client_query::TransactionOptions;
-        use crate::grpc_connection_manager::GrpcConnectionManager;
-        use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
-        use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-        use crate::session_pool::{SessionPool, SessionPoolSettings};
-        use http::Uri;
-        use ydb_grpc::ydb_proto::status_ids::StatusCode;
-
         let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
         let lease = pool.acquire_explicit().await.expect("acquire test session");
         let mut ctx = transaction_exec_context(
-            GrpcConnectionManager::new(
-                SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
-                    Uri::from_static("http://127.0.0.1/bench"),
-                ))),
-                "bench".to_string(),
-                MultiInterceptor::new(),
-                GrpcOptions::default(),
-            ),
+            test_connection_manager(),
             lease,
             TransactionOptions::default(),
             None,
@@ -936,22 +932,68 @@ mod unit_tests {
     }
 
     #[tokio::test]
-    async fn in_flight_transaction_cleanup_discards_its_session() {
-        use crate::client_query::TransactionOptions;
-        use crate::grpc_connection_manager::GrpcConnectionManager;
-        use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
-        use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
-        use crate::session_pool::{SessionPool, SessionPoolSettings};
-        use http::Uri;
-
-        let manager = GrpcConnectionManager::new(
-            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
-                Uri::from_static("http://127.0.0.1/bench"),
-            ))),
-            "bench".to_string(),
-            MultiInterceptor::new(),
-            GrpcOptions::default(),
+    async fn definitive_dispatched_error_invalidates_and_returns_healthy_session() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let lease = pool.acquire_explicit().await.expect("acquire test session");
+        let session_id = lease.session_id().to_string();
+        let mut ctx = transaction_exec_context(
+            test_connection_manager(),
+            lease,
+            TransactionOptions::default(),
+            None,
         );
+        ctx.active_mut().expect("active transaction").server = ServerTransaction::BeginInFlight;
+        let error = YdbError::YdbStatusError(crate::errors::YdbStatusError {
+            message: "transaction rejected".into(),
+            operation_status: StatusCode::Aborted as i32,
+            issues: vec![],
+        });
+
+        ctx.finish_dispatched_error(&error)
+            .expect("rejected operation must finish the transaction");
+
+        assert!(matches!(ctx.state, TxState::Invalidated(_)));
+        let reused = pool
+            .acquire_explicit()
+            .await
+            .expect("healthy session must return to the pool");
+        assert_eq!(reused.session_id(), session_id);
+        reused.return_to_pool();
+    }
+
+    #[tokio::test]
+    async fn unknown_dispatched_error_is_ambiguous_and_discards_session() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let lease = pool.acquire_explicit().await.expect("acquire test session");
+        let session_id = lease.session_id().to_string();
+        let mut ctx = transaction_exec_context(
+            test_connection_manager(),
+            lease,
+            TransactionOptions::default(),
+            None,
+        );
+        ctx.active_mut().expect("active transaction").server = ServerTransaction::BeginInFlight;
+        let error = YdbError::YdbStatusError(crate::errors::YdbStatusError {
+            message: "transaction outcome unknown".into(),
+            operation_status: StatusCode::Undetermined as i32,
+            issues: vec![],
+        });
+
+        ctx.finish_dispatched_error(&error)
+            .expect("unknown outcome must finish the transaction");
+
+        assert!(matches!(ctx.state, TxState::Ambiguous(_)));
+        let replacement = pool
+            .acquire_explicit()
+            .await
+            .expect("discarded session must be replaced");
+        assert_ne!(replacement.session_id(), session_id);
+        replacement.return_to_pool();
+    }
+
+    #[tokio::test]
+    async fn in_flight_transaction_cleanup_discards_its_session() {
+        let manager = test_connection_manager();
         let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
         let lease = pool.acquire_explicit().await.expect("acquire test session");
         let session_id = lease.session_id().to_string();
