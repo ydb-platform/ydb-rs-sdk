@@ -234,7 +234,12 @@ impl QueryClient {
                 PostCallbackAction::Return => ControlFlow::Break(Ok(value)),
                 PostCallbackAction::Commit => match tx.commit().await {
                     Ok(()) => ControlFlow::Break(Ok(value)),
-                    Err(error) if matches!(&tx.ctx.state, TxState::Invalidated(_)) => {
+                    Err(error)
+                        if matches!(
+                            &tx.ctx.state,
+                            TxState::Active(_) | TxState::Invalidated(_)
+                        ) =>
+                    {
                         ControlFlow::Continue(error.into())
                     }
                     Err(error) => ControlFlow::Break(Err(error.into())),
