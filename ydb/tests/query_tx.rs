@@ -20,7 +20,7 @@ mod mock_server;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ydb::{Client, ClientBuilder, Transaction, YdbResult, closure};
+use ydb::{Client, ClientBuilder, Transaction, YdbError, YdbResult, YdbStatusError, closure};
 use ydb_grpc::ydb_proto::query::{
     CommitTransactionResponse, ExecuteQueryResponsePart, RollbackTransactionResponse,
     TransactionMeta,
@@ -62,6 +62,13 @@ fn failing_part(status: StatusCode) -> ExecuteQueryResponsePart {
         exec_stats: None,
         tx_meta: None,
     }
+}
+
+fn status_error(status: StatusCode) -> YdbError {
+    let mut error = YdbStatusError::default();
+    error.message = "test callback error".to_string();
+    error.operation_status = status as i32;
+    YdbError::YdbStatusError(error)
 }
 
 /// Returns `script[call]`, or the script's last entry once `call` runs past the end.
@@ -434,6 +441,37 @@ async fn commit_via_query_reports_committed() -> YdbResult<()> {
 
 #[tokio::test]
 #[tracing_test::traced_test]
+async fn callback_error_after_commit_does_not_retry_transaction() -> YdbResult<()> {
+    let (handler, _tx_lifecycle) = CountingHandler::new();
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let attempts = Arc::new(AtomicUsize::new(0));
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!([&attempts], async |tx: &mut Transaction| {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')")
+                .with_commit(true)
+                .await?;
+            if attempt == 0 {
+                return Err(status_error(StatusCode::Unavailable).into());
+            }
+            Ok(())
+        }))
+        .await;
+
+    assert!(result.is_err(), "the callback error must be returned");
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        1,
+        "a confirmed commit must never be retried"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
 async fn empty_commit_via_query_response_is_not_committed() -> YdbResult<()> {
     let (handler, tx_lifecycle) = CountingHandler::with_empty_execute_response(true);
     let (server, _reply_tx) = MockServer::start(handler).await;
@@ -700,6 +738,41 @@ async fn swallowed_undetermined_query_error_is_ambiguous() -> YdbResult<()> {
         .await;
 
     assert!(result.is_err(), "an unknown transaction outcome must fail");
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 0);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn callback_error_does_not_override_ambiguous_transaction() -> YdbResult<()> {
+    let (handler, tx_lifecycle) =
+        ScriptedQueryHandler::new(vec![StatusCode::Undetermined, StatusCode::Success], vec![]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let attempts = Arc::new(AtomicUsize::new(0));
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!([&attempts], async |tx: &mut Transaction| {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+            let query = tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await;
+            if attempt == 0 {
+                assert!(query.is_err(), "the first query must be ambiguous");
+                return Err(status_error(StatusCode::Unavailable).into());
+            }
+            query?;
+            Ok(())
+        }))
+        .await;
+
+    assert!(result.is_err(), "the ambiguous outcome must be returned");
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        1,
+        "a callback error must not make an ambiguous transaction retryable"
+    );
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(lifecycle.commit_count, 0);
     assert_eq!(lifecycle.rollback_count, 0);

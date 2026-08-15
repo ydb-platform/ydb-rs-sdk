@@ -244,7 +244,12 @@ impl QueryClient {
             },
             Err(err) => {
                 tx.rollback_quiet().await;
-                ControlFlow::Continue(err)
+                match &tx.ctx.state {
+                    TxState::Committed => ControlFlow::Break(Err(err)),
+                    TxState::Ambiguous(error) => ControlFlow::Break(Err(error.clone().into())),
+                    TxState::Invalidated(error) => ControlFlow::Continue(error.clone().into()),
+                    TxState::Active(_) | TxState::RolledBack => ControlFlow::Continue(err),
+                }
             }
         }?
         .retry_flow(idempotency)
