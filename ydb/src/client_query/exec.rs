@@ -76,7 +76,7 @@ pub(crate) enum TxState {
     Committed,
     /// Rollback path was chosen and the SDK must not report a commit.
     RolledBack,
-    /// The server ended the transaction after a definitive status on a query.
+    /// A definitive operation failure ended the local transaction attempt.
     Invalidated(YdbError),
     /// A commit or rollback RPC returned an error, so the local end attempt was not confirmed.
     Ambiguous(YdbError),
@@ -160,11 +160,15 @@ impl TransactionExecContext {
     fn finish_dispatched_error(&mut self, error: &YdbError) -> YdbResult<()> {
         let outcome = error.transaction_error_outcome();
         let replacement = match outcome {
-            TransactionErrorOutcome::AttemptFailed => TxState::Invalidated(error.clone()),
+            TransactionErrorOutcome::TransactionEnded
+            | TransactionErrorOutcome::TransactionMayRemainActive => {
+                TxState::Invalidated(error.clone())
+            }
             TransactionErrorOutcome::OutcomeUnknown => TxState::Ambiguous(error.clone()),
         };
         let active = self.take_active(replacement)?;
-        if outcome == TransactionErrorOutcome::AttemptFailed && !error.requires_session_discard() {
+        if outcome == TransactionErrorOutcome::TransactionEnded && !error.requires_session_discard()
+        {
             active.lease.return_to_pool();
         }
         Ok(())
@@ -959,6 +963,39 @@ mod unit_tests {
             .expect("healthy session must return to the pool");
         assert_eq!(reused.session_id(), session_id);
         reused.return_to_pool();
+    }
+
+    #[tokio::test]
+    async fn transient_dispatched_error_discards_session_with_possibly_active_transaction() {
+        for status in [StatusCode::Unavailable, StatusCode::Overloaded] {
+            let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+            let lease = pool.acquire_explicit().await.expect("acquire test session");
+            let session_id = lease.session_id().to_string();
+            let mut ctx = transaction_exec_context(
+                test_connection_manager(),
+                lease,
+                TransactionOptions::default(),
+                None,
+            );
+            ctx.active_mut().expect("active transaction").server =
+                ServerTransaction::Started("tx-1".to_string());
+            let error = YdbError::YdbStatusError(crate::errors::YdbStatusError {
+                message: "temporary query failure".into(),
+                operation_status: status as i32,
+                issues: vec![],
+            });
+
+            ctx.finish_dispatched_error(&error)
+                .expect("temporary failure must finish the local transaction attempt");
+
+            assert!(matches!(ctx.state, TxState::Invalidated(_)));
+            let replacement = pool
+                .acquire_explicit()
+                .await
+                .expect("session with an unconfirmed transaction must be replaced");
+            assert_ne!(replacement.session_id(), session_id);
+            replacement.return_to_pool();
+        }
     }
 
     #[tokio::test]
