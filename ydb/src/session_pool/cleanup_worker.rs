@@ -92,29 +92,43 @@ async fn run_cleanup_worker<Execute, ExecuteFuture>(
 {
     let mut tasks = JoinSet::new();
 
-    let shutdown_completion = loop {
+    let mut shutdown_completion = None;
+    loop {
+        // Cleanup tasks may submit follow-up work. In particular, a failed rollback drops its
+        // lease, which submits DeleteSession. Session-pool shutdown has already stopped external
+        // producers, so the worker is quiescent once both the task set and command queue are empty.
+        if shutdown_completion.is_some() && tasks.is_empty() && receiver.is_empty() {
+            break;
+        }
+
         tokio::select! {
             command = receiver.recv() => match command {
                 Some(CleanupCommand::Run(task)) => {
                     tasks.spawn(execute(task));
                 }
                 Some(CleanupCommand::Shutdown { completed }) => {
-                    break Some(completed);
+                    if shutdown_completion.is_some() {
+                        error!("session cleanup worker received multiple shutdown commands");
+                    } else {
+                        shutdown_completion = Some(completed);
+                    }
                 }
                 None => {
-                    break None;
+                    drain_cleanup_tasks(&mut tasks).await;
+                    return;
                 }
             },
             Some(result) = tasks.join_next(), if !tasks.is_empty() => {
                 report_cleanup_task_result(result);
             }
         }
-    };
+    }
 
-    drain_cleanup_tasks(&mut tasks).await;
-    if let Some(completed) = shutdown_completion
-        && completed.send(()).is_err()
-    {
+    let Some(completed) = shutdown_completion else {
+        error!("session cleanup worker exited without a shutdown command");
+        return;
+    };
+    if completed.send(()).is_err() {
         trace!("session cleanup shutdown caller was dropped");
     }
 }
@@ -237,7 +251,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
 
     use http::Uri;
@@ -363,5 +377,43 @@ mod tests {
             .clone();
         completed.sort();
         assert_eq!(completed, ["one", "two"]);
+    }
+
+    #[tokio::test]
+    async fn shutdown_drains_cleanup_submitted_by_running_task() {
+        let completed = Arc::new(Mutex::new(Vec::new()));
+        let cleanup_slot = Arc::new(OnceLock::<SessionCleanup>::new());
+        let (cleanup, worker) = start_test_worker({
+            let completed = completed.clone();
+            let cleanup_slot = cleanup_slot.clone();
+            move |task| {
+                let completed = completed.clone();
+                let cleanup_slot = cleanup_slot.clone();
+                async move {
+                    if let CleanupTask::DeleteSession(session) = task {
+                        completed
+                            .lock()
+                            .expect("completed lock must not be poisoned")
+                            .push(session.session_id.clone());
+                        if session.session_id == "parent" {
+                            cleanup_slot
+                                .get()
+                                .expect("cleanup handle must be initialized")
+                                .submit_delete(identity("child"));
+                        }
+                    }
+                }
+            }
+        });
+        assert!(cleanup_slot.set(cleanup.clone()).is_ok());
+
+        cleanup.submit_delete(identity("parent"));
+        cleanup.shutdown().await.expect("shutdown must succeed");
+        worker.await.expect("cleanup worker must stop");
+
+        let completed = completed
+            .lock()
+            .expect("completed lock must not be poisoned");
+        assert_eq!(*completed, ["parent", "child"]);
     }
 }
