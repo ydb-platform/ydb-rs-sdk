@@ -313,7 +313,12 @@ impl YdbError {
     pub(crate) fn transaction_error_outcome(&self) -> TransactionErrorOutcome {
         match self {
             Self::YdbStatusError(status) => match status.operation_status() {
-                Ok(StatusCode::Undetermined | StatusCode::Unspecified | StatusCode::Success)
+                Ok(
+                    StatusCode::Timeout
+                    | StatusCode::Undetermined
+                    | StatusCode::Unspecified
+                    | StatusCode::Success,
+                )
                 | Err(_) => TransactionErrorOutcome::OutcomeUnknown,
                 Ok(StatusCode::Unavailable | StatusCode::Overloaded) => {
                     TransactionErrorOutcome::TransactionMayRemainActive
@@ -325,7 +330,6 @@ impl YdbError {
                     | StatusCode::Aborted
                     | StatusCode::SchemeError
                     | StatusCode::GenericError
-                    | StatusCode::Timeout
                     | StatusCode::BadSession
                     | StatusCode::PreconditionFailed
                     | StatusCode::AlreadyExists
@@ -447,7 +451,7 @@ impl YdbError {
                     | StatusCode::BadSession
                     | StatusCode::SessionExpired
                     | StatusCode::SessionBusy => NeedRetry::True,
-                    StatusCode::Undetermined => NeedRetry::IdempotentOnly,
+                    StatusCode::Timeout | StatusCode::Undetermined => NeedRetry::IdempotentOnly,
                     _ => NeedRetry::False,
                 }
             }
@@ -544,6 +548,7 @@ mod error_classification_tests {
     #[test]
     fn ambiguous_and_transport_errors_have_unknown_transaction_outcome() {
         for error in [
+            ydb_status(StatusCode::Timeout),
             ydb_status(StatusCode::Undetermined),
             YdbError::Transport("timeout".into()),
             YdbError::Custom("malformed response".into()),
@@ -553,6 +558,14 @@ mod error_classification_tests {
                 TransactionErrorOutcome::OutcomeUnknown
             );
         }
+    }
+
+    #[test]
+    fn timeout_status_requires_idempotency_to_retry() {
+        let error = ydb_status(StatusCode::Timeout);
+
+        assert!(!error.is_retriable(Idempotency::NonIdempotent));
+        assert!(error.is_retriable(Idempotency::Idempotent));
     }
 
     #[test]
@@ -649,6 +662,12 @@ impl<T> From<std::sync::PoisonError<T>> for YdbError {
 impl From<tonic::Status> for YdbError {
     fn from(e: tonic::Status) -> Self {
         YdbError::TransportGRPCStatus(Arc::new(e))
+    }
+}
+
+impl From<tokio::time::error::Elapsed> for YdbError {
+    fn from(_: tokio::time::error::Elapsed) -> Self {
+        Self::DeadlineExceeded
     }
 }
 

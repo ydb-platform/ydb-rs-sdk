@@ -414,6 +414,30 @@ async fn definitive_commit_failure_retries_whole_transaction() -> YdbResult<()> 
 
 #[tokio::test]
 #[tracing_test::traced_test]
+async fn idempotent_transaction_retries_ambiguous_commit_outcome() -> YdbResult<()> {
+    let (handler, tx_lifecycle) =
+        ScriptedCommitHandler::new(vec![StatusCode::Undetermined, StatusCode::Success]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+            Ok(())
+        }))
+        .idempotent(true)
+        .await;
+
+    assert!(result.is_ok(), "expected successful retry, got {result:?}");
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 2);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
 async fn commit_via_query_reports_committed() -> YdbResult<()> {
     let (handler, tx_lifecycle) = CountingHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
@@ -740,6 +764,33 @@ async fn swallowed_undetermined_query_error_is_ambiguous() -> YdbResult<()> {
     assert!(result.is_err(), "an unknown transaction outcome must fail");
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(lifecycle.commit_count, 0);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn idempotent_transaction_retries_ambiguous_query_outcome() -> YdbResult<()> {
+    let (handler, tx_lifecycle) =
+        ScriptedQueryHandler::new(vec![StatusCode::Undetermined, StatusCode::Success], vec![]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let attempts = Arc::new(AtomicUsize::new(0));
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!([&attempts], async |tx: &mut Transaction| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+            Ok(())
+        }))
+        .idempotent(true)
+        .await;
+
+    assert!(result.is_ok(), "expected successful retry, got {result:?}");
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 1);
     assert_eq!(lifecycle.rollback_count, 0);
     Ok(())
 }
