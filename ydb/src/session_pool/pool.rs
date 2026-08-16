@@ -203,10 +203,6 @@ impl SessionPoolLease {
         self.record.session.ensure_healthy()
     }
 
-    pub(crate) fn cleanup_timeout(&self) -> Duration {
-        self.pool.settings.session_delete_timeout
-    }
-
     /// Consume this lease and offer its session back to the pool. Pool policy may still discard
     /// an unhealthy, expired, or excess session.
     #[instrument(name = "ydb.SessionPool.ReturnSession", skip_all, fields(db.system.name = "ydb"))]
