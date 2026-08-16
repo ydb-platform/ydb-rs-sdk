@@ -95,8 +95,11 @@ pub(crate) enum NeedRetry {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TransactionErrorOutcome {
-    /// The server returned a concrete failure for the dispatched operation.
-    AttemptFailed,
+    /// The failed operation also ended the server transaction.
+    TransactionEnded,
+    /// The operation failed, but an existing server transaction may remain active; its session
+    /// cannot be reused without cleanup.
+    TransactionMayRemainActive,
     /// The SDK cannot determine the outcome of the dispatched operation.
     OutcomeUnknown,
 }
@@ -312,13 +315,14 @@ impl YdbError {
             Self::YdbStatusError(status) => match status.operation_status() {
                 Ok(StatusCode::Undetermined | StatusCode::Unspecified | StatusCode::Success)
                 | Err(_) => TransactionErrorOutcome::OutcomeUnknown,
+                Ok(StatusCode::Unavailable | StatusCode::Overloaded) => {
+                    TransactionErrorOutcome::TransactionMayRemainActive
+                }
                 Ok(
                     StatusCode::BadRequest
                     | StatusCode::Unauthorized
                     | StatusCode::InternalError
                     | StatusCode::Aborted
-                    | StatusCode::Unavailable
-                    | StatusCode::Overloaded
                     | StatusCode::SchemeError
                     | StatusCode::GenericError
                     | StatusCode::Timeout
@@ -331,7 +335,7 @@ impl YdbError {
                     | StatusCode::Unsupported
                     | StatusCode::SessionBusy
                     | StatusCode::ExternalError,
-                ) => TransactionErrorOutcome::AttemptFailed,
+                ) => TransactionErrorOutcome::TransactionEnded,
             },
             Self::Custom(_)
             | Self::Convert(_)
@@ -514,17 +518,25 @@ mod error_classification_tests {
     }
 
     #[test]
-    fn concrete_ydb_failures_end_the_transaction_attempt() {
+    fn definitive_ydb_failures_end_the_server_transaction() {
         for status in [
             StatusCode::PreconditionFailed,
             StatusCode::Aborted,
-            StatusCode::Unavailable,
-            StatusCode::Overloaded,
             StatusCode::BadSession,
         ] {
             assert_eq!(
                 ydb_status(status).transaction_error_outcome(),
-                TransactionErrorOutcome::AttemptFailed
+                TransactionErrorOutcome::TransactionEnded
+            );
+        }
+    }
+
+    #[test]
+    fn transient_query_failures_may_leave_the_server_transaction_active() {
+        for status in [StatusCode::Unavailable, StatusCode::Overloaded] {
+            assert_eq!(
+                ydb_status(status).transaction_error_outcome(),
+                TransactionErrorOutcome::TransactionMayRemainActive
             );
         }
     }
