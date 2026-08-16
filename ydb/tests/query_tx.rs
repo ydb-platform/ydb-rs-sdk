@@ -814,6 +814,7 @@ async fn transient_error_propagated_retries_whole_transaction() -> YdbResult<()>
         .await;
 
     assert!(result.is_ok(), "expected eventual success, got {result:?}");
+    client.shutdown().await?;
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(
         lifecycle.rollback_count, 1,
@@ -858,6 +859,7 @@ async fn transient_error_swallowed_retries_whole_transaction() -> YdbResult<()> 
         result.is_ok(),
         "the retried transaction should succeed: {result:?}"
     );
+    client.shutdown().await?;
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(
         lifecycle.commit_count, 1,
