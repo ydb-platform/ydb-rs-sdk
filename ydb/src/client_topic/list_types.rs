@@ -7,7 +7,6 @@ use crate::grpc_wrapper::raw_topic_service::common::partition::{
 use crate::grpc_wrapper::raw_topic_service::common::partitioning_settings::RawPartitioningSettings;
 use crate::grpc_wrapper::raw_topic_service::common::topic::RawTopicStats;
 use crate::grpc_wrapper::raw_topic_service::describe_topic::RawDescribeTopicResult;
-use derive_builder::Builder;
 use std::collections::HashMap;
 use std::option::Option;
 use std::time::SystemTime;
@@ -87,7 +86,7 @@ impl From<Option<MeteringMode>> for RawMeteringMode {
     }
 }
 
-#[derive(Debug, Clone, Builder)]
+#[derive(Debug, Clone, derive_builder::Builder)]
 #[builder(build_fn(error = "crate::errors::YdbError"))]
 pub struct Consumer {
     pub name: String,
@@ -134,7 +133,7 @@ impl From<Consumer> for RawConsumer {
     }
 }
 
-#[derive(Debug, Clone, Builder)]
+#[derive(Debug, Clone, derive_builder::Builder)]
 #[builder(build_fn(error = "crate::errors::YdbError"))]
 pub struct AlterConsumer {
     pub name: String,
