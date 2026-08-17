@@ -74,6 +74,11 @@ chrono = { version = "0.4", default-features = false, features = [
     "clock",
     "std",
 ] }
+# Enable ring crypto provider to let rustls auto-install it in test binaries.
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+] }
 lazy_static = "1.4"
 mockall = "0.14"
 ntest = "0.7"

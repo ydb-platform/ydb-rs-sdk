@@ -3313,6 +3313,7 @@ dependencies = [
  "rand",
  "rayon",
  "reqwest",
+ "rustls",
  "secrecy",
  "serde",
  "serde_json",
