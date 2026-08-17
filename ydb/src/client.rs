@@ -77,23 +77,13 @@ impl Client {
         Ok(client)
     }
 
-    /// Return a child driver that shares sessions, connections, and shutdown state but uses a
-    /// different retry budget.
+    /// Replace the driver-wide retry budget.
     ///
-    /// All service clients created from the returned [`Client`] consult `budget` before each retry
-    /// (table, query one-shot, [`crate::QueryClient::retry_tx`], operation service, and similar).
-    pub fn clone_with_retry_settings(&self, retry_settings: RetrySettings) -> Self {
-        Self {
-            credentials: self.credentials.clone(),
-            load_balancer: self.load_balancer.clone(),
-            discovery: self.discovery.clone(),
-            connection_manager: self.connection_manager.clone(),
-            executor: self.executor.clone(),
-            session_pool: self.session_pool.clone(),
-            retry_settings,
-            metrics_names: self.metrics_names.clone(),
-            lifetime: self.lifetime.clone(),
-        }
+    /// Service clients created afterward use these settings for table, query, operation, and
+    /// similar retries.
+    pub fn with_retry_settings(mut self, retry_settings: RetrySettings) -> Self {
+        self.retry_settings = retry_settings;
+        self
     }
 
     /// Replace the driver session pool (CreateSession + AttachSession) and optionally warm it up.
