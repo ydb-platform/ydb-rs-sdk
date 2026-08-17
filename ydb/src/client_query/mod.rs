@@ -171,13 +171,13 @@ impl QueryClient {
         lifetime: crate::client_lifetime::ClientLifetime,
     ) -> Self {
         Self {
-            ctx: ClientExecContext {
+            ctx: ClientExecContext::new(
                 connection_manager,
                 session_pool,
                 retry_settings,
                 metrics_names,
                 lifetime,
-            },
+            ),
         }
     }
 
@@ -295,14 +295,8 @@ impl QueryClient {
         T: Send,
     {
         ensure_interactive_tx_mode(options.mode())?;
-        self.ctx
-            .lifetime
-            .ensure_open()
-            .map_err(YdbOrCustomerError::from)?;
-        let result = self
-            .ctx
-            .retry_settings
-            .clone()
+        let retry_settings = self.ctx.access()?.retry_settings.clone();
+        let result = retry_settings
             .with_deadline(wall_timeout)
             .retry(closure!(
                 [&client = self, callback, &options],
@@ -338,9 +332,10 @@ impl QueryClient {
         options: TransactionOptions,
         retry_deadline: Option<Instant>,
     ) -> YdbResult<Transaction> {
-        let lease = self.ctx.session_pool.acquire_explicit().await?;
+        let lease = self.ctx.access()?.session_pool.acquire_explicit().await?;
         let query_client = match self
             .ctx
+            .access()?
             .connection_manager
             .get_auth_service_to_node(RawQueryClient::new, lease.node_uri())
             .await

@@ -2,7 +2,7 @@ use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::RefWithLifetime;
 use crate::async_closure::AsyncFnMut;
-use crate::client_lifetime::ClientLifetime;
+use crate::client_lifetime::{ClientLifetime, ShutdownGuarded};
 use crate::closure;
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -19,9 +19,13 @@ use tracing::instrument;
 
 #[derive(Clone)]
 pub struct OperationClient {
+    inner: ShutdownGuarded<OperationClientInner>,
+}
+
+#[derive(Clone)]
+struct OperationClientInner {
     connection_manager: GrpcConnectionManager,
     retry_settings: RetrySettings,
-    lifetime: ClientLifetime,
 }
 
 impl OperationClient {
@@ -31,9 +35,10 @@ impl OperationClient {
         lifetime: ClientLifetime,
     ) -> Self {
         Self {
-            connection_manager,
-            retry_settings,
-            lifetime,
+            inner: lifetime.guard(OperationClientInner {
+                connection_manager,
+                retry_settings,
+            }),
         }
     }
 
@@ -54,8 +59,9 @@ impl OperationClient {
     where
         F: AsyncFnMut<RefWithLifetime<RetryState>, Output = YdbResult<T>>,
     {
-        self.lifetime.ensure_open()?;
-        self.retry_settings
+        self.inner
+            .access()?
+            .retry_settings
             .clone()
             .with_deadline(opts.timeout)
             .retry_on_retriable_errors(Idempotency::Idempotent, attempt_fn)
@@ -174,7 +180,9 @@ impl OperationClient {
     }
 
     async fn raw_client(&self) -> YdbResult<RawOperationClient> {
-        self.connection_manager
+        self.inner
+            .access()?
+            .connection_manager
             .get_auth_service(RawOperationClient::new)
             .await
     }

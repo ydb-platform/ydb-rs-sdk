@@ -1,5 +1,5 @@
 use crate::client::TimeoutSettings;
-use crate::client_lifetime::ClientLifetime;
+use crate::client_lifetime::{ClientLifetime, ShutdownGuarded};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_coordination_service::alter_node::RawAlterNodeRequest;
 use crate::grpc_wrapper::raw_coordination_service::config::RawCoordinationNodeConfig;
@@ -14,21 +14,24 @@ use super::list_types::{NodeConfig, NodeDescription};
 
 #[derive(Clone)]
 pub struct CoordinationClient {
+    inner: ShutdownGuarded<CoordinationClientInner>,
+}
+
+#[derive(Clone)]
+struct CoordinationClientInner {
     timeouts: TimeoutSettings,
-
     session_seq_no: u64,
-
     connection_manager: GrpcConnectionManager,
-    lifetime: ClientLifetime,
 }
 
 impl CoordinationClient {
     pub(crate) fn new(connection_manager: GrpcConnectionManager, lifetime: ClientLifetime) -> Self {
         Self {
-            timeouts: TimeoutSettings::default(),
-            session_seq_no: 0,
-            connection_manager,
-            lifetime,
+            inner: lifetime.guard(CoordinationClientInner {
+                timeouts: TimeoutSettings::default(),
+                session_seq_no: 0,
+                connection_manager,
+            }),
         }
     }
 
@@ -38,15 +41,16 @@ impl CoordinationClient {
         path: String,
         options: SessionOptions,
     ) -> YdbResult<CoordinationSession> {
-        let resource = self.lifetime.register_coordination_session()?;
-        let seq_no = self.session_seq_no;
-        self.session_seq_no += 1;
+        let resource = self.inner.register_coordination_session()?;
+        let inner = self.inner.access_mut()?;
+        let seq_no = inner.session_seq_no;
+        inner.session_seq_no += 1;
 
         CoordinationSession::new(
             path,
             seq_no,
             options,
-            self.connection_manager.clone(),
+            inner.connection_manager.clone(),
             resource,
         )
         .await
@@ -54,13 +58,14 @@ impl CoordinationClient {
 
     #[instrument(name = "ydb.CoordinationClient.CreateNode", skip_all, fields(db.system.name = "ydb", ydb.coordination.path = %path))]
     pub async fn create_node(&mut self, path: String, config: NodeConfig) -> YdbResult<()> {
+        let inner = self.inner.access()?;
         let req = RawCreateNodeRequest {
             config: RawCoordinationNodeConfig::from(config),
-            operation_params: self.timeouts.operation_params(),
+            operation_params: inner.timeouts.operation_params(),
             path,
         };
 
-        let mut service = self.raw_client_connection().await?;
+        let mut service = inner.raw_client_connection().await?;
         service.create_node(req).await?;
 
         Ok(())
@@ -68,13 +73,14 @@ impl CoordinationClient {
 
     #[instrument(name = "ydb.CoordinationClient.AlterNode", skip_all, fields(db.system.name = "ydb", ydb.coordination.path = %path))]
     pub async fn alter_node(&mut self, path: String, config: NodeConfig) -> YdbResult<()> {
+        let inner = self.inner.access()?;
         let req = RawAlterNodeRequest {
             config: RawCoordinationNodeConfig::from(config),
-            operation_params: self.timeouts.operation_params(),
+            operation_params: inner.timeouts.operation_params(),
             path,
         };
 
-        let mut service = self.raw_client_connection().await?;
+        let mut service = inner.raw_client_connection().await?;
         service.alter_node(req).await?;
 
         Ok(())
@@ -82,12 +88,13 @@ impl CoordinationClient {
 
     #[instrument(name = "ydb.CoordinationClient.DescribeNode", skip_all, fields(db.system.name = "ydb", ydb.coordination.path = %path))]
     pub async fn describe_node(&mut self, path: String) -> YdbResult<NodeDescription> {
+        let inner = self.inner.access()?;
         let req = RawDescribeNodeRequest {
-            operation_params: self.timeouts.operation_params(),
+            operation_params: inner.timeouts.operation_params(),
             path,
         };
 
-        let mut service = self.raw_client_connection().await?;
+        let mut service = inner.raw_client_connection().await?;
         let result = service.describe_node(req).await?;
         let description = NodeDescription::from(result);
 
@@ -96,21 +103,23 @@ impl CoordinationClient {
 
     #[instrument(name = "ydb.CoordinationClient.DropNode", skip_all, fields(db.system.name = "ydb", ydb.coordination.path = %path))]
     pub async fn drop_node(&mut self, path: String) -> YdbResult<()> {
+        let inner = self.inner.access()?;
         let req = RawDropNodeRequest {
-            operation_params: self.timeouts.operation_params(),
+            operation_params: inner.timeouts.operation_params(),
             path,
         };
 
-        let mut service = self.raw_client_connection().await?;
+        let mut service = inner.raw_client_connection().await?;
         service.drop_node(req).await?;
 
         Ok(())
     }
+}
 
-    pub(crate) async fn raw_client_connection(
+impl CoordinationClientInner {
+    async fn raw_client_connection(
         &self,
     ) -> YdbResult<grpc_wrapper::raw_coordination_service::client::RawCoordinationClient> {
-        self.lifetime.ensure_open()?;
         self.connection_manager
             .get_auth_service(
                 grpc_wrapper::raw_coordination_service::client::RawCoordinationClient::new,

@@ -1,7 +1,7 @@
 use crate::RetrySettings;
 use crate::client_common::DBCredentials;
 use crate::client_coordination::client::CoordinationClient;
-use crate::client_lifetime::{ClientLifetime, LiveClientResources};
+use crate::client_lifetime::ClientLifetime;
 use crate::client_operation::OperationClient;
 use crate::client_query::QueryClient;
 use crate::client_scheme::client::SchemeClient;
@@ -21,7 +21,7 @@ use crate::client_topic::client::TopicClient;
 use crate::client_topic::compression::{Executor, default_executor};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-use tracing::{error, instrument, trace};
+use tracing::{instrument, trace};
 
 /// YDB client.
 ///
@@ -123,8 +123,16 @@ impl Client {
     #[instrument(name = "ydb.Driver.Shutdown", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database), err)]
     pub async fn shutdown(self) -> YdbResult<()> {
         self.lifetime.close();
-        let session_pool_result = self.session_pool.shutdown().await;
-        finish_shutdown(session_pool_result, self.lifetime.live_resources())
+        self.session_pool.shutdown().await?;
+
+        let live_resources = self.lifetime.live_resources();
+        if live_resources.is_empty() {
+            Ok(())
+        } else {
+            Err(crate::YdbError::custom(format!(
+                "client shutdown completed with live resources: {live_resources}"
+            )))
+        }
     }
 
     pub fn database(&self) -> String {
@@ -214,24 +222,6 @@ impl Client {
         self.load_balancer.wait().await?;
         Ok(())
     }
-}
-
-fn finish_shutdown(
-    session_pool_result: YdbResult<()>,
-    live_resources: LiveClientResources,
-) -> YdbResult<()> {
-    if live_resources.is_empty() {
-        return session_pool_result;
-    }
-
-    if let Err(err) = session_pool_result {
-        error!(%live_resources, "client shutdown failed with live resources");
-        return Err(err);
-    }
-
-    Err(crate::YdbError::custom(format!(
-        "client shutdown completed with live resources: {live_resources}"
-    )))
 }
 
 #[cfg(test)]

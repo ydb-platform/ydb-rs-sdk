@@ -14,6 +14,13 @@ pub(crate) struct ClientLifetime {
     inner: Arc<ClientLifetimeInner>,
 }
 
+/// A value that can only be accessed while its driver accepts new work.
+#[derive(Clone)]
+pub(crate) struct ShutdownGuarded<T> {
+    lifetime: ClientLifetime,
+    value: T,
+}
+
 struct ClientLifetimeInner {
     closed: AtomicBool,
     topic_readers: ResourceCounter,
@@ -44,8 +51,11 @@ impl Display for LiveClientResources {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "topic readers={}, topic writers={}, coordination sessions={}",
-            self.topic_readers, self.topic_writers, self.coordination_sessions
+            "topic readers={topic_readers}, topic writers={topic_writers}, \
+             coordination sessions={coordination_sessions}",
+            topic_readers = self.topic_readers,
+            topic_writers = self.topic_writers,
+            coordination_sessions = self.coordination_sessions,
         )
     }
 }
@@ -104,6 +114,13 @@ impl ClientLifetime {
         }
     }
 
+    pub(crate) fn guard<T>(&self, value: T) -> ShutdownGuarded<T> {
+        ShutdownGuarded {
+            lifetime: self.clone(),
+            value,
+        }
+    }
+
     pub(crate) fn close(&self) {
         self.inner.closed.store(true, Ordering::Relaxed);
         self.inner.topic_readers.close();
@@ -129,5 +146,29 @@ impl ClientLifetime {
             topic_writers: self.inner.topic_writers.active(),
             coordination_sessions: self.inner.coordination_sessions.active(),
         }
+    }
+}
+
+impl<T> ShutdownGuarded<T> {
+    pub(crate) fn access(&self) -> YdbResult<&T> {
+        self.lifetime.ensure_open()?;
+        Ok(&self.value)
+    }
+
+    pub(crate) fn access_mut(&mut self) -> YdbResult<&mut T> {
+        self.lifetime.ensure_open()?;
+        Ok(&mut self.value)
+    }
+
+    pub(crate) fn register_topic_reader(&self) -> YdbResult<ClientResourceGuard> {
+        self.lifetime.register_topic_reader()
+    }
+
+    pub(crate) fn register_topic_writer(&self) -> YdbResult<ClientResourceGuard> {
+        self.lifetime.register_topic_writer()
+    }
+
+    pub(crate) fn register_coordination_session(&self) -> YdbResult<ClientResourceGuard> {
+        self.lifetime.register_coordination_session()
     }
 }

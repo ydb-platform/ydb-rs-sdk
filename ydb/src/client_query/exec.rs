@@ -6,7 +6,7 @@ use futures_util::TryFutureExt;
 use tokio::time::timeout;
 
 use crate::client_metrics::names::MetricsNames;
-use crate::client_lifetime::ClientLifetime;
+use crate::client_lifetime::{ClientLifetime, ShutdownGuarded};
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
@@ -48,11 +48,38 @@ impl CallOptions {
 
 #[derive(Clone)]
 pub(crate) struct ClientExecContext {
+    inner: ShutdownGuarded<ClientExecContextInner>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ClientExecContextInner {
     pub connection_manager: GrpcConnectionManager,
     pub session_pool: SessionPool,
     pub retry_settings: RetrySettings,
     pub metrics_names: MetricsNames,
-    pub lifetime: ClientLifetime,
+}
+
+impl ClientExecContext {
+    pub(crate) fn new(
+        connection_manager: GrpcConnectionManager,
+        session_pool: SessionPool,
+        retry_settings: RetrySettings,
+        metrics_names: MetricsNames,
+        lifetime: ClientLifetime,
+    ) -> Self {
+        Self {
+            inner: lifetime.guard(ClientExecContextInner {
+                connection_manager,
+                session_pool,
+                retry_settings,
+                metrics_names,
+            }),
+        }
+    }
+
+    pub(crate) fn access(&self) -> YdbResult<&ClientExecContextInner> {
+        self.inner.access()
+    }
 }
 
 /// Opened client stream and its explicit session ownership mode.
@@ -479,6 +506,7 @@ async fn client_implicit_session_request(
     concurrent_result_sets: bool,
 ) -> YdbResult<(RawQueryClient, RawExecuteQueryRequest)> {
     let client = ctx
+        .access()?
         .connection_manager
         .get_auth_service(RawQueryClient::new)
         .await?;
@@ -523,10 +551,11 @@ async fn open_pooled_query_stream(
     concurrent_result_sets: bool,
 ) -> YdbResult<OpenedClientQueryStream> {
     let tx_control = tx_control_for_client(opts)?;
-    let lease = ctx.session_pool.acquire_explicit().await?;
+    let lease = ctx.access()?.session_pool.acquire_explicit().await?;
     let result = async {
         lease.ensure_healthy()?;
         let mut client = ctx
+            .access()?
             .connection_manager
             .get_auth_service_to_node(RawQueryClient::new, lease.node_uri())
             .await?;
@@ -560,8 +589,8 @@ pub(crate) async fn client_begin_stream(
     opts: CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<OpenedClientQueryStream> {
-    ctx.lifetime.ensure_open()?;
-    ctx.retry_settings
+    ctx.access()?
+        .retry_settings
         .clone()
         .with_deadline(opts.timeout)
         .retry_on_retriable_errors(

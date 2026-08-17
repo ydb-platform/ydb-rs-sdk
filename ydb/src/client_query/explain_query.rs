@@ -76,6 +76,7 @@ async fn explain_query_once(
     text: &str,
 ) -> YdbResult<Option<RawQueryStatsPlan>> {
     let mut client = ctx
+        .access()?
         .connection_manager
         .get_auth_service(RawQueryClient::new)
         .await?;
@@ -97,9 +98,9 @@ async fn explain_query(
     text: String,
     timeout: Option<Duration>,
 ) -> YdbResult<ExplainResult> {
-    ctx.lifetime.ensure_open()?;
     // EXPLAIN never executes the query, so retrying is always safe.
     let plan = ctx
+        .access()?
         .retry_settings
         .clone()
         .with_deadline(timeout)
@@ -149,8 +150,8 @@ mod unit_tests {
     /// Context pointing at a closed port: every attempt fails with a retriable transport error,
     /// so the only thing that can end the retry loop is the deadline.
     fn unreachable_ctx() -> ClientExecContext {
-        ClientExecContext {
-            connection_manager: GrpcConnectionManager::new(
+        ClientExecContext::new(
+            GrpcConnectionManager::new(
                 SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
                     Uri::from_static("http://127.0.0.1:1"),
                 ))),
@@ -158,11 +159,11 @@ mod unit_tests {
                 MultiInterceptor::new(),
                 GrpcOptions::default(),
             ),
-            session_pool: SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
-            retry_settings: RetrySettings::with_default_backoff(),
-            metrics_names: MetricsNames::new(None),
-            lifetime: ClientLifetime::new(),
-        }
+            SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
+            RetrySettings::with_default_backoff(),
+            MetricsNames::new(None),
+            ClientLifetime::new(),
+        )
     }
 
     #[tokio::test]
