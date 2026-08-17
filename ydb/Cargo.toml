@@ -30,8 +30,8 @@ chrono = { version = "0.4", default-features = false, features = [
 ] }
 decimal-rs = { version = "0.1", features = ["serde"] }
 derivative = "2"
-# version is contrained to unify darling dependency with derive_builder
-bon = ">=3.5,<3.6"
+# 3.5 unifies darling dependency with derive_builder
+bon = "3.5"
 derive_builder = "0.20"
 futures-util = "0.3"
 http = "1.5"
