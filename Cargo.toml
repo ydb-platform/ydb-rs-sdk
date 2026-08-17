@@ -46,8 +46,6 @@ opentelemetry-semantic-conventions = "0.32"
 
 [patch.crates-io]
 opentelemetry = { version = "0.32.0", git = "https://github.com/open-telemetry/opentelemetry-rust.git", rev = "efc4ef4acd17919751674cf1ef9505e4f050de59" }
-opentelemetry-otlp = { version = "0.32.0", features = [
-    "grpc-tonic",
-], git = "https://github.com/open-telemetry/opentelemetry-rust.git", rev = "efc4ef4acd17919751674cf1ef9505e4f050de59" }
+opentelemetry-otlp = { version = "0.32.0", git = "https://github.com/open-telemetry/opentelemetry-rust.git", rev = "efc4ef4acd17919751674cf1ef9505e4f050de59" }
 opentelemetry_sdk = { version = "0.32.1", git = "https://github.com/open-telemetry/opentelemetry-rust.git", rev = "efc4ef4acd17919751674cf1ef9505e4f050de59" }
 opentelemetry-semantic-conventions = { version = "0.32", git = "https://github.com/open-telemetry/opentelemetry-rust.git", rev = "efc4ef4acd17919751674cf1ef9505e4f050de59" }

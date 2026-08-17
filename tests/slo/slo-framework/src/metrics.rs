@@ -6,7 +6,6 @@ use opentelemetry::metrics::{Counter, Gauge, MeterProvider as _, UpDownCounter};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Temporality};
-use opentelemetry_sdk::runtime;
 
 use crate::config::Config;
 
@@ -53,12 +52,14 @@ impl Metrics {
         let topic_e2e_latency = Arc::new(Mutex::new(LatencySeries::new()));
         let ref_name = cfg.ref_name.clone();
 
-        let resource = Resource::new(vec![
-            KeyValue::new("service.name", cfg.label.clone()),
-            KeyValue::new("ref", ref_name.clone()),
-            KeyValue::new("sdk", "rust"),
-            KeyValue::new("sdk_version", env!("CARGO_PKG_VERSION")),
-        ]);
+        let resource = Resource::builder()
+            .with_service_name(cfg.label.clone())
+            .with_attributes([
+                KeyValue::new("ref", ref_name.clone()),
+                KeyValue::new("sdk", "rust"),
+                KeyValue::new("sdk_version", env!("CARGO_PKG_VERSION")),
+            ])
+            .build();
 
         let provider_builder = SdkMeterProvider::builder().with_resource(resource);
         let provider = if let Some(endpoint) = &cfg.otlp_endpoint {
@@ -69,7 +70,7 @@ impl Metrics {
                 .build()
                 .map_err(|err| format!("failed to create OTLP exporter: {err}"))?;
 
-            let reader = PeriodicReader::builder(exporter, runtime::Tokio)
+            let reader = PeriodicReader::builder(exporter)
                 .with_interval(Duration::from_secs(1))
                 .build();
 
