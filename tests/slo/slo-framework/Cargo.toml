@@ -16,14 +16,18 @@ opentelemetry-otlp = { workspace = true, features = [
     "http-proto",
     "metrics",
     "reqwest-client",
-    # pulls aws-lc-rs
-    # "reqwest-rustls",
+    # pulls aws-lc-rs, so we don't enable it
+    #"reqwest-rustls",
+] }
+# enable TLS support in reqwest. Fallback crypto provider is chosen at compile-time if only one provider is enabled in the end binary.
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls-no-provider",
 ] }
 opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
 opentelemetry-semantic-conventions.workspace = true
 rand = "0.9"
 rand_core = "0.9"
-# SLO framework prefers ring crypto provider and provides `install_ring_crypto_provider` helper
+# SLO framework prefers ring crypto provider. It's chosen as a fallback provider at compile-time as long as it's the only enabled crypto provider.
 rustls = { version = "0.23", default-features = false, features = [
     "std",
     "ring",

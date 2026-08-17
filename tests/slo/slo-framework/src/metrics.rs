@@ -259,13 +259,10 @@ fn attrs_from_key(key: &str) -> Vec<KeyValue> {
 
 #[cfg(test)]
 mod tests {
-    use crate::install_ring_crypto_provider;
-
     use super::*;
 
     #[test]
     fn otlp_metric_exporter_has_http_client() {
-        install_ring_crypto_provider();
         let exporter = opentelemetry_otlp::MetricExporter::builder()
             .with_http()
             .with_endpoint("http://localhost:4318/v1/metrics")
