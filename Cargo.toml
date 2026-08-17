@@ -40,7 +40,7 @@ tonic-prost-build = "0.14.2"
 serde = { version = "1.0", features = ["derive"] }
 
 opentelemetry = "0.32.0"
-opentelemetry-otlp = "0.32.0"
+opentelemetry-otlp = { version = "0.32.0", default-features = false }
 opentelemetry_sdk = "0.32.1"
 opentelemetry-semantic-conventions = "0.32"
 

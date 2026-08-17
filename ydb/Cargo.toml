@@ -47,6 +47,9 @@ rand = "0.9"
 reqwest = { version = "0.13", features = [
     "blocking",
     "json",
+    # TLS support is required for production
+    # crypto provider is chosen by application binary
+    "rustls-no-provider",
 ], default-features = false }
 secrecy = "0.4.1"
 serde = { workspace = true }
@@ -75,7 +78,9 @@ lazy_static = "1.4"
 mockall = "0.14"
 ntest = "0.7"
 opentelemetry.workspace = true
-opentelemetry-otlp = { workspace = true, features = ["grpc-tonic"] }
+opentelemetry-otlp = { workspace = true, default_features = false, features = [
+    "grpc-tonic",
+] }
 opentelemetry_sdk.workspace = true
 tokio = { version = "1.22", features = ["test-util"] }
 tracing-opentelemetry = "0.33.0"

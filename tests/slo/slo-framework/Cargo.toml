@@ -16,12 +16,18 @@ opentelemetry-otlp = { workspace = true, features = [
     "http-proto",
     "metrics",
     "reqwest-client",
-    "reqwest-rustls",
+    # pulls aws-lc-rs
+    # "reqwest-rustls",
 ] }
 opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
 opentelemetry-semantic-conventions.workspace = true
 rand = "0.9"
 rand_core = "0.9"
+# SLO framework prefers ring crypto provider and provides `install_ring_crypto_provider` helper
+rustls = { version = "0.23", default-features = false, features = [
+    "std",
+    "ring",
+] }
 tokio = { version = "=1.38.1", features = ["full", "signal"] }
 tokio-util = { version = "=0.7.11" }
 ydb = { path = "../../../ydb" }
