@@ -51,7 +51,7 @@ pub struct SessionPoolSettings {
     /// Default is **50** (ydb-go-sdk parity). The legacy table-only pool defaulted to **1000**;
     /// after upgrading, callers that relied on the old default should set
     /// `SessionPoolSettings::new().with_limit(1000)` explicitly or tune via
-    /// [`crate::Client::with_session_pool`].
+    /// [`crate::ClientBuilder::with_session_pool`].
     ///
     /// Normalized to at least 1 when a pool is created (`with_limit` and pool constructors
     /// apply the same rule).
@@ -331,21 +331,12 @@ impl SessionPool {
         Self { inner }
     }
 
-    #[instrument(name = "ydb.SessionPool.Initialize", skip_all, fields(db.system.name = "ydb"), err)]
-    pub async fn new_explicit(
-        connection_manager: GrpcConnectionManager,
-        discovery: Arc<dyn Discovery>,
-        settings: SessionPoolSettings,
-    ) -> YdbResult<Self> {
-        let settings = normalize_pool_settings(settings);
-        let warm_up = settings.warm_up;
-        let pool = Self::new_explicit_sync(connection_manager, discovery, settings);
-
+    pub(crate) async fn warm_up(&self) -> YdbResult<()> {
+        let warm_up = self.inner.settings.warm_up;
         if warm_up > 0 {
-            SessionPoolInner::warm_up_parallel(pool.inner.clone(), warm_up).await?;
+            SessionPoolInner::warm_up_parallel(self.inner.clone(), warm_up).await?;
         }
-
-        Ok(pool)
+        Ok(())
     }
 
     pub fn stats(&self) -> SessionPoolStats {
@@ -782,15 +773,6 @@ mod unit_tests {
         });
         assert_eq!(settings.limit, 1);
         assert_eq!(settings.warm_up, 1);
-    }
-
-    #[test]
-    fn default_session_pool_settings_matches_driver() {
-        use crate::session_pool::default_session_pool_settings;
-        assert_eq!(
-            default_session_pool_settings().limit,
-            SessionPoolSettings::default().limit
-        );
     }
 
     #[test]

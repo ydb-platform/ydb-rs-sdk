@@ -9,7 +9,7 @@ use crate::client_table::TableClient;
 use crate::discovery::Discovery;
 use crate::errors::YdbResult;
 use crate::load_balancer::SharedLoadBalancer;
-use crate::session_pool::{SessionPool, default_session_pool_settings};
+use crate::session_pool::SessionPool;
 pub use crate::session_pool::{SessionPoolSettings, SessionPoolStats};
 use crate::waiter::Waiter;
 
@@ -27,7 +27,8 @@ use tracing::{instrument, trace};
 ///
 /// The built-in session pool defaults to a limit of **50** concurrent sessions (shared by
 /// table and query clients). The legacy table-only pool used **1000**; use
-/// [`Self::with_session_pool`] with an explicit limit when migrating high-concurrency workloads.
+/// [`crate::ClientBuilder::with_session_pool`] with an explicit limit when migrating
+/// high-concurrency workloads.
 pub struct Client {
     credentials: DBCredentials,
     load_balancer: SharedLoadBalancer,
@@ -49,6 +50,7 @@ impl Client {
         executor: Option<Arc<dyn Executor>>,
         retry_settings: RetrySettings,
         metrics_names: MetricsNames,
+        session_pool_settings: SessionPoolSettings,
     ) -> YdbResult<Self> {
         let executor = match executor {
             Some(e) => e,
@@ -58,7 +60,7 @@ impl Client {
         let session_pool = SessionPool::new_explicit_sync(
             connection_manager.clone(),
             discovery.clone(),
-            default_session_pool_settings(),
+            session_pool_settings,
         );
 
         let client = Client {
@@ -73,6 +75,7 @@ impl Client {
             lifetime: ClientLifetime::new(),
         };
         client.wait().await?;
+        client.session_pool.warm_up().await?;
 
         Ok(client)
     }
@@ -84,27 +87,6 @@ impl Client {
     pub fn with_retry_settings(mut self, retry_settings: RetrySettings) -> Self {
         self.retry_settings = retry_settings;
         self
-    }
-
-    /// Replace the driver session pool (CreateSession + AttachSession) and optionally warm it up.
-    ///
-    /// The returned driver starts a new shutdown lifetime because it owns a different pool. Service
-    /// clients derived before this call remain attached to the previous pool and lifetime.
-    ///
-    #[instrument(name = "ydb.Driver.WithSessionPool", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database), err)]
-    pub async fn with_session_pool(self, settings: SessionPoolSettings) -> YdbResult<Self> {
-        self.lifetime.ensure_open()?;
-        let session_pool = SessionPool::new_explicit(
-            self.connection_manager.clone(),
-            self.discovery.clone(),
-            settings,
-        )
-        .await?;
-        Ok(Self {
-            session_pool,
-            lifetime: ClientLifetime::new(),
-            ..self
-        })
     }
 
     /// Session pool counters for the driver (shared by table and query clients).

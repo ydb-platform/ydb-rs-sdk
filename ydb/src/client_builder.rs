@@ -14,7 +14,7 @@ use crate::grpc_connection_manager::{
 use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::SharedLoadBalancer;
-use crate::{Client, Credentials, GrpcOptions, HasGrpcOptions, RetrySettings};
+use crate::{Client, Credentials, GrpcOptions, HasGrpcOptions, RetrySettings, SessionPoolSettings};
 use http::Uri;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -237,6 +237,7 @@ pub struct ClientBuilder {
     executor: Option<Arc<dyn Executor>>,
     retry_settings: Option<RetrySettings>,
     driver_name: Option<String>,
+    session_pool_settings: SessionPoolSettings,
 }
 
 impl ClientBuilder {
@@ -330,6 +331,7 @@ impl ClientBuilder {
             self.executor,
             retry_settings,
             metrics_names,
+            self.session_pool_settings,
         )
         .await
     }
@@ -390,6 +392,12 @@ impl ClientBuilder {
         self
     }
 
+    /// Configure the session pool shared by table and query clients.
+    pub fn with_session_pool(mut self, settings: SessionPoolSettings) -> Self {
+        self.session_pool_settings = settings;
+        self
+    }
+
     fn new() -> Self {
         Self {
             credentials: credentials_ref(AccessTokenCredentials::from("")),
@@ -402,6 +410,7 @@ impl ClientBuilder {
             executor: None,
             retry_settings: None,
             driver_name: None,
+            session_pool_settings: SessionPoolSettings::default(),
         }
     }
 }
