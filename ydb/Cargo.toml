@@ -57,7 +57,7 @@ tokio-util = "0.7.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tonic = { workspace = true }
-tower = "0.4"
+tower = "0.5"
 url = "2.2"
 uuid = { version = "1.17.0", features = ["v4", "v7"] }
 ydb-grpc = { version = "0.2.2", path = "../ydb-grpc" }
