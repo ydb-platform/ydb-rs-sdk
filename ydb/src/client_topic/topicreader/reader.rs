@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::client_common::TokenCache;
+use crate::client_lifetime::ClientResourceGuard;
 use crate::client_query::Transaction;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
@@ -35,6 +36,7 @@ pub struct TopicReader {
     reconnect_handle: JoinHandle<YdbResult<()>>,
     runtime: RuntimeHandle,
     cancellation: CancellationToken,
+    _client_resource: ClientResourceGuard,
 }
 
 static READER_ID: AtomicUsize = AtomicUsize::new(0);
@@ -49,6 +51,7 @@ impl TopicReader {
         manager: GrpcConnectionManager,
         token_cache: TokenCache,
         compression_executor: Arc<dyn Executor>,
+        client_resource: ClientResourceGuard,
     ) -> YdbResult<Self> {
         let cancellation = CancellationToken::new();
         let ReconnectorTask {
@@ -71,6 +74,7 @@ impl TopicReader {
             reconnect_handle: join_handle,
             runtime,
             cancellation: cancellation_token,
+            _client_resource: client_resource,
         })
     }
 

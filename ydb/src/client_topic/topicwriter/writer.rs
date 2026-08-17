@@ -8,6 +8,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::{instrument, trace};
 
+use crate::client_lifetime::ClientResourceGuard;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_write_status::{
@@ -26,6 +27,7 @@ pub struct TopicWriter {
     wait_for_fatal_error_handle: JoinHandle<()>,
     reconnector: Reconnector,
     _cancel_on_drop: DropGuard,
+    _client_resource: ClientResourceGuard,
 }
 
 pub struct AckFuture {
@@ -50,8 +52,16 @@ impl TopicWriter {
         writer_options: TopicWriterOptions,
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
+        client_resource: ClientResourceGuard,
     ) -> YdbResult<Self> {
-        Self::new_inner(writer_options, connection_manager, executor, None).await
+        Self::new_inner(
+            writer_options,
+            connection_manager,
+            executor,
+            None,
+            client_resource,
+        )
+        .await
     }
 
     pub(crate) async fn with_tx_identity(
@@ -59,12 +69,14 @@ impl TopicWriter {
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
         tx_identity: TransactionIdentity,
+        client_resource: ClientResourceGuard,
     ) -> YdbResult<Self> {
         Self::new_inner(
             writer_options,
             connection_manager,
             executor,
             Some(tx_identity),
+            client_resource,
         )
         .await
     }
@@ -74,6 +86,7 @@ impl TopicWriter {
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
         tx_identity: Option<TransactionIdentity>,
+        client_resource: ClientResourceGuard,
     ) -> YdbResult<Self> {
         let producer_id = writer_options
             .producer_id
@@ -117,6 +130,7 @@ impl TopicWriter {
             wait_for_fatal_error_handle,
             reconnector,
             _cancel_on_drop: cancel_on_drop,
+            _client_resource: client_resource,
         })
     }
 

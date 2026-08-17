@@ -223,7 +223,7 @@ impl TopicClient {
         consumer: impl Into<String>,
         topic: impl Into<TopicSelectors>,
     ) -> YdbResult<TopicReader> {
-        self.lifetime.ensure_open()?;
+        let resource = self.lifetime.register_topic_reader()?;
         let options = TopicReaderOptions::builder()
             .consumer(consumer)
             .topic(topic)
@@ -233,6 +233,7 @@ impl TopicClient {
             self.connection_manager.clone(),
             self.token_cache.clone(),
             self.executor.clone(),
+            resource,
         )
         .await
     }
@@ -242,12 +243,13 @@ impl TopicClient {
         &mut self,
         options: TopicReaderOptions,
     ) -> YdbResult<TopicReader> {
-        self.lifetime.ensure_open()?;
+        let resource = self.lifetime.register_topic_reader()?;
         TopicReader::new(
             options,
             self.connection_manager.clone(),
             self.token_cache.clone(),
             self.executor.clone(),
+            resource,
         )
         .await
     }
@@ -257,11 +259,12 @@ impl TopicClient {
         &mut self,
         writer_options: TopicWriterOptions,
     ) -> YdbResult<TopicWriter> {
-        self.lifetime.ensure_open()?;
+        let resource = self.lifetime.register_topic_writer()?;
         TopicWriter::new(
             writer_options,
             self.connection_manager.clone(),
             self.executor.clone(),
+            resource,
         )
         .await
     }
@@ -282,23 +285,25 @@ impl TopicClient {
         writer_tx_options: TopicWriterTxOptions,
         tx: &mut Transaction,
     ) -> YdbResult<TopicWriterTx> {
-        self.lifetime.ensure_open()?;
+        let resource = self.lifetime.register_topic_writer()?;
         TopicWriterTx::new(
             writer_tx_options,
             self.connection_manager.clone(),
             self.executor.clone(),
             tx,
+            resource,
         )
         .await
     }
 
     #[instrument(name = "ydb.TopicClient.CreateWriter", skip_all)]
     pub async fn create_writer(&mut self, path: impl Into<String>) -> YdbResult<TopicWriter> {
-        self.lifetime.ensure_open()?;
+        let resource = self.lifetime.register_topic_writer()?;
         TopicWriter::new(
             TopicWriterOptions::builder().topic_path(path).build(),
             self.connection_manager.clone(),
             self.executor.clone(),
+            resource,
         )
         .await
     }

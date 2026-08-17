@@ -38,11 +38,18 @@ impl CoordinationClient {
         path: String,
         options: SessionOptions,
     ) -> YdbResult<CoordinationSession> {
-        self.lifetime.ensure_open()?;
+        let resource = self.lifetime.register_coordination_session()?;
         let seq_no = self.session_seq_no;
         self.session_seq_no += 1;
 
-        CoordinationSession::new(path, seq_no, options, self.connection_manager.clone()).await
+        CoordinationSession::new(
+            path,
+            seq_no,
+            options,
+            self.connection_manager.clone(),
+            resource,
+        )
+        .await
     }
 
     #[instrument(name = "ydb.CoordinationClient.CreateNode", skip_all, fields(db.system.name = "ydb", ydb.coordination.path = %path))]

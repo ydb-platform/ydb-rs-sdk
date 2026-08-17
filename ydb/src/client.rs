@@ -1,7 +1,7 @@
 use crate::RetrySettings;
 use crate::client_common::DBCredentials;
 use crate::client_coordination::client::CoordinationClient;
-use crate::client_lifetime::ClientLifetime;
+use crate::client_lifetime::{ClientLifetime, LiveClientResources};
 use crate::client_operation::OperationClient;
 use crate::client_query::QueryClient;
 use crate::client_scheme::client::SchemeClient;
@@ -21,8 +21,7 @@ use crate::client_topic::client::TopicClient;
 use crate::client_topic::compression::{Executor, default_executor};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_ydb_operation::RawOperationParams;
-use tracing::instrument;
-use tracing::trace;
+use tracing::{error, instrument, trace};
 
 /// YDB client.
 ///
@@ -78,7 +77,8 @@ impl Client {
         Ok(client)
     }
 
-    /// Return a child driver that shares sessions and connections but uses a different retry budget.
+    /// Return a child driver that shares sessions, connections, and shutdown state but uses a
+    /// different retry budget.
     ///
     /// All service clients created from the returned [`Client`] consult `budget` before each retry
     /// (table, query one-shot, [`crate::QueryClient::retry_tx`], operation service, and similar).
@@ -98,7 +98,8 @@ impl Client {
 
     /// Replace the driver session pool (CreateSession + AttachSession) and optionally warm it up.
     ///
-    /// Table and query clients created from this driver share the same pool.
+    /// The returned driver starts a new shutdown lifetime because it owns a different pool. Service
+    /// clients derived before this call remain attached to the previous pool and lifetime.
     ///
     #[instrument(name = "ydb.Driver.WithSessionPool", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database), err)]
     pub async fn with_session_pool(self, settings: SessionPoolSettings) -> YdbResult<Self> {
@@ -123,14 +124,17 @@ impl Client {
 
     /// Stop the shared session pool and wait for accepted session cleanup attempts to finish.
     ///
-    /// This consumes the driver and stops new session acquisition. Existing session leases may
-    /// finish; shutdown waits for them before deleting idle sessions. Do not use clients,
-    /// sessions, transactions, or streams derived from this driver after shutdown begins.
+    /// This consumes the driver and rejects new work through service clients sharing its shutdown
+    /// state. Existing sessions, transactions, streams, readers, writers, and coordination
+    /// sessions remain usable so they can finish or stop. Shutdown waits for session leases before
+    /// deleting idle sessions. Topic readers, writers, and coordination sessions are not awaited;
+    /// shutdown reports their final counts if they remain.
     /// Shutdown must run while the Tokio runtime that created the driver is still alive.
     #[instrument(name = "ydb.Driver.Shutdown", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database), err)]
     pub async fn shutdown(self) -> YdbResult<()> {
         self.lifetime.close();
-        self.session_pool.shutdown().await
+        let session_pool_result = self.session_pool.shutdown().await;
+        finish_shutdown(session_pool_result, self.lifetime.live_resources())
     }
 
     pub fn database(&self) -> String {
@@ -220,6 +224,24 @@ impl Client {
         self.load_balancer.wait().await?;
         Ok(())
     }
+}
+
+fn finish_shutdown(
+    session_pool_result: YdbResult<()>,
+    live_resources: LiveClientResources,
+) -> YdbResult<()> {
+    if live_resources.is_empty() {
+        return session_pool_result;
+    }
+
+    if let Err(err) = session_pool_result {
+        error!(%live_resources, "client shutdown failed with live resources");
+        return Err(err);
+    }
+
+    Err(crate::YdbError::custom(format!(
+        "client shutdown completed with live resources: {live_resources}"
+    )))
 }
 
 #[cfg(test)]
