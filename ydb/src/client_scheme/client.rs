@@ -1,4 +1,5 @@
 use crate::client::TimeoutSettings;
+use crate::client_lifetime::ClientLifetime;
 use crate::client_scheme::list_types::SchemeEntry;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_scheme_client::client::{
@@ -14,13 +15,15 @@ use tracing::instrument;
 pub struct SchemeClient {
     timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
+    lifetime: ClientLifetime,
 }
 
 impl SchemeClient {
-    pub(crate) fn new(connection_manager: GrpcConnectionManager) -> Self {
+    pub(crate) fn new(connection_manager: GrpcConnectionManager, lifetime: ClientLifetime) -> Self {
         Self {
             timeouts: TimeoutSettings::default(),
             connection_manager,
+            lifetime,
         }
     }
 
@@ -75,6 +78,7 @@ impl SchemeClient {
     async fn connection(
         &self,
     ) -> YdbResult<grpc_wrapper::raw_scheme_client::client::RawSchemeClient> {
+        self.lifetime.ensure_open()?;
         self.connection_manager
             .get_auth_service(grpc_wrapper::raw_scheme_client::client::RawSchemeClient::new)
             .await

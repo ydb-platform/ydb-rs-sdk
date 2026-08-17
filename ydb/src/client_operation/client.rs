@@ -2,6 +2,7 @@ use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::RefWithLifetime;
 use crate::async_closure::AsyncFnMut;
+use crate::client_lifetime::ClientLifetime;
 use crate::closure;
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -20,16 +21,19 @@ use tracing::instrument;
 pub struct OperationClient {
     connection_manager: GrpcConnectionManager,
     retry_settings: RetrySettings,
+    lifetime: ClientLifetime,
 }
 
 impl OperationClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
         retry_settings: RetrySettings,
+        lifetime: ClientLifetime,
     ) -> Self {
         Self {
             connection_manager,
             retry_settings,
+            lifetime,
         }
     }
 
@@ -50,6 +54,7 @@ impl OperationClient {
     where
         F: AsyncFnMut<RefWithLifetime<RetryState>, Output = YdbResult<T>>,
     {
+        self.lifetime.ensure_open()?;
         self.retry_settings
             .clone()
             .with_deadline(opts.timeout)

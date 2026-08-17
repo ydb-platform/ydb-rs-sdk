@@ -39,6 +39,7 @@ pub(crate) mod client_common;
 pub(crate) mod client_coordination;
 #[cfg(test)]
 mod client_directory_test_integration;
+mod client_lifetime;
 pub(crate) mod client_operation;
 pub(crate) mod client_query;
 pub(crate) mod client_scheme;

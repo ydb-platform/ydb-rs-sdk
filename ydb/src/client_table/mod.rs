@@ -3,6 +3,7 @@ pub(crate) mod call_options;
 
 use crate::RefWithLifetime;
 use crate::async_closure::AsyncFnMut;
+use crate::client_lifetime::ClientLifetime;
 use crate::retry_settings::{RetrySettings, RetryState};
 use crate::session::TableSession;
 use crate::session_pool::{SessionPool, TableSessionPool};
@@ -66,6 +67,7 @@ impl WithGrpcMaxMessageSize for TableServiceClientType {
 #[derive(Clone)]
 pub struct TableClient {
     session_pool: TableSessionPool,
+    lifetime: ClientLifetime,
 }
 
 impl TableClient {
@@ -73,6 +75,7 @@ impl TableClient {
         connection_manager: GrpcConnectionManager,
         session_pool: SessionPool,
         retry_settings: RetrySettings,
+        lifetime: ClientLifetime,
     ) -> Self {
         Self {
             session_pool: TableSessionPool::from_shared(
@@ -80,6 +83,7 @@ impl TableClient {
                 connection_manager,
                 retry_settings,
             ),
+            lifetime,
         }
     }
 
@@ -178,6 +182,7 @@ impl TableClient {
         columns: Option<Vec<String>>,
         opts: TableCallOptions,
     ) -> YdbResult<crate::ResultSet> {
+        self.lifetime.ensure_open()?;
         if keys.is_empty() {
             return Ok(crate::ResultSet::default());
         }
@@ -218,6 +223,7 @@ impl TableClient {
         rows: Vec<Value>,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
+        self.lifetime.ensure_open()?;
         let Some(value) = try_vec_to_list_of_structs(rows)? else {
             return Ok(());
         };
@@ -253,6 +259,7 @@ impl TableClient {
         destination_path: String,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
+        self.lifetime.ensure_open()?;
         self.retry_table_operation(
             &opts,
             Idempotency::NonIdempotent,
@@ -294,6 +301,7 @@ impl TableClient {
         tables: Vec<CopyTableItem>,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
+        self.lifetime.ensure_open()?;
         self.retry_table_operation(
             &opts,
             Idempotency::NonIdempotent,
@@ -340,6 +348,7 @@ impl TableClient {
         replace_destination: bool,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
+        self.lifetime.ensure_open()?;
         self.retry_table_operation(
             &opts,
             Idempotency::NonIdempotent,
@@ -384,6 +393,7 @@ impl TableClient {
         tables: Vec<RenameTableItem>,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
+        self.lifetime.ensure_open()?;
         self.retry_table_operation(
             &opts,
             Idempotency::NonIdempotent,
@@ -421,6 +431,7 @@ impl TableClient {
         path: String,
         opts: TableCallOptions,
     ) -> YdbResult<TableDescription> {
+        self.lifetime.ensure_open()?;
         self.retry_table_operation(
             &opts,
             Idempotency::NonIdempotent,
@@ -460,6 +471,7 @@ impl TableClient {
         request: CreateTableRequest,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
+        self.lifetime.ensure_open()?;
         self.retry_table_operation(
             &opts,
             Idempotency::NonIdempotent,
@@ -498,6 +510,7 @@ impl TableClient {
         request: DropTableRequest,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
+        self.lifetime.ensure_open()?;
         self.retry_table_operation(
             &opts,
             Idempotency::NonIdempotent,
@@ -531,6 +544,7 @@ impl TableClient {
         request: AlterTableRequest,
         opts: TableCallOptions,
     ) -> YdbResult<()> {
+        self.lifetime.ensure_open()?;
         self.retry_table_operation(
             &opts,
             Idempotency::NonIdempotent,
@@ -567,6 +581,7 @@ impl TableClient {
         &self,
         opts: TableCallOptions,
     ) -> YdbResult<TableOptionsDescription> {
+        self.lifetime.ensure_open()?;
         self.retry_table_operation(
             &opts,
             Idempotency::NonIdempotent,

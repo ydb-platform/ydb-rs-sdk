@@ -1,6 +1,7 @@
 use crate::RetrySettings;
 use crate::client_common::DBCredentials;
 use crate::client_coordination::client::CoordinationClient;
+use crate::client_lifetime::ClientLifetime;
 use crate::client_operation::OperationClient;
 use crate::client_query::QueryClient;
 use crate::client_scheme::client::SchemeClient;
@@ -37,6 +38,7 @@ pub struct Client {
     session_pool: SessionPool,
     retry_settings: RetrySettings,
     metrics_names: MetricsNames,
+    lifetime: ClientLifetime,
 }
 
 impl Client {
@@ -69,6 +71,7 @@ impl Client {
             session_pool,
             retry_settings,
             metrics_names,
+            lifetime: ClientLifetime::new(),
         };
         client.wait().await?;
 
@@ -89,6 +92,7 @@ impl Client {
             session_pool: self.session_pool.clone(),
             retry_settings,
             metrics_names: self.metrics_names.clone(),
+            lifetime: self.lifetime.clone(),
         }
     }
 
@@ -98,6 +102,7 @@ impl Client {
     ///
     #[instrument(name = "ydb.Driver.WithSessionPool", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database), err)]
     pub async fn with_session_pool(self, settings: SessionPoolSettings) -> YdbResult<Self> {
+        self.lifetime.ensure_open()?;
         let session_pool = SessionPool::new_explicit(
             self.connection_manager.clone(),
             self.discovery.clone(),
@@ -106,6 +111,7 @@ impl Client {
         .await?;
         Ok(Self {
             session_pool,
+            lifetime: ClientLifetime::new(),
             ..self
         })
     }
@@ -123,6 +129,7 @@ impl Client {
     /// Shutdown must run while the Tokio runtime that created the driver is still alive.
     #[instrument(name = "ydb.Driver.Shutdown", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database), err)]
     pub async fn shutdown(self) -> YdbResult<()> {
+        self.lifetime.close();
         self.session_pool.shutdown().await
     }
 
@@ -140,6 +147,7 @@ impl Client {
             self.connection_manager.clone(),
             self.session_pool.clone(),
             self.retry_settings.clone(),
+            self.lifetime.clone(),
         )
     }
 
@@ -154,6 +162,7 @@ impl Client {
             self.session_pool.clone(),
             self.retry_settings.clone(),
             self.metrics_names.clone(),
+            self.lifetime.clone(),
         )
     }
 
@@ -163,7 +172,7 @@ impl Client {
         self.metrics_names
             .client_new_scheme_client_counter
             .increment(1);
-        SchemeClient::new(self.connection_manager.clone())
+        SchemeClient::new(self.connection_manager.clone(), self.lifetime.clone())
     }
 
     /// Create instance of client for topic service
@@ -176,19 +185,24 @@ impl Client {
             self.connection_manager.clone(),
             self.credentials.token_cache.clone(),
             self.executor.clone(),
+            self.lifetime.clone(),
         )
     }
 
     /// Create instance of client for coordination service
     #[instrument(name = "ydb.Driver.CoordinationClient", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database))]
     pub fn coordination_client(&self) -> CoordinationClient {
-        CoordinationClient::new(self.connection_manager.clone())
+        CoordinationClient::new(self.connection_manager.clone(), self.lifetime.clone())
     }
 
     /// Create instance of client for operation service (list/get/forget long-running operations).
     #[instrument(name = "ydb.Driver.OperationClient", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database))]
     pub fn operation_client(&self) -> OperationClient {
-        OperationClient::new(self.connection_manager.clone(), self.retry_settings.clone())
+        OperationClient::new(
+            self.connection_manager.clone(),
+            self.retry_settings.clone(),
+            self.lifetime.clone(),
+        )
     }
 
     /// Wait initialization completed

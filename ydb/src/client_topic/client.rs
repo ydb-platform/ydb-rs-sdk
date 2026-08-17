@@ -4,6 +4,7 @@ use super::topicwriter::writer_tx_options::{TopicWriterTxOptions, TopicWriterTxO
 use crate::YdbError::InternalError;
 use crate::client::TimeoutSettings;
 use crate::client_common::TokenCache;
+use crate::client_lifetime::ClientLifetime;
 use crate::client_query::Transaction;
 use crate::client_topic::list_types::{AlterConsumer, Consumer, MeteringMode};
 use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
@@ -124,6 +125,7 @@ pub struct TopicClient {
     connection_manager: GrpcConnectionManager,
     token_cache: TokenCache,
     executor: Arc<dyn Executor>,
+    lifetime: ClientLifetime,
 }
 
 impl TopicClient {
@@ -131,12 +133,14 @@ impl TopicClient {
         connection_manager: GrpcConnectionManager,
         token_cache: TokenCache,
         executor: Arc<dyn Executor>,
+        lifetime: ClientLifetime,
     ) -> Self {
         Self {
             timeouts: TimeoutSettings::default(),
             connection_manager,
             token_cache,
             executor,
+            lifetime,
         }
     }
 
@@ -219,6 +223,7 @@ impl TopicClient {
         consumer: impl Into<String>,
         topic: impl Into<TopicSelectors>,
     ) -> YdbResult<TopicReader> {
+        self.lifetime.ensure_open()?;
         let options = TopicReaderOptions::builder()
             .consumer(consumer)
             .topic(topic)
@@ -237,6 +242,7 @@ impl TopicClient {
         &mut self,
         options: TopicReaderOptions,
     ) -> YdbResult<TopicReader> {
+        self.lifetime.ensure_open()?;
         TopicReader::new(
             options,
             self.connection_manager.clone(),
@@ -251,6 +257,7 @@ impl TopicClient {
         &mut self,
         writer_options: TopicWriterOptions,
     ) -> YdbResult<TopicWriter> {
+        self.lifetime.ensure_open()?;
         TopicWriter::new(
             writer_options,
             self.connection_manager.clone(),
@@ -275,6 +282,7 @@ impl TopicClient {
         writer_tx_options: TopicWriterTxOptions,
         tx: &mut Transaction,
     ) -> YdbResult<TopicWriterTx> {
+        self.lifetime.ensure_open()?;
         TopicWriterTx::new(
             writer_tx_options,
             self.connection_manager.clone(),
@@ -286,6 +294,7 @@ impl TopicClient {
 
     #[instrument(name = "ydb.TopicClient.CreateWriter", skip_all)]
     pub async fn create_writer(&mut self, path: impl Into<String>) -> YdbResult<TopicWriter> {
+        self.lifetime.ensure_open()?;
         TopicWriter::new(
             TopicWriterOptions::builder().topic_path(path).build(),
             self.connection_manager.clone(),
@@ -297,6 +306,7 @@ impl TopicClient {
     pub(crate) async fn raw_client_connection(
         &self,
     ) -> YdbResult<grpc_wrapper::raw_topic_service::client::RawTopicClient> {
+        self.lifetime.ensure_open()?;
         self.connection_manager
             .get_auth_service(grpc_wrapper::raw_topic_service::client::RawTopicClient::new)
             .await

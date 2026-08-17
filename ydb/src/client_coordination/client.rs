@@ -1,4 +1,5 @@
 use crate::client::TimeoutSettings;
+use crate::client_lifetime::ClientLifetime;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_coordination_service::alter_node::RawAlterNodeRequest;
 use crate::grpc_wrapper::raw_coordination_service::config::RawCoordinationNodeConfig;
@@ -18,14 +19,16 @@ pub struct CoordinationClient {
     session_seq_no: u64,
 
     connection_manager: GrpcConnectionManager,
+    lifetime: ClientLifetime,
 }
 
 impl CoordinationClient {
-    pub(crate) fn new(connection_manager: GrpcConnectionManager) -> Self {
+    pub(crate) fn new(connection_manager: GrpcConnectionManager, lifetime: ClientLifetime) -> Self {
         Self {
             timeouts: TimeoutSettings::default(),
             session_seq_no: 0,
             connection_manager,
+            lifetime,
         }
     }
 
@@ -35,6 +38,7 @@ impl CoordinationClient {
         path: String,
         options: SessionOptions,
     ) -> YdbResult<CoordinationSession> {
+        self.lifetime.ensure_open()?;
         let seq_no = self.session_seq_no;
         self.session_seq_no += 1;
 
@@ -99,6 +103,7 @@ impl CoordinationClient {
     pub(crate) async fn raw_client_connection(
         &self,
     ) -> YdbResult<grpc_wrapper::raw_coordination_service::client::RawCoordinationClient> {
+        self.lifetime.ensure_open()?;
         self.connection_manager
             .get_auth_service(
                 grpc_wrapper::raw_coordination_service::client::RawCoordinationClient::new,

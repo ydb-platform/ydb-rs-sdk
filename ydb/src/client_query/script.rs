@@ -156,6 +156,7 @@ async fn client_execute_script(
     opts: CallOptions,
     results_ttl: Duration,
 ) -> YdbResult<ExecuteScriptOperation> {
+    ctx.lifetime.ensure_open()?;
     // Unlike FetchScriptResults, ExecuteScript is not retried: a server-side start
     // followed by a client transport error would spawn duplicate long-running ops.
     client_execute_script_once(ctx, &text, &params, &opts, results_ttl).await
@@ -211,6 +212,7 @@ async fn client_fetch_script_results(
     rows_limit: i64,
     opts: CallOptions,
 ) -> YdbResult<FetchScriptResult> {
+    ctx.lifetime.ensure_open()?;
     // FetchScriptResults is always safe to retry (aligned with Go SDK).
     ctx.retry_settings
         .clone()

@@ -97,6 +97,7 @@ async fn explain_query(
     text: String,
     timeout: Option<Duration>,
 ) -> YdbResult<ExplainResult> {
+    ctx.lifetime.ensure_open()?;
     // EXPLAIN never executes the query, so retrying is always safe.
     let plan = ctx
         .retry_settings
@@ -137,6 +138,7 @@ mod unit_tests {
     use super::*;
     use crate::GrpcOptions;
     use crate::client_metrics::names::MetricsNames;
+    use crate::client_lifetime::ClientLifetime;
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
@@ -159,6 +161,7 @@ mod unit_tests {
             session_pool: SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
             retry_settings: RetrySettings::with_default_backoff(),
             metrics_names: MetricsNames::new(None),
+            lifetime: ClientLifetime::new(),
         }
     }
 

@@ -168,6 +168,7 @@ impl QueryClient {
         session_pool: SessionPool,
         retry_settings: RetrySettings,
         metrics_names: MetricsNames,
+        lifetime: crate::client_lifetime::ClientLifetime,
     ) -> Self {
         Self {
             ctx: ClientExecContext {
@@ -175,6 +176,7 @@ impl QueryClient {
                 session_pool,
                 retry_settings,
                 metrics_names,
+                lifetime,
             },
         }
     }
@@ -293,6 +295,10 @@ impl QueryClient {
         T: Send,
     {
         ensure_interactive_tx_mode(options.mode())?;
+        self.ctx
+            .lifetime
+            .ensure_open()
+            .map_err(YdbOrCustomerError::from)?;
         let result = self
             .ctx
             .retry_settings
@@ -585,6 +591,7 @@ mod unit_tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use crate::GrpcOptions;
+    use crate::client_lifetime::ClientLifetime;
     use crate::errors::YdbStatusError;
     use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
     use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
@@ -691,6 +698,7 @@ mod unit_tests {
             pool.clone(),
             RetrySettings::dont_retry(),
             MetricsNames::new(None),
+            ClientLifetime::new(),
         );
         let observed_pool = pool.clone();
 
@@ -716,6 +724,7 @@ mod unit_tests {
             pool,
             RetrySettings::dont_retry(),
             MetricsNames::new(None),
+            ClientLifetime::new(),
         );
         let callback_called = Arc::new(AtomicBool::new(false));
         let observed_called = callback_called.clone();
@@ -742,6 +751,7 @@ mod unit_tests {
             pool,
             RetrySettings::dont_retry(),
             MetricsNames::new(None),
+            ClientLifetime::new(),
         );
         let callback_called = Arc::new(AtomicBool::new(false));
 
@@ -781,6 +791,7 @@ mod unit_tests {
             pool,
             RetrySettings::with_default_backoff(),
             MetricsNames::new(None),
+            ClientLifetime::new(),
         );
         let callback_calls = Arc::new(AtomicUsize::new(0));
         let observed_calls = callback_calls.clone();

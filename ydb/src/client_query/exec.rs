@@ -6,6 +6,7 @@ use futures_util::TryFutureExt;
 use tokio::time::timeout;
 
 use crate::client_metrics::names::MetricsNames;
+use crate::client_lifetime::ClientLifetime;
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
@@ -51,6 +52,7 @@ pub(crate) struct ClientExecContext {
     pub session_pool: SessionPool,
     pub retry_settings: RetrySettings,
     pub metrics_names: MetricsNames,
+    pub lifetime: ClientLifetime,
 }
 
 /// Opened client stream and its explicit session ownership mode.
@@ -558,6 +560,7 @@ pub(crate) async fn client_begin_stream(
     opts: CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<OpenedClientQueryStream> {
+    ctx.lifetime.ensure_open()?;
     ctx.retry_settings
         .clone()
         .with_deadline(opts.timeout)
