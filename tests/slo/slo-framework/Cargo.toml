@@ -21,12 +21,14 @@ opentelemetry-otlp = { workspace = true, features = [
 ] }
 # enable TLS support in reqwest. Implicit default crypto provider is chosen at compile-time if only one provider is enabled in the end binary.
 reqwest = { version = "0.13", default-features = false, features = [
+    "http2",
     "rustls-no-provider",
 ] }
 opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
 opentelemetry-semantic-conventions.workspace = true
 rand = "0.9"
 rand_core = "0.9"
+rustls-platform-verifier = "0.7"
 # SLO framework prefers ring crypto provider. It's chosen as an implicit default provider at compile-time as long as it's the only enabled crypto provider.
 rustls = { version = "0.23", default-features = false, features = [
     "std",

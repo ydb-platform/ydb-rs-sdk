@@ -3,9 +3,10 @@ use std::time::{Duration, Instant};
 
 use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Counter, Gauge, MeterProvider as _, UpDownCounter};
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{MetricExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
 use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Temporality};
+use rustls_platform_verifier::BuilderVerifierExt;
 
 use crate::config::Config;
 
@@ -63,12 +64,7 @@ impl Metrics {
 
         let provider_builder = SdkMeterProvider::builder().with_resource(resource);
         let provider = if let Some(endpoint) = &cfg.otlp_endpoint {
-            let exporter = opentelemetry_otlp::MetricExporter::builder()
-                .with_http()
-                .with_endpoint(endpoint.clone())
-                .with_temporality(Temporality::Cumulative)
-                .build()
-                .map_err(|err| format!("failed to create OTLP exporter: {err}"))?;
+            let exporter = metric_exporter(endpoint)?;
 
             let reader = PeriodicReader::builder(exporter)
                 .with_interval(Duration::from_secs(1))
@@ -164,6 +160,28 @@ impl Metrics {
             pending: true,
         }
     }
+}
+
+fn metric_exporter(endpoint: &str) -> Result<MetricExporter, String> {
+    // reqwest panics if `__rustls-aws-lc-rs` is not enabled
+    // we use preconfigured tls backend, which installs implicit default crypto provider, derived from `rustls` features
+
+    let client_config = rustls::ClientConfig::builder()
+        .with_platform_verifier()
+        .map_err(|err| format!("failed to set TLS platform verifier: {err}"))?
+        .with_no_client_auth();
+    let implicit_default_crypto_http_client = reqwest::Client::builder()
+        .tls_backend_preconfigured(client_config)
+        .build()
+        .map_err(|err| format!("failed to build preconfigured HTTP client: {err}"))?;
+
+    opentelemetry_otlp::MetricExporter::builder()
+        .with_http()
+        .with_http_client(implicit_default_crypto_http_client)
+        .with_endpoint(endpoint.to_owned())
+        .with_temporality(Temporality::Cumulative)
+        .build()
+        .map_err(|err| format!("failed to create OTLP exporter: {err}"))
 }
 
 fn record_latency_series(series: &Mutex<LatencySeries>, latency: Duration, attrs_key: String) {
@@ -263,11 +281,7 @@ mod tests {
 
     #[test]
     fn otlp_metric_exporter_has_http_client() {
-        let exporter = opentelemetry_otlp::MetricExporter::builder()
-            .with_http()
-            .with_endpoint("http://localhost:4318/v1/metrics")
-            .with_temporality(Temporality::Cumulative)
-            .build();
+        let exporter = metric_exporter("http://localhost:4318/v1/metrics");
         assert!(
             exporter.is_ok(),
             "OTLP metrics exporter must build with reqwest HTTP client features: {}",
