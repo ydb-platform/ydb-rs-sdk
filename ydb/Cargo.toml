@@ -74,7 +74,7 @@ chrono = { version = "0.4", default-features = false, features = [
     "clock",
     "std",
 ] }
-# Enable ring crypto provider to let rustls select ring as a fallback as long as it is the only enabled crypto provider in test/example/bench binaries.
+# Enable rustls with ring crypto provider to select ring as an implicit default provider as long as it is the only enabled crypto provider in test/example/bench binaries.
 rustls = { version = "0.23", default-features = false, features = [
     "ring",
     "std",
