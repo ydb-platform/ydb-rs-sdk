@@ -20,7 +20,7 @@ pub use row::{RowID, TestRow, test_row_from_row};
 pub use topic::{TopicService, TopicWorkload};
 
 pub fn install_ring_crypto_provider() {
-    let _ = rustls::crypto::ring::default_provider()
+    rustls::crypto::ring::default_provider()
         .install_default()
         .expect("crypto provider is already installed");
 }
