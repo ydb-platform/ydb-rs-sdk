@@ -59,7 +59,32 @@ For a single YQL statement you usually do not need `retry_tx` — call a builder
 | [`exec`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html) | `()` | DDL, DML without rows (`CREATE TABLE`, `UPSERT`, `DELETE`) |
 | [`query_row`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html) | one [`Row`](https://docs.rs/ydb/latest/ydb/struct.Row.html) | exactly one row (`SELECT COUNT(*) …`) |
 | [`query_result_set`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html) | one [`ResultSet`](https://docs.rs/ydb/latest/ydb/struct.ResultSet.html) | all rows of one result set |
-| [`query`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html) | [`QueryStream`](https://docs.rs/ydb/latest/ydb/struct.QueryStream.html) | multiple result sets, large reads |
+| [`query`](https://docs.rs/ydb/latest/ydb/struct.QueryClient.html) | `Vec<ResultSet>` | all rows of multiple result sets |
+
+Every `QueryClient` query-execution method above materializes its complete result before returning
+and retries the full operation on retryable failures. Queries inside `retry_tx` can instead stream
+large results lazily:
+
+```rust
+use futures_util::TryStreamExt;
+use ydb::{Transaction, closure};
+
+qc.retry_tx(closure!(async |tx: &mut Transaction| {
+    let mut results = tx.query("SELECT 1 AS a; SELECT 2 AS b").await?;
+    while let Some(mut result_set) = results.next_result_set().await? {
+        while let Some(part) = result_set.try_next().await? {
+            for _row in part {
+                // process rows from this response part
+            }
+        }
+    }
+    Ok(())
+})).await?;
+```
+
+Only one lazy transaction result set can be active at a time. Dropping one early causes its unread
+chunks to be discarded before `next_result_set()` returns the next result set; `discard().await`
+performs that drain immediately and reports any error it encounters.
 
 Parameters chain at the call site:
 

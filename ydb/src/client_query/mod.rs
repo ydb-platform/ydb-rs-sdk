@@ -6,6 +6,7 @@ mod builders;
 mod exec;
 mod explain_query;
 pub(crate) mod hooks;
+mod result_set_cursor;
 mod retry_tx;
 mod script;
 mod stream_facade;
@@ -449,10 +450,6 @@ impl QueryExecutor for QueryClient {
         QueryClient::exec(self, text)
     }
 
-    fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_, Self::Scope> {
-        QueryClient::query(self, text)
-    }
-
     fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_, Self::Scope> {
         QueryClient::query_result_set(self, text)
     }
@@ -550,10 +547,6 @@ impl QueryExecutor for Transaction {
         Transaction::exec(self, text)
     }
 
-    fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_, Self::Scope> {
-        Transaction::query(self, text)
-    }
-
     fn query_result_set(&mut self, text: impl Into<String>) -> ResultSetBuilder<'_, Self::Scope> {
         Transaction::query_result_set(self, text)
     }
@@ -568,15 +561,15 @@ impl QueryExecutor for Transaction {
 }
 
 pub use builders::{
-    CallBuilder, ClientOneShot, ExecBuilder, ExecCall, Interactive, OneResultSet, OneRow,
-    OptionalRow, OptionalRowBuilder, QueryExecutor, QueryRowBuilder, QueryStreamBuilder,
-    ResultSetBuilder, Streamed,
+    CallBuilder, ClientOneShot, ExecBuilder, ExecCall, Interactive, Materialized, OneResultSet,
+    OneRow, OptionalRow, OptionalRowBuilder, QueryBuilder, QueryExecutor, QueryRowBuilder,
+    QueryStreamBuilder, ResultSetBuilder, Streamed,
 };
 pub use explain_query::{ExplainQueryBuilder, ExplainResult};
 pub use retry_tx::{RetryTxAttempt, RetryTxBuilder};
 pub use script::{ExecuteScriptBuilder, FetchScriptResultsBuilder};
 pub use script::{ExecuteScriptOperation, FetchScriptResult};
-pub use stream_facade::{QueryStats, QueryStream};
+pub use stream_facade::{QueryResultSet, QueryStats, QueryStream};
 
 #[cfg(test)]
 mod unit_tests {
@@ -586,7 +579,6 @@ mod unit_tests {
 
     use crate::GrpcOptions;
     use crate::errors::YdbStatusError;
-    use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
     use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
     use crate::grpc_wrapper::raw_table_service::value::{RawColumn, RawResultSet, RawValue};
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
@@ -825,30 +817,5 @@ mod unit_tests {
 
         drop(tx);
         assert_eq!(aborted.load(Ordering::Relaxed), 1);
-    }
-
-    #[tokio::test]
-    async fn dropping_drained_unclosed_stream_marks_transaction_undetermined() {
-        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
-        let lease = pool.acquire_explicit().await.expect("acquire test session");
-        let mut tx = test_transaction(lease).await;
-        tx.ctx.mark_query_in_flight_for_test("tx-1");
-
-        {
-            let mut stream = QueryStream::from_tx(
-                ExecuteQueryStream::from_test_parts(Vec::new()),
-                &mut tx.ctx,
-                false,
-            );
-            assert!(
-                stream
-                    .next_result_set()
-                    .await
-                    .expect("drain test stream")
-                    .is_none()
-            );
-        }
-
-        assert!(matches!(tx.ctx.state, TxState::Undetermined(_)));
     }
 }

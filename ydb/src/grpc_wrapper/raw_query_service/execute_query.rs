@@ -3,9 +3,7 @@ use std::time::Duration;
 
 use crate::grpc_wrapper::raw_errors::RawResult;
 use crate::grpc_wrapper::raw_query_service::status::check_status;
-use crate::grpc_wrapper::raw_table_service::value::{
-    RawColumn, RawResultSet, RawTypedValue, RawValue,
-};
+use crate::grpc_wrapper::raw_table_service::value::{RawColumn, RawTypedValue};
 use crate::types::Value;
 use ydb_grpc::ydb_proto::query::{
     ExecMode, ExecuteQueryRequest, ExecuteQueryResponsePart, QueryContent, SchemaInclusionMode,
@@ -155,33 +153,7 @@ pub(crate) fn plan_from_part(part: &ExecuteQueryResponsePart) -> Option<RawQuery
     })
 }
 
-pub(crate) fn append_rows_from_part(
-    columns: &mut Vec<RawColumn>,
-    rows: &mut Vec<Vec<RawValue>>,
-    truncated: &mut bool,
-    part: ExecuteQueryResponsePart,
-) -> RawResult<()> {
-    let Some(proto_set) = part.result_set else {
-        return Ok(());
-    };
-    let part_set = RawResultSet::try_from(proto_set)?;
-    *truncated |= part_set.truncated;
-    if !columns.is_empty()
-        && !part_set.columns.is_empty()
-        && !columns_compatible(columns, &part_set.columns)
-    {
-        return Err(crate::grpc_wrapper::raw_errors::RawError::custom(
-            "column metadata mismatch between stream parts".to_string(),
-        ));
-    }
-    if columns.is_empty() {
-        *columns = part_set.columns;
-    }
-    rows.extend(part_set.rows);
-    Ok(())
-}
-
-fn columns_compatible(existing: &[RawColumn], new_cols: &[RawColumn]) -> bool {
+pub(super) fn columns_compatible(existing: &[RawColumn], new_cols: &[RawColumn]) -> bool {
     existing.len() == new_cols.len()
         && existing
             .iter()
