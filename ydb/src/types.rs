@@ -221,6 +221,7 @@ pub enum Value {
 
     Optional(Box<ValueOptional>),
     List(Box<ValueList>),
+    Set(Box<ValueSet>),
     Struct(ValueStruct),
 
     Decimal(YdbDecimal),
@@ -325,6 +326,26 @@ pub struct ValueList {
 impl Default for Box<ValueList> {
     fn default() -> Self {
         Box::new(ValueList {
+            t: Value::Bool(false),
+            values: Vec::default(),
+        })
+    }
+}
+
+/// Elements of a [`Value::Set`], with an example value describing their type.
+///
+/// YDB has no dedicated wire type for sets: `Set<T>` is transferred as
+/// `Dict<T, Void>`, so this encodes to a dict whose payloads are all `Void`.
+/// See the [YDB container types documentation](https://ydb.tech/docs/en/yql/reference/types/containers).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ValueSet {
+    pub(crate) t: Value,
+    pub(crate) values: Vec<Value>,
+}
+
+impl Default for Box<ValueSet> {
+    fn default() -> Self {
+        Box::new(ValueSet {
             t: Value::Bool(false),
             values: Vec::default(),
         })
@@ -490,6 +511,55 @@ impl Value {
         })))
     }
 
+    /// Create a `Set<T>` value from an example element and the set members.
+    ///
+    /// The example describes the element type and is used to build the query
+    /// type even when `values` is empty, exactly like [`Value::list_from`].
+    /// Every member must be the same `Value` variant as the example.
+    ///
+    /// YDB represents `Set<T>` as `Dict<T, Void>`, so this value is sent as a
+    /// dict whose payloads are all `Void`.
+    ///
+    /// Elements are sent in the order given. YDB requires the keys of a dict
+    /// to be unique, so passing duplicates makes the server reject the query;
+    /// de-duplicate before calling if the source may contain repeats.
+    ///
+    /// Example:
+    /// ```
+    ///  # use ydb::{Value, YdbResult};
+    ///  # fn example() -> YdbResult<()>{
+    ///  let v = Value::set_from(0.into(), vec![1.into(), 2.into(), 3.into()])?;
+    ///  # Ok(())
+    /// # }
+    /// ```
+    pub fn set_from(example_value: Value, values: Vec<Value>) -> YdbResult<Self> {
+        for (index, value) in values.iter().enumerate() {
+            if std::mem::discriminant(&example_value) != std::mem::discriminant(value) {
+                return Err(YdbError::Custom(format!(
+                    "failed set_from: type and value has different enum-types. index: {index}, type: '{example_value:?}', value: '{value:?}'"
+                )));
+            }
+        }
+
+        if let Value::Struct(example_value_struct) = &example_value {
+            for (i, value) in values.iter().enumerate() {
+                if let Value::Struct(value_struct) = &value
+                    && value_struct.fields_name != example_value_struct.fields_name
+                {
+                    return Err(YdbError::Custom(format!(
+                        "failed set_from: fields of value struct with index `{i}`: '{:?}' is not equal to fields of example value struct: '{:?}'",
+                        value_struct.fields_name, example_value_struct.fields_name
+                    )));
+                }
+            }
+        }
+
+        Ok(Value::Set(Box::new(ValueSet {
+            t: example_value,
+            values,
+        })))
+    }
+
     pub(crate) fn optional_from(t: Value, value: Option<Value>) -> YdbResult<Self> {
         if let Some(value) = &value
             && std::mem::discriminant(&t) != std::mem::discriminant(value)
@@ -630,6 +700,14 @@ impl Value {
 
         values.push(
             Value::list_from(
+                Value::Int8(0),
+                vec![Value::Int8(1), Value::Int8(2), Value::Int8(3)],
+            )
+            .unwrap(),
+        );
+
+        values.push(
+            Value::set_from(
                 Value::Int8(0),
                 vec![Value::Int8(1), Value::Int8(2), Value::Int8(3)],
             )

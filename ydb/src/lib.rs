@@ -228,7 +228,8 @@ pub use crate::{
     },
     pub_traits::{Credentials, TokenInfo},
     types::{
-        Bytes, Sign, SignedInterval, Value, ValueList, ValueOptional, ValueStruct, YdbDecimal,
+        Bytes, Sign, SignedInterval, Value, ValueList, ValueOptional, ValueSet, ValueStruct,
+        YdbDecimal,
     },
 };
 
