@@ -1,12 +1,12 @@
 use crate::RetrySettings;
 use crate::client_common::DBCredentials;
 use crate::client_coordination::client::CoordinationClient;
-use crate::client_lifetime::ClientLifetime;
 use crate::client_operation::OperationClient;
 use crate::client_query::QueryClient;
 use crate::client_scheme::client::SchemeClient;
 use crate::client_table::TableClient;
 use crate::discovery::Discovery;
+use crate::driver_lifecycle::DriverLifecycle;
 use crate::errors::YdbResult;
 use crate::load_balancer::SharedLoadBalancer;
 use crate::session_pool::SessionPool;
@@ -31,14 +31,12 @@ use tracing::{instrument, trace};
 /// high-concurrency workloads.
 pub struct Client {
     credentials: DBCredentials,
-    load_balancer: SharedLoadBalancer,
-    discovery: Arc<dyn Discovery>,
     connection_manager: GrpcConnectionManager,
     executor: Arc<dyn Executor>,
     session_pool: SessionPool,
     retry_settings: RetrySettings,
     metrics_names: MetricsNames,
-    lifetime: ClientLifetime,
+    lifecycle: DriverLifecycle,
 }
 
 impl Client {
@@ -63,21 +61,18 @@ impl Client {
             session_pool_settings,
         );
 
-        let client = Client {
+        Self::wait_until_ready(&credentials, &discovery, &load_balancer).await?;
+        session_pool.warm_up().await?;
+
+        Ok(Client {
             credentials,
-            load_balancer,
-            discovery,
             connection_manager,
             executor,
             session_pool,
             retry_settings,
             metrics_names,
-            lifetime: ClientLifetime::new(),
-        };
-        client.wait().await?;
-        client.session_pool.warm_up().await?;
-
-        Ok(client)
+            lifecycle: DriverLifecycle::new(),
+        })
     }
 
     /// Replace the driver-wide retry budget.
@@ -103,11 +98,12 @@ impl Client {
     /// shutdown reports their final counts if they remain.
     /// Shutdown must run while the Tokio runtime that created the driver is still alive.
     #[instrument(name = "ydb.Driver.Shutdown", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database), err)]
-    pub async fn shutdown(self) -> YdbResult<()> {
-        self.lifetime.close();
+    pub async fn shutdown(mut self) -> YdbResult<()> {
+        self.lifecycle.start_shutdown();
         self.session_pool.shutdown().await?;
+        self.lifecycle.complete_shutdown();
 
-        let live_resources = self.lifetime.live_resources();
+        let live_resources = self.lifecycle.live_resources();
         if live_resources.is_empty() {
             Ok(())
         } else {
@@ -131,7 +127,7 @@ impl Client {
             self.connection_manager.clone(),
             self.session_pool.clone(),
             self.retry_settings.clone(),
-            self.lifetime.clone(),
+            &self.lifecycle,
         )
     }
 
@@ -146,7 +142,7 @@ impl Client {
             self.session_pool.clone(),
             self.retry_settings.clone(),
             self.metrics_names.clone(),
-            self.lifetime.clone(),
+            &self.lifecycle,
         )
     }
 
@@ -156,7 +152,7 @@ impl Client {
         self.metrics_names
             .client_new_scheme_client_counter
             .increment(1);
-        SchemeClient::new(self.connection_manager.clone(), self.lifetime.clone())
+        SchemeClient::new(self.connection_manager.clone(), &self.lifecycle)
     }
 
     /// Create instance of client for topic service
@@ -169,14 +165,14 @@ impl Client {
             self.connection_manager.clone(),
             self.credentials.token_cache.clone(),
             self.executor.clone(),
-            self.lifetime.clone(),
+            &self.lifecycle,
         )
     }
 
     /// Create instance of client for coordination service
     #[instrument(name = "ydb.Driver.CoordinationClient", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database))]
     pub fn coordination_client(&self) -> CoordinationClient {
-        CoordinationClient::new(self.connection_manager.clone(), self.lifetime.clone())
+        CoordinationClient::new(self.connection_manager.clone(), &self.lifecycle)
     }
 
     /// Create instance of client for operation service (list/get/forget long-running operations).
@@ -185,7 +181,7 @@ impl Client {
         OperationClient::new(
             self.connection_manager.clone(),
             self.retry_settings.clone(),
-            self.lifetime.clone(),
+            &self.lifecycle,
         )
     }
 
@@ -193,15 +189,19 @@ impl Client {
     ///
     /// Wait all background process get first successfully result and client fully
     /// available to work.
-    #[instrument(name = "ydb.Driver.Initialize", skip_all, fields(db.system.name = "ydb", db.namespace = %self.credentials.database), err)]
-    async fn wait(&self) -> YdbResult<()> {
+    #[instrument(name = "ydb.Driver.Initialize", skip_all, fields(db.system.name = "ydb", db.namespace = %credentials.database), err)]
+    async fn wait_until_ready(
+        credentials: &DBCredentials,
+        discovery: &Arc<dyn Discovery>,
+        load_balancer: &SharedLoadBalancer,
+    ) -> YdbResult<()> {
         trace!("waiting_token");
-        self.credentials.token_cache.wait().await?;
+        credentials.token_cache.wait().await?;
         trace!("wait discovery");
-        self.discovery.wait().await?;
+        discovery.wait().await?;
 
         trace!("wait balancer");
-        self.load_balancer.wait().await?;
+        load_balancer.wait().await?;
         Ok(())
     }
 }

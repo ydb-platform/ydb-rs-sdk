@@ -1,5 +1,5 @@
 use crate::client::TimeoutSettings;
-use crate::client_lifetime::{ClientLifetime, ShutdownGuarded};
+use crate::driver_lifecycle::{DriverGuarded, DriverLifecycle};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_coordination_service::alter_node::RawAlterNodeRequest;
 use crate::grpc_wrapper::raw_coordination_service::config::RawCoordinationNodeConfig;
@@ -14,7 +14,7 @@ use super::list_types::{NodeConfig, NodeDescription};
 
 #[derive(Clone)]
 pub struct CoordinationClient {
-    inner: ShutdownGuarded<CoordinationClientInner>,
+    inner: DriverGuarded<CoordinationClientInner>,
 }
 
 #[derive(Clone)]
@@ -25,9 +25,12 @@ struct CoordinationClientInner {
 }
 
 impl CoordinationClient {
-    pub(crate) fn new(connection_manager: GrpcConnectionManager, lifetime: ClientLifetime) -> Self {
+    pub(crate) fn new(
+        connection_manager: GrpcConnectionManager,
+        lifecycle: &DriverLifecycle,
+    ) -> Self {
         Self {
-            inner: lifetime.guard(CoordinationClientInner {
+            inner: lifecycle.guard(CoordinationClientInner {
                 timeouts: TimeoutSettings::default(),
                 session_seq_no: 0,
                 connection_manager,

@@ -6,7 +6,7 @@ use futures_util::TryFutureExt;
 use tokio::time::timeout;
 
 use crate::client_metrics::names::MetricsNames;
-use crate::client_lifetime::{ClientLifetime, ShutdownGuarded};
+use crate::driver_lifecycle::{DriverGuarded, DriverLifecycle};
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
@@ -48,7 +48,7 @@ impl CallOptions {
 
 #[derive(Clone)]
 pub(crate) struct ClientExecContext {
-    inner: ShutdownGuarded<ClientExecContextInner>,
+    inner: DriverGuarded<ClientExecContextInner>,
 }
 
 #[derive(Clone)]
@@ -65,10 +65,10 @@ impl ClientExecContext {
         session_pool: SessionPool,
         retry_settings: RetrySettings,
         metrics_names: MetricsNames,
-        lifetime: ClientLifetime,
+        lifecycle: &DriverLifecycle,
     ) -> Self {
         Self {
-            inner: lifetime.guard(ClientExecContextInner {
+            inner: lifecycle.guard(ClientExecContextInner {
                 connection_manager,
                 session_pool,
                 retry_settings,

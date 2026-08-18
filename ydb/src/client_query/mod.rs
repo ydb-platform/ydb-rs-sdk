@@ -168,7 +168,7 @@ impl QueryClient {
         session_pool: SessionPool,
         retry_settings: RetrySettings,
         metrics_names: MetricsNames,
-        lifetime: crate::client_lifetime::ClientLifetime,
+        lifecycle: &crate::driver_lifecycle::DriverLifecycle,
     ) -> Self {
         Self {
             ctx: ClientExecContext::new(
@@ -176,7 +176,7 @@ impl QueryClient {
                 session_pool,
                 retry_settings,
                 metrics_names,
-                lifetime,
+                lifecycle,
             ),
         }
     }
@@ -586,7 +586,7 @@ mod unit_tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use crate::GrpcOptions;
-    use crate::client_lifetime::ClientLifetime;
+    use crate::driver_lifecycle::DriverLifecycle;
     use crate::errors::YdbStatusError;
     use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
     use crate::grpc_wrapper::raw_table_service::value::r#type::RawType;
@@ -599,6 +599,12 @@ mod unit_tests {
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
     use builders::{exactly_one_set, take_single_row};
+
+    fn test_driver_lifecycle() -> DriverLifecycle {
+        let mut lifecycle = DriverLifecycle::new();
+        lifecycle.complete_shutdown();
+        lifecycle
+    }
 
     struct AbortCounterHook(Arc<AtomicUsize>);
 
@@ -693,7 +699,7 @@ mod unit_tests {
             pool.clone(),
             RetrySettings::dont_retry(),
             MetricsNames::new(None),
-            ClientLifetime::new(),
+            &test_driver_lifecycle(),
         );
         let observed_pool = pool.clone();
 
@@ -719,7 +725,7 @@ mod unit_tests {
             pool,
             RetrySettings::dont_retry(),
             MetricsNames::new(None),
-            ClientLifetime::new(),
+            &test_driver_lifecycle(),
         );
         let callback_called = Arc::new(AtomicBool::new(false));
         let observed_called = callback_called.clone();
@@ -746,7 +752,7 @@ mod unit_tests {
             pool,
             RetrySettings::dont_retry(),
             MetricsNames::new(None),
-            ClientLifetime::new(),
+            &test_driver_lifecycle(),
         );
         let callback_called = Arc::new(AtomicBool::new(false));
 
@@ -786,7 +792,7 @@ mod unit_tests {
             pool,
             RetrySettings::with_default_backoff(),
             MetricsNames::new(None),
-            ClientLifetime::new(),
+            &test_driver_lifecycle(),
         );
         let callback_calls = Arc::new(AtomicUsize::new(0));
         let observed_calls = callback_calls.clone();

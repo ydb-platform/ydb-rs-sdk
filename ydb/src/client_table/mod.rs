@@ -3,7 +3,7 @@ pub(crate) mod call_options;
 
 use crate::RefWithLifetime;
 use crate::async_closure::AsyncFnMut;
-use crate::client_lifetime::{ClientLifetime, ShutdownGuarded};
+use crate::driver_lifecycle::{DriverGuarded, DriverLifecycle};
 use crate::retry_settings::{RetrySettings, RetryState};
 use crate::session::TableSession;
 use crate::session_pool::{SessionPool, TableSessionPool};
@@ -66,7 +66,7 @@ impl WithGrpcMaxMessageSize for TableServiceClientType {
 /// `table_client.read_rows(path, keys, None).timeout(Duration::from_secs(1)).idempotent(true).await`.
 #[derive(Clone)]
 pub struct TableClient {
-    session_pool: ShutdownGuarded<TableSessionPool>,
+    session_pool: DriverGuarded<TableSessionPool>,
 }
 
 impl TableClient {
@@ -74,10 +74,10 @@ impl TableClient {
         connection_manager: GrpcConnectionManager,
         session_pool: SessionPool,
         retry_settings: RetrySettings,
-        lifetime: ClientLifetime,
+        lifecycle: &DriverLifecycle,
     ) -> Self {
         Self {
-            session_pool: lifetime.guard(TableSessionPool::from_shared(
+            session_pool: lifecycle.guard(TableSessionPool::from_shared(
                 session_pool,
                 connection_manager,
                 retry_settings,

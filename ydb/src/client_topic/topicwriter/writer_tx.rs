@@ -5,12 +5,12 @@ use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 use tracing::instrument;
 
 use crate::YdbResult;
-use crate::client_lifetime::ClientResourceGuard;
 use crate::client_query::Transaction;
 use crate::client_query::hooks::{QueryTxCommitStatus, QueryTxHook};
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::writer::TopicWriter;
+use crate::driver_lifecycle::DriverResourceGuard;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use super::writer_tx_options::TopicWriterTxOptions;
@@ -49,7 +49,7 @@ impl TopicWriterTx {
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
         tx: &mut Transaction,
-        client_resource: ClientResourceGuard,
+        driver_resource: DriverResourceGuard,
     ) -> YdbResult<Self> {
         let (session_id, transaction_id) = tx.identity().await?;
 
@@ -67,7 +67,7 @@ impl TopicWriterTx {
             connection_manager,
             executor,
             tx_identity,
-            client_resource,
+            driver_resource,
         )
         .await?;
 

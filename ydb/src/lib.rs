@@ -39,7 +39,6 @@ pub(crate) mod client_common;
 pub(crate) mod client_coordination;
 #[cfg(test)]
 mod client_directory_test_integration;
-mod client_lifetime;
 pub(crate) mod client_operation;
 pub(crate) mod client_query;
 pub(crate) mod client_scheme;
@@ -50,6 +49,7 @@ pub(crate) mod client_topic;
 pub(crate) mod connection_pool;
 mod credentials;
 pub(crate) mod discovery;
+mod driver_lifecycle;
 mod errors;
 mod grpc;
 pub(crate) mod grpc_connection_manager;

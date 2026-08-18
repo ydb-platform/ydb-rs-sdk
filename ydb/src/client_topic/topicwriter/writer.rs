@@ -8,7 +8,6 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::{CancellationToken, DropGuard};
 use tracing::{instrument, trace};
 
-use crate::client_lifetime::ClientResourceGuard;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::message_write_status::{
@@ -16,6 +15,7 @@ use crate::client_topic::topicwriter::message_write_status::{
 };
 use crate::client_topic::topicwriter::reconnector::{Reconnector, ReconnectorParams};
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
+use crate::driver_lifecycle::DriverResourceGuard;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::{YdbError, YdbResult};
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
@@ -27,7 +27,7 @@ pub struct TopicWriter {
     wait_for_fatal_error_handle: JoinHandle<()>,
     reconnector: Reconnector,
     _cancel_on_drop: DropGuard,
-    _client_resource: ClientResourceGuard,
+    _driver_resource: DriverResourceGuard,
 }
 
 pub struct AckFuture {
@@ -52,14 +52,14 @@ impl TopicWriter {
         writer_options: TopicWriterOptions,
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
-        client_resource: ClientResourceGuard,
+        driver_resource: DriverResourceGuard,
     ) -> YdbResult<Self> {
         Self::new_inner(
             writer_options,
             connection_manager,
             executor,
             None,
-            client_resource,
+            driver_resource,
         )
         .await
     }
@@ -69,14 +69,14 @@ impl TopicWriter {
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
         tx_identity: TransactionIdentity,
-        client_resource: ClientResourceGuard,
+        driver_resource: DriverResourceGuard,
     ) -> YdbResult<Self> {
         Self::new_inner(
             writer_options,
             connection_manager,
             executor,
             Some(tx_identity),
-            client_resource,
+            driver_resource,
         )
         .await
     }
@@ -86,7 +86,7 @@ impl TopicWriter {
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
         tx_identity: Option<TransactionIdentity>,
-        client_resource: ClientResourceGuard,
+        driver_resource: DriverResourceGuard,
     ) -> YdbResult<Self> {
         let producer_id = writer_options
             .producer_id
@@ -130,7 +130,7 @@ impl TopicWriter {
             wait_for_fatal_error_handle,
             reconnector,
             _cancel_on_drop: cancel_on_drop,
-            _client_resource: client_resource,
+            _driver_resource: driver_resource,
         })
     }
 

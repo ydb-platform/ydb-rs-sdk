@@ -139,13 +139,19 @@ mod unit_tests {
     use super::*;
     use crate::GrpcOptions;
     use crate::client_metrics::names::MetricsNames;
-    use crate::client_lifetime::ClientLifetime;
+    use crate::driver_lifecycle::DriverLifecycle;
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
     use crate::retry_settings::RetrySettings;
     use crate::session_pool::{SessionPool, SessionPoolSettings};
     use http::Uri;
+
+    fn test_driver_lifecycle() -> DriverLifecycle {
+        let mut lifecycle = DriverLifecycle::new();
+        lifecycle.complete_shutdown();
+        lifecycle
+    }
 
     /// Context pointing at a closed port: every attempt fails with a retriable transport error,
     /// so the only thing that can end the retry loop is the deadline.
@@ -162,7 +168,7 @@ mod unit_tests {
             SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
             RetrySettings::with_default_backoff(),
             MetricsNames::new(None),
-            ClientLifetime::new(),
+            &test_driver_lifecycle(),
         )
     }
 

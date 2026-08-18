@@ -1,6 +1,6 @@
 use crate::client::TimeoutSettings;
-use crate::client_lifetime::{ClientLifetime, ShutdownGuarded};
 use crate::client_scheme::list_types::SchemeEntry;
+use crate::driver_lifecycle::{DriverGuarded, DriverLifecycle};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_scheme_client::client::{
     RawMakeDirectoryRequest, RawRemoveDirectoryRequest,
@@ -13,7 +13,7 @@ use tracing::instrument;
 
 #[derive(Clone)]
 pub struct SchemeClient {
-    inner: ShutdownGuarded<SchemeClientInner>,
+    inner: DriverGuarded<SchemeClientInner>,
 }
 
 #[derive(Clone)]
@@ -23,9 +23,12 @@ struct SchemeClientInner {
 }
 
 impl SchemeClient {
-    pub(crate) fn new(connection_manager: GrpcConnectionManager, lifetime: ClientLifetime) -> Self {
+    pub(crate) fn new(
+        connection_manager: GrpcConnectionManager,
+        lifecycle: &DriverLifecycle,
+    ) -> Self {
         Self {
-            inner: lifetime.guard(SchemeClientInner {
+            inner: lifecycle.guard(SchemeClientInner {
                 timeouts: TimeoutSettings::default(),
                 connection_manager,
             }),

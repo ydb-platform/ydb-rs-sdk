@@ -2,8 +2,8 @@ use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::RefWithLifetime;
 use crate::async_closure::AsyncFnMut;
-use crate::client_lifetime::{ClientLifetime, ShutdownGuarded};
 use crate::closure;
+use crate::driver_lifecycle::{DriverGuarded, DriverLifecycle};
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_operation_service::client::RawOperationClient;
@@ -19,7 +19,7 @@ use tracing::instrument;
 
 #[derive(Clone)]
 pub struct OperationClient {
-    inner: ShutdownGuarded<OperationClientInner>,
+    inner: DriverGuarded<OperationClientInner>,
 }
 
 #[derive(Clone)]
@@ -32,10 +32,10 @@ impl OperationClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
         retry_settings: RetrySettings,
-        lifetime: ClientLifetime,
+        lifecycle: &DriverLifecycle,
     ) -> Self {
         Self {
-            inner: lifetime.guard(OperationClientInner {
+            inner: lifecycle.guard(OperationClientInner {
                 connection_manager,
                 retry_settings,
             }),

@@ -4,7 +4,6 @@ use super::topicwriter::writer_tx_options::{TopicWriterTxOptions, TopicWriterTxO
 use crate::YdbError::InternalError;
 use crate::client::TimeoutSettings;
 use crate::client_common::TokenCache;
-use crate::client_lifetime::{ClientLifetime, ShutdownGuarded};
 use crate::client_query::Transaction;
 use crate::client_topic::list_types::{AlterConsumer, Consumer, MeteringMode};
 use crate::client_topic::topicreader::reader::{TopicReader, TopicSelectors};
@@ -12,6 +11,7 @@ use crate::client_topic::topicreader::reader_options::TopicReaderOptions;
 use crate::client_topic::topicwriter::writer::TopicWriter;
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
 use crate::client_topic::topicwriter::writer_tx::TopicWriterTx;
+use crate::driver_lifecycle::{DriverGuarded, DriverLifecycle};
 use crate::errors;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::alter_topic::RawAlterTopicRequest;
@@ -121,7 +121,7 @@ impl From<UninitializedFieldError> for errors::YdbError {
 
 #[derive(Clone)]
 pub struct TopicClient {
-    inner: ShutdownGuarded<TopicClientInner>,
+    inner: DriverGuarded<TopicClientInner>,
 }
 
 #[derive(Clone)]
@@ -137,10 +137,10 @@ impl TopicClient {
         connection_manager: GrpcConnectionManager,
         token_cache: TokenCache,
         executor: Arc<dyn Executor>,
-        lifetime: ClientLifetime,
+        lifecycle: &DriverLifecycle,
     ) -> Self {
         Self {
-            inner: lifetime.guard(TopicClientInner {
+            inner: lifecycle.guard(TopicClientInner {
                 timeouts: TimeoutSettings::default(),
                 connection_manager,
                 token_cache,

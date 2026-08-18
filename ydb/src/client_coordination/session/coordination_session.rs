@@ -13,7 +13,7 @@ use ydb_grpc::ydb_proto::coordination::{
     session_response::SessionStarted,
 };
 
-use crate::client_lifetime::ClientResourceGuard;
+use crate::driver_lifecycle::DriverResourceGuard;
 use crate::{
     AcquireOptions, AcquireOptionsBuilder, DescribeOptions, DescribeOptionsBuilder, SessionOptions,
     YdbError, YdbResult,
@@ -61,7 +61,7 @@ pub struct CoordinationSession {
     protection_key: Vec<u8>,
 
     connection_manager: GrpcConnectionManager,
-    _client_resource: ClientResourceGuard,
+    _driver_resource: DriverResourceGuard,
 }
 
 #[allow(dead_code)]
@@ -71,7 +71,7 @@ impl CoordinationSession {
         seq_no: u64,
         options: SessionOptions,
         connection_manager: GrpcConnectionManager,
-        client_resource: ClientResourceGuard,
+        driver_resource: DriverResourceGuard,
     ) -> YdbResult<Self> {
         let mut coordination_service = connection_manager
             .get_auth_service(
@@ -151,7 +151,7 @@ impl CoordinationSession {
             protection_key,
 
             connection_manager,
-            _client_resource: client_resource,
+            _driver_resource: driver_resource,
         })
     }
 
