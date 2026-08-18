@@ -130,7 +130,6 @@ impl DriverLifecycle {
 impl Drop for DriverLifecycle {
     fn drop(&mut self) {
         if !self.shutdown_completed {
-        if !self.shutdown_completed {
             self.state.start_shutdown();
             tracing::warn!(
                 "YDB driver dropped without completing graceful shutdown; call Client::shutdown().await before dropping it"
