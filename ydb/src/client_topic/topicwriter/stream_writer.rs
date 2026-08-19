@@ -13,7 +13,7 @@ use crate::client_topic::compression::{
 };
 use crate::client_topic::list_types::Codec;
 use crate::client_topic::topicwriter::message_write_status::WriteAck;
-use crate::client_topic::topicwriter::queue::Queue;
+use crate::client_topic::topicwriter::queue::WriterRuntime;
 use crate::client_topic::topicwriter::write_request::{
     PendingWriteRequest, TryAddMessage, WriteRequestSettings,
 };
@@ -36,7 +36,7 @@ impl StreamWriter {
             stream_write_message::FromClient,
             stream_write_message::FromServer,
         >,
-        queue: Queue,
+        queue: WriterRuntime,
         error_sender: oneshot::Sender<YdbError>,
         server_codecs: Vec<Codec>,
         executor: Arc<dyn Executor>,
@@ -100,7 +100,7 @@ impl StreamWriter {
     async fn write_messages_loop(
         cancellation_token: CancellationToken,
         error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
-        queue: Queue,
+        queue: WriterRuntime,
         batch_tx: mpsc::UnboundedSender<Vec<MessageData>>,
     ) {
         loop {
@@ -233,7 +233,7 @@ impl StreamWriter {
     async fn receive_messages_loop(
         cancellation_token: CancellationToken,
         error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
-        queue: Queue,
+        queue: WriterRuntime,
         mut stream: AsyncGrpcStreamWrapper<
             stream_write_message::FromClient,
             stream_write_message::FromServer,
@@ -265,7 +265,7 @@ impl StreamWriter {
     }
 
     async fn receive_messages_loop_iteration(
-        queue: &Queue,
+        queue: &WriterRuntime,
         server_messages_receiver: &mut AsyncGrpcStreamWrapper<
             stream_write_message::FromClient,
             stream_write_message::FromServer,

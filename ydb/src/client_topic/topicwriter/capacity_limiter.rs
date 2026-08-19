@@ -70,12 +70,7 @@ impl CapacityLimiter {
 
     pub(crate) async fn admit(&self, message: TopicWriterMessage) -> YdbResult<AdmittedMessage> {
         let charged_bytes = self.charged_bytes(message.data.len())?;
-        let capacity = self.acquire(charged_bytes).await?;
-        Ok(AdmittedMessage { message, capacity })
-    }
-
-    async fn acquire(&self, charged_bytes: u32) -> YdbResult<CapacityPermit> {
-        let message = self
+        let message_capacity = self
             .message_slots
             .clone()
             .acquire_owned()
@@ -84,16 +79,19 @@ impl CapacityLimiter {
 
         // A message larger than the entire buffer occupies all byte slots. This lets one
         // oversized message make progress while still applying backpressure to later writes.
-        let bytes = self
+        let byte_capacity = self
             .byte_slots
             .clone()
             .acquire_many_owned(charged_bytes)
             .await
             .map_err(|_| YdbError::custom("message queue is closed for new messages"))?;
 
-        Ok(CapacityPermit {
-            _message: message,
-            _bytes: bytes,
+        Ok(AdmittedMessage {
+            message,
+            capacity: CapacityPermit {
+                _message: message_capacity,
+                _bytes: byte_capacity,
+            },
         })
     }
 
