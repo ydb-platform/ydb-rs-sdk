@@ -9,4 +9,3 @@ pub(crate) mod reader_options;
 pub(crate) mod reader_tx;
 mod reconnector;
 mod runtime;
-mod task_supervisor;

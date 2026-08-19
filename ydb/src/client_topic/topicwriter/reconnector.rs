@@ -134,10 +134,7 @@ struct RecreateStreamWriterResult {
 }
 
 impl ReconnectionHelper {
-    async fn recreate_stream_writer(
-        &self,
-        error_sender: oneshot::Sender<YdbError>,
-    ) -> YdbResult<RecreateStreamWriterResult> {
+    async fn recreate_stream_writer(&self) -> YdbResult<RecreateStreamWriterResult> {
         self.runtime.reset_progress()?;
 
         let mut stream = self.connect().await?;
@@ -149,7 +146,6 @@ impl ReconnectionHelper {
                 self.writer_options.clone(),
                 stream,
                 self.runtime.clone(),
-                error_sender,
                 server_codecs,
                 self.executor.clone(),
                 self.write_request_settings.clone(),
@@ -222,7 +218,7 @@ struct ReconnectionLoop {
 enum ReconnectionLoopStatus {
     HandleError(YdbError),
     RecreateStreamWriter,
-    WaitForErrorOrCancellation(oneshot::Receiver<YdbError>),
+    WaitForErrorOrCancellation,
     Exit(Option<YdbError>),
 }
 
@@ -255,9 +251,9 @@ impl ReconnectionLoop {
                         )))
                 }
                 ReconnectionLoopStatus::RecreateStreamWriter => self.recreate_stream_writer().await,
-                ReconnectionLoopStatus::WaitForErrorOrCancellation(error_receiver) => {
+                ReconnectionLoopStatus::WaitForErrorOrCancellation => {
                     deadline = retry_settings.wait_deadline().boxed();
-                    self.wait_for_error_or_cancellation(error_receiver).await
+                    self.wait_for_error_or_cancellation().await
                 }
                 ReconnectionLoopStatus::Exit(err) => {
                     break err;
@@ -314,13 +310,11 @@ impl ReconnectionLoop {
             return ReconnectionLoopStatus::HandleError(err);
         }
 
-        let (error_sender, error_receiver) = oneshot::channel();
-
         if self.retry.is_none() {
             self.retry = Some(RetryState::init());
         }
 
-        match self.helper.recreate_stream_writer(error_sender).await {
+        match self.helper.recreate_stream_writer().await {
             Ok(swr) => {
                 self.stream_writer = Some(swr.stream_writer);
                 self.retry = None;
@@ -329,7 +323,7 @@ impl ReconnectionLoop {
                     let _ = tx.send(Ok(swr.connection_info));
                 }
 
-                ReconnectionLoopStatus::WaitForErrorOrCancellation(error_receiver)
+                ReconnectionLoopStatus::WaitForErrorOrCancellation
             }
             Err(err) => {
                 trace!("error creating stream writer: {err}");
@@ -339,17 +333,20 @@ impl ReconnectionLoop {
         }
     }
 
-    async fn wait_for_error_or_cancellation(
-        &mut self,
-        error_receiver: oneshot::Receiver<YdbError>,
-    ) -> ReconnectionLoopStatus {
+    async fn wait_for_error_or_cancellation(&mut self) -> ReconnectionLoopStatus {
+        let Some(stream_writer) = &mut self.stream_writer else {
+            return ReconnectionLoopStatus::Exit(Some(YdbError::custom(
+                "topic writer connection is missing while waiting for its result",
+            )));
+        };
+
         tokio::select! {
             _ = self.helper.cancellation_token.cancelled() => ReconnectionLoopStatus::Exit(None),
-            received_err = error_receiver => match received_err {
-                Ok(err) => {
-                    ReconnectionLoopStatus::HandleError(err)
-                },
-                Err(chan_err) => ReconnectionLoopStatus::Exit(Some(YdbError::custom(format!("error channel error: {chan_err}"))))
+            result = stream_writer.wait() => match result {
+                Ok(()) => ReconnectionLoopStatus::Exit(Some(YdbError::custom(
+                    "topic writer connection stopped without an error or cancellation",
+                ))),
+                Err(err) => ReconnectionLoopStatus::HandleError(err),
             },
         }
     }

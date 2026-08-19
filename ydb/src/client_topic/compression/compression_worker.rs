@@ -53,7 +53,12 @@ impl CompressionWorker {
         })
     }
 
-    pub(crate) fn spawn_into(self, tasks: &mut JoinSet<()>, mut rx: InputRx, tx: OutputTx) {
+    pub(crate) fn spawn_into(
+        self,
+        tasks: &mut JoinSet<YdbResult<()>>,
+        mut rx: InputRx,
+        tx: OutputTx,
+    ) {
         let CompressionWorker {
             mut codec_selector,
             codec_registry,
@@ -83,6 +88,7 @@ impl CompressionWorker {
                         .await;
                 }
             }
+            Ok(())
         });
 
         tasks.spawn(async move {
@@ -92,9 +98,10 @@ impl CompressionWorker {
                     .unwrap_or(Err(YdbError::custom("executor compression task panicked")));
 
                 if tx.send(result).is_err() {
-                    break;
+                    return Ok(());
                 }
             }
+            Ok(())
         });
     }
 }

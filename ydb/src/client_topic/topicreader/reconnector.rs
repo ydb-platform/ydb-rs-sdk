@@ -19,7 +19,7 @@ use super::decompressor::Decompressor;
 use super::grpc_streamer::GrpcStreamer;
 use super::reader_options::TopicReaderOptions;
 use super::runtime;
-use super::task_supervisor::wait_child_tasks;
+use crate::client_topic::task_supervisor::wait_child_tasks;
 
 pub(super) struct ConnectionAttempt {
     pub(super) manager: GrpcConnectionManager,
