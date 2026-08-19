@@ -112,10 +112,6 @@ impl MessageQueue {
         self.sent_messages.append(&mut self.messages);
         swap(&mut self.messages, &mut self.sent_messages);
     }
-
-    pub(crate) fn last_added_seq_no(&self) -> Option<i64> {
-        self.last_added_seq_no
-    }
 }
 
 #[cfg(test)]

@@ -105,9 +105,7 @@ impl Reconnector {
                 return Err(YdbError::from(err));
             }
         };
-        queue
-            .initialize_last_seq_no(connection_info.last_seq_no_assigned)
-            .await?;
+        queue.initialize_last_seq_no(connection_info.last_seq_no_assigned)?;
 
         Ok(Reconnector {
             cancellation_token: cancellation_token.clone(),
@@ -145,7 +143,7 @@ impl Reconnector {
     }
 
     pub(crate) async fn stop(self) -> YdbResult<()> {
-        self.queue.close_for_new_messages().await;
+        self.queue.close_for_new_messages()?;
         let flush_result = self.flush().await;
 
         self.cancellation_token.cancel();
@@ -204,7 +202,7 @@ impl ReconnectionHelper {
         &self,
         error_sender: oneshot::Sender<YdbError>,
     ) -> YdbResult<RecreateStreamWriterResult> {
-        self.queue.reset_progress().await;
+        self.queue.reset_progress()?;
 
         let mut stream = self.connect().await?;
         let init_response = ConnectionInfo::try_from(stream.receive::<RawServerMessage>().await?)?;
@@ -340,11 +338,18 @@ impl ReconnectionLoop {
 
         if let Some(final_error) = final_result {
             self.update_status(ReconnectorStatus::FinishedWithError(final_error.clone()));
-            self.helper.queue.close_for_new_messages().await;
-            self.helper
+            if let Err(err) = self.helper.queue.close_for_new_messages() {
+                error!("failed to close topic writer queue after terminal error: {err}");
+            }
+            if let Err(err) = self
+                .helper
                 .queue
                 .notify_reception_tickets(final_error.clone())
-                .await;
+            {
+                error!(
+                    "failed to notify topic writer acknowledgements after terminal error: {err}"
+                );
+            }
 
             if let Some(tx) = self.init_tx.take() {
                 let _ = tx.send(Err(final_error.clone()));

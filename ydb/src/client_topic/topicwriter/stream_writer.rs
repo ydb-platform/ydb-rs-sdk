@@ -106,7 +106,17 @@ impl StreamWriter {
         loop {
             tokio::select! {
                 _ = cancellation_token.cancelled() => { return; }
-                messages = queue.get_messages_to_send() => {
+                result = queue.get_messages_to_send() => {
+                    let messages = match result {
+                        Ok(messages) => messages,
+                        Err(err) => {
+                            warn!("error reading topic writer queue: {err}");
+                            if let Err(send_err) = StreamWriter::loop_iteration_error(cancellation_token, error_tx, err).await {
+                                warn!("can't send error from stream writer write_messages_loop: {send_err}");
+                            }
+                            break;
+                        }
+                    };
                     if messages.is_empty() {
                         continue;
                     }
@@ -271,7 +281,7 @@ impl StreamWriter {
                 RawServerMessage::Write(write_response_body) => {
                     for raw_ack in write_response_body.acks {
                         let write_ack = WriteAck::from(raw_ack);
-                        queue.acknowledge_message(write_ack).await?;
+                        queue.acknowledge_message(write_ack)?;
                     }
                 }
                 RawServerMessage::UpdateToken(_update_token_response_body) => {}
