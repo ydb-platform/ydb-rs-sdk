@@ -17,31 +17,31 @@ use crate::client_topic::topicwriter::reception_queue::{ReceptionQueue, Receptio
 use crate::client_topic::topicwriter::writer_options::{AutoFlushSettings, WriterFlowControl};
 use crate::{YdbError, YdbResult};
 
-const WRITER_RUNTIME_MUTEX_POISONED: &str = "topic writer runtime mutex poisoned";
+const WRITER_STATE_MUTEX_POISONED: &str = "topic writer state mutex poisoned";
 
 /// Shared logical writer state that outlives individual gRPC stream attempts.
 ///
 /// Reconnecting resets send progress but preserves the buffer. Terminal failure stores the error
 /// returned by every subsequent operation.
 #[derive(Clone)]
-pub(crate) struct WriterRuntime {
-    inner: Arc<RuntimeInner>,
+pub(crate) struct WriterState {
+    inner: Arc<WriterStateInner>,
 }
 
-struct RuntimeInner {
-    state: Mutex<RuntimeState>,
+struct WriterStateInner {
+    buffer_state: Mutex<WriterBufferState>,
     capacity_limiter: CapacityLimiter,
     auto_flush: AutoFlushSettings,
     new_message_added: Notify,
     flush_requested: Notify,
 }
 
-enum RuntimeState {
+enum WriterBufferState {
     Active(WriterBuffer),
     Failed(YdbError),
 }
 
-impl RuntimeState {
+impl WriterBufferState {
     fn buffer_mut(&mut self) -> YdbResult<&mut WriterBuffer> {
         match self {
             Self::Active(buffer) => Ok(buffer),
@@ -50,7 +50,7 @@ impl RuntimeState {
     }
 }
 
-impl WriterRuntime {
+impl WriterState {
     pub(crate) fn new_with_status_validator(
         status_validator: MessageWriteStatusValidator,
         auto_seq_no: bool,
@@ -58,8 +58,8 @@ impl WriterRuntime {
     ) -> YdbResult<Self> {
         let inflight = flow_control.inflight();
         Ok(Self {
-            inner: Arc::new(RuntimeInner {
-                state: Mutex::new(RuntimeState::Active(WriterBuffer::new(
+            inner: Arc::new(WriterStateInner {
+                buffer_state: Mutex::new(WriterBufferState::Active(WriterBuffer::new(
                     status_validator,
                     auto_seq_no,
                 ))),
@@ -71,15 +71,15 @@ impl WriterRuntime {
         })
     }
 
-    fn lock_state(&self) -> YdbResult<MutexGuard<'_, RuntimeState>> {
+    fn lock_buffer_state(&self) -> YdbResult<MutexGuard<'_, WriterBufferState>> {
         self.inner
-            .state
+            .buffer_state
             .lock()
-            .map_err(|_| YdbError::custom(WRITER_RUNTIME_MUTEX_POISONED))
+            .map_err(|_| YdbError::custom(WRITER_STATE_MUTEX_POISONED))
     }
 
     pub(crate) fn initialize_last_seq_no(&self, last_seq_no: i64) -> YdbResult<()> {
-        let mut state = self.lock_state()?;
+        let mut state = self.lock_buffer_state()?;
         let buffer = state.buffer_mut()?;
         if buffer.last_seq_no_assigned.is_some() {
             return Err(YdbError::custom(
@@ -100,17 +100,19 @@ impl WriterRuntime {
         tokio::pin!(admission);
         let (message, was_blocked) = match admission.as_mut().now_or_never() {
             Some(Ok(message)) => (message, false),
-            Some(Err(err)) => return Err(self.runtime_error_or(err)),
+            Some(Err(err)) => return Err(self.failure_or(err)),
             None => {
                 self.inner.flush_requested.notify_one();
                 match admission.await {
                     Ok(message) => (message, true),
-                    Err(err) => return Err(self.runtime_error_or(err)),
+                    Err(err) => return Err(self.failure_or(err)),
                 }
             }
         };
-        let mut state = self.lock_state()?;
-        state.buffer_mut()?.add_message(message, ack_sender)?;
+        {
+            let mut state = self.lock_buffer_state()?;
+            state.buffer_mut()?.add_message(message, ack_sender)?;
+        }
         self.inner.new_message_added.notify_one();
         if was_blocked {
             // Send this message while later capacity waiters are still blocked.
@@ -120,8 +122,9 @@ impl WriterRuntime {
     }
 
     pub(crate) fn acknowledge_message(&self, write_ack: WriteAck) -> YdbResult<()> {
-        let mut state = self.lock_state()?;
-        state.buffer_mut()?.acknowledge_message(write_ack)
+        self.lock_buffer_state()?
+            .buffer_mut()?
+            .acknowledge_message(write_ack)
     }
 
     fn append_message_to_send_buffer(
@@ -129,7 +132,7 @@ impl WriterRuntime {
         send_buffer: &mut Vec<MessageData>,
         send_buffer_bytes: &mut usize,
     ) -> YdbResult<AppendMessageToSendBufferResult> {
-        let mut state = self.lock_state()?;
+        let mut state = self.lock_buffer_state()?;
         Ok(state
             .buffer_mut()?
             .message_queue
@@ -165,12 +168,12 @@ impl WriterRuntime {
 
     pub(crate) fn fail(&self, error: YdbError) -> YdbResult<()> {
         {
-            let mut state = self.lock_state()?;
+            let mut state = self.lock_buffer_state()?;
             state
                 .buffer_mut()?
                 .reception_queue
                 .send_error_to_tickets_and_clear(error.clone());
-            *state = RuntimeState::Failed(error);
+            *state = WriterBufferState::Failed(error);
         }
         self.inner.capacity_limiter.close();
         self.inner.new_message_added.notify_waiters();
@@ -179,14 +182,16 @@ impl WriterRuntime {
     }
 
     pub(crate) fn reset_progress(&self) -> YdbResult<()> {
-        let mut state = self.lock_state()?;
-        state.buffer_mut()?.message_queue.reset_progress();
+        self.lock_buffer_state()?
+            .buffer_mut()?
+            .message_queue
+            .reset_progress();
         Ok(())
     }
 
     pub(crate) async fn flush(&self) -> YdbResult<()> {
         let flush_result_rx = {
-            let mut state = self.lock_state()?;
+            let mut state = self.lock_buffer_state()?;
             state.buffer_mut()?.reception_queue.init_flush()?
         };
         self.inner.flush_requested.notify_one();
@@ -194,13 +199,13 @@ impl WriterRuntime {
     }
 
     pub(crate) fn ensure_available(&self) -> YdbResult<()> {
-        match &*self.lock_state()? {
-            RuntimeState::Active(_) => Ok(()),
-            RuntimeState::Failed(err) => Err(err.clone()),
+        match &*self.lock_buffer_state()? {
+            WriterBufferState::Active(_) => Ok(()),
+            WriterBufferState::Failed(err) => Err(err.clone()),
         }
     }
 
-    fn runtime_error_or(&self, fallback: YdbError) -> YdbError {
+    fn failure_or(&self, fallback: YdbError) -> YdbError {
         match self.ensure_available() {
             Ok(()) => fallback,
             Err(err) => err,
@@ -214,7 +219,7 @@ const TEST_INFLIGHT_MESSAGES: usize = 1000;
 const TEST_INFLIGHT_BYTES: usize = 20 * crate::byte_units::MiB;
 
 #[cfg(test)]
-impl WriterRuntime {
+impl WriterState {
     fn new() -> Self {
         Self::with_flow_control(
             false,
@@ -354,7 +359,7 @@ mod tests {
 
     #[tokio::test]
     async fn capacity_is_held_until_acknowledgement() {
-        let q = WriterRuntime::with_flow_control(false, 2, 5, 1, 5, Duration::ZERO);
+        let q = WriterState::with_flow_control(false, 2, 5, 1, 5, Duration::ZERO);
         q.add_message(create_message(1, vec![0; 3]), None)
             .await
             .unwrap();
@@ -370,7 +375,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn capacity_waiter_flushes_partial_batches() {
-        let q = WriterRuntime::with_flow_control(false, 10, 10, 10, 10, Duration::from_secs(3600));
+        let q = WriterState::with_flow_control(false, 10, 10, 10, 10, Duration::from_secs(3600));
         q.add_message(create_message(1, vec![0; 7]), None)
             .await
             .unwrap();
@@ -398,7 +403,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn capacity_waiters_keep_flushing_partial_batches() {
-        let q = WriterRuntime::with_flow_control(false, 10, 10, 10, 10, Duration::from_secs(3600));
+        let q = WriterState::with_flow_control(false, 10, 10, 10, 10, Duration::from_secs(3600));
         q.add_message(create_message(1, vec![0; 10]), None)
             .await
             .unwrap();
@@ -435,7 +440,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_messages_to_send_flushes_at_byte_threshold() {
-        let q = WriterRuntime::with_flow_control(false, 10, 10, 10, 5, Duration::from_secs(3600));
+        let q = WriterState::with_flow_control(false, 10, 10, 10, 5, Duration::from_secs(3600));
         let q_collect = q.clone();
         let collect_handle =
             tokio::spawn(async move { q_collect.get_messages_to_send().await.unwrap() });
@@ -458,7 +463,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_messages_to_send_moves_batch_to_sent_and_can_ack() {
-        let q = Arc::new(WriterRuntime::new());
+        let q = Arc::new(WriterState::new());
 
         let q_collect = Arc::clone(&q);
         let collect_handle =
@@ -481,14 +486,14 @@ mod tests {
 
     #[tokio::test]
     async fn get_messages_to_send_empty_queue_times_out_empty() {
-        let q = WriterRuntime::new();
+        let q = WriterState::new();
         let msgs = q.get_messages_to_send().await.unwrap();
         assert!(msgs.is_empty());
     }
 
     #[tokio::test]
     async fn get_messages_to_send_drains_messages_added_before_call() {
-        let q = WriterRuntime::new();
+        let q = WriterState::new();
         q.add_message(create_message(1, vec![]), None)
             .await
             .unwrap();
@@ -505,7 +510,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_messages_to_send_with_zero_duration_drains_messages() {
-        let q = WriterRuntime::with_flow_control(
+        let q = WriterState::with_flow_control(
             false,
             TEST_INFLIGHT_MESSAGES,
             TEST_INFLIGHT_BYTES,
@@ -525,7 +530,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_messages_to_send_collects_messages_added_during_call() {
-        let q = Arc::new(WriterRuntime::new());
+        let q = Arc::new(WriterState::new());
         let q_collect = Arc::clone(&q);
         let collect_handle =
             tokio::spawn(async move { q_collect.get_messages_to_send().await.unwrap() });
@@ -540,7 +545,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_messages_to_send_respects_threshold() {
-        let q = Arc::new(WriterRuntime::with_flow_control(
+        let q = Arc::new(WriterState::with_flow_control(
             false,
             TEST_INFLIGHT_MESSAGES,
             TEST_INFLIGHT_BYTES,
@@ -569,7 +574,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_messages_to_send_second_call_drains_remaining() {
-        let q = Arc::new(WriterRuntime::with_flow_control(
+        let q = Arc::new(WriterState::with_flow_control(
             false,
             TEST_INFLIGHT_MESSAGES,
             TEST_INFLIGHT_BYTES,
@@ -600,7 +605,7 @@ mod tests {
 
     #[tokio::test]
     async fn acknowledge_message_returns_error_when_reception_ticket_not_present() {
-        let q = WriterRuntime::new();
+        let q = WriterState::new();
 
         let err = q.acknowledge_message(write_ack(8)).unwrap_err();
         let err_msg = err.to_string();
@@ -609,7 +614,7 @@ mod tests {
 
     #[tokio::test]
     async fn acknowledge_message_errors_when_seq_no_mismatches() {
-        let q = WriterRuntime::new();
+        let q = WriterState::new();
         q.add_message(create_message(1, vec![]), None)
             .await
             .unwrap();
@@ -625,7 +630,7 @@ mod tests {
 
     #[tokio::test]
     async fn reset_progress_restores_sent_messages_to_pending() {
-        let q = WriterRuntime::new();
+        let q = WriterState::new();
         q.add_message(create_message(1, vec![]), None)
             .await
             .unwrap();
@@ -645,7 +650,7 @@ mod tests {
 
     #[tokio::test]
     async fn flush_returns_status_validation_error_observed_before_flush() {
-        let q = WriterRuntime::new_with_status_validator(
+        let q = WriterState::new_with_status_validator(
             expect_transactional_write_status,
             false,
             writer_flow_control(
@@ -671,7 +676,7 @@ mod tests {
     #[tokio::test]
     async fn flush_returns_status_validation_error_observed_during_flush() {
         let q = Arc::new(
-            WriterRuntime::new_with_status_validator(
+            WriterState::new_with_status_validator(
                 expect_transactional_write_status,
                 false,
                 writer_flow_control(
@@ -705,7 +710,7 @@ mod tests {
 
     #[tokio::test]
     async fn flush_returns_error_when_reception_tickets_fail_during_wait() {
-        let q = Arc::new(WriterRuntime::new());
+        let q = Arc::new(WriterState::new());
         q.add_message(create_message(1, vec![]), None)
             .await
             .unwrap();
@@ -728,8 +733,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminal_failure_is_returned_by_all_runtime_operations() {
-        let q = WriterRuntime::new();
+    async fn terminal_failure_is_returned_by_all_operations() {
+        let q = WriterState::new();
         let (ack_tx, ack_rx) = oneshot::channel();
         q.add_message(create_message(1, vec![]), Some(ack_tx))
             .await
@@ -750,8 +755,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminal_failure_wakes_capacity_waiters_with_runtime_error() {
-        let q = WriterRuntime::with_flow_control(false, 1, 1, 1, 1, Duration::ZERO);
+    async fn terminal_failure_wakes_capacity_waiters_with_stored_error() {
+        let q = WriterState::with_flow_control(false, 1, 1, 1, 1, Duration::ZERO);
         q.add_message(create_message(1, vec![0]), None)
             .await
             .unwrap();

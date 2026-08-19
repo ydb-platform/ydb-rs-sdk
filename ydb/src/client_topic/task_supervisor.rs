@@ -1,4 +1,4 @@
-use tokio::task::JoinSet;
+use tokio::task::{JoinError, JoinSet};
 use tokio_util::sync::CancellationToken;
 
 use crate::errors::Idempotency;
@@ -41,26 +41,33 @@ pub(super) async fn wait_child_tasks(
 /// Policy: among multiple errors observed during task drain, prefer a fatal
 /// classification over a retriable one. This keeps real non-retriable root
 /// causes from being masked by sibling channel-close retry noise.
-fn select_error(
+pub(super) fn select_error<T>(
     selected_error: &mut Option<YdbError>,
-    joined: Result<YdbResult<()>, tokio::task::JoinError>,
+    joined: Result<YdbResult<T>, JoinError>,
     context: &'static str,
 ) {
     let Some(err) = task_error(joined, context) else {
         return;
     };
 
-    if selected_error.is_none() || !err.is_retriable(Idempotency::Idempotent) {
-        *selected_error = Some(err);
+    match selected_error {
+        Some(selected_error) => prefer_error(selected_error, err),
+        None => *selected_error = Some(err),
     }
 }
 
-fn task_error(
-    joined: Result<YdbResult<()>, tokio::task::JoinError>,
+fn prefer_error(selected_error: &mut YdbError, error: YdbError) {
+    if !error.is_retriable(Idempotency::Idempotent) {
+        *selected_error = error;
+    }
+}
+
+pub(super) fn task_error<T>(
+    joined: Result<YdbResult<T>, JoinError>,
     context: &'static str,
 ) -> Option<YdbError> {
     match joined {
-        Ok(Ok(())) => None,
+        Ok(Ok(_)) => None,
         Ok(Err(err)) => Some(err),
         Err(join_err) => Some(YdbError::custom(format!(
             "{context}: task failed: {join_err}"
@@ -90,6 +97,20 @@ mod tests {
 
         assert!(err.to_string().contains("root task error"));
         assert!(cancellation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn prefers_fatal_error_over_retriable_channel_error() {
+        let cancellation = CancellationToken::new();
+        let mut tasks = JoinSet::new();
+        tasks.spawn(async { Err(YdbError::Transport("dependent channel closed".to_string())) });
+        tasks.spawn(async { Err(YdbError::custom("root task error")) });
+
+        let error = wait_child_tasks(&cancellation, tasks, "test task set")
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("root task error"));
     }
 
     #[tokio::test]
