@@ -1,4 +1,3 @@
-#![recursion_limit = "256"]
 //! Query Service examples — implicit sessions (default), awaitable builders.
 
 use std::time::Duration;

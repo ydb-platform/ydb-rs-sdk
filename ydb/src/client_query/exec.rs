@@ -146,9 +146,11 @@ where
 }
 
 async fn query_client_from_tx(tx: &TransactionExecContext) -> YdbResult<RawQueryClient> {
-    tx.connection_manager
-        .get_auth_service_to_node(RawQueryClient::new, tx.session_lease()?.node_uri())
-        .await
+    Box::pin(
+        tx.connection_manager
+            .get_auth_service_to_node(RawQueryClient::new, tx.session_lease()?.node_uri()),
+    )
+    .await
 }
 
 fn tx_mode_to_raw(mode: TxMode) -> YdbResult<RawTxMode> {
@@ -324,13 +326,14 @@ async fn open_pooled_query_stream(
     concurrent_result_sets: bool,
 ) -> YdbResult<OpenedQueryStream> {
     let tx_control = tx_control_for_client(opts)?;
-    let lease = ctx.session_pool.acquire_explicit().await?;
+    let lease = Box::pin(ctx.session_pool.acquire_explicit()).await?;
     let result = async {
         lease.ensure_healthy()?;
-        let mut client = ctx
-            .connection_manager
-            .get_auth_service_to_node(RawQueryClient::new, lease.node_uri())
-            .await?;
+        let mut client = Box::pin(
+            ctx.connection_manager
+                .get_auth_service_to_node(RawQueryClient::new, lease.node_uri()),
+        )
+        .await?;
         let mut req = RawExecuteQueryRequest::new(
             lease.session_id(),
             text,
@@ -384,7 +387,7 @@ async fn ensure_tx_session(tx: &mut TransactionExecContext) -> YdbResult<()> {
         lease.ensure_healthy()?;
         return Ok(());
     }
-    let lease = tx.session_pool.acquire_explicit().await?;
+    let lease = Box::pin(tx.session_pool.acquire_explicit()).await?;
     tx.pooled_lease = Some(lease);
     Ok(())
 }

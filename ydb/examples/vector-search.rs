@@ -1,4 +1,3 @@
-#![recursion_limit = "256"]
 //! Vector search with YQL Knn UDFs — mirrors
 //! `ydb/public/sdk/python/examples/vector_search/vector_search.py`.
 
