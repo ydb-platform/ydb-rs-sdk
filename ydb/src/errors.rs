@@ -392,7 +392,10 @@ impl YdbError {
             }
             Self::YdbStatusError(status) => match StatusCode::try_from(status.operation_status) {
                 Ok(
-                    StatusCode::BadSession | StatusCode::SessionBusy | StatusCode::SessionExpired,
+                    StatusCode::BadSession
+                    | StatusCode::NotFound
+                    | StatusCode::SessionBusy
+                    | StatusCode::SessionExpired,
                 ) => true,
                 Ok(
                     StatusCode::Unspecified
@@ -408,7 +411,6 @@ impl YdbError {
                     | StatusCode::Timeout
                     | StatusCode::PreconditionFailed
                     | StatusCode::AlreadyExists
-                    | StatusCode::NotFound
                     | StatusCode::Cancelled
                     | StatusCode::Undetermined
                     | StatusCode::Unsupported
@@ -584,6 +586,7 @@ mod error_classification_tests {
     #[test]
     fn session_discard_is_separate_from_retry_classification() {
         assert!(ydb_status(StatusCode::BadSession).requires_session_discard());
+        assert!(ydb_status(StatusCode::NotFound).requires_session_discard());
         assert!(ydb_status(StatusCode::SessionBusy).requires_session_discard());
         assert!(ydb_status(StatusCode::SessionExpired).requires_session_discard());
         assert!(!ydb_status(StatusCode::PreconditionFailed).requires_session_discard());

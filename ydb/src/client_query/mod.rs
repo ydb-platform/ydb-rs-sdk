@@ -900,6 +900,19 @@ mod unit_tests {
     }
 
     #[tokio::test]
+    async fn failed_transaction_immediately_discards_missing_session() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let (_tx, session_id) = failed_transaction(&pool, StatusCode::NotFound).await;
+
+        let lease = pool
+            .acquire_explicit()
+            .await
+            .expect("acquire replacement session");
+        assert_ne!(lease.session_id(), session_id);
+        lease.return_to_pool();
+    }
+
+    #[tokio::test]
     async fn cancelled_query_notifies_hooks_once_before_transaction_drop() {
         let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
         let lease = pool.acquire_explicit().await.expect("acquire test session");
