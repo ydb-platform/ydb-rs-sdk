@@ -52,6 +52,7 @@ enum AckMode {
     WrittenInTx,
     Written { offset: i64 },
     SkippedAlreadyWritten,
+    Withheld,
 }
 
 struct AutoReplyHandler {
@@ -204,6 +205,7 @@ impl Handler for AutoReplyHandler {
                                     message.seq_no,
                                 )
                             }
+                            AckMode::Withheld => continue,
                         };
                         self.replies.send(Reply::Topic(reply));
                     }
@@ -261,6 +263,42 @@ async fn write_single_message_written_in_tx() -> YdbResult<()> {
             Ok(())
         }))
         .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn dropping_bound_writer_fails_commit_instead_of_hanging() -> YdbResult<()> {
+    let (handler, _, _, tx_lifecycle) = AutoReplyHandler::new(AckMode::Withheld);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let query_client = client.query_client();
+
+    let result = timeout(
+        Duration::from_secs(5),
+        query_client
+            .retry_tx(closure!([&client], async |tx: &mut Transaction| {
+                let mut writer = client.topic_client().create_writer(TOPIC_PATH).await?;
+                let writer_tx = writer.transactional(tx).await?;
+                writer_tx.write(test_message()).await?;
+                Ok(())
+            }))
+            .into_future(),
+    )
+    .await
+    .expect("transaction commit hung after its topic writer was dropped");
+
+    let error = result.expect_err("transaction commit must fail after its writer is dropped");
+    assert!(
+        error
+            .to_string()
+            .contains("topic writer was dropped before pending operations completed")
+    );
+
+    let tx_lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(tx_lifecycle.commit_count, 0);
+    assert_eq!(tx_lifecycle.rollback_count, 1);
 
     Ok(())
 }

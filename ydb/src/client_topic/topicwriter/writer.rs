@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tokio::sync::oneshot;
-use tokio_util::sync::{CancellationToken, DropGuard};
-use tracing::{instrument, trace};
+use tokio_util::sync::CancellationToken;
+use tracing::{error, instrument, trace};
 
 use crate::client_query::Transaction;
 use crate::client_topic::compression::Executor;
@@ -24,7 +24,44 @@ use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 pub struct TopicWriter {
     state: WriterState,
     reconnector: Reconnector,
-    _shutdown_on_drop: DropGuard,
+    shutdown_on_drop: WriterShutdownGuard,
+}
+
+struct WriterShutdownGuard {
+    state: WriterState,
+    shutdown_token: CancellationToken,
+    armed: bool,
+}
+
+impl WriterShutdownGuard {
+    fn new(state: WriterState, shutdown_token: CancellationToken) -> Self {
+        Self {
+            state,
+            shutdown_token,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for WriterShutdownGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+
+        let fail_result = self.state.fail(YdbError::custom(
+            "topic writer was dropped before pending operations completed",
+        ));
+        self.shutdown_token.cancel();
+
+        if let Err(error) = fail_result {
+            error!(%error, "failed to terminate topic writer state during drop");
+        }
+    }
 }
 
 pub struct AckFuture {
@@ -56,22 +93,22 @@ impl TopicWriter {
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         let shutdown_token = CancellationToken::new();
-        let shutdown_on_drop = shutdown_token.clone().drop_guard();
 
         let reconnector = Reconnector::new(ReconnectorParams {
             writer_options,
             producer_id,
             connection_manager,
-            shutdown_token,
+            shutdown_token: shutdown_token.clone(),
             executor,
         })
         .await?;
         let state = reconnector.state();
+        let shutdown_on_drop = WriterShutdownGuard::new(state.clone(), shutdown_token);
 
         Ok(Self {
             state,
             reconnector,
-            _shutdown_on_drop: shutdown_on_drop,
+            shutdown_on_drop,
         })
     }
 
@@ -137,7 +174,7 @@ impl TopicWriter {
     }
 
     #[instrument(name = "ydb.TopicWriter.Stop", skip_all, fields(db.system.name = "ydb"), err)]
-    pub async fn stop(self) -> YdbResult<()> {
+    pub async fn stop(mut self) -> YdbResult<()> {
         trace!("stopping...");
 
         self.reconnector.stop().await.map_err(|err| {
@@ -145,6 +182,7 @@ impl TopicWriter {
                 "stop: error while waiting for reconnector to finish: {err}"
             ))
         })?;
+        self.shutdown_on_drop.disarm();
 
         trace!("reconnection loop stopped");
 
