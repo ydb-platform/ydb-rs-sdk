@@ -10,7 +10,9 @@ use tokio_util::sync::CancellationToken;
 use slo_framework::topic_tx::PartitionId;
 use slo_framework::{Framework, Logger, Metrics, Workload, preserve_primary_error};
 
-use crate::storage::TopicTxStorage;
+use crate::storage::{
+    ERROR_COMMIT_PHASE_FAILURE, ERROR_OPERATIONAL_FAILURE, OPERATION_TRANSACTION, TopicTxStorage,
+};
 
 pub(super) struct TopicTxWorkload {
     metrics: Metrics,
@@ -72,6 +74,12 @@ impl Workload for TopicTxWorkload {
 pub(super) async fn new_workload(
     framework: Framework,
 ) -> std::result::Result<Box<dyn Workload>, String> {
+    framework
+        .metrics
+        .initialize_error_series(OPERATION_TRANSACTION, ERROR_COMMIT_PHASE_FAILURE);
+    framework
+        .metrics
+        .initialize_error_series(OPERATION_TRANSACTION, ERROR_OPERATIONAL_FAILURE);
     let params = slo_framework::topic_tx::parse_params(&framework);
     let storage = TopicTxStorage::connect(&framework, params)
         .await

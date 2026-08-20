@@ -142,6 +142,13 @@ impl Metrics {
         record_latency_series(&self.inner.topic_e2e_latency, latency, attrs_key);
     }
 
+    pub fn initialize_error_series(&self, operation_type: OperationType, error_name: &'static str) {
+        self.inner.errors_total.add(
+            0,
+            &error_attributes(&self.inner.ref_name, operation_type, error_name),
+        );
+    }
+
     pub(crate) fn check(&self) -> Result<(), String> {
         check_latency_series(&self.inner.operation_latency, "operation latency")?;
         check_latency_series(&self.inner.topic_e2e_latency, "topic end-to-end latency")
@@ -214,10 +221,10 @@ impl Span {
             if err_msg.contains("timeout") || err_msg.contains("deadline") {
                 self.metrics.inner.timeouts_total.add(1, &attrs);
             }
-            let mut error_attrs = attrs;
-            error_attrs.push(KeyValue::new("error_category", "ydb"));
-            error_attrs.push(KeyValue::new("error_name", err_msg.to_string()));
-            self.metrics.inner.errors_total.add(1, &error_attrs);
+            self.metrics.inner.errors_total.add(
+                1,
+                &error_attributes(&self.metrics.inner.ref_name, self.operation_type, err_msg),
+            );
         }
     }
 
@@ -256,9 +263,55 @@ fn attrs_from_key(key: &str) -> Vec<KeyValue> {
         .collect()
 }
 
+fn error_attributes(
+    ref_name: &str,
+    operation_type: OperationType,
+    error_name: &str,
+) -> Vec<KeyValue> {
+    vec![
+        KeyValue::new("ref", ref_name.to_string()),
+        KeyValue::new("operation_type", operation_type),
+        KeyValue::new("operation_status", STATUS_FAILURE),
+        KeyValue::new("error_category", "ydb"),
+        KeyValue::new("error_name", error_name.to_string()),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Weak};
+
+    use opentelemetry::Value;
+    use opentelemetry_sdk::metrics::data::{ResourceMetrics, Sum};
+    use opentelemetry_sdk::metrics::reader::MetricReader;
+    use opentelemetry_sdk::metrics::{InstrumentKind, ManualReader, MetricResult, Pipeline};
+
     use super::*;
+
+    #[derive(Clone, Debug)]
+    struct SharedReader(Arc<ManualReader>);
+
+    impl MetricReader for SharedReader {
+        fn register_pipeline(&self, pipeline: Weak<Pipeline>) {
+            self.0.register_pipeline(pipeline);
+        }
+
+        fn collect(&self, metrics: &mut ResourceMetrics) -> MetricResult<()> {
+            self.0.collect(metrics)
+        }
+
+        fn force_flush(&self) -> MetricResult<()> {
+            self.0.force_flush()
+        }
+
+        fn shutdown(&self) -> MetricResult<()> {
+            self.0.shutdown()
+        }
+
+        fn temporality(&self, kind: InstrumentKind) -> Temporality {
+            self.0.temporality(kind)
+        }
+    }
 
     #[test]
     fn otlp_metric_exporter_has_http_client() {
@@ -272,5 +325,49 @@ mod tests {
             "OTLP metrics exporter must build with reqwest HTTP client features: {}",
             exporter.err().map(|e| e.to_string()).unwrap_or_default()
         );
+    }
+
+    #[test]
+    fn zero_measurement_initializes_error_series() {
+        let reader = SharedReader(Arc::new(ManualReader::builder().build()));
+        let provider = SdkMeterProvider::builder()
+            .with_reader(reader.clone())
+            .build();
+        let counter = provider
+            .meter("test")
+            .u64_counter("sdk.errors.total")
+            .build();
+        counter.add(
+            0,
+            &error_attributes("test-ref", "transaction", "commit_phase_failure"),
+        );
+
+        let mut metrics = ResourceMetrics {
+            resource: Resource::empty(),
+            scope_metrics: Vec::new(),
+        };
+        reader.collect(&mut metrics).expect("collect metrics");
+
+        let errors = metrics
+            .scope_metrics
+            .iter()
+            .flat_map(|scope| &scope.metrics)
+            .find(|metric| metric.name == "sdk.errors.total")
+            .expect("error counter must be exported")
+            .data
+            .as_any()
+            .downcast_ref::<Sum<u64>>()
+            .expect("error counter must be an unsigned sum");
+        let initialized = errors.data_points.iter().any(|point| {
+            point.value == 0
+                && point.attributes.iter().any(|attribute| {
+                    attribute.key.as_str() == "error_name"
+                        && matches!(
+                            &attribute.value,
+                            Value::String(value) if value.as_str() == "commit_phase_failure"
+                        )
+                })
+        });
+        assert!(initialized, "zero-valued error series was not exported");
     }
 }

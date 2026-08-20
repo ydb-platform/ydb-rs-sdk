@@ -13,6 +13,10 @@ use slo_framework::{Framework, preserve_primary_error};
 
 pub(super) use transaction::PartitionWorker;
 
+pub(super) const OPERATION_TRANSACTION: &str = "transaction";
+pub(super) const ERROR_COMMIT_PHASE_FAILURE: &str = "commit_phase_failure";
+pub(super) const ERROR_OPERATIONAL_FAILURE: &str = "operational_failure";
+
 pub(super) struct TopicTxStorage {
     client: Client,
     topic_client: TopicClient,
