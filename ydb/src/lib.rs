@@ -29,15 +29,6 @@
 //!
 //! # More examples
 //! [Examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples)
-//!
-// This workaround solves compiler error
-// ```
-// error: queries overflow the depth limit!
-//   |
-//   = help: consider increasing the recursion limit by adding a `#![recursion_limit = "256"]` attribute to your crate ...
-// ```
-// because queue depth limit has changed since 1.94. See https://github.com/rust-lang/rust/issues/152942
-#![recursion_limit = "256"]
 
 extern crate core;
 

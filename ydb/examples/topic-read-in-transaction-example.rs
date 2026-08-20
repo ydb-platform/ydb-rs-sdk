@@ -1,4 +1,3 @@
-#![recursion_limit = "256"]
 /*!
 # Transactional Topic Reading Example
 

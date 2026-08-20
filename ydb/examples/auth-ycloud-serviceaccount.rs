@@ -1,4 +1,3 @@
-#![recursion_limit = "256"]
 use std::time::Duration;
 use std::{env, str::FromStr};
 use tokio::time::timeout;

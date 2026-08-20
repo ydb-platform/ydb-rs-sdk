@@ -1,4 +1,3 @@
-#![recursion_limit = "256"]
 //! `retry_tx` with `AsyncFnMut(&mut Transaction)` on implicit sessions.
 
 use std::time::Duration;

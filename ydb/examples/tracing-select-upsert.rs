@@ -1,4 +1,3 @@
-#![recursion_limit = "256"]
 use opentelemetry::KeyValue;
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_otlp::WithExportConfig;
