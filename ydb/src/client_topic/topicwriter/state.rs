@@ -75,26 +75,21 @@ impl WriterBufferState {
 
     fn user_buffer(
         &mut self,
-        requested_transaction: Option<&Arc<TransactionIdentity>>,
+        requested: Option<&Arc<TransactionIdentity>>,
     ) -> YdbResult<&mut WriterBuffer> {
-        match requested_transaction {
-            None => {
-                let buffer = self.buffer_mut()?;
-                match &buffer.transaction {
-                    None => Ok(buffer),
-                    Some(binding) => Err(ordinary_write_disabled_error(binding.identity())),
-                }
+        let buffer = self.buffer_mut()?;
+
+        match (requested, &buffer.transaction) {
+            (None, None) => Ok(buffer),
+            (None, Some(active)) => Err(ordinary_write_disabled_error(active.identity())),
+            (Some(requested), None) => Err(transaction_inactive_error(requested)),
+            (Some(requested), Some(active)) if !Arc::ptr_eq(active.identity(), requested) => {
+                Err(transaction_mismatch_error(active.identity(), requested))
             }
-            Some(requested) => {
-                let buffer = self.transaction_buffer(requested)?;
-                match &buffer.transaction {
-                    Some(TransactionBinding::Committing(_)) => {
-                        Err(transaction_committing_error(requested))
-                    }
-                    Some(TransactionBinding::Writing(_)) => Ok(buffer),
-                    None => Err(transaction_inactive_error(requested)),
-                }
+            (Some(requested), Some(TransactionBinding::Committing(_))) => {
+                Err(transaction_committing_error(requested))
             }
+            (Some(_), Some(TransactionBinding::Writing(_))) => Ok(buffer),
         }
     }
 
@@ -103,13 +98,15 @@ impl WriterBufferState {
         requested: &Arc<TransactionIdentity>,
     ) -> YdbResult<&mut WriterBuffer> {
         let buffer = self.buffer_mut()?;
-        match &buffer.transaction {
-            None => Err(transaction_inactive_error(requested)),
-            Some(active) if !Arc::ptr_eq(active.identity(), requested) => {
-                Err(transaction_mismatch_error(active.identity(), requested))
-            }
-            Some(_) => Ok(buffer),
+
+        let Some(active) = &buffer.transaction else {
+            return Err(transaction_inactive_error(requested));
+        };
+        if !Arc::ptr_eq(active.identity(), requested) {
+            return Err(transaction_mismatch_error(active.identity(), requested));
         }
+
+        Ok(buffer)
     }
 
     fn connection_buffer(&mut self, epoch: usize) -> YdbResult<&mut WriterBuffer> {
