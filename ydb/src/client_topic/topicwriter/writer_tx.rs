@@ -29,7 +29,7 @@ struct WriterTxHook {
 impl QueryTxHook for WriterTxHook {
     async fn before_commit(&mut self) -> YdbResult<()> {
         self.state
-            .flush_transaction(&self.transaction_identity)
+            .begin_commit_and_flush(&self.transaction_identity)
             .await
     }
 

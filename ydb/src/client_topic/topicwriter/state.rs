@@ -398,18 +398,7 @@ impl WriterState {
         Ok(())
     }
 
-    pub(crate) fn flush(&self) -> impl Future<Output = YdbResult<()>> + '_ {
-        self.flush_inner()
-    }
-
-    pub(crate) fn flush_transaction<'a>(
-        &'a self,
-        transaction: &'a Arc<TransactionIdentity>,
-    ) -> impl Future<Output = YdbResult<()>> + 'a {
-        self.flush_transaction_inner(transaction)
-    }
-
-    async fn flush_inner(&self) -> YdbResult<()> {
+    pub(crate) async fn flush(&self) -> YdbResult<()> {
         let flush_result_rx = {
             let mut state = self.lock_buffer_state()?;
             state.user_buffer(None)?.reception_queue.init_flush()?
@@ -418,7 +407,7 @@ impl WriterState {
         flush_result_rx.await.map_err(YdbError::from)?
     }
 
-    async fn flush_transaction_inner(
+    pub(crate) async fn begin_commit_and_flush(
         &self,
         transaction: &Arc<TransactionIdentity>,
     ) -> YdbResult<()> {
@@ -1025,12 +1014,12 @@ mod tests {
         q.acknowledge_message(q.epoch().unwrap(), write_ack(1))
             .unwrap_err();
 
-        assert!(q.flush_transaction(&transaction).await.is_err());
+        assert!(q.begin_commit_and_flush(&transaction).await.is_err());
     }
 
     #[tokio::test]
     async fn flush_returns_status_validation_error_observed_during_flush() {
-        let q = Arc::new(WriterState::for_test());
+        let q = WriterState::for_test();
         let transaction = transaction();
         q.bind_transaction(transaction.clone()).unwrap();
         q.add_transactional_message(create_message(1, vec![]), None, &transaction)
@@ -1039,41 +1028,32 @@ mod tests {
         let messages = q.get_messages_to_send(q.epoch().unwrap()).await.unwrap();
         assert_eq!(messages.messages.len(), 1);
 
-        let q_flush = Arc::clone(&q);
-        let flush_transaction = transaction.clone();
-        let flush_handle =
-            tokio::spawn(async move { q_flush.flush_transaction(&flush_transaction).await });
+        let mut flush = Box::pin(q.begin_commit_and_flush(&transaction));
+        assert!(flush.as_mut().now_or_never().is_none());
 
         q.acknowledge_message(q.epoch().unwrap(), write_ack(1))
             .unwrap_err();
 
-        assert!(
-            flush_handle
-                .await
-                .expect("flush task must complete")
-                .is_err()
-        );
+        assert!(flush.await.is_err());
     }
 
     #[tokio::test]
     async fn flush_returns_error_when_reception_tickets_fail_during_wait() {
-        let q = Arc::new(WriterState::for_test());
+        let q = WriterState::for_test();
         q.add_message(create_message(1, vec![]), None)
             .await
             .unwrap();
         let messages = q.get_messages_to_send(q.epoch().unwrap()).await.unwrap();
         assert_eq!(messages.messages.len(), 1);
 
-        let q_flush = Arc::clone(&q);
-        let flush_handle = tokio::spawn(async move { q_flush.flush().await });
-        tokio::task::yield_now().await;
+        let mut flush = Box::pin(q.flush());
+        assert!(flush.as_mut().now_or_never().is_none());
 
         q.fail(YdbError::custom("fatal writer error")).unwrap();
 
-        let result = timeout(Duration::from_millis(100), flush_handle)
+        let result = timeout(Duration::from_millis(100), flush)
             .await
-            .expect("flush must finish after reception tickets fail")
-            .expect("flush task must not panic");
+            .expect("flush must finish after reception tickets fail");
 
         let err = result.unwrap_err();
         assert!(err.to_string().contains("fatal writer error"));
@@ -1170,7 +1150,7 @@ mod tests {
         let transaction = transaction();
         q.bind_transaction(transaction.clone()).unwrap();
 
-        q.flush_transaction(&transaction).await.unwrap();
+        q.begin_commit_and_flush(&transaction).await.unwrap();
         let error = q
             .add_transactional_message(create_message(1, vec![]), None, &transaction)
             .await
@@ -1188,7 +1168,7 @@ mod tests {
         let stop_error = q.flush().await.unwrap_err();
         q.fail(stop_error).unwrap();
 
-        assert!(q.flush_transaction(&transaction).await.is_err());
+        assert!(q.begin_commit_and_flush(&transaction).await.is_err());
     }
 
     #[tokio::test]
@@ -1286,7 +1266,7 @@ mod tests {
             YdbError::Transport("stream failed".to_string()),
         )
         .unwrap();
-        assert!(q.flush_transaction(&transaction).await.is_err());
+        assert!(q.begin_commit_and_flush(&transaction).await.is_err());
         q.request_transaction_cleanup(
             &transaction,
             YdbError::custom("transaction attempt aborted"),
@@ -1324,7 +1304,7 @@ mod tests {
             },
         )
         .unwrap();
-        q.flush_transaction(&transaction).await.unwrap();
+        q.begin_commit_and_flush(&transaction).await.unwrap();
         let failed_epoch = q.epoch().unwrap();
 
         q.handle_connection_failure(
@@ -1429,7 +1409,7 @@ mod tests {
         let error = q.finish_committed_transaction(&transaction).unwrap_err();
         assert!(error.to_string().contains("before its commit flush"));
 
-        q.flush_transaction(&transaction).await.unwrap();
+        q.begin_commit_and_flush(&transaction).await.unwrap();
         q.finish_committed_transaction(&transaction).unwrap();
 
         q.add_message(create_message(1, vec![]), None)

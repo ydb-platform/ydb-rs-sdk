@@ -84,10 +84,10 @@ impl Reconnector {
 
     pub(crate) async fn stop(self) -> YdbResult<()> {
         let flush_result = self.state.flush().await;
-        let failure_result = flush_result
-            .as_ref()
-            .err()
-            .map(|error| self.state.fail(error.clone()));
+        let state_failure_result = match &flush_result {
+            Ok(()) => Ok(()),
+            Err(error) => self.state.fail(error.clone()),
+        };
 
         self.shutdown_token.cancel();
 
@@ -101,9 +101,7 @@ impl Reconnector {
             })
             .and_then(|result| result);
 
-        if let Some(result) = failure_result {
-            result?;
-        }
+        state_failure_result?;
         flush_result?;
         reconnection_result?;
         self.state.ensure_not_failed()

@@ -45,15 +45,7 @@ impl Future for AckFuture {
 }
 
 impl TopicWriter {
-    pub(crate) fn new(
-        writer_options: TopicWriterOptions,
-        connection_manager: GrpcConnectionManager,
-        executor: Arc<dyn Executor>,
-    ) -> impl Future<Output = YdbResult<Self>> {
-        Self::new_inner(writer_options, connection_manager, executor)
-    }
-
-    async fn new_inner(
+    pub(crate) async fn new(
         writer_options: TopicWriterOptions,
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
@@ -85,14 +77,7 @@ impl TopicWriter {
 
     #[instrument(name = "ydb.TopicWriter.Write", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn write(&self, message: TopicWriterMessage) -> YdbResult<()> {
-        self.write_inner(message).await
-    }
-
-    pub(super) fn write_inner(
-        &self,
-        message: TopicWriterMessage,
-    ) -> impl Future<Output = YdbResult<()>> + '_ {
-        self.state.add_message(message, None)
+        self.state.add_message(message, None).await
     }
 
     pub(super) fn write_transactional_inner<'a>(
