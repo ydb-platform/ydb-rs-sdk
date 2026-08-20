@@ -1,9 +1,13 @@
 mod mock_server;
 
+use std::future::{IntoFuture, pending};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::Notify;
+use tokio::time::timeout;
 use ydb::{
     Client, ClientBuilder, PartitioningStrategy, TopicWriterMessage, TopicWriterOptions,
-    Transaction, YdbResult, closure,
+    Transaction, YdbError, YdbResult, YdbResultWithCustomerErr, closure,
 };
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 use ydb_grpc::ydb_proto::topic::stream_write_message::InitRequest;
@@ -33,6 +37,7 @@ const PRODUCER_ID: &str = "tx-producer";
 type CapturedTxIdentity = Arc<Mutex<Option<TransactionIdentity>>>;
 type CapturedInitRequest = Arc<Mutex<Option<InitRequest>>>;
 type CapturedTxVec = Arc<Mutex<Vec<TransactionIdentity>>>;
+type CapturedOptionalTxVec = Arc<Mutex<Vec<Option<TransactionIdentity>>>>;
 type CapturedStreamId = Arc<Mutex<Option<u64>>>;
 type CapturedTxLifecycle = Arc<Mutex<TxLifecycle>>;
 
@@ -55,6 +60,68 @@ struct AutoReplyHandler {
     captured_tx_identity: CapturedTxIdentity,
     captured_init_request: CapturedInitRequest,
     tx_lifecycle: CapturedTxLifecycle,
+}
+
+struct ReusableWriterHandler {
+    replies: ReplySink,
+    captured_transactions: CapturedOptionalTxVec,
+    transaction_captured: Arc<Notify>,
+}
+
+impl ReusableWriterHandler {
+    fn new() -> (Self, CapturedOptionalTxVec, Arc<Notify>) {
+        let captured_transactions = Arc::new(Mutex::new(Vec::new()));
+        let transaction_captured = Arc::new(Notify::new());
+        (
+            Self {
+                replies: ReplySink::default(),
+                captured_transactions: captured_transactions.clone(),
+                transaction_captured: transaction_captured.clone(),
+            },
+            captured_transactions,
+            transaction_captured,
+        )
+    }
+}
+
+impl Handler for ReusableWriterHandler {
+    fn set_channel(&mut self, tx: FromHandlerToService) {
+        self.replies.set_channel(tx);
+    }
+
+    fn handle(&self, incoming: Incoming) -> Option<Incoming> {
+        if let Incoming::Topic(TopicIncoming::StreamWrite { stream_id, msg }) = &incoming {
+            let stream_id = *stream_id;
+            match msg {
+                WriteFromClient::InitRequest(_) => {
+                    self.replies
+                        .send(Reply::Topic(builders::write_init_response(
+                            stream_id,
+                            WRITE_SESSION_ID,
+                            PARTITION_ID,
+                        )));
+                }
+                WriteFromClient::WriteRequest(request) => {
+                    self.captured_transactions
+                        .lock()
+                        .unwrap()
+                        .push(request.tx.clone());
+                    if request.tx.is_some() {
+                        self.transaction_captured.notify_one();
+                    }
+                    let seq_no = request.messages.first().map_or(1, |message| message.seq_no);
+                    let reply = if request.tx.is_some() {
+                        builders::write_ack_written_in_tx(stream_id, seq_no)
+                    } else {
+                        builders::write_ack_written(stream_id, seq_no, REGULAR_WRITER_OFFSET)
+                    };
+                    self.replies.send(Reply::Topic(reply));
+                }
+                _ => {}
+            }
+        }
+        Some(incoming)
+    }
 }
 
 impl AutoReplyHandler {
@@ -200,6 +267,30 @@ async fn write_single_message_written_in_tx() -> YdbResult<()> {
 
 #[tokio::test]
 #[tracing_test::traced_test]
+async fn transaction_can_execute_query_while_writer_view_exists() -> YdbResult<()> {
+    let (handler, _, _, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let mut writer = client.topic_client().create_writer(TOPIC_PATH).await?;
+
+    client
+        .query_client()
+        .retry_tx(closure!([&mut writer], async |tx: &mut Transaction| {
+            let writer_tx = writer.transactional(tx).await?;
+            writer_tx.write(test_message()).await?;
+            tx.exec("SELECT 1").await?;
+            writer_tx
+                .write(TopicWriterMessage::new(b"after query".to_vec()))
+                .await?;
+            Ok(())
+        }))
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
 async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
     let (handler, _, _, tx_lifecycle) = AutoReplyHandler::new(AckMode::Written {
         offset: WRONG_ACK_OFFSET,
@@ -281,6 +372,79 @@ async fn regular_writer_sends_no_tx_identity() -> YdbResult<()> {
         identity.is_none(),
         "regular writer must not set WriteRequest.tx"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn cancelled_transaction_does_not_poison_or_replay_into_regular_writer() -> YdbResult<()> {
+    let (handler, captured_transactions, transaction_captured) = ReusableWriterHandler::new();
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let mut writer = client.topic_client().create_writer(TOPIC_PATH).await?;
+
+    let query_client = client.query_client();
+    let cancelled_attempt = query_client.retry_tx(closure!(
+        [&mut writer, &transaction_captured],
+        async |tx: &mut Transaction| {
+            let writer_tx = writer.transactional(tx).await?;
+            writer_tx.write(test_message()).await?;
+            timeout(Duration::from_secs(1), transaction_captured.notified())
+                .await
+                .map_err(|_| YdbError::Custom("transactional write was not observed".into()))?;
+            pending::<YdbResultWithCustomerErr<()>>().await
+        }
+    ));
+    assert!(
+        timeout(Duration::from_millis(100), cancelled_attempt.into_future(),)
+            .await
+            .is_err(),
+        "transaction attempt must be cancelled by the test deadline",
+    );
+
+    writer
+        .write_with_ack(TopicWriterMessage::new(
+            b"ordinary after cancellation".to_vec(),
+        ))
+        .await?;
+    writer.stop().await?;
+
+    let captured_transactions = captured_transactions.lock().unwrap();
+    assert_eq!(captured_transactions.len(), 2);
+    assert!(captured_transactions[0].is_some());
+    assert!(captured_transactions[1].is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn transaction_binding_flushes_ordinary_messages_first() -> YdbResult<()> {
+    let (handler, captured_transactions, _transaction_captured) = ReusableWriterHandler::new();
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let mut writer = client.topic_client().create_writer(TOPIC_PATH).await?;
+
+    writer
+        .write(TopicWriterMessage::new(
+            b"ordinary before transaction".to_vec(),
+        ))
+        .await?;
+    client
+        .query_client()
+        .retry_tx(closure!([&mut writer], async |tx: &mut Transaction| {
+            let writer_tx = writer.transactional(tx).await?;
+            writer_tx.write(test_message()).await?;
+            Ok(())
+        }))
+        .await?;
+    writer.stop().await?;
+
+    let captured_transactions = captured_transactions.lock().unwrap();
+    assert_eq!(captured_transactions.len(), 2);
+    assert!(captured_transactions[0].is_none());
+    assert!(captured_transactions[1].is_some());
 
     Ok(())
 }
