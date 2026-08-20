@@ -1,5 +1,6 @@
-use std::{collections::VecDeque, mem::swap};
+use std::{collections::VecDeque, mem::swap, sync::Arc};
 
+use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
 use crate::client_topic::topicwriter::capacity_limiter::CapacityPermit;
@@ -8,13 +9,19 @@ use crate::{YdbError, YdbResult};
 
 pub(crate) struct QueuedMessage {
     data: MessageData,
+    transaction: Option<Arc<TransactionIdentity>>,
     _capacity: CapacityPermit,
 }
 
 impl QueuedMessage {
-    pub(crate) fn new(data: MessageData, capacity: CapacityPermit) -> Self {
+    pub(crate) fn new(
+        data: MessageData,
+        transaction: Option<Arc<TransactionIdentity>>,
+        capacity: CapacityPermit,
+    ) -> Self {
         Self {
             data,
+            transaction,
             _capacity: capacity,
         }
     }
@@ -71,11 +78,19 @@ impl MessageQueue {
         &mut self,
         send_buffer: &mut Vec<MessageData>,
         send_buffer_bytes: &mut usize,
+        transaction: &mut Option<Arc<TransactionIdentity>>,
         settings: AutoFlushSettings,
     ) -> AppendMessageToSendBufferResult {
         let Some(message) = self.messages.pop_front() else {
             return AppendMessageToSendBufferResult::CouldNotGetMessage;
         };
+
+        if send_buffer.is_empty() {
+            // WriterState admits messages only for the buffer's current transaction binding, so
+            // every message collected into this batch has the same transaction identity.
+            *transaction = message.transaction.clone();
+        }
+
         *send_buffer_bytes += message.data.data.len();
         send_buffer.push(message.data.clone());
         self.sent_messages.push_back(message);
@@ -112,6 +127,10 @@ impl MessageQueue {
         self.sent_messages.append(&mut self.messages);
         swap(&mut self.messages, &mut self.sent_messages);
     }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.messages.is_empty() && self.sent_messages.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -133,11 +152,20 @@ mod tests {
         .unwrap();
         let capacity = limiter.try_acquire(data.len()).unwrap();
 
-        QueuedMessage::new(create_message_data(seq_no, data), capacity)
+        QueuedMessage::new(create_message_data(seq_no, data), None, capacity)
     }
 
     fn move_all_pending_to_sent(q: &mut MessageQueue) {
         q.sent_messages.append(&mut q.messages);
+    }
+
+    fn append_for_test(
+        queue: &mut MessageQueue,
+        buffer: &mut Vec<MessageData>,
+        buffer_bytes: &mut usize,
+        settings: AutoFlushSettings,
+    ) -> AppendMessageToSendBufferResult {
+        queue.append_message_to_send_buffer(buffer, buffer_bytes, &mut None, settings)
     }
 
     #[test]
@@ -193,7 +221,8 @@ mod tests {
 
         let mut buffer = Vec::new();
         let mut buffer_bytes = 0;
-        let result = q.append_message_to_send_buffer(
+        let result = append_for_test(
+            &mut q,
             &mut buffer,
             &mut buffer_bytes,
             auto_flush_settings(10, 10, Duration::ZERO),
@@ -218,7 +247,8 @@ mod tests {
         let mut buffer = Vec::new();
         let mut buffer_bytes = 0;
 
-        let result = q.append_message_to_send_buffer(
+        let result = append_for_test(
+            &mut q,
             &mut buffer,
             &mut buffer_bytes,
             auto_flush_settings(10, 10, Duration::ZERO),
@@ -240,7 +270,8 @@ mod tests {
         let mut buffer = Vec::new();
         let mut buffer_bytes = 0;
         assert!(matches!(
-            q.append_message_to_send_buffer(
+            append_for_test(
+                &mut q,
                 &mut buffer,
                 &mut buffer_bytes,
                 auto_flush_settings(2, 10, Duration::ZERO),
@@ -248,7 +279,8 @@ mod tests {
             AppendMessageToSendBufferResult::UnderThreshold
         ));
         assert!(matches!(
-            q.append_message_to_send_buffer(
+            append_for_test(
+                &mut q,
                 &mut buffer,
                 &mut buffer_bytes,
                 auto_flush_settings(2, 10, Duration::ZERO),
@@ -270,11 +302,11 @@ mod tests {
         let mut buffer_bytes = 0;
         let settings = auto_flush_settings(10, 5, Duration::ZERO);
         assert!(matches!(
-            q.append_message_to_send_buffer(&mut buffer, &mut buffer_bytes, settings),
+            append_for_test(&mut q, &mut buffer, &mut buffer_bytes, settings),
             AppendMessageToSendBufferResult::UnderThreshold
         ));
         assert!(matches!(
-            q.append_message_to_send_buffer(&mut buffer, &mut buffer_bytes, settings),
+            append_for_test(&mut q, &mut buffer, &mut buffer_bytes, settings),
             AppendMessageToSendBufferResult::Full
         ));
         assert_eq!(buffer.len(), 2);
@@ -291,11 +323,11 @@ mod tests {
         let mut buffer_bytes = 0;
         let settings = auto_flush_settings(10, 5, Duration::ZERO);
         assert!(matches!(
-            q.append_message_to_send_buffer(&mut buffer, &mut buffer_bytes, settings),
+            append_for_test(&mut q, &mut buffer, &mut buffer_bytes, settings),
             AppendMessageToSendBufferResult::UnderThreshold
         ));
         assert!(matches!(
-            q.append_message_to_send_buffer(&mut buffer, &mut buffer_bytes, settings),
+            append_for_test(&mut q, &mut buffer, &mut buffer_bytes, settings),
             AppendMessageToSendBufferResult::Full
         ));
         assert_eq!(buffer.len(), 2);

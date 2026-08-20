@@ -32,15 +32,16 @@ async fn topic_writer_tx_write_and_commit() -> YdbResult<()> {
         .await?;
 
     let messages = [b"first tx writer".to_vec(), b"second tx writer".to_vec()];
+    let mut writer = topic_client.create_writer(topic_path.clone()).await?;
 
     for message_data in &messages {
         client
             .query_client()
             .retry_tx(closure!(
-                [&mut topic_client, &topic_path, message_data],
+                [&mut writer, message_data],
                 async |tx: &mut Transaction| {
-                    let mut writer = topic_client.create_writer_tx(topic_path, tx).await?;
-                    writer
+                    let writer_tx = writer.transactional(tx).await?;
+                    writer_tx
                         .write(
                             TopicWriterMessage::builder()
                                 .data(message_data.clone())
@@ -52,6 +53,7 @@ async fn topic_writer_tx_write_and_commit() -> YdbResult<()> {
             ))
             .await?;
     }
+    writer.stop().await?;
 
     let mut reader = topic_client
         .create_reader(consumer_name, topic_path.clone())
@@ -102,24 +104,23 @@ async fn topic_writer_tx_rollback_discards_message() -> YdbResult<()> {
         )
         .await?;
 
+    let mut writer = topic_client.create_writer(topic_path.clone()).await?;
     client
         .query_client()
-        .retry_tx(closure!(
-            [&mut topic_client, &topic_path],
-            async |tx: &mut Transaction| {
-                let mut writer = topic_client.create_writer_tx(topic_path, tx).await?;
-                writer
-                    .write(
-                        TopicWriterMessage::builder()
-                            .data(b"should be discarded".to_vec())
-                            .build(),
-                    )
-                    .await?;
-                tx.rollback().await?;
-                Ok(())
-            }
-        ))
+        .retry_tx(closure!([&mut writer], async |tx: &mut Transaction| {
+            let writer_tx = writer.transactional(tx).await?;
+            writer_tx
+                .write(
+                    TopicWriterMessage::builder()
+                        .data(b"should be discarded".to_vec())
+                        .build(),
+                )
+                .await?;
+            tx.rollback().await?;
+            Ok(())
+        }))
         .await?;
+    writer.stop().await?;
 
     let mut reader = topic_client
         .create_reader(consumer_name, topic_path.clone())

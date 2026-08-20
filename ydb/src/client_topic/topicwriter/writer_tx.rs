@@ -2,82 +2,91 @@ use std::sync::Arc;
 
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
-use tracing::instrument;
-
-use crate::YdbResult;
 use crate::client_query::Transaction;
 use crate::client_query::hooks::{QueryTxCommitStatus, QueryTxHook};
-use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
+use crate::client_topic::topicwriter::state::WriterState;
 use crate::client_topic::topicwriter::writer::TopicWriter;
-use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::{YdbError, YdbResult};
+use tracing::{error, instrument};
 
-use super::writer_tx_options::TopicWriterTxOptions;
-
-/// A topic writer bound to an active YDB transaction.
+/// A temporary transactional view of an existing topic writer.
 ///
-/// Messages written through this writer are attached to the transaction and become visible
-/// only after the transaction is committed.
-pub struct TopicWriterTx {
-    inner: Arc<TopicWriter>,
+/// Messages written through this wrapper belong to the query transaction and become visible only
+/// after it commits. Ordinary writes through the underlying writer remain disabled until the
+/// transaction finishes.
+pub struct TopicWriterTx<'writer> {
+    writer: &'writer mut TopicWriter,
+    transaction_identity: Arc<TransactionIdentity>,
 }
 
 struct WriterTxHook {
-    writer: Arc<TopicWriter>,
-}
-
-impl WriterTxHook {
-    #[instrument(name = "ydb.TopicWriterTx.Flush", skip_all, fields(db.system.name = "ydb"), err)]
-    async fn flush(&self) -> YdbResult<()> {
-        self.writer.flush_inner().await
-    }
+    state: WriterState,
+    transaction_identity: Arc<TransactionIdentity>,
 }
 
 #[async_trait::async_trait]
 impl QueryTxHook for WriterTxHook {
     async fn before_commit(&mut self) -> YdbResult<()> {
-        self.flush().await
+        self.state
+            .flush_transaction(&self.transaction_identity)
+            .await
     }
 
-    fn after_commit(&mut self, _status: QueryTxCommitStatus) {}
-}
-
-impl TopicWriterTx {
-    pub(crate) async fn new(
-        options: TopicWriterTxOptions,
-        connection_manager: GrpcConnectionManager,
-        executor: Arc<dyn Executor>,
-        tx: &mut Transaction,
-    ) -> YdbResult<Self> {
-        let (session_id, transaction_id) = tx.identity().await?;
-
-        let tx_identity = TransactionIdentity {
-            id: transaction_id,
-            session: session_id,
+    fn after_commit(&mut self, status: QueryTxCommitStatus) {
+        let result = match status {
+            QueryTxCommitStatus::Committed => self
+                .state
+                .finish_committed_transaction(&self.transaction_identity),
+            QueryTxCommitStatus::Aborted => self.state.request_transaction_cleanup(
+                &self.transaction_identity,
+                YdbError::custom(format!(
+                    "query transaction was aborted: transaction_id={}",
+                    self.transaction_identity.id,
+                )),
+            ),
         };
 
-        // All validation and configuration, specific for `TopicWriterTx` should be done in
-        // options construction and conversion.
-        let options = options.into_non_tx_options();
+        if let Err(error) = result {
+            error!(
+                transaction_id = %self.transaction_identity.id,
+                %error,
+                "failed to finish topic writer transaction binding",
+            );
+        }
+    }
+}
 
-        let writer =
-            TopicWriter::with_tx_identity(options, connection_manager, executor, tx_identity)
-                .await?;
+impl<'writer> TopicWriterTx<'writer> {
+    pub(super) async fn new(
+        writer: &'writer mut TopicWriter,
+        tx: &mut Transaction,
+    ) -> YdbResult<Self> {
+        writer.flush_inner().await?;
 
-        let inner = Arc::new(writer);
+        let (session, id) = tx.identity().await?;
+        let transaction_identity = Arc::new(TransactionIdentity { id, session });
+        let state = writer.state();
         tx.register_hook(WriterTxHook {
-            writer: inner.clone(),
+            state: state.clone(),
+            transaction_identity: transaction_identity.clone(),
         })?;
+        state.bind_transaction(transaction_identity.clone())?;
 
-        Ok(Self { inner })
+        Ok(Self {
+            writer,
+            transaction_identity,
+        })
     }
 
     /// Enqueues a message for transactional write.
     ///
-    /// No topic offset is returned. Transactional topic writes are published, and receive
-    /// their final offsets, only when the transaction commits.
+    /// No topic offset is returned. Transactional topic writes are published, and receive their
+    /// final offsets, only when the transaction commits.
     #[instrument(name = "ydb.TopicWriterTx.Write", skip_all, fields(db.system.name = "ydb"), err)]
-    pub async fn write(&mut self, message: TopicWriterMessage) -> YdbResult<()> {
-        self.inner.write_inner(message).await
+    pub async fn write(&self, message: TopicWriterMessage) -> YdbResult<()> {
+        self.writer
+            .write_transactional_inner(message, &self.transaction_identity)
+            .await
     }
 }

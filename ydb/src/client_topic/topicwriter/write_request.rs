@@ -1,4 +1,5 @@
 use prost::Message;
+use std::sync::Arc;
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
@@ -18,15 +19,11 @@ const LENGTH_DELIMITED_FIELD_KEY_SIZE: usize = 1;
 
 #[derive(Clone)]
 pub(super) struct WriteRequestSettings {
-    tx_identity: Option<TransactionIdentity>,
     max_write_request_size: usize,
 }
 
 impl WriteRequestSettings {
-    pub(super) fn new(
-        tx_identity: Option<TransactionIdentity>,
-        grpc_max_message_size: usize,
-    ) -> YdbResult<Self> {
+    pub(super) fn new(grpc_max_message_size: usize) -> YdbResult<Self> {
         let Some(max_write_request_size) = grpc_max_message_size
             .checked_sub(WRITE_REQUEST_SIZE_RESERVE_BYTES)
             .filter(|size| *size > 0)
@@ -37,7 +34,6 @@ impl WriteRequestSettings {
         };
 
         Ok(Self {
-            tx_identity,
             max_write_request_size,
         })
     }
@@ -59,11 +55,12 @@ impl PendingWriteRequest {
         settings: &WriteRequestSettings,
         codec: Codec,
         first_message: MessageData,
+        transaction: Option<Arc<TransactionIdentity>>,
     ) -> YdbResult<Self> {
         let mut request = WriteRequest {
             messages: Vec::with_capacity(1),
             codec: codec.code,
-            tx: settings.tx_identity.clone(),
+            tx: transaction.map(|identity| identity.as_ref().clone()),
         };
         let base_encoded_len = request.encoded_len();
         let message_encoded_len = length_delimited_field_encoded_len(first_message.encoded_len());
@@ -142,11 +139,8 @@ mod tests {
     }
 
     fn settings(max_write_request_size: usize) -> WriteRequestSettings {
-        WriteRequestSettings::new(
-            None,
-            WRITE_REQUEST_SIZE_RESERVE_BYTES + max_write_request_size,
-        )
-        .unwrap()
+        WriteRequestSettings::new(WRITE_REQUEST_SIZE_RESERVE_BYTES + max_write_request_size)
+            .unwrap()
     }
 
     fn encoded_request_size(messages: Vec<MessageData>) -> usize {
@@ -162,7 +156,7 @@ mod tests {
 
     #[test]
     fn rejects_grpc_limit_without_write_request_capacity() {
-        let result = WriteRequestSettings::new(None, WRITE_REQUEST_SIZE_RESERVE_BYTES);
+        let result = WriteRequestSettings::new(WRITE_REQUEST_SIZE_RESERVE_BYTES);
 
         assert!(result.is_err());
     }
@@ -173,7 +167,7 @@ mod tests {
         let encoded_size = encoded_request_size(vec![message.clone()]);
         let limit = encoded_size - 1;
 
-        let result = PendingWriteRequest::new(&settings(limit), Codec::RAW, message);
+        let result = PendingWriteRequest::new(&settings(limit), Codec::RAW, message, None);
 
         assert!(result.is_err());
     }
@@ -184,7 +178,7 @@ mod tests {
         let second = message(2, 8);
         let one_message_size = encoded_request_size(vec![first.clone()]);
         let mut pending =
-            PendingWriteRequest::new(&settings(one_message_size), Codec::RAW, first).unwrap();
+            PendingWriteRequest::new(&settings(one_message_size), Codec::RAW, first, None).unwrap();
 
         let result = pending.try_add(second);
 
@@ -202,10 +196,14 @@ mod tests {
             id: "transaction".to_string(),
             session: "session".to_string(),
         };
-        let settings =
-            WriteRequestSettings::new(Some(tx_identity), WRITE_REQUEST_SIZE_RESERVE_BYTES + 1024)
-                .unwrap();
-        let mut pending = PendingWriteRequest::new(&settings, Codec::GZIP, message(1, 8)).unwrap();
+        let settings = WriteRequestSettings::new(WRITE_REQUEST_SIZE_RESERVE_BYTES + 1024).unwrap();
+        let mut pending = PendingWriteRequest::new(
+            &settings,
+            Codec::GZIP,
+            message(1, 8),
+            Some(Arc::new(tx_identity)),
+        )
+        .unwrap();
         assert!(matches!(
             pending.try_add(message(2, 16)),
             TryAddMessage::Added
@@ -220,7 +218,8 @@ mod tests {
     #[test]
     fn finalization_rejects_request_above_limit() {
         let settings = settings(1024);
-        let mut pending = PendingWriteRequest::new(&settings, Codec::RAW, message(1, 8)).unwrap();
+        let mut pending =
+            PendingWriteRequest::new(&settings, Codec::RAW, message(1, 8), None).unwrap();
         let encoded_size = length_delimited_field_encoded_len(pending.write_request_encoded_len);
         let limit = encoded_size - 1;
         pending.max_write_request_size = limit;

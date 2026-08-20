@@ -12,7 +12,7 @@ pub(crate) const OUTPUT_BACKLOG_PER_TASK: std::num::NonZeroUsize =
 pub(crate) use codec_registry::CodecRegistry;
 pub use codec_registry::{CompressionDecoder, CompressionEncoder};
 pub use codec_selector::CodecSelection;
-pub(crate) use compression_worker::{CompressedChunk, CompressionWorker};
+pub(crate) use compression_worker::{CompressedChunk, CompressionBatch, CompressionWorker};
 pub use executor::Executor;
 pub(crate) use executor::default_executor;
 pub(crate) use ordered_task_queue::{OrderedTaskQueue, TaskResultRx};

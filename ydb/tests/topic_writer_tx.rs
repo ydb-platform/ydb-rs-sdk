@@ -2,16 +2,20 @@ mod mock_server;
 
 use std::sync::{Arc, Mutex};
 use ydb::{
-    Client, ClientBuilder, PartitioningStrategy, TopicWriterMessage, TopicWriterTxOptionsBuilder,
+    Client, ClientBuilder, PartitioningStrategy, TopicWriterMessage, TopicWriterOptions,
     Transaction, YdbResult, closure,
 };
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 use ydb_grpc::ydb_proto::topic::stream_write_message::InitRequest;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage as WriteFromClient;
 use ydb_grpc::ydb_proto::topic::stream_write_message::init_request::Partitioning;
+use ydb_grpc::ydb_proto::{
+    query::{ExecuteQueryResponsePart, TransactionMeta},
+    status_ids::StatusCode,
+};
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply, ReplySink};
-use crate::mock_server::query::QueryIncoming;
+use crate::mock_server::query::{QueryIncoming, QueryReply};
 use crate::mock_server::server::MockServer;
 use crate::mock_server::topic::{TopicIncoming, builders};
 
@@ -84,6 +88,27 @@ impl Handler for AutoReplyHandler {
     fn handle(&self, incoming: Incoming) -> Option<Incoming> {
         record_tx_lifecycle(&incoming, &self.tx_lifecycle);
 
+        if let Incoming::Query(QueryIncoming::ExecuteQuery(_, stream_id)) = &incoming {
+            self.replies.send(Reply::Query(QueryReply::ExecuteQuery {
+                stream_id: *stream_id,
+                part: ExecuteQueryResponsePart {
+                    status: StatusCode::Success as i32,
+                    issues: Vec::new(),
+                    result_set_index: 0,
+                    result_set: None,
+                    exec_stats: None,
+                    tx_meta: Some(TransactionMeta {
+                        id: TX_ID.to_string(),
+                    }),
+                },
+            }));
+            self.replies
+                .send(Reply::Query(QueryReply::ExecuteQueryClose {
+                    stream_id: *stream_id,
+                }));
+            return None;
+        }
+
         if let Incoming::Topic(TopicIncoming::StreamWrite { stream_id, msg }) = &incoming {
             let stream_id = *stream_id;
             match msg {
@@ -98,19 +123,23 @@ impl Handler for AutoReplyHandler {
                 }
                 WriteFromClient::WriteRequest(req) => {
                     *self.captured_tx_identity.lock().unwrap() = req.tx.clone();
-                    let seq_no = req.messages.first().map(|m| m.seq_no).unwrap_or(1);
-                    let reply = match self.ack_mode {
-                        AckMode::WrittenInTx => {
-                            builders::write_ack_written_in_tx(stream_id, seq_no)
-                        }
-                        AckMode::Written { offset } => {
-                            builders::write_ack_written(stream_id, seq_no, offset)
-                        }
-                        AckMode::SkippedAlreadyWritten => {
-                            builders::write_ack_skipped_already_written(stream_id, seq_no)
-                        }
-                    };
-                    self.replies.send(Reply::Topic(reply));
+                    for message in &req.messages {
+                        let reply = match self.ack_mode {
+                            AckMode::WrittenInTx => {
+                                builders::write_ack_written_in_tx(stream_id, message.seq_no)
+                            }
+                            AckMode::Written { offset } => {
+                                builders::write_ack_written(stream_id, message.seq_no, offset)
+                            }
+                            AckMode::SkippedAlreadyWritten => {
+                                builders::write_ack_skipped_already_written(
+                                    stream_id,
+                                    message.seq_no,
+                                )
+                            }
+                        };
+                        self.replies.send(Reply::Topic(reply));
+                    }
                 }
                 _ => {}
             }
@@ -155,15 +184,13 @@ async fn write_single_message_written_in_tx() -> YdbResult<()> {
     let (handler, _, _, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
+    let mut writer = client.topic_client().create_writer(TOPIC_PATH).await?;
 
     client
         .query_client()
-        .retry_tx(closure!([&client], async |tx: &mut Transaction| {
-            let mut writer = client
-                .topic_client()
-                .create_writer_tx(TOPIC_PATH.to_string(), tx)
-                .await?;
-            writer.write(test_message()).await?;
+        .retry_tx(closure!([&mut writer], async |tx: &mut Transaction| {
+            let writer_tx = writer.transactional(tx).await?;
+            writer_tx.write(test_message()).await?;
             Ok(())
         }))
         .await?;
@@ -179,16 +206,13 @@ async fn write_wrong_ack_status_returns_error() -> YdbResult<()> {
     });
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
+    let mut writer = client.topic_client().create_writer(TOPIC_PATH).await?;
 
     let result = client
         .query_client()
-        .retry_tx(closure!([&client], async |tx: &mut Transaction| {
-            let mut writer = client
-                .topic_client()
-                .create_writer_tx(TOPIC_PATH.to_string(), tx)
-                .await?;
-
-            let result = writer.write(test_message()).await;
+        .retry_tx(closure!([&mut writer], async |tx: &mut Transaction| {
+            let writer_tx = writer.transactional(tx).await?;
+            let result = writer_tx.write(test_message()).await;
             result?;
             Ok(())
         }))
@@ -216,15 +240,13 @@ async fn tx_identity_present_in_write_request() -> YdbResult<()> {
     let (handler, captured_tx, _, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
+    let mut writer = client.topic_client().create_writer(TOPIC_PATH).await?;
 
     client
         .query_client()
-        .retry_tx(closure!([&client], async |tx: &mut Transaction| {
-            let mut writer = client
-                .topic_client()
-                .create_writer_tx(TOPIC_PATH.to_string(), tx)
-                .await?;
-            writer.write(test_message()).await?;
+        .retry_tx(closure!([&mut writer], async |tx: &mut Transaction| {
+            let writer_tx = writer.transactional(tx).await?;
+            writer_tx.write(test_message()).await?;
             Ok(())
         }))
         .await?;
@@ -265,64 +287,28 @@ async fn regular_writer_sends_no_tx_identity() -> YdbResult<()> {
 
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn tx_writer_without_producer_disables_deduplication() -> YdbResult<()> {
-    let (handler, _, captured_init, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
-    let (server, _reply_tx) = MockServer::start(handler).await;
-
-    let options = TopicWriterTxOptionsBuilder::default()
-        .topic_path(TOPIC_PATH.to_string())
-        .build()?;
-
-    let client = make_client(&server).await?;
-    client
-        .query_client()
-        .retry_tx(closure!(
-            [&client, &options],
-            async |tx: &mut Transaction| {
-                let mut writer = client
-                    .topic_client()
-                    .create_writer_tx_with_params(options.clone(), tx)
-                    .await?;
-                writer.write(test_message()).await?;
-                Ok(())
-            }
-        ))
-        .await?;
-
-    let init = captured_init.lock().unwrap().clone();
-    let init = init.expect("InitRequest must be captured");
-    assert_eq!(init.path, TOPIC_PATH);
-    assert_eq!(init.producer_id, "");
-
-    Ok(())
-}
-
-#[tokio::test]
-#[tracing_test::traced_test]
 async fn tx_writer_with_producer_sends_producer_id() -> YdbResult<()> {
     let (handler, _, captured_init, _) = AutoReplyHandler::new(AckMode::WrittenInTx);
     let (server, _reply_tx) = MockServer::start(handler).await;
 
-    let options = TopicWriterTxOptionsBuilder::default()
-        .topic_path(TOPIC_PATH.to_string())
-        .producer_id(PRODUCER_ID)
+    let options = TopicWriterOptions::builder()
+        .topic_path(TOPIC_PATH)
+        .producer_id(PRODUCER_ID.to_string())
         .partitioning(PartitioningStrategy::PartitionId(PARTITION_ID))
-        .build()?;
+        .build();
 
     let client = make_client(&server).await?;
+    let mut writer = client
+        .topic_client()
+        .create_writer_with_params(options)
+        .await?;
     client
         .query_client()
-        .retry_tx(closure!(
-            [&client, &options],
-            async |tx: &mut Transaction| {
-                let mut writer = client
-                    .topic_client()
-                    .create_writer_tx_with_params(options.clone(), tx)
-                    .await?;
-                writer.write(test_message()).await?;
-                Ok(())
-            }
-        ))
+        .retry_tx(closure!([&mut writer], async |tx: &mut Transaction| {
+            let writer_tx = writer.transactional(tx).await?;
+            writer_tx.write(test_message()).await?;
+            Ok(())
+        }))
         .await?;
 
     let init = captured_init.lock().unwrap().clone();
@@ -402,15 +388,13 @@ async fn write_skipped_already_written_returns_error_and_rolls_back() -> YdbResu
     let (handler, _, _, tx_lifecycle) = AutoReplyHandler::new(AckMode::SkippedAlreadyWritten);
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
+    let mut writer = client.topic_client().create_writer(TOPIC_PATH).await?;
 
     let result = client
         .query_client()
-        .retry_tx(closure!([&client], async |tx: &mut Transaction| {
-            let mut writer = client
-                .topic_client()
-                .create_writer_tx(TOPIC_PATH.to_string(), tx)
-                .await?;
-            writer.write(test_message()).await?;
+        .retry_tx(closure!([&mut writer], async |tx: &mut Transaction| {
+            let writer_tx = writer.transactional(tx).await?;
+            writer_tx.write(test_message()).await?;
             Ok(())
         }))
         .await;
@@ -437,16 +421,14 @@ async fn write_returns_error_after_stream_close_and_rolls_back() -> YdbResult<()
     let (handler, _, captured_stream_id, tx_lifecycle) = ReconnectHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
+    let mut writer = client.topic_client().create_writer(TOPIC_PATH).await?;
 
     let result = client
         .query_client()
         .retry_tx(closure!(
-            [&client, &captured_stream_id, &server],
+            [&mut writer, &captured_stream_id, &server],
             async |tx: &mut Transaction| {
-                let mut writer = client
-                    .topic_client()
-                    .create_writer_tx(TOPIC_PATH.to_string(), tx)
-                    .await?;
+                let writer_tx = writer.transactional(tx).await?;
 
                 let stream_id = captured_stream_id
                     .lock()
@@ -457,7 +439,7 @@ async fn write_returns_error_after_stream_close_and_rolls_back() -> YdbResult<()
                     .close(stream_id)
                     .expect("mock server failed to fail write stream");
 
-                let result = writer.write(test_message()).await;
+                let result = writer_tx.write(test_message()).await;
                 result?;
                 Ok(())
             }
@@ -569,15 +551,13 @@ async fn commit_failure_after_successful_write_is_not_retried() -> YdbResult<()>
     let (handler, state) = CommitFailsHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
+    let mut writer = client.topic_client().create_writer(TOPIC_PATH).await?;
 
     let result = client
         .query_client()
-        .retry_tx(closure!([&client], async |tx: &mut Transaction| {
-            let mut writer = client
-                .topic_client()
-                .create_writer_tx(TOPIC_PATH.to_string(), tx)
-                .await?;
-            writer.write(test_message()).await?;
+        .retry_tx(closure!([&mut writer], async |tx: &mut Transaction| {
+            let writer_tx = writer.transactional(tx).await?;
+            writer_tx.write(test_message()).await?;
             Ok(())
         }))
         .await;
