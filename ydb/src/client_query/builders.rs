@@ -10,10 +10,9 @@ use crate::types::Value;
 
 use super::FromYdbRow;
 use super::exec::{
-    CallOptions, ClientExecContext, TransactionExecContext, client_begin_stream, resolve_commit_tx,
-    transaction_begin_stream,
+    CallOptions, ClientExecContext, ExecTarget, TxExecContext, client_begin_stream,
+    resolve_commit_tx, tx_begin_stream,
 };
-use super::internal::ExecCoreRef;
 use super::stream_facade::{QueryStream, materialize_query};
 
 use futures_util::future::BoxFuture;
@@ -36,7 +35,7 @@ pub type ResultSetBuilder<'a, S = ClientOneShot> = CallBuilder<'a, OneResultSet,
 pub type QueryStreamBuilder<'a, S = ClientOneShot> = CallBuilder<'a, Streamed, S>;
 
 pub struct CallBuilder<'a, K, S = ClientOneShot> {
-    core: ExecCoreRef<'a>,
+    core: ExecTarget<'a>,
     text: String,
     params: HashMap<String, Value>,
     opts: CallOptions,
@@ -47,7 +46,7 @@ pub struct CallBuilder<'a, K, S = ClientOneShot> {
 impl<'a, K> CallBuilder<'a, K, ClientOneShot> {
     pub(crate) fn new_client(ctx: &'a mut ClientExecContext, text: String) -> Self {
         Self {
-            core: ExecCoreRef::Client(ctx),
+            core: ExecTarget::Client(ctx),
             text,
             params: HashMap::new(),
             opts: CallOptions::default(),
@@ -65,9 +64,9 @@ impl<'a, K> CallBuilder<'a, K, ClientOneShot> {
 }
 
 impl<'a, K> CallBuilder<'a, K, Interactive> {
-    pub(crate) fn new_transaction(ctx: &'a mut TransactionExecContext, text: String) -> Self {
+    pub(crate) fn new_tx(ctx: &'a mut TxExecContext, text: String) -> Self {
         Self {
-            core: ExecCoreRef::Transaction(ctx),
+            core: ExecTarget::Tx(ctx),
             text,
             params: HashMap::new(),
             opts: CallOptions::default(),
@@ -221,11 +220,11 @@ impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OneRow<T>, S> {
             let row = take_single_row(set)?.ok_or(YdbError::NoRows)?;
             let delta = start.elapsed();
             match &self.core {
-                ExecCoreRef::Client(core) => core
+                ExecTarget::Client(core) => core
                     .metrics_names
                     .client_row_query_time_histogram
                     .record(delta.as_secs_f64()),
-                ExecCoreRef::Transaction(core) => core
+                ExecTarget::Tx(core) => core
                     .metrics_names
                     .client_transaction_row_query_time_histogram
                     .record(delta.as_secs_f64()),
@@ -248,11 +247,11 @@ impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OptionalRow<T>, S
             let row = take_single_row(set)?.map(T::from_row).transpose();
             let delta = start.elapsed();
             match &self.core {
-                ExecCoreRef::Client(core) => core
+                ExecTarget::Client(core) => core
                     .metrics_names
                     .client_row_query_time_histogram
                     .record(delta.as_secs_f64()),
-                ExecCoreRef::Transaction(core) => core
+                ExecTarget::Tx(core) => core
                     .metrics_names
                     .client_transaction_row_query_time_histogram
                     .record(delta.as_secs_f64()),
@@ -283,21 +282,16 @@ impl<'a, S> IntoFuture for CallBuilder<'a, Streamed, S> {
         Box::pin(async move {
             let commit_at_end = resolve_commit_tx(&self.core, &self.opts);
             match self.core {
-                ExecCoreRef::Client(context) => {
+                ExecTarget::Client(context) => {
                     let opened =
                         client_begin_stream(context, self.text, self.params, self.opts, false)
                             .await?;
                     Ok(QueryStream::from_client(opened))
                 }
-                ExecCoreRef::Transaction(context) => {
+                ExecTarget::Tx(context) => {
                     let stream =
-                        transaction_begin_stream(context, self.text, self.params, self.opts, false)
-                            .await?;
-                    Ok(QueryStream::from_transaction(
-                        stream,
-                        context,
-                        commit_at_end,
-                    ))
+                        tx_begin_stream(context, self.text, self.params, self.opts, false).await?;
+                    Ok(QueryStream::from_tx(stream, context, commit_at_end))
                 }
             }
         })
@@ -347,31 +341,31 @@ macro_rules! impl_client_query_methods {
     };
 }
 
-macro_rules! impl_transaction_query_methods {
+macro_rules! impl_tx_query_methods {
     () => {
         pub fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_, Interactive> {
-            CallBuilder::new_transaction(&mut self.ctx, text.into())
+            CallBuilder::new_tx(&mut self.ctx, text.into())
         }
 
         pub fn query(&mut self, text: impl Into<String>) -> QueryStreamBuilder<'_, Interactive> {
-            CallBuilder::new_transaction(&mut self.ctx, text.into())
+            CallBuilder::new_tx(&mut self.ctx, text.into())
         }
 
         pub fn query_result_set(
             &mut self,
             text: impl Into<String>,
         ) -> ResultSetBuilder<'_, Interactive> {
-            CallBuilder::new_transaction(&mut self.ctx, text.into())
+            CallBuilder::new_tx(&mut self.ctx, text.into())
         }
 
         pub fn query_row(
             &mut self,
             text: impl Into<String>,
         ) -> QueryRowBuilder<'_, Row, Interactive> {
-            CallBuilder::new_transaction(&mut self.ctx, text.into())
+            CallBuilder::new_tx(&mut self.ctx, text.into())
         }
     };
 }
 
 pub(crate) use impl_client_query_methods;
-pub(crate) use impl_transaction_query_methods;
+pub(crate) use impl_tx_query_methods;

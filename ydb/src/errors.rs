@@ -95,14 +95,14 @@ pub(crate) enum NeedRetry {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TransactionErrorOutcome {
+pub(crate) enum TxErrorOutcome {
     /// The failed operation also ended the server transaction.
-    TransactionEnded,
+    Ended,
     /// The operation failed, but an existing server transaction may remain active; its session
     /// cannot be reused without cleanup.
-    TransactionMayRemainActive,
+    MayRemainActive,
     /// The SDK cannot determine the outcome of the dispatched operation.
-    OutcomeUnknown,
+    Undetermined,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -336,13 +336,16 @@ impl YdbError {
 
     /// Classify the outcome of a dispatched transaction operation independently from retry and
     /// session-health policy.
-    pub(crate) fn transaction_error_outcome(&self) -> TransactionErrorOutcome {
+    pub(crate) fn tx_error_outcome(&self) -> TxErrorOutcome {
         match self {
             Self::YdbStatusError(status) => match status.operation_status() {
-                Ok(StatusCode::Undetermined | StatusCode::Unspecified | StatusCode::Success)
-                | Err(_) => TransactionErrorOutcome::OutcomeUnknown,
+                // Successful responses are not represented as YdbStatusError.
+                Ok(StatusCode::Success) => TxErrorOutcome::Undetermined,
+                Ok(StatusCode::Undetermined | StatusCode::Unspecified) | Err(_) => {
+                    TxErrorOutcome::Undetermined
+                }
                 Ok(StatusCode::Unavailable | StatusCode::Overloaded) => {
-                    TransactionErrorOutcome::TransactionMayRemainActive
+                    TxErrorOutcome::MayRemainActive
                 }
                 Ok(
                     StatusCode::BadRequest
@@ -361,7 +364,7 @@ impl YdbError {
                     | StatusCode::Unsupported
                     | StatusCode::SessionBusy
                     | StatusCode::ExternalError,
-                ) => TransactionErrorOutcome::TransactionEnded,
+                ) => TxErrorOutcome::Ended,
             },
             Self::Custom(_)
             | Self::Convert(_)
@@ -371,7 +374,7 @@ impl YdbError {
             | Self::TransportDial(_)
             | Self::Transport(_)
             | Self::TransportGRPCStatus(_)
-            | Self::DeadlineExceeded => TransactionErrorOutcome::OutcomeUnknown,
+            | Self::DeadlineExceeded => TxErrorOutcome::Undetermined,
         }
     }
 
@@ -587,10 +590,10 @@ mod error_classification_tests {
     }
 
     #[test]
-    fn malformed_success_status_has_unknown_transaction_outcome() {
+    fn malformed_success_status_is_conservatively_undetermined() {
         assert_eq!(
-            ydb_status(StatusCode::Success).transaction_error_outcome(),
-            TransactionErrorOutcome::OutcomeUnknown
+            ydb_status(StatusCode::Success).tx_error_outcome(),
+            TxErrorOutcome::Undetermined
         );
     }
 
@@ -601,10 +604,7 @@ mod error_classification_tests {
             StatusCode::Aborted,
             StatusCode::BadSession,
         ] {
-            assert_eq!(
-                ydb_status(status).transaction_error_outcome(),
-                TransactionErrorOutcome::TransactionEnded
-            );
+            assert_eq!(ydb_status(status).tx_error_outcome(), TxErrorOutcome::Ended);
         }
     }
 
@@ -612,33 +612,27 @@ mod error_classification_tests {
     fn transient_query_failures_may_leave_the_server_transaction_active() {
         for status in [StatusCode::Unavailable, StatusCode::Overloaded] {
             assert_eq!(
-                ydb_status(status).transaction_error_outcome(),
-                TransactionErrorOutcome::TransactionMayRemainActive
+                ydb_status(status).tx_error_outcome(),
+                TxErrorOutcome::MayRemainActive
             );
         }
     }
 
     #[test]
-    fn ambiguous_and_transport_errors_have_unknown_transaction_outcome() {
+    fn undetermined_and_transport_errors_have_undetermined_tx_outcome() {
         for error in [
             ydb_status(StatusCode::Undetermined),
             YdbError::Transport("timeout".into()),
             YdbError::Custom("malformed response".into()),
         ] {
-            assert_eq!(
-                error.transaction_error_outcome(),
-                TransactionErrorOutcome::OutcomeUnknown
-            );
+            assert_eq!(error.tx_error_outcome(), TxErrorOutcome::Undetermined);
         }
     }
 
     #[test]
-    fn unknown_status_code_has_unknown_transaction_outcome() {
+    fn unknown_status_code_has_undetermined_tx_outcome() {
         let err = YdbError::YdbStatusError(YdbStatusError::new("unknown", -1, vec![]));
-        assert_eq!(
-            err.transaction_error_outcome(),
-            TransactionErrorOutcome::OutcomeUnknown
-        );
+        assert_eq!(err.tx_error_outcome(), TxErrorOutcome::Undetermined);
     }
 
     #[test]

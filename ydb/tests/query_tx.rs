@@ -6,7 +6,7 @@
 //! - no query fails: `retry_tx` sends `CommitTransaction`;
 //! - the last query uses `.with_commit(true)`: the query commits the transaction;
 //! - a query returns a concrete failure: the whole transaction attempt is retried;
-//! - a query returns an ambiguous status: the transaction outcome is unknown;
+//! - a query returns an undetermined status: the transaction outcome is unknown;
 //! - the caller explicitly rolls back;
 //! - rollback or commit RPC outcome is unknown;
 //!
@@ -223,7 +223,7 @@ impl Handler for ScriptedQueryHandler {
 /// Every `ExecuteQuery` succeeds; `CommitTransaction` always fails at the transport level
 /// (mirrors `topic_writer_tx.rs`'s `CommitFailsHandler`: a raw RPC failure, not a status-coded
 /// response, so `need_retry` resolves to `IdempotentOnly` and the default `idempotent(false)`
-/// blocks a blind whole-transaction retry after an ambiguous commit).
+/// blocks a blind whole-transaction retry after an undetermined commit).
 #[derive(Default)]
 struct CommitTransportFailsHandler {
     replies: ReplySink,
@@ -295,7 +295,7 @@ async fn happy_path_reports_committed() -> YdbResult<()> {
     Ok(())
 }
 
-/// A failed `CommitTransaction` has an ambiguous server-side outcome, so `retry_tx`
+/// A failed `CommitTransaction` has an undetermined server-side outcome, so `retry_tx`
 /// must report the error instead of retrying the whole transaction blindly.
 #[tokio::test]
 #[tracing_test::traced_test]
@@ -314,12 +314,12 @@ async fn commit_rpc_failure_is_reported_and_not_retried() -> YdbResult<()> {
 
     assert!(
         result.is_err(),
-        "a failed commit is ambiguous and must be reported as failure, got {result:?}"
+        "a failed commit is undetermined and must be reported as failure, got {result:?}"
     );
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(
         lifecycle.commit_count, 1,
-        "commit outcome is ambiguous, so the whole tx must not be retried"
+        "commit outcome is undetermined, so the whole tx must not be retried"
     );
     assert_eq!(lifecycle.rollback_count, 0);
     Ok(())
@@ -400,7 +400,7 @@ async fn swallowed_empty_commit_via_query_response_is_not_committed() -> YdbResu
 
     assert!(
         result.is_err(),
-        "swallowing an ambiguous commit error must not report success"
+        "swallowing an undetermined commit error must not report success"
     );
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(lifecycle.commit_count, 0);
@@ -429,7 +429,7 @@ async fn swallowed_first_query_failure_is_not_committed_locally() -> YdbResult<(
 
     assert!(
         result.is_err(),
-        "an unconfirmed first query must leave the transaction ambiguous"
+        "an unconfirmed first query must leave the transaction undetermined"
     );
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(lifecycle.commit_count, 0);
@@ -604,7 +604,7 @@ async fn transient_error_swallowed_retries_whole_transaction() -> YdbResult<()> 
 /// callback swallows it, the SDK must not continue or commit that transaction.
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn swallowed_undetermined_query_error_is_ambiguous() -> YdbResult<()> {
+async fn swallowed_undetermined_query_error_is_undetermined() -> YdbResult<()> {
     let (handler, tx_lifecycle) =
         ScriptedQueryHandler::new(vec![StatusCode::Success, StatusCode::Undetermined], vec![]);
     let (server, _reply_tx) = MockServer::start(handler).await;
@@ -619,7 +619,10 @@ async fn swallowed_undetermined_query_error_is_ambiguous() -> YdbResult<()> {
         }))
         .await;
 
-    assert!(result.is_err(), "an unknown transaction outcome must fail");
+    assert!(
+        result.is_err(),
+        "an undetermined transaction outcome must fail"
+    );
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(lifecycle.commit_count, 0);
     assert_eq!(lifecycle.rollback_count, 0);
