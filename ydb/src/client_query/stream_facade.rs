@@ -235,6 +235,13 @@ async fn materialize_tx_once(
             return Err(ydb_err);
         }
     };
+    let sets = match convert_result_sets(raw_sets) {
+        Ok(sets) => sets,
+        Err(ydb_err) => {
+            tx_handle_query_error(context, &ydb_err);
+            return Err(ydb_err);
+        }
+    };
     match stream.close().await {
         Ok(meta) => {
             apply_stream_tx_id(context, meta.tx_id);
@@ -246,7 +253,7 @@ async fn materialize_tx_once(
             return Err(ydb_err);
         }
     }
-    convert_result_sets(raw_sets)
+    Ok(sets)
 }
 
 async fn drain_result_sets(stream: &mut ExecuteQueryStream) -> YdbResult<Vec<RawResultSet>> {
