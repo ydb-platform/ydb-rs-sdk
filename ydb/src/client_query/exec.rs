@@ -79,7 +79,7 @@ pub(crate) enum TxState {
     RolledBack,
     /// A transaction operation failed; retry policy decides whether to start a new attempt.
     AttemptFailed(YdbError),
-    /// A commit or rollback RPC failed after dispatch, so its outcome was not confirmed.
+    /// A dispatched operation did not confirm the transaction's final outcome.
     Undetermined(YdbError),
 }
 

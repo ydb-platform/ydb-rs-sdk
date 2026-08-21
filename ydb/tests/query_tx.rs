@@ -18,6 +18,7 @@ mod mock_server;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use ydb::{Client, ClientBuilder, Transaction, YdbResult, closure};
 use ydb_grpc::ydb_proto::query::{
@@ -78,6 +79,19 @@ struct TxLifecycle {
 }
 
 type SharedTxLifecycle = Arc<Mutex<TxLifecycle>>;
+
+async fn wait_for_rollback_count(tx_lifecycle: &SharedTxLifecycle, expected: usize) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if tx_lifecycle.lock().unwrap().rollback_count >= expected {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("timed out waiting for transaction cleanup rollback");
+}
 
 /// Every `ExecuteQuery` succeeds. A lazy transaction ID arrives after the first response part;
 /// a query that commits the transaction omits it. `CommitTransaction` and `RollbackTransaction`
@@ -429,7 +443,7 @@ async fn swallowed_first_query_failure_is_not_committed_locally() -> YdbResult<(
 
     assert!(
         result.is_err(),
-        "an unconfirmed first query must leave the transaction undetermined"
+        "an unconfirmed first query must fail the transaction attempt"
     );
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(lifecycle.commit_count, 0);
@@ -466,12 +480,11 @@ async fn invalidating_error_propagated_is_retried_until_success() -> YdbResult<(
 }
 
 /// Regression test for https://github.com/ydb-platform/ydb-rs-sdk/issues/521:
-/// `retry_tx` must not report a transaction as committed when the server has
-/// already invalidated it, even if the user callback swallows the invalidating
-/// query error and returns `Ok`.
+/// `retry_tx` must not report a transaction as committed when a query fails,
+/// even if the user callback swallows that error and returns `Ok`.
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn swallowed_invalidating_error_must_not_report_committed() -> YdbResult<()> {
+async fn swallowed_query_error_must_not_report_committed() -> YdbResult<()> {
     let (handler, tx_lifecycle) = ScriptedQueryHandler::new(
         vec![StatusCode::Success, StatusCode::PreconditionFailed],
         vec![],
@@ -484,7 +497,8 @@ async fn swallowed_invalidating_error_must_not_report_committed() -> YdbResult<(
         .retry_tx(closure!(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (2, 'x')").await?;
 
-            // Duplicate-key-style conflict: server aborts the transaction.
+            // Duplicate-key-style conflict. The SDK cannot infer the remote transaction
+            // lifecycle from the status alone, so cleanup must attempt rollback.
             let conflict = tx.exec("INSERT INTO t (id, val) VALUES (1, 'dup')").await;
 
             // The application "handles" the error itself and continues — this is the
@@ -495,22 +509,21 @@ async fn swallowed_invalidating_error_must_not_report_committed() -> YdbResult<(
         }))
         .await;
 
-    {
-        let lifecycle = tx_lifecycle.lock().unwrap();
-        assert_eq!(
-            lifecycle.commit_count, 0,
-            "the server already invalidated the tx; the SDK must not send CommitTransaction"
-        );
-        assert_eq!(
-            lifecycle.rollback_count, 0,
-            "the server already invalidated the tx; the SDK must not send RollbackTransaction"
-        );
-    }
+    wait_for_rollback_count(&tx_lifecycle, 1).await;
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(
+        lifecycle.commit_count, 0,
+        "a failed transaction attempt must not send CommitTransaction"
+    );
+    assert_eq!(
+        lifecycle.rollback_count, 1,
+        "a started transaction must be rolled back before its session is reused"
+    );
 
     assert!(
         result.is_err(),
-        "retry_tx reported success ({result:?}) for a transaction the server had already \
-         aborted, just because the callback swallowed the invalidating query error \
+        "retry_tx reported success ({result:?}) for a failed transaction attempt just \
+         because the callback swallowed the query error \
          (https://github.com/ydb-platform/ydb-rs-sdk/issues/521)"
     );
 
