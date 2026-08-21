@@ -1,3 +1,4 @@
+mod arrow_helpers;
 mod builders;
 pub(crate) mod call_options;
 
@@ -13,7 +14,9 @@ use crate::grpc_connection_manager::GrpcConnectionManager;
 use tracing::instrument;
 
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
-use crate::grpc_wrapper::raw_table_service::bulk_upsert::RawBulkUpsertRequest;
+use crate::grpc_wrapper::raw_table_service::bulk_upsert::{
+    RawBulkUpsertArrowRequest, RawBulkUpsertRequest,
+};
 use crate::grpc_wrapper::raw_table_service::client::RawTableClient;
 use crate::grpc_wrapper::raw_table_service::copy_table::{
     RawCopyTableRequest, RawCopyTablesRequest,
@@ -40,9 +43,9 @@ use itertools::Itertools;
 use ydb_grpc::ydb_proto::table::v1::table_service_client::TableServiceClient;
 
 pub use builders::{
-    AlterTableBuilder, BulkUpsertBuilder, CopyTableBuilder, CopyTablesBuilder, CreateTableBuilder,
-    DescribeTableBuilder, DescribeTableOptionsBuilder, DropTableBuilder, ReadRowsBuilder,
-    RenameTableBuilder, RenameTablesBuilder,
+    AlterTableBuilder, BulkUpsertArrowBuilder, BulkUpsertBuilder, CopyTableBuilder,
+    CopyTablesBuilder, CreateTableBuilder, DescribeTableBuilder, DescribeTableOptionsBuilder,
+    DropTableBuilder, ReadRowsBuilder, RenameTableBuilder, RenameTablesBuilder,
 };
 
 use call_options::{TableCallOptions, resolve_timeouts};
@@ -112,6 +115,26 @@ impl TableClient {
             .bulk_upsert(RawBulkUpsertRequest {
                 table: table_path,
                 rows: raw_rows.into(),
+                operation_params: resolve_timeouts(opts).operation_params(),
+            })
+            .await
+            .map_err(YdbError::from)?;
+        Ok(())
+    }
+
+    async fn bulk_upsert_arrow_once(
+        &self,
+        table_path: String,
+        arrow_schema: Vec<u8>,
+        arrow_data: Vec<u8>,
+        opts: &TableCallOptions,
+    ) -> YdbResult<()> {
+        let mut client = self.sessionless_table_client(opts).await?;
+        client
+            .bulk_upsert_arrow(RawBulkUpsertArrowRequest {
+                table: table_path,
+                arrow_schema,
+                arrow_data,
                 operation_params: resolve_timeouts(opts).operation_params(),
             })
             .await
@@ -211,6 +234,32 @@ impl TableClient {
         }
     }
 
+    /// Bulk upsert an Arrow [`RecordBatch`](arrow_array::RecordBatch) without opening a session.
+    ///
+    /// Callers add `arrow-array` (and typically `arrow-schema`) to build batches. Dictionary-
+    /// encoded arrays are rejected because YDB's Arrow converter does not support them.
+    ///
+    /// # Experimental
+    ///
+    /// Arrow releases breaking versions frequently, and this method currently exposes Arrow's
+    /// native `RecordBatch` type. Check the `arrow-array` version in this crate's dependencies and
+    /// use the same version in your application. A stable API based on serialized Arrow IPC data
+    /// is being designed in [#631].
+    ///
+    /// [#631]: https://github.com/ydb-platform/ydb-rs-sdk/issues/631
+    pub fn bulk_upsert_arrow(
+        &self,
+        table_path: impl Into<String>,
+        batch: arrow_array::RecordBatch,
+    ) -> BulkUpsertArrowBuilder<'_> {
+        BulkUpsertArrowBuilder {
+            client: self,
+            table_path: table_path.into(),
+            batch,
+            opts: TableCallOptions::default(),
+        }
+    }
+
     #[instrument(name = "ydb.TableClient.BulkUpsert", skip_all, fields(db.system.name = "ydb", ydb.table.path = %table_path), err)]
     pub(crate) async fn bulk_upsert_call(
         &self,
@@ -227,6 +276,31 @@ impl TableClient {
             closure!([&client = self, &table_path, &value, &opts], async |_| {
                 client
                     .bulk_upsert_once(table_path.clone(), value.clone(), opts)
+                    .await
+            }),
+        )
+        .await
+    }
+
+    #[instrument(name = "ydb.TableClient.BulkUpsertArrow", skip_all, fields(db.system.name = "ydb", ydb.table.path = %table_path), err)]
+    pub(crate) async fn bulk_upsert_arrow_call(
+        &self,
+        table_path: String,
+        batch: arrow_array::RecordBatch,
+        opts: TableCallOptions,
+    ) -> YdbResult<()> {
+        if batch.num_rows() == 0 {
+            return Ok(());
+        }
+
+        self.retry_table_operation(
+            &opts,
+            Idempotency::Idempotent,
+            closure!([&client = self, &table_path, &batch, &opts], async |_| {
+                let (arrow_schema, arrow_data) =
+                    arrow_helpers::serialize_record_batch_for_bulk_upsert(batch.clone()).await?;
+                client
+                    .bulk_upsert_arrow_once(table_path.clone(), arrow_schema, arrow_data, opts)
                     .await
             }),
         )
