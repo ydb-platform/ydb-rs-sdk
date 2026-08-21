@@ -94,17 +94,6 @@ pub(crate) enum NeedRetry {
     False,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum TxErrorOutcome {
-    /// The failed operation also ended the server transaction.
-    Ended,
-    /// The operation failed, but an existing server transaction may remain active; its session
-    /// cannot be reused without cleanup.
-    MayRemainActive,
-    /// The SDK cannot determine the outcome of the dispatched operation.
-    Undetermined,
-}
-
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Idempotency {
     Idempotent,
@@ -334,50 +323,6 @@ impl YdbError {
         YdbError::Custom(s.into())
     }
 
-    /// Classify the outcome of a dispatched transaction operation independently from retry and
-    /// session-health policy.
-    pub(crate) fn tx_error_outcome(&self) -> TxErrorOutcome {
-        match self {
-            Self::YdbStatusError(status) => match status.operation_status() {
-                // Successful responses are not represented as YdbStatusError.
-                Ok(StatusCode::Success) => TxErrorOutcome::Undetermined,
-                Ok(StatusCode::Undetermined | StatusCode::Unspecified) | Err(_) => {
-                    TxErrorOutcome::Undetermined
-                }
-                Ok(StatusCode::Unavailable | StatusCode::Overloaded) => {
-                    TxErrorOutcome::MayRemainActive
-                }
-                Ok(
-                    StatusCode::BadRequest
-                    | StatusCode::Unauthorized
-                    | StatusCode::InternalError
-                    | StatusCode::Aborted
-                    | StatusCode::SchemeError
-                    | StatusCode::GenericError
-                    | StatusCode::Timeout
-                    | StatusCode::BadSession
-                    | StatusCode::PreconditionFailed
-                    | StatusCode::AlreadyExists
-                    | StatusCode::NotFound
-                    | StatusCode::SessionExpired
-                    | StatusCode::Cancelled
-                    | StatusCode::Unsupported
-                    | StatusCode::SessionBusy
-                    | StatusCode::ExternalError,
-                ) => TxErrorOutcome::Ended,
-            },
-            Self::Custom(_)
-            | Self::Convert(_)
-            | Self::NoRows
-            | Self::EndpointHasNoHost(_)
-            | Self::InternalError(_)
-            | Self::TransportDial(_)
-            | Self::Transport(_)
-            | Self::TransportGRPCStatus(_)
-            | Self::DeadlineExceeded => TxErrorOutcome::Undetermined,
-        }
-    }
-
     /// Whether an operation error makes a pooled session unsafe to reuse.
     ///
     /// This is deliberately separate from retry classification: retryability describes
@@ -587,52 +532,6 @@ mod error_classification_tests {
 
     fn ydb_status(status: StatusCode) -> YdbError {
         YdbError::YdbStatusError(YdbStatusError::new("test", status as i32, vec![]))
-    }
-
-    #[test]
-    fn malformed_success_status_is_conservatively_undetermined() {
-        assert_eq!(
-            ydb_status(StatusCode::Success).tx_error_outcome(),
-            TxErrorOutcome::Undetermined
-        );
-    }
-
-    #[test]
-    fn definitive_ydb_failures_end_the_server_transaction() {
-        for status in [
-            StatusCode::PreconditionFailed,
-            StatusCode::Aborted,
-            StatusCode::BadSession,
-        ] {
-            assert_eq!(ydb_status(status).tx_error_outcome(), TxErrorOutcome::Ended);
-        }
-    }
-
-    #[test]
-    fn transient_query_failures_may_leave_the_server_transaction_active() {
-        for status in [StatusCode::Unavailable, StatusCode::Overloaded] {
-            assert_eq!(
-                ydb_status(status).tx_error_outcome(),
-                TxErrorOutcome::MayRemainActive
-            );
-        }
-    }
-
-    #[test]
-    fn undetermined_and_transport_errors_have_undetermined_tx_outcome() {
-        for error in [
-            ydb_status(StatusCode::Undetermined),
-            YdbError::Transport("timeout".into()),
-            YdbError::Custom("malformed response".into()),
-        ] {
-            assert_eq!(error.tx_error_outcome(), TxErrorOutcome::Undetermined);
-        }
-    }
-
-    #[test]
-    fn unknown_status_code_has_undetermined_tx_outcome() {
-        let err = YdbError::YdbStatusError(YdbStatusError::new("unknown", -1, vec![]));
-        assert_eq!(err.tx_error_outcome(), TxErrorOutcome::Undetermined);
     }
 
     #[test]

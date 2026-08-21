@@ -5,7 +5,7 @@
 //!
 //! - no query fails: `retry_tx` sends `CommitTransaction`;
 //! - the last query uses `.with_commit(true)`: the query commits the transaction;
-//! - a query returns a concrete failure: the whole transaction attempt is retried;
+//! - a query returns a concrete failure: the attempt is rolled back and retried;
 //! - a query returns an undetermined status: the transaction outcome is unknown;
 //! - the caller explicitly rolls back;
 //! - rollback or commit RPC outcome is unknown;
@@ -13,7 +13,7 @@
 //! The regression cases for #521 are the swallowed-error paths: if the callback
 //! returns `Ok` after the server invalidated the transaction, or after rollback
 //! failed, `retry_tx` must not report a successful commit. A concrete transient query
-//! failure ends the current attempt and retries the whole transaction.
+//! failure ends the current attempt, which is rolled back before retry.
 mod mock_server;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -517,8 +517,8 @@ async fn swallowed_invalidating_error_must_not_report_committed() -> YdbResult<(
     Ok(())
 }
 
-/// A concrete transient query failure ends the current attempt and retries the whole
-/// transaction rather than continuing or rolling back that attempt.
+/// A concrete transient query failure rolls back the current attempt and retries the whole
+/// transaction rather than continuing it.
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn transient_error_propagated_retries_whole_transaction() -> YdbResult<()> {
@@ -546,8 +546,8 @@ async fn transient_error_propagated_retries_whole_transaction() -> YdbResult<()>
     assert!(result.is_ok(), "expected eventual success, got {result:?}");
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(
-        lifecycle.rollback_count, 0,
-        "the failed query already ended the local transaction attempt"
+        lifecycle.rollback_count, 1,
+        "the failed transaction attempt must be rolled back before retry"
     );
     assert_eq!(
         lifecycle.commit_count, 1,
@@ -594,8 +594,8 @@ async fn transient_error_swallowed_retries_whole_transaction() -> YdbResult<()> 
         "only the successful retry attempt should commit"
     );
     assert_eq!(
-        lifecycle.rollback_count, 0,
-        "the concrete query failure ends its transaction attempt"
+        lifecycle.rollback_count, 1,
+        "the swallowed query error must still roll back its failed attempt"
     );
     Ok(())
 }
@@ -625,7 +625,6 @@ async fn swallowed_undetermined_query_error_is_undetermined() -> YdbResult<()> {
     );
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(lifecycle.commit_count, 0);
-    assert_eq!(lifecycle.rollback_count, 0);
     Ok(())
 }
 

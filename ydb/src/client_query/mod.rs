@@ -46,7 +46,7 @@ use crate::retry_settings::{RetrySettings, RetryState};
 use crate::session_pool::SessionPool;
 use builders::{impl_client_query_methods, impl_tx_query_methods};
 use exec::{
-    ClientExecContext, TxExecContext, finish_query_tx_on_drop, tx_commit, tx_ensure_begin,
+    ClientExecContext, TxExecContext, release_unfinished_tx, tx_commit, tx_ensure_begin,
     tx_exec_context, tx_identity, tx_rollback,
 };
 use hooks::{QueryTxCommitStatus, QueryTxHook};
@@ -504,7 +504,7 @@ impl Drop for Transaction {
         let state = std::mem::replace(&mut self.ctx.state, TxState::RolledBack);
         match state {
             TxState::Active(active) => {
-                finish_query_tx_on_drop(self.ctx.connection_manager.clone(), active);
+                release_unfinished_tx(self.ctx.connection_manager.clone(), active);
             }
             TxState::Committed
             | TxState::RolledBack

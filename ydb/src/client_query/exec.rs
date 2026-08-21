@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use tokio::time::timeout;
 
-use crate::errors::{Idempotency, TxErrorOutcome, YdbError, YdbResult};
+use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryRequest;
@@ -77,9 +77,9 @@ pub(crate) enum TxState {
     Committed,
     /// Rollback path was chosen and the SDK must not report a commit.
     RolledBack,
-    /// A definitive operation failure ended the local transaction attempt.
+    /// A transaction operation failed; retry policy decides whether to start a new attempt.
     AttemptFailed(YdbError),
-    /// A commit or rollback RPC returned an error, so the local end attempt was not confirmed.
+    /// A commit or rollback RPC failed after dispatch, so its outcome was not confirmed.
     Undetermined(YdbError),
 }
 
@@ -164,18 +164,15 @@ impl TxExecContext {
         }
     }
 
-    fn finish_dispatched_error(&mut self, error: &YdbError) -> YdbResult<()> {
-        let outcome = error.tx_error_outcome();
-        let replacement = match outcome {
-            TxErrorOutcome::Ended | TxErrorOutcome::MayRemainActive => {
-                TxState::AttemptFailed(error.clone())
-            }
-            TxErrorOutcome::Undetermined => TxState::Undetermined(error.clone()),
-        };
-        let active = self.replace_active(replacement)?;
-        if outcome == TxErrorOutcome::Ended && !error.requires_session_discard() {
-            active.lease.return_to_pool();
+    fn fail_attempt(&mut self, error: &YdbError) -> YdbResult<()> {
+        let active = self.replace_active(TxState::AttemptFailed(error.clone()))?;
+
+        if error.requires_session_discard() {
+            // Dropping a lease without returning it schedules session cleanup.
+            return Ok(());
         }
+
+        release_unfinished_tx(self.connection_manager.clone(), active);
         Ok(())
     }
 }
@@ -529,7 +526,7 @@ pub(crate) async fn tx_ensure_begin(tx: &mut TxExecContext) -> YdbResult<()> {
             Ok(())
         }
         Err(err) => {
-            tx.finish_dispatched_error(&err)?;
+            tx.fail_attempt(&err)?;
             Err(err)
         }
     }
@@ -569,10 +566,10 @@ async fn tx_before_commit(tx: &mut TxExecContext) -> YdbResult<()> {
     Ok(())
 }
 
-/// Apply a query error to the retained session and transaction state.
+/// Finish a failed query attempt and release its transaction resources.
 pub(crate) fn tx_handle_query_error(tx: &mut TxExecContext, err: &YdbError) {
     if tx.state.is_active()
-        && let Err(error) = tx.finish_dispatched_error(err)
+        && let Err(error) = tx.fail_attempt(err)
     {
         tracing::error!(%error, "failed to finish transaction after query error");
     }
@@ -597,6 +594,7 @@ pub(crate) async fn tx_begin_stream(
         "implicit_session is only available on QueryClient one-shot builders"
     );
     tx.active()?;
+    let commit_at_end = opts.commit_tx.unwrap_or(false);
     let effective_timeout = resolve_effective_timeout(tx.retry_deadline, opts.timeout);
     let mut query_dispatched = false;
     let result: YdbResult<ExecuteQueryStream> =
@@ -606,7 +604,7 @@ pub(crate) async fn tx_begin_stream(
             if tx.begin {
                 tx_ensure_begin(tx).await?;
             }
-            if opts.commit_tx.unwrap_or(false) {
+            if commit_at_end {
                 tx_before_commit(tx).await?;
             }
             let (mut client, req) =
@@ -777,8 +775,8 @@ pub(crate) async fn tx_rollback(tx: &mut TxExecContext) -> YdbResult<()> {
     active.lease.finish(result)
 }
 
-/// Best-effort rollback when [`super::Transaction`] is dropped without `commit`/`rollback`.
-pub(crate) fn finish_query_tx_on_drop(connection_manager: GrpcConnectionManager, active: ActiveTx) {
+/// Release an unfinished transaction, rolling it back first when its id is known.
+pub(super) fn release_unfinished_tx(connection_manager: GrpcConnectionManager, active: ActiveTx) {
     let ActiveTx {
         lease,
         server_progress,
@@ -940,7 +938,7 @@ mod unit_tests {
     }
 
     #[tokio::test]
-    async fn definitive_dispatched_error_ends_attempt_and_returns_healthy_session() {
+    async fn begin_in_flight_error_discards_session() {
         let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
         let lease = pool.acquire_explicit().await.expect("acquire test session");
         let session_id = lease.session_id().to_string();
@@ -960,16 +958,16 @@ mod unit_tests {
             issues: vec![],
         });
 
-        ctx.finish_dispatched_error(&error)
+        ctx.fail_attempt(&error)
             .expect("rejected operation must finish the transaction");
 
         assert!(matches!(ctx.state, TxState::AttemptFailed(_)));
-        let reused = pool
+        let replacement = pool
             .acquire_explicit()
             .await
-            .expect("healthy session must return to the pool");
-        assert_eq!(reused.session_id(), session_id);
-        reused.return_to_pool();
+            .expect("session with an unconfirmed begin must be replaced");
+        assert_ne!(replacement.session_id(), session_id);
+        replacement.return_to_pool();
     }
 
     #[tokio::test]
@@ -994,7 +992,7 @@ mod unit_tests {
                 issues: vec![],
             });
 
-            ctx.finish_dispatched_error(&error)
+            ctx.fail_attempt(&error)
                 .expect("temporary failure must finish the local transaction attempt");
 
             assert!(matches!(ctx.state, TxState::AttemptFailed(_)));
@@ -1008,7 +1006,7 @@ mod unit_tests {
     }
 
     #[tokio::test]
-    async fn undetermined_dispatched_error_discards_session() {
+    async fn undetermined_query_error_fails_attempt_and_discards_session() {
         let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
         let lease = pool.acquire_explicit().await.expect("acquire test session");
         let session_id = lease.session_id().to_string();
@@ -1028,10 +1026,10 @@ mod unit_tests {
             issues: vec![],
         });
 
-        ctx.finish_dispatched_error(&error)
+        ctx.fail_attempt(&error)
             .expect("undetermined outcome must finish the transaction");
 
-        assert!(matches!(ctx.state, TxState::Undetermined(_)));
+        assert!(matches!(ctx.state, TxState::AttemptFailed(_)));
         let replacement = pool
             .acquire_explicit()
             .await
@@ -1060,7 +1058,7 @@ mod unit_tests {
             .replace_active(TxState::RolledBack)
             .expect("take active transaction");
 
-        finish_query_tx_on_drop(manager, active);
+        release_unfinished_tx(manager, active);
 
         let replacement = pool
             .acquire_explicit()
