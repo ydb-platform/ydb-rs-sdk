@@ -8,9 +8,13 @@ use arrow_ipc::writer::{
 };
 
 /// Serialize Arrow RecordBatch to IPC format for bulk upsert
-pub(crate) fn serialize_record_batch_for_bulk_upsert(
-    batch: &RecordBatch,
+pub(super) async fn serialize_record_batch_for_bulk_upsert(
+    batch: RecordBatch,
 ) -> YdbResult<(Vec<u8>, Vec<u8>)> {
+    tokio::task::spawn_blocking(move || serialize_record_batch(&batch)).await?
+}
+
+fn serialize_record_batch(batch: &RecordBatch) -> YdbResult<(Vec<u8>, Vec<u8>)> {
     let options = IpcWriteOptions::try_new(8, false, MetadataVersion::V5)
         .map_err(|e| YdbError::Custom(format!("Failed to create IPC options: {}", e)))?;
 
@@ -49,7 +53,9 @@ mod tests {
     use arrow_array::builder::StringDictionaryBuilder;
     use arrow_array::types::Int8Type;
     use arrow_array::{Int64Array, StringArray};
+    use arrow_ipc::reader::StreamReader;
     use arrow_schema::{DataType, Field, Schema};
+    use std::io::Cursor;
     use std::sync::Arc;
 
     #[test]
@@ -68,10 +74,22 @@ mod tests {
         )
         .map_err(|e| YdbError::Custom(format!("Failed to create batch: {}", e)))?;
 
-        let (schema_bytes, data_bytes) = serialize_record_batch_for_bulk_upsert(&batch)?;
+        let (schema_bytes, data_bytes) = serialize_record_batch(&batch)?;
 
         assert!(!schema_bytes.is_empty());
         assert!(!data_bytes.is_empty());
+
+        let mut stream_bytes = schema_bytes;
+        stream_bytes.extend_from_slice(&data_bytes);
+        let mut reader = StreamReader::try_new(Cursor::new(stream_bytes), None)
+            .map_err(|e| YdbError::Custom(format!("Failed to read IPC schema: {e}")))?;
+        let decoded = reader
+            .next()
+            .transpose()
+            .map_err(|e| YdbError::Custom(format!("Failed to read IPC batch: {e}")))?
+            .ok_or_else(|| YdbError::Custom("IPC stream did not contain a batch".to_string()))?;
+
+        assert_eq!(decoded, batch);
 
         Ok(())
     }
@@ -84,7 +102,7 @@ mod tests {
             RecordBatch::try_new(schema, vec![Arc::new(Int64Array::from(vec![] as Vec<i64>))])
                 .map_err(|e| YdbError::Custom(format!("Failed to create batch: {}", e)))?;
 
-        let (schema_bytes, data_bytes) = serialize_record_batch_for_bulk_upsert(&batch)?;
+        let (schema_bytes, data_bytes) = serialize_record_batch(&batch)?;
 
         assert!(!schema_bytes.is_empty());
         assert!(!data_bytes.is_empty());
@@ -107,7 +125,7 @@ mod tests {
         .map_err(|e| YdbError::Custom(format!("Failed to create batch: {e}")))?;
 
         assert!(matches!(
-            serialize_record_batch_for_bulk_upsert(&batch),
+            serialize_record_batch(&batch),
             Err(YdbError::Custom(message)) if message == "Dictionary encoding not supported"
         ));
         Ok(())

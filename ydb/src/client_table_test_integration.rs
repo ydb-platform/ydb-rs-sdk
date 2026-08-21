@@ -358,7 +358,9 @@ async fn bulk_upsert_arrow() -> YdbResult<()> {
     exec_ddl(&client, format!("DROP TABLE IF EXISTS {table_name}")).await?;
     exec_ddl(
         &client,
-        format!("CREATE TABLE {table_name} (id Int64 NOT NULL, val Utf8, PRIMARY KEY (id))"),
+        format!(
+            "CREATE TABLE {table_name} (id Int64 NOT NULL, val Utf8, PRIMARY KEY (id)) WITH (STORE = COLUMN)"
+        ),
     )
     .await?;
 

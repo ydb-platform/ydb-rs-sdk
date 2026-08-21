@@ -1,3 +1,4 @@
+// Required when `cargo test --workspace` compiles this example as a test target.
 #![recursion_limit = "256"]
 
 use arrow_array::{Int64Array, RecordBatch, StringArray};
@@ -7,7 +8,7 @@ use ydb::{ClientBuilder, YdbError, YdbResult};
 
 #[tokio::main]
 async fn main() -> YdbResult<()> {
-    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136?database=local")?
+    let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?
         .build()
         .await?;
 
@@ -20,7 +21,7 @@ async fn main() -> YdbResult<()> {
         .await?;
     query_client
         .exec(format!(
-            "CREATE TABLE {table_name} (id Int64 NOT NULL, val Utf8, PRIMARY KEY(id))",
+            "CREATE TABLE {table_name} (id Int64 NOT NULL, val Utf8, PRIMARY KEY(id)) WITH (STORE = COLUMN)",
         ))
         .await?;
 

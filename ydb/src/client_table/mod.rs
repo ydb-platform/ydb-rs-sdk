@@ -1,3 +1,4 @@
+mod arrow_helpers;
 mod builders;
 pub(crate) mod call_options;
 
@@ -237,6 +238,15 @@ impl TableClient {
     ///
     /// Callers add `arrow-array` (and typically `arrow-schema`) to build batches. Dictionary-
     /// encoded arrays are rejected because YDB's Arrow converter does not support them.
+    ///
+    /// # Experimental
+    ///
+    /// Arrow releases breaking versions frequently, and this method currently exposes Arrow's
+    /// native `RecordBatch` type. Check the `arrow-array` version in this crate's dependencies and
+    /// use the same version in your application. A stable API based on serialized Arrow IPC data
+    /// is being designed in [#631].
+    ///
+    /// [#631]: https://github.com/ydb-platform/ydb-rs-sdk/issues/631
     pub fn bulk_upsert_arrow(
         &self,
         table_path: impl Into<String>,
@@ -283,28 +293,16 @@ impl TableClient {
             return Ok(());
         }
 
-        let first_payload = std::sync::Mutex::new(Some(
-            crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(&batch)?,
-        ));
         self.retry_table_operation(
             &opts,
             Idempotency::Idempotent,
-            closure!(
-                [&client = self, &table_path, &batch, &first_payload, &opts],
-                async |_| {
-                    let payload = first_payload
-                        .lock()
-                        .map_err(|_| YdbError::custom("Arrow bulk upsert payload lock poisoned"))?
-                        .take();
-                    let (arrow_schema, arrow_data) = payload.map_or_else(
-                        || crate::arrow_helpers::serialize_record_batch_for_bulk_upsert(batch),
-                        Ok,
-                    )?;
-                    client
-                        .bulk_upsert_arrow_once(table_path.clone(), arrow_schema, arrow_data, opts)
-                        .await
-                }
-            ),
+            closure!([&client = self, &table_path, &batch, &opts], async |_| {
+                let (arrow_schema, arrow_data) =
+                    arrow_helpers::serialize_record_batch_for_bulk_upsert(batch.clone()).await?;
+                client
+                    .bulk_upsert_arrow_once(table_path.clone(), arrow_schema, arrow_data, opts)
+                    .await
+            }),
         )
         .await
     }

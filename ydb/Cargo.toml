@@ -19,7 +19,6 @@ force-exhaustive-all = [
 [dependencies]
 arrow-array = { version = "56.2.0", default-features = false }
 arrow-ipc = { version = "56.2.0", default-features = false }
-arrow-schema = { version = "56.2.0", default-features = false }
 async-trait = "0.1"
 chrono = { version = "0.4", default-features = false, features = [
     "clock",
@@ -66,6 +65,7 @@ flate2 = "1.1.9"
 rayon = "1.10"
 
 [dev-dependencies]
+arrow-schema = { version = "56.2.0", default-features = false }
 async_once = "0.2"
 chrono = { version = "0.4", default-features = false, features = [
     "clock",
