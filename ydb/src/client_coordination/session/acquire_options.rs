@@ -1,8 +1,7 @@
 use crate::errors;
-use derive_builder::Builder;
 use std::time::Duration;
 
-#[derive(Builder, Clone)]
+#[derive(derive_builder::Builder, Clone)]
 #[builder(build_fn(error = "errors::YdbError"))]
 #[allow(dead_code)]
 pub struct AcquireOptions {

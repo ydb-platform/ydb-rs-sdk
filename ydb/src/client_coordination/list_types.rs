@@ -1,5 +1,3 @@
-use derive_builder::Builder;
-
 use crate::grpc_wrapper::raw_coordination_service::config::{
     RawConsistencyMode, RawCoordinationNodeConfig, RawRateLimiterCountersMode,
 };
@@ -58,7 +56,7 @@ impl From<RawRateLimiterCountersMode> for Option<RateLimiterCountersMode> {
     }
 }
 
-#[derive(Builder)]
+#[derive(derive_builder::Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct NodeConfig {
     // Use NodeConfigBuilder

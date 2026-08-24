@@ -1,9 +1,8 @@
 use crate::errors;
-use derive_builder::Builder;
 use std::time::Duration;
 
 #[allow(dead_code)]
-#[derive(Builder, Clone)]
+#[derive(derive_builder::Builder, Clone)]
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct SessionOptions {
     #[builder(default = "Duration::from_secs(20)")]

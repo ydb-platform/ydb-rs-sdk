@@ -19,13 +19,13 @@ use crate::grpc_wrapper::raw_topic_service::describe_consumer::RawDescribeConsum
 use crate::grpc_wrapper::raw_topic_service::describe_topic::RawDescribeTopicRequest;
 use crate::grpc_wrapper::raw_topic_service::drop_topic::RawDropTopicRequest;
 use crate::{YdbResult, grpc_wrapper};
-use derive_builder::{Builder, UninitializedFieldError};
+use derive_builder::UninitializedFieldError;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::instrument;
 
-#[derive(Builder)]
+#[derive(derive_builder::Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct CreateTopicOptions {
     // Use CreateTopicOptionsBuilder
@@ -51,7 +51,7 @@ pub struct CreateTopicOptions {
     pub metering_mode: Option<MeteringMode>,
 }
 
-#[derive(Builder)]
+#[derive(derive_builder::Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct AlterTopicOptions {
     // Use AlterTopicOptionsBuilder
@@ -92,7 +92,7 @@ pub struct AlterTopicOptions {
     pub set_metering_mode: Option<MeteringMode>,
 }
 
-#[derive(Builder)]
+#[derive(derive_builder::Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct DescribeTopicOptions {
     // Use DescribeTopicOptionsBuilder
@@ -102,7 +102,7 @@ pub struct DescribeTopicOptions {
     pub include_location: bool,
 }
 
-#[derive(Builder)]
+#[derive(derive_builder::Builder)]
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct DescribeConsumerOptions {
     // Use DescribeConsumerOptionsBuilder

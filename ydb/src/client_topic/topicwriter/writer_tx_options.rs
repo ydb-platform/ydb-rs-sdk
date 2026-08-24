@@ -1,13 +1,11 @@
 use std::sync::Arc;
 
-use derive_builder::Builder;
-
 use crate::client_topic::compression::{CodecSelection, CompressionEncoder};
 use crate::client_topic::topicwriter::partitioning::PartitioningStrategy;
 use crate::retry_settings::RetrySettings;
 use crate::{TopicWriterOptions, errors};
 
-#[derive(Builder, Clone)]
+#[derive(derive_builder::Builder, Clone)]
 #[builder(build_fn(error = "errors::YdbError"))]
 pub struct TopicWriterTxOptions {
     pub topic_path: String,

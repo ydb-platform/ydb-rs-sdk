@@ -33,8 +33,20 @@ pbjson-types = "0.8.0"
 pbjson-build = "0.8.0"
 
 # Versions of those crates should match, that's why all of them are here.
-tonic = { version = "0.14.2", features = ["tls-ring", "tls-native-roots"] }
+# TLS support with native OS root certificates. Crypto provider is chosen by application binary.
+tonic = { version = "0.14.2", features = ["tls-native-roots"] }
 tonic-prost = "0.14.2"
 tonic-prost-build = "0.14.2"
 
 serde = { version = "1.0", features = ["derive"] }
+
+opentelemetry = "0.32.0"
+opentelemetry-otlp = { version = "0.32.0", default-features = false }
+opentelemetry_sdk = "0.32.1"
+opentelemetry-semantic-conventions = "0.32"
+
+[patch.crates-io]
+opentelemetry = { version = "0.32.0", git = "https://github.com/open-telemetry/opentelemetry-rust.git", rev = "efc4ef4acd17919751674cf1ef9505e4f050de59" }
+opentelemetry-otlp = { version = "0.32.0", git = "https://github.com/open-telemetry/opentelemetry-rust.git", rev = "efc4ef4acd17919751674cf1ef9505e4f050de59" }
+opentelemetry_sdk = { version = "0.32.1", git = "https://github.com/open-telemetry/opentelemetry-rust.git", rev = "efc4ef4acd17919751674cf1ef9505e4f050de59" }
+opentelemetry-semantic-conventions = { version = "0.32", git = "https://github.com/open-telemetry/opentelemetry-rust.git", rev = "efc4ef4acd17919751674cf1ef9505e4f050de59" }

@@ -9,19 +9,31 @@ rust-version.workspace = true
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.22.1"
-clap = { version = "=4.2.7", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 hdrhistogram = "7.5.4"
-opentelemetry = "0.27"
-opentelemetry-otlp = { version = "0.27", default-features = false, features = [
+opentelemetry.workspace = true
+opentelemetry-otlp = { workspace = true, features = [
     "http-proto",
     "metrics",
     "reqwest-client",
-    "reqwest-rustls",
+    # pulls aws-lc-rs, so we don't enable it
+    #"reqwest-rustls",
 ] }
-opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
-opentelemetry-semantic-conventions = "0.27"
-rand = "0.8.5"
-rand_core = "0.6.4"
+# enable TLS support in reqwest. Implicit default crypto provider is chosen at compile-time if only one provider is enabled in the end binary.
+reqwest = { version = "0.13", default-features = false, features = [
+    "http2",
+    "rustls-no-provider",
+] }
+opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
+opentelemetry-semantic-conventions.workspace = true
+rand = "0.9"
+rand_core = "0.9"
+rustls-platform-verifier = "0.7"
+# SLO framework prefers ring crypto provider. It's chosen as an implicit default provider at compile-time as long as it's the only enabled crypto provider.
+rustls = { version = "0.23", default-features = false, features = [
+    "std",
+    "ring",
+] }
 tokio = { version = "=1.38.1", features = ["full", "signal"] }
 tokio-util = { version = "=0.7.11" }
 ydb = { path = "../../../ydb" }
