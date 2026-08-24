@@ -1,4 +1,5 @@
 use crate::client_common::{DBCredentials, TokenCache};
+use crate::client_metrics::names::MetricsNames;
 use crate::client_topic::compression::Executor;
 use crate::credentials::{
     AccessTokenCredentials, CredentialsRef, GCEMetadata, ServiceAccountCredentials,
@@ -235,6 +236,7 @@ pub struct ClientBuilder {
     grpc_opts: GrpcOptions,
     executor: Option<Arc<dyn Executor>>,
     retry_settings: Option<RetrySettings>,
+    driver_name: Option<String>,
 }
 
 impl ClientBuilder {
@@ -271,6 +273,10 @@ impl ClientBuilder {
     }
 
     pub async fn build(self) -> YdbResult<Client> {
+        let metrics_names = MetricsNames::new(self.driver_name);
+
+        metrics_names.client_new_counter.increment(1);
+
         let retry_settings = self
             .retry_settings
             .unwrap_or_else(RetrySettings::with_default_backoff);
@@ -323,6 +329,7 @@ impl ClientBuilder {
             load_balancer,
             self.executor,
             retry_settings,
+            metrics_names,
         )
         .await
     }
@@ -376,6 +383,13 @@ impl ClientBuilder {
         self
     }
 
+    /// Set metrics driver name
+    /// If unset, `main` is used.
+    pub fn with_driver_name(mut self, driver_name: &str) -> Self {
+        self.driver_name = Some(driver_name.to_string());
+        self
+    }
+
     fn new() -> Self {
         Self {
             credentials: credentials_ref(AccessTokenCredentials::from("")),
@@ -387,6 +401,7 @@ impl ClientBuilder {
             grpc_opts: GrpcOptions::default(),
             executor: None,
             retry_settings: None,
+            driver_name: None,
         }
     }
 }

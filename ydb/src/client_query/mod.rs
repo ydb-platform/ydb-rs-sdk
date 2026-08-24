@@ -167,12 +167,14 @@ impl QueryClient {
         connection_manager: GrpcConnectionManager,
         session_pool: SessionPool,
         retry_settings: RetrySettings,
+        metrics_names: MetricsNames,
     ) -> Self {
         Self {
             ctx: ClientExecContext {
                 connection_manager,
                 session_pool,
                 retry_settings,
+                metrics_names,
             },
         }
     }
@@ -292,6 +294,7 @@ impl QueryClient {
                         client.ctx.session_pool.clone(),
                         options.clone(),
                         wall_timeout.map(|d| retry.start_time + d),
+                        client.ctx.metrics_names.clone(),
                     );
 
                     client.try_attempt_body(callback, tx, idempotency).await
@@ -384,6 +387,7 @@ impl QueryExecutor for QueryClient {
     }
 
     fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row, Self::Scope> {
+        self.ctx.metrics_names.client_query_row_counter.increment(1);
         QueryClient::query_row(self, text)
     }
 }
@@ -400,6 +404,7 @@ impl Transaction {
         session_pool: SessionPool,
         options: TransactionOptions,
         retry_deadline: Option<Instant>,
+        metrics_names: MetricsNames,
     ) -> Self {
         Self {
             ctx: transaction_exec_context(
@@ -407,6 +412,7 @@ impl Transaction {
                 session_pool,
                 options,
                 retry_deadline,
+                metrics_names,
             ),
         }
     }
@@ -505,6 +511,10 @@ impl QueryExecutor for Transaction {
     type Scope = builders::Interactive;
 
     fn exec(&mut self, text: impl Into<String>) -> ExecBuilder<'_, Self::Scope> {
+        self.ctx
+            .metrics_names
+            .client_transaction_exec_counter
+            .increment(1);
         Transaction::exec(self, text)
     }
 
@@ -517,10 +527,15 @@ impl QueryExecutor for Transaction {
     }
 
     fn query_row(&mut self, text: impl Into<String>) -> QueryRowBuilder<'_, Row, Self::Scope> {
+        self.ctx
+            .metrics_names
+            .client_transaction_query_row_counter
+            .increment(1);
         Transaction::query_row(self, text)
     }
 }
 
+use crate::client_metrics::names::MetricsNames;
 pub use builders::{
     CallBuilder, ClientOneShot, ExecBuilder, ExecCall, Interactive, OneResultSet, OneRow,
     OptionalRow, OptionalRowBuilder, QueryExecutor, QueryRowBuilder, QueryStreamBuilder,
@@ -586,6 +601,7 @@ mod unit_tests {
             pool.clone(),
             TransactionOptions::default(),
             None,
+            MetricsNames::new(None),
         );
         tx.ctx.pooled_lease = Some(lease);
         exec::transaction_handle_query_error(

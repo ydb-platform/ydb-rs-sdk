@@ -64,8 +64,11 @@ uuid = { version = "1.17.0", features = ["v4", "v7"] }
 ydb-grpc = { version = "0.2.2", path = "../ydb-grpc" }
 flate2 = "1.1.9"
 rayon = "1.10"
+metrics = "0.24.6"
 
 [dev-dependencies]
+prometheus = "0.14.0"
+metrics-prometheus = "0.11.2"
 async_once = "0.2"
 chrono = { version = "0.4", default-features = false, features = [
     "clock",
