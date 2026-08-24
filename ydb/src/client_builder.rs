@@ -1,3 +1,4 @@
+use crate::client::ClientInitSettings;
 use crate::client_common::{DBCredentials, TokenCache};
 use crate::client_metrics::names::MetricsNames;
 use crate::client_topic::compression::Executor;
@@ -328,10 +329,12 @@ impl ClientBuilder {
             discovery,
             connection_manager,
             load_balancer,
-            self.executor,
-            retry_settings,
-            metrics_names,
-            self.session_pool_settings,
+            ClientInitSettings {
+                executor: self.executor,
+                retry_settings,
+                metrics_names,
+                session_pool_settings: self.session_pool_settings,
+            },
         )
         .await
     }

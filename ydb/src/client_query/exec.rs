@@ -49,6 +49,7 @@ impl CallOptions {
 #[derive(Clone)]
 pub(crate) struct ClientExecContext {
     inner: DriverGuarded<ClientExecContextInner>,
+    pub metrics_names: MetricsNames,
 }
 
 #[derive(Clone)]
@@ -56,7 +57,6 @@ pub(crate) struct ClientExecContextInner {
     pub connection_manager: GrpcConnectionManager,
     pub session_pool: SessionPool,
     pub retry_settings: RetrySettings,
-    pub metrics_names: MetricsNames,
 }
 
 impl ClientExecContext {
@@ -72,8 +72,8 @@ impl ClientExecContext {
                 connection_manager,
                 session_pool,
                 retry_settings,
-                metrics_names,
             }),
+            metrics_names,
         }
     }
 

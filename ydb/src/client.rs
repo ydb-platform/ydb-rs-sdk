@@ -39,18 +39,22 @@ pub struct Client {
     lifecycle: DriverLifecycle,
 }
 
+pub(crate) struct ClientInitSettings {
+    pub executor: Option<Arc<dyn Executor>>,
+    pub retry_settings: RetrySettings,
+    pub metrics_names: MetricsNames,
+    pub session_pool_settings: SessionPoolSettings,
+}
+
 impl Client {
     pub(crate) async fn init(
         credentials: DBCredentials,
         discovery: Arc<dyn Discovery>,
         connection_manager: GrpcConnectionManager,
         load_balancer: SharedLoadBalancer,
-        executor: Option<Arc<dyn Executor>>,
-        retry_settings: RetrySettings,
-        metrics_names: MetricsNames,
-        session_pool_settings: SessionPoolSettings,
+        settings: ClientInitSettings,
     ) -> YdbResult<Self> {
-        let executor = match executor {
+        let executor = match settings.executor {
             Some(e) => e,
             None => default_executor()?,
         };
@@ -58,7 +62,7 @@ impl Client {
         let session_pool = SessionPool::new_explicit_sync(
             connection_manager.clone(),
             discovery.clone(),
-            session_pool_settings,
+            settings.session_pool_settings,
         );
 
         Self::wait_until_ready(&credentials, &discovery, &load_balancer).await?;
@@ -69,8 +73,8 @@ impl Client {
             connection_manager,
             executor,
             session_pool,
-            retry_settings,
-            metrics_names,
+            retry_settings: settings.retry_settings,
+            metrics_names: settings.metrics_names,
             lifecycle: DriverLifecycle::new(),
         })
     }
