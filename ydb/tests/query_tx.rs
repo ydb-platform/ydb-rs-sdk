@@ -82,6 +82,7 @@ fn scripted_status(script: &[StatusCode], call: usize) -> StatusCode {
 
 #[derive(Default)]
 struct TxLifecycle {
+    create_session_count: usize,
     commit_count: usize,
     rollback_count: usize,
 }
@@ -322,8 +323,14 @@ impl Handler for ScriptedCommitHandler {
     }
 
     fn handle(&self, incoming: Incoming) -> Option<Incoming> {
-        if let Incoming::Query(QueryIncoming::RollbackTransaction(_, _)) = &incoming {
-            self.tx_lifecycle.lock().unwrap().rollback_count += 1;
+        match &incoming {
+            Incoming::Query(QueryIncoming::CreateSession(_, _)) => {
+                self.tx_lifecycle.lock().unwrap().create_session_count += 1;
+            }
+            Incoming::Query(QueryIncoming::RollbackTransaction(_, _)) => {
+                self.tx_lifecycle.lock().unwrap().rollback_count += 1;
+            }
+            _ => {}
         }
 
         match incoming {
@@ -422,6 +429,10 @@ async fn definitive_commit_failure_retries_whole_transaction() -> YdbResult<()> 
     assert!(result.is_ok(), "expected successful retry, got {result:?}");
     wait_for_rollback_count(&tx_lifecycle, 1).await;
     let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(
+        lifecycle.create_session_count, 1,
+        "successful rollback cleanup must return the session for retry"
+    );
     assert_eq!(
         lifecycle.commit_count, 2,
         "the definitive commit failure must retry the whole transaction"

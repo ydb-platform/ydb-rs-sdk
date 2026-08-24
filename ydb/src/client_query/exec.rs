@@ -1045,7 +1045,7 @@ mod unit_tests {
     }
 
     #[tokio::test]
-    async fn transient_dispatched_error_discards_session_with_possibly_active_transaction() {
+    async fn transient_dispatched_error_discards_session_when_cleanup_fails() {
         for status in [StatusCode::Unavailable, StatusCode::Overloaded] {
             let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
             let lease = pool.acquire_explicit().await.expect("acquire test session");
