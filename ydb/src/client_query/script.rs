@@ -11,10 +11,10 @@ use crate::grpc_wrapper::raw_query_service::fetch_script_results::RawFetchScript
 use crate::result::ResultSet;
 use crate::types::Value;
 
-use futures_util::future::BoxFuture;
+use futures_util::{TryFutureExt, future::BoxFuture};
 use tracing::instrument;
 
-use super::exec::{CallOptions, ClientExecContext, maybe_with_operation_timeout};
+use super::exec::{CallOptions, ClientExecContext, with_optional_timeout};
 
 /// Long-running script operation started by [`QueryClient::execute_script`].
 #[derive(Debug, Clone)]
@@ -184,14 +184,11 @@ async fn client_execute_script_once(
         .connection_manager
         .get_auth_service(RawQueryClient::new)
         .await?;
-    let (id, consumed_units) = match maybe_with_operation_timeout(timeout, async {
-        client.execute_script(req).await.map_err(YdbError::from)
-    })
-    .await
-    {
+    let operation = client.execute_script(req).map_err(YdbError::from);
+    let (id, consumed_units) = match with_optional_timeout(timeout, operation).await {
         Ok(value) => value,
         Err(err) => {
-            if matches!(&err, YdbError::Transport(msg) if msg.contains("timed out")) {
+            if matches!(&err, YdbError::DeadlineExceeded) {
                 tracing::warn!(
                     ?timeout,
                     "execute_script timed out waiting for RPC response; \

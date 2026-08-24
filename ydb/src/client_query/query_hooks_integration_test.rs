@@ -83,7 +83,8 @@ impl QueryTxHook for StatsHook {
 }
 
 fn register_stats_hook(tx: &mut Transaction, stats: &Arc<HookStats>) {
-    tx.register_hook(stats.hook());
+    tx.register_hook(stats.hook())
+        .expect("active transaction must accept a hook");
 }
 
 #[tokio::test]

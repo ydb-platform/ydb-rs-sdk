@@ -614,6 +614,12 @@ impl From<tonic::Status> for YdbError {
     }
 }
 
+impl From<tokio::time::error::Elapsed> for YdbError {
+    fn from(_: tokio::time::error::Elapsed) -> Self {
+        Self::DeadlineExceeded
+    }
+}
+
 impl From<RawError> for YdbError {
     fn from(e: RawError) -> Self {
         match e {

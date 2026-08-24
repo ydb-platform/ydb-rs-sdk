@@ -62,7 +62,7 @@ impl<'a> TopicReaderTx<'a> {
 
         tx.register_hook(ReaderTxHook {
             runtime: runtime.clone(),
-        });
+        })?;
 
         Ok(Self {
             inner: reader,

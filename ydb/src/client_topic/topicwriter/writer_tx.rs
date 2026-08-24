@@ -67,7 +67,7 @@ impl TopicWriterTx {
         let inner = Arc::new(writer);
         tx.register_hook(WriterTxHook {
             writer: inner.clone(),
-        });
+        })?;
 
         Ok(Self { inner })
     }

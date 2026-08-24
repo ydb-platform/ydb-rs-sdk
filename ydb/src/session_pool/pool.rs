@@ -235,7 +235,7 @@ impl SessionPoolLease {
         }
     }
 
-    /// Mark a retained lease unusable. Returning it later will schedule session cleanup.
+    #[cfg(test)]
     pub(crate) fn invalidate(&mut self) {
         self.record.session.invalidate();
     }

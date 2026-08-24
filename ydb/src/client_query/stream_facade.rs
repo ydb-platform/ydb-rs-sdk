@@ -44,8 +44,14 @@ impl Drop for QueryStream<'_> {
 
 impl QueryStream<'_> {
     fn abort(&mut self) {
-        self.apply_captured_transaction_id();
+        if let Err(error) = self.apply_captured_transaction_id() {
+            tracing::warn!(%error, "failed to capture transaction id while cancelling query stream");
+        }
         self.stream.cancel();
+        self.finish_cancelled_lifecycle();
+    }
+
+    fn finish_cancelled_lifecycle(&mut self) {
         let lifecycle = std::mem::replace(&mut self.lifecycle, QueryStreamLifecycle::Finished);
         if let QueryStreamLifecycle::Active(QueryStreamOwner::Tx { context, .. }) = lifecycle {
             tx_cancel_query(context);
@@ -75,25 +81,27 @@ impl<'a> QueryStream<'a> {
         }
     }
 
-    fn apply_transaction_id(&mut self, transaction_id: Option<String>) {
+    fn apply_transaction_id(&mut self, transaction_id: Option<String>) -> YdbResult<()> {
         if let QueryStreamLifecycle::Active(QueryStreamOwner::Tx { context, .. }) =
             &mut self.lifecycle
         {
-            apply_stream_tx_id(context, transaction_id);
+            apply_stream_tx_id(context, transaction_id)?;
         }
+        Ok(())
     }
 
-    fn apply_captured_transaction_id(&mut self) {
+    fn apply_captured_transaction_id(&mut self) -> YdbResult<()> {
         let transaction_id = self.stream.take_captured_tx_id();
-        self.apply_transaction_id(transaction_id);
+        self.apply_transaction_id(transaction_id)
     }
 
-    fn handle_error(&mut self, error: &YdbError) {
+    fn handle_error(&mut self, error: &YdbError) -> YdbResult<()> {
         if let QueryStreamLifecycle::Active(QueryStreamOwner::Tx { context, .. }) =
             &mut self.lifecycle
         {
-            tx_handle_query_error(context, error);
+            tx_handle_query_error(context, error)?;
         }
+        Ok(())
     }
 
     fn finish(&mut self) -> YdbResult<()> {
@@ -116,26 +124,26 @@ impl<'a> QueryStream<'a> {
             Ok(v) => v,
             Err(err) => {
                 let ydb_err = YdbError::from(err);
-                self.handle_error(&ydb_err);
+                self.stream.cancel();
+                self.handle_error(&ydb_err)?;
                 if matches!(
                     &self.lifecycle,
                     QueryStreamLifecycle::Active(QueryStreamOwner::Client(_))
                 ) && !ydb_err.requires_session_discard()
                 {
-                    self.stream.cancel();
                     return Err(ydb_err);
                 }
-                self.abort();
+                self.lifecycle = QueryStreamLifecycle::Finished;
                 return Err(ydb_err);
             }
         };
         match next {
             Some((raw, transaction_id)) => {
-                self.apply_transaction_id(transaction_id);
+                self.apply_transaction_id(transaction_id)?;
                 ResultSet::try_from(raw).map(Some)
             }
             None => {
-                self.apply_captured_transaction_id();
+                self.apply_captured_transaction_id()?;
                 Ok(None)
             }
         }
@@ -150,12 +158,13 @@ impl<'a> QueryStream<'a> {
     pub async fn close(mut self) -> YdbResult<()> {
         match self.stream.close().await {
             Ok(meta) => {
-                self.apply_transaction_id(meta.tx_id);
+                self.apply_transaction_id(meta.tx_id)?;
                 self.finish()
             }
             Err(err) => {
                 let ydb_err = YdbError::from(err);
-                self.handle_error(&ydb_err);
+                self.handle_error(&ydb_err)?;
+                self.lifecycle = QueryStreamLifecycle::Finished;
                 Err(ydb_err)
             }
         }
@@ -170,13 +179,13 @@ impl<'a> QueryStream<'a> {
 /// On [`QueryClient`], the full open+drain+close cycle is retried on retryable errors.
 /// Interactive transactions are materialized once since tx retries are owned by [`QueryClient::retry_tx`] loop.
 pub(crate) async fn materialize_query(
-    target: &mut ExecTarget<'_>,
+    core: &mut ExecTarget<'_>,
     text: String,
     params: HashMap<String, Value>,
     opts: CallOptions,
 ) -> YdbResult<Vec<ResultSet>> {
-    let commit_at_end = resolve_commit_tx(target, &opts);
-    match target {
+    let commit_at_end = resolve_commit_tx(core, &opts);
+    match core {
         ExecTarget::Client(ctx) => {
             ctx.retry_settings
                 .clone()
@@ -228,25 +237,25 @@ async fn materialize_tx_once(
     let raw_sets = match drain_result_sets(&mut stream).await {
         Ok(raw_sets) => raw_sets,
         Err(ydb_err) => {
-            tx_handle_query_error(context, &ydb_err);
+            tx_handle_query_error(context, &ydb_err)?;
             return Err(ydb_err);
         }
     };
     let sets = match convert_result_sets(raw_sets) {
         Ok(sets) => sets,
         Err(ydb_err) => {
-            tx_handle_query_error(context, &ydb_err);
+            tx_handle_query_error(context, &ydb_err)?;
             return Err(ydb_err);
         }
     };
     match stream.close().await {
         Ok(meta) => {
-            apply_stream_tx_id(context, meta.tx_id);
+            apply_stream_tx_id(context, meta.tx_id)?;
             tx_finish_query(context, commit_at_end)?;
         }
         Err(err) => {
             let ydb_err = YdbError::from(err);
-            tx_handle_query_error(context, &ydb_err);
+            tx_handle_query_error(context, &ydb_err)?;
             return Err(ydb_err);
         }
     }
