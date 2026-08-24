@@ -575,9 +575,18 @@ pub(crate) fn tx_handle_query_error(tx: &mut TxExecContext, err: &YdbError) {
     }
 }
 
-pub(crate) fn tx_invalidate_session(tx: &mut TxExecContext) {
-    if let TxState::Active(active) = &mut tx.state {
-        active.lease.invalidate();
+/// Cancel a transaction query whose response stream was not successfully closed.
+pub(crate) fn tx_cancel_query(tx: &mut TxExecContext) {
+    if !tx.state.is_active() {
+        return;
+    }
+
+    let error = YdbError::InternalError(
+        "query response stream was dropped before successful close".to_string(),
+    );
+    match tx.replace_active(TxState::Undetermined(error)) {
+        Ok(mut active) => active.lease.invalidate(),
+        Err(error) => tracing::error!(%error, "failed to cancel transaction query"),
     }
 }
 

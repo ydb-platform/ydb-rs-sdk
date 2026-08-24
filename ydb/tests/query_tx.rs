@@ -366,6 +366,46 @@ async fn commit_via_query_reports_committed() -> YdbResult<()> {
     Ok(())
 }
 
+async fn assert_dropped_transaction_stream_is_not_committed(drain: bool) -> YdbResult<()> {
+    let (handler, tx_lifecycle) = CountingHandler::new();
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            let mut stream = tx.query("SELECT 1; SELECT 2").await?;
+            if drain {
+                while stream.next_result_set().await?.is_some() {}
+            }
+            drop(stream);
+            Ok(())
+        }))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "a dropped transaction stream must fail the attempt"
+    );
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 0);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn dropped_partially_consumed_transaction_stream_is_not_committed() -> YdbResult<()> {
+    // Opening primes one response part; dropping now leaves the remaining stream unread.
+    assert_dropped_transaction_stream_is_not_committed(false).await
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn dropped_drained_transaction_stream_is_not_committed() -> YdbResult<()> {
+    assert_dropped_transaction_stream_is_not_committed(true).await
+}
+
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn empty_commit_via_query_response_is_not_committed() -> YdbResult<()> {

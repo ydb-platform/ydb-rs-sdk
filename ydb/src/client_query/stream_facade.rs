@@ -11,7 +11,7 @@ use crate::types::Value;
 use super::exec::{
     CallOptions, ClientExecContext, ClientQuerySession, ExecTarget, OpenedClientQueryStream,
     TxExecContext, apply_stream_tx_id, client_begin_stream_once, resolve_commit_tx,
-    tx_begin_stream, tx_finish_query, tx_handle_query_error, tx_invalidate_session,
+    tx_begin_stream, tx_cancel_query, tx_finish_query, tx_handle_query_error,
 };
 
 /// Streaming query result. Drain all result sets and call [`Self::close`] to return an owned
@@ -45,13 +45,10 @@ impl Drop for QueryStream<'_> {
 impl QueryStream<'_> {
     fn abort(&mut self) {
         self.apply_captured_transaction_id();
-        let dropped_mid_stream = self.stream.in_progress();
         self.stream.cancel();
         let lifecycle = std::mem::replace(&mut self.lifecycle, QueryStreamLifecycle::Finished);
-        if let QueryStreamLifecycle::Active(QueryStreamOwner::Tx { context, .. }) = lifecycle
-            && dropped_mid_stream
-        {
-            tx_invalidate_session(context);
+        if let QueryStreamLifecycle::Active(QueryStreamOwner::Tx { context, .. }) = lifecycle {
+            tx_cancel_query(context);
         }
     }
 }
