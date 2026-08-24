@@ -165,27 +165,26 @@ async fn execute_cleanup_task(
 
 async fn delete_session(
     connection_manager: GrpcConnectionManager,
-    delete_timeout: Duration,
+    cleanup_timeout: Duration,
     identity: Arc<SessionIdentity>,
 ) {
-    let mut client = match connection_manager
-        .get_auth_service_to_node(RawQueryClient::new, &identity.node_uri)
-        .await
-    {
-        Ok(client) => client,
-        Err(err) => {
-            warn!(session_id = %identity.session_id, error = %err, "failed to connect for DeleteSession");
-            return;
-        }
+    let delete = async {
+        let mut client = connection_manager
+            .get_auth_service_to_node(RawQueryClient::new, &identity.node_uri)
+            .await?;
+        client
+            .delete_session(&identity.session_id)
+            .await
+            .map_err(YdbError::from)
     };
 
-    match tokio::time::timeout(delete_timeout, client.delete_session(&identity.session_id)).await {
+    match tokio::time::timeout(cleanup_timeout, delete).await {
         Ok(Ok(())) => {}
         Ok(Err(err)) => {
-            warn!(session_id = %identity.session_id, error = %err, "DeleteSession failed")
+            warn!(session_id = %identity.session_id, error = %err, "DeleteSession cleanup failed")
         }
         Err(_) => {
-            warn!(session_id = %identity.session_id, ?delete_timeout, "DeleteSession timed out")
+            warn!(session_id = %identity.session_id, ?cleanup_timeout, "DeleteSession cleanup timed out")
         }
     }
 }
