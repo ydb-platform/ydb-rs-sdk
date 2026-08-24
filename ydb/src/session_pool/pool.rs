@@ -77,6 +77,8 @@ pub struct SessionPoolSettings {
     /// Close idle sessions after this duration (0 = unlimited).
     pub idle_ttl: Duration,
     pub session_create_timeout: Duration,
+    /// Maximum time for a best-effort session cleanup RPC, including `DeleteSession` and
+    /// transaction rollback performed before a session can be reused.
     pub session_delete_timeout: Duration,
     /// Max wait when [`SessionPool::acquire_explicit`] blocks on the pool semaphore.
     pub acquire_timeout: Duration,
@@ -152,7 +154,7 @@ impl SessionPoolSettings {
         self
     }
 
-    /// Maximum time for DeleteSession when the pool closes a session.
+    /// Maximum time for a best-effort session cleanup RPC.
     pub fn with_session_delete_timeout(mut self, timeout: Duration) -> Self {
         self.session_delete_timeout = timeout;
         self
@@ -199,6 +201,10 @@ impl SessionPoolLease {
 
     pub fn ensure_healthy(&self) -> YdbResult<()> {
         self.record.session.ensure_healthy()
+    }
+
+    pub(crate) fn cleanup_timeout(&self) -> Duration {
+        self.pool.settings.session_delete_timeout
     }
 
     /// Consume this lease and offer its session back to the pool. Pool policy may still discard

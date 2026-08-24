@@ -792,21 +792,31 @@ pub(super) fn release_unfinished_tx(connection_manager: GrpcConnectionManager, a
         | TxServerProgress::RollbackInFlight(_) => return,
     };
 
+    let cleanup_timeout = lease.cleanup_timeout();
+    let node_uri = lease.node_uri().clone();
+    let session_id = lease.session_id().to_string();
+
     spawn_pool_release(async move {
-        let client_result = connection_manager
-            .get_auth_service_to_node(RawQueryClient::new, lease.node_uri())
-            .await;
-        let rollback_ok = match client_result {
-            Ok(mut client) => client
-                .rollback_transaction(lease.session_id(), tx_id.as_str())
+        let rollback = async move {
+            let mut client = connection_manager
+                .get_auth_service_to_node(RawQueryClient::new, &node_uri)
+                .await?;
+            client
+                .rollback_transaction(&session_id, tx_id.as_str())
                 .await
-                .is_ok(),
-            Err(_) => false,
+                .map_err(YdbError::from)
         };
-        if rollback_ok {
-            lease.return_to_pool();
-        }
+        finish_rollback_cleanup(lease, cleanup_timeout, rollback).await;
     });
+}
+
+async fn finish_rollback_cleanup<F>(lease: SessionPoolLease, cleanup_timeout: Duration, rollback: F)
+where
+    F: Future<Output = YdbResult<()>>,
+{
+    if matches!(timeout(cleanup_timeout, rollback).await, Ok(Ok(()))) {
+        lease.return_to_pool();
+    }
 }
 
 pub(crate) fn tx_exec_context(
@@ -1064,6 +1074,27 @@ mod unit_tests {
             .acquire_explicit()
             .await
             .expect("acquire replacement session");
+        assert_ne!(replacement.session_id(), session_id);
+        replacement.return_to_pool();
+    }
+
+    #[tokio::test]
+    async fn rollback_cleanup_timeout_discards_session_and_releases_pool_permit() {
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let lease = pool.acquire_explicit().await.expect("acquire test session");
+        let session_id = lease.session_id().to_string();
+
+        finish_rollback_cleanup(
+            lease,
+            Duration::ZERO,
+            std::future::pending::<YdbResult<()>>(),
+        )
+        .await;
+
+        let replacement = pool
+            .acquire_explicit()
+            .await
+            .expect("timed-out rollback must release the pool permit");
         assert_ne!(replacement.session_id(), session_id);
         replacement.return_to_pool();
     }
