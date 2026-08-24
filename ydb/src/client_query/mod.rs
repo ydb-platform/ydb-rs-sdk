@@ -249,9 +249,7 @@ impl QueryClient {
                         %error,
                         "rollback after transaction callback failure did not complete"
                     );
-                    if matches!(&tx.ctx.state, TxState::Undetermined(_)) {
-                        retry_error = RetryError::UndeterminedTx(error);
-                    }
+                    retry_error = retry_error_for_operation(&tx.ctx.state, error);
                 }
                 return retry_error.retry_flow(idempotency);
             }

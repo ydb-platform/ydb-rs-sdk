@@ -451,9 +451,13 @@ async fn idempotent_transaction_retries_undetermined_commit_outcome() -> YdbResu
         .await;
 
     assert!(result.is_ok(), "expected successful retry, got {result:?}");
+    wait_for_rollback_count(&tx_lifecycle, 1).await;
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(lifecycle.commit_count, 2);
-    assert_eq!(lifecycle.rollback_count, 0);
+    assert_eq!(
+        lifecycle.rollback_count, 1,
+        "the returned commit error must be cleaned up before retry"
+    );
     Ok(())
 }
 

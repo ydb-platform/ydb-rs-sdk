@@ -80,8 +80,8 @@ pub(crate) enum TxState {
     Committed,
     /// Rollback path was chosen and the SDK must not report a commit.
     RolledBack,
-    /// A conclusive failure ended the local transaction attempt. Its session ownership has already
-    /// been resolved; retry policy decides whether to start another attempt.
+    /// A returned operation error ended the local transaction attempt. Its session ownership has
+    /// already been resolved; retry policy decides whether to start another attempt.
     AttemptFailed(YdbError),
     /// A dispatched operation's server outcome was not conclusively observed.
     Undetermined(YdbError),
@@ -243,9 +243,9 @@ impl TxExecContext {
         replacement: TxState,
         status: QueryTxCommitStatus,
     ) -> YdbResult<SessionPoolLease> {
-        let mut active = self.replace_active(replacement)?;
-        active.notify_hooks(status);
-        Ok(active.lease)
+        let mut previous_active = self.replace_active(replacement)?;
+        previous_active.notify_hooks(status);
+        Ok(previous_active.lease)
     }
 
     /// End an attempt with an unknown server outcome and discard its session.
@@ -296,17 +296,6 @@ impl TxExecContext {
         Ok(())
     }
 
-    fn resolve_finalization_error(&mut self, error: &YdbError) -> YdbResult<()> {
-        // An error that is safe to retry even for non-idempotent work guarantees that the
-        // finalization did not complete. Other retry classes do not prove the outcome of an
-        // already-dispatched commit or rollback, so keep those outcomes undetermined.
-        if error.is_retriable(Idempotency::NonIdempotent) {
-            self.fail_attempt(error)
-        } else {
-            self.finish_undetermined(error.clone())
-        }
-    }
-
     fn handle_pre_dispatch_error(&mut self, error: &YdbError) -> YdbResult<()> {
         if error.requires_session_discard() {
             self.fail_attempt(error)?;
@@ -355,14 +344,14 @@ impl Drop for TxExecContext {
             (TxOperationState::InFlight, _) => return,
         };
 
+        let cleanup_timeout = lease.cleanup_timeout();
+        let session_id = lease.session_id().to_string();
+
         spawn_pool_release(async move {
-            let rollback_ok = client
-                .rollback_transaction(lease.session_id(), tx_id.as_str())
-                .await
-                .is_ok();
-            if rollback_ok {
-                lease.return_to_pool();
-            }
+            let rollback = client
+                .rollback_transaction(&session_id, tx_id.as_str())
+                .map_err(YdbError::from);
+            finish_rollback_cleanup(lease, cleanup_timeout, rollback).await;
         });
     }
 }
@@ -855,7 +844,7 @@ pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
             Ok(())
         }
         Err(error) => {
-            tx.resolve_finalization_error(&error)?;
+            tx.fail_attempt(&error)?;
             Err(error)
         }
     }
@@ -899,7 +888,7 @@ pub(crate) async fn tx_rollback(tx: &mut TxExecContext) -> YdbResult<()> {
             Ok(())
         }
         Err(error) => {
-            tx.resolve_finalization_error(&error)?;
+            tx.fail_attempt(&error)?;
             Err(error)
         }
     }
@@ -1080,31 +1069,6 @@ mod unit_tests {
             assert_ne!(replacement.session_id(), session_id);
             replacement.return_to_pool();
         }
-    }
-
-    #[tokio::test]
-    async fn undetermined_finalization_discards_session() {
-        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
-        let lease = pool.acquire_explicit().await.expect("acquire test session");
-        let session_id = lease.session_id().to_string();
-        let mut ctx = test_transaction_context(lease).await;
-        ctx.mark_query_in_flight_for_test("tx-1");
-        let error = YdbError::YdbStatusError(crate::errors::YdbStatusError::new(
-            "transaction outcome unknown",
-            StatusCode::Undetermined as i32,
-            vec![],
-        ));
-
-        ctx.resolve_finalization_error(&error)
-            .expect("unknown outcome must finish the transaction");
-
-        assert!(matches!(ctx.state, TxState::Undetermined(_)));
-        let replacement = pool
-            .acquire_explicit()
-            .await
-            .expect("discarded session must be replaced");
-        assert_ne!(replacement.session_id(), session_id);
-        replacement.return_to_pool();
     }
 
     #[tokio::test]
