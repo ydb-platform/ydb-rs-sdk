@@ -34,8 +34,8 @@ use std::time::{Duration, Instant};
 use http::Uri;
 use tracing::instrument;
 
-use crate::client_query::exec::TxState;
 use crate::client_metrics::names::MetricsNames;
+use crate::client_query::exec::TxState;
 use crate::closure;
 use crate::errors::{
     Idempotency, YdbError, YdbOrCustomerError, YdbResult, YdbResultWithCustomerErr,
@@ -687,6 +687,7 @@ mod unit_tests {
             test_connection_manager(),
             pool.clone(),
             RetrySettings::dont_retry(),
+            MetricsNames::new(None),
         );
         let observed_pool = pool.clone();
 
@@ -707,7 +708,12 @@ mod unit_tests {
             SessionPoolSettings::new().with_limit(1),
             1,
         );
-        let client = QueryClient::new(test_connection_manager(), pool, RetrySettings::dont_retry());
+        let client = QueryClient::new(
+            test_connection_manager(),
+            pool,
+            RetrySettings::dont_retry(),
+            MetricsNames::new(None),
+        );
         let callback_called = Arc::new(AtomicBool::new(false));
         let observed_called = callback_called.clone();
 
@@ -728,7 +734,12 @@ mod unit_tests {
             SessionPoolSettings::new().with_limit(1),
             1,
         );
-        let client = QueryClient::new(test_connection_manager(), pool, RetrySettings::dont_retry());
+        let client = QueryClient::new(
+            test_connection_manager(),
+            pool,
+            RetrySettings::dont_retry(),
+            MetricsNames::new(None),
+        );
         let callback_called = Arc::new(AtomicBool::new(false));
 
         let observed_called = callback_called.clone();
@@ -766,6 +777,7 @@ mod unit_tests {
             test_connection_manager(),
             pool,
             RetrySettings::with_default_backoff(),
+            MetricsNames::new(None),
         );
         let callback_calls = Arc::new(AtomicUsize::new(0));
         let observed_calls = callback_calls.clone();

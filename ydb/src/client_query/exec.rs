@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use futures_util::TryFutureExt;
 use tokio::time::timeout;
 
-use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::client_metrics::names::MetricsNames;
+use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_query_service::execute_query::RawExecuteQueryRequest;
@@ -823,6 +823,7 @@ pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
         return Err(err);
     }
     let operation_timeout = remaining_retry_timeout(tx.retry_deadline);
+    let commit_counter = tx.metrics_names.client_transaction_commit_counter.clone();
     let active = tx.active_mut()?;
     if active.server_progress.operation.is_in_flight() {
         return Err(TxServerProgress::operation_in_progress_error());
@@ -833,9 +834,7 @@ pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
         return Ok(());
     };
 
-    tx.metrics_names
-        .client_transaction_commit_counter
-        .increment(1);
+    commit_counter.increment(1);
 
     debug_assert_eq!(active.server_progress.operation, TxOperationState::Ready);
     active.server_progress.operation = TxOperationState::InFlight;
@@ -1006,7 +1005,13 @@ mod unit_tests {
             .get_auth_service_to_node(RawQueryClient::new, lease.node_uri())
             .await
             .expect("create test query client");
-        tx_exec_context(client, lease, TransactionOptions::default(), None)
+        tx_exec_context(
+            client,
+            lease,
+            TransactionOptions::default(),
+            None,
+            MetricsNames::new(None),
+        )
     }
 
     #[test]
