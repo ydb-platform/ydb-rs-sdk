@@ -619,7 +619,7 @@ async fn write_skipped_already_written_returns_error_and_rolls_back() -> YdbResu
 
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn write_returns_error_after_stream_close_and_rolls_back() -> YdbResult<()> {
+async fn ignored_write_error_rolls_back_and_rebuilds_writer() -> YdbResult<()> {
     let (handler, _, captured_stream_id, tx_lifecycle) = ReconnectHandler::new();
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
@@ -641,8 +641,7 @@ async fn write_returns_error_after_stream_close_and_rolls_back() -> YdbResult<()
                     .close(stream_id)
                     .expect("mock server failed to fail write stream");
 
-                let result = writer_tx.write(test_message()).await;
-                result?;
+                let _write_result = writer_tx.write(test_message()).await;
                 Ok(())
             }
         ))
@@ -650,15 +649,24 @@ async fn write_returns_error_after_stream_close_and_rolls_back() -> YdbResult<()
 
     assert!(result.is_err(), "expected error after stream failure");
 
+    client
+        .query_client()
+        .retry_tx(closure!([&mut writer], async |tx: &mut Transaction| {
+            let writer_tx = writer.transactional(tx).await?;
+            writer_tx.write(test_message()).await?;
+            Ok(())
+        }))
+        .await?;
+
     let tx_lifecycle = tx_lifecycle.lock().unwrap();
-    assert_eq!(tx_lifecycle.begin_count, 1);
+    assert_eq!(tx_lifecycle.begin_count, 2);
     assert_eq!(
         tx_lifecycle.rollback_count, 1,
         "write error must roll back the query transaction"
     );
     assert_eq!(
-        tx_lifecycle.commit_count, 0,
-        "failed write must not commit the query transaction"
+        tx_lifecycle.commit_count, 1,
+        "replacement writer must commit only the second transaction"
     );
 
     Ok(())

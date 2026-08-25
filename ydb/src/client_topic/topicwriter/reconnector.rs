@@ -155,9 +155,13 @@ impl ReconnectionLoop {
         loop {
             let Err(error) = wait_for_failure(background_tasks).await;
             trace!("topic writer connection failed: {error}");
-            self.state.handle_connection_failure(epoch, error.clone())?;
+            let retry_error = self.state.handle_connection_failure(epoch, error)?;
+            self.state.wait_for_transaction_finish().await?;
 
-            let established_connection = self.retry_after_failure(error).await?;
+            let established_connection = match retry_error {
+                Some(error) => self.retry_after_failure(error).await?,
+                None => self.establish_connection_with_retry().await?,
+            };
             epoch = self.state.epoch()?;
             background_tasks = self.spawn_connection_tasks(established_connection, epoch)?;
         }
@@ -184,6 +188,18 @@ impl ReconnectionLoop {
                         }
                     }
                 ),
+            )
+    }
+
+    fn establish_connection_with_retry(
+        &self,
+    ) -> impl std::future::Future<Output = YdbResult<EstablishedConnection>> + '_ {
+        self.writer_options
+            .retry_settings
+            .retry_on_retriable_errors(
+                Idempotency::Idempotent,
+                closure!([&reconnection_loop = self], |_| reconnection_loop
+                    .establish_connection()),
             )
     }
 
