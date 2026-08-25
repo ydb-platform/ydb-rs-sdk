@@ -1,16 +1,17 @@
 use std::sync::Arc;
 
+use ydb_grpc::ydb_proto::status_ids::StatusCode;
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
 use tracing::instrument;
 
-use crate::YdbResult;
 use crate::client_query::Transaction;
 use crate::client_query::hooks::{QueryTxCommitStatus, QueryTxHook};
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::writer::TopicWriter;
 use crate::grpc_connection_manager::GrpcConnectionManager;
+use crate::{YdbError, YdbResult};
 
 use super::writer_tx_options::TopicWriterTxOptions;
 
@@ -36,10 +37,29 @@ impl WriterTxHook {
 #[async_trait::async_trait]
 impl QueryTxHook for WriterTxHook {
     async fn before_commit(&mut self) -> YdbResult<()> {
-        self.flush().await
+        self.flush().await.map_err(normalize_topic_tx_error)
     }
 
     fn after_commit(&mut self, _status: QueryTxCommitStatus) {}
+}
+
+fn normalize_topic_tx_error(mut error: YdbError) -> YdbError {
+    // The Topic transaction bridge collapses KQP transaction failures, including a vanished
+    // Query session reported as BAD_SESSION, to UNKNOWN_TXID and exposes it as NOT_FOUND. At this
+    // boundary that means the Topic transaction identity can no longer be used. The observed
+    // response was:
+    // operation_status=400140, issue_code=500030,
+    // message="status is not ok: <main>: Error: Session not found.\n".
+    // Some server responses omit all issue details, so this workaround deliberately matches the
+    // status at the exact Topic transaction boundary instead of depending on issue_code or text.
+    // Ordinary Query NOT_FOUND errors retain their documented retry and session-reuse policy.
+    // https://ydb.tech/docs/en/reference/ydb-sdk/ydb-status-codes
+    if let YdbError::YdbStatusError(status) = &mut error
+        && status.operation_status == StatusCode::NotFound as i32
+    {
+        status.operation_status = StatusCode::BadSession as i32;
+    }
+    error
 }
 
 impl TopicWriterTx {
