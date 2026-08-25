@@ -142,6 +142,19 @@ impl Metrics {
         record_latency_series(&self.inner.topic_e2e_latency, latency, attrs_key);
     }
 
+    pub fn initialize_error_series(&self, operation_type: OperationType, error_name: &'static str) {
+        self.inner.errors_total.add(
+            0,
+            &[
+                KeyValue::new("ref", self.inner.ref_name.clone()),
+                KeyValue::new("operation_type", operation_type),
+                KeyValue::new("operation_status", STATUS_FAILURE),
+                KeyValue::new("error_category", "ydb"),
+                KeyValue::new("error_name", error_name),
+            ],
+        );
+    }
+
     pub(crate) fn check(&self) -> Result<(), String> {
         check_latency_series(&self.inner.operation_latency, "operation latency")?;
         check_latency_series(&self.inner.topic_e2e_latency, "topic end-to-end latency")

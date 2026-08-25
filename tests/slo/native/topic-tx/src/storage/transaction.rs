@@ -14,8 +14,7 @@ use slo_framework::topic_tx::{MessageCoordinate, Params, PartitionId};
 use slo_framework::{Logger, Metrics};
 
 use super::queries::{insert_transition, transition_from_batch};
-
-const OPERATION_TRANSACTION: &str = "transaction";
+use super::{ERROR_COMMIT_PHASE_FAILURE, ERROR_OPERATIONAL_FAILURE, OPERATION_TRANSACTION};
 
 /// Owns one partition reader and advances its chain one transaction at a time.
 pub(crate) struct PartitionWorker {
@@ -99,12 +98,12 @@ impl PartitionWorker {
                 ChainAdvanceOutcome::CommitPhaseFailure(coordinate, error) => {
                     let message =
                         format!("transaction commit phase failed at {coordinate}: {error:#}");
-                    span.finish(Some("commit_phase_failure"), attempts);
+                    span.finish(Some(ERROR_COMMIT_PHASE_FAILURE), attempts);
                     logger.errorf(message);
                 }
                 ChainAdvanceOutcome::OperationalFailure(error) => {
                     let message = format!("{error:#}");
-                    span.finish(Some("operational_failure"), attempts);
+                    span.finish(Some(ERROR_OPERATIONAL_FAILURE), attempts);
                     logger.errorf(message);
                 }
                 ChainAdvanceOutcome::InvalidChainState(error) => {
