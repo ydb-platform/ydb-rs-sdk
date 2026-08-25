@@ -1,10 +1,8 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;
 use tokio::task::JoinSet;
-use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
 use slo_framework::topic_tx::PartitionId;
@@ -59,7 +57,6 @@ impl Workload for TopicTxWorkload {
         worker_cancel.cancel();
         let shutdown_result = join_workers(&mut worker_tasks).await;
         let run_result = preserve_primary_error(run_result, shutdown_result);
-        sleep(Duration::from_secs(1)).await;
         preserve_primary_error(run_result, self.storage.verify_shutdown_state().await)
     }
 
