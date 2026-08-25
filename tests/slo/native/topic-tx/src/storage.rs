@@ -2,13 +2,13 @@ mod queries;
 mod transaction;
 mod verification;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use ydb::{
     Client, ClientBuilder, ConsumerBuilder, CreateTopicOptionsBuilder, PartitioningStrategy,
     QueryClient, SessionPoolSettings, TopicClient, TopicWriterMessage, TopicWriterOptions,
 };
 
-use slo_framework::topic_tx::{ChainEvent, Params, PartitionId, TopicOffset};
+use slo_framework::topic_tx::{ChainEvent, Params, PartitionId};
 use slo_framework::{Framework, preserve_primary_error};
 
 pub(super) use transaction::PartitionWorker;
@@ -161,33 +161,6 @@ impl TopicTxStorage {
             })?;
         }
 
-        let partitions = self.read_partition_offsets().await?;
-        let expected_partitions = self.params.partition_count;
-        if partitions.len() != expected_partitions {
-            bail!(
-                "expected {expected_partitions} initialized partitions, found {}",
-                partitions.len(),
-            );
-        }
-        for (raw_partition_id, partition) in partitions.into_iter().enumerate() {
-            let expected_partition_id = PartitionId::new(raw_partition_id as i64);
-            if partition.partition_id != expected_partition_id {
-                bail!(
-                    "expected initialized partition {expected_partition_id}, found {}",
-                    partition.partition_id,
-                );
-            }
-            if partition.committed_offset != TopicOffset::new(0)
-                || partition.end_offset != TopicOffset::new(1)
-            {
-                bail!(
-                    "partition {} was not initialized with exactly one event: committed offset {}, end offset {}",
-                    partition.partition_id,
-                    partition.committed_offset,
-                    partition.end_offset,
-                );
-            }
-        }
         Ok(())
     }
 }

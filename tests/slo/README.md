@@ -129,22 +129,19 @@ transition, writes its successor to the same partition, and commits the consumer
 offset. Workers share the bounded query session pool; the defaults provide one
 query session per partition worker.
 
-After shutdown, every partition must have exactly one unconsumed chain event:
-
-```text
-topic end offset - committed consumer offset = 1
-```
-
-The transition table must contain exactly one row for every committed input
-offset, with contiguous generations. A failure after the workload callback has
+After workers stop, verification transactionally consumes the final chain event from every
+partition and reads the corresponding transition table state. It validates the observation only
+after the transaction commits successfully, so the topic offset update and table read have passed
+YDB's serializable transaction checks. The transition table must contain exactly one row for every
+committed input offset, with contiguous generations. A failure after the workload callback has
 finished is recorded as a commit-phase failure. That phase includes the topic
 writer flush and the commit RPC, so the workload neither labels every such
 failure as ambiguous nor tries to resolve its outcome. The transactional reader
-reconnects in the background and continues from the offset exposed by YDB. A
-one-second quiet period before final verification reduces, but cannot eliminate,
-the chance of a late commit changing that state. The workload does not exercise
-automatic topic partitioning or consumer-group rebalancing; the plain topic
-workload owns that coverage.
+reconnects in the background and continues from the offset exposed by YDB. If a
+late commit conflicts with verification, the verification transaction retries and
+observes the resulting committed state. The workload does not exercise automatic
+topic partitioning or consumer-group rebalancing; the plain topic workload owns
+that coverage.
 
 Topic transaction metrics measure one logical chain advance, including any
 internal `retry_tx` attempts. Retry overhead is the number of extra attempts per
