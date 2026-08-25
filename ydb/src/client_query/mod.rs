@@ -606,11 +606,11 @@ mod unit_tests {
         tx.ctx.pooled_lease = Some(lease);
         exec::transaction_handle_query_error(
             &mut tx.ctx,
-            &YdbError::YdbStatusError(YdbStatusError {
-                message: "transaction failed".to_string(),
-                operation_status: status as i32,
-                issues: Vec::new(),
-            }),
+            &YdbError::YdbStatusError(YdbStatusError::new(
+                "transaction failed",
+                status as i32,
+                Vec::new(),
+            )),
         );
         assert!(matches!(tx.ctx.state, TxState::Invalidated(_)));
         (tx, session_id)

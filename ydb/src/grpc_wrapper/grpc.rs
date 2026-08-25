@@ -11,11 +11,11 @@ pub(crate) fn grpc_check_status<T>(operation: &impl YdbGrpcStatus<T>) -> RawResu
         let issues = operation.issues()?;
         let issues = issues.to_vec();
 
-        Err(RawError::YdbStatus(crate::errors::YdbStatusError {
-            message: format!("{:?}", operation),
-            operation_status: status.into(),
-            issues: proto_issues_to_ydb_issues(issues),
-        }))
+        Err(RawError::YdbStatus(crate::errors::YdbStatusError::new(
+            format!("{:?}", operation),
+            status.into(),
+            proto_issues_to_ydb_issues(issues),
+        )))
     } else {
         Ok(())
     }
@@ -47,11 +47,11 @@ where
 }
 
 pub(crate) fn create_operation_error(op: ydb_grpc::ydb_proto::operations::Operation) -> RawError {
-    RawError::YdbStatus(crate::errors::YdbStatusError {
-        message: format!("{:?}", op),
-        operation_status: op.status,
-        issues: proto_issues_to_ydb_issues(op.issues),
-    })
+    RawError::YdbStatus(crate::errors::YdbStatusError::new(
+        format!("{:?}", op),
+        op.status,
+        proto_issues_to_ydb_issues(op.issues),
+    ))
 }
 
 pub(crate) fn proto_issues_to_ydb_issues(proto_issues: Vec<IssueMessage>) -> Vec<YdbIssue> {

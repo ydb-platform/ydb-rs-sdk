@@ -764,11 +764,11 @@ mod unit_tests {
         ctx.tx_id = Some("tx-1".into());
         transaction_handle_query_error(
             &mut ctx,
-            &YdbError::YdbStatusError(crate::errors::YdbStatusError {
-                message: "bad".into(),
-                operation_status: StatusCode::GenericError as i32,
-                issues: vec![],
-            }),
+            &YdbError::YdbStatusError(crate::errors::YdbStatusError::new(
+                "bad",
+                StatusCode::GenericError as i32,
+                vec![],
+            )),
         );
         assert!(!ctx.state.is_active());
         assert!(ctx.tx_id.is_none());
