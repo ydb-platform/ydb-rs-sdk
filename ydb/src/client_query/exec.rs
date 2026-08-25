@@ -971,11 +971,11 @@ mod unit_tests {
         ctx.active_mut()
             .expect("active transaction")
             .server_progress = TxServerProgress::BeginInFlight;
-        let error = YdbError::YdbStatusError(crate::errors::YdbStatusError {
-            message: "transaction rejected".into(),
-            operation_status: StatusCode::Aborted as i32,
-            issues: vec![],
-        });
+        let error = YdbError::YdbStatusError(crate::errors::YdbStatusError::new(
+            "transaction rejected",
+            StatusCode::Aborted as i32,
+            vec![],
+        ));
 
         ctx.fail_attempt(&error)
             .expect("rejected operation must finish the transaction");
@@ -1005,11 +1005,11 @@ mod unit_tests {
             ctx.active_mut()
                 .expect("active transaction")
                 .server_progress = TxServerProgress::Started("tx-1".to_string());
-            let error = YdbError::YdbStatusError(crate::errors::YdbStatusError {
-                message: "temporary query failure".into(),
-                operation_status: status as i32,
-                issues: vec![],
-            });
+            let error = YdbError::YdbStatusError(crate::errors::YdbStatusError::new(
+                "temporary query failure",
+                status as i32,
+                vec![],
+            ));
 
             ctx.fail_attempt(&error)
                 .expect("temporary failure must finish the local transaction attempt");
@@ -1039,11 +1039,11 @@ mod unit_tests {
         ctx.active_mut()
             .expect("active transaction")
             .server_progress = TxServerProgress::BeginInFlight;
-        let error = YdbError::YdbStatusError(crate::errors::YdbStatusError {
-            message: "transaction outcome unknown".into(),
-            operation_status: StatusCode::Undetermined as i32,
-            issues: vec![],
-        });
+        let error = YdbError::YdbStatusError(crate::errors::YdbStatusError::new(
+            "transaction outcome unknown",
+            StatusCode::Undetermined as i32,
+            vec![],
+        ));
 
         ctx.fail_attempt(&error)
             .expect("undetermined outcome must finish the transaction");
