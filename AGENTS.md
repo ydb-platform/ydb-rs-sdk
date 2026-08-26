@@ -62,7 +62,7 @@ If the change touches `Cargo.toml`, `Cargo.lock` or `deny.toml`, also run:
 
 ```bash
 python3 .github/scripts/check_workspace_deps.py
-cargo deny --locked --all-features --exclude-unpublished --exclude-dev check bans licenses sources -D unmatched-skip
+cargo deny --locked --all-features --exclude-unpublished --exclude-dev check bans licenses sources -D unmatched-skip -D unnecessary-skip
 cargo deny --locked --all-features check advisories
 ```
 
