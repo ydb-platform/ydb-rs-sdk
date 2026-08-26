@@ -1,0 +1,63 @@
+name: Dependencies
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    # Advisories are published against the committed Cargo.lock, so the check
+    # has to run without a push to be of any use.
+    - cron: '43 4 * * *'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+  # Pinned modern Rust version, kept in sync with the other workflows.
+  RUST_VERSION_MODERN: "1.96"
+
+jobs:
+  workspace-dependencies:
+    name: Workspace dependency inheritance
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check that members inherit [workspace.dependencies]
+        run: python3 .github/scripts/check_workspace_deps.py
+
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_VERSION_MODERN }}
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      # The graph a user of the `ydb` / `ydb-grpc` crates actually compiles:
+      # no dev-dependencies, no `publish = false` SLO workloads. A second
+      # version of any crate in it fails the build, see deny.toml.
+      - name: Published dependency graph
+        run: |
+          cargo deny --locked --all-features --exclude-unpublished --exclude-dev \
+            check bans licenses sources -D unmatched-skip -D unnecessary-skip
+
+      # Advisories cover everything that is built in this repository, including
+      # dev-dependencies and the SLO workloads.
+      - name: Security advisories
+        run: cargo deny --locked --all-features check advisories

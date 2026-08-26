@@ -33,7 +33,7 @@ impl LoadBalancer for RandomLoadBalancer {
             ))),
             Some(nodes) => {
                 if !nodes.is_empty() {
-                    let index = rand::random::<usize>() % nodes.len();
+                    let index = rand::random_range(0..nodes.len());
                     let node = &nodes[index % nodes.len()];
                     Ok(node.uri.clone())
                 } else {
