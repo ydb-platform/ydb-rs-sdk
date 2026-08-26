@@ -62,11 +62,13 @@ Duplicates that the workspace cannot collapse are listed in `[bans].skip` with t
 
 `--exclude-unpublished` drops the `publish = false` SLO workloads from the graph, `--exclude-dev` drops dev-dependencies; both are checked for advisories by the second invocation but are not part of the single-version rule.
 
+When a duplicate can only be avoided by holding a crate back, the hold goes in `Cargo.lock`, never as an upper bound in `[workspace.dependencies]`: a bound there is published in the `ydb` manifest and constrains every application that uses the same crate. The reason for the hold is a comment next to the requirement. Today there is one: `bon` stays at 3.9.x because 3.10 moved to `darling` 0.24 while `derive_builder` 0.20 — the last release — is capped at `darling` 0.20, and 3.9 accepts both. A `cargo update` that raises `bon` brings the `darling` duplicate back and fails the bans check; the way out is to drop `derive_builder` in favour of `bon`, or to take the duplicate back with a `[bans].skip` entry.
+
 MSRV-sensitive Clippy checks are enabled in root `[workspace.lints.clippy]` via `incompatible_msrv = "warn"`. Clippy derives the MSRV from each package's `rust-version`, inherited from root `[workspace.package]`; CI runs Clippy on Rust 1.96 and promotes warnings to errors with `-D warnings`.
 
 The protobuf regeneration container (`ydb-grpc/generate-protobuf.Dockerfile`) intentionally uses Rust 1.88.0 to keep generated code buildable on the declared MSRV. SLO workload images intentionally use Rust 1.96.0.
 
-Do not run `cargo update` or bump dependency versions unless the task requires it.
+Do not run `cargo update` or bump dependency versions unless the task requires it. When it does, run both `cargo deny` invocations afterwards: a refreshed lock is exactly where a new duplicate or advisory shows up.
 
 ## Features
 
