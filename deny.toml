@@ -53,17 +53,11 @@ wildcards = "deny"
 allow-wildcard-paths = true
 
 # Duplicates that this workspace cannot collapse: every entry names what keeps
-# the second version alive. CI runs the check with `-D unmatched-skip`, so an
-# entry that stops matching fails the build and has to be deleted — the list
-# cannot rot into a blanket allowance.
+# the second version alive. CI runs the check with `-D unmatched-skip -D
+# unnecessary-skip`, so an entry that stops matching, or that covers a crate
+# which now has a single version, fails the build and has to be deleted — the
+# list cannot rot into a blanket allowance.
 skip = [
-    # `derive_builder` 0.20 is on `darling` 0.20, `bon` 3 is on `darling` 0.24.
-    # Collapses when `derive_builder` catches up, or when the remaining
-    # `derive_builder` derives are migrated to `bon`. Constraining `bon` to
-    # 3.5 does not help: the requirement still resolves to the newest 3.x.
-    { crate = "darling@0.20", reason = "derive_builder 0.20 pins darling 0.20, bon 3 pins darling 0.24" },
-    { crate = "darling_core@0.20", reason = "see darling" },
-    { crate = "darling_macro@0.20", reason = "see darling" },
     # Three versions, one per consumer: `ring` (through `rustls`) is on 0.2,
     # `rand` 0.9 on 0.3, `uuid` 1 on 0.4. None of them is ours to move.
     { crate = "getrandom", reason = "ring pins getrandom 0.2, rand 0.9 pins 0.3, uuid 1 pins 0.4" },
@@ -72,7 +66,6 @@ skip = [
     # ecosystem is mid-transition from `syn` 2 to `syn` 3, and `derivative`
     # (unmaintained, see the advisory ignore above) is still on `syn` 1.
     { crate = "syn", reason = "proc-macro dependency, ecosystem is between syn 2 and syn 3" },
-    { crate = "prettyplease", reason = "build-time only, version follows syn" },
     { crate = "hashbrown", reason = "build-time only: indexmap is on 0.17, petgraph (via prost-build) on 0.15" },
 ]
 
