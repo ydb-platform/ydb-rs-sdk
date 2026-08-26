@@ -41,10 +41,26 @@ CI uses `ydbplatform/local-ydb:nightly` (see `rust-tests.yml`); image tag may di
 | `publish-crate.yml` | manual dispatch | version bump + crates.io publish on Rust 1.96 |
 | `slo.yml` | PR label `SLO` + manual dispatch | SLO tests via `ydb-slo-action` v2; workload Docker images build on Rust 1.96 |
 | `slo-report.yml` | after `SLO` workflow | Publishes SLO report to PR comment |
+| `dependencies.yml` | push/PR + nightly cron | `cargo deny` on the published graph (bans/licenses/sources) and advisories on the whole workspace, plus the `[workspace.dependencies]` inheritance check |
 
 ## Workspace dependency policy
 
-Shared versions for `prost`, `tonic`, `pbjson` are declared in the root `Cargo.toml` under `[workspace.dependencies]`. Member crates reference them with `workspace = true`.
+Every third-party dependency of every workspace member is declared once, in the root `Cargo.toml` under `[workspace.dependencies]`; members inherit it with `{ workspace = true }` and may only add `features`. A version requirement in a member manifest is a CI failure (`.github/scripts/check_workspace_deps.py`), as is a `[workspace.dependencies]` entry that no member inherits. The single documented exception is the OpenTelemetry stack of `slo-framework`, which is a major version behind the one the `ydb` examples use; the exemption list lives in that script.
+
+One requirement per crate keeps a crate at one version in the resolved tree. `deny.toml` enforces the result:
+
+```bash
+# the graph a user of the published crates compiles: a second version of any
+# crate is an error
+cargo deny --locked --all-features --exclude-unpublished --exclude-dev \
+    check bans licenses sources -D unmatched-skip
+# RustSec advisories over everything built in this repository
+cargo deny --locked --all-features check advisories
+```
+
+Duplicates that the workspace cannot collapse are listed in `[bans].skip` with the crates that keep them alive. `-D unmatched-skip` turns an entry that no longer matches into a failure, so the list has to be pruned when a bump makes it obsolete. Same for `[advisories].ignore`: the only entry is `RUSTSEC-2024-0388` (`derivative` unmaintained, being replaced).
+
+`--exclude-unpublished` drops the `publish = false` SLO workloads from the graph, `--exclude-dev` drops dev-dependencies; both are checked for advisories by the second invocation but are not part of the single-version rule.
 
 MSRV-sensitive Clippy checks are enabled in root `[workspace.lints.clippy]` via `incompatible_msrv = "warn"`. Clippy derives the MSRV from each package's `rust-version`, inherited from root `[workspace.package]`; CI runs Clippy on Rust 1.96 and promotes warnings to errors with `-D warnings`.
 
