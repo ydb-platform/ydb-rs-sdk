@@ -173,10 +173,10 @@ pub use grpc_options::{GrpcOptions, HasGrpcOptions};
 pub use client_query::{
     CallBuilder, ClientOneShot, ExecBuilder, ExecCall, ExecuteScriptBuilder,
     ExecuteScriptOperation, ExplainQueryBuilder, ExplainResult, FetchScriptResult,
-    FetchScriptResultsBuilder, FromYdbRow, Interactive, OneResultSet, OneRow, OptionalRow,
-    OptionalRowBuilder, QueryClient, QueryExecutor, QueryRowBuilder, QueryStats, QueryStream,
-    QueryStreamBuilder, ResultSetBuilder, RetryTxAttempt, RetryTxBuilder, Streamed, Transaction,
-    TransactionOptions, TxMode,
+    FetchScriptResultsBuilder, FromYdbRow, Interactive, Materialized, OneResultSet, OneRow,
+    OptionalRow, OptionalRowBuilder, QueryBuilder, QueryClient, QueryExecutor, QueryResultSet,
+    QueryRowBuilder, QueryStats, QueryStream, QueryStreamBuilder, ResultSetBuilder, RetryTxAttempt,
+    RetryTxBuilder, Streamed, Transaction, TransactionOptions, TxMode,
 };
 
 // full enum pub types

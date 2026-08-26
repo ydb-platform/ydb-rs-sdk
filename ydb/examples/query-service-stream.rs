@@ -1,5 +1,6 @@
 //! Multi-result-set streaming inside `retry_tx` (lazy tx on implicit session).
 
+use futures_util::TryStreamExt;
 use ydb::{ClientBuilder, Transaction, closure};
 
 #[tokio::main]
@@ -26,16 +27,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             //
             // The single-stream-per-transaction invariant comes for free.
 
-            let mut set_count = 0;
-            while let Some(result_set) = stream.next_result_set().await? {
-                for mut row in result_set {
-                    let _ = row.remove_field_by_name("a");
+            let mut result_set_count = 0;
+            while let Some(mut result_set) = stream.next_result_set().await? {
+                while let Some(part) = result_set.try_next().await? {
+                    for mut row in part {
+                        let _ = row.remove_field_by_name("a");
+                    }
                 }
-                set_count += 1;
+                result_set_count += 1;
             }
-            stream.close().await?;
 
-            Ok(set_count)
+            Ok(result_set_count)
         }))
         .await?;
 

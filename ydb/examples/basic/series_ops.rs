@@ -1,9 +1,7 @@
 use std::fmt::Write;
 use std::time::{Duration, SystemTime};
 
-use ydb::{
-    Bytes, ExecBuilder, QueryClient, QueryStreamBuilder, TxMode, Value, YdbResult, ydb_struct,
-};
+use ydb::{Bytes, ExecBuilder, QueryBuilder, QueryClient, TxMode, Value, YdbResult, ydb_struct};
 
 use super::data::SampleData;
 
@@ -13,7 +11,7 @@ fn idem_exec<'a>(b: ExecBuilder<'a>) -> ExecBuilder<'a> {
     b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
 }
 
-fn idem_query<'a>(b: QueryStreamBuilder<'a>) -> QueryStreamBuilder<'a> {
+fn idem_query<'a>(b: QueryBuilder<'a>) -> QueryBuilder<'a> {
     b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
 }
 
@@ -118,9 +116,9 @@ pub async fn read_series(qc: &mut QueryClient, prefix: &str) -> YdbResult<()> {
         table_path(prefix, "series")
     );
 
-    let mut stream = idem_query(qc.query(sql).with_tx_mode(TxMode::SnapshotReadOnly)).await?;
+    let result_sets = idem_query(qc.query(sql).with_tx_mode(TxMode::SnapshotReadOnly)).await?;
 
-    while let Some(result_set) = stream.next_result_set().await? {
+    for result_set in result_sets {
         for mut row in result_set {
             let series_id: Option<Bytes> = row.remove_field_by_name("series_id")?.try_into()?;
             let series_bytes: Vec<u8> = series_id.expect("series_id present").into();
@@ -135,7 +133,6 @@ pub async fn read_series(qc: &mut QueryClient, prefix: &str) -> YdbResult<()> {
             );
         }
     }
-    stream.close().await?;
     Ok(())
 }
 

@@ -104,6 +104,7 @@ Topic Status: test_topic
 
 */
 
+use futures_util::TryStreamExt;
 use std::time::Duration;
 use tokio::time::timeout;
 use ydb::{
@@ -450,23 +451,23 @@ async fn main() -> YdbResult<()> {
                 .await?;
 
             let mut rows = Vec::new();
-            if let Some(result_set) = stream.next_result_set().await? {
-                for mut row in result_set {
-                    let topic: String = row.remove_field_by_name("topic")?.try_into()?;
-                    let partition: i64 = row.remove_field_by_name("partition")?.try_into()?;
-                    let offset: i64 = row.remove_field_by_name("offset")?.try_into()?;
-                    let body: Option<String> = row.remove_field_by_name("body")?.try_into()?;
+            while let Some(mut result_set) = stream.next_result_set().await? {
+                while let Some(part) = result_set.try_next().await? {
+                    for mut row in part {
+                        let topic: String = row.remove_field_by_name("topic")?.try_into()?;
+                        let partition: i64 = row.remove_field_by_name("partition")?.try_into()?;
+                        let offset: i64 = row.remove_field_by_name("offset")?.try_into()?;
+                        let body: Option<String> = row.remove_field_by_name("body")?.try_into()?;
 
-                    rows.push(TableRow {
-                        topic,
-                        partition,
-                        offset,
-                        body: body.unwrap_or_default(),
-                    });
+                        rows.push(TableRow {
+                            topic,
+                            partition,
+                            offset,
+                            body: body.unwrap_or_default(),
+                        });
+                    }
                 }
             }
-            stream.close().await?;
-
             Ok(rows)
         }))
         .await;

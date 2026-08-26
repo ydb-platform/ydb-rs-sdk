@@ -85,9 +85,8 @@ async fn explain_query_once(
     req.exec_mode = RawExecMode::Explain;
 
     let mut stream = ExecuteQueryStream::new(client.execute_query(req).await?);
-    // Drains the stream and checks every part's status. EXPLAIN sends no result sets, so the
-    // returned vector is empty; the plan arrives as stream metadata.
-    stream.materialize_all_result_sets().await?;
+    // Drains the stream and checks every part's status. The plan arrives as stream metadata.
+    stream.drain().await?;
     Ok(stream.take_query_plan())
 }
 

@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use ydb::{Bytes, ClientBuilder, ExecBuilder, QueryStreamBuilder, Value, YdbResult, ydb_struct};
+use ydb::{Bytes, ClientBuilder, ExecBuilder, QueryBuilder, Value, YdbResult, ydb_struct};
 
 const EXAMPLE_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -11,7 +11,7 @@ fn idem_exec<'a>(b: ExecBuilder<'a>) -> ExecBuilder<'a> {
     b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
 }
 
-fn idem_query<'a>(b: QueryStreamBuilder<'a>) -> QueryStreamBuilder<'a> {
+fn idem_query<'a>(b: QueryBuilder<'a>) -> QueryBuilder<'a> {
     b.idempotent(true).timeout(EXAMPLE_TIMEOUT)
 }
 
@@ -160,14 +160,14 @@ async fn search_items_as_bytes(
         "#
     );
 
-    let mut stream = idem_query(
+    let result_sets = idem_query(
         qc.query(query)
             .param("$embedding", convert_vector_to_bytes(embedding)),
     )
     .await?;
 
     let mut hits = Vec::new();
-    while let Some(result_set) = stream.next_result_set().await? {
+    for result_set in result_sets {
         for mut row in result_set {
             let id: Option<String> = row.remove_field_by_name("id")?.try_into()?;
             let document: Option<String> = row.remove_field_by_name("document")?.try_into()?;
@@ -179,7 +179,6 @@ async fn search_items_as_bytes(
             });
         }
     }
-    stream.close().await?;
     Ok(hits)
 }
 

@@ -50,6 +50,7 @@ async fn topic_writer_tx_write_and_commit() -> YdbResult<()> {
                     Ok(true)
                 }
             ))
+            .timeout(Duration::from_secs(10))
             .await?;
     }
 
