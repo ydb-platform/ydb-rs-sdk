@@ -56,9 +56,10 @@ pub(crate) async fn create_client_with_session_pool(
 ) -> YdbResult<Arc<Client>> {
     let client = test_client_builder()
         .with_executor(Arc::new(InplaceExecutor))
+        .with_session_pool(settings)
         .build()
         .await?;
-    Ok(Arc::new(client.with_session_pool(settings).await?))
+    Ok(Arc::new(client))
 }
 
 async fn connect(executor: Arc<dyn Executor>) -> YdbResult<Arc<Client>> {

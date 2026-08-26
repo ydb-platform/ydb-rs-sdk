@@ -149,6 +149,9 @@ impl<'a> IntoFuture for FetchScriptResultsBuilder<'a> {
     }
 }
 
+// Unlike FetchScriptResults, ExecuteScript is not retried: a server-side start followed by a
+// client transport error would spawn duplicate long-running operations.
+#[instrument(name = "ydb.ExecuteScript", skip_all, fields(db.system.name = "ydb", ydb.Query.text = %crate::traces::helpers::ensure_len_string(&text)), err)]
 async fn client_execute_script(
     ctx: &ClientExecContext,
     text: String,
@@ -156,23 +159,10 @@ async fn client_execute_script(
     opts: CallOptions,
     results_ttl: Duration,
 ) -> YdbResult<ExecuteScriptOperation> {
-    // Unlike FetchScriptResults, ExecuteScript is not retried: a server-side start
-    // followed by a client transport error would spawn duplicate long-running ops.
-    client_execute_script_once(ctx, &text, &params, &opts, results_ttl).await
-}
-
-#[instrument(name = "ydb.ExecuteScript", skip_all, fields(db.system.name = "ydb", ydb.Query.text = %crate::traces::helpers::ensure_len_string(text)), err)]
-async fn client_execute_script_once(
-    ctx: &ClientExecContext,
-    text: &str,
-    params: &HashMap<String, Value>,
-    opts: &CallOptions,
-    results_ttl: Duration,
-) -> YdbResult<ExecuteScriptOperation> {
     let timeout = opts.timeout;
     let req = RawExecuteScriptRequest {
-        yql_text: text.to_string(),
-        parameters: params.clone(),
+        yql_text: text,
+        parameters: params,
         results_ttl,
         operation_params: TimeoutSettings {
             operation_timeout: timeout,
@@ -181,6 +171,7 @@ async fn client_execute_script_once(
         collect_stats: false,
     };
     let mut client = ctx
+        .access()?
         .connection_manager
         .get_auth_service(RawQueryClient::new)
         .await?;
@@ -211,9 +202,9 @@ async fn client_fetch_script_results(
     rows_limit: i64,
     opts: CallOptions,
 ) -> YdbResult<FetchScriptResult> {
+    let retry_settings = ctx.access()?.retry_settings.clone();
     // FetchScriptResults is always safe to retry (aligned with Go SDK).
-    ctx.retry_settings
-        .clone()
+    retry_settings
         .with_deadline(opts.timeout)
         .retry_on_retriable_errors(
             Idempotency::Idempotent,
@@ -248,6 +239,7 @@ async fn client_fetch_script_results_once(
         rows_limit,
     };
     let mut client = ctx
+        .access()?
         .connection_manager
         .get_auth_service(RawQueryClient::new)
         .await?;

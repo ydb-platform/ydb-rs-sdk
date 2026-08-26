@@ -49,6 +49,7 @@ pub(crate) mod client_topic;
 pub(crate) mod connection_pool;
 mod credentials;
 pub(crate) mod discovery;
+mod driver_lifecycle;
 mod errors;
 mod grpc;
 pub(crate) mod grpc_connection_manager;
