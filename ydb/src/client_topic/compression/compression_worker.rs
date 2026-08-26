@@ -4,7 +4,7 @@ use crate::client_topic::compression::codec_selector::{CodecSelection, CodecSele
 use crate::client_topic::compression::executor::Executor;
 use crate::client_topic::list_types::Codec;
 use crate::{YdbError, YdbResult};
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{convert::Infallible, num::NonZeroUsize, sync::Arc};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
@@ -53,49 +53,76 @@ impl CompressionWorker {
         })
     }
 
-    pub(crate) fn spawn_into(self, tasks: &mut JoinSet<()>, mut rx: InputRx, tx: OutputTx) {
+    pub(crate) fn spawn_into(
+        self,
+        tasks: &mut JoinSet<YdbResult<Infallible>>,
+        rx: InputRx,
+        tx: OutputTx,
+    ) {
         let CompressionWorker {
-            mut codec_selector,
+            codec_selector,
             codec_registry,
             queue,
-            mut results_rx,
+            results_rx,
             parallelism,
         } = self;
 
-        tasks.spawn(async move {
-            while let Some(mut batch) = rx.recv().await {
-                codec_selector.step(&batch).await;
-                let codec = codec_selector.codec();
-                let chunk_size =
-                    (batch.len() / parallelism).clamp(1, super::MAX_MESSAGES_PER_CHUNK);
+        tasks.spawn(schedule_batches(
+            rx,
+            codec_selector,
+            codec_registry,
+            queue,
+            parallelism,
+        ));
+        tasks.spawn(forward_chunks(results_rx, tx));
+    }
+}
 
-                while !batch.is_empty() {
-                    let chunk: Vec<MessageData> =
-                        batch.drain(..chunk_size.min(batch.len())).collect();
-                    let ends_batch = batch.is_empty();
+async fn schedule_batches(
+    mut rx: InputRx,
+    mut codec_selector: CodecSelector,
+    codec_registry: Arc<CodecRegistry>,
+    queue: OrderedTaskQueue<CompressedChunk>,
+    parallelism: NonZeroUsize,
+) -> YdbResult<Infallible> {
+    loop {
+        let mut batch = rx.recv().await.ok_or_else(|| {
+            YdbError::Transport("compression worker input channel closed".to_string())
+        })?;
 
-                    let registry = codec_registry.clone();
+        codec_selector.step(&batch).await;
+        let codec = codec_selector.codec();
+        let chunk_size = (batch.len() / parallelism).clamp(1, super::MAX_MESSAGES_PER_CHUNK);
 
-                    queue
-                        .submit(Box::new(move || {
-                            compress_chunk(chunk, codec, ends_batch, registry)
-                        }))
-                        .await;
-                }
-            }
-        });
+        while !batch.is_empty() {
+            let chunk: Vec<MessageData> = batch.drain(..chunk_size.min(batch.len())).collect();
+            let ends_batch = batch.is_empty();
+            let registry = codec_registry.clone();
 
-        tasks.spawn(async move {
-            while let Some(result_tx) = results_rx.recv().await {
-                let result = result_tx
-                    .await
-                    .unwrap_or(Err(YdbError::custom("executor compression task panicked")));
+            queue
+                .submit(Box::new(move || {
+                    compress_chunk(chunk, codec, ends_batch, registry)
+                }))
+                .await;
+        }
+    }
+}
 
-                if tx.send(result).is_err() {
-                    break;
-                }
-            }
-        });
+async fn forward_chunks(
+    mut results_rx: ordered_task_queue::TaskResultRx<CompressedChunk>,
+    tx: OutputTx,
+) -> YdbResult<Infallible> {
+    loop {
+        let result_tx = results_rx.recv().await.ok_or_else(|| {
+            YdbError::Transport("compression worker result channel closed".to_string())
+        })?;
+        let result = result_tx.await.map_err(|_| {
+            YdbError::Transport("compression executor result channel closed".to_string())
+        })?;
+
+        tx.send(result).map_err(|_| {
+            YdbError::Transport("compression worker output channel closed".to_string())
+        })?;
     }
 }
 

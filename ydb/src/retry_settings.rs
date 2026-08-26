@@ -94,16 +94,6 @@ impl RetrySettings {
         }
     }
 
-    /// Waits for the deadline.
-    ///
-    /// Can be used to manually implement retry loop in difficult
-    /// cases. Not recommended to use. If you use it, make sure
-    /// that all your operations are aborted when deadline is exceeded.
-    /// Also make sure that the deadline is polled at the start of the loop.
-    pub(crate) async fn wait_deadline(&self) {
-        self.deadline.wait_deadline().await
-    }
-
     /// Applies deadline for given retry loop future.
     pub(crate) async fn run_with_deadline<D: Future<Output = ()>, F: Future>(
         deadline: D,
@@ -114,13 +104,6 @@ impl RetrySettings {
             res = f => Some(res),
             () = deadline => None
         }
-    }
-
-    /// Waits until retry or deadline.
-    ///
-    /// Returns whether to continue retries.
-    pub(crate) async fn wait_retry(&self, retry: &RetryState) -> ControlFlow<()> {
-        self.strategy.wait_retry(retry).await
     }
 
     /// Makes an attempt with proper tracing.
@@ -640,7 +623,7 @@ mod tests {
         assert!(
             tokio::time::timeout(
                 Duration::from_millis(15),
-                retry_budget.wait_retry(&RetryState::init()),
+                retry_budget.strategy.wait_retry(&RetryState::init()),
             )
             .await
             .unwrap()
@@ -685,6 +668,7 @@ mod tests {
 
         assert!(
             retry_settings
+                .strategy
                 .wait_retry(&RetryState::init())
                 .await
                 .is_break()

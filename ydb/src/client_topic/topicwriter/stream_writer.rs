@@ -1,9 +1,9 @@
+use std::convert::Infallible;
 use std::sync::Arc;
 
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
-use tokio_util::sync::CancellationToken;
-use tracing::{trace, warn};
+use tracing::trace;
 
 use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
@@ -13,7 +13,7 @@ use crate::client_topic::compression::{
 };
 use crate::client_topic::list_types::Codec;
 use crate::client_topic::topicwriter::message_write_status::WriteAck;
-use crate::client_topic::topicwriter::queue::Queue;
+use crate::client_topic::topicwriter::state::WriterState;
 use crate::client_topic::topicwriter::write_request::{
     PendingWriteRequest, TryAddMessage, WriteRequestSettings,
 };
@@ -22,292 +22,168 @@ use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
 use crate::{YdbError, YdbResult};
 
-/// Manages the gRPC stream communications: write loop and receive-messages loop.
-/// Reports error via error_tx.
-pub(crate) struct StreamWriter {
-    tasks: JoinSet<()>,
-    cancellation_token: CancellationToken,
+pub(super) fn spawn_connection_tasks(
+    writer_options: TopicWriterOptions,
+    stream: AsyncGrpcStreamWrapper<
+        stream_write_message::FromClient,
+        stream_write_message::FromServer,
+    >,
+    state: WriterState,
+    server_codecs: Vec<Codec>,
+    executor: Arc<dyn Executor>,
+    write_request_settings: WriteRequestSettings,
+) -> YdbResult<JoinSet<YdbResult<Infallible>>> {
+    let mut codec_registry = CodecRegistry::new();
+    for enc in &writer_options.extra_encoders {
+        codec_registry.register_encoder(enc.clone());
+    }
+
+    let worker = CompressionWorker::new(
+        writer_options.codec_selector,
+        Arc::new(codec_registry),
+        executor,
+        server_codecs,
+    )?;
+
+    let (batch_tx, batch_rx) = mpsc::unbounded_channel::<Vec<MessageData>>();
+    let (compressed_tx, compressed_rx) = mpsc::unbounded_channel::<YdbResult<CompressedChunk>>();
+
+    let request_stream = stream.clone_sender();
+
+    let mut tasks = JoinSet::new();
+
+    tasks.spawn(write_messages(state.clone(), batch_tx));
+
+    worker.spawn_into(&mut tasks, batch_rx, compressed_tx);
+
+    tasks.spawn(send_compressed_chunks(
+        compressed_rx,
+        request_stream,
+        write_request_settings,
+    ));
+
+    tasks.spawn(receive_messages(state, stream));
+
+    Ok(tasks)
 }
 
-impl StreamWriter {
-    pub(super) async fn new(
-        writer_options: TopicWriterOptions,
-        stream: AsyncGrpcStreamWrapper<
-            stream_write_message::FromClient,
-            stream_write_message::FromServer,
-        >,
-        queue: Queue,
-        error_sender: oneshot::Sender<YdbError>,
-        server_codecs: Vec<Codec>,
-        executor: Arc<dyn Executor>,
-        write_request_settings: WriteRequestSettings,
-    ) -> YdbResult<Self> {
-        let cancellation_token = CancellationToken::new();
-
-        // Both loops share the same oneshot error channel.
-        let shared_error_tx = Arc::new(Mutex::new(Some(error_sender)));
-
-        let mut codec_registry = CodecRegistry::new();
-        for enc in &writer_options.extra_encoders {
-            codec_registry.register_encoder(enc.clone());
+async fn write_messages(
+    state: WriterState,
+    batch_tx: mpsc::UnboundedSender<Vec<MessageData>>,
+) -> YdbResult<Infallible> {
+    loop {
+        let messages = state.get_messages_to_send().await?;
+        if messages.is_empty() {
+            continue;
         }
+        batch_tx.send(messages).map_err(|_| {
+            YdbError::Transport("compression worker input channel closed".to_string())
+        })?;
+    }
+}
 
-        let worker = CompressionWorker::new(
-            writer_options.codec_selector,
-            Arc::new(codec_registry),
-            executor,
-            server_codecs,
+async fn send_compressed_chunks(
+    mut compressed_rx: mpsc::UnboundedReceiver<YdbResult<CompressedChunk>>,
+    request_stream: mpsc::UnboundedSender<stream_write_message::FromClient>,
+    write_request_settings: WriteRequestSettings,
+) -> YdbResult<Infallible> {
+    let mut pending_request = None;
+
+    loop {
+        let chunk = compressed_rx.recv().await.ok_or_else(|| {
+            YdbError::Transport("compression worker output channel closed".to_string())
+        })??;
+        send_compressed_chunk(
+            &request_stream,
+            &write_request_settings,
+            &mut pending_request,
+            chunk,
         )?;
+    }
+}
 
-        let (batch_tx, batch_rx) = mpsc::unbounded_channel::<Vec<MessageData>>();
-        let (compressed_tx, compressed_rx) =
-            mpsc::unbounded_channel::<YdbResult<CompressedChunk>>();
+fn send_compressed_chunk(
+    request_stream: &mpsc::UnboundedSender<stream_write_message::FromClient>,
+    settings: &WriteRequestSettings,
+    pending_request: &mut Option<PendingWriteRequest>,
+    chunk: CompressedChunk,
+) -> YdbResult<()> {
+    let CompressedChunk {
+        messages,
+        codec,
+        ends_batch,
+    } = chunk;
 
-        let request_stream = stream.clone_sender();
-
-        let mut tasks = JoinSet::new();
-
-        tasks.spawn(StreamWriter::write_messages_loop(
-            cancellation_token.clone(),
-            shared_error_tx.clone(),
-            queue.clone(),
-            batch_tx,
-        ));
-
-        worker.spawn_into(&mut tasks, batch_rx, compressed_tx);
-
-        tasks.spawn(StreamWriter::grpc_send_loop(
-            cancellation_token.clone(),
-            shared_error_tx.clone(),
-            compressed_rx,
-            request_stream,
-            write_request_settings,
-        ));
-
-        tasks.spawn(StreamWriter::receive_messages_loop(
-            cancellation_token.clone(),
-            shared_error_tx,
-            queue,
-            stream,
-        ));
-
-        Ok(Self {
-            tasks,
-            cancellation_token,
-        })
+    if let Some(request) = pending_request.as_ref()
+        && request.codec() != codec
+    {
+        return Err(YdbError::custom(format!(
+            "compression codec changed before the topic write batch ended: previous_codec={}, next_codec={}",
+            request.codec().code,
+            codec.code,
+        )));
     }
 
-    async fn write_messages_loop(
-        cancellation_token: CancellationToken,
-        error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
-        queue: Queue,
-        batch_tx: mpsc::UnboundedSender<Vec<MessageData>>,
-    ) {
-        loop {
-            tokio::select! {
-                _ = cancellation_token.cancelled() => { return; }
-                messages = queue.get_messages_to_send() => {
-                    if messages.is_empty() {
-                        continue;
-                    }
-                    if batch_tx.send(messages).is_err() {
-                        let err = YdbError::custom("compression worker input channel closed");
-                        warn!("error sending message in topic writer write_messages_loop: {}", &err);
-                        if let Err(send_err) = StreamWriter::loop_iteration_error(cancellation_token, error_tx, err).await {
-                            warn!("can't send error from stream writer write_messages_loop: {send_err}");
-                        }
-                        break;
-                    }
-                }
+    for message in messages {
+        match pending_request.take() {
+            None => {
+                *pending_request = Some(PendingWriteRequest::new(settings, codec, message)?);
             }
-        }
-    }
-
-    async fn grpc_send_loop(
-        cancellation_token: CancellationToken,
-        error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
-        mut compressed_rx: mpsc::UnboundedReceiver<YdbResult<CompressedChunk>>,
-        request_stream: mpsc::UnboundedSender<stream_write_message::FromClient>,
-        write_request_settings: WriteRequestSettings,
-    ) {
-        let mut pending_request = None;
-
-        loop {
-            tokio::select! {
-                _ = cancellation_token.cancelled() => { return; }
-                next = compressed_rx.recv() => {
-                    let Some(chunk_result) = next else { return; };
-                    let result = chunk_result.and_then(|chunk| {
-                        StreamWriter::send_compressed_chunk(
-                            &request_stream,
-                            &write_request_settings,
-                            &mut pending_request,
-                            chunk,
-                        )
-                    });
-
-                    let Err(err) = result else { continue; };
-
-                    warn!("error sending message in topic writer grpc_send_loop: {}", &err);
-                    if let Err(send_err) = StreamWriter::loop_iteration_error(cancellation_token, error_tx, err).await {
-                        warn!("can't send error from stream writer grpc_send_loop: {send_err}");
-                    }
-                    break;
+            Some(mut request) => match request.try_add(message) {
+                TryAddMessage::Added => {
+                    *pending_request = Some(request);
                 }
-            }
-        }
-    }
-
-    fn send_compressed_chunk(
-        request_stream: &mpsc::UnboundedSender<stream_write_message::FromClient>,
-        settings: &WriteRequestSettings,
-        pending_request: &mut Option<PendingWriteRequest>,
-        chunk: CompressedChunk,
-    ) -> YdbResult<()> {
-        let CompressedChunk {
-            messages,
-            codec,
-            ends_batch,
-        } = chunk;
-
-        if let Some(request) = pending_request.as_ref()
-            && request.codec() != codec
-        {
-            return Err(YdbError::custom(format!(
-                "compression codec changed before the topic write batch ended: previous_codec={}, next_codec={}",
-                request.codec().code,
-                codec.code,
-            )));
-        }
-
-        for message in messages {
-            match pending_request.take() {
-                None => {
+                TryAddMessage::RequestFull(message) => {
+                    send_write_request(request_stream, request)?;
                     *pending_request = Some(PendingWriteRequest::new(settings, codec, message)?);
                 }
-                Some(mut request) => match request.try_add(message) {
-                    TryAddMessage::Added => {
-                        *pending_request = Some(request);
-                    }
-                    TryAddMessage::RequestFull(message) => {
-                        StreamWriter::send_write_request(request_stream, request)?;
-                        *pending_request =
-                            Some(PendingWriteRequest::new(settings, codec, message)?);
-                    }
-                },
-            }
-        }
-
-        if ends_batch {
-            let Some(request) = pending_request.take() else {
-                return Err(YdbError::custom(
-                    "compressed topic write batch ended without messages",
-                ));
-            };
-            StreamWriter::send_write_request(request_stream, request)?;
-        }
-
-        Ok(())
-    }
-
-    fn send_write_request(
-        request_stream: &mpsc::UnboundedSender<stream_write_message::FromClient>,
-        request: PendingWriteRequest,
-    ) -> YdbResult<()> {
-        trace!("sending topic message to grpc stream");
-        request_stream
-            .send(request.into_grpc_message()?)
-            .map_err(|err| YdbError::Transport(err.to_string()))
-    }
-
-    async fn receive_messages_loop(
-        cancellation_token: CancellationToken,
-        error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
-        queue: Queue,
-        mut stream: AsyncGrpcStreamWrapper<
-            stream_write_message::FromClient,
-            stream_write_message::FromServer,
-        >,
-    ) {
-        loop {
-            tokio::select! {
-                _ = cancellation_token.cancelled() => { return; }
-                result = StreamWriter::receive_messages_loop_iteration(
-                    &queue,
-                    &mut stream,
-                ) => {
-                    let Err(receive_messages_iteration_error) = result else {
-                        continue;
-                    };
-
-                    warn!(
-                        "error receiving message in topic writer receiver stream loop: {}",
-                        &receive_messages_iteration_error
-                    );
-
-                    if let Err(send_err) = StreamWriter::loop_iteration_error(cancellation_token, error_tx, receive_messages_iteration_error).await {
-                        warn!("can't send error from stream writer receive_messages_loop: {send_err}");
-                    }
-                    break;
-                }
-            }
-        }
-    }
-
-    async fn receive_messages_loop_iteration(
-        queue: &Queue,
-        server_messages_receiver: &mut AsyncGrpcStreamWrapper<
-            stream_write_message::FromClient,
-            stream_write_message::FromServer,
-        >,
-    ) -> YdbResult<()> {
-        match server_messages_receiver.receive::<RawServerMessage>().await {
-            Ok(message) => match message {
-                RawServerMessage::Init(_init_response_body) => {
-                    return Err(YdbError::custom(
-                        "unexpected message type in stream reader: init_response",
-                    ));
-                }
-                RawServerMessage::Write(write_response_body) => {
-                    for raw_ack in write_response_body.acks {
-                        let write_ack = WriteAck::from(raw_ack);
-                        queue.acknowledge_message(write_ack).await?;
-                    }
-                }
-                RawServerMessage::UpdateToken(_update_token_response_body) => {}
             },
-            Err(some_err) => {
-                return Err(YdbError::from(some_err));
-            }
         }
-        Ok(())
     }
 
-    async fn loop_iteration_error(
-        cancellation_token: CancellationToken,
-        error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
-        error: YdbError,
-    ) -> Result<(), YdbError> {
-        cancellation_token.cancel();
-
-        let Some(tx) = error_tx.lock().await.take() else {
-            return Ok(());
+    if ends_batch {
+        let Some(request) = pending_request.take() else {
+            return Err(YdbError::custom(
+                "compressed topic write batch ended without messages",
+            ));
         };
-
-        tx.send(error)
+        send_write_request(request_stream, request)?;
     }
 
-    pub(crate) async fn stop(mut self) -> YdbResult<()> {
-        trace!("stopping...");
+    Ok(())
+}
 
-        self.cancellation_token.cancel();
+fn send_write_request(
+    request_stream: &mpsc::UnboundedSender<stream_write_message::FromClient>,
+    request: PendingWriteRequest,
+) -> YdbResult<()> {
+    trace!("sending topic message to grpc stream");
+    request_stream
+        .send(request.into_grpc_message()?)
+        .map_err(|err| YdbError::Transport(err.to_string()))
+}
 
-        while let Some(join_result) = self.tasks.join_next().await {
-            join_result?;
+async fn receive_messages(
+    state: WriterState,
+    mut stream: AsyncGrpcStreamWrapper<
+        stream_write_message::FromClient,
+        stream_write_message::FromServer,
+    >,
+) -> YdbResult<Infallible> {
+    loop {
+        match stream.receive::<RawServerMessage>().await? {
+            RawServerMessage::Init(_) => {
+                return Err(YdbError::custom(
+                    "unexpected message type in stream reader: init_response",
+                ));
+            }
+            RawServerMessage::Write(write_response) => {
+                for raw_ack in write_response.acks {
+                    state.acknowledge_message(WriteAck::from(raw_ack))?;
+                }
+            }
+            RawServerMessage::UpdateToken(_) => {}
         }
-
-        trace!("stream writer stopped");
-        Ok(())
     }
 }
 
@@ -369,7 +245,7 @@ mod tests {
         let mut pending = None;
         let settings = settings(1024);
 
-        StreamWriter::send_compressed_chunk(
+        send_compressed_chunk(
             &request_tx,
             &settings,
             &mut pending,
@@ -378,7 +254,7 @@ mod tests {
         .unwrap();
         assert!(matches!(request_rx.try_recv(), Err(TryRecvError::Empty)));
 
-        StreamWriter::send_compressed_chunk(
+        send_compressed_chunk(
             &request_tx,
             &settings,
             &mut pending,
@@ -407,7 +283,7 @@ mod tests {
         let (request_tx, mut request_rx) = mpsc::unbounded_channel();
         let mut pending = None;
 
-        StreamWriter::send_compressed_chunk(
+        send_compressed_chunk(
             &request_tx,
             &settings(one_message_size),
             &mut pending,
@@ -431,14 +307,14 @@ mod tests {
         let mut pending = None;
         let settings = settings(1024);
 
-        StreamWriter::send_compressed_chunk(
+        send_compressed_chunk(
             &request_tx,
             &settings,
             &mut pending,
             chunk(vec![message(1, 8)], true),
         )
         .unwrap();
-        StreamWriter::send_compressed_chunk(
+        send_compressed_chunk(
             &request_tx,
             &settings,
             &mut pending,

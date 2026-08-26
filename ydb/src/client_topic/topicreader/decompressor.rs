@@ -21,7 +21,7 @@ use crate::{YdbError, YdbResult};
 
 use super::reconnector;
 use super::runtime::RuntimeHandle;
-use super::task_supervisor::wait_child_tasks;
+use crate::client_topic::task_supervisor::wait_child_tasks;
 
 type EventRx = mpsc::UnboundedReceiver<RawFromServer>;
 

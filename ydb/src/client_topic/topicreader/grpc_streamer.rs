@@ -22,7 +22,7 @@ use crate::{
 };
 
 use super::reconnector;
-use super::task_supervisor::wait_child_tasks;
+use crate::client_topic::task_supervisor::wait_child_tasks;
 
 const READER_BUFFER_SIZE: i64 = 1024 * 1024;
 
