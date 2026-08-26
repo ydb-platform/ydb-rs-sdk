@@ -11,26 +11,26 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 clap = { workspace = true }
 hdrhistogram = { workspace = true }
-rand = { workspace = true }
-rand_core = { workspace = true }
-tokio = { workspace = true, features = ["signal"] }
-tokio-util = { workspace = true }
-ydb = { workspace = true }
-
-# The OTLP stack is declared here instead of `[workspace.dependencies]`: the
-# `ydb` examples are on OpenTelemetry 0.32 while this workload is still on 0.27,
-# and one crate name cannot carry two requirements in the workspace table.
-# Upgrading the workload is tracked separately; until then these four entries
-# are the documented exception in `.github/scripts/check_workspace_deps.py`.
-opentelemetry = "0.27"
-opentelemetry-otlp = { version = "0.27", default-features = false, features = [
+opentelemetry = { workspace = true }
+# `reqwest-rustls` would pull `aws-lc-rs`; the exporter gets a preconfigured
+# client instead, see `metrics::metric_exporter`.
+opentelemetry-otlp = { workspace = true, features = [
     "http-proto",
     "metrics",
     "reqwest-client",
-    "reqwest-rustls",
 ] }
-opentelemetry-semantic-conventions = "0.27"
-opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-semantic-conventions = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = ["rt-tokio"] }
+rand = { workspace = true }
+rand_core = { workspace = true }
+reqwest = { workspace = true, features = ["http2"] }
+# The workload prefers `ring`; it is the only provider enabled in the binary, so
+# rustls picks it as the implicit default.
+rustls = { workspace = true }
+rustls-platform-verifier = { workspace = true }
+tokio = { workspace = true, features = ["signal"] }
+tokio-util = { workspace = true }
+ydb = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

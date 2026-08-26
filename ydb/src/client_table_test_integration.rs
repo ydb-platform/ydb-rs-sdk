@@ -2,7 +2,7 @@ use itertools::Itertools;
 use std::time;
 use std::time::UNIX_EPOCH;
 
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, SampleString};
 use tracing::trace;
 use tracing_test::traced_test;
 
@@ -25,7 +25,7 @@ async fn copy_table() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
 
-    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let rand_str = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let table_name = format!("temp_table_{rand_str}");
     let copy_table_name = format!("copy_{table_name}");
 
@@ -93,7 +93,7 @@ async fn copy_tables() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
 
-    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let rand_str = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let table_name = format!("temp_table_{rand_str}");
     let copy_table_name = format!("copy_{table_name}");
 
@@ -430,7 +430,7 @@ async fn describe_table() -> YdbResult<()> {
 async fn bulk_upsert_rpc() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
-    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let rand_str = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let table_name = format!("bulk_rpc_{rand_str}");
     let table_path = format!("/local/{table_name}");
 
@@ -481,7 +481,7 @@ async fn bulk_upsert_rpc() -> YdbResult<()> {
 async fn create_drop_table_rpc() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
-    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let rand_str = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let table_name = format!("rpc_table_{rand_str}");
     let database_path = client.database();
     let table_path = format!("{database_path}/{table_name}");
@@ -521,7 +521,7 @@ async fn describe_table_options_rpc() -> YdbResult<()> {
 async fn alter_table_rpc() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
-    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let rand_str = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let table_name = format!("alter_rpc_{rand_str}");
     let database_path = client.database();
     let table_path = format!("{database_path}/{table_name}");
@@ -569,7 +569,7 @@ async fn alter_table_rpc() -> YdbResult<()> {
 async fn table_attributes_rpc() -> YdbResult<()> {
     let client = create_client().await?;
     let table_client = client.table_client();
-    let rand_str = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let rand_str = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let table_name = format!("attrs_rpc_{rand_str}");
     let database_path = client.database();
     let table_path = format!("{database_path}/{table_name}");
