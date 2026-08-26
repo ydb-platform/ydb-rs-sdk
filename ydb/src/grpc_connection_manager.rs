@@ -6,8 +6,8 @@ use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
 use crate::{GrpcOptions, YdbResult};
-use derivative::Derivative;
 use http::Uri;
+use std::fmt::{Debug, Formatter};
 use tracing::instrument;
 
 pub(crate) type GrpcConnectionManager = GrpcConnectionManagerGeneric<SharedLoadBalancer, Simple>;
@@ -17,15 +17,42 @@ pub(crate) type DiscoveryConnectionManager =
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NoBalancer;
 
-#[derive(Derivative)]
-#[derivative(Clone(bound = "BalancerT: Clone"), Debug)]
 pub(crate) struct GrpcConnectionManagerGeneric<BalancerT, ConnectionT: Connection> {
     balancer: BalancerT,
     connections_pool: Arc<ConnectionPool<ConnectionT>>,
-    #[derivative(Debug = "ignore")]
     interceptor: MultiInterceptor,
     database: String,
     opts: GrpcOptions,
+}
+
+// `ConnectionT` is behind an `Arc`, so cloning does not require it to be
+// `Clone` - only the balancer does.
+impl<BalancerT: Clone, ConnectionT: Connection> Clone
+    for GrpcConnectionManagerGeneric<BalancerT, ConnectionT>
+{
+    fn clone(&self) -> Self {
+        Self {
+            balancer: self.balancer.clone(),
+            connections_pool: self.connections_pool.clone(),
+            interceptor: self.interceptor.clone(),
+            database: self.database.clone(),
+            opts: self.opts.clone(),
+        }
+    }
+}
+
+impl<BalancerT: Debug, ConnectionT: Connection + Debug> Debug
+    for GrpcConnectionManagerGeneric<BalancerT, ConnectionT>
+{
+    // `interceptor` is skipped: `MultiInterceptor` is not `Debug`.
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GrpcConnectionManagerGeneric")
+            .field("balancer", &self.balancer)
+            .field("connections_pool", &self.connections_pool)
+            .field("database", &self.database)
+            .field("opts", &self.opts)
+            .finish()
+    }
 }
 
 impl<BalancerT, ConnectionT: Connection> GrpcConnectionManagerGeneric<BalancerT, ConnectionT> {
@@ -90,5 +117,84 @@ impl<BalancerT, ConnectionT: Connection> GrpcConnectionManagerGeneric<BalancerT,
 
     pub(crate) fn max_message_size(&self) -> usize {
         self.opts.max_message_size
+    }
+}
+
+#[cfg(test)]
+mod manager_derive_tests {
+    use super::*;
+    use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+
+    fn discovery_manager() -> DiscoveryConnectionManager {
+        GrpcConnectionManagerGeneric::new(
+            NoBalancer,
+            "test-database".to_string(),
+            MultiInterceptor::new(),
+            GrpcOptions::default(),
+        )
+    }
+
+    /// `Debug` is hand-written because `MultiInterceptor` is not `Debug`. Pin
+    /// the fields it reports, and that the interceptor stays out of the output.
+    #[test]
+    fn debug_reports_configuration_without_interceptor() {
+        let rendered = format!("{:?}", discovery_manager());
+
+        assert!(
+            rendered.starts_with("GrpcConnectionManagerGeneric {"),
+            "unexpected shape: {rendered}"
+        );
+        assert!(
+            rendered.contains("test-database"),
+            "database missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("balancer"),
+            "balancer missing: {rendered}"
+        );
+        assert!(
+            rendered.contains("connections_pool"),
+            "connections_pool missing: {rendered}"
+        );
+
+        assert!(
+            !rendered.contains("interceptor"),
+            "interceptor must stay out of Debug: {rendered}"
+        );
+    }
+
+    /// `Clone` is bound on `BalancerT` only - the connection pool sits behind an
+    /// `Arc`, so a non-`Clone` `ConnectionT` must not block cloning, and clones
+    /// must keep sharing the same pool.
+    #[test]
+    fn clone_shares_the_connection_pool() {
+        let manager = discovery_manager();
+        let clone = manager.clone();
+
+        assert!(Arc::ptr_eq(
+            &manager.connections_pool,
+            &clone.connections_pool
+        ));
+        assert_eq!(manager.database, clone.database);
+    }
+
+    /// The same `Clone` bound has to hold for the balancer used in production.
+    #[test]
+    fn clone_works_for_the_shared_balancer_manager() {
+        let manager = GrpcConnectionManager::new(
+            SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
+                Uri::from_static("http://127.0.0.1:2136/local"),
+            ))),
+            "local".to_string(),
+            MultiInterceptor::new(),
+            GrpcOptions::default(),
+        );
+
+        let clone = manager.clone();
+
+        assert!(Arc::ptr_eq(
+            &manager.connections_pool,
+            &clone.connections_pool
+        ));
     }
 }
