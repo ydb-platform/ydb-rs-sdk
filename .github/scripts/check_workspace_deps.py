@@ -19,21 +19,10 @@ from pathlib import Path
 
 DEPENDENCY_TABLES = ("dependencies", "dev-dependencies", "build-dependencies")
 
-# Dependencies a member is allowed to declare on its own, with the reason.
-# Keep this list as short as possible.
-EXEMPTIONS: dict[tuple[str, str], str] = {
-    (
-        "tests/slo/slo-framework",
-        name,
-    ): "SLO workload is on OpenTelemetry 0.27 while the ydb examples are on 0.32; "
-    "one crate name cannot carry two requirements in the workspace table"
-    for name in (
-        "opentelemetry",
-        "opentelemetry-otlp",
-        "opentelemetry-semantic-conventions",
-        "opentelemetry_sdk",
-    )
-}
+# Dependencies a member is allowed to declare on its own, keyed by
+# (member path, crate name), with the reason as the value. Empty on purpose:
+# every dependency is inherited today, and an entry here has to be argued for.
+EXEMPTIONS: dict[tuple[str, str], str] = {}
 
 
 def dependency_tables(manifest: dict) -> list[tuple[str, dict]]:

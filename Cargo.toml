@@ -52,15 +52,25 @@ tokio-stream = { version = "0.1.18", features = ["sync"] }
 tokio-util = "0.7.11"
 tower = "0.5"
 
-# HTTP. `reqwest` must stay on the `hyper` 1.x / `http` 1.x / `rustls` 0.23
-# generation used by `tonic`, and on the `ring` crypto provider: `rustls` 0.23
-# fails at runtime when several providers are linked without an explicit choice.
-http = "1.1.0"
-reqwest = { version = "0.12", default-features = false, features = [
+# HTTP. `reqwest` stays on the `hyper` 1.x / `http` 1.x / `rustls` 0.23
+# generation used by `tonic`. It takes `rustls-no-provider` rather than its own
+# `rustls` feature, which would add `aws-lc-rs` next to the `ring` that
+# `tonic`'s `tls-ring` already selects; `rustls` 0.23 fails at request time when
+# more than one provider is linked and none was chosen explicitly.
+http = "1.5"
+reqwest = { version = "0.13", default-features = false, features = [
     "blocking",
     "json",
-    "rustls-tls",
+    "rustls-no-provider",
 ] }
+# Used directly by the SLO workload to hand a preconfigured TLS backend to the
+# OTLP exporter. `ring` is the provider `tonic` selects, spelled out here so the
+# workload cannot end up with a second one.
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+] }
+rustls-platform-verifier = "0.7"
 
 # Serialization and data types.
 chrono = { version = "0.4", default-features = false, features = [
@@ -84,17 +94,22 @@ derivative = "2"
 derive_builder = "0.20"
 itertools = "0.14"
 once_cell = "1.8"
-rand = "0.8"
+rand = "0.9"
 rayon = "1.10"
 secrecy = "0.4.1"
-strum = { version = "0.27", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 walkdir = "2"
 
 # Authentication.
-jsonwebtoken = "9.3"
+jsonwebtoken = "11"
 
-# Observability.
+# Observability. The OTLP stack is shared by the `ydb` examples and the SLO
+# workload; each of them enables the exporter it needs.
 metrics = "0.24.6"
+opentelemetry = "0.32.0"
+opentelemetry-otlp = { version = "0.32.0", default-features = false }
+opentelemetry-semantic-conventions = "0.32"
+opentelemetry_sdk = "0.32.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
@@ -104,9 +119,6 @@ lazy_static = "1.4"
 metrics-prometheus = "0.11.2"
 mockall = "0.14"
 ntest = "0.7"
-opentelemetry = "0.32.0"
-opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"] }
-opentelemetry_sdk = "0.32.1"
 prometheus = "0.14.0"
 tracing-opentelemetry = "0.33.0"
 tracing-test = "0.2.1"
@@ -116,6 +128,6 @@ tracing-test = "0.2.1"
 # single-version check with `--exclude-unpublished`.
 anyhow = "1"
 base64 = "0.22.1"
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 hdrhistogram = "7.5.4"
-rand_core = "0.6.4"
+rand_core = "0.9"

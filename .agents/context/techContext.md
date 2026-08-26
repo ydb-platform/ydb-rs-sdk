@@ -9,7 +9,7 @@
 | CI Rust versions | 1.88 (tests + proto generation), 1.96 (fmt + lint + tests + publish + SLO workload builds) |
 | Async runtime | Tokio 1.x |
 | gRPC | tonic 0.14, prost 0.14, pbjson 0.8 |
-| TLS | rustls via tonic features (`tls-ring`, `tls-native-roots`) |
+| TLS | rustls via tonic features (`tls-ring`, `tls-native-roots`); `reqwest` uses `rustls-no-provider` so `ring` stays the only crypto provider in the tree |
 
 ## Local development
 
@@ -45,7 +45,7 @@ CI uses `ydbplatform/local-ydb:nightly` (see `rust-tests.yml`); image tag may di
 
 ## Workspace dependency policy
 
-Every third-party dependency of every workspace member is declared once, in the root `Cargo.toml` under `[workspace.dependencies]`; members inherit it with `{ workspace = true }` and may only add `features`. A version requirement in a member manifest is a CI failure (`.github/scripts/check_workspace_deps.py`), as is a `[workspace.dependencies]` entry that no member inherits. The single documented exception is the OpenTelemetry stack of `slo-framework`, which is a major version behind the one the `ydb` examples use; the exemption list lives in that script.
+Every third-party dependency of every workspace member is declared once, in the root `Cargo.toml` under `[workspace.dependencies]`; members inherit it with `{ workspace = true }` and may only add `features`. A version requirement in a member manifest is a CI failure (`.github/scripts/check_workspace_deps.py`), as is a `[workspace.dependencies]` entry that no member inherits. The script has an exemption table for dependencies that genuinely cannot be shared; it is empty, and an entry in it has to be argued for.
 
 One requirement per crate keeps a crate at one version in the resolved tree. `deny.toml` enforces the result:
 
