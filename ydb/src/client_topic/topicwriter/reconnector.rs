@@ -9,7 +9,6 @@ use ydb_grpc::ydb_proto::topic::stream_write_message;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::task_supervisor::{select_error, task_error};
 use crate::client_topic::topicwriter::connection::ConnectionInfo;
-use crate::client_topic::topicwriter::message_write_status::MessageWriteStatusValidator;
 use crate::client_topic::topicwriter::state::WriterState;
 use crate::client_topic::topicwriter::stream_writer;
 use crate::client_topic::topicwriter::write_request::WriteRequestSettings;
@@ -20,7 +19,6 @@ use crate::grpc_wrapper::grpc_stream_wrapper::AsyncGrpcStreamWrapper;
 use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
 use crate::grpc_wrapper::raw_topic_service::stream_write::RawServerMessage;
 use crate::{YdbError, YdbResult, closure};
-use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 
 pub(crate) struct ReconnectorParams {
     pub(crate) writer_options: TopicWriterOptions,
@@ -28,8 +26,6 @@ pub(crate) struct ReconnectorParams {
     pub(crate) connection_manager: GrpcConnectionManager,
     pub(crate) shutdown_token: CancellationToken,
     pub(crate) executor: Arc<dyn Executor>,
-    pub(crate) tx_identity: Option<TransactionIdentity>,
-    pub(crate) status_validator: MessageWriteStatusValidator,
 }
 
 /// Owns the transport-attempt lifecycle while [`WriterState`] owns accepted messages.
@@ -47,18 +43,12 @@ impl Reconnector {
             connection_manager,
             shutdown_token,
             executor,
-            tx_identity,
-            status_validator,
         } = params;
 
         let flow_control = WriterFlowControl::try_from(&writer_options)?;
         let write_request_settings =
-            WriteRequestSettings::new(tx_identity, connection_manager.max_message_size())?;
-        let state = WriterState::new_with_status_validator(
-            status_validator,
-            writer_options.auto_seq_no,
-            flow_control,
-        )?;
+            WriteRequestSettings::new(connection_manager.max_message_size())?;
+        let state = WriterState::new(writer_options.auto_seq_no, flow_control)?;
 
         let reconnection_loop = ReconnectionLoop {
             state: state.clone(),
@@ -94,6 +84,10 @@ impl Reconnector {
 
     pub(crate) async fn stop(self) -> YdbResult<()> {
         let flush_result = self.state.flush().await;
+        let state_failure_result = match &flush_result {
+            Ok(()) => Ok(()),
+            Err(error) => self.state.fail(error.clone()),
+        };
 
         self.shutdown_token.cancel();
 
@@ -107,9 +101,10 @@ impl Reconnector {
             })
             .and_then(|result| result);
 
+        state_failure_result?;
         flush_result?;
         reconnection_result?;
-        self.state.ensure_available()
+        self.state.ensure_not_failed()
     }
 }
 
@@ -128,18 +123,23 @@ impl ReconnectionLoop {
         self,
         initial_connection: EstablishedConnection,
     ) -> YdbResult<JoinHandle<YdbResult<()>>> {
-        let background_tasks = self.spawn_connection_tasks(initial_connection)?;
-        Ok(tokio::spawn(self.run(background_tasks)))
+        let epoch = self.state.epoch()?;
+        let background_tasks = self.spawn_connection_tasks(initial_connection, epoch)?;
+        Ok(tokio::spawn(self.run(background_tasks, epoch)))
     }
 
-    async fn run(self, initial_background_tasks: JoinSet<YdbResult<Infallible>>) -> YdbResult<()> {
+    async fn run(
+        self,
+        initial_background_tasks: JoinSet<YdbResult<Infallible>>,
+        initial_epoch: usize,
+    ) -> YdbResult<()> {
         let state = self.state.clone();
         let shutdown_token = self.shutdown_token.clone();
 
         tokio::select! {
             biased;
             _ = shutdown_token.cancelled() => Ok(()),
-            result = self.reconnect_loop(initial_background_tasks) => {
+            result = self.reconnect_loop(initial_background_tasks, initial_epoch) => {
                 let Err(error) = result;
                 state.fail(error.clone())?;
                 Err(error)
@@ -150,35 +150,57 @@ impl ReconnectionLoop {
     async fn reconnect_loop(
         self,
         mut background_tasks: JoinSet<YdbResult<Infallible>>,
+        mut epoch: usize,
     ) -> YdbResult<Infallible> {
         loop {
-            let Err(error) = wait_for_failure(background_tasks).await;
-
+            let error = wait_for_connection_failure(background_tasks).await;
             trace!("topic writer connection failed: {error}");
-            self.state.reset_progress()?;
+            let retry_error = self.state.handle_connection_failure(epoch, error)?;
+            self.state.wait_for_failed_transaction_cleanup().await?;
 
-            // The retry helper performs an operation before its first wait. Feed the connection
-            // failure through that operation so error classification and backoff remain owned by
-            // RetrySettings; subsequent operations establish a new connection.
-            let unclassified_error = Some(error);
-            let established_connection = self
-                .writer_options
-                .retry_settings
-                .retry_on_retriable_errors(
-                    Idempotency::Idempotent,
-                    closure!(
-                        [&reconnection_loop = &self, unclassified_error],
-                        async |_| {
-                            match unclassified_error.take() {
-                                Some(error) => Err(error),
-                                None => reconnection_loop.establish_connection().await,
-                            }
-                        }
-                    ),
-                )
-                .await?;
-            background_tasks = self.spawn_connection_tasks(established_connection)?;
+            let established_connection = match retry_error {
+                Some(error) => self.retry_after_failure(error).await?,
+                None => self.establish_connection_with_retry().await?,
+            };
+            epoch = self.state.epoch()?;
+            background_tasks = self.spawn_connection_tasks(established_connection, epoch)?;
         }
+    }
+
+    fn retry_after_failure(
+        &self,
+        error: YdbError,
+    ) -> impl std::future::Future<Output = YdbResult<EstablishedConnection>> + '_ {
+        // The retry helper performs an operation before its first wait. Feed the connection
+        // failure through that operation so error classification and backoff remain owned by
+        // RetrySettings; subsequent operations establish a new connection.
+        let unclassified_error = Some(error);
+        self.writer_options
+            .retry_settings
+            .retry_on_retriable_errors(
+                Idempotency::Idempotent,
+                closure!(
+                    [&reconnection_loop = self, unclassified_error],
+                    async |_| {
+                        match unclassified_error.take() {
+                            Some(error) => Err(error),
+                            None => reconnection_loop.establish_connection().await,
+                        }
+                    }
+                ),
+            )
+    }
+
+    fn establish_connection_with_retry(
+        &self,
+    ) -> impl std::future::Future<Output = YdbResult<EstablishedConnection>> + '_ {
+        self.writer_options
+            .retry_settings
+            .retry_on_retriable_errors(
+                Idempotency::Idempotent,
+                closure!([&reconnection_loop = self], |_| reconnection_loop
+                    .establish_connection()),
+            )
     }
 
     async fn establish_connection(&self) -> YdbResult<EstablishedConnection> {
@@ -213,6 +235,7 @@ impl ReconnectionLoop {
     fn spawn_connection_tasks(
         &self,
         established: EstablishedConnection,
+        epoch: usize,
     ) -> YdbResult<JoinSet<YdbResult<Infallible>>> {
         let EstablishedConnection {
             stream,
@@ -223,6 +246,7 @@ impl ReconnectionLoop {
             self.writer_options.clone(),
             stream,
             self.state.clone(),
+            epoch,
             server_codecs,
             self.executor.clone(),
             self.write_request_settings.clone(),
@@ -230,12 +254,10 @@ impl ReconnectionLoop {
     }
 }
 
-async fn wait_for_failure(mut tasks: JoinSet<YdbResult<Infallible>>) -> YdbResult<Infallible> {
-    let mut selected_error = match tasks.join_next().await {
-        Some(joined) => task_error(joined, "topic writer connection"),
-        None => None,
-    };
-
+async fn wait_for_connection_failure(mut tasks: JoinSet<YdbResult<Infallible>>) -> YdbError {
+    let first_joined = tasks.join_next().await;
+    let mut selected_error =
+        first_joined.and_then(|joined| task_error(joined, "topic writer connection"));
     tasks.abort_all();
 
     while let Some(joined) = tasks.join_next().await {
@@ -245,12 +267,9 @@ async fn wait_for_failure(mut tasks: JoinSet<YdbResult<Infallible>>) -> YdbResul
         select_error(&mut selected_error, joined, "topic writer connection");
     }
 
-    match selected_error {
-        Some(error) => Err(error),
-        None => Err(YdbError::custom(
-            "topic writer connection tasks stopped without an error",
-        )),
-    }
+    selected_error.unwrap_or_else(|| {
+        YdbError::custom("topic writer connection tasks stopped without an error")
+    })
 }
 
 struct EstablishedConnection {
@@ -288,7 +307,7 @@ mod tests {
             pending().await
         });
 
-        let error = wait_for_failure(tasks).await.unwrap_err();
+        let error = wait_for_connection_failure(tasks).await;
 
         assert!(error.to_string().contains("root task error"));
         dropped_rx
@@ -306,7 +325,7 @@ mod tests {
             pending().await
         });
 
-        wait_for_failure(tasks).await.unwrap_err();
+        wait_for_connection_failure(tasks).await;
 
         assert_eq!(resource_rx.recv().await, None);
     }
@@ -327,7 +346,7 @@ mod tests {
 
         finished_rx.recv().await.unwrap();
         finished_rx.recv().await.unwrap();
-        let error = wait_for_failure(tasks).await.unwrap_err();
+        let error = wait_for_connection_failure(tasks).await;
 
         assert!(error.to_string().contains("root task error"));
     }

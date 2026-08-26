@@ -34,9 +34,6 @@ pub(crate) struct WriteAck {
     pub status: MessageWriteStatus,
 }
 
-pub(crate) type MessageWriteStatusValidator =
-    fn(MessageWriteStatus) -> YdbResult<MessageWriteStatus>;
-
 pub(crate) fn accept_any_write_status(status: MessageWriteStatus) -> YdbResult<MessageWriteStatus> {
     Ok(status)
 }

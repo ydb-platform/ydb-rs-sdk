@@ -122,4 +122,8 @@ impl ReceptionQueue {
             let _ = pending.notifier.send(Err(error.clone()));
         }
     }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.ticket_queue.is_empty() && self.pending_flushes.is_empty()
+    }
 }

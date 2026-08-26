@@ -4,17 +4,17 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use tokio::sync::oneshot;
-use tokio_util::sync::{CancellationToken, DropGuard};
-use tracing::{instrument, trace};
+use tokio_util::sync::CancellationToken;
+use tracing::{error, instrument, trace};
 
+use crate::client_query::Transaction;
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
-use crate::client_topic::topicwriter::message_write_status::{
-    MessageWriteStatus, accept_any_write_status, expect_transactional_write_status,
-};
+use crate::client_topic::topicwriter::message_write_status::MessageWriteStatus;
 use crate::client_topic::topicwriter::reconnector::{Reconnector, ReconnectorParams};
 use crate::client_topic::topicwriter::state::WriterState;
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
+use crate::client_topic::topicwriter::writer_tx::TopicWriterTx;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::{YdbError, YdbResult};
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
@@ -24,7 +24,44 @@ use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 pub struct TopicWriter {
     state: WriterState,
     reconnector: Reconnector,
-    _shutdown_on_drop: DropGuard,
+    shutdown_on_drop: WriterShutdownGuard,
+}
+
+struct WriterShutdownGuard {
+    state: WriterState,
+    shutdown_token: CancellationToken,
+    armed: bool,
+}
+
+impl WriterShutdownGuard {
+    fn new(state: WriterState, shutdown_token: CancellationToken) -> Self {
+        Self {
+            state,
+            shutdown_token,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for WriterShutdownGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+
+        let fail_result = self.state.fail(YdbError::custom(
+            "topic writer was dropped before pending operations completed",
+        ));
+        self.shutdown_token.cancel();
+
+        if let Err(error) = fail_result {
+            error!(%error, "failed to terminate topic writer state during drop");
+        }
+    }
 }
 
 pub struct AckFuture {
@@ -45,33 +82,10 @@ impl Future for AckFuture {
 }
 
 impl TopicWriter {
-    pub(crate) fn new(
+    pub(crate) async fn new(
         writer_options: TopicWriterOptions,
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
-    ) -> impl Future<Output = YdbResult<Self>> {
-        Self::new_inner(writer_options, connection_manager, executor, None)
-    }
-
-    pub(crate) fn with_tx_identity(
-        writer_options: TopicWriterOptions,
-        connection_manager: GrpcConnectionManager,
-        executor: Arc<dyn Executor>,
-        tx_identity: TransactionIdentity,
-    ) -> impl Future<Output = YdbResult<Self>> {
-        Self::new_inner(
-            writer_options,
-            connection_manager,
-            executor,
-            Some(tx_identity),
-        )
-    }
-
-    async fn new_inner(
-        writer_options: TopicWriterOptions,
-        connection_manager: GrpcConnectionManager,
-        executor: Arc<dyn Executor>,
-        tx_identity: Option<TransactionIdentity>,
     ) -> YdbResult<Self> {
         let producer_id = writer_options
             .producer_id
@@ -79,43 +93,41 @@ impl TopicWriter {
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         let shutdown_token = CancellationToken::new();
-        let shutdown_on_drop = shutdown_token.clone().drop_guard();
-
-        let status_validator = if tx_identity.is_some() {
-            expect_transactional_write_status
-        } else {
-            accept_any_write_status
-        };
 
         let reconnector = Reconnector::new(ReconnectorParams {
             writer_options,
             producer_id,
             connection_manager,
-            shutdown_token,
+            shutdown_token: shutdown_token.clone(),
             executor,
-            tx_identity,
-            status_validator,
         })
         .await?;
         let state = reconnector.state();
+        let shutdown_on_drop = WriterShutdownGuard::new(state.clone(), shutdown_token);
 
         Ok(Self {
             state,
             reconnector,
-            _shutdown_on_drop: shutdown_on_drop,
+            shutdown_on_drop,
         })
     }
 
     #[instrument(name = "ydb.TopicWriter.Write", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn write(&self, message: TopicWriterMessage) -> YdbResult<()> {
-        self.write_inner(message).await
+        self.state.add_message(message, None).await
     }
 
-    pub(super) fn write_inner(
-        &self,
+    pub(super) fn write_transactional_inner<'a>(
+        &'a self,
         message: TopicWriterMessage,
-    ) -> impl Future<Output = YdbResult<()>> + '_ {
-        self.state.add_message(message, None)
+        transaction: &'a Arc<TransactionIdentity>,
+    ) -> impl Future<Output = YdbResult<()>> + 'a {
+        self.state
+            .add_transactional_message(message, None, transaction)
+    }
+
+    pub(super) fn state(&self) -> WriterState {
+        self.state.clone()
     }
 
     #[instrument(name = "ydb.TopicWriter.WriteWithAck", skip_all, fields(db.system.name = "ydb"), err)]
@@ -149,8 +161,20 @@ impl TopicWriter {
         self.state.flush()
     }
 
+    /// Binds this writer to an active query transaction.
+    ///
+    /// Existing ordinary messages are flushed before the binding is installed. Only the returned
+    /// wrapper can enqueue messages until the transaction finishes.
+    #[instrument(name = "ydb.TopicWriter.Transactional", skip_all, fields(db.system.name = "ydb"), err)]
+    pub async fn transactional<'writer>(
+        &'writer mut self,
+        tx: &mut Transaction,
+    ) -> YdbResult<TopicWriterTx<'writer>> {
+        TopicWriterTx::new(self, tx).await
+    }
+
     #[instrument(name = "ydb.TopicWriter.Stop", skip_all, fields(db.system.name = "ydb"), err)]
-    pub async fn stop(self) -> YdbResult<()> {
+    pub async fn stop(mut self) -> YdbResult<()> {
         trace!("stopping...");
 
         self.reconnector.stop().await.map_err(|err| {
@@ -158,6 +182,7 @@ impl TopicWriter {
                 "stop: error while waiting for reconnector to finish: {err}"
             ))
         })?;
+        self.shutdown_on_drop.disarm();
 
         trace!("reconnection loop stopped");
 

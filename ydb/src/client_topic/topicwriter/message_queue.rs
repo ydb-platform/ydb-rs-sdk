@@ -76,6 +76,7 @@ impl MessageQueue {
         let Some(message) = self.messages.pop_front() else {
             return AppendMessageToSendBufferResult::CouldNotGetMessage;
         };
+
         *send_buffer_bytes += message.data.data.len();
         send_buffer.push(message.data.clone());
         self.sent_messages.push_back(message);
@@ -112,6 +113,10 @@ impl MessageQueue {
         self.sent_messages.append(&mut self.messages);
         swap(&mut self.messages, &mut self.sent_messages);
     }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.messages.is_empty() && self.sent_messages.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -138,6 +143,15 @@ mod tests {
 
     fn move_all_pending_to_sent(q: &mut MessageQueue) {
         q.sent_messages.append(&mut q.messages);
+    }
+
+    fn append_for_test(
+        queue: &mut MessageQueue,
+        buffer: &mut Vec<MessageData>,
+        buffer_bytes: &mut usize,
+        settings: AutoFlushSettings,
+    ) -> AppendMessageToSendBufferResult {
+        queue.append_message_to_send_buffer(buffer, buffer_bytes, settings)
     }
 
     #[test]
@@ -193,7 +207,8 @@ mod tests {
 
         let mut buffer = Vec::new();
         let mut buffer_bytes = 0;
-        let result = q.append_message_to_send_buffer(
+        let result = append_for_test(
+            &mut q,
             &mut buffer,
             &mut buffer_bytes,
             auto_flush_settings(10, 10, Duration::ZERO),
@@ -218,7 +233,8 @@ mod tests {
         let mut buffer = Vec::new();
         let mut buffer_bytes = 0;
 
-        let result = q.append_message_to_send_buffer(
+        let result = append_for_test(
+            &mut q,
             &mut buffer,
             &mut buffer_bytes,
             auto_flush_settings(10, 10, Duration::ZERO),
@@ -240,7 +256,8 @@ mod tests {
         let mut buffer = Vec::new();
         let mut buffer_bytes = 0;
         assert!(matches!(
-            q.append_message_to_send_buffer(
+            append_for_test(
+                &mut q,
                 &mut buffer,
                 &mut buffer_bytes,
                 auto_flush_settings(2, 10, Duration::ZERO),
@@ -248,7 +265,8 @@ mod tests {
             AppendMessageToSendBufferResult::UnderThreshold
         ));
         assert!(matches!(
-            q.append_message_to_send_buffer(
+            append_for_test(
+                &mut q,
                 &mut buffer,
                 &mut buffer_bytes,
                 auto_flush_settings(2, 10, Duration::ZERO),
@@ -270,11 +288,11 @@ mod tests {
         let mut buffer_bytes = 0;
         let settings = auto_flush_settings(10, 5, Duration::ZERO);
         assert!(matches!(
-            q.append_message_to_send_buffer(&mut buffer, &mut buffer_bytes, settings),
+            append_for_test(&mut q, &mut buffer, &mut buffer_bytes, settings),
             AppendMessageToSendBufferResult::UnderThreshold
         ));
         assert!(matches!(
-            q.append_message_to_send_buffer(&mut buffer, &mut buffer_bytes, settings),
+            append_for_test(&mut q, &mut buffer, &mut buffer_bytes, settings),
             AppendMessageToSendBufferResult::Full
         ));
         assert_eq!(buffer.len(), 2);
@@ -291,11 +309,11 @@ mod tests {
         let mut buffer_bytes = 0;
         let settings = auto_flush_settings(10, 5, Duration::ZERO);
         assert!(matches!(
-            q.append_message_to_send_buffer(&mut buffer, &mut buffer_bytes, settings),
+            append_for_test(&mut q, &mut buffer, &mut buffer_bytes, settings),
             AppendMessageToSendBufferResult::UnderThreshold
         ));
         assert!(matches!(
-            q.append_message_to_send_buffer(&mut buffer, &mut buffer_bytes, settings),
+            append_for_test(&mut q, &mut buffer, &mut buffer_bytes, settings),
             AppendMessageToSendBufferResult::Full
         ));
         assert_eq!(buffer.len(), 2);

@@ -6,10 +6,11 @@ use tokio::task::JoinSet;
 use tracing::trace;
 
 use ydb_grpc::ydb_proto::topic::stream_write_message;
+#[cfg(test)]
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
 use crate::client_topic::compression::{
-    CodecRegistry, CompressedChunk, CompressionWorker, Executor,
+    CodecRegistry, CompressedChunk, CompressionBatch, CompressionWorker, Executor,
 };
 use crate::client_topic::list_types::Codec;
 use crate::client_topic::topicwriter::message_write_status::WriteAck;
@@ -29,6 +30,7 @@ pub(super) fn spawn_connection_tasks(
         stream_write_message::FromServer,
     >,
     state: WriterState,
+    epoch: usize,
     server_codecs: Vec<Codec>,
     executor: Arc<dyn Executor>,
     write_request_settings: WriteRequestSettings,
@@ -45,14 +47,14 @@ pub(super) fn spawn_connection_tasks(
         server_codecs,
     )?;
 
-    let (batch_tx, batch_rx) = mpsc::unbounded_channel::<Vec<MessageData>>();
+    let (batch_tx, batch_rx) = mpsc::unbounded_channel::<CompressionBatch>();
     let (compressed_tx, compressed_rx) = mpsc::unbounded_channel::<YdbResult<CompressedChunk>>();
 
     let request_stream = stream.clone_sender();
 
     let mut tasks = JoinSet::new();
 
-    tasks.spawn(write_messages(state.clone(), batch_tx));
+    tasks.spawn(write_messages(state.clone(), epoch, batch_tx));
 
     worker.spawn_into(&mut tasks, batch_rx, compressed_tx);
 
@@ -62,21 +64,22 @@ pub(super) fn spawn_connection_tasks(
         write_request_settings,
     ));
 
-    tasks.spawn(receive_messages(state, stream));
+    tasks.spawn(receive_messages(state, epoch, stream));
 
     Ok(tasks)
 }
 
 async fn write_messages(
     state: WriterState,
-    batch_tx: mpsc::UnboundedSender<Vec<MessageData>>,
+    epoch: usize,
+    batch_tx: mpsc::UnboundedSender<CompressionBatch>,
 ) -> YdbResult<Infallible> {
     loop {
-        let messages = state.get_messages_to_send().await?;
-        if messages.is_empty() {
+        let batch = state.get_messages_to_send(epoch).await?;
+        if batch.is_empty() {
             continue;
         }
-        batch_tx.send(messages).map_err(|_| {
+        batch_tx.send(batch).map_err(|_| {
             YdbError::Transport("compression worker input channel closed".to_string())
         })?;
     }
@@ -112,6 +115,7 @@ fn send_compressed_chunk(
         messages,
         codec,
         ends_batch,
+        transaction,
     } = chunk;
 
     if let Some(request) = pending_request.as_ref()
@@ -127,7 +131,12 @@ fn send_compressed_chunk(
     for message in messages {
         match pending_request.take() {
             None => {
-                *pending_request = Some(PendingWriteRequest::new(settings, codec, message)?);
+                *pending_request = Some(PendingWriteRequest::new(
+                    settings,
+                    codec,
+                    message,
+                    transaction.as_deref(),
+                )?);
             }
             Some(mut request) => match request.try_add(message) {
                 TryAddMessage::Added => {
@@ -135,7 +144,12 @@ fn send_compressed_chunk(
                 }
                 TryAddMessage::RequestFull(message) => {
                     send_write_request(request_stream, request)?;
-                    *pending_request = Some(PendingWriteRequest::new(settings, codec, message)?);
+                    *pending_request = Some(PendingWriteRequest::new(
+                        settings,
+                        codec,
+                        message,
+                        transaction.as_deref(),
+                    )?);
                 }
             },
         }
@@ -165,6 +179,7 @@ fn send_write_request(
 
 async fn receive_messages(
     state: WriterState,
+    epoch: usize,
     mut stream: AsyncGrpcStreamWrapper<
         stream_write_message::FromClient,
         stream_write_message::FromServer,
@@ -179,7 +194,7 @@ async fn receive_messages(
             }
             RawServerMessage::Write(write_response) => {
                 for raw_ack in write_response.acks {
-                    state.acknowledge_message(WriteAck::from(raw_ack))?;
+                    state.acknowledge_message(epoch, WriteAck::from(raw_ack))?;
                 }
             }
             RawServerMessage::UpdateToken(_) => {}
@@ -210,15 +225,13 @@ mod tests {
             messages,
             codec: Codec::RAW,
             ends_batch,
+            transaction: None,
         }
     }
 
     fn settings(max_write_request_size: usize) -> WriteRequestSettings {
-        WriteRequestSettings::new(
-            None,
-            WRITE_REQUEST_SIZE_RESERVE_BYTES + max_write_request_size,
-        )
-        .unwrap()
+        WriteRequestSettings::new(WRITE_REQUEST_SIZE_RESERVE_BYTES + max_write_request_size)
+            .unwrap()
     }
 
     fn write_request(message: stream_write_message::FromClient) -> WriteRequest {

@@ -6,8 +6,8 @@ use tokio::time::{Instant, timeout_at};
 use tokio_util::sync::CancellationToken;
 use ydb::{
     PartitioningStrategy, QueryClient, TopicClient, TopicReader, TopicReaderOptions, TopicSelector,
-    TopicWriterMessage, TopicWriterTxOptions, TopicWriterTxOptionsBuilder, Transaction, YdbError,
-    YdbOrCustomerError, closure,
+    TopicWriter, TopicWriterMessage, TopicWriterOptions, Transaction, YdbError, YdbOrCustomerError,
+    closure,
 };
 
 use slo_framework::topic_tx::{MessageCoordinate, Params, PartitionId};
@@ -20,9 +20,8 @@ use super::{ERROR_COMMIT_PHASE_FAILURE, ERROR_OPERATIONAL_FAILURE, OPERATION_TRA
 pub(crate) struct PartitionWorker {
     partition_id: PartitionId,
     query_client: QueryClient,
-    topic_client: TopicClient,
     reader: TopicReader,
-    writer_options: TopicWriterTxOptions,
+    writer: TopicWriter,
     table_path: String,
     operation_timeout: Duration,
 }
@@ -52,23 +51,21 @@ impl PartitionWorker {
             .create_reader_with_params(reader_options)
             .await
             .with_context(|| format!("open transaction reader for partition {partition_id}"))?;
-        let writer_options = TopicWriterTxOptionsBuilder::default()
+        let writer_options = TopicWriterOptions::builder()
             .topic_path(params.topic_path.clone())
-            // Each transaction needs a new writer, but the partition worker remains
-            // one logical producer whose sequence continues across transactions.
             .producer_id(format!("slo-topic-tx-partition-{partition_id}"))
             .partitioning(PartitioningStrategy::PartitionId(partition_id.value()))
-            .build()
-            .with_context(|| {
-                format!("build transaction writer options for partition {partition_id}")
-            })?;
+            .build();
+        let writer = topic_client
+            .create_writer_with_params(writer_options)
+            .await
+            .with_context(|| format!("open transaction writer for partition {partition_id}"))?;
 
         Ok(Self {
             partition_id,
             query_client,
-            topic_client,
             reader,
-            writer_options,
+            writer,
             table_path: params.table_path.clone(),
             operation_timeout: params.operation_timeout,
         })
@@ -134,8 +131,7 @@ impl PartitionWorker {
                     &mut attempts,
                     &mut commit_phase_coordinate,
                     &mut reader = &mut self.reader,
-                    &mut topic_client = &mut self.topic_client,
-                    &writer_options = &self.writer_options,
+                    &mut writer = &mut self.writer,
                     &table_path = &self.table_path,
                     partition_id = self.partition_id,
                     &deadline,
@@ -154,10 +150,8 @@ impl PartitionWorker {
                     };
                     let transition = transition_from_batch(batch, *partition_id).await?;
                     insert_transition(tx, table_path.as_str(), &transition).await?;
-                    let mut writer = topic_client
-                        .create_writer_tx_with_params(writer_options.clone(), tx)
-                        .await?;
-                    writer
+                    let writer_tx = writer.transactional(tx).await?;
+                    writer_tx
                         .write(TopicWriterMessage::new(transition.successor().encode()))
                         .await?;
 

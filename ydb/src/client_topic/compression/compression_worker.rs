@@ -7,16 +7,36 @@ use crate::{YdbError, YdbResult};
 use std::{convert::Infallible, num::NonZeroUsize, sync::Arc};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
+use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
 type ChunkResult = YdbResult<CompressedChunk>;
-type InputRx = mpsc::UnboundedReceiver<Vec<MessageData>>;
+type InputRx = mpsc::UnboundedReceiver<CompressionBatch>;
 type OutputTx = mpsc::UnboundedSender<ChunkResult>;
+
+pub(crate) struct CompressionBatch {
+    pub(crate) messages: Vec<MessageData>,
+    pub(crate) transaction: Option<Arc<TransactionIdentity>>,
+}
+
+impl CompressionBatch {
+    pub(crate) fn new() -> Self {
+        Self {
+            messages: Vec::new(),
+            transaction: None,
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+}
 
 pub(crate) struct CompressedChunk {
     pub(crate) messages: Vec<MessageData>,
     pub(crate) codec: Codec,
     pub(crate) ends_batch: bool,
+    pub(crate) transaction: Option<Arc<TransactionIdentity>>,
 }
 
 pub(crate) struct CompressionWorker {
@@ -86,22 +106,28 @@ async fn schedule_batches(
     parallelism: NonZeroUsize,
 ) -> YdbResult<Infallible> {
     loop {
-        let mut batch = rx.recv().await.ok_or_else(|| {
+        let batch = rx.recv().await.ok_or_else(|| {
             YdbError::Transport("compression worker input channel closed".to_string())
         })?;
+        let CompressionBatch {
+            mut messages,
+            transaction,
+        } = batch;
 
-        codec_selector.step(&batch).await;
+        codec_selector.step(&messages).await;
         let codec = codec_selector.codec();
-        let chunk_size = (batch.len() / parallelism).clamp(1, super::MAX_MESSAGES_PER_CHUNK);
+        let chunk_size = (messages.len() / parallelism).clamp(1, super::MAX_MESSAGES_PER_CHUNK);
 
-        while !batch.is_empty() {
-            let chunk: Vec<MessageData> = batch.drain(..chunk_size.min(batch.len())).collect();
-            let ends_batch = batch.is_empty();
+        while !messages.is_empty() {
+            let chunk: Vec<MessageData> =
+                messages.drain(..chunk_size.min(messages.len())).collect();
+            let ends_batch = messages.is_empty();
             let registry = codec_registry.clone();
+            let transaction = transaction.clone();
 
             queue
                 .submit(Box::new(move || {
-                    compress_chunk(chunk, codec, ends_batch, registry)
+                    compress_chunk(chunk, codec, ends_batch, transaction, registry)
                 }))
                 .await;
         }
@@ -130,6 +156,7 @@ fn compress_chunk(
     mut messages: Vec<MessageData>,
     codec: Codec,
     ends_batch: bool,
+    transaction: Option<Arc<TransactionIdentity>>,
     registry: Arc<CodecRegistry>,
 ) -> ChunkResult {
     if codec != Codec::RAW {
@@ -154,5 +181,6 @@ fn compress_chunk(
         messages,
         codec,
         ends_batch,
+        transaction,
     })
 }

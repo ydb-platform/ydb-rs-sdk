@@ -3,6 +3,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message::FromServer;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_server::ServerMessage;
 use ydb_grpc::ydb_proto::{status_ids::StatusCode, topic::stream_write_message::WriteResponse};
 
+use crate::errors::{NeedRetry, YdbStatusError};
 use crate::grpc_wrapper::{
     grpc::proto_issues_to_ydb_issues,
     raw_errors::{RawError, RawResult},
@@ -20,11 +21,20 @@ pub(crate) enum RawServerMessage {
 }
 
 pub(crate) fn create_server_status_error(message: FromServer) -> RawError {
-    RawError::YdbStatus(crate::errors::YdbStatusError::new(
+    let mut error = YdbStatusError::new(
         "", // TODO: what message?
         message.status,
         proto_issues_to_ydb_issues(message.issues),
-    ))
+    );
+
+    // Topic Service uses `NOT_FOUND` for a lost transactional write session; retry it with a
+    // replacement Query session. YDBAPPTEAM-1899
+    if message.status == StatusCode::NotFound as i32 {
+        error.need_retry = Some(NeedRetry::True);
+        error.requires_session_discard = Some(true);
+    }
+
+    RawError::YdbStatus(error)
 }
 
 impl TryFrom<FromServer> for RawServerMessage {
