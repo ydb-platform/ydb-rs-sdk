@@ -2,9 +2,8 @@
 //!
 //! Each partition contains one unconsumed [`ChainEvent`]. A transaction consumes
 //! that event, stores the corresponding [`ChainTransition`], and writes the next
-//! generation back to the same partition. After workers stop, committed topic
-//! offsets, topic end offsets, and table transitions must describe the same
-//! contiguous chain.
+//! generation back to the same partition. After workers stop, a verification
+//! transaction consumes the final event and validates the contiguous table chain.
 
 mod chain;
 mod params;

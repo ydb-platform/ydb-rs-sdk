@@ -1,5 +1,3 @@
-use crate::errors::NeedRetry::IdempotentOnly;
-
 use crate::grpc_wrapper::raw_errors::RawError;
 use http::Uri;
 use std::fmt::{Debug, Display, Formatter};
@@ -86,11 +84,14 @@ impl From<YdbError> for YdbOrCustomerError {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NeedRetry {
-    True,           // operation guarantee to not completed, error is temporary, need retry
-    IdempotentOnly, // operation in unknown state - it may be completed or not, error temporary. Operation may be auto retry for idempotent operations only.
-    False, // operation is completed or error is stable (for example yql syntax error) and no need retry
+    /// The operation is guaranteed not to have completed and may be retried.
+    True,
+    /// The operation may have completed and may only be retried when it is idempotent.
+    IdempotentOnly,
+    /// The error is stable or is not documented as safe to retry.
+    False,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -203,9 +204,34 @@ pub struct YdbStatusError {
     ///
     /// It describe internal errors, warnings, etc more detail then operation_status or message.
     pub issues: Vec<YdbIssue>,
+
+    /// Context-specific retry classification overriding the default status-code policy.
+    ///
+    /// `None` uses the documented YDB status-code policy.
+    pub(crate) need_retry: Option<NeedRetry>,
+
+    /// Context-specific session-discard decision overriding the default status-code policy.
+    ///
+    /// `None` uses the documented YDB status-code policy.
+    pub(crate) requires_session_discard: Option<bool>,
 }
 
 impl YdbStatusError {
+    /// Creates a status error using the documented retry and session-discard policies.
+    pub(crate) fn new(
+        message: impl Into<String>,
+        operation_status: i32,
+        issues: Vec<YdbIssue>,
+    ) -> Self {
+        Self {
+            message: message.into(),
+            operation_status,
+            issues,
+            need_retry: None,
+            requires_session_discard: None,
+        }
+    }
+
     /// Got typed operation status or error
     ///
     /// ```
@@ -297,39 +323,6 @@ impl YdbError {
         YdbError::Custom(s.into())
     }
 
-    /// Definitive YDB operation status on a transactional statement: the server has
-    /// ended the transaction (explicit commit/rollback would return NOT_FOUND).
-    ///
-    /// Transport and ambiguous statuses (`UNDETERMINED`, `UNAVAILABLE`, `OVERLOADED`,
-    /// `SUCCESS`, `UNSPECIFIED`) are excluded — the transaction may still be active.
-    pub(crate) fn invalidates_server_transaction(&self) -> bool {
-        let Self::YdbStatusError(status) = self else {
-            return false;
-        };
-        let Ok(code) = status.operation_status() else {
-            return false;
-        };
-        matches!(
-            code,
-            StatusCode::BadRequest
-                | StatusCode::Unauthorized
-                | StatusCode::InternalError
-                | StatusCode::Aborted
-                | StatusCode::SchemeError
-                | StatusCode::GenericError
-                | StatusCode::Timeout
-                | StatusCode::BadSession
-                | StatusCode::PreconditionFailed
-                | StatusCode::AlreadyExists
-                | StatusCode::NotFound
-                | StatusCode::SessionExpired
-                | StatusCode::Cancelled
-                | StatusCode::Unsupported
-                | StatusCode::SessionBusy
-                | StatusCode::ExternalError
-        )
-    }
-
     /// Whether an operation error makes a pooled session unsafe to reuse.
     ///
     /// This is deliberately separate from retry classification: retryability describes
@@ -344,92 +337,147 @@ impl YdbError {
             | Self::InternalError(_) => false,
             Self::TransportDial(_) | Self::Transport(_) | Self::DeadlineExceeded => true,
             Self::TransportGRPCStatus(status) => {
-                use tonic::Code;
+                use tonic::Code::*;
 
-                // Match go-sdk `xerrors.MustDeleteTableOrQuerySession`: these gRPC
-                // transport failures can leave server-side query or transaction work in
-                // flight, so the session must not be reused.
+                // Keep this match in the order of the YDB "Recreate session" table:
+                // https://ydb.tech/docs/en/reference/ydb-sdk/grpc-status-codes
                 match status.code() {
-                    Code::Ok | Code::ResourceExhausted | Code::OutOfRange => false,
-                    Code::Cancelled
-                    | Code::Unknown
-                    | Code::InvalidArgument
-                    | Code::DeadlineExceeded
-                    | Code::NotFound
-                    | Code::AlreadyExists
-                    | Code::PermissionDenied
-                    | Code::FailedPrecondition
-                    | Code::Aborted
-                    | Code::Unimplemented
-                    | Code::Internal
-                    | Code::Unavailable
-                    | Code::DataLoss
-                    | Code::Unauthenticated => true,
+                    Ok => false,
+                    Cancelled => true,
+                    Unknown => true,
+                    InvalidArgument => true,
+                    DeadlineExceeded => true,
+                    NotFound => true,
+                    AlreadyExists => true,
+                    PermissionDenied => true,
+                    ResourceExhausted => false,
+                    FailedPrecondition => true,
+                    Aborted => true,
+                    OutOfRange => false,
+                    Unimplemented => true,
+                    Internal => true,
+                    Unavailable => true,
+                    DataLoss => true,
+                    Unauthenticated => true,
                 }
             }
-            Self::YdbStatusError(status) => match StatusCode::try_from(status.operation_status) {
-                Ok(
-                    StatusCode::BadSession | StatusCode::SessionBusy | StatusCode::SessionExpired,
-                ) => true,
-                Ok(
-                    StatusCode::Unspecified
-                    | StatusCode::Success
-                    | StatusCode::BadRequest
-                    | StatusCode::Unauthorized
-                    | StatusCode::InternalError
-                    | StatusCode::Aborted
-                    | StatusCode::Unavailable
-                    | StatusCode::Overloaded
-                    | StatusCode::SchemeError
-                    | StatusCode::GenericError
-                    | StatusCode::Timeout
-                    | StatusCode::PreconditionFailed
-                    | StatusCode::AlreadyExists
-                    | StatusCode::NotFound
-                    | StatusCode::Cancelled
-                    | StatusCode::Undetermined
-                    | StatusCode::Unsupported
-                    | StatusCode::ExternalError,
-                ) => false,
-                // An unknown server status is not evidence that the session is reusable.
-                Err(_) => true,
-            },
+            Self::YdbStatusError(status) => {
+                if let Some(requires_discard) = status.requires_session_discard {
+                    return requires_discard;
+                }
+
+                let Ok(status) = StatusCode::try_from(status.operation_status) else {
+                    // An unknown server status is not evidence that the session is reusable.
+                    return true;
+                };
+                use StatusCode::*;
+
+                // Keep this match in the order of the YDB "Recreate session" table:
+                // https://ydb.tech/docs/en/reference/ydb-sdk/ydb-status-codes
+                match status {
+                    Success => false,
+                    BadRequest => false,
+                    Unauthorized => false,
+                    InternalError => false,
+                    Aborted => false,
+                    Unavailable => false,
+                    Overloaded => false,
+                    SchemeError => false,
+                    GenericError => false,
+                    Timeout => false,
+                    BadSession => true,
+                    PreconditionFailed => false,
+                    AlreadyExists => false,
+                    NotFound => false,
+                    SessionExpired => true,
+                    Cancelled => false,
+                    Undetermined => false,
+                    Unsupported => false,
+                    SessionBusy => true,
+                    ExternalError => false,
+                    Unspecified => false,
+                }
+            }
         }
     }
 
     pub(crate) fn need_retry(&self) -> NeedRetry {
+        use NeedRetry::*;
+
         match self {
             Self::Convert(_)
             | Self::Custom(_)
             | Self::InternalError(_)
             | Self::NoRows
-            | Self::EndpointHasNoHost(_) => NeedRetry::False,
-            Self::TransportDial(_) => NeedRetry::True,
-            Self::Transport(_) | Self::DeadlineExceeded => IdempotentOnly, // TODO: check when transport error created
+            | Self::EndpointHasNoHost(_) => False,
+            Self::TransportDial(_) => True,
+            Self::Transport(_) | Self::DeadlineExceeded => IdempotentOnly,
             Self::TransportGRPCStatus(status) => {
-                use tonic::Code;
+                use tonic::Code::*;
+
+                // Keep this match in the order of the YDB retry table:
+                // https://ydb.tech/docs/en/reference/ydb-sdk/grpc-status-codes
                 match status.code() {
-                    Code::Aborted | Code::ResourceExhausted => NeedRetry::True,
-                    Code::Internal | Code::Cancelled | Code::Unavailable | Code::Unknown => {
-                        NeedRetry::IdempotentOnly
-                    }
-                    _ => NeedRetry::False,
+                    Ok => False,
+                    Cancelled => IdempotentOnly,
+                    // tonic-generated clients create a new UNKNOWN status for `Service::ready()`
+                    // failures and retain only the formatted message, so the original failure
+                    // cannot be distinguished reliably from a server-returned UNKNOWN:
+                    // https://github.com/grpc/grpc-rust/blob/v0.14.2/tonic-build/src/client.rs#L239-L242
+                    // tonic deliberately retains UNKNOWN for transport failures:
+                    // https://github.com/grpc/grpc-rust/issues/2488
+                    Unknown => IdempotentOnly,
+                    InvalidArgument => False,
+                    DeadlineExceeded => IdempotentOnly,
+                    NotFound => False,
+                    AlreadyExists => False,
+                    PermissionDenied => False,
+                    ResourceExhausted => True,
+                    FailedPrecondition => False,
+                    Aborted => True,
+                    OutOfRange => False,
+                    Unimplemented => False,
+                    Internal => IdempotentOnly,
+                    Unavailable => IdempotentOnly,
+                    DataLoss => False,
+                    Unauthenticated => False,
                 }
             }
-            Self::YdbStatusError(ydb_err) => {
-                let Ok(status) = StatusCode::try_from(ydb_err.operation_status) else {
-                    return NeedRetry::False;
-                };
+            Self::YdbStatusError(status) => {
+                if let Some(need_retry) = status.need_retry {
+                    return need_retry;
+                }
 
+                let Ok(status) = StatusCode::try_from(status.operation_status) else {
+                    // An unknown server status is not documented as safe to retry.
+                    return False;
+                };
+                use StatusCode::*;
+
+                // Keep this match in the order of the YDB retry table:
+                // https://ydb.tech/docs/en/reference/ydb-sdk/ydb-status-codes
                 match status {
-                    StatusCode::Aborted
-                    | StatusCode::Unavailable
-                    | StatusCode::Overloaded
-                    | StatusCode::BadSession
-                    | StatusCode::SessionExpired
-                    | StatusCode::SessionBusy => NeedRetry::True,
-                    StatusCode::Undetermined => NeedRetry::IdempotentOnly,
-                    _ => NeedRetry::False,
+                    Success => False,
+                    BadRequest => False,
+                    Unauthorized => False,
+                    InternalError => False,
+                    Aborted => True,
+                    Unavailable => True,
+                    Overloaded => True,
+                    SchemeError => False,
+                    GenericError => False,
+                    Timeout => IdempotentOnly,
+                    BadSession => True,
+                    PreconditionFailed => False,
+                    AlreadyExists => False,
+                    NotFound => False,
+                    SessionExpired => True,
+                    Cancelled => False,
+                    Undetermined => IdempotentOnly,
+                    Unsupported => False,
+                    SessionBusy => True,
+                    ExternalError => False,
+                    Unspecified => False,
                 }
             }
         }
@@ -438,7 +486,7 @@ impl YdbError {
     pub(crate) fn is_retriable(&self, idempotency: Idempotency) -> bool {
         match self.need_retry() {
             NeedRetry::True => true,
-            IdempotentOnly => idempotency.is_idempotent(),
+            NeedRetry::IdempotentOnly => idempotency.is_idempotent(),
             NeedRetry::False => false,
         }
     }
@@ -483,42 +531,7 @@ mod error_classification_tests {
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
     fn ydb_status(status: StatusCode) -> YdbError {
-        YdbError::YdbStatusError(YdbStatusError {
-            message: "test".into(),
-            operation_status: status as i32,
-            issues: vec![],
-        })
-    }
-
-    #[test]
-    fn success_does_not_invalidate_server_transaction() {
-        assert!(!ydb_status(StatusCode::Success).invalidates_server_transaction());
-    }
-
-    #[test]
-    fn operational_errors_invalidate_server_transaction() {
-        assert!(ydb_status(StatusCode::PreconditionFailed).invalidates_server_transaction());
-        assert!(ydb_status(StatusCode::Aborted).invalidates_server_transaction());
-        assert!(ydb_status(StatusCode::BadSession).invalidates_server_transaction());
-    }
-
-    #[test]
-    fn ambiguous_and_transport_errors_do_not_invalidate() {
-        assert!(!ydb_status(StatusCode::Undetermined).invalidates_server_transaction());
-        assert!(!ydb_status(StatusCode::Unavailable).invalidates_server_transaction());
-        assert!(!ydb_status(StatusCode::Overloaded).invalidates_server_transaction());
-        assert!(!YdbError::Transport("timeout".into()).invalidates_server_transaction());
-        assert!(!YdbError::Custom("x".into()).invalidates_server_transaction());
-    }
-
-    #[test]
-    fn unknown_status_code_does_not_invalidate() {
-        let err = YdbError::YdbStatusError(YdbStatusError {
-            message: "unknown".into(),
-            operation_status: -1,
-            issues: vec![],
-        });
-        assert!(!err.invalidates_server_transaction());
+        YdbError::YdbStatusError(YdbStatusError::new("test", status as i32, vec![]))
     }
 
     #[test]
@@ -555,11 +568,7 @@ mod error_classification_tests {
 
     #[test]
     fn unknown_operation_status_discards_session_conservatively() {
-        let err = YdbError::YdbStatusError(YdbStatusError {
-            message: "unknown".into(),
-            operation_status: -1,
-            issues: vec![],
-        });
+        let err = YdbError::YdbStatusError(YdbStatusError::new("unknown", -1, vec![]));
         assert!(err.requires_session_discard());
     }
 }
@@ -602,6 +611,12 @@ impl<T> From<std::sync::PoisonError<T>> for YdbError {
 impl From<tonic::Status> for YdbError {
     fn from(e: tonic::Status) -> Self {
         YdbError::TransportGRPCStatus(Arc::new(e))
+    }
+}
+
+impl From<tokio::time::error::Elapsed> for YdbError {
+    fn from(_: tokio::time::error::Elapsed) -> Self {
+        Self::DeadlineExceeded
     }
 }
 

@@ -50,11 +50,13 @@ impl TryFrom<SessionResponse> for RawSessionResponse {
         match response {
             session_response::Response::Ping(ping) => Ok(RawSessionResponse::Ping(ping)),
             session_response::Response::Pong(pong) => Ok(RawSessionResponse::Pong(pong)),
-            session_response::Response::Failure(fail) => Err(RawError::YdbStatus(YdbStatusError {
-                message: "".to_string(), // TODO: what message?
-                operation_status: fail.status,
-                issues: proto_issues_to_ydb_issues(fail.issues),
-            })),
+            session_response::Response::Failure(fail) => {
+                Err(RawError::YdbStatus(YdbStatusError::new(
+                    "", // TODO: what message?
+                    fail.status,
+                    proto_issues_to_ydb_issues(fail.issues),
+                )))
+            }
             session_response::Response::SessionStarted(started) => {
                 Ok(RawSessionResponse::SessionStarted(started))
             }

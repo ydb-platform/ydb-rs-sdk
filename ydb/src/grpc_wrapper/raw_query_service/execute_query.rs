@@ -40,7 +40,7 @@ impl From<RawExecMode> for ExecMode {
 pub(crate) struct RawExecuteQueryRequest {
     pub session_id: String,
     pub yql_text: String,
-    pub parameters: HashMap<String, Value>,
+    parameters: HashMap<String, RawTypedValue>,
     pub tx_control: Option<ydb_grpc::ydb_proto::query::TransactionControl>,
     pub collect_stats: bool,
     pub concurrent_result_sets: bool,
@@ -54,8 +54,13 @@ impl RawExecuteQueryRequest {
         parameters: HashMap<String, Value>,
         tx_control: Option<ydb_grpc::ydb_proto::query::TransactionControl>,
         collect_stats: bool,
-    ) -> Self {
-        Self {
+    ) -> RawResult<Self> {
+        let parameters = parameters
+            .into_iter()
+            .map(|(name, value)| RawTypedValue::try_from(value).map(|value| (name, value)))
+            .collect::<RawResult<_>>()?;
+
+        Ok(Self {
             session_id: session_id.into(),
             yql_text: yql_text.into(),
             parameters,
@@ -63,38 +68,38 @@ impl RawExecuteQueryRequest {
             collect_stats,
             concurrent_result_sets: false,
             exec_mode: RawExecMode::Execute,
-        }
+        })
     }
+}
 
-    pub fn into_proto(self) -> RawResult<ExecuteQueryRequest> {
-        let mut parameters = HashMap::with_capacity(self.parameters.len());
-        for (name, val) in self.parameters {
-            let raw: RawTypedValue = val.try_into()?;
-            parameters.insert(name, raw.into());
-        }
-
-        Ok(ExecuteQueryRequest {
-            session_id: self.session_id,
-            exec_mode: ExecMode::from(self.exec_mode) as i32,
-            tx_control: self.tx_control,
+impl From<RawExecuteQueryRequest> for ExecuteQueryRequest {
+    fn from(request: RawExecuteQueryRequest) -> Self {
+        Self {
+            session_id: request.session_id,
+            exec_mode: ExecMode::from(request.exec_mode) as i32,
+            tx_control: request.tx_control,
             query: Some(execute_query_request::Query::QueryContent(QueryContent {
                 syntax: Syntax::YqlV1 as i32,
-                text: self.yql_text,
+                text: request.yql_text,
             })),
-            parameters,
-            stats_mode: if self.collect_stats {
+            parameters: request
+                .parameters
+                .into_iter()
+                .map(|(name, value)| (name, value.into()))
+                .collect(),
+            stats_mode: if request.collect_stats {
                 StatsMode::Basic as i32
             } else {
                 StatsMode::None as i32
             },
-            concurrent_result_sets: self.concurrent_result_sets,
+            concurrent_result_sets: request.concurrent_result_sets,
             response_part_limit_bytes: 0,
             pool_id: String::new(),
             stats_period_ms: 0,
             schema_inclusion_mode: SchemaInclusionMode::Unspecified as i32,
             result_set_format: Format::Unspecified as i32,
             arrow_format_settings: None,
-        })
+        }
     }
 }
 
@@ -191,9 +196,10 @@ mod unit_tests {
     use ydb_grpc::ydb_proto::table_stats::QueryStats;
 
     fn request(mode: RawExecMode) -> ExecuteQueryRequest {
-        let mut req = RawExecuteQueryRequest::new("", "SELECT 1", HashMap::new(), None, false);
+        let mut req = RawExecuteQueryRequest::new("", "SELECT 1", HashMap::new(), None, false)
+            .expect("valid request");
         req.exec_mode = mode;
-        req.into_proto().expect("no parameters to convert")
+        req.into()
     }
 
     fn part(stats: Option<QueryStats>) -> ExecuteQueryResponsePart {
@@ -209,10 +215,11 @@ mod unit_tests {
 
     #[test]
     fn exec_mode_defaults_to_execute() {
-        let req = RawExecuteQueryRequest::new("s", "SELECT 1", HashMap::new(), None, false);
+        let req = RawExecuteQueryRequest::new("s", "SELECT 1", HashMap::new(), None, false)
+            .expect("valid request");
         assert_eq!(req.exec_mode, RawExecMode::Execute);
         assert_eq!(
-            req.into_proto().expect("into_proto").exec_mode,
+            ExecuteQueryRequest::from(req).exec_mode,
             ExecMode::Execute as i32
         );
     }

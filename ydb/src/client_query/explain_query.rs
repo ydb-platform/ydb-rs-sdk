@@ -81,7 +81,7 @@ async fn explain_query_once(
         .await?;
 
     // Implicit session: EXPLAIN holds no server-side state, so no pool lease is taken.
-    let mut req = RawExecuteQueryRequest::new("", text, HashMap::new(), None, false);
+    let mut req = RawExecuteQueryRequest::new("", text, HashMap::new(), None, false)?;
     req.exec_mode = RawExecMode::Explain;
 
     let mut stream = ExecuteQueryStream::new(client.execute_query(req).await?);

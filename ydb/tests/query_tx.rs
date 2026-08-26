@@ -5,24 +5,28 @@
 //!
 //! - no query fails: `retry_tx` sends `CommitTransaction`;
 //! - the last query uses `.with_commit(true)`: the query commits the transaction;
-//! - a query returns an invalidating status: the server has already ended the transaction;
-//! - a query returns a transient/ambiguous status: the transaction may still be active;
+//! - a query returns a concrete failure: the attempt is rolled back and retried;
+//! - a query returns an undetermined status: the transaction outcome is unknown;
 //! - the caller explicitly rolls back;
 //! - rollback or commit RPC outcome is unknown;
 //!
 //! The regression cases for #521 are the swallowed-error paths: if the callback
-//! returns `Ok` after the server invalidated the transaction, or after rollback
-//! failed, `retry_tx` must not report a successful commit. Swallowing a transient
-//! query error is different: the transaction is not known to be invalidated, so a
-//! real commit attempt decides the outcome.
+//! returns `Ok` after a query failed, or after rollback failed, `retry_tx` must not
+//! report a successful commit. A concrete transient query
+//! failure ends the current attempt, which is rolled back before retry.
 mod mock_server;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use ydb::{Client, ClientBuilder, Transaction, YdbResult, closure};
+use ydb::{
+    Client, ClientBuilder, Transaction, YdbError, YdbOrCustomerError, YdbResult, YdbStatusError,
+    closure,
+};
 use ydb_grpc::ydb_proto::query::{
-    ExecuteQueryResponsePart, RollbackTransactionResponse, TransactionMeta,
+    CommitTransactionResponse, ExecuteQueryResponsePart, RollbackTransactionResponse,
+    TransactionMeta,
 };
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
@@ -63,6 +67,13 @@ fn failing_part(status: StatusCode) -> ExecuteQueryResponsePart {
     }
 }
 
+fn status_error(status: StatusCode) -> YdbError {
+    let mut error = YdbStatusError::default();
+    error.message = "test callback error".to_string();
+    error.operation_status = status as i32;
+    YdbError::YdbStatusError(error)
+}
+
 /// Returns `script[call]`, or the script's last entry once `call` runs past the end.
 /// An empty script always answers `Success`.
 fn scripted_status(script: &[StatusCode], call: usize) -> StatusCode {
@@ -74,29 +85,50 @@ fn scripted_status(script: &[StatusCode], call: usize) -> StatusCode {
 
 #[derive(Default)]
 struct TxLifecycle {
+    create_session_count: usize,
     commit_count: usize,
     rollback_count: usize,
 }
 
 type SharedTxLifecycle = Arc<Mutex<TxLifecycle>>;
 
-/// Every `ExecuteQuery` succeeds (handing back `QUERY_TX_ID`); `CommitTransaction` and
-/// `RollbackTransaction` are counted and then passed through to the mock's default handler,
-/// which replies success for both. Covers T0 (happy path), T1 (commit-via-query), T4
-/// (explicit rollback succeeds), and T6 (panic, before/after a real terminal event) — the
-/// mock behavior needed is identical across those; only the callback differs.
+async fn wait_for_rollback_count(tx_lifecycle: &SharedTxLifecycle, expected: usize) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if tx_lifecycle.lock().unwrap().rollback_count >= expected {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("timed out waiting for transaction cleanup rollback");
+}
+
+/// Every `ExecuteQuery` succeeds. A lazy transaction ID arrives after the first response part;
+/// a query that commits the transaction omits it. `CommitTransaction` and `RollbackTransaction`
+/// are counted and then passed through to the mock's default handler, which replies success for
+/// both. Covers T0 (happy path), T1 (commit-via-query), T4 (explicit rollback succeeds), and T6
+/// (panic, before/after a real terminal event) — the mock behavior needed is identical across
+/// those; only the callback differs.
 #[derive(Default)]
 struct CountingHandler {
     replies: ReplySink,
     tx_lifecycle: SharedTxLifecycle,
+    empty_execute_response: bool,
 }
 
 impl CountingHandler {
     fn new() -> (Self, SharedTxLifecycle) {
+        Self::with_empty_execute_response(false)
+    }
+
+    fn with_empty_execute_response(empty_execute_response: bool) -> (Self, SharedTxLifecycle) {
         let tx_lifecycle = Arc::new(Mutex::new(TxLifecycle::default()));
         let handler = Self {
             replies: ReplySink::default(),
             tx_lifecycle: tx_lifecycle.clone(),
+            empty_execute_response,
         };
         (handler, tx_lifecycle)
     }
@@ -118,13 +150,25 @@ impl Handler for CountingHandler {
             _ => {}
         }
 
-        let Incoming::Query(QueryIncoming::ExecuteQuery(_, stream_id)) = incoming else {
+        let Incoming::Query(QueryIncoming::ExecuteQuery(request, stream_id)) = incoming else {
             return Some(incoming);
         };
-        self.replies.send(QueryReply::ExecuteQuery {
-            stream_id,
-            part: success_part(Some(QUERY_TX_ID)),
-        });
+        if !self.empty_execute_response {
+            self.replies.send(QueryReply::ExecuteQuery {
+                stream_id,
+                part: success_part(None),
+            });
+            if request
+                .tx_control
+                .as_ref()
+                .is_none_or(|control| !control.commit_tx)
+            {
+                self.replies.send(QueryReply::ExecuteQuery {
+                    stream_id,
+                    part: success_part(Some(QUERY_TX_ID)),
+                });
+            }
+        }
         self.replies
             .send(QueryReply::ExecuteQueryClose { stream_id });
         None
@@ -205,7 +249,7 @@ impl Handler for ScriptedQueryHandler {
 /// Every `ExecuteQuery` succeeds; `CommitTransaction` always fails at the transport level
 /// (mirrors `topic_writer_tx.rs`'s `CommitFailsHandler`: a raw RPC failure, not a status-coded
 /// response, so `need_retry` resolves to `IdempotentOnly` and the default `idempotent(false)`
-/// blocks a blind whole-transaction retry after an ambiguous commit).
+/// blocks a blind whole-transaction retry after an undetermined commit).
 #[derive(Default)]
 struct CommitTransportFailsHandler {
     replies: ReplySink,
@@ -255,6 +299,68 @@ impl Handler for CommitTransportFailsHandler {
     }
 }
 
+/// Every `ExecuteQuery` succeeds; `CommitTransaction` follows a per-call status script.
+struct ScriptedCommitHandler {
+    replies: ReplySink,
+    tx_lifecycle: SharedTxLifecycle,
+    commit_call: AtomicUsize,
+    commit_statuses: Vec<StatusCode>,
+}
+
+impl ScriptedCommitHandler {
+    fn new(commit_statuses: Vec<StatusCode>) -> (Self, SharedTxLifecycle) {
+        let tx_lifecycle = Arc::new(Mutex::new(TxLifecycle::default()));
+        let handler = Self {
+            replies: ReplySink::default(),
+            tx_lifecycle: tx_lifecycle.clone(),
+            commit_call: AtomicUsize::new(0),
+            commit_statuses,
+        };
+        (handler, tx_lifecycle)
+    }
+}
+
+impl Handler for ScriptedCommitHandler {
+    fn set_channel(&mut self, tx: FromHandlerToService) {
+        self.replies.set_channel(tx);
+    }
+
+    fn handle(&self, incoming: Incoming) -> Option<Incoming> {
+        match &incoming {
+            Incoming::Query(QueryIncoming::CreateSession(_, _)) => {
+                self.tx_lifecycle.lock().unwrap().create_session_count += 1;
+            }
+            Incoming::Query(QueryIncoming::RollbackTransaction(_, _)) => {
+                self.tx_lifecycle.lock().unwrap().rollback_count += 1;
+            }
+            _ => {}
+        }
+
+        match incoming {
+            Incoming::Query(QueryIncoming::ExecuteQuery(_, stream_id)) => {
+                self.replies.send(QueryReply::ExecuteQuery {
+                    stream_id,
+                    part: success_part(Some(QUERY_TX_ID)),
+                });
+                self.replies
+                    .send(QueryReply::ExecuteQueryClose { stream_id });
+                None
+            }
+            Incoming::Query(QueryIncoming::CommitTransaction(_, reply_tx)) => {
+                self.tx_lifecycle.lock().unwrap().commit_count += 1;
+                let call = self.commit_call.fetch_add(1, Ordering::SeqCst);
+                let status = scripted_status(&self.commit_statuses, call);
+                let _ = reply_tx.send(Ok(tonic::Response::new(CommitTransactionResponse {
+                    status: status as i32,
+                    issues: vec![],
+                })));
+                None
+            }
+            other => Some(other),
+        }
+    }
+}
+
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn happy_path_reports_committed() -> YdbResult<()> {
@@ -277,7 +383,7 @@ async fn happy_path_reports_committed() -> YdbResult<()> {
     Ok(())
 }
 
-/// A failed `CommitTransaction` has an ambiguous server-side outcome, so `retry_tx`
+/// A failed `CommitTransaction` has an undetermined server-side outcome, so `retry_tx`
 /// must report the error instead of retrying the whole transaction blindly.
 #[tokio::test]
 #[tracing_test::traced_test]
@@ -296,14 +402,76 @@ async fn commit_rpc_failure_is_reported_and_not_retried() -> YdbResult<()> {
 
     assert!(
         result.is_err(),
-        "a failed commit is ambiguous and must be reported as failure, got {result:?}"
+        "a failed commit is undetermined and must be reported as failure, got {result:?}"
     );
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(
         lifecycle.commit_count, 1,
-        "commit outcome is ambiguous, so the whole tx must not be retried"
+        "commit outcome is undetermined, so the whole tx must not be retried"
     );
     assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn definitive_commit_failure_retries_whole_transaction() -> YdbResult<()> {
+    let (handler, tx_lifecycle) =
+        ScriptedCommitHandler::new(vec![StatusCode::Aborted, StatusCode::Success]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+            Ok(())
+        }))
+        .await;
+
+    assert!(result.is_ok(), "expected successful retry, got {result:?}");
+    wait_for_rollback_count(&tx_lifecycle, 1).await;
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(
+        lifecycle.create_session_count, 1,
+        "successful rollback cleanup must return the session for retry"
+    );
+    assert_eq!(
+        lifecycle.commit_count, 2,
+        "the definitive commit failure must retry the whole transaction"
+    );
+    assert_eq!(
+        lifecycle.rollback_count, 1,
+        "the failed commit attempt must be rolled back before its session is reused"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn idempotent_transaction_retries_undetermined_commit_outcome() -> YdbResult<()> {
+    let (handler, tx_lifecycle) =
+        ScriptedCommitHandler::new(vec![StatusCode::Undetermined, StatusCode::Success]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+            Ok(())
+        }))
+        .idempotent(true)
+        .await;
+
+    assert!(result.is_ok(), "expected successful retry, got {result:?}");
+    wait_for_rollback_count(&tx_lifecycle, 1).await;
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 2);
+    assert_eq!(
+        lifecycle.rollback_count, 1,
+        "the returned commit error must be cleaned up before retry"
+    );
     Ok(())
 }
 
@@ -330,6 +498,162 @@ async fn commit_via_query_reports_committed() -> YdbResult<()> {
         lifecycle.commit_count, 0,
         "commit already happened via the query; no separate RPC expected"
     );
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+async fn assert_dropped_transaction_stream_is_not_committed(drain: bool) -> YdbResult<()> {
+    let (handler, tx_lifecycle) = CountingHandler::new();
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            let mut stream = tx.query("SELECT 1; SELECT 2").await?;
+            if drain {
+                while stream.next_result_set().await?.is_some() {}
+            }
+            drop(stream);
+            Ok(())
+        }))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "a dropped transaction stream must fail the attempt"
+    );
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 0);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn dropped_partially_consumed_transaction_stream_is_not_committed() -> YdbResult<()> {
+    // Opening primes one response part; dropping now leaves the remaining stream unread.
+    assert_dropped_transaction_stream_is_not_committed(false).await
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn dropped_drained_transaction_stream_is_not_committed() -> YdbResult<()> {
+    assert_dropped_transaction_stream_is_not_committed(true).await
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn callback_error_after_commit_does_not_retry_transaction() -> YdbResult<()> {
+    let (handler, _tx_lifecycle) = CountingHandler::new();
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let attempts = Arc::new(AtomicUsize::new(0));
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!([&attempts], async |tx: &mut Transaction| {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')")
+                .with_commit(true)
+                .await?;
+            if attempt == 0 {
+                return Err(status_error(StatusCode::Unavailable).into());
+            }
+            Ok(())
+        }))
+        .await;
+
+    assert!(result.is_err(), "the callback error must be returned");
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        1,
+        "a confirmed commit must never be retried"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn empty_commit_via_query_response_is_not_committed() -> YdbResult<()> {
+    let (handler, tx_lifecycle) = CountingHandler::with_empty_execute_response(true);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')")
+                .with_commit(true)
+                .await?;
+            Ok(())
+        }))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "an empty ExecuteQuery response must not confirm commit"
+    );
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 0);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn swallowed_empty_commit_via_query_response_is_not_committed() -> YdbResult<()> {
+    let (handler, tx_lifecycle) = CountingHandler::with_empty_execute_response(true);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            let commit = tx
+                .exec("UPSERT INTO t (id, val) VALUES (1, 'x')")
+                .with_commit(true)
+                .await;
+            assert!(commit.is_err(), "empty response must fail the query");
+            Ok(())
+        }))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "swallowing an undetermined commit error must not report success"
+    );
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 0);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+/// Once the first `ExecuteQuery` has been dispatched, a failed response can leave a server-side
+/// transaction whose ID the SDK never received. Swallowing that error must not turn the local
+/// transaction back into an unstarted transaction that can be "committed" without an RPC.
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn swallowed_first_query_failure_is_not_committed_locally() -> YdbResult<()> {
+    let (handler, tx_lifecycle) = ScriptedQueryHandler::new(vec![StatusCode::Undetermined], vec![]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            let query = tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await;
+            assert!(query.is_err(), "the first query must fail");
+            Ok(())
+        }))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "an unconfirmed first query must fail the transaction attempt"
+    );
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 0);
     assert_eq!(lifecycle.rollback_count, 0);
     Ok(())
 }
@@ -363,12 +687,11 @@ async fn invalidating_error_propagated_is_retried_until_success() -> YdbResult<(
 }
 
 /// Regression test for https://github.com/ydb-platform/ydb-rs-sdk/issues/521:
-/// `retry_tx` must not report a transaction as committed when the server has
-/// already invalidated it, even if the user callback swallows the invalidating
-/// query error and returns `Ok`.
+/// `retry_tx` must not report a transaction as committed when a query fails,
+/// even if the user callback swallows that error and returns `Ok`.
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn swallowed_invalidating_error_must_not_report_committed() -> YdbResult<()> {
+async fn swallowed_query_error_must_not_report_committed() -> YdbResult<()> {
     let (handler, tx_lifecycle) = ScriptedQueryHandler::new(
         vec![StatusCode::Success, StatusCode::PreconditionFailed],
         vec![],
@@ -381,7 +704,8 @@ async fn swallowed_invalidating_error_must_not_report_committed() -> YdbResult<(
         .retry_tx(closure!(async |tx: &mut Transaction| {
             tx.exec("UPSERT INTO t (id, val) VALUES (2, 'x')").await?;
 
-            // Duplicate-key-style conflict: server aborts the transaction.
+            // Duplicate-key-style conflict. The SDK cannot infer the remote transaction
+            // lifecycle from the status alone, so cleanup must attempt rollback.
             let conflict = tx.exec("INSERT INTO t (id, val) VALUES (1, 'dup')").await;
 
             // The application "handles" the error itself and continues — this is the
@@ -392,33 +716,32 @@ async fn swallowed_invalidating_error_must_not_report_committed() -> YdbResult<(
         }))
         .await;
 
-    {
-        let lifecycle = tx_lifecycle.lock().unwrap();
-        assert_eq!(
-            lifecycle.commit_count, 0,
-            "the server already invalidated the tx; the SDK must not send CommitTransaction"
-        );
-        assert_eq!(
-            lifecycle.rollback_count, 0,
-            "the server already invalidated the tx; the SDK must not send RollbackTransaction"
-        );
-    }
+    wait_for_rollback_count(&tx_lifecycle, 1).await;
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(
+        lifecycle.commit_count, 0,
+        "a failed transaction attempt must not send CommitTransaction"
+    );
+    assert_eq!(
+        lifecycle.rollback_count, 1,
+        "a started transaction must be rolled back before its session is reused"
+    );
 
     assert!(
         result.is_err(),
-        "retry_tx reported success ({result:?}) for a transaction the server had already \
-         aborted, just because the callback swallowed the invalidating query error \
+        "retry_tx reported success ({result:?}) for a failed transaction attempt just \
+         because the callback swallowed the query error \
          (https://github.com/ydb-platform/ydb-rs-sdk/issues/521)"
     );
 
     Ok(())
 }
 
-/// A transient query error does not prove the server ended the transaction, so a
-/// propagated error must trigger a real rollback before retrying.
+/// A concrete transient query failure rolls back the current attempt and retries the whole
+/// transaction rather than continuing it.
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn transient_error_propagated_rolls_back_and_retries() -> YdbResult<()> {
+async fn transient_error_propagated_retries_whole_transaction() -> YdbResult<()> {
     let (handler, tx_lifecycle) = ScriptedQueryHandler::new(
         vec![
             StatusCode::Success,     // attempt 0, 1st query: establishes tx_id
@@ -444,7 +767,7 @@ async fn transient_error_propagated_rolls_back_and_retries() -> YdbResult<()> {
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(
         lifecycle.rollback_count, 1,
-        "the failed first attempt must be rolled back for real"
+        "the failed transaction attempt must be rolled back before retry"
     );
     assert_eq!(
         lifecycle.commit_count, 1,
@@ -453,13 +776,19 @@ async fn transient_error_propagated_rolls_back_and_retries() -> YdbResult<()> {
     Ok(())
 }
 
-/// Swallowing a transient query error is safe from false-commit reporting because
-/// `retry_tx` still verifies the final outcome with a real commit attempt.
+/// Swallowing a concrete transient query error still retries the whole transaction attempt.
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn transient_error_swallowed_falls_through_to_real_commit() -> YdbResult<()> {
-    let (handler, tx_lifecycle) =
-        ScriptedQueryHandler::new(vec![StatusCode::Success, StatusCode::Unavailable], vec![]);
+async fn transient_error_swallowed_retries_whole_transaction() -> YdbResult<()> {
+    let (handler, tx_lifecycle) = ScriptedQueryHandler::new(
+        vec![
+            StatusCode::Success,
+            StatusCode::Unavailable,
+            StatusCode::Success,
+            StatusCode::Success,
+        ],
+        vec![],
+    );
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
 
@@ -477,17 +806,179 @@ async fn transient_error_swallowed_falls_through_to_real_commit() -> YdbResult<(
 
     assert!(
         result.is_ok(),
-        "the tx was never invalidated, so a real commit should decide the outcome: {result:?}"
+        "the retried transaction should succeed: {result:?}"
     );
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(
         lifecycle.commit_count, 1,
-        "retry_tx must still attempt a real commit rather than trusting the swallowed error"
+        "only the successful retry attempt should commit"
     );
     assert_eq!(
-        lifecycle.rollback_count, 0,
-        "single attempt, no retry expected"
+        lifecycle.rollback_count, 1,
+        "the swallowed query error must still roll back its failed attempt"
     );
+    Ok(())
+}
+
+/// `UNDETERMINED` does not establish whether the dispatched query took effect. Even if the
+/// callback swallows it, the SDK must not continue or commit that transaction.
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn swallowed_undetermined_query_error_fails_attempt() -> YdbResult<()> {
+    let (handler, tx_lifecycle) =
+        ScriptedQueryHandler::new(vec![StatusCode::Success, StatusCode::Undetermined], vec![]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+            let _ = tx.exec("UPSERT INTO t (id, val) VALUES (2, 'y')").await;
+            Ok(())
+        }))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "an undetermined query status must fail the transaction attempt"
+    );
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn idempotent_transaction_retries_undetermined_query_outcome() -> YdbResult<()> {
+    let (handler, tx_lifecycle) =
+        ScriptedQueryHandler::new(vec![StatusCode::Undetermined, StatusCode::Success], vec![]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let attempts = Arc::new(AtomicUsize::new(0));
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!([&attempts], async |tx: &mut Transaction| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+            Ok(())
+        }))
+        .idempotent(true)
+        .await;
+
+    assert!(result.is_ok(), "expected successful retry, got {result:?}");
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 1);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn callback_error_does_not_override_undetermined_query_error() -> YdbResult<()> {
+    let (handler, tx_lifecycle) =
+        ScriptedQueryHandler::new(vec![StatusCode::Undetermined, StatusCode::Success], vec![]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let attempts = Arc::new(AtomicUsize::new(0));
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!([&attempts], async |tx: &mut Transaction| {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+            let query = tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await;
+            if attempt == 0 {
+                assert!(query.is_err(), "the first query must be undetermined");
+                return Err(status_error(StatusCode::Unavailable).into());
+            }
+            query?;
+            Ok(())
+        }))
+        .await;
+
+    assert!(result.is_err(), "the undetermined outcome must be returned");
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        1,
+        "a callback error must not make an undetermined transaction retryable"
+    );
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.commit_count, 0);
+    assert_eq!(lifecycle.rollback_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn undetermined_automatic_rollback_prevents_callback_retry() -> YdbResult<()> {
+    let (handler, tx_lifecycle) =
+        ScriptedQueryHandler::new(vec![StatusCode::Success], vec![StatusCode::Undetermined]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let attempts = Arc::new(AtomicUsize::new(0));
+
+    let result: Result<(), _> = client
+        .query_client()
+        .retry_tx(closure!([&attempts], async |tx: &mut Transaction| {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+            if attempt > 0 {
+                // Bound the regression case instead of letting an incorrect retry loop forever.
+                return Err(status_error(StatusCode::GenericError).into());
+            }
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+            Err(status_error(StatusCode::Aborted).into())
+        }))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "the rollback outcome must remain undetermined"
+    );
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        1,
+        "an undetermined rollback must prevent a non-idempotent callback retry"
+    );
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.rollback_count, 1);
+    assert_eq!(lifecycle.commit_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn customer_error_is_not_replaced_by_rollback_failure() -> YdbResult<()> {
+    let (handler, tx_lifecycle) =
+        ScriptedQueryHandler::new(vec![StatusCode::Success], vec![StatusCode::BadSession]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let attempts = Arc::new(AtomicUsize::new(0));
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!([&attempts], async |tx: &mut Transaction| {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+            if attempt == 0 {
+                return Err(YdbOrCustomerError::from_err(std::io::Error::other(
+                    "customer validation failed",
+                )));
+            }
+            Ok(())
+        }))
+        .await;
+
+    assert!(matches!(result, Err(YdbOrCustomerError::Customer(_))));
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        1,
+        "a rollback cleanup error must not make a customer error retryable"
+    );
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.rollback_count, 1);
+    assert_eq!(lifecycle.commit_count, 0);
     Ok(())
 }
 
@@ -561,7 +1052,7 @@ async fn rollback_rpc_failure_propagated_is_retried_until_rollback_succeeds() ->
 #[tracing_test::traced_test]
 async fn swallowed_rollback_failure_must_not_report_committed() -> YdbResult<()> {
     let (handler, tx_lifecycle) =
-        ScriptedQueryHandler::new(vec![StatusCode::Success], vec![StatusCode::BadSession]);
+        ScriptedQueryHandler::new(vec![StatusCode::Success], vec![StatusCode::Undetermined]);
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
 
