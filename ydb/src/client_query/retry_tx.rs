@@ -72,7 +72,10 @@ impl<'a, F, T> RetryTxBuilder<'a, F, T> {
         self
     }
 
-    /// Also retry errors that require idempotency (see [`crate::CallBuilder::idempotent`]).
+    /// Set whether the entire transaction callback is safe to repeat.
+    ///
+    /// This enables errors that require idempotency and is also required before retrying any
+    /// transaction attempt whose server outcome is unknown.
     pub fn idempotent(mut self, idempotent: bool) -> Self {
         self.idempotent = idempotent;
         self

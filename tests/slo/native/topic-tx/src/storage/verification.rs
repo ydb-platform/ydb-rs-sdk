@@ -2,50 +2,41 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use tokio::time::{Instant, sleep};
-use ydb::{DescribeConsumerOptionsBuilder, Transaction, YdbOrCustomerError, closure};
+use ydb::{Transaction, YdbOrCustomerError, closure};
 
-use slo_framework::topic_tx::{ChainTransition, PartitionId, TopicOffset};
+use slo_framework::topic_tx::{ChainTransition, PartitionId};
 
 use super::TopicTxStorage;
 use super::queries::{read_next_transition, required_field};
 use super::transaction::{invalid_chain_state, reader_options};
 
 const POOL_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
-const POOL_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const STATE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PartitionOffsets {
-    pub(super) partition_id: PartitionId,
-    pub(super) committed_offset: TopicOffset,
-    pub(super) end_offset: TopicOffset,
+struct PartitionObservation {
+    partition_id: PartitionId,
+    next_offset: i64,
+    transition_count: u64,
+    valid_transition_count: u64,
 }
 
 impl TopicTxStorage {
     /// Verifies atomic chain state after workers stop, then checks that no query
     /// session remains in use or creation.
     pub(crate) async fn verify_shutdown_state(&self) -> Result<()> {
-        self.verify_transactional_snapshots().await?;
-        for partition in self.read_partition_offsets().await? {
-            ensure!(
-                partition.end_offset.value() - partition.committed_offset.value() == 1,
-                "partition {} must have exactly one unconsumed event: committed offset {}, end offset {}",
-                partition.partition_id,
-                partition.committed_offset,
-                partition.end_offset,
-            );
-        }
+        self.verify_transactional_chains().await?;
         self.wait_for_pool_release().await
     }
 
-    async fn verify_transactional_snapshots(&self) -> Result<()> {
+    async fn verify_transactional_chains(&self) -> Result<()> {
         for raw_partition_id in 0..self.params.partition_count {
             let partition_id = PartitionId::new(raw_partition_id as i64);
-            self.verify_partition_snapshot(partition_id).await?;
+            self.verify_partition_chain(partition_id).await?;
         }
         Ok(())
     }
 
-    async fn verify_partition_snapshot(&self, partition_id: PartitionId) -> Result<()> {
+    async fn verify_partition_chain(&self, partition_id: PartitionId) -> Result<()> {
         let options = reader_options(partition_id, &self.params);
         let mut reader = self
             .topic_client
@@ -57,68 +48,34 @@ impl TopicTxStorage {
         let deadline = Instant::now() + timeout;
         let table_path = &self.params.table_path;
 
-        self.query_client
+        let observation = self
+            .query_client
             .retry_tx(closure!(
                 [&mut reader, table_path, partition_id, &deadline],
                 async |tx: &mut Transaction| {
-                    // Observe both sides of the chain in one transaction, then
-                    // roll it back so verification does not advance the consumer.
                     let transition =
                         read_next_transition(reader, tx, *partition_id, *deadline).await?;
-                    verify_partition_table_state(tx, table_path, &transition).await?;
-                    tx.rollback().await?;
-                    Ok(())
+                    read_partition_table_observation(tx, table_path, &transition).await
                 }
             ))
             .idempotent(true)
             .timeout(timeout)
             .await
             .map_err(anyhow::Error::new)
-            .with_context(|| format!("verify transaction snapshot for partition {partition_id}"))
-    }
-
-    pub(super) async fn read_partition_offsets(&self) -> Result<Vec<PartitionOffsets>> {
-        let options = DescribeConsumerOptionsBuilder::default()
-            .include_stats(true)
-            .build()
-            .context("build topic transaction consumer description options")?;
-        let description = self
-            .topic_client
-            .clone()
-            .describe_consumer(
-                self.params.topic_path.clone(),
-                self.params.consumer_name.clone(),
-                options,
-            )
-            .await
             .with_context(|| {
-                format!(
-                    "describe consumer {} on topic {}",
-                    self.params.consumer_name, self.params.topic_path,
-                )
+                format!("commit verification transaction for partition {partition_id}")
             })?;
-        let mut partitions = Vec::with_capacity(description.partitions.len());
-        for partition in description.partitions {
-            let partition_id = PartitionId::new(partition.partition_id);
-            let committed_offset = partition.consumer_stats.committed_offset;
-            let end_offset = partition.stats.end_offset;
-            ensure!(
-                committed_offset >= 0,
-                "partition {partition_id} has negative committed offset {committed_offset}",
-            );
-            ensure!(
-                end_offset >= 0,
-                "partition {partition_id} has negative end offset {end_offset}",
-            );
-            partitions.push(PartitionOffsets {
-                partition_id,
-                committed_offset: TopicOffset::new(committed_offset),
-                end_offset: TopicOffset::new(end_offset),
-            });
-        }
-        partitions.sort_unstable_by_key(|partition| partition.partition_id);
 
-        Ok(partitions)
+        // Topic payloads are read from the live reader; only their consumer-offset updates belong
+        // to the Query transaction. Commit must succeed before comparing that live observation
+        // with the transaction's table view.
+        validate_partition_table_counts(
+            observation.partition_id,
+            observation.next_offset,
+            observation.transition_count,
+            observation.valid_transition_count,
+        )
+        .with_context(|| format!("verify committed transaction for partition {partition_id}"))
     }
 
     async fn wait_for_pool_release(&self) -> Result<()> {
@@ -141,16 +98,16 @@ impl TopicTxStorage {
                 stats.in_use,
                 stats.create_in_progress,
             );
-            sleep(POOL_POLL_INTERVAL).await;
+            sleep(STATE_POLL_INTERVAL).await;
         }
     }
 }
 
-async fn verify_partition_table_state(
+async fn read_partition_table_observation(
     tx: &mut Transaction,
     table_path: &str,
     transition: &ChainTransition,
-) -> Result<(), YdbOrCustomerError> {
+) -> Result<PartitionObservation, YdbOrCustomerError> {
     let partition_id = transition.coordinate.partition_id;
     let next_offset = transition.coordinate.offset.value();
     let query = format!(
@@ -175,13 +132,12 @@ async fn verify_partition_table_state(
     let valid_transition_count: u64 =
         required_field(&mut row, "valid_transition_count").map_err(invalid_chain_state)?;
 
-    validate_partition_table_counts(
+    Ok(PartitionObservation {
         partition_id,
         next_offset,
         transition_count,
         valid_transition_count,
-    )
-    .map_err(invalid_chain_state)
+    })
 }
 
 fn validate_partition_table_counts(

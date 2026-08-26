@@ -98,6 +98,7 @@ impl AttachedSession {
         self.health.is_healthy()
     }
 
+    #[cfg(test)]
     pub(super) fn invalidate(&self) {
         self.health.mark_broken();
     }
@@ -106,14 +107,14 @@ impl AttachedSession {
         if self.is_healthy() {
             Ok(())
         } else {
-            Err(YdbError::YdbStatusError(YdbStatusError {
-                message: format!(
+            Err(YdbError::YdbStatusError(YdbStatusError::new(
+                format!(
                     "query session {} is not healthy",
                     self.resource.identity.session_id
                 ),
-                operation_status: StatusCode::BadSession as i32,
-                issues: Vec::new(),
-            }))
+                StatusCode::BadSession as i32,
+                Vec::new(),
+            )))
         }
     }
 

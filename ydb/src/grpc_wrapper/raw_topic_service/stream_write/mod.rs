@@ -20,11 +20,11 @@ pub(crate) enum RawServerMessage {
 }
 
 pub(crate) fn create_server_status_error(message: FromServer) -> RawError {
-    RawError::YdbStatus(crate::errors::YdbStatusError {
-        message: "".to_string(), // TODO: what message?
-        operation_status: message.status,
-        issues: proto_issues_to_ydb_issues(message.issues),
-    })
+    RawError::YdbStatus(crate::errors::YdbStatusError::new(
+        "", // TODO: what message?
+        message.status,
+        proto_issues_to_ydb_issues(message.issues),
+    ))
 }
 
 impl TryFrom<FromServer> for RawServerMessage {

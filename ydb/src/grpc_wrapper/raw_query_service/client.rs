@@ -19,7 +19,8 @@ use crate::grpc_wrapper::runtime_interceptors::InterceptedChannel;
 use ydb_grpc::ydb_proto::query::v1::query_service_client::QueryServiceClient;
 use ydb_grpc::ydb_proto::query::{
     AttachSessionRequest, BeginTransactionRequest, CommitTransactionRequest, CreateSessionRequest,
-    DeleteSessionRequest, ExecuteQueryResponsePart, RollbackTransactionRequest, SessionState,
+    DeleteSessionRequest, ExecuteQueryRequest, ExecuteQueryResponsePart,
+    RollbackTransactionRequest, SessionState,
 };
 
 /// gRPC metadata: enable server-side session balancing on CreateSession.
@@ -62,8 +63,10 @@ impl RawQueryClient {
         &mut self,
         req: RawExecuteQueryRequest,
     ) -> RawResult<tonic::Streaming<ExecuteQueryResponsePart>> {
-        let proto = req.into_proto()?;
-        let response = self.service.execute_query(proto).await?;
+        let response = self
+            .service
+            .execute_query(ExecuteQueryRequest::from(req))
+            .await?;
         Ok(response.into_inner())
     }
 
