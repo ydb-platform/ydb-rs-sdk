@@ -89,6 +89,11 @@ uuid = { version = "1.17.0", features = ["v4", "v7"] }
 
 # Derive macros and general utilities.
 async-trait = "0.1"
+# Held at 3.9.x in Cargo.lock, not by a requirement here: `bon` 3.10 moved to
+# `darling` 0.24 while `derive_builder` 0.20 is capped at `darling` 0.20, and
+# 3.9 accepts both. Raising it means either dropping `derive_builder` (it is the
+# only other builder crate here) or adding a `darling` entry to `[bans].skip` in
+# deny.toml. An upper bound is deliberately not published to users.
 bon = "3"
 derivative = "2"
 derive_builder = "0.20"

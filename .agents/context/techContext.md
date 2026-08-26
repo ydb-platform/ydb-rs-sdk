@@ -53,12 +53,12 @@ One requirement per crate keeps a crate at one version in the resolved tree. `de
 # the graph a user of the published crates compiles: a second version of any
 # crate is an error
 cargo deny --locked --all-features --exclude-unpublished --exclude-dev \
-    check bans licenses sources -D unmatched-skip
+    check bans licenses sources -D unmatched-skip -D unnecessary-skip
 # RustSec advisories over everything built in this repository
 cargo deny --locked --all-features check advisories
 ```
 
-Duplicates that the workspace cannot collapse are listed in `[bans].skip` with the crates that keep them alive. `-D unmatched-skip` turns an entry that no longer matches into a failure, so the list has to be pruned when a bump makes it obsolete. Same for `[advisories].ignore`: the only entry is `RUSTSEC-2024-0388` (`derivative` unmaintained, being replaced).
+Duplicates that the workspace cannot collapse are listed in `[bans].skip` with the crates that keep them alive. `-D unmatched-skip -D unnecessary-skip` turns an entry that no longer matches, or that now covers a single-version crate, into a failure, so the list has to be pruned when a bump makes it obsolete. Same for `[advisories].ignore`: the only entry is `RUSTSEC-2024-0388` (`derivative` unmaintained, being replaced).
 
 `--exclude-unpublished` drops the `publish = false` SLO workloads from the graph, `--exclude-dev` drops dev-dependencies; both are checked for advisories by the second invocation but are not part of the single-version rule.
 
