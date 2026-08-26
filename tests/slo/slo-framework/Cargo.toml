@@ -6,11 +6,22 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-anyhow = "1"
-async-trait = "0.1"
-base64 = "0.22.1"
-clap = { version = "=4.2.7", features = ["derive"] }
-hdrhistogram = "7.5.4"
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+clap = { workspace = true }
+hdrhistogram = { workspace = true }
+rand = { workspace = true }
+rand_core = { workspace = true }
+tokio = { workspace = true, features = ["signal"] }
+tokio-util = { workspace = true }
+ydb = { workspace = true }
+
+# The OTLP stack is declared here instead of `[workspace.dependencies]`: the
+# `ydb` examples are on OpenTelemetry 0.32 while this workload is still on 0.27,
+# and one crate name cannot carry two requirements in the workspace table.
+# Upgrading the workload is tracked separately; until then these four entries
+# are the documented exception in `.github/scripts/check_workspace_deps.py`.
 opentelemetry = "0.27"
 opentelemetry-otlp = { version = "0.27", default-features = false, features = [
     "http-proto",
@@ -18,13 +29,8 @@ opentelemetry-otlp = { version = "0.27", default-features = false, features = [
     "reqwest-client",
     "reqwest-rustls",
 ] }
-opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-semantic-conventions = "0.27"
-rand = "0.8.5"
-rand_core = "0.6.4"
-tokio = { version = "=1.38.1", features = ["full", "signal"] }
-tokio-util = { version = "=0.7.11" }
-ydb = { path = "../../../ydb" }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 
 [dev-dependencies]
-tokio = { version = "=1.38.1", features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util"] }
