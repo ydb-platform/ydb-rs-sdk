@@ -1,5 +1,4 @@
 use prost::Message;
-use std::sync::Arc;
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 use ydb_grpc::ydb_proto::topic::stream_write_message::from_client::ClientMessage;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
@@ -55,12 +54,12 @@ impl PendingWriteRequest {
         settings: &WriteRequestSettings,
         codec: Codec,
         first_message: MessageData,
-        transaction: Option<Arc<TransactionIdentity>>,
+        transaction: Option<&TransactionIdentity>,
     ) -> YdbResult<Self> {
         let mut request = WriteRequest {
             messages: Vec::with_capacity(1),
             codec: codec.code,
-            tx: transaction.map(|identity| identity.as_ref().clone()),
+            tx: transaction.cloned(),
         };
         let base_encoded_len = request.encoded_len();
         let message_encoded_len = length_delimited_field_encoded_len(first_message.encoded_len());
@@ -197,13 +196,9 @@ mod tests {
             session: "session".to_string(),
         };
         let settings = WriteRequestSettings::new(WRITE_REQUEST_SIZE_RESERVE_BYTES + 1024).unwrap();
-        let mut pending = PendingWriteRequest::new(
-            &settings,
-            Codec::GZIP,
-            message(1, 8),
-            Some(Arc::new(tx_identity)),
-        )
-        .unwrap();
+        let mut pending =
+            PendingWriteRequest::new(&settings, Codec::GZIP, message(1, 8), Some(&tx_identity))
+                .unwrap();
         assert!(matches!(
             pending.try_add(message(2, 16)),
             TryAddMessage::Added

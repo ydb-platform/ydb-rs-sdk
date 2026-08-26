@@ -135,7 +135,7 @@ fn send_compressed_chunk(
                     settings,
                     codec,
                     message,
-                    transaction.clone(),
+                    transaction.as_deref(),
                 )?);
             }
             Some(mut request) => match request.try_add(message) {
@@ -148,7 +148,7 @@ fn send_compressed_chunk(
                         settings,
                         codec,
                         message,
-                        transaction.clone(),
+                        transaction.as_deref(),
                     )?);
                 }
             },

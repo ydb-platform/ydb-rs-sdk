@@ -1,6 +1,5 @@
-use std::{collections::VecDeque, mem::swap, sync::Arc};
+use std::{collections::VecDeque, mem::swap};
 
-use ydb_grpc::ydb_proto::topic::TransactionIdentity;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
 use crate::client_topic::topicwriter::capacity_limiter::CapacityPermit;
@@ -9,19 +8,13 @@ use crate::{YdbError, YdbResult};
 
 pub(crate) struct QueuedMessage {
     data: MessageData,
-    transaction: Option<Arc<TransactionIdentity>>,
     _capacity: CapacityPermit,
 }
 
 impl QueuedMessage {
-    pub(crate) fn new(
-        data: MessageData,
-        transaction: Option<Arc<TransactionIdentity>>,
-        capacity: CapacityPermit,
-    ) -> Self {
+    pub(crate) fn new(data: MessageData, capacity: CapacityPermit) -> Self {
         Self {
             data,
-            transaction,
             _capacity: capacity,
         }
     }
@@ -78,18 +71,11 @@ impl MessageQueue {
         &mut self,
         send_buffer: &mut Vec<MessageData>,
         send_buffer_bytes: &mut usize,
-        transaction: &mut Option<Arc<TransactionIdentity>>,
         settings: AutoFlushSettings,
     ) -> AppendMessageToSendBufferResult {
         let Some(message) = self.messages.pop_front() else {
             return AppendMessageToSendBufferResult::CouldNotGetMessage;
         };
-
-        if send_buffer.is_empty() {
-            // WriterState admits messages only for the buffer's current transaction binding, so
-            // every message collected into this batch has the same transaction identity.
-            *transaction = message.transaction.clone();
-        }
 
         *send_buffer_bytes += message.data.data.len();
         send_buffer.push(message.data.clone());
@@ -152,7 +138,7 @@ mod tests {
         .unwrap();
         let capacity = limiter.try_acquire(data.len()).unwrap();
 
-        QueuedMessage::new(create_message_data(seq_no, data), None, capacity)
+        QueuedMessage::new(create_message_data(seq_no, data), capacity)
     }
 
     fn move_all_pending_to_sent(q: &mut MessageQueue) {
@@ -165,7 +151,7 @@ mod tests {
         buffer_bytes: &mut usize,
         settings: AutoFlushSettings,
     ) -> AppendMessageToSendBufferResult {
-        queue.append_message_to_send_buffer(buffer, buffer_bytes, &mut None, settings)
+        queue.append_message_to_send_buffer(buffer, buffer_bytes, settings)
     }
 
     #[test]

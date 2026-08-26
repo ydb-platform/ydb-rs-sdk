@@ -153,10 +153,10 @@ impl ReconnectionLoop {
         mut epoch: usize,
     ) -> YdbResult<Infallible> {
         loop {
-            let Err(error) = wait_for_failure(background_tasks).await;
+            let error = wait_for_connection_failure(background_tasks).await;
             trace!("topic writer connection failed: {error}");
             let retry_error = self.state.handle_connection_failure(epoch, error)?;
-            self.state.wait_for_transaction_finish().await?;
+            self.state.wait_for_failed_transaction_cleanup().await?;
 
             let established_connection = match retry_error {
                 Some(error) => self.retry_after_failure(error).await?,
@@ -254,37 +254,22 @@ impl ReconnectionLoop {
     }
 }
 
-async fn drain_connection_failure(
-    tasks: &mut JoinSet<YdbResult<Infallible>>,
-    first_joined: Option<Result<YdbResult<Infallible>, tokio::task::JoinError>>,
-) -> YdbError {
+async fn wait_for_connection_failure(mut tasks: JoinSet<YdbResult<Infallible>>) -> YdbError {
+    let first_joined = tasks.join_next().await;
     let mut selected_error =
         first_joined.and_then(|joined| task_error(joined, "topic writer connection"));
-
-    drain_connection_tasks(tasks, &mut selected_error).await;
-
-    selected_error.unwrap_or_else(|| {
-        YdbError::custom("topic writer connection tasks stopped without an error")
-    })
-}
-
-async fn drain_connection_tasks(
-    tasks: &mut JoinSet<YdbResult<Infallible>>,
-    selected_error: &mut Option<YdbError>,
-) {
     tasks.abort_all();
 
     while let Some(joined) = tasks.join_next().await {
         if matches!(&joined, Err(join_error) if join_error.is_cancelled()) {
             continue;
         }
-        select_error(selected_error, joined, "topic writer connection");
+        select_error(&mut selected_error, joined, "topic writer connection");
     }
-}
 
-async fn wait_for_failure(mut tasks: JoinSet<YdbResult<Infallible>>) -> YdbResult<Infallible> {
-    let first_joined = tasks.join_next().await;
-    Err(drain_connection_failure(&mut tasks, first_joined).await)
+    selected_error.unwrap_or_else(|| {
+        YdbError::custom("topic writer connection tasks stopped without an error")
+    })
 }
 
 struct EstablishedConnection {
@@ -322,7 +307,7 @@ mod tests {
             pending().await
         });
 
-        let error = wait_for_failure(tasks).await.unwrap_err();
+        let error = wait_for_connection_failure(tasks).await;
 
         assert!(error.to_string().contains("root task error"));
         dropped_rx
@@ -340,7 +325,7 @@ mod tests {
             pending().await
         });
 
-        wait_for_failure(tasks).await.unwrap_err();
+        wait_for_connection_failure(tasks).await;
 
         assert_eq!(resource_rx.recv().await, None);
     }
@@ -361,7 +346,7 @@ mod tests {
 
         finished_rx.recv().await.unwrap();
         finished_rx.recv().await.unwrap();
-        let error = wait_for_failure(tasks).await.unwrap_err();
+        let error = wait_for_connection_failure(tasks).await;
 
         assert!(error.to_string().contains("root task error"));
     }

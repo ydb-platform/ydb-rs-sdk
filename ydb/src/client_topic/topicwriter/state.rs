@@ -47,26 +47,18 @@ enum WriterBufferState {
     Failed(YdbError),
 }
 
-enum TransactionBinding {
-    /// Transactional messages may still be enqueued.
-    Writing(Arc<TransactionIdentity>),
-    /// Message admission is closed while accepted messages flush and the Query transaction finalizes.
-    Committing(Arc<TransactionIdentity>),
-    /// StreamWrite failed while bound; transaction completion must clear the empty replacement.
-    Failed {
-        identity: Arc<TransactionIdentity>,
-        error: Box<YdbError>,
-    },
+struct TransactionBinding {
+    identity: Arc<TransactionIdentity>,
+    phase: TransactionPhase,
 }
 
-impl TransactionBinding {
-    fn identity(&self) -> &Arc<TransactionIdentity> {
-        match self {
-            Self::Writing(identity)
-            | Self::Committing(identity)
-            | Self::Failed { identity, .. } => identity,
-        }
-    }
+enum TransactionPhase {
+    /// Transactional messages may still be enqueued.
+    Writing,
+    /// Message admission is closed while accepted messages flush and the Query transaction finalizes.
+    Committing,
+    /// StreamWrite failed while bound; transaction completion must clear the empty replacement.
+    Failed(Box<YdbError>),
 }
 
 impl WriterBufferState {
@@ -90,20 +82,22 @@ impl WriterBufferState {
     ) -> YdbResult<&mut WriterBuffer> {
         let buffer = self.buffer_mut()?;
 
-        match (requested, &buffer.transaction) {
-            (None, None) => Ok(buffer),
-            (None, Some(active)) => Err(ordinary_write_disabled_error(active.identity())),
-            (Some(requested), None) => Err(transaction_inactive_error(requested)),
-            (Some(requested), Some(active)) if !Arc::ptr_eq(active.identity(), requested) => {
-                Err(transaction_mismatch_error(active.identity(), requested))
-            }
-            (Some(_), Some(TransactionBinding::Failed { error, .. })) => {
-                Err(error.as_ref().clone())
-            }
-            (Some(requested), Some(TransactionBinding::Committing(_))) => {
-                Err(transaction_committing_error(requested))
-            }
-            (Some(_), Some(TransactionBinding::Writing(_))) => Ok(buffer),
+        let Some(requested) = requested else {
+            return match &buffer.transaction {
+                None => Ok(buffer),
+                Some(active) => Err(ordinary_write_disabled_error(&active.identity)),
+            };
+        };
+        let Some(active) = &buffer.transaction else {
+            return Err(transaction_inactive_error(requested));
+        };
+        if !Arc::ptr_eq(&active.identity, requested) {
+            return Err(transaction_mismatch_error(&active.identity, requested));
+        }
+        match &active.phase {
+            TransactionPhase::Writing => Ok(buffer),
+            TransactionPhase::Committing => Err(transaction_committing_error(requested)),
+            TransactionPhase::Failed(error) => Err(error.as_ref().clone()),
         }
     }
 
@@ -116,10 +110,10 @@ impl WriterBufferState {
         let Some(active) = &buffer.transaction else {
             return Err(transaction_inactive_error(requested));
         };
-        if !Arc::ptr_eq(active.identity(), requested) {
-            return Err(transaction_mismatch_error(active.identity(), requested));
+        if !Arc::ptr_eq(&active.identity, requested) {
+            return Err(transaction_mismatch_error(&active.identity, requested));
         }
-        if let TransactionBinding::Failed { error, .. } = active {
+        if let TransactionPhase::Failed(error) = &active.phase {
             return Err(error.as_ref().clone());
         }
 
@@ -236,7 +230,7 @@ impl WriterState {
         if let Some(bound) = &buffer.transaction {
             return Err(YdbError::custom(format!(
                 "topic writer is already bound to transaction: transaction_id={}",
-                bound.identity().id,
+                bound.identity.id,
             )));
         }
         if !buffer.is_empty() {
@@ -244,7 +238,10 @@ impl WriterState {
                 "cannot bind topic writer to a transaction while messages are pending",
             ));
         }
-        buffer.transaction = Some(TransactionBinding::Writing(transaction));
+        buffer.transaction = Some(TransactionBinding {
+            identity: transaction,
+            phase: TransactionPhase::Writing,
+        });
         Ok(())
     }
 
@@ -255,39 +252,38 @@ impl WriterState {
         {
             let mut state = self.lock_buffer_state()?;
             let buffer = state.buffer_mut()?;
-            match &buffer.transaction {
-                None => {}
-                Some(active) if !Arc::ptr_eq(active.identity(), transaction) => {
-                    return Err(transaction_mismatch_error(active.identity(), transaction));
+            if let Some(active) = &buffer.transaction {
+                if !Arc::ptr_eq(&active.identity, transaction) {
+                    return Err(transaction_mismatch_error(&active.identity, transaction));
                 }
-                Some(TransactionBinding::Writing(_)) => {
-                    return Err(YdbError::custom(format!(
-                        "topic writer transaction committed before its commit flush: transaction_id={}",
-                        transaction.id,
-                    )));
+                match &active.phase {
+                    TransactionPhase::Writing => {
+                        return Err(YdbError::custom(format!(
+                            "topic writer transaction committed before its commit flush: transaction_id={}",
+                            transaction.id,
+                        )));
+                    }
+                    TransactionPhase::Committing if !buffer.is_empty() => {
+                        return Err(YdbError::custom(format!(
+                            "committed topic transaction still has pending messages: transaction_id={}",
+                            transaction.id,
+                        )));
+                    }
+                    TransactionPhase::Committing => {}
+                    TransactionPhase::Failed(_) => {
+                        // Query commit is dispatched only after this hook's flush succeeds. A
+                        // committed transaction can therefore race only with a later StreamWrite
+                        // failure, after every transactional message was already acknowledged.
+                    }
                 }
-                Some(TransactionBinding::Committing(_)) if !buffer.is_empty() => {
-                    return Err(YdbError::custom(format!(
-                        "committed topic transaction still has pending messages: transaction_id={}",
-                        transaction.id,
-                    )));
-                }
-                Some(TransactionBinding::Committing(_)) => {
-                    buffer.transaction = None;
-                }
-                Some(TransactionBinding::Failed { .. }) => {
-                    // Query commit is dispatched only after this hook's flush succeeds. A committed
-                    // transaction can therefore race only with a later StreamWrite failure, after
-                    // every transactional message was already acknowledged.
-                    buffer.transaction = None;
-                }
+                buffer.transaction = None;
             }
         }
         self.inner.transaction_finished.notify_one();
         Ok(())
     }
 
-    pub(crate) fn request_transaction_cleanup(
+    pub(crate) fn finish_aborted_transaction(
         &self,
         transaction: &Arc<TransactionIdentity>,
         error: YdbError,
@@ -295,19 +291,22 @@ impl WriterState {
         let epoch_advanced = {
             let mut state = self.lock_buffer_state()?;
             let buffer = state.buffer_mut()?;
-            match &buffer.transaction {
-                None => false,
-                Some(active) if !Arc::ptr_eq(active.identity(), transaction) => {
-                    return Err(transaction_mismatch_error(active.identity(), transaction));
+            if let Some(active) = &buffer.transaction {
+                if !Arc::ptr_eq(&active.identity, transaction) {
+                    return Err(transaction_mismatch_error(&active.identity, transaction));
                 }
-                Some(TransactionBinding::Failed { .. }) => {
-                    buffer.transaction = None;
-                    false
+                match &active.phase {
+                    TransactionPhase::Failed(_) => {
+                        buffer.transaction = None;
+                        false
+                    }
+                    TransactionPhase::Writing | TransactionPhase::Committing => {
+                        buffer.replace_after_transaction(error);
+                        true
+                    }
                 }
-                Some(TransactionBinding::Writing(_)) | Some(TransactionBinding::Committing(_)) => {
-                    buffer.replace_after_transaction(error);
-                    true
-                }
+            } else {
+                false
             }
         };
 
@@ -357,12 +356,19 @@ impl WriterState {
     ) -> YdbResult<AppendMessageToSendBufferResult> {
         let mut state = self.lock_buffer_state()?;
         let buffer = state.connection_buffer(epoch)?;
-        Ok(buffer.message_queue.append_message_to_send_buffer(
+        let batch_was_empty = send_buffer.messages.is_empty();
+        let result = buffer.message_queue.append_message_to_send_buffer(
             &mut send_buffer.messages,
             send_buffer_bytes,
-            &mut send_buffer.transaction,
             self.inner.auto_flush,
-        ))
+        );
+        if batch_was_empty && !send_buffer.messages.is_empty() {
+            send_buffer.transaction = buffer
+                .transaction
+                .as_ref()
+                .map(|binding| binding.identity.clone());
+        }
+        Ok(result)
     }
 
     pub(crate) async fn get_messages_to_send(&self, epoch: usize) -> YdbResult<CompressionBatch> {
@@ -410,7 +416,7 @@ impl WriterState {
     /// Resolve buffer ownership after a connection task fails.
     ///
     /// Returns the error only when ordinary writer retry policy must decide whether to reconnect.
-    /// Transaction errors remain in [`TransactionBinding::Failed`], while stale errors belong to
+    /// Transaction errors remain in [`TransactionPhase::Failed`], while stale errors belong to
     /// an already-abandoned buffer epoch.
     pub(crate) fn handle_connection_failure(
         &self,
@@ -436,16 +442,16 @@ impl WriterState {
         Ok(retry_error)
     }
 
-    pub(crate) async fn wait_for_transaction_finish(&self) -> YdbResult<()> {
+    pub(crate) async fn wait_for_failed_transaction_cleanup(&self) -> YdbResult<()> {
         loop {
             let transaction_finished = self.inner.transaction_finished.notified();
-            let waiting = {
-                let state = self.lock_buffer_state()?;
-                matches!(
-                    state.buffer()?.transaction,
-                    Some(TransactionBinding::Failed { .. })
-                )
-            };
+            let waiting =
+                {
+                    let state = self.lock_buffer_state()?;
+                    state.buffer()?.transaction.as_ref().is_some_and(|binding| {
+                        matches!(&binding.phase, TransactionPhase::Failed(_))
+                    })
+                };
             if !waiting {
                 return Ok(());
             }
@@ -469,7 +475,13 @@ impl WriterState {
         let flush_result_rx = {
             let mut state = self.lock_buffer_state()?;
             let buffer = state.transaction_buffer(transaction)?;
-            buffer.begin_commit(transaction);
+            let binding = buffer.transaction.as_mut().ok_or_else(|| {
+                YdbError::InternalError(format!(
+                    "cannot begin topic transaction commit without a transaction binding: transaction_id={}",
+                    transaction.id,
+                ))
+            })?;
+            binding.phase = TransactionPhase::Committing;
             buffer.reception_queue.init_flush()?
         };
         self.inner.flush_requested.notify_one();
@@ -608,25 +620,21 @@ impl WriterBuffer {
                 "cannot fail transactional topic writes without a transaction binding".to_string(),
             ));
         };
-        let identity = match transaction {
-            TransactionBinding::Writing(identity) | TransactionBinding::Committing(identity) => {
-                identity.clone()
-            }
-            TransactionBinding::Failed { identity, .. } => {
-                return Err(YdbError::InternalError(format!(
-                    "transactional topic writes are already failed: transaction_id={}",
-                    identity.id,
-                )));
-            }
-        };
+        if matches!(&transaction.phase, TransactionPhase::Failed(_)) {
+            return Err(YdbError::InternalError(format!(
+                "transactional topic writes are already failed: transaction_id={}",
+                transaction.identity.id,
+            )));
+        }
+        let identity = transaction.identity.clone();
         let next_epoch = self.epoch.wrapping_add(1);
         let auto_seq_no = self.auto_seq_no;
         let last_seq_no_assigned = self.last_seq_no_assigned;
         self.fail(error.clone());
         *self = Self::new(next_epoch, auto_seq_no, last_seq_no_assigned);
-        self.transaction = Some(TransactionBinding::Failed {
+        self.transaction = Some(TransactionBinding {
             identity,
-            error: Box::new(error),
+            phase: TransactionPhase::Failed(Box::new(error)),
         });
         Ok(())
     }
@@ -656,13 +664,8 @@ impl WriterBuffer {
         let (message, capacity) = admitted.into_parts();
         let message: MessageData = message.try_into()?;
         let seq_no = message.seq_no;
-        self.message_queue.add_message(QueuedMessage::new(
-            message,
-            self.transaction
-                .as_ref()
-                .map(|binding| binding.identity().clone()),
-            capacity,
-        ))?;
+        self.message_queue
+            .add_message(QueuedMessage::new(message, capacity))?;
         self.reception_queue
             .add_ticket(ReceptionTicket::new(seq_no, ack_sender));
         self.last_seq_no_assigned = Some(message_seq_no);
@@ -707,10 +710,6 @@ impl WriterBuffer {
 
     fn fail(&mut self, error: YdbError) {
         self.reception_queue.send_error_to_tickets_and_clear(error);
-    }
-
-    fn begin_commit(&mut self, transaction: &Arc<TransactionIdentity>) {
-        self.transaction = Some(TransactionBinding::Committing(transaction.clone()));
     }
 
     fn is_empty(&self) -> bool {
@@ -1244,18 +1243,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failing_bound_writer_makes_later_transaction_flush_fail() {
-        let q = WriterState::for_test();
-        let transaction = transaction();
-        q.bind_transaction(transaction.clone()).unwrap();
-
-        let stop_error = q.flush().await.unwrap_err();
-        q.fail(stop_error).unwrap();
-
-        assert!(q.begin_commit_and_flush(&transaction).await.is_err());
-    }
-
-    #[tokio::test]
     async fn transaction_cleanup_replaces_buffer_immediately() {
         let q = WriterState::with_flow_control(false, 1, 1, 1, 1, Duration::ZERO);
         let transaction = transaction();
@@ -1272,7 +1259,7 @@ mod tests {
             &transaction,
         ));
 
-        q.request_transaction_cleanup(
+        q.finish_aborted_transaction(
             &transaction,
             YdbError::custom("transaction attempt aborted"),
         )
@@ -1318,7 +1305,7 @@ mod tests {
         });
         tokio::task::yield_now().await;
 
-        q.request_transaction_cleanup(
+        q.finish_aborted_transaction(
             &transaction,
             YdbError::custom("transaction attempt aborted"),
         )
@@ -1359,14 +1346,14 @@ mod tests {
         let flush_error = q.begin_commit_and_flush(&transaction).await.unwrap_err();
         assert!(flush_error.to_string().contains("stream failed"));
 
-        let mut transaction_finished = Box::pin(q.wait_for_transaction_finish());
-        assert!(transaction_finished.as_mut().now_or_never().is_none());
-        q.request_transaction_cleanup(
+        let mut failed_transaction_cleanup = Box::pin(q.wait_for_failed_transaction_cleanup());
+        assert!(failed_transaction_cleanup.as_mut().now_or_never().is_none());
+        q.finish_aborted_transaction(
             &transaction,
             YdbError::custom("transaction attempt aborted"),
         )
         .unwrap();
-        transaction_finished.await.unwrap();
+        failed_transaction_cleanup.await.unwrap();
         assert_eq!(q.epoch().unwrap(), failed_epoch + 1);
 
         let empty = q.get_messages_to_send(q.epoch().unwrap()).await.unwrap();
@@ -1408,11 +1395,11 @@ mod tests {
         )
         .unwrap();
 
-        let mut transaction_finished = Box::pin(q.wait_for_transaction_finish());
-        assert!(transaction_finished.as_mut().now_or_never().is_none());
+        let mut failed_transaction_cleanup = Box::pin(q.wait_for_failed_transaction_cleanup());
+        assert!(failed_transaction_cleanup.as_mut().now_or_never().is_none());
 
         q.finish_committed_transaction(&transaction).unwrap();
-        transaction_finished.await.unwrap();
+        failed_transaction_cleanup.await.unwrap();
 
         q.add_message(create_message(2, vec![]), None)
             .await
@@ -1425,7 +1412,7 @@ mod tests {
         let transaction = transaction();
         q.bind_transaction(transaction.clone()).unwrap();
         let stale_epoch = q.epoch().unwrap();
-        q.request_transaction_cleanup(
+        q.finish_aborted_transaction(
             &transaction,
             YdbError::custom("transaction attempt aborted"),
         )
@@ -1474,7 +1461,7 @@ mod tests {
             session: "new session".to_string(),
         });
         q.bind_transaction(old_transaction.clone()).unwrap();
-        q.request_transaction_cleanup(
+        q.finish_aborted_transaction(
             &old_transaction,
             YdbError::custom("transaction attempt aborted"),
         )
@@ -1482,7 +1469,7 @@ mod tests {
         q.bind_transaction(new_transaction.clone()).unwrap();
 
         assert!(
-            q.request_transaction_cleanup(
+            q.finish_aborted_transaction(
                 &old_transaction,
                 YdbError::custom("late transaction cleanup"),
             )

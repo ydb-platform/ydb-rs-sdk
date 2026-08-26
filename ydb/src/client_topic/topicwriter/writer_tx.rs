@@ -38,7 +38,7 @@ impl QueryTxHook for WriterTxHook {
             QueryTxCommitStatus::Committed => self
                 .state
                 .finish_committed_transaction(&self.transaction_identity),
-            QueryTxCommitStatus::Aborted => self.state.request_transaction_cleanup(
+            QueryTxCommitStatus::Aborted => self.state.finish_aborted_transaction(
                 &self.transaction_identity,
                 YdbError::custom(format!(
                     "query transaction was aborted: transaction_id={}",
