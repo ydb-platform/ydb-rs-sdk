@@ -10,7 +10,7 @@ name = "slo-native-topic"
 path = "src/main.rs"
 
 [dependencies]
-async-trait = "0.1"
-slo-framework = { path = "../../slo-framework" }
-tokio = { version = "=1.38.1", features = ["full"] }
-ydb = { path = "../../../../ydb" }
+async-trait = { workspace = true }
+slo-framework = { workspace = true }
+tokio = { workspace = true }
+ydb = { workspace = true }
