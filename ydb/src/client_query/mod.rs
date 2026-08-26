@@ -249,7 +249,12 @@ impl QueryClient {
                         %error,
                         "rollback after transaction callback failure did not complete"
                     );
-                    retry_error = retry_error_for_operation(&tx.ctx.state, error);
+                    if !matches!(
+                        &retry_error,
+                        RetryError::AccordingToError(YdbOrCustomerError::Customer(_))
+                    ) {
+                        retry_error = retry_error_for_operation(&tx.ctx.state, error);
+                    }
                 }
                 return retry_error.retry_flow(idempotency);
             }

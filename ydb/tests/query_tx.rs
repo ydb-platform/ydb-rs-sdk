@@ -20,7 +20,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use ydb::{Client, ClientBuilder, Transaction, YdbError, YdbResult, YdbStatusError, closure};
+use ydb::{
+    Client, ClientBuilder, Transaction, YdbError, YdbOrCustomerError, YdbResult, YdbStatusError,
+    closure,
+};
 use ydb_grpc::ydb_proto::query::{
     CommitTransactionResponse, ExecuteQueryResponsePart, RollbackTransactionResponse,
     TransactionMeta,
@@ -937,6 +940,41 @@ async fn undetermined_automatic_rollback_prevents_callback_retry() -> YdbResult<
         attempts.load(Ordering::SeqCst),
         1,
         "an undetermined rollback must prevent a non-idempotent callback retry"
+    );
+    let lifecycle = tx_lifecycle.lock().unwrap();
+    assert_eq!(lifecycle.rollback_count, 1);
+    assert_eq!(lifecycle.commit_count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn customer_error_is_not_replaced_by_rollback_failure() -> YdbResult<()> {
+    let (handler, tx_lifecycle) =
+        ScriptedQueryHandler::new(vec![StatusCode::Success], vec![StatusCode::BadSession]);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let attempts = Arc::new(AtomicUsize::new(0));
+
+    let result = client
+        .query_client()
+        .retry_tx(closure!([&attempts], async |tx: &mut Transaction| {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+            tx.exec("UPSERT INTO t (id, val) VALUES (1, 'x')").await?;
+            if attempt == 0 {
+                return Err(YdbOrCustomerError::from_err(std::io::Error::other(
+                    "customer validation failed",
+                )));
+            }
+            Ok(())
+        }))
+        .await;
+
+    assert!(matches!(result, Err(YdbOrCustomerError::Customer(_))));
+    assert_eq!(
+        attempts.load(Ordering::SeqCst),
+        1,
+        "a rollback cleanup error must not make a customer error retryable"
     );
     let lifecycle = tx_lifecycle.lock().unwrap();
     assert_eq!(lifecycle.rollback_count, 1);
