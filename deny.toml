@@ -36,7 +36,6 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
-    "BSL-1.0",
     "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
@@ -60,13 +59,15 @@ allow-wildcard-paths = true
 skip = [
     # `derive_builder` 0.20 is on `darling` 0.20, `bon` 3 is on `darling` 0.24.
     # Collapses when `derive_builder` catches up, or when the remaining
-    # `derive_builder` derives are migrated to `bon`.
+    # `derive_builder` derives are migrated to `bon`. Constraining `bon` to
+    # 3.5 does not help: the requirement still resolves to the newest 3.x.
     { crate = "darling@0.20", reason = "derive_builder 0.20 pins darling 0.20, bon 3 pins darling 0.24" },
     { crate = "darling_core@0.20", reason = "see darling" },
     { crate = "darling_macro@0.20", reason = "see darling" },
-    # `ring` (through `rustls`) and `rand` 0.8 are on `getrandom` 0.2, `uuid` 1
-    # is on `getrandom` 0.4. Out of reach until `ring` moves.
-    { crate = "getrandom@0.2", reason = "ring and rand 0.8 pin getrandom 0.2, uuid 1 pins getrandom 0.4" },
+    # Three versions, one per consumer: `ring` (through `rustls`) is on 0.2,
+    # `rand` 0.9 on 0.3, `uuid` 1 on 0.4. None of them is ours to move.
+    { crate = "getrandom", reason = "ring pins getrandom 0.2, rand 0.9 pins 0.3, uuid 1 pins 0.4" },
+    { crate = "r-efi", reason = "UEFI-only dependency of getrandom, one version per getrandom major" },
     # Proc-macro and build-time only, never linked into a user binary. The
     # ecosystem is mid-transition from `syn` 2 to `syn` 3, and `derivative`
     # (unmaintained, see the advisory ignore above) is still on `syn` 1.

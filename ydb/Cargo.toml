@@ -65,7 +65,7 @@ metrics-prometheus = { workspace = true }
 mockall = { workspace = true }
 ntest = { workspace = true }
 opentelemetry = { workspace = true }
-opentelemetry-otlp = { workspace = true }
+opentelemetry-otlp = { workspace = true, features = ["grpc-tonic", "trace"] }
 opentelemetry_sdk = { workspace = true }
 prometheus = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
