@@ -11,6 +11,7 @@ pub(crate) mod drop_table;
 pub(crate) mod execute_data_query;
 pub(crate) mod execute_scheme_query;
 pub(crate) mod explain_data_query;
+pub(crate) mod partitioning_settings;
 pub(crate) mod query_stats;
 pub(crate) mod read_rows;
 pub(crate) mod rename_tables;
