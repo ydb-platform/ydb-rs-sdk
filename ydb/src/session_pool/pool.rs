@@ -20,7 +20,14 @@ use super::session::{AttachedSession, CreatedSession, SessionCleanup};
 /// defaulted to 1000; callers migrating from that capacity should set
 /// `SessionPoolSettings::new().with_limit(1000)` explicitly.
 pub(crate) const DEFAULT_POOL_LIMIT: usize = 50;
-pub(crate) const DEFAULT_SESSION_CREATE_TIMEOUT: Duration = Duration::from_millis(500);
+/// Max time for CreateSession + AttachSession before the attempt is abandoned.
+///
+/// Matches ydb-go-sdk `table.DefaultSessionPoolCreateSessionTimeout` (5s). The previous
+/// 500ms budget was tight enough that an ordinary latency spike — a cold connection, a
+/// loaded or virtualized server — failed session creation instead of waiting it out.
+pub(crate) const DEFAULT_SESSION_CREATE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Max time for the best-effort session cleanup RPC. Cleanup runs off the caller's path
+/// and must not hold resources, so it keeps the short budget.
 pub(crate) const DEFAULT_SESSION_DELETE_TIMEOUT: Duration = Duration::from_millis(500);
 /// Default max wait when acquiring a session from the pool.
 pub(crate) const DEFAULT_POOL_ACQUIRE_TIMEOUT: Duration = Duration::ZERO;
@@ -722,10 +729,10 @@ mod unit_tests {
     use super::*;
 
     #[test]
-    fn default_session_pool_timeouts_are_500ms() {
+    fn default_session_pool_timeouts() {
         let settings = SessionPoolSettings::default();
         assert_eq!(settings.limit, DEFAULT_POOL_LIMIT);
-        assert_eq!(settings.session_create_timeout, Duration::from_millis(500));
+        assert_eq!(settings.session_create_timeout, Duration::from_secs(5));
         assert_eq!(settings.session_delete_timeout, Duration::from_millis(500));
     }
 
