@@ -76,6 +76,7 @@ async fn explain_query_once(
     text: &str,
 ) -> YdbResult<Option<RawQueryStatsPlan>> {
     let mut client = ctx
+        .access()?
         .connection_manager
         .get_auth_service(RawQueryClient::new)
         .await?;
@@ -99,6 +100,7 @@ async fn explain_query(
 ) -> YdbResult<ExplainResult> {
     // EXPLAIN never executes the query, so retrying is always safe.
     let plan = ctx
+        .access()?
         .retry_settings
         .clone()
         .with_deadline(timeout)
@@ -137,6 +139,7 @@ mod unit_tests {
     use super::*;
     use crate::GrpcOptions;
     use crate::client_metrics::names::MetricsNames;
+    use crate::driver_lifecycle::DriverLifecycle;
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
@@ -144,11 +147,17 @@ mod unit_tests {
     use crate::session_pool::{SessionPool, SessionPoolSettings};
     use http::Uri;
 
+    fn test_driver_lifecycle() -> DriverLifecycle {
+        let mut lifecycle = DriverLifecycle::new();
+        lifecycle.complete_shutdown();
+        lifecycle
+    }
+
     /// Context pointing at a closed port: every attempt fails with a retriable transport error,
     /// so the only thing that can end the retry loop is the deadline.
     fn unreachable_ctx() -> ClientExecContext {
-        ClientExecContext {
-            connection_manager: GrpcConnectionManager::new(
+        ClientExecContext::new(
+            GrpcConnectionManager::new(
                 SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
                     Uri::from_static("http://127.0.0.1:1"),
                 ))),
@@ -156,10 +165,11 @@ mod unit_tests {
                 MultiInterceptor::new(),
                 GrpcOptions::default(),
             ),
-            session_pool: SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
-            retry_settings: RetrySettings::with_default_backoff(),
-            metrics_names: MetricsNames::new(None),
-        }
+            SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
+            RetrySettings::with_default_backoff(),
+            MetricsNames::new(None),
+            &test_driver_lifecycle(),
+        )
     }
 
     #[tokio::test]

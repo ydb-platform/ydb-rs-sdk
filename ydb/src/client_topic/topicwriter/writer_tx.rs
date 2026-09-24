@@ -10,6 +10,7 @@ use crate::client_query::hooks::{QueryTxCommitStatus, QueryTxHook};
 use crate::client_topic::compression::Executor;
 use crate::client_topic::topicwriter::message::TopicWriterMessage;
 use crate::client_topic::topicwriter::writer::TopicWriter;
+use crate::driver_lifecycle::DriverResourceGuard;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 
 use super::writer_tx_options::TopicWriterTxOptions;
@@ -48,6 +49,7 @@ impl TopicWriterTx {
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
         tx: &mut Transaction,
+        driver_resource: DriverResourceGuard,
     ) -> YdbResult<Self> {
         let (session_id, transaction_id) = tx.identity().await?;
 
@@ -60,9 +62,14 @@ impl TopicWriterTx {
         // options construction and conversion.
         let options = options.into_non_tx_options();
 
-        let writer =
-            TopicWriter::with_tx_identity(options, connection_manager, executor, tx_identity)
-                .await?;
+        let writer = TopicWriter::with_tx_identity(
+            options,
+            connection_manager,
+            executor,
+            tx_identity,
+            driver_resource,
+        )
+        .await?;
 
         let inner = Arc::new(writer);
         tx.register_hook(WriterTxHook {
