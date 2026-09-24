@@ -10,10 +10,10 @@ repository = "https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb-grpc"
 rust-version.workspace = true
 
 [dependencies]
-prost = { workspace = true }
-prost-types = { workspace = true }
 pbjson = { workspace = true }
 pbjson-types = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
 serde = { workspace = true }
 tonic = { workspace = true, features = [
     "tls-native-roots",
@@ -22,10 +22,10 @@ tonic = { workspace = true, features = [
 tonic-prost = { workspace = true }
 
 [build-dependencies]
-prost-build = { workspace = true }
 pbjson-build = { workspace = true }
+prost-build = { workspace = true }
 tonic-prost-build = { workspace = true }
-walkdir = "2"
+walkdir = { workspace = true }
 
 [features]
 regenerate-sources = []

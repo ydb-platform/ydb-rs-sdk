@@ -44,6 +44,7 @@ On **"update memory bank"** — review all core files in [`.agents/context/READM
 - MSRV is 1.88; CI runs tests on Rust 1.88 and 1.96, and uses Rust 1.96 for lint, publish, and SLO workload builds. Proto generation stays on MSRV.
 - Integration tests are `#[ignore]`; need `YDB_CONNECTION_STRING` and `--include-ignored`.
 - `ydb-grpc` is generated; clippy excludes it. Do not bump crate versions unless asked.
+- Dependency versions live only in `[workspace.dependencies]` (root `Cargo.toml`); members inherit with `{ workspace = true }` and add features. CI denies a second version of any crate in the published graph — see [`dependencies.yml`](.github/workflows/dependencies.yml) and [`deny.toml`](deny.toml).
 - Non-trivial changes: discuss in a GitHub issue first ([`CONTRIBUTING.md`](CONTRIBUTING.md)).
 - **Every task must end with the linter gate** (see [Done when](#done-when)) — do not hand off or open a PR until `cargo fmt --check` and CI clippy pass on touched crates.
 
@@ -55,6 +56,14 @@ From repo root — **run before every handoff / PR**, even for small or doc-only
 cargo fmt --check
 cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
 cargo test --workspace
+```
+
+If the change touches `Cargo.toml`, `Cargo.lock` or `deny.toml`, also run:
+
+```bash
+python3 .github/scripts/check_workspace_deps.py
+cargo deny --locked --all-features --exclude-unpublished --exclude-dev check bans licenses sources -D unmatched-skip -D unnecessary-skip
+cargo deny --locked --all-features check advisories
 ```
 
 Fix all clippy warnings (`-D warnings`); do not rely on `cargo test` alone. `ydb-grpc` is excluded from clippy (generated code).

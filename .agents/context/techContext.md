@@ -9,7 +9,7 @@
 | CI Rust versions | 1.88 (tests + proto generation), 1.96 (fmt + lint + tests + publish + SLO workload builds) |
 | Async runtime | Tokio 1.x |
 | gRPC | tonic 0.14, prost 0.14, pbjson 0.8 |
-| TLS | rustls via tonic features (`tls-ring`, `tls-native-roots`) |
+| TLS | rustls via tonic features (`tls-ring`, `tls-native-roots`); `reqwest` uses `rustls-no-provider` so `ring` stays the only crypto provider in the tree |
 
 ## Local development
 
@@ -41,16 +41,34 @@ CI uses `ydbplatform/local-ydb:nightly` (see `rust-tests.yml`); image tag may di
 | `publish-crate.yml` | manual dispatch | version bump + crates.io publish on Rust 1.96 |
 | `slo.yml` | PR label `SLO` + manual dispatch | SLO tests via `ydb-slo-action` v2; workload Docker images build on Rust 1.96 |
 | `slo-report.yml` | after `SLO` workflow | Publishes SLO report to PR comment |
+| `dependencies.yml` | push/PR + nightly cron | `cargo deny` on the published graph (bans/licenses/sources) and advisories on the whole workspace, plus the `[workspace.dependencies]` inheritance check |
 
 ## Workspace dependency policy
 
-Shared versions for `prost`, `tonic`, `pbjson` are declared in the root `Cargo.toml` under `[workspace.dependencies]`. Member crates reference them with `workspace = true`.
+Every third-party dependency of every workspace member is declared once, in the root `Cargo.toml` under `[workspace.dependencies]`; members inherit it with `{ workspace = true }` and may only add `features`. A version requirement in a member manifest is a CI failure (`.github/scripts/check_workspace_deps.py`), as is a `[workspace.dependencies]` entry that no member inherits. The script has an exemption table for dependencies that genuinely cannot be shared; it is empty, and an entry in it has to be argued for.
+
+One requirement per crate keeps a crate at one version in the resolved tree. `deny.toml` enforces the result:
+
+```bash
+# the graph a user of the published crates compiles: a second version of any
+# crate is an error
+cargo deny --locked --all-features --exclude-unpublished --exclude-dev \
+    check bans licenses sources -D unmatched-skip -D unnecessary-skip
+# RustSec advisories over everything built in this repository
+cargo deny --locked --all-features check advisories
+```
+
+Duplicates that the workspace cannot collapse are listed in `[bans].skip` with the crates that keep them alive. `-D unmatched-skip -D unnecessary-skip` turns an entry that no longer matches, or that now covers a single-version crate, into a failure, so the list has to be pruned when a bump makes it obsolete. Same for `[advisories].ignore`: the only entry is `RUSTSEC-2024-0388` (`derivative` unmaintained, being replaced).
+
+`--exclude-unpublished` drops the `publish = false` SLO workloads from the graph, `--exclude-dev` drops dev-dependencies; both are checked for advisories by the second invocation but are not part of the single-version rule.
+
+When a duplicate can only be avoided by holding a crate back, the hold goes in `Cargo.lock`, never as an upper bound in `[workspace.dependencies]`: a bound there is published in the `ydb` manifest and constrains every application that uses the same crate. The reason for the hold is a comment next to the requirement. Today there is one: `bon` stays at 3.9.x because 3.10 moved to `darling` 0.24 while `derive_builder` 0.20 — the last release — is capped at `darling` 0.20, and 3.9 accepts both. A `cargo update` that raises `bon` brings the `darling` duplicate back and fails the bans check; the way out is to drop `derive_builder` in favour of `bon`, or to take the duplicate back with a `[bans].skip` entry.
 
 MSRV-sensitive Clippy checks are enabled in root `[workspace.lints.clippy]` via `incompatible_msrv = "warn"`. Clippy derives the MSRV from each package's `rust-version`, inherited from root `[workspace.package]`; CI runs Clippy on Rust 1.96 and promotes warnings to errors with `-D warnings`.
 
 The protobuf regeneration container (`ydb-grpc/generate-protobuf.Dockerfile`) intentionally uses Rust 1.88.0 to keep generated code buildable on the declared MSRV. SLO workload images intentionally use Rust 1.96.0.
 
-Do not run `cargo update` or bump dependency versions unless the task requires it.
+Do not run `cargo update` or bump dependency versions unless the task requires it. When it does, run both `cargo deny` invocations afterwards: a refreshed lock is exactly where a new duplicate or advisory shows up.
 
 ## Features
 
