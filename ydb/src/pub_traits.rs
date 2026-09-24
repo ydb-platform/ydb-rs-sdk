@@ -6,6 +6,10 @@ use std::time::{Duration, Instant};
 
 pub(crate) const DEFAULT_TOKEN_RENEW_INTERVAL: Duration = Duration::from_secs(3600); // 1 hour
 
+/// An auth token together with the moment it should be renewed
+///
+/// Returned by [`Credentials::create_token`]. The SDK caches the token and
+/// refreshes it in background once `next_renew` passes.
 #[derive(Debug, Clone)]
 pub struct TokenInfo {
     pub(crate) token: SecretString,
@@ -26,16 +30,27 @@ impl TokenInfo {
     }
 }
 
+/// Source of auth tokens for the driver
+///
+/// Implement it to plug a custom auth scheme into
+/// [`ClientBuilder::with_credentials`](crate::ClientBuilder::with_credentials).
+/// The SDK ships implementations for static tokens, user/password, external
+/// commands and cloud metadata services - see the crate root for the full list.
 pub trait Credentials: Send + Sync {
-    // may not cache result and can block for some time (command execute, network request)
-    // if always called from thread, available to block
-    // successfully result will cache until TokenInfo.next_renew,
-    // then create_token called in background.
-    // cached token will use until successfully return again
-    // and TokenInfo.next_renew reserve until token expire for renew it
-    // and for retry errors
+    /// Produce a fresh token
+    ///
+    /// The implementation may block (spawn a command, make a network request);
+    /// it is called from a thread where blocking is allowed.
+    ///
+    /// A successful result is cached until the returned renewal deadline, after
+    /// which `create_token` is called again in background. While renewal keeps
+    /// failing the previously cached token stays in use, so `next_renew`
+    /// should leave room before the real expiration for retries.
     fn create_token(&self) -> YdbResult<TokenInfo>;
 
+    /// Short description used in logs and in the `Debug` output
+    ///
+    /// Must not leak the token itself.
     fn debug_string(&self) -> String {
         "some credentials".to_string()
     }

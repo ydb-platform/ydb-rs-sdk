@@ -49,14 +49,17 @@ pub(crate) mod client_topic;
 pub(crate) mod connection_pool;
 mod credentials;
 pub(crate) mod discovery;
+#[deny(missing_docs)]
 mod errors;
 mod grpc;
 pub(crate) mod grpc_connection_manager;
 mod grpc_options;
 mod grpc_wrapper;
 mod load_balancer;
+#[deny(missing_docs)]
 mod pub_traits;
 pub(crate) mod query;
+#[deny(missing_docs)]
 pub(crate) mod result;
 mod retry_settings;
 mod session;
@@ -92,6 +95,7 @@ pub mod traces;
 mod trait_operation;
 mod types;
 mod types_converters;
+#[deny(missing_docs)]
 pub(crate) mod waiter;
 
 #[cfg(test)]

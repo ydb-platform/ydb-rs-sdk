@@ -3,8 +3,17 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::watch;
 
+/// Something that becomes ready asynchronously
+///
+/// Implemented by the driver background components - the token cache,
+/// discovery and the load balancers. The driver awaits all of them while
+/// connecting, so the first request does not race initialization.
 #[async_trait::async_trait]
 pub trait Waiter: Send + Sync {
+    /// Wait until ready
+    ///
+    /// Implementations return immediately once readiness has been reached at
+    /// least once, and return an error if the component failed to become ready.
     async fn wait(&self) -> YdbResult<()>;
 }
 
