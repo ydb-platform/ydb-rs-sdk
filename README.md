@@ -50,6 +50,41 @@ async fn main() -> YdbResult<()> {
 
 For more examples, see [ydb/examples](https://github.com/ydb-platform/ydb-rs-sdk/tree/master/ydb/examples).
 
+### Strict serializable writes
+
+Select `TxMode::StrictSerializableRW` on a one-shot Query call or on `retry_tx` to use Query
+Service's strict serializable read-write mode. The server must have strict serializable isolation
+enabled; otherwise it rejects the request. For a successful write, the server may return a
+`VirtualTimestamp` with unsigned `plan_step` and `tx_id` components:
+
+```rust,no_run
+# use ydb::{ClientBuilder, TxMode, YdbResult};
+# #[tokio::main]
+# async fn main() -> YdbResult<()> {
+# let client = ClientBuilder::new_from_connection_string("grpc://localhost:2136/local")?.build().await?;
+let mut query = client.query_client();
+let timestamp = query
+    .exec("UPSERT INTO test (id) VALUES (1)")
+    .with_tx_mode(TxMode::StrictSerializableRW)
+    .execute_with_commit_timestamp()
+    .await?;
+if let Some(timestamp) = timestamp {
+    println!("{}:{}", timestamp.plan_step(), timestamp.tx_id());
+}
+# Ok(())
+# }
+```
+
+For a streaming call, drain all result sets and use `QueryStream::close_with_commit_timestamp()`.
+For an interactive transaction, use `Transaction::commit_with_timestamp()` for an explicit commit,
+or `with_commit(true)` on its last query and close the resulting stream. Existing `exec().await`,
+`QueryStream::close()`, and automatic `retry_tx` commits retain their previous return types.
+
+The timestamp is optional. The server sends it only on `SUCCESS`, in this mode, and when the
+transaction had write effects. `VirtualTimestamp::compare()` orders values by `plan_step` and
+then `tx_id`; it rejects values produced by separately built drivers. The SDK has the database
+path but cannot prove that two separate drivers address the same database.
+
 ### QueryClient one-shot methods
 
 For a single YQL statement you usually do not need `retry_tx` — call a builder and `.await?`:

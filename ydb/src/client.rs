@@ -37,6 +37,7 @@ pub struct Client {
     session_pool: SessionPool,
     retry_settings: RetrySettings,
     metrics_names: MetricsNames,
+    timestamp_scope: Arc<str>,
 }
 
 impl Client {
@@ -60,6 +61,7 @@ impl Client {
             default_session_pool_settings(),
         );
 
+        let timestamp_scope = Arc::<str>::from(credentials.database.as_str());
         let client = Client {
             credentials,
             load_balancer,
@@ -69,6 +71,7 @@ impl Client {
             session_pool,
             retry_settings,
             metrics_names,
+            timestamp_scope,
         };
         client.wait().await?;
 
@@ -89,6 +92,7 @@ impl Client {
             session_pool: self.session_pool.clone(),
             retry_settings,
             metrics_names: self.metrics_names.clone(),
+            timestamp_scope: self.timestamp_scope.clone(),
         }
     }
 
@@ -143,6 +147,7 @@ impl Client {
             self.session_pool.clone(),
             self.retry_settings.clone(),
             self.metrics_names.clone(),
+            self.timestamp_scope.clone(),
         )
     }
 
