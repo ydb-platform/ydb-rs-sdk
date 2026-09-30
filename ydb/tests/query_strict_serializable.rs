@@ -177,6 +177,30 @@ async fn stream_uses_only_final_trailing_timestamp() -> YdbResult<()> {
 }
 
 #[tokio::test]
+async fn interactive_query_commit_returns_trailing_timestamp() -> YdbResult<()> {
+    let (handler, controls) =
+        TimestampHandler::new(vec![part(None, None), part(Some(timestamp()), None)], None);
+    let (server, _) = MockServer::start(handler).await;
+    let client = make_client(&server).await?;
+    let query = client.query_client();
+    let observed = query
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            Ok(tx
+                .exec(WRITE)
+                .with_commit(true)
+                .execute_with_commit_timestamp()
+                .await?)
+        }))
+        .isolation(TxMode::StrictSerializableRW)
+        .await
+        .expect("query commit")
+        .expect("trailing timestamp");
+    assert_eq!(observed.plan_step(), u64::MAX);
+    assert_strict_mode(&controls.lock().unwrap()[0], true);
+    Ok(())
+}
+
+#[tokio::test]
 async fn explicit_commit_preserves_optional_timestamp() -> YdbResult<()> {
     for commit_timestamp in [Some(timestamp()), None] {
         let (handler, controls) =
