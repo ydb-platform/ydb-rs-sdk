@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::TryFutureExt;
@@ -24,6 +25,7 @@ use tracing::instrument;
 use crate::session_pool::{SessionPool, SessionPoolLease, spawn_pool_release};
 
 use super::hooks::{QueryTxCommitStatus, QueryTxHook};
+use super::virtual_timestamp::VirtualTimestamp;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CallOptions {
@@ -51,6 +53,7 @@ pub(crate) struct ClientExecContext {
     pub session_pool: SessionPool,
     pub retry_settings: RetrySettings,
     pub metrics_names: MetricsNames,
+    pub timestamp_scope: Arc<str>,
 }
 
 /// Opened client stream and its explicit session ownership mode.
@@ -194,6 +197,7 @@ pub(crate) struct TxExecContext {
     /// Absolute deadline from [`QueryClient::retry_tx`] `.timeout()`, propagated to every RPC in the callback.
     pub retry_deadline: Option<Instant>,
     pub metrics_names: MetricsNames,
+    pub timestamp_scope: Arc<str>,
 }
 
 impl TxExecContext {
@@ -397,6 +401,7 @@ fn tx_mode_to_raw(mode: TxMode) -> YdbResult<RawTxMode> {
                 .to_string(),
         )),
         TxMode::SerializableReadWrite => Ok(RawTxMode::SerializableReadWrite),
+        TxMode::StrictSerializableRW => Ok(RawTxMode::StrictSerializableRW),
         TxMode::SnapshotReadOnly => Ok(RawTxMode::SnapshotReadOnly),
         TxMode::SnapshotReadWrite => Ok(RawTxMode::SnapshotReadWrite),
         TxMode::StaleReadOnly => Ok(RawTxMode::StaleReadOnly),
@@ -416,7 +421,7 @@ pub(super) fn ensure_interactive_tx_mode(mode: TxMode) -> YdbResult<()> {
     if !mode.supported_in_interactive() {
         return Err(YdbError::Custom(format!(
             "transaction mode {mode:?} is not supported in interactive transactions \
-             (use SerializableReadWrite, SnapshotReadOnly, or SnapshotReadWrite)"
+             (use SerializableReadWrite, StrictSerializableRW, SnapshotReadOnly, or SnapshotReadWrite)"
         )));
     }
     Ok(())
@@ -799,8 +804,14 @@ pub(crate) async fn tx_begin_stream(
 
 #[instrument(name = "ydb.Commit", skip_all, fields(db.system.name = "ydb", ydb.tx.id = tracing::field::Empty, ydb.session.id = tracing::field::Empty), err)]
 pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
+    tx_commit_with_timestamp(tx).await.map(|_| ())
+}
+
+pub(crate) async fn tx_commit_with_timestamp(
+    tx: &mut TxExecContext,
+) -> YdbResult<Option<VirtualTimestamp>> {
     if !tx.state.is_active() {
-        return Ok(());
+        return Ok(None);
     }
     if let Err(err) = tx_before_commit(tx).await {
         if let Err(error) = tx_rollback(tx).await {
@@ -820,7 +831,7 @@ pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
     let Some(tx_id) = active.server_progress.tx_id.as_deref() else {
         tx.finish_tx(TxState::Committed, QueryTxCommitStatus::Committed)?
             .return_to_pool();
-        return Ok(());
+        return Ok(None);
     };
 
     commit_counter.increment(1);
@@ -838,10 +849,12 @@ pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
     let result = with_optional_timeout(operation_timeout, operation).await;
 
     match result {
-        Ok(()) => {
+        Ok(timestamp) => {
             tx.finish_tx(TxState::Committed, QueryTxCommitStatus::Committed)?
                 .return_to_pool();
-            Ok(())
+            Ok(timestamp.map(|timestamp| {
+                VirtualTimestamp::from_proto(timestamp, tx.timestamp_scope.clone())
+            }))
         }
         Err(error) => {
             tx.fail_attempt(&error)?;
@@ -909,6 +922,7 @@ pub(crate) fn tx_exec_context(
     options: TransactionOptions,
     retry_deadline: Option<Instant>,
     metrics_names: MetricsNames,
+    timestamp_scope: Arc<str>,
 ) -> TxExecContext {
     TxExecContext {
         tx_mode: options.mode(),
@@ -916,6 +930,7 @@ pub(crate) fn tx_exec_context(
         state: TxState::Active(ActiveTx::new(client, lease)),
         retry_deadline,
         metrics_names,
+        timestamp_scope,
     }
 }
 
@@ -969,6 +984,34 @@ mod unit_tests {
     use http::Uri;
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
+    #[test]
+    fn strict_serializable_mode_is_available_in_both_query_paths() {
+        assert_eq!(
+            tx_mode_to_raw(TxMode::StrictSerializableRW).unwrap(),
+            RawTxMode::StrictSerializableRW
+        );
+        assert!(ensure_interactive_tx_mode(TxMode::StrictSerializableRW).is_ok());
+        let request = build_client_execute_request_for_test(
+            &CallOptions {
+                tx_mode: Some(TxMode::StrictSerializableRW),
+                ..Default::default()
+            },
+            false,
+        );
+        let control = request.tx_control.expect("strict mode has tx control");
+        assert!(control.commit_tx);
+        assert!(matches!(
+            control.tx_selector,
+            Some(ydb_grpc::ydb_proto::query::transaction_control::TxSelector::BeginTx(
+                ydb_grpc::ydb_proto::query::TransactionSettings {
+                    tx_mode: Some(
+                        ydb_grpc::ydb_proto::query::transaction_settings::TxMode::StrictSerializableReadWrite(_)
+                    )
+                }
+            ))
+        ));
+    }
+
     use crate::GrpcOptions;
     use crate::client_query::TransactionOptions;
     use crate::errors::{Idempotency, YdbError, YdbOrCustomerError};
@@ -1000,6 +1043,7 @@ mod unit_tests {
             TransactionOptions::default(),
             None,
             MetricsNames::new(None),
+            Arc::from("bench"),
         )
     }
 

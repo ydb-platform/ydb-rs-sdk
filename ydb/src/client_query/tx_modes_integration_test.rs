@@ -4,6 +4,7 @@ use crate::test_integration_helper::create_client;
 use crate::{Transaction, TxMode};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing_test::traced_test;
+use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -32,6 +33,14 @@ fn customer_err(err: YdbOrCustomerError) -> YdbError {
 
 fn is_snapshot_rw_unsupported(err: &impl std::fmt::Display) -> bool {
     err.to_string().contains("Snapshot Isolation")
+}
+
+fn is_strict_serializable_disabled(err: &YdbError) -> bool {
+    // The server reports this feature flag as BAD_REQUEST with issue code 0, so the issue text
+    // is the only way for this integration test to distinguish it from a real query failure.
+    matches!(err, YdbError::YdbStatusError(status)
+        if status.operation_status == StatusCode::BadRequest as i32
+            && status.issues.iter().any(|issue| issue.message.contains("Strict Serializable mode is disabled")))
 }
 
 macro_rules! client_mode_select {
@@ -101,6 +110,63 @@ client_mode_select!(
 client_mode_select!(query_client_snapshot_ro_one_shot, TxMode::SnapshotReadOnly);
 client_mode_select!(query_client_stale_ro_one_shot, TxMode::StaleReadOnly);
 client_mode_select!(query_client_online_ro_one_shot, TxMode::OnlineReadOnly);
+
+#[tokio::test]
+#[traced_test]
+#[ignore] // need YDB access
+async fn strict_serializable_commit_timestamps() -> YdbResult<()> {
+    let client = create_client().await?;
+    let mut qc = client.query_client();
+    let table_name = unique_table_name("strict_serializable");
+    idem!(qc.exec(format!("DROP TABLE IF EXISTS {table_name}"))).await?;
+    idem!(qc.exec(format!(
+        "CREATE TABLE {table_name} (id Int64, PRIMARY KEY(id))"
+    )))
+    .await?;
+
+    let read_only = match idem!(
+        qc.exec("SELECT 1")
+            .with_tx_mode(TxMode::StrictSerializableRW)
+    )
+    .execute_with_commit_timestamp()
+    .await
+    {
+        Ok(timestamp) => timestamp,
+        Err(error) if is_strict_serializable_disabled(&error) => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    assert!(read_only.is_none());
+
+    let timestamp = idem!(
+        qc.exec(format!("UPSERT INTO {table_name} (id) VALUES (1)"))
+            .with_tx_mode(TxMode::StrictSerializableRW)
+    )
+    .execute_with_commit_timestamp()
+    .await?;
+    assert!(timestamp.is_some());
+
+    let mut stream = idem!(
+        qc.query(format!("UPSERT INTO {table_name} (id) VALUES (2)"))
+            .with_tx_mode(TxMode::StrictSerializableRW)
+    )
+    .await?;
+    while stream.next_result_set().await?.is_some() {}
+    let streamed = stream.close_with_commit_timestamp().await?;
+    assert!(streamed.is_some());
+
+    let explicit = qc
+        .retry_tx(closure!([&table_name], async |tx: &mut Transaction| {
+            tx.exec(format!("UPSERT INTO {table_name} (id) VALUES (3)"))
+                .await?;
+            Ok(tx.commit_with_timestamp().await?)
+        }))
+        .isolation(TxMode::StrictSerializableRW)
+        .timeout(TEST_TIMEOUT)
+        .await
+        .map_err(customer_err)?;
+    assert!(explicit.is_some());
+    Ok(())
+}
 
 #[tokio::test]
 #[traced_test]
