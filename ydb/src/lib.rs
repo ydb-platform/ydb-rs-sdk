@@ -101,6 +101,8 @@ mod client_metrics;
 #[cfg(test)]
 mod connection_pool_test;
 
+pub use client_metrics::MetricsRecorder;
+
 pub use async_closure::{
     __make_closure, AsyncFnMut, DynAsyncFnMut,
     with_lifetime::{MutWithLifetime, OwnedWithLifetime, RefWithLifetime, WithLifetime},

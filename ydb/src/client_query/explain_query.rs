@@ -158,7 +158,7 @@ mod unit_tests {
             ),
             session_pool: SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
             retry_settings: RetrySettings::with_default_backoff(),
-            metrics_names: MetricsNames::new(None),
+            metrics_names: MetricsNames::new(None, Vec::new(), None),
         }
     }
 

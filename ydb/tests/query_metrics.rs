@@ -1,15 +1,18 @@
 //! Mock-server tests for query client metrics (counters).
 //!
-//! These tests are separated from `query_tx.rs` because they
-//! share the global `prometheus::default_registry()` and would
-//! interfere with parallel runs within the same test binary.
+//! Each test injects an isolated `metrics_prometheus::Recorder` backed by its own
+//! private `prometheus::Registry` via `ClientBuilder::with_metrics_recorder`, so the
+//! tests run in parallel and never touch the process-global recorder.
+//! Custom static labels attached via `ClientBuilder::with_metrics_label(s)` are
+//! covered here too, including the reserved-key and duplicate-key validation.
 #![recursion_limit = "256"]
 
 mod mock_server;
 
-use std::sync::LazyLock;
-
-use ydb::{Client, ClientBuilder, QueryExecutor, Transaction, YdbResult, closure};
+use ydb::{
+    Client, ClientBuilder, MetricsRecorder, QueryExecutor, Transaction, YdbError, YdbResult,
+    closure,
+};
 use ydb_grpc::ydb_proto::query::{ExecuteQueryResponsePart, TransactionMeta};
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 use ydb_grpc::ydb_proto::{Column, ResultSet, Type, Value, r#type};
@@ -18,23 +21,45 @@ use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply
 use crate::mock_server::query::{QUERY_TX_ID, QueryIncoming, QueryReply};
 use crate::mock_server::server::MockServer;
 
-/// Serializes metric tests that share the global prometheus registry.
-static METRICS_LOCK: LazyLock<tokio::sync::Mutex<()>> =
-    LazyLock::new(|| tokio::sync::Mutex::new(()));
-
 const DATABASE: &str = "/local";
 
-async fn make_client(server: &MockServer) -> YdbResult<Client> {
+async fn make_client(
+    server: &MockServer,
+    recorder: metrics_prometheus::Recorder,
+) -> YdbResult<Client> {
+    make_client_with_labels(server, recorder, Vec::<(String, String)>::new()).await
+}
+
+async fn make_client_with_labels<I, K, V>(
+    server: &MockServer,
+    recorder: metrics_prometheus::Recorder,
+    labels: I,
+) -> YdbResult<Client>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: Into<String>,
+    V: Into<String>,
+{
     ClientBuilder::new_from_connection_string(format!(
         "{}{DATABASE}?use_discovery=false",
         server.endpoint()
     ))?
+    .with_metrics_labels(labels)
+    .with_metrics_recorder(MetricsRecorder::new(recorder))
     .build()
     .await
 }
 
-fn counter_value(metric_name: &str) -> u64 {
-    let gathered = prometheus::default_registry().gather();
+fn test_recorder() -> (prometheus::Registry, metrics_prometheus::Recorder) {
+    let registry = prometheus::Registry::new();
+    let recorder = metrics_prometheus::Recorder::builder()
+        .with_registry(&registry)
+        .build();
+    (registry, recorder)
+}
+
+fn counter_value(registry: &prometheus::Registry, metric_name: &str) -> u64 {
+    let gathered = registry.gather();
     gathered
         .iter()
         .find(|mf| mf.name() == metric_name)
@@ -42,8 +67,12 @@ fn counter_value(metric_name: &str) -> u64 {
         .unwrap_or(0)
 }
 
-fn counter_label_value(metric_name: &str, label_key: &str) -> Option<String> {
-    let gathered = prometheus::default_registry().gather();
+fn counter_label_value(
+    registry: &prometheus::Registry,
+    metric_name: &str,
+    label_key: &str,
+) -> Option<String> {
+    let gathered = registry.gather();
     gathered
         .iter()
         .find(|mf| mf.name() == metric_name)
@@ -87,16 +116,14 @@ fn row_with_value(value: i64) -> ExecuteQueryResponsePart {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn happy_path_collect_metrics() -> YdbResult<()> {
-    let _guard = METRICS_LOCK.lock().await;
-    let _ = metrics_prometheus::try_install().ok(); // here should be `ok` because only one error can be emitted - duplicate attempt
-
     struct DummyHandler;
     impl Handler for DummyHandler {}
 
+    let (registry, recorder) = test_recorder();
     let (server, _reply_tx) = MockServer::start(DummyHandler).await;
-    let _ = make_client(&server).await?;
+    let _ = make_client(&server, recorder).await?;
 
-    let metrics_vec = prometheus::default_registry().gather();
+    let metrics_vec = registry.gather();
     assert!(!metrics_vec.is_empty());
 
     Ok(())
@@ -105,22 +132,26 @@ async fn happy_path_collect_metrics() -> YdbResult<()> {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn query_client_creation_increments_counter_metric() -> YdbResult<()> {
-    let _guard = METRICS_LOCK.lock().await;
-    let _ = metrics_prometheus::try_install().ok(); // here should be `ok` because only one error can be emitted - duplicate attempt
-
     struct DummyHandler;
     impl Handler for DummyHandler {}
 
+    let (registry, recorder) = test_recorder();
     let (server, _reply_tx) = MockServer::start(DummyHandler).await;
-    let client = make_client(&server).await?;
+    let client = make_client(&server, recorder).await?;
 
-    let before = counter_value("ydb_new_query_client_counter");
+    let before = counter_value(&registry, "ydb_new_query_client_counter");
 
     let _qc1 = client.query_client();
-    assert_eq!(counter_value("ydb_new_query_client_counter") - before, 1);
+    assert_eq!(
+        counter_value(&registry, "ydb_new_query_client_counter") - before,
+        1
+    );
 
     let _qc2 = client.query_client();
-    assert_eq!(counter_value("ydb_new_query_client_counter") - before, 2);
+    assert_eq!(
+        counter_value(&registry, "ydb_new_query_client_counter") - before,
+        2
+    );
 
     Ok(())
 }
@@ -128,12 +159,10 @@ async fn query_client_creation_increments_counter_metric() -> YdbResult<()> {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn query_client_creation_with_driver_name_label() -> YdbResult<()> {
-    let _guard = METRICS_LOCK.lock().await;
-    let _ = metrics_prometheus::try_install().ok();
-
     struct DummyHandler;
     impl Handler for DummyHandler {}
 
+    let (registry, recorder) = test_recorder();
     let (server, _reply_tx) = MockServer::start(DummyHandler).await;
 
     let client = ClientBuilder::new_from_connection_string(format!(
@@ -142,12 +171,13 @@ async fn query_client_creation_with_driver_name_label() -> YdbResult<()> {
         DATABASE,
     ))?
     .with_driver_name("custom")
+    .with_metrics_recorder(MetricsRecorder::new(recorder))
     .build()
     .await?;
 
     let _qc = client.query_client();
 
-    let driver_name = counter_label_value("ydb_new_query_client_counter", "driver_name");
+    let driver_name = counter_label_value(&registry, "ydb_new_query_client_counter", "driver_name");
     assert_eq!(
         driver_name.as_deref(),
         Some("custom"),
@@ -159,10 +189,93 @@ async fn query_client_creation_with_driver_name_label() -> YdbResult<()> {
 
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn query_row_increments_counter_metric() -> YdbResult<()> {
-    let _guard = METRICS_LOCK.lock().await;
-    let _ = metrics_prometheus::try_install().ok(); // here should be `ok` because only one error can be emitted - duplicate attempt
+async fn custom_metrics_labels_attached() -> YdbResult<()> {
+    struct DummyHandler;
+    impl Handler for DummyHandler {}
 
+    let (registry, recorder) = test_recorder();
+    let (server, _reply_tx) = MockServer::start(DummyHandler).await;
+    let _client =
+        make_client_with_labels(&server, recorder, vec![("env", "prod"), ("app", "billing")])
+            .await?;
+
+    for (key, expected) in [("driver_name", "main"), ("env", "prod"), ("app", "billing")] {
+        let value = counter_label_value(&registry, "ydb_new_client_counter", key);
+        assert_eq!(
+            value.as_deref(),
+            Some(expected),
+            "ydb_new_client_counter must carry {key}={expected} alongside SDK labels"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn driver_name_with_custom_labels() -> YdbResult<()> {
+    struct DummyHandler;
+    impl Handler for DummyHandler {}
+
+    let (registry, recorder) = test_recorder();
+    let (server, _reply_tx) = MockServer::start(DummyHandler).await;
+
+    let _client = ClientBuilder::new_from_connection_string(format!(
+        "{}{DATABASE}?use_discovery=false",
+        server.endpoint()
+    ))?
+    .with_driver_name("custom")
+    .with_metrics_label("env", "prod")
+    .with_metrics_recorder(MetricsRecorder::new(recorder))
+    .build()
+    .await?;
+
+    for (key, expected) in [("driver_name", "custom"), ("env", "prod")] {
+        let value = counter_label_value(&registry, "ydb_new_client_counter", key);
+        assert_eq!(
+            value.as_deref(),
+            Some(expected),
+            "ydb_new_client_counter must carry {key}={expected}"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn reserved_metrics_label_key_rejected() {
+    let result = ClientBuilder::new_from_connection_string("grpc://localhost:2135/local")
+        .expect("valid connection string")
+        .with_metrics_label("driver_name", "x")
+        .build()
+        .await;
+
+    assert!(
+        matches!(result, Err(YdbError::Custom(_))),
+        "build() must reject the reserved 'driver_name' label key"
+    );
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn duplicate_metrics_label_keys_rejected() {
+    let result = ClientBuilder::new_from_connection_string("grpc://localhost:2135/local")
+        .expect("valid connection string")
+        .with_metrics_label("env", "prod")
+        .with_metrics_label("env", "dev")
+        .build()
+        .await;
+
+    assert!(
+        matches!(result, Err(YdbError::Custom(_))),
+        "build() must reject duplicate metrics label keys"
+    );
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn query_row_increments_counter_metric() -> YdbResult<()> {
     struct QueryRowHandler {
         replies: FromHandlerToService,
     }
@@ -187,19 +300,20 @@ async fn query_row_increments_counter_metric() -> YdbResult<()> {
         }
     }
 
+    let (registry, recorder) = test_recorder();
     let handler = QueryRowHandler {
         replies: tokio::sync::mpsc::unbounded_channel::<Reply>().0,
     };
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server).await?;
+    let client = make_client(&server, recorder).await?;
 
-    let before = counter_value("ydb_client_query_row_counter");
+    let before = counter_value(&registry, "ydb_client_query_row_counter");
 
     let mut qc = client.query_client();
     let _row = QueryExecutor::query_row(&mut qc, "SELECT 42 AS val").await?;
 
     assert_eq!(
-        counter_value("ydb_client_query_row_counter") - before,
+        counter_value(&registry, "ydb_client_query_row_counter") - before,
         1,
         "query_row() must increment the query_row counter by exactly 1"
     );
@@ -207,7 +321,7 @@ async fn query_row_increments_counter_metric() -> YdbResult<()> {
     let _row2 = QueryExecutor::query_row(&mut qc, "SELECT 42 AS val").await?;
 
     assert_eq!(
-        counter_value("ydb_client_query_row_counter") - before,
+        counter_value(&registry, "ydb_client_query_row_counter") - before,
         2,
         "second query_row() call must increment the counter again by exactly 1"
     );
@@ -255,16 +369,14 @@ impl Handler for ExecCountingHandler {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn transaction_exec_increments_counter_metric() -> YdbResult<()> {
-    let _guard = METRICS_LOCK.lock().await;
-    let _ = metrics_prometheus::try_install().ok(); // here should be `ok` because only one error can be emitted - duplicate attempt
-
+    let (registry, recorder) = test_recorder();
     let handler = ExecCountingHandler {
         replies: tokio::sync::mpsc::unbounded_channel::<Reply>().0,
     };
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server).await?;
+    let client = make_client(&server, recorder).await?;
 
-    let before = counter_value("ydb_client_transaction_exec_counter");
+    let before = counter_value(&registry, "ydb_client_transaction_exec_counter");
 
     client
         .query_client()
@@ -275,7 +387,7 @@ async fn transaction_exec_increments_counter_metric() -> YdbResult<()> {
         .await?;
 
     assert_eq!(
-        counter_value("ydb_client_transaction_exec_counter") - before,
+        counter_value(&registry, "ydb_client_transaction_exec_counter") - before,
         1,
         "transaction exec must increment the exec counter by exactly 1"
     );
@@ -289,7 +401,7 @@ async fn transaction_exec_increments_counter_metric() -> YdbResult<()> {
         .await?;
 
     assert_eq!(
-        counter_value("ydb_client_transaction_exec_counter") - before,
+        counter_value(&registry, "ydb_client_transaction_exec_counter") - before,
         2,
         "second transaction exec call must increment the counter again by exactly 1"
     );
@@ -300,16 +412,14 @@ async fn transaction_exec_increments_counter_metric() -> YdbResult<()> {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn transaction_commit_increments_counter_metric() -> YdbResult<()> {
-    let _guard = METRICS_LOCK.lock().await;
-    let _ = metrics_prometheus::try_install().ok(); // here should be `ok` because only one error can be emitted - duplicate attempt
-
+    let (registry, recorder) = test_recorder();
     let handler = ExecCountingHandler {
         replies: tokio::sync::mpsc::unbounded_channel::<Reply>().0,
     };
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server).await?;
+    let client = make_client(&server, recorder).await?;
 
-    let before = counter_value("ydb_client_transaction_commit_counter");
+    let before = counter_value(&registry, "ydb_client_transaction_commit_counter");
 
     client
         .query_client()
@@ -320,7 +430,7 @@ async fn transaction_commit_increments_counter_metric() -> YdbResult<()> {
         .await?;
 
     assert_eq!(
-        counter_value("ydb_client_transaction_commit_counter") - before,
+        counter_value(&registry, "ydb_client_transaction_commit_counter") - before,
         1,
         "first retry_tx must trigger commit and increment the commit counter by exactly 1"
     );
@@ -334,7 +444,7 @@ async fn transaction_commit_increments_counter_metric() -> YdbResult<()> {
         .await?;
 
     assert_eq!(
-        counter_value("ydb_client_transaction_commit_counter") - before,
+        counter_value(&registry, "ydb_client_transaction_commit_counter") - before,
         2,
         "second retry_tx must trigger commit and increment the commit counter again by exactly 1"
     );
@@ -345,16 +455,14 @@ async fn transaction_commit_increments_counter_metric() -> YdbResult<()> {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn transaction_rollback_increments_counter_metric() -> YdbResult<()> {
-    let _guard = METRICS_LOCK.lock().await;
-    let _ = metrics_prometheus::try_install().ok(); // here should be `ok` because only one error can be emitted - duplicate attempt
-
+    let (registry, recorder) = test_recorder();
     let handler = ExecCountingHandler {
         replies: tokio::sync::mpsc::unbounded_channel::<Reply>().0,
     };
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server).await?;
+    let client = make_client(&server, recorder).await?;
 
-    let before = counter_value("ydb_client_transaction_rollback_counter");
+    let before = counter_value(&registry, "ydb_client_transaction_rollback_counter");
 
     client
         .query_client()
@@ -366,7 +474,7 @@ async fn transaction_rollback_increments_counter_metric() -> YdbResult<()> {
         .await?;
 
     assert_eq!(
-        counter_value("ydb_client_transaction_rollback_counter") - before,
+        counter_value(&registry, "ydb_client_transaction_rollback_counter") - before,
         1,
         "explicit rollback must increment the rollback counter by exactly 1"
     );
@@ -381,7 +489,7 @@ async fn transaction_rollback_increments_counter_metric() -> YdbResult<()> {
         .await?;
 
     assert_eq!(
-        counter_value("ydb_client_transaction_rollback_counter") - before,
+        counter_value(&registry, "ydb_client_transaction_rollback_counter") - before,
         2,
         "second explicit rollback must increment the counter again by exactly 1"
     );
@@ -392,9 +500,6 @@ async fn transaction_rollback_increments_counter_metric() -> YdbResult<()> {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn transaction_query_row_increments_counter_metric() -> YdbResult<()> {
-    let _guard = METRICS_LOCK.lock().await;
-    let _ = metrics_prometheus::try_install().ok(); // here should be `ok` because only one error can be emitted - duplicate attempt
-
     struct TxQueryRowHandler {
         replies: FromHandlerToService,
     }
@@ -425,13 +530,14 @@ async fn transaction_query_row_increments_counter_metric() -> YdbResult<()> {
         }
     }
 
+    let (registry, recorder) = test_recorder();
     let handler = TxQueryRowHandler {
         replies: tokio::sync::mpsc::unbounded_channel::<Reply>().0,
     };
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server).await?;
+    let client = make_client(&server, recorder).await?;
 
-    let before = counter_value("ydb_client_transaction_query_row_counter");
+    let before = counter_value(&registry, "ydb_client_transaction_query_row_counter");
 
     client
         .query_client()
@@ -442,7 +548,7 @@ async fn transaction_query_row_increments_counter_metric() -> YdbResult<()> {
         .await?;
 
     assert_eq!(
-        counter_value("ydb_client_transaction_query_row_counter") - before,
+        counter_value(&registry, "ydb_client_transaction_query_row_counter") - before,
         1,
         "transaction query_row must increment the transaction_query_row counter by exactly 1"
     );
@@ -456,7 +562,7 @@ async fn transaction_query_row_increments_counter_metric() -> YdbResult<()> {
         .await?;
 
     assert_eq!(
-        counter_value("ydb_client_transaction_query_row_counter") - before,
+        counter_value(&registry, "ydb_client_transaction_query_row_counter") - before,
         2,
         "second transaction query_row call must increment the counter again by exactly 1"
     );
@@ -541,14 +647,12 @@ impl Handler for EmptyRowHandler {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn optional_row_into_future_maps_to_option() -> YdbResult<()> {
-    let _guard = METRICS_LOCK.lock().await;
-    let _ = metrics_prometheus::try_install().ok();
-
     let handler = OptionalRowHandler {
         replies: tokio::sync::mpsc::unbounded_channel::<Reply>().0,
     };
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server).await?;
+    let (_registry, recorder) = test_recorder();
+    let client = make_client(&server, recorder).await?;
 
     let mut qc = client.query_client();
     let row = QueryExecutor::query_row(&mut qc, "SELECT 42 AS val")
@@ -566,14 +670,12 @@ async fn optional_row_into_future_maps_to_option() -> YdbResult<()> {
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn optional_row_into_future_returns_none_when_empty() -> YdbResult<()> {
-    let _guard = METRICS_LOCK.lock().await;
-    let _ = metrics_prometheus::try_install().ok();
-
     let handler = EmptyRowHandler {
         replies: tokio::sync::mpsc::unbounded_channel::<Reply>().0,
     };
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server).await?;
+    let (_registry, recorder) = test_recorder();
+    let client = make_client(&server, recorder).await?;
 
     let mut qc = client.query_client();
     let row = QueryExecutor::query_row(&mut qc, "SELECT 42 AS val")
