@@ -10,6 +10,7 @@ use ydb_grpc::ydb_proto::query::{
     transaction_control, transaction_settings,
 };
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
+use ydb_grpc::ydb_proto::{Column, ResultSet, Type, Value, r#type, value};
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, ReplySink};
 use crate::mock_server::query::{QUERY_TX_ID, QueryIncoming, QueryReply};
@@ -44,6 +45,27 @@ fn part(
         tx_meta: tx_id.map(|id| TransactionMeta { id: id.to_string() }),
         ..Default::default()
     }
+}
+
+fn result_part(commit_timestamp: Option<RawVirtualTimestamp>) -> ExecuteQueryResponsePart {
+    let mut response = part(commit_timestamp, None);
+    response.result_set = Some(ResultSet {
+        columns: vec![Column {
+            name: "value".to_string(),
+            r#type: Some(Type {
+                r#type: Some(r#type::Type::TypeId(r#type::PrimitiveTypeId::Int64 as i32)),
+            }),
+        }],
+        rows: vec![Value {
+            items: vec![Value {
+                value: Some(value::Value::Int64Value(1)),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    response
 }
 
 struct TimestampHandler {
@@ -117,7 +139,7 @@ fn assert_strict_mode(control: &TransactionControl, commit: bool) {
 #[tokio::test]
 async fn one_shot_returns_unsigned_trailing_timestamp() -> YdbResult<()> {
     let (handler, controls) =
-        TimestampHandler::new(vec![part(None, None), part(Some(timestamp()), None)], None);
+        TimestampHandler::new(vec![part(None, None), result_part(Some(timestamp()))], None);
     let (server, _) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
     let mut query = client.query_client();
@@ -160,7 +182,7 @@ async fn stream_uses_only_final_trailing_timestamp() -> YdbResult<()> {
     assert!(stream.close_with_commit_timestamp().await?.is_none());
 
     let (handler, _) =
-        TimestampHandler::new(vec![part(None, None), part(Some(timestamp()), None)], None);
+        TimestampHandler::new(vec![part(None, None), result_part(Some(timestamp()))], None);
     let (server, _) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
     let mut query = client.query_client();
@@ -168,6 +190,7 @@ async fn stream_uses_only_final_trailing_timestamp() -> YdbResult<()> {
         .query(WRITE)
         .with_tx_mode(TxMode::StrictSerializableRW)
         .await?;
+    assert!(stream.next_result_set().await?.is_some());
     assert!(stream.next_result_set().await?.is_none());
     assert_eq!(
         stream.close_with_commit_timestamp().await?.unwrap().tx_id(),
@@ -179,7 +202,7 @@ async fn stream_uses_only_final_trailing_timestamp() -> YdbResult<()> {
 #[tokio::test]
 async fn interactive_query_commit_returns_trailing_timestamp() -> YdbResult<()> {
     let (handler, controls) =
-        TimestampHandler::new(vec![part(None, None), part(Some(timestamp()), None)], None);
+        TimestampHandler::new(vec![part(None, None), result_part(Some(timestamp()))], None);
     let (server, _) = MockServer::start(handler).await;
     let client = make_client(&server).await?;
     let query = client.query_client();
