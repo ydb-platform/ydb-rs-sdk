@@ -61,6 +61,7 @@ impl Handler for QueryDefaultHandler {
                 let _ = reply_tx.send(Ok(tonic::Response::new(CommitTransactionResponse {
                     status: StatusCode::Success as i32,
                     issues: Vec::new(),
+                    ..Default::default()
                 })));
             }
             QueryIncoming::RollbackTransaction(_, reply_tx) => {

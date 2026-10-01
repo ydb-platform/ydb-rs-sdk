@@ -61,6 +61,7 @@ fn part(response: &Response) -> ExecuteQueryResponsePart {
         result_set: None,
         exec_stats,
         tx_meta: None,
+        ..Default::default()
     }
 }
 

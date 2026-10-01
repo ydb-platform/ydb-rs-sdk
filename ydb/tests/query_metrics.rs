@@ -81,6 +81,7 @@ fn row_with_value(value: i64) -> ExecuteQueryResponsePart {
         }),
         exec_stats: None,
         tx_meta: None,
+        ..Default::default()
     }
 }
 
@@ -223,6 +224,7 @@ fn success_part(tx_id: Option<&str>) -> ExecuteQueryResponsePart {
         result_set: None,
         exec_stats: None,
         tx_meta: tx_id.map(|id| TransactionMeta { id: id.to_string() }),
+        ..Default::default()
     }
 }
 
@@ -483,6 +485,7 @@ fn empty_result_set_part() -> ExecuteQueryResponsePart {
         }),
         exec_stats: None,
         tx_meta: None,
+        ..Default::default()
     }
 }
 

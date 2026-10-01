@@ -37,6 +37,9 @@ pub struct EndpointInfo {
     /// not this specific node hostname.
     #[prost(string, tag = "10")]
     pub ssl_target_name_override: ::prost::alloc::string::String,
+    /// Optional name of the bridge pile this endpoint belongs to.
+    #[prost(string, tag = "11")]
+    pub bridge_pile_name: ::prost::alloc::string::String,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -45,6 +48,10 @@ pub struct ListEndpointsResult {
     pub endpoints: ::prost::alloc::vec::Vec<EndpointInfo>,
     #[prost(string, tag = "2")]
     pub self_location: ::prost::alloc::string::String,
+    /// List of bridge pile states.
+    /// This field is empty if cluster is not in bridge mode.
+    #[prost(message, repeated, tag = "3")]
+    pub pile_states: ::prost::alloc::vec::Vec<super::bridge::PileState>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -68,6 +75,24 @@ pub struct WhoAmIResult {
     /// List of group SIDs (Security IDs) for the user
     #[prost(string, repeated, tag = "2")]
     pub groups: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Whether user is allowed to perform administration operations
+    #[prost(bool, tag = "3")]
+    pub is_administration_allowed: bool,
+    /// Whether user is allowed to perform monitoring operations
+    #[prost(bool, tag = "4")]
+    pub is_monitoring_allowed: bool,
+    /// Whether user is allowed to view data
+    #[prost(bool, tag = "5")]
+    pub is_viewer_allowed: bool,
+    /// Whether user is allowed to access database
+    #[prost(bool, tag = "6")]
+    pub is_database_allowed: bool,
+    /// Whether user is allowed to register dynamic node
+    #[prost(bool, tag = "7")]
+    pub is_register_node_allowed: bool,
+    /// Whether user is allowed to bootstrap
+    #[prost(bool, tag = "8")]
+    pub is_bootstrap_allowed: bool,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -95,6 +120,8 @@ pub struct NodeLocation {
     #[deprecated]
     #[prost(uint32, optional, tag = "100500")]
     pub body: ::core::option::Option<u32>,
+    #[prost(string, optional, tag = "5")]
+    pub bridge_pile_name: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "10")]
     pub data_center: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "20")]
@@ -103,4 +130,67 @@ pub struct NodeLocation {
     pub rack: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag = "40")]
     pub unit: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NodeInfo {
+    #[prost(uint32, optional, tag = "1")]
+    pub node_id: ::core::option::Option<u32>,
+    #[prost(string, optional, tag = "2")]
+    pub host: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint32, optional, tag = "3")]
+    pub port: ::core::option::Option<u32>,
+    #[prost(string, optional, tag = "4")]
+    pub resolve_host: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "5")]
+    pub address: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "6")]
+    pub location: ::core::option::Option<NodeLocation>,
+    #[prost(uint64, optional, tag = "7")]
+    pub expire: ::core::option::Option<u64>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NodeRegistrationRequest {
+    #[prost(string, optional, tag = "1")]
+    pub host: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint32, optional, tag = "2")]
+    pub port: ::core::option::Option<u32>,
+    #[prost(string, optional, tag = "3")]
+    pub resolve_host: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "4")]
+    pub address: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "5")]
+    pub location: ::core::option::Option<NodeLocation>,
+    #[prost(string, optional, tag = "6")]
+    pub domain_path: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bool, optional, tag = "7")]
+    pub fixed_node_id: ::core::option::Option<bool>,
+    #[prost(string, optional, tag = "8")]
+    pub path: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NodeRegistrationResult {
+    #[prost(uint32, optional, tag = "1")]
+    pub node_id: ::core::option::Option<u32>,
+    #[prost(string, optional, tag = "2")]
+    pub domain_path: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint64, optional, tag = "3")]
+    pub expire: ::core::option::Option<u64>,
+    #[prost(message, repeated, tag = "4")]
+    pub nodes: ::prost::alloc::vec::Vec<NodeInfo>,
+    #[prost(uint64, optional, tag = "5")]
+    pub scope_tablet_id: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "6")]
+    pub scope_path_id: ::core::option::Option<u64>,
+    /// A unique name within the tenant generated by the system
+    #[prost(string, optional, tag = "7")]
+    pub node_name: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NodeRegistrationResponse {
+    #[prost(message, optional, tag = "1")]
+    pub operation: ::core::option::Option<super::operations::Operation>,
 }
