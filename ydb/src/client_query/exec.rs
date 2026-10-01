@@ -802,11 +802,11 @@ pub(crate) async fn tx_begin_stream(
     result
 }
 
-#[instrument(name = "ydb.Commit", skip_all, fields(db.system.name = "ydb", ydb.tx.id = tracing::field::Empty, ydb.session.id = tracing::field::Empty), err)]
 pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
     tx_commit_with_timestamp(tx).await.map(|_| ())
 }
 
+#[instrument(name = "ydb.Commit", skip_all, fields(db.system.name = "ydb", ydb.tx.id = tracing::field::Empty, ydb.session.id = tracing::field::Empty), err)]
 pub(crate) async fn tx_commit_with_timestamp(
     tx: &mut TxExecContext,
 ) -> YdbResult<Option<VirtualTimestamp>> {
