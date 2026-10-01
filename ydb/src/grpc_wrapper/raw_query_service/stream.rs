@@ -103,12 +103,9 @@ impl ExecuteQueryStream {
     fn ingest_part(&mut self, part: &ExecuteQueryResponsePart) -> RawResult<Option<String>> {
         let tx_id = self.absorb_part_metadata(part);
         check_part(part)?;
-        // Only the last successful metadata-only part can be the trailing response.
-        self.trailing_commit_timestamp = if part.result_set.is_none() {
-            part.commit_timestamp
-        } else {
-            None
-        };
+        // The final successful part may carry both a result set and the commit timestamp.
+        // Replace the candidate on every part; close exposes it only after EOF.
+        self.trailing_commit_timestamp = part.commit_timestamp;
         Ok(tx_id)
     }
 
@@ -576,10 +573,21 @@ mod tests {
 
         let mut result_part = part_with_row(0, "a", 10);
         result_part.commit_timestamp = Some(timestamp);
-        let mut no_trailing = ExecuteQueryStream::from_test_parts(vec![result_part]);
-        no_trailing.materialize_all_result_sets().await.unwrap();
+        let mut with_result_set = ExecuteQueryStream::from_test_parts(vec![result_part.clone()]);
+        with_result_set.materialize_all_result_sets().await.unwrap();
+        assert_eq!(
+            with_result_set.close().await.unwrap().commit_timestamp,
+            Some(timestamp)
+        );
+
+        let mut earlier_result_set =
+            ExecuteQueryStream::from_test_parts(vec![result_part, metadata_only_part(0)]);
+        earlier_result_set
+            .materialize_all_result_sets()
+            .await
+            .unwrap();
         assert!(
-            no_trailing
+            earlier_result_set
                 .close()
                 .await
                 .unwrap()
