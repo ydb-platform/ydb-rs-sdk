@@ -9,10 +9,9 @@
 
 mod mock_server;
 
-use ydb::{
-    Client, ClientBuilder, MetricsRecorder, QueryExecutor, Transaction, YdbError, YdbResult,
-    closure,
-};
+use std::sync::Arc;
+
+use ydb::{Client, ClientBuilder, QueryExecutor, Transaction, YdbError, YdbResult, closure};
 use ydb_grpc::ydb_proto::query::{ExecuteQueryResponsePart, TransactionMeta};
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 use ydb_grpc::ydb_proto::{Column, ResultSet, Type, Value, r#type};
@@ -45,9 +44,13 @@ where
         server.endpoint()
     ))?
     .with_metrics_labels(labels)
-    .with_metrics_recorder(MetricsRecorder::new(recorder))
+    .with_metrics_recorder(backend(recorder))
     .build()
     .await
+}
+
+fn backend(recorder: metrics_prometheus::Recorder) -> Arc<dyn metrics::Recorder + Send + Sync> {
+    Arc::new(recorder)
 }
 
 fn test_recorder() -> (prometheus::Registry, metrics_prometheus::Recorder) {
@@ -171,7 +174,7 @@ async fn query_client_creation_with_driver_name_label() -> YdbResult<()> {
         DATABASE,
     ))?
     .with_driver_name("custom")
-    .with_metrics_recorder(MetricsRecorder::new(recorder))
+    .with_metrics_recorder(backend(recorder))
     .build()
     .await?;
 
@@ -226,7 +229,7 @@ async fn driver_name_with_custom_labels() -> YdbResult<()> {
     ))?
     .with_driver_name("custom")
     .with_metrics_label("env", "prod")
-    .with_metrics_recorder(MetricsRecorder::new(recorder))
+    .with_metrics_recorder(backend(recorder))
     .build()
     .await?;
 

@@ -1,6 +1,5 @@
 use crate::client_common::{DBCredentials, TokenCache};
-use crate::client_metrics::MetricsRecorder;
-use crate::client_metrics::names::MetricsNames;
+use crate::client_metrics::{DefaultMetricsRecorder, MetricsRecorder};
 use crate::client_topic::compression::Executor;
 use crate::credentials::{
     AccessTokenCredentials, CredentialsRef, GCEMetadata, ServiceAccountCredentials,
@@ -238,7 +237,7 @@ pub struct ClientBuilder {
     executor: Option<Arc<dyn Executor>>,
     retry_settings: Option<RetrySettings>,
     driver_name: Option<String>,
-    metrics_recorder: Option<MetricsRecorder>,
+    metrics_recorder: Option<Arc<dyn metrics::Recorder + Send + Sync>>,
     metrics_labels: Vec<(String, String)>,
 }
 
@@ -275,16 +274,15 @@ impl ClientBuilder {
         Ok(client_builder)
     }
 
-    pub async fn build(self) -> YdbResult<Client> {
+    pub async fn build(mut self) -> YdbResult<Client> {
         validate_metrics_labels(&self.metrics_labels)?;
 
-        let metrics_names = MetricsNames::new(
-            self.driver_name,
-            self.metrics_labels,
-            self.metrics_recorder.as_ref().map(|r| r.as_dyn()),
-        );
-
-        metrics_names.client_new_counter.increment(1);
+        let metrics_recorder = Arc::new(DefaultMetricsRecorder::from_parts(
+            self.driver_name.take(),
+            std::mem::take(&mut self.metrics_labels),
+            self.metrics_recorder.take(),
+        ));
+        metrics_recorder.client_new_counter().increment(1);
 
         let retry_settings = self
             .retry_settings
@@ -338,8 +336,7 @@ impl ClientBuilder {
             load_balancer,
             self.executor,
             retry_settings,
-            metrics_names,
-            self.metrics_recorder,
+            metrics_recorder,
         )
         .await
     }
@@ -400,11 +397,19 @@ impl ClientBuilder {
         self
     }
 
-    /// Use a caller-provided metrics backend instead of the ambient/global recorder.
+    /// Register SDK metrics into a caller-provided non-global `metrics` backend.
     ///
-    /// When unset (the default), SDK metrics are recorded through the ambient `metrics`
-    /// recorder (e.g. one installed with `metrics_prometheus::try_install`).
-    pub fn with_metrics_recorder(mut self, recorder: MetricsRecorder) -> Self {
+    /// The backend (any [`metrics::Recorder`], e.g. a `metrics_prometheus::Recorder`
+    /// over a caller-owned `prometheus::Registry`) receives all SDK metric handles,
+    /// registered with this builder's `driver_name` and static metrics labels.
+    ///
+    /// When unset (the default), handles bind to the ambient `metrics` recorder
+    /// (e.g. one installed with `metrics_prometheus::try_install`). In both cases the
+    /// SDK records through a [`DefaultMetricsRecorder`] built at `build()` time.
+    pub fn with_metrics_recorder(
+        mut self,
+        recorder: Arc<dyn metrics::Recorder + Send + Sync>,
+    ) -> Self {
         self.metrics_recorder = Some(recorder);
         self
     }

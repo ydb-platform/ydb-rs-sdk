@@ -30,7 +30,7 @@ impl MetricsNames {
     pub fn new(
         driver_name: Option<String>,
         extra_labels: Vec<(String, String)>,
-        recorder: Option<&dyn metrics::Recorder>,
+        recorder: Option<&(dyn metrics::Recorder + Send + Sync)>,
     ) -> Self {
         let mut labels = vec![(
             "driver_name".to_string(),
