@@ -1,6 +1,7 @@
 pub(crate) mod auth;
 pub(crate) mod grpc;
 pub(crate) mod grpc_limits;
+pub(crate) mod metrics_interceptor;
 
 #[macro_use]
 mod macros;

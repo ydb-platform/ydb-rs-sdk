@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
-use crate::connection_pool::{Connection, ConnectionPool, RacyRoundRobin, Simple};
+use crate::client_metrics::MetricsRecorder;
+use crate::connection_pool::{Connection, ConnectionPool, RacyRoundRobin, Simple, endpoint_label};
 use crate::grpc_wrapper::grpc_limits::WithGrpcMaxMessageSize;
+use crate::grpc_wrapper::grpc_stream_wrapper::GrpcStreamMetrics;
+use crate::grpc_wrapper::metrics_interceptor::intern_endpoint;
 use crate::grpc_wrapper::raw_services::{GrpcServiceForDiscovery, Service};
 use crate::grpc_wrapper::runtime_interceptors::{InterceptedChannel, MultiInterceptor};
 use crate::load_balancer::{LoadBalancer, SharedLoadBalancer};
@@ -34,8 +37,9 @@ impl<BalancerT, ConnectionT: Connection> GrpcConnectionManagerGeneric<BalancerT,
         database: String,
         interceptor: MultiInterceptor,
         opts: GrpcOptions,
+        metrics: Arc<dyn MetricsRecorder>,
     ) -> Self {
-        let cp = ConnectionPool::new(opts.clone());
+        let cp = ConnectionPool::new(opts.clone(), metrics);
 
         Self {
             balancer,
@@ -73,7 +77,14 @@ impl<BalancerT, ConnectionT: Connection> GrpcConnectionManagerGeneric<BalancerT,
         let channel = Box::pin(self.connections_pool.connection(uri)).await?;
 
         let intercepted_channel = InterceptedChannel::new(channel, self.interceptor.clone());
-        Ok(new(intercepted_channel).with_grpc_max_message_size(self.opts.max_message_size))
+        let endpoint = intern_endpoint(&endpoint_label(uri));
+        let client = new(intercepted_channel)
+            .with_grpc_max_message_size(self.opts.max_message_size)
+            .with_stream_metrics(GrpcStreamMetrics::new(
+                self.connections_pool.metrics(),
+                endpoint,
+            ));
+        Ok(client)
     }
 
     #[instrument(name = "ydb.ConnectionManager.GetEndpoint", skip_all, fields(ydb.service.name = ?service))]

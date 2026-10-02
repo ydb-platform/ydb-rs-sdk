@@ -308,6 +308,7 @@ async fn listen_attach_stream(
 mod tests {
     use super::*;
     use crate::GrpcOptions;
+    use crate::client_metrics::DefaultMetricsRecorder;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 
@@ -319,6 +320,7 @@ mod tests {
             "bench".to_string(),
             MultiInterceptor::new(),
             GrpcOptions::default(),
+            Arc::new(DefaultMetricsRecorder::new()),
         )
     }
 

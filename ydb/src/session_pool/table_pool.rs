@@ -52,8 +52,11 @@ impl TableSessionPool {
 
 #[cfg(test)]
 mod test {
+    use std::sync::Arc;
+
     use super::TableSessionPool;
     use crate::GrpcOptions;
+    use crate::client_metrics::DefaultMetricsRecorder;
     use crate::errors::YdbResult;
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
@@ -76,6 +79,7 @@ mod test {
             "bench".to_string(),
             MultiInterceptor::new(),
             GrpcOptions::default(),
+            Arc::new(DefaultMetricsRecorder::new()),
         )
     }
 

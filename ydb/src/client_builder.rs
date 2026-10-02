@@ -12,6 +12,7 @@ use crate::grpc_connection_manager::{
     DiscoveryConnectionManager, GrpcConnectionManager, NoBalancer,
 };
 use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
+use crate::grpc_wrapper::metrics_interceptor::MetricsInterceptor;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::SharedLoadBalancer;
 use crate::{Client, Credentials, GrpcOptions, HasGrpcOptions, RetrySettings};
@@ -277,11 +278,12 @@ impl ClientBuilder {
     pub async fn build(mut self) -> YdbResult<Client> {
         validate_metrics_labels(&self.metrics_labels)?;
 
-        let metrics_recorder = Arc::new(DefaultMetricsRecorder::from_parts(
-            self.driver_name.take(),
-            std::mem::take(&mut self.metrics_labels),
-            self.metrics_recorder.take(),
-        ));
+        let metrics_recorder: Arc<dyn MetricsRecorder> =
+            Arc::new(DefaultMetricsRecorder::from_parts(
+                self.driver_name.take(),
+                std::mem::take(&mut self.metrics_labels),
+                self.metrics_recorder.take(),
+            ));
         metrics_recorder.client_new_counter().increment(1);
 
         let retry_settings = self
@@ -293,14 +295,16 @@ impl ClientBuilder {
             database: self.database.clone(),
         };
 
-        let interceptor =
-            MultiInterceptor::new().with_interceptor(AuthGrpcInterceptor::new(db_cred.clone())?);
+        let interceptor = MultiInterceptor::new()
+            .with_interceptor(MetricsInterceptor::new(Arc::clone(&metrics_recorder)))
+            .with_interceptor(AuthGrpcInterceptor::new(db_cred.clone())?);
 
         let discovery_connection_manager = DiscoveryConnectionManager::new(
             NoBalancer,
             db_cred.database.clone(),
             interceptor.clone(),
             self.grpc_opts.clone(),
+            Arc::clone(&metrics_recorder),
         );
 
         let discovery: Box<dyn Discovery> = match self.discovery {
@@ -327,6 +331,7 @@ impl ClientBuilder {
             db_cred.database.clone(),
             interceptor,
             self.grpc_opts.clone(),
+            metrics_recorder.clone(),
         );
 
         Client::init(
