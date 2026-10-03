@@ -44,6 +44,78 @@ impl StreamDirection {
     }
 }
 
+/// Acquire outcome for `ydb_session_pool_acquire_*` metrics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionPoolAcquireResult {
+    Ok,
+    Timeout,
+    Error,
+}
+
+impl SessionPoolAcquireResult {
+    pub(crate) fn as_label(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Timeout => "timeout",
+            Self::Error => "error",
+        }
+    }
+}
+
+/// Why a session was closed (`ydb_session_pool_sessions_closed_total`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionPoolCloseReason {
+    IdleTtl,
+    UsageLimit,
+    BadSession,
+    Shutdown,
+    KeepaliveFailed,
+}
+
+impl SessionPoolCloseReason {
+    pub(crate) fn as_label(self) -> &'static str {
+        match self {
+            Self::IdleTtl => "idle_ttl",
+            Self::UsageLimit => "usage_limit",
+            Self::BadSession => "bad_session",
+            Self::Shutdown => "shutdown",
+            Self::KeepaliveFailed => "keepalive_failed",
+        }
+    }
+}
+
+/// Synchronous session pool gauge values, re-emitted by the pool at every mutation
+/// site (never sampled by a timer).
+///
+/// The values are derived from the pool's own counters, so they are always consistent
+/// with `SessionPool::stats()`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SessionPoolGaugeSnapshot {
+    /// Sessions waiting in the idle stack (`state="idle"`).
+    pub idle: f64,
+    /// Sessions leased to callers (`state="active"`).
+    pub active: f64,
+    /// CreateSession RPCs in flight (`state="creating"`).
+    pub creating: f64,
+    /// Configured pool size limit (`ydb_session_pool_size_limit`).
+    pub limit: f64,
+    /// Callers waiting for a free session (`ydb_session_pool_pending_requests`).
+    pub pending: f64,
+}
+
+impl SessionPoolGaugeSnapshot {
+    /// Snapshot of a freshly created pool: nothing idle, active, or pending.
+    pub(crate) fn initial(limit: usize) -> Self {
+        Self {
+            idle: 0.0,
+            active: 0.0,
+            creating: 0.0,
+            limit: limit as f64,
+            pending: 0.0,
+        }
+    }
+}
+
 /// Access to the SDK's individual metric handles.
 ///
 /// SDK components record through the read-only handle getters only; they never touch
@@ -104,6 +176,30 @@ pub trait MetricsRecorder: Send + Sync {
         _direction: StreamDirection,
     ) {
     }
+
+    /// Emit the session pool gauges synchronously after a pool state change.
+    ///
+    /// All values are recomputed from the pool's own counters at the mutation site —
+    /// never sampled by a timer, so state between mutations is never stale.
+    fn session_pool_gauges(&self, _snapshot: SessionPoolGaugeSnapshot) {}
+
+    /// Record one acquire attempt outcome and its duration.
+    fn session_pool_acquire(&self, _result: SessionPoolAcquireResult, _duration: Duration) {}
+
+    /// Record a CreateSession(+Attach) duration (successful creations only).
+    fn session_pool_session_create(&self, _duration: Duration) {}
+
+    /// Count a successfully created session.
+    fn session_pool_session_created(&self) {}
+
+    /// Count a session close with its reason.
+    fn session_pool_session_closed(&self, _reason: SessionPoolCloseReason) {}
+
+    /// Record how long a session was leased to one caller.
+    fn session_pool_session_use(&self, _duration: Duration) {}
+
+    /// Record the outcome of the background session liveness (attach stream) watcher.
+    fn session_pool_keepalive(&self, _ok: bool) {}
 }
 
 /// Default [`MetricsRecorder`] implementation.
@@ -154,6 +250,17 @@ impl DefaultMetricsRecorder {
 impl Default for DefaultMetricsRecorder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl DefaultMetricsRecorder {
+    /// Run an emission closure either through the caller-provided backend or through
+    /// the ambient/global recorder.
+    fn record(&self, record: impl FnOnce()) {
+        match self._backend.as_deref() {
+            Some(recorder) => metrics::with_local_recorder(recorder, record),
+            None => record(),
+        }
     }
 }
 
@@ -215,10 +322,7 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             gauge!("ydb_grpc_connections", "endpoint" => endpoint, "state" => state)
                 .increment(delta);
         };
-        match self._backend.as_deref() {
-            Some(recorder) => metrics::with_local_recorder(recorder, record),
-            None => record(),
-        }
+        self.record(record);
     }
 
     fn grpc_connection_establish(&self, endpoint: &str, ok: bool, duration: Duration) {
@@ -228,10 +332,7 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             histogram!("ydb_grpc_connection_establish_milliseconds", "endpoint" => endpoint, "result" => result)
                 .record(duration.as_secs_f64() * 1000.0);
         };
-        match self._backend.as_deref() {
-            Some(recorder) => metrics::with_local_recorder(recorder, record),
-            None => record(),
-        }
+        self.record(record);
     }
 
     fn grpc_request(
@@ -256,10 +357,7 @@ impl MetricsRecorder for DefaultMetricsRecorder {
                     .increment(1);
             }
         };
-        match self._backend.as_deref() {
-            Some(recorder) => metrics::with_local_recorder(recorder, record),
-            None => record(),
-        }
+        self.record(record);
     }
 
     fn grpc_stream_message(
@@ -277,10 +375,67 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             counter!("ydb_grpc_stream_messages_total", "endpoint" => endpoint, "service" => service, "method" => method, "direction" => direction)
                 .increment(1);
         };
-        match self._backend.as_deref() {
-            Some(recorder) => metrics::with_local_recorder(recorder, record),
-            None => record(),
-        }
+        self.record(record);
+    }
+
+    fn session_pool_gauges(&self, snapshot: SessionPoolGaugeSnapshot) {
+        let record = || {
+            gauge!("ydb_session_pool_sessions", "state" => "idle").set(snapshot.idle);
+            gauge!("ydb_session_pool_sessions", "state" => "active").set(snapshot.active);
+            gauge!("ydb_session_pool_sessions", "state" => "creating").set(snapshot.creating);
+            gauge!("ydb_session_pool_size_limit").set(snapshot.limit);
+            gauge!("ydb_session_pool_pending_requests").set(snapshot.pending);
+        };
+        self.record(record);
+    }
+
+    fn session_pool_acquire(&self, result: SessionPoolAcquireResult, duration: Duration) {
+        let result = result.as_label();
+        let record = || {
+            counter!("ydb_session_pool_acquire_total", "result" => result).increment(1);
+            histogram!("ydb_session_pool_acquire_milliseconds", "result" => result)
+                .record(duration.as_secs_f64() * 1000.0);
+        };
+        self.record(record);
+    }
+
+    fn session_pool_session_create(&self, duration: Duration) {
+        let record = || {
+            histogram!("ydb_session_pool_session_create_milliseconds")
+                .record(duration.as_secs_f64() * 1000.0);
+        };
+        self.record(record);
+    }
+
+    fn session_pool_session_created(&self) {
+        let record = || {
+            counter!("ydb_session_pool_sessions_created_total").increment(1);
+        };
+        self.record(record);
+    }
+
+    fn session_pool_session_closed(&self, reason: SessionPoolCloseReason) {
+        let reason = reason.as_label();
+        let record = || {
+            counter!("ydb_session_pool_sessions_closed_total", "reason" => reason).increment(1);
+        };
+        self.record(record);
+    }
+
+    fn session_pool_session_use(&self, duration: Duration) {
+        let record = || {
+            histogram!("ydb_session_pool_session_use_milliseconds")
+                .record(duration.as_secs_f64() * 1000.0);
+        };
+        self.record(record);
+    }
+
+    fn session_pool_keepalive(&self, ok: bool) {
+        let result = if ok { "ok" } else { "error" };
+        let record = || {
+            counter!("ydb_session_pool_keepalive_total", "result" => result).increment(1);
+        };
+        self.record(record);
     }
 }
 

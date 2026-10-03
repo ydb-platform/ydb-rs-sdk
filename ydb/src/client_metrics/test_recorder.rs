@@ -126,6 +126,11 @@ impl TestRecorder {
         self.state_for(&key).lock().unwrap().gauge += delta;
     }
 
+    fn set_gauge_key(&self, name: &str, labels: &[(&str, &str)], value: f64) {
+        let key = owned_key(name, labels);
+        self.state_for(&key).lock().unwrap().gauge = value;
+    }
+
     fn last_key(&self, name: &str) -> Option<metrics::Key> {
         self.inner
             .order
@@ -145,6 +150,18 @@ impl TestRecorder {
             .unwrap()
             .iter()
             .filter(|(key, _)| key.name() == name)
+            .map(|(_, state)| state.lock().unwrap().counter)
+            .sum()
+    }
+
+    /// Counter total for `name` with a specific label value, e.g. `result=ok`.
+    pub fn counter_value_with_label(&self, name: &str, label: &str, value: &str) -> u64 {
+        self.inner
+            .states
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(key, _)| key.name() == name && labels_contain(key.labels(), label, value))
             .map(|(_, state)| state.lock().unwrap().counter)
             .sum()
     }
@@ -412,6 +429,79 @@ impl crate::client_metrics::MetricsRecorder for TestRecorder {
                 ("method", method),
                 ("direction", direction.as_label()),
             ],
+            1,
+        );
+    }
+
+    fn session_pool_gauges(&self, snapshot: crate::client_metrics::SessionPoolGaugeSnapshot) {
+        self.set_gauge_key(
+            "ydb_session_pool_sessions",
+            &[("state", "idle")],
+            snapshot.idle,
+        );
+        self.set_gauge_key(
+            "ydb_session_pool_sessions",
+            &[("state", "active")],
+            snapshot.active,
+        );
+        self.set_gauge_key(
+            "ydb_session_pool_sessions",
+            &[("state", "creating")],
+            snapshot.creating,
+        );
+        self.set_gauge_key("ydb_session_pool_size_limit", &[], snapshot.limit);
+        self.set_gauge_key("ydb_session_pool_pending_requests", &[], snapshot.pending);
+    }
+
+    fn session_pool_acquire(
+        &self,
+        result: crate::client_metrics::SessionPoolAcquireResult,
+        duration: Duration,
+    ) {
+        self.increment_counter_key(
+            "ydb_session_pool_acquire_total",
+            &[("result", result.as_label())],
+            1,
+        );
+        self.record_observation(
+            "ydb_session_pool_acquire_milliseconds",
+            &[("result", result.as_label())],
+            duration.as_secs_f64() * 1000.0,
+        );
+    }
+
+    fn session_pool_session_create(&self, duration: Duration) {
+        self.record_observation(
+            "ydb_session_pool_session_create_milliseconds",
+            &[],
+            duration.as_secs_f64() * 1000.0,
+        );
+    }
+
+    fn session_pool_session_created(&self) {
+        self.increment_counter_key("ydb_session_pool_sessions_created_total", &[], 1);
+    }
+
+    fn session_pool_session_closed(&self, reason: crate::client_metrics::SessionPoolCloseReason) {
+        self.increment_counter_key(
+            "ydb_session_pool_sessions_closed_total",
+            &[("reason", reason.as_label())],
+            1,
+        );
+    }
+
+    fn session_pool_session_use(&self, duration: Duration) {
+        self.record_observation(
+            "ydb_session_pool_session_use_milliseconds",
+            &[],
+            duration.as_secs_f64() * 1000.0,
+        );
+    }
+
+    fn session_pool_keepalive(&self, ok: bool) {
+        self.increment_counter_key(
+            "ydb_session_pool_keepalive_total",
+            &[("result", if ok { "ok" } else { "error" })],
             1,
         );
     }
