@@ -1,0 +1,38 @@
+name: ydb.tech examples
+
+on:
+  pull_request:
+  push:
+    branches: [master, docs/topic-snippets]
+
+concurrency:
+  group: ydb-tech-examples-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  examples:
+    name: Examples (ydb_tech)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      ydb:
+        image: ydbplatform/local-ydb:trunk
+        ports: ["2136:2136", "8765:8765"]
+        env:
+          YDB_USE_IN_MEMORY_PDISKS: true
+        options: '-h localhost'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: '1.96'
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
+      - run: bash ydb_tech/run.sh
+        env:
+          YDB_CONNECTION_STRING: grpc://localhost:2136/local
