@@ -33,6 +33,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets --no-deps --exclude=ydb-grpc -- -D warnings
-      - run: bash ydb_tech/run.sh
+      - run: bash ydb/examples/ydb_tech/run.sh
         env:
           YDB_CONNECTION_STRING: grpc://localhost:2136/local

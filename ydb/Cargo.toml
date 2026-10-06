@@ -87,4 +87,4 @@ uuid = { version = "1.17.0", features = ["v4"] }
 
 [[example]]
 name = "ydb-tech-topic"
-path = "../ydb_tech/topic/main.rs"
+path = "examples/ydb_tech/topic/main.rs"
