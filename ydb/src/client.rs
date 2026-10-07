@@ -60,6 +60,7 @@ impl Client {
             connection_manager.clone(),
             discovery.clone(),
             default_session_pool_settings(),
+            metrics_recorder.clone(),
         );
 
         let client = Client {
@@ -104,6 +105,7 @@ impl Client {
             self.connection_manager.clone(),
             self.discovery.clone(),
             settings,
+            self.metrics_recorder.clone(),
         )
         .await?;
         Ok(Self {

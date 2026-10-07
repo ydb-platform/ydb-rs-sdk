@@ -6,13 +6,16 @@ use http::Uri;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{instrument, trace, warn};
 
+use crate::client_metrics::{
+    MetricsRecorder, SessionPoolAcquireResult, SessionPoolCloseReason, SessionPoolGaugeSnapshot,
+};
 use crate::discovery::Discovery;
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
 use crate::grpc_wrapper::raw_services::Service;
 
-use super::session::{AttachedSession, CreatedSession, SessionCleanup};
+use super::session::{AttachedSession, CreatedSession, SessionCleanup, SessionCloseCause};
 
 /// Default pool size for [`SessionPoolSettings::default()`] and the driver built-in pool.
 ///
@@ -27,11 +30,27 @@ pub(crate) const DEFAULT_POOL_ACQUIRE_TIMEOUT: Duration = Duration::ZERO;
 
 /// Ensures `create_in_progress` is decremented when the outer future is dropped
 /// (e.g. per-call `with_operation_timeout` cancelling pool acquire + create).
-struct CreateInProgressGuard<'a>(&'a AtomicUsize);
+struct CreateInProgressGuard<'a> {
+    inner: &'a SessionPoolInner,
+}
 
 impl Drop for CreateInProgressGuard<'_> {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
+        self.inner.create_in_progress.fetch_sub(1, Ordering::SeqCst);
+        self.inner.update_session_pool_gauges();
+    }
+}
+
+/// Pairs with the manual `pending_acquires` increment in `acquire_permit`; keeps the
+/// pending gauge correct when the wait is cancelled or times out.
+struct PendingAcquireGuard<'a> {
+    inner: &'a SessionPoolInner,
+}
+
+impl Drop for PendingAcquireGuard<'_> {
+    fn drop(&mut self) {
+        self.inner.pending_acquires.fetch_sub(1, Ordering::SeqCst);
+        self.inner.update_session_pool_gauges();
     }
 }
 
@@ -170,8 +189,14 @@ impl SessionPoolSettings {
 /// Pooled explicit session lease. Not concurrent-safe: one logical owner at a time.
 ///
 /// Call [`Self::return_to_pool`] to make a healthy session reusable. Dropping a lease without
-/// returning it schedules session cleanup.
+/// returning it schedules session cleanup (see `SessionResource`).
+///
+/// The payload is boxed so holding a lease (in transaction and stream states) stays small.
 pub(crate) struct SessionPoolLease {
+    inner: Box<LeaseInner>,
+}
+
+struct LeaseInner {
     /// One permit represents this lease's exclusive use of one pool-capacity slot.
     permit: OwnedSemaphorePermit,
     record: SessionRecord,
@@ -184,38 +209,44 @@ impl SessionPoolLease {
         permit: OwnedSemaphorePermit,
         pool: Arc<SessionPoolInner>,
     ) -> Self {
+        let mut record = session.record;
+        // The session-use metric measures from the lease start; `last_used` doubles as
+        // the use-start marker until the release path recomputes it.
+        record.last_used = Instant::now();
         Self {
-            permit,
-            record: session.record,
-            pool,
+            inner: Box::new(LeaseInner {
+                permit,
+                record,
+                pool,
+            }),
         }
     }
 
     pub fn session_id(&self) -> &str {
-        self.record.session.session_id()
+        self.inner.record.session.session_id()
     }
 
     pub fn node_uri(&self) -> &Uri {
-        self.record.session.node_uri()
+        self.inner.record.session.node_uri()
     }
 
     pub fn ensure_healthy(&self) -> YdbResult<()> {
-        self.record.session.ensure_healthy()
+        self.inner.record.session.ensure_healthy()
     }
 
     pub(crate) fn cleanup_timeout(&self) -> Duration {
-        self.pool.settings.session_delete_timeout
+        self.inner.pool.settings.session_delete_timeout
     }
 
     /// Consume this lease and offer its session back to the pool. Pool policy may still discard
     /// an unhealthy, expired, or excess session.
     #[instrument(name = "ydb.SessionPool.ReturnSession", skip_all, fields(db.system.name = "ydb"))]
     pub fn return_to_pool(self) {
-        let Self {
+        let LeaseInner {
             permit,
             record,
             pool,
-        } = self;
+        } = *self.inner;
         pool.release_explicit_session(record, permit);
     }
 
@@ -237,7 +268,7 @@ impl SessionPoolLease {
 
     #[cfg(test)]
     pub(crate) fn invalidate(&mut self) {
-        self.record.session.invalidate();
+        self.inner.record.session.invalidate();
     }
 }
 
@@ -248,7 +279,7 @@ pub(crate) struct SessionPool {
 
 /// Session data shared by the pool ownership states below.
 struct SessionRecord {
-    session: AttachedSession,
+    pub(crate) session: AttachedSession,
     created: Instant,
     last_used: Instant,
     use_count: u64,
@@ -268,16 +299,29 @@ pub(super) struct SessionPoolObserver {
 }
 
 impl SessionPoolObserver {
+    /// Weak handle to the owning pool, shared with created sessions so abnormal
+    /// session drops can emit close metrics.
+    pub(super) fn pool_weak(&self) -> std::sync::Weak<SessionPoolInner> {
+        self.pool.clone()
+    }
+
     pub(super) fn node_shutdown(&self, node_uri: &Uri) {
         self.discovery.pessimization(node_uri);
         let Some(pool) = self.pool.upgrade() else {
             return;
         };
-        let _ = pool.drain_idle_for_node(node_uri);
+        pool.drain_idle_for_node(node_uri);
+    }
+
+    /// Report the outcome of a session's attach-stream (liveness) watcher.
+    pub(super) fn session_keepalive_finished(&self, ok: bool) {
+        if let Some(pool) = self.pool.upgrade() {
+            pool.session_keepalive_recorded(ok);
+        }
     }
 }
 
-struct SessionPoolInner {
+pub(super) struct SessionPoolInner {
     settings: SessionPoolSettings,
     acquire_timeout_ms: AtomicU64,
     connection_manager: GrpcConnectionManager,
@@ -287,6 +331,9 @@ struct SessionPoolInner {
     observer: SessionPoolObserver,
     create_in_progress: AtomicUsize,
     sessions_created: AtomicU64,
+    /// Callers currently waiting for a free session (pending gauge).
+    pending_acquires: AtomicUsize,
+    pub(super) metrics: Arc<dyn MetricsRecorder>,
     /// Stub create/close paths without RPC (see `session_pool_bench` and regression tests).
     #[cfg(test)]
     bench_mode: bool,
@@ -294,17 +341,46 @@ struct SessionPoolInner {
     bench_create_failures_remaining: AtomicUsize,
 }
 
+impl Drop for SessionPoolInner {
+    fn drop(&mut self) {
+        // Pool teardown: every session still idle is closed with the `shutdown`
+        // reason (spec §5 maps pool drop to `shutdown`). Leases hold an `Arc` to
+        // this struct, so by the time it drops no lease exists and the only
+        // remaining sessions are the idle ones owned by `explicit_idle`; they are
+        // dropped with the struct below and their close emissions are disarmed so
+        // only the shutdown reason is counted. Gauges are not re-emitted: the pool
+        // no longer exists, so its gauges carry no further meaning.
+        let remaining = {
+            let mut idle = self
+                .explicit_idle
+                // A poisoned lock must not panic during teardown unwinding; the
+                // guard contents stay valid and are still drained.
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            idle.drain(..).collect::<Vec<_>>()
+        };
+        for mut item in remaining {
+            item.record.session.disarm_close_emission();
+            self.metrics
+                .session_pool_session_closed(SessionPoolCloseReason::Shutdown);
+        }
+    }
+}
+
 impl SessionPool {
     pub fn new_explicit_sync(
         connection_manager: GrpcConnectionManager,
         discovery: Arc<dyn Discovery>,
         settings: SessionPoolSettings,
+        metrics: Arc<dyn MetricsRecorder>,
     ) -> Self {
         let settings = normalize_pool_settings(settings);
         let limit = settings.limit;
+        metrics.session_pool_gauges(SessionPoolGaugeSnapshot::initial(limit));
         let inner = Arc::new_cyclic(
             |weak: &std::sync::Weak<SessionPoolInner>| SessionPoolInner {
                 settings: settings.clone(),
+                // Settings-based (not zero) so tests can exercise acquire-timeout paths.
                 acquire_timeout_ms: AtomicU64::new(settings.acquire_timeout.as_millis() as u64),
                 connection_manager: connection_manager.clone(),
                 semaphore: Arc::new(Semaphore::new(limit)),
@@ -319,6 +395,8 @@ impl SessionPool {
                 },
                 create_in_progress: AtomicUsize::new(0),
                 sessions_created: AtomicU64::new(0),
+                pending_acquires: AtomicUsize::new(0),
+                metrics,
                 #[cfg(test)]
                 bench_mode: false,
                 #[cfg(test)]
@@ -334,10 +412,11 @@ impl SessionPool {
         connection_manager: GrpcConnectionManager,
         discovery: Arc<dyn Discovery>,
         settings: SessionPoolSettings,
+        metrics: Arc<dyn MetricsRecorder>,
     ) -> YdbResult<Self> {
         let settings = normalize_pool_settings(settings);
         let warm_up = settings.warm_up;
-        let pool = Self::new_explicit_sync(connection_manager, discovery, settings);
+        let pool = Self::new_explicit_sync(connection_manager, discovery, settings, metrics);
 
         if warm_up > 0 {
             SessionPoolInner::warm_up_parallel(pool.inner.clone(), warm_up).await?;
@@ -352,10 +431,33 @@ impl SessionPool {
 
     #[instrument(name = "ydb.SessionPool.AcquireSession", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn acquire_explicit(&self) -> YdbResult<SessionPoolLease> {
-        let permit = self.inner.acquire_permit().await?;
+        let start = Instant::now();
+        let result = self.acquire_explicit_inner().await;
+        let outcome = match &result {
+            Ok(_) => SessionPoolAcquireResult::Ok,
+            Err(AcquireSessionError::Timeout(_)) => SessionPoolAcquireResult::Timeout,
+            Err(AcquireSessionError::Other(_)) => SessionPoolAcquireResult::Error,
+        };
+        self.inner
+            .metrics
+            .session_pool_acquire(outcome, start.elapsed());
+        result.map_err(|err| match err {
+            AcquireSessionError::Timeout(error) | AcquireSessionError::Other(error) => error,
+        })
+    }
+
+    async fn acquire_explicit_inner(&self) -> Result<SessionPoolLease, AcquireSessionError> {
+        let permit = self
+            .inner
+            .acquire_permit()
+            .await
+            .map_err(AcquireSessionError::from)?;
 
         while let Some(item) = self.inner.pop_explicit_idle() {
-            if self.inner.should_close_explicit(&item.record) {
+            if let Some(reason) = self.inner.session_close_reason(&item.record) {
+                let mut item = item;
+                item.record.session.disarm_close_emission();
+                self.inner.metrics.session_pool_session_closed(reason);
                 drop(item);
                 continue;
             }
@@ -363,38 +465,108 @@ impl SessionPool {
                 session_id = item.record.session.session_id(),
                 "got query session from pool"
             );
+            self.inner.update_session_pool_gauges();
             return Ok(SessionPoolLease::new(item, permit, self.inner.clone()));
         }
 
-        let item = self.inner.create_explicit_session().await?;
-        trace!(
-            session_id = item.record.session.session_id(),
-            "created query session for pool"
-        );
-        Ok(SessionPoolLease::new(item, permit, self.inner.clone()))
+        match self.inner.create_explicit_session().await {
+            Ok(item) => {
+                trace!(
+                    session_id = item.record.session.session_id(),
+                    "created query session for pool"
+                );
+                self.inner.update_session_pool_gauges();
+                Ok(SessionPoolLease::new(item, permit, self.inner.clone()))
+            }
+            Err(error) => {
+                self.inner.update_session_pool_gauges();
+                Err(AcquireSessionError::Other(error))
+            }
+        }
+    }
+}
+
+/// Typed semaphore wait failure: distinguishes timeout from other errors for the
+/// acquire metrics without matching on error message text.
+enum AcquirePermitError {
+    Timeout(YdbError),
+    Closed,
+}
+
+/// Adds the create-session failure case on top of [`AcquirePermitError`].
+enum AcquireSessionError {
+    Timeout(YdbError),
+    Other(YdbError),
+}
+
+impl From<AcquirePermitError> for AcquireSessionError {
+    fn from(value: AcquirePermitError) -> Self {
+        match value {
+            AcquirePermitError::Timeout(error) => Self::Timeout(error),
+            AcquirePermitError::Closed => {
+                Self::Other(YdbError::Transport("session pool closed".to_string()))
+            }
+        }
     }
 }
 
 impl SessionPoolInner {
+    /// Count a session close that was not handled by an explicit pool close site:
+    /// the session record was dropped while its close emission was armed.
+    pub(super) fn record_abnormal_session_close(&self) {
+        self.metrics
+            .session_pool_session_closed(SessionPoolCloseReason::BadSession);
+        self.update_session_pool_gauges();
+    }
+
+    /// Record the outcome of a session's attach-stream (liveness) watcher.
+    pub(super) fn session_keepalive_recorded(&self, ok: bool) {
+        self.metrics.session_pool_keepalive(ok);
+    }
     fn acquire_timeout(&self) -> Duration {
         Duration::from_millis(self.acquire_timeout_ms.load(Ordering::Relaxed))
     }
 
-    async fn acquire_permit(&self) -> YdbResult<OwnedSemaphorePermit> {
+    async fn acquire_permit(&self) -> Result<OwnedSemaphorePermit, AcquirePermitError> {
         let acquire_timeout = self.acquire_timeout();
         let acquire = self.semaphore.clone().acquire_owned();
-        let permit = if acquire_timeout.is_zero() {
+
+        self.pending_acquires.fetch_add(1, Ordering::SeqCst);
+        self.update_session_pool_gauges();
+        // RAII pairing: the decrement must run even when the acquire future is
+        // cancelled mid-await (dropped `acquire_explicit`), otherwise the pending
+        // gauge leaks upward forever. Binding (not `let _ =`) keeps the guard alive
+        // until scope end.
+        let _pending = PendingAcquireGuard { inner: self };
+        let waited = if acquire_timeout.is_zero() {
             acquire.await
         } else {
-            tokio::time::timeout(acquire_timeout, acquire)
-                .await
-                .map_err(|_| {
-                    YdbError::Transport(format!(
+            match tokio::time::timeout(acquire_timeout, acquire).await {
+                Ok(permit) => permit,
+                Err(_) => {
+                    return Err(AcquirePermitError::Timeout(YdbError::Transport(format!(
                         "acquire session from pool timed out after {acquire_timeout:?}"
-                    ))
-                })?
+                    ))));
+                }
+            }
         };
-        permit.map_err(|_| YdbError::Transport("session pool closed".to_string()))
+        // `pending` (and the gauge decrement) drops at scope end, after the wait is over.
+        waited.map_err(|_| AcquirePermitError::Closed)
+    }
+
+    /// Re-emit the session pool gauges from the current internal counters.
+    ///
+    /// Called synchronously at every pool mutation site so gauge values never lag
+    /// the actual pool state; no timer-based snapshots are involved.
+    pub(super) fn update_session_pool_gauges(&self) {
+        let stats = self.stats();
+        self.metrics.session_pool_gauges(SessionPoolGaugeSnapshot {
+            idle: stats.idle as f64,
+            active: stats.in_use as f64,
+            creating: stats.create_in_progress as f64,
+            limit: stats.limit as f64,
+            pending: self.pending_acquires.load(Ordering::SeqCst) as f64,
+        });
     }
 
     fn stats(&self) -> SessionPoolStats {
@@ -471,30 +643,56 @@ impl SessionPoolInner {
                     Some(item)
                 }
             };
-            if let Some(item) = overflow {
+            if let Some(mut item) = overflow {
+                item.record.session.disarm_close_emission();
+                inner
+                    .metrics
+                    .session_pool_session_closed(SessionPoolCloseReason::UsageLimit);
                 drop(item);
             }
         }
+        inner.update_session_pool_gauges();
         Ok(())
     }
 
-    fn drain_idle_for_node(&self, node_uri: &Uri) -> Vec<IdleSession> {
-        let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
-        let mut drained = Vec::new();
-        let mut i = 0;
-        while i < idle.len() {
-            if idle[i].record.session.node_uri() == node_uri {
-                drained.push(idle.swap_remove(i));
-            } else {
-                i += 1;
+    /// Close every idle session attached to `node_uri` (pessimization / node shutdown).
+    ///
+    /// Drained sessions are counted with the `shutdown` close reason — the plan's
+    /// five-value reason list does not have a separate `node_shutdown` value, so node
+    /// draining maps onto it (the injection doc's `node_shutdown` label is an alias).
+    fn drain_idle_for_node(&self, node_uri: &Uri) {
+        let drained = {
+            let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
+            let mut drained = Vec::new();
+            let mut i = 0;
+            while i < idle.len() {
+                if idle[i].record.session.node_uri() == node_uri {
+                    drained.push(idle.swap_remove(i));
+                } else {
+                    i += 1;
+                }
             }
+            drained
+        };
+        if drained.is_empty() {
+            return;
         }
-        drained
+        for mut item in drained {
+            // Explicit close site: disarm the abnormal-drop emission so only the
+            // shutdown reason is counted for this session.
+            item.record.session.disarm_close_emission();
+            self.metrics
+                .session_pool_session_closed(SessionPoolCloseReason::Shutdown);
+        }
+        self.update_session_pool_gauges();
     }
 
     async fn create_explicit_session(&self) -> YdbResult<IdleSession> {
         self.create_in_progress.fetch_add(1, Ordering::SeqCst);
-        let _guard = CreateInProgressGuard(&self.create_in_progress);
+        self.update_session_pool_gauges();
+        // Drops at scope end, after the create attempt finished (also on cancellation
+        // of this future), decrementing `create_in_progress`.
+        let _guard = CreateInProgressGuard { inner: self };
         self.create_explicit_session_inner().await
     }
 
@@ -505,6 +703,7 @@ impl SessionPoolInner {
             return self.create_explicit_session_bench().await;
         }
 
+        let start = Instant::now();
         let node_uri = self.connection_manager.endpoint(Service::Query)?;
         let mut client = self
             .connection_manager
@@ -519,7 +718,12 @@ impl SessionPoolInner {
                 ))
             })?;
         let created = created?;
-        let created = CreatedSession::new(created.session_id, node_uri, self.cleanup.clone());
+        let created = CreatedSession::new(
+            created.session_id,
+            node_uri,
+            self.cleanup.clone(),
+            self.observer.pool_weak(),
+        );
         let session = tokio::time::timeout(
             create_timeout,
             created.attach(&mut client, self.observer.clone()),
@@ -532,6 +736,12 @@ impl SessionPoolInner {
         })?;
         let session = session?;
 
+        self.metrics.session_pool_session_create(start.elapsed());
+        self.now_session_created(session)
+    }
+
+    fn now_session_created(&self, session: AttachedSession) -> YdbResult<IdleSession> {
+        self.metrics.session_pool_session_created();
         let now = Instant::now();
         self.sessions_created.fetch_add(1, Ordering::Relaxed);
         Ok(IdleSession {
@@ -546,6 +756,16 @@ impl SessionPoolInner {
 
     #[cfg(test)]
     async fn create_explicit_session_bench(&self) -> YdbResult<IdleSession> {
+        let start = Instant::now();
+        let result = self.create_explicit_session_bench_inner().await;
+        if result.is_ok() {
+            self.metrics.session_pool_session_create(start.elapsed());
+        }
+        result
+    }
+
+    #[cfg(test)]
+    async fn create_explicit_session_bench_inner(&self) -> YdbResult<IdleSession> {
         if self.bench_create_failures_remaining.load(Ordering::SeqCst) > 0 {
             self.bench_create_failures_remaining
                 .fetch_sub(1, Ordering::SeqCst);
@@ -556,6 +776,7 @@ impl SessionPoolInner {
         static BENCH_SESSION_COUNTER: AtomicU64 = AtomicU64::new(0);
         let id = BENCH_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
         let node_uri = Uri::from_static("http://127.0.0.1/bench");
+        self.metrics.session_pool_session_created();
         let now = Instant::now();
         self.sessions_created.fetch_add(1, Ordering::Relaxed);
         Ok(IdleSession {
@@ -564,6 +785,7 @@ impl SessionPoolInner {
                     format!("bench-{id}"),
                     node_uri.clone(),
                     self.cleanup.clone(),
+                    self.observer.pool_weak(),
                 ),
                 created: now,
                 last_used: now,
@@ -577,21 +799,30 @@ impl SessionPoolInner {
         idle.pop()
     }
 
-    fn should_close_explicit(&self, item: &SessionRecord) -> bool {
-        session_should_close(
+    /// Close reason for a session record, if the pool policy says it must close.
+    fn session_close_reason(&self, item: &SessionRecord) -> Option<SessionPoolCloseReason> {
+        session_close_reason(
             &self.settings,
             item.use_count,
             item.created,
             item.last_used,
-            item.session.is_healthy(),
+            item.session.close_cause(),
         )
     }
 
     fn release_explicit_session(&self, mut item: SessionRecord, permit: OwnedSemaphorePermit) {
+        // `last_used` still holds the lease start marker (see `SessionPoolLease::new`).
+        self.metrics
+            .session_pool_session_use(item.last_used.elapsed());
         item.use_count += 1;
         item.last_used = Instant::now();
 
-        if self.should_close_explicit(&item) {
+        if let Some(reason) = self.session_close_reason(&item) {
+            // Disarm first: only this close reason may be counted for the session.
+            item.session.disarm_close_emission();
+            self.metrics.session_pool_session_closed(reason);
+            // Ordering-explicit: free the pool slot before the session cleanup RPC is
+            // scheduled, so a new acquirer can proceed while DeleteSession runs.
             drop(permit);
             drop(item);
         } else {
@@ -604,40 +835,60 @@ impl SessionPoolInner {
                     Some(item)
                 }
             };
+            // Ordering-explicit as above: slot first, session cleanup after.
             drop(permit);
-            if let Some(item) = overflow {
+            if let Some(mut item) = overflow {
+                item.session.disarm_close_emission();
+                self.metrics
+                    .session_pool_session_closed(SessionPoolCloseReason::UsageLimit);
                 drop(item);
             }
         }
+        self.update_session_pool_gauges();
     }
 }
 
-fn session_should_close(
+fn session_close_reason(
     settings: &SessionPoolSettings,
     use_count: u64,
     created: Instant,
     last_used: Instant,
-    is_healthy: bool,
-) -> bool {
-    if !is_healthy {
-        return true;
+    close_cause: SessionCloseCause,
+) -> Option<SessionPoolCloseReason> {
+    match close_cause {
+        SessionCloseCause::Healthy => {}
+        SessionCloseCause::Broken => return Some(SessionPoolCloseReason::BadSession),
+        SessionCloseCause::KeepaliveFailed => {
+            return Some(SessionPoolCloseReason::KeepaliveFailed);
+        }
     }
     if settings.item_usage_limit > 0 && use_count >= settings.item_usage_limit {
-        return true;
+        return Some(SessionPoolCloseReason::UsageLimit);
     }
     if settings.item_usage_ttl > Duration::ZERO && created.elapsed() >= settings.item_usage_ttl {
-        return true;
+        return Some(SessionPoolCloseReason::UsageLimit);
     }
     if settings.idle_ttl > Duration::ZERO && last_used.elapsed() >= settings.idle_ttl {
-        return true;
+        return Some(SessionPoolCloseReason::IdleTtl);
     }
-    false
+    None
 }
 
 #[cfg(test)]
 impl SessionPool {
     /// Explicit pool backed by in-memory stub sessions (no CreateSession / Attach / Delete RPC).
     pub(crate) fn new_explicit_bench(settings: SessionPoolSettings) -> Self {
+        Self::new_explicit_bench_with_metrics(
+            settings,
+            Arc::new(crate::client_metrics::DefaultMetricsRecorder::new()),
+        )
+    }
+
+    /// Like [`Self::new_explicit_bench`], but recording into a caller-provided recorder.
+    pub(crate) fn new_explicit_bench_with_metrics(
+        settings: SessionPoolSettings,
+        metrics: Arc<dyn MetricsRecorder>,
+    ) -> Self {
         use crate::GrpcOptions;
         use crate::client_metrics::DefaultMetricsRecorder;
         use crate::discovery::StaticDiscovery;
@@ -648,6 +899,7 @@ impl SessionPool {
         let settings = normalize_pool_settings(settings);
         let warm_up = settings.warm_up;
         let limit = settings.limit;
+        metrics.session_pool_gauges(SessionPoolGaugeSnapshot::initial(limit));
         let connection_manager = GrpcConnectionManager::new(
             SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
                 Uri::from_static("http://127.0.0.1/bench"),
@@ -664,7 +916,8 @@ impl SessionPool {
         );
         let inner = Arc::new_cyclic(|weak| SessionPoolInner {
             settings: settings.clone(),
-            acquire_timeout_ms: AtomicU64::new(0),
+            // Settings-based (not zero) so tests can exercise acquire-timeout paths.
+            acquire_timeout_ms: AtomicU64::new(settings.acquire_timeout.as_millis() as u64),
             connection_manager: connection_manager.clone(),
             semaphore: Arc::new(Semaphore::new(limit)),
             explicit_idle: Mutex::new(Vec::new()),
@@ -675,6 +928,8 @@ impl SessionPool {
             },
             create_in_progress: AtomicUsize::new(0),
             sessions_created: AtomicU64::new(0),
+            pending_acquires: AtomicUsize::new(0),
+            metrics,
             bench_mode: true,
             bench_create_failures_remaining: AtomicUsize::new(0),
         });
@@ -690,6 +945,7 @@ impl SessionPool {
                             format!("bench-prefill-{i}"),
                             node_uri.clone(),
                             inner.cleanup.clone(),
+                            Arc::downgrade(&inner),
                         ),
                         created: now,
                         last_used: now,
@@ -716,6 +972,11 @@ impl SessionPool {
 
     pub(crate) async fn warm_up_for_tests(&self, count: usize) -> YdbResult<()> {
         SessionPoolInner::warm_up_parallel(self.inner.clone(), count).await
+    }
+
+    /// Observer access for metrics tests driving node shutdown drain.
+    pub(super) fn observer_for_metrics_tests(&self) -> &SessionPoolObserver {
+        &self.inner.observer
     }
 }
 
@@ -761,7 +1022,7 @@ mod unit_tests {
     }
 
     #[test]
-    fn session_should_close_respects_usage_limit_and_ttl() {
+    fn session_close_reason_respects_usage_limit_and_ttl() {
         let settings = SessionPoolSettings {
             item_usage_limit: 3,
             item_usage_ttl: Duration::from_secs(60),
@@ -770,12 +1031,28 @@ mod unit_tests {
         };
         let created = Instant::now();
         let last_used = Instant::now();
-        assert!(!session_should_close(
-            &settings, 2, created, last_used, true,
-        ));
-        assert!(session_should_close(&settings, 3, created, last_used, true));
-        assert!(session_should_close(
-            &settings, 0, created, last_used, false,
-        ));
+        let healthy = SessionCloseCause::Healthy;
+        assert_eq!(
+            session_close_reason(&settings, 2, created, last_used, healthy),
+            None
+        );
+        assert_eq!(
+            session_close_reason(&settings, 3, created, last_used, healthy),
+            Some(SessionPoolCloseReason::UsageLimit)
+        );
+        assert_eq!(
+            session_close_reason(&settings, 0, created, last_used, SessionCloseCause::Broken),
+            Some(SessionPoolCloseReason::BadSession)
+        );
+        assert_eq!(
+            session_close_reason(
+                &settings,
+                0,
+                created,
+                last_used,
+                SessionCloseCause::KeepaliveFailed
+            ),
+            Some(SessionPoolCloseReason::KeepaliveFailed)
+        );
     }
 }
