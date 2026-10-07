@@ -115,7 +115,7 @@ type ServiceMethodCache = RwLock<HashMap<String, (Arc<str>, Arc<str>)>>;
 type EndpointCache = RwLock<HashMap<String, Arc<str>>>;
 
 /// gRPC status codes with Prometheus-friendly snake-case label names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum GrpcCode {
     Ok,
     Cancelled,
@@ -157,6 +157,33 @@ impl GrpcCode {
             Self::DataLoss => "data_loss",
             Self::Unauthenticated => "unauthenticated",
         }
+    }
+
+    /// Inverse of [`Self::as_label`], for mapping label strings back to the
+    /// closed code set (used by the metric handle caches). Returns `None` for
+    /// values outside the set.
+    pub(crate) fn from_label(label: &str) -> Option<Self> {
+        let code = match label {
+            "ok" => Self::Ok,
+            "cancelled" => Self::Cancelled,
+            "unknown" => Self::Unknown,
+            "invalid_argument" => Self::InvalidArgument,
+            "deadline_exceeded" => Self::DeadlineExceeded,
+            "not_found" => Self::NotFound,
+            "already_exists" => Self::AlreadyExists,
+            "permission_denied" => Self::PermissionDenied,
+            "resource_exhausted" => Self::ResourceExhausted,
+            "failed_precondition" => Self::FailedPrecondition,
+            "aborted" => Self::Aborted,
+            "out_of_range" => Self::OutOfRange,
+            "unimplemented" => Self::Unimplemented,
+            "internal" => Self::Internal,
+            "unavailable" => Self::Unavailable,
+            "data_loss" => Self::DataLoss,
+            "unauthenticated" => Self::Unauthenticated,
+            _ => return None,
+        };
+        Some(code)
     }
 
     fn from_i32(value: i32) -> Self {
@@ -444,5 +471,18 @@ mod tests {
         assert_eq!(GrpcCode::from_i32(4).as_label(), "deadline_exceeded");
         assert_eq!(GrpcCode::from_i32(14).as_label(), "unavailable");
         assert_eq!(GrpcCode::from_i32(99).as_label(), "unknown");
+    }
+
+    #[test]
+    fn grpc_code_from_label_round_trips() {
+        for code in [
+            GrpcCode::Ok,
+            GrpcCode::DeadlineExceeded,
+            GrpcCode::Unavailable,
+            GrpcCode::Unauthenticated,
+        ] {
+            assert_eq!(GrpcCode::from_label(code.as_label()), Some(code));
+        }
+        assert_eq!(GrpcCode::from_label("not-a-grpc-code"), None);
     }
 }

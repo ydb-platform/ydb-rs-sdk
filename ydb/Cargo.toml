@@ -74,6 +74,7 @@ chrono = { version = "0.4", default-features = false, features = [
     "clock",
     "std",
 ] }
+criterion = "0.8"
 lazy_static = "1.4"
 mockall = "0.14"
 ntest = "0.7"
@@ -84,3 +85,7 @@ tokio = { version = "1.22", features = ["test-util"] }
 tracing-opentelemetry = "0.33.0"
 tracing-test = "0.2.1"
 uuid = { version = "1.17.0", features = ["v4"] }
+
+[[bench]]
+name = "metrics_dynamic_cache"
+harness = false
