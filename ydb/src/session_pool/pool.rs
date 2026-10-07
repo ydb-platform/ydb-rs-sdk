@@ -639,6 +639,7 @@ impl SessionPool {
     /// Explicit pool backed by in-memory stub sessions (no CreateSession / Attach / Delete RPC).
     pub(crate) fn new_explicit_bench(settings: SessionPoolSettings) -> Self {
         use crate::GrpcOptions;
+        use crate::client_metrics::DefaultMetricsRecorder;
         use crate::discovery::StaticDiscovery;
         use crate::grpc_connection_manager::GrpcConnectionManager;
         use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
@@ -654,6 +655,7 @@ impl SessionPool {
             "bench".to_string(),
             MultiInterceptor::new(),
             GrpcOptions::default(),
+            Arc::new(DefaultMetricsRecorder::new()),
         );
 
         let discovery: Arc<dyn Discovery> = Arc::new(

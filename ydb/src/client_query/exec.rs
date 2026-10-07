@@ -989,6 +989,7 @@ mod unit_tests {
             "bench".to_string(),
             MultiInterceptor::new(),
             GrpcOptions::default(),
+            Arc::new(DefaultMetricsRecorder::new()),
         )
     }
 

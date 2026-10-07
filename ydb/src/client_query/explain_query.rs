@@ -157,6 +157,7 @@ mod unit_tests {
                 "test".to_string(),
                 MultiInterceptor::new(),
                 GrpcOptions::default(),
+                Arc::new(DefaultMetricsRecorder::new()),
             ),
             session_pool: SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
             retry_settings: RetrySettings::with_default_backoff(),
