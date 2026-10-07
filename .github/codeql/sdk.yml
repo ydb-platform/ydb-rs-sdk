@@ -10,4 +10,5 @@ paths:
 
 paths-ignore:
   - "ydb-grpc/**"
+  - "**/tests/**"
   - "**/*_test*.rs"
