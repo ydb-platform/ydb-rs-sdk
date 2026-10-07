@@ -999,7 +999,7 @@ mod unit_tests {
             lease,
             TransactionOptions::default(),
             None,
-            MetricsNames::new(None),
+            MetricsNames::new(None, Vec::new(), None),
         )
     }
 

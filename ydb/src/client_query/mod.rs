@@ -647,7 +647,7 @@ mod unit_tests {
             lease,
             TransactionOptions::default(),
             None,
-            MetricsNames::new(None),
+            MetricsNames::new(None, Vec::new(), None),
         )
     }
 
@@ -690,7 +690,7 @@ mod unit_tests {
             test_connection_manager(),
             pool.clone(),
             RetrySettings::dont_retry(),
-            MetricsNames::new(None),
+            MetricsNames::new(None, Vec::new(), None),
         );
         let observed_pool = pool.clone();
 
@@ -715,7 +715,7 @@ mod unit_tests {
             test_connection_manager(),
             pool,
             RetrySettings::dont_retry(),
-            MetricsNames::new(None),
+            MetricsNames::new(None, Vec::new(), None),
         );
         let callback_called = Arc::new(AtomicBool::new(false));
         let observed_called = callback_called.clone();
@@ -741,7 +741,7 @@ mod unit_tests {
             test_connection_manager(),
             pool,
             RetrySettings::dont_retry(),
-            MetricsNames::new(None),
+            MetricsNames::new(None, Vec::new(), None),
         );
         let callback_called = Arc::new(AtomicBool::new(false));
 
@@ -780,7 +780,7 @@ mod unit_tests {
             test_connection_manager(),
             pool,
             RetrySettings::with_default_backoff(),
-            MetricsNames::new(None),
+            MetricsNames::new(None, Vec::new(), None),
         );
         let callback_calls = Arc::new(AtomicUsize::new(0));
         let observed_calls = callback_calls.clone();

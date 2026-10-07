@@ -22,17 +22,22 @@ pub(crate) struct MetricsNames {
 
 impl Default for MetricsNames {
     fn default() -> Self {
-        MetricsNames::new(None)
+        MetricsNames::new(None, Vec::new(), None)
     }
 }
 
 impl MetricsNames {
-    pub fn new(driver_name: Option<String>) -> Self {
-        let labels = [(
-            "driver_name",
-            driver_name.unwrap_or(DEFAULT_DRIVER_NAME.to_string()),
+    pub fn new(
+        driver_name: Option<String>,
+        extra_labels: Vec<(String, String)>,
+        recorder: Option<&dyn metrics::Recorder>,
+    ) -> Self {
+        let mut labels = vec![(
+            "driver_name".to_string(),
+            driver_name.unwrap_or_else(|| DEFAULT_DRIVER_NAME.to_string()),
         )];
-        Self {
+        labels.extend(extra_labels);
+        let build = || Self {
             client_new_counter: counter!(description: "ydb new client counter", "ydb_new_client_counter", &labels),
             client_new_table_client_counter: counter!(description: "ydb new table client counter", "ydb_new_table_client_counter", &labels),
             client_new_query_client_counter: counter!(description: "ydb new query client counter", "ydb_new_query_client_counter", &labels),
@@ -45,6 +50,10 @@ impl MetricsNames {
             client_transaction_rollback_counter: counter!(description: "ydb client transaction rollback counter", "ydb_client_transaction_rollback_counter", &labels),
             client_row_query_time_histogram: histogram!(description: "ydb row query time histogram", "ydb_row_query_time_histogram", &labels),
             client_transaction_row_query_time_histogram: histogram!(description: "ydb transaction row query time histogram", "ydb_transaction_row_query_time_histogram", &labels),
+        };
+        match recorder {
+            Some(recorder) => metrics::with_local_recorder(recorder, build),
+            None => build(),
         }
     }
 }

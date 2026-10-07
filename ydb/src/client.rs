@@ -15,6 +15,7 @@ use crate::waiter::Waiter;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::client_metrics::MetricsRecorder;
 use crate::client_metrics::names::MetricsNames;
 use crate::client_topic::client::TopicClient;
 use crate::client_topic::compression::{Executor, default_executor};
@@ -37,9 +38,12 @@ pub struct Client {
     session_pool: SessionPool,
     retry_settings: RetrySettings,
     metrics_names: MetricsNames,
+    metrics_recorder: Option<MetricsRecorder>,
 }
 
 impl Client {
+    // Constructor plumbing mirrors the Client fields one-to-one; bundling would obscure that.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn init(
         credentials: DBCredentials,
         discovery: Arc<dyn Discovery>,
@@ -48,6 +52,7 @@ impl Client {
         executor: Option<Arc<dyn Executor>>,
         retry_settings: RetrySettings,
         metrics_names: MetricsNames,
+        metrics_recorder: Option<MetricsRecorder>,
     ) -> YdbResult<Self> {
         let executor = match executor {
             Some(e) => e,
@@ -69,6 +74,7 @@ impl Client {
             session_pool,
             retry_settings,
             metrics_names,
+            metrics_recorder,
         };
         client.wait().await?;
 
@@ -89,6 +95,7 @@ impl Client {
             session_pool: self.session_pool.clone(),
             retry_settings,
             metrics_names: self.metrics_names.clone(),
+            metrics_recorder: self.metrics_recorder.clone(),
         }
     }
 

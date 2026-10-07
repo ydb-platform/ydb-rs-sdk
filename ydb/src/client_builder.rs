@@ -1,4 +1,5 @@
 use crate::client_common::{DBCredentials, TokenCache};
+use crate::client_metrics::MetricsRecorder;
 use crate::client_metrics::names::MetricsNames;
 use crate::client_topic::compression::Executor;
 use crate::credentials::{
@@ -17,7 +18,7 @@ use crate::load_balancer::SharedLoadBalancer;
 use crate::{Client, Credentials, GrpcOptions, HasGrpcOptions, RetrySettings};
 use http::Uri;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -237,6 +238,8 @@ pub struct ClientBuilder {
     executor: Option<Arc<dyn Executor>>,
     retry_settings: Option<RetrySettings>,
     driver_name: Option<String>,
+    metrics_recorder: Option<MetricsRecorder>,
+    metrics_labels: Vec<(String, String)>,
 }
 
 impl ClientBuilder {
@@ -273,7 +276,13 @@ impl ClientBuilder {
     }
 
     pub async fn build(self) -> YdbResult<Client> {
-        let metrics_names = MetricsNames::new(self.driver_name);
+        validate_metrics_labels(&self.metrics_labels)?;
+
+        let metrics_names = MetricsNames::new(
+            self.driver_name,
+            self.metrics_labels,
+            self.metrics_recorder.as_ref().map(|r| r.as_dyn()),
+        );
 
         metrics_names.client_new_counter.increment(1);
 
@@ -330,6 +339,7 @@ impl ClientBuilder {
             self.executor,
             retry_settings,
             metrics_names,
+            self.metrics_recorder,
         )
         .await
     }
@@ -390,6 +400,49 @@ impl ClientBuilder {
         self
     }
 
+    /// Use a caller-provided metrics backend instead of the ambient/global recorder.
+    ///
+    /// When unset (the default), SDK metrics are recorded through the ambient `metrics`
+    /// recorder (e.g. one installed with `metrics_prometheus::try_install`).
+    pub fn with_metrics_recorder(mut self, recorder: MetricsRecorder) -> Self {
+        self.metrics_recorder = Some(recorder);
+        self
+    }
+
+    /// Add one static label attached to all SDK metrics.
+    ///
+    /// Labels accumulate across calls and are emitted in insertion order after
+    /// the SDK-owned `driver_name` label. Values are fixed per client at
+    /// `build()` time, so keep them static and low-cardinality (e.g. `env`,
+    /// `app`); high-cardinality values inflate the metrics backend.
+    ///
+    /// The `driver_name` key is reserved; use [`ClientBuilder::with_driver_name`]
+    /// instead. Duplicate keys and the reserved key make `build()` fail.
+    pub fn with_metrics_label<K: Into<String>, V: Into<String>>(
+        mut self,
+        key: K,
+        value: V,
+    ) -> Self {
+        self.metrics_labels.push((key.into(), value.into()));
+        self
+    }
+
+    /// Add a set of static labels attached to all SDK metrics, in iteration order.
+    ///
+    /// Same semantics as [`ClientBuilder::with_metrics_label`]; may be called
+    /// repeatedly and preserves call order. Duplicate keys and the reserved
+    /// `driver_name` key make `build()` fail.
+    pub fn with_metrics_labels<I, K, V>(mut self, labels: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        self.metrics_labels
+            .extend(labels.into_iter().map(|(k, v)| (k.into(), v.into())));
+        self
+    }
+
     fn new() -> Self {
         Self {
             credentials: credentials_ref(AccessTokenCredentials::from("")),
@@ -402,8 +455,31 @@ impl ClientBuilder {
             executor: None,
             retry_settings: None,
             driver_name: None,
+            metrics_recorder: None,
+            metrics_labels: Vec::new(),
         }
     }
+}
+
+/// Check user-supplied static metric labels before any work is done in `build()`:
+/// the `driver_name` key is reserved for the SDK, and duplicate keys would produce
+/// ambiguous metric series.
+fn validate_metrics_labels(labels: &[(String, String)]) -> YdbResult<()> {
+    let mut seen: HashSet<&str> = HashSet::from(["driver_name"]);
+    for (key, _) in labels {
+        if key == "driver_name" {
+            return Err(YdbError::Custom(
+                "reserved metrics label key 'driver_name'; use ClientBuilder::with_driver_name instead"
+                    .to_string(),
+            ));
+        }
+        if !seen.insert(key.as_str()) {
+            return Err(YdbError::Custom(format!(
+                "duplicate metrics label key '{key}'"
+            )));
+        }
+    }
+    Ok(())
 }
 
 impl HasGrpcOptions for ClientBuilder {
