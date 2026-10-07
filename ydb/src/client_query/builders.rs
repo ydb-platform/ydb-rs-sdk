@@ -221,12 +221,12 @@ impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OneRow<T>, S> {
             let delta = start.elapsed();
             match &self.core {
                 ExecTarget::Client(core) => core
-                    .metrics_names
-                    .client_row_query_time_histogram
+                    .metrics_recorder
+                    .client_row_query_time_histogram()
                     .record(delta.as_secs_f64()),
                 ExecTarget::Tx(core) => core
-                    .metrics_names
-                    .client_transaction_row_query_time_histogram
+                    .metrics_recorder
+                    .client_transaction_row_query_time_histogram()
                     .record(delta.as_secs_f64()),
             }
             T::from_row(row)
@@ -248,12 +248,12 @@ impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OptionalRow<T>, S
             let delta = start.elapsed();
             match &self.core {
                 ExecTarget::Client(core) => core
-                    .metrics_names
-                    .client_row_query_time_histogram
+                    .metrics_recorder
+                    .client_row_query_time_histogram()
                     .record(delta.as_secs_f64()),
                 ExecTarget::Tx(core) => core
-                    .metrics_names
-                    .client_transaction_row_query_time_histogram
+                    .metrics_recorder
+                    .client_transaction_row_query_time_histogram()
                     .record(delta.as_secs_f64()),
             }
             row
