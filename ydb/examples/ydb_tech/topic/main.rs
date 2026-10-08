@@ -2,8 +2,8 @@ use std::time::{Duration, SystemTime};
 
 use ydb::{
     AlterTopicOptionsBuilder, ClientBuilder, Codec, ConsumerBuilder, CreateTopicOptionsBuilder,
-    DescribeTopicOptionsBuilder, PartitioningStrategy, TopicReaderOptions, TopicSelector,
-    TopicSelectors, TopicWriterMessage, TopicWriterOptions, Transaction, YdbError, closure,
+    DescribeTopicOptionsBuilder, TopicReaderOptions, TopicSelector, TopicSelectors, TopicWriterMessage,
+    TopicWriterOptions, Transaction, YdbError, closure,
 };
 
 #[tokio::main]
@@ -30,7 +30,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let topic_path = format!("ydb_tech_{}", uuid::Uuid::new_v4().simple());
     let second_topic = format!("{topic_path}_another");
     let consumers = vec![
-        ConsumerBuilder::default().name("consumer".into()).build()?,
+        ConsumerBuilder::default().name("my-consumer".into()).build()?,
         ConsumerBuilder::default()
             .name("selectors".into())
             .build()?,
@@ -44,13 +44,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             topic_path.clone(),
             CreateTopicOptionsBuilder::default()
                 .min_active_partitions(3)
-                .partition_count_limit(5)
                 .supported_codecs(vec![Codec::RAW, Codec::ZSTD])
-                .consumers(consumers)
                 .build()?,
         )
         .await?;
     // [END topic_create]
+    topic_client
+        .alter_topic(
+            topic_path.clone(),
+            AlterTopicOptionsBuilder::default()
+                .set_partition_count_limit(5)
+                .add_consumers(consumers)
+                .build()?,
+        )
+        .await?;
     let result = async {
         topic_client
             .create_topic(
@@ -97,8 +104,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             .create_writer_with_params(
                 TopicWriterOptions::builder()
                     .topic_path(topic_path.clone())
-                    .producer_id("ydb-tech-producer".to_owned())
-                    .partitioning(PartitioningStrategy::PartitionId(0))
+                    .producer_id("group-id".to_owned())
                     .build(),
             )
             .await?;
@@ -108,17 +114,26 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         writer
             .write(
                 TopicWriterMessage::builder()
-                    .data(b"buffered".to_vec())
+                    .data(b"payload".to_vec())
                     .build(),
             )
             .await?;
+        writer.stop().await?;
         // [END topic_write]
 
+        let writer = topic_client
+            .create_writer_with_params(
+                TopicWriterOptions::builder()
+                    .topic_path(topic_path.clone())
+                    .producer_id("group-id".to_owned())
+                    .build(),
+            )
+            .await?;
         // [BEGIN topic_write_ack]
         writer
             .write_with_ack(
                 TopicWriterMessage::builder()
-                    .data(b"acknowledged".to_vec())
+                    .data(b"payload".to_vec())
                     .build(),
             )
             .await?;
@@ -126,21 +141,23 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         writer.stop().await?;
 
         // [BEGIN topic_start_reader]
-        let mut reader = topic_client.create_reader("consumer", &topic_path).await?;
+        let mut reader = topic_client.create_reader("my-consumer", &topic_path).await?;
         // [END topic_start_reader]
         let mut payloads = Vec::new();
         while payloads.len() < 2 {
             // [BEGIN topic_read_commit]
             let mut batch = reader.read_batch().await?;
+            reader.commit(batch.get_commit_marker())?;
+            // or with waiting for ack from the server:
+            reader.commit_with_ack(batch.get_commit_marker()).await?;
+            // [END topic_read_commit]
             for message in &mut batch.messages {
                 if let Some(payload) = message.read_and_take().await? {
                     payloads.push(payload);
                 }
             }
-            reader.commit_with_ack(batch.get_commit_marker()).await?;
-            // [END topic_read_commit]
         }
-        if payloads != vec![b"buffered".to_vec(), b"acknowledged".to_vec()] {
+        if payloads != vec![b"payload".to_vec(), b"payload".to_vec()] {
             return Err(YdbError::Custom("Unexpected topic payloads".into()));
         }
         drop(reader);
@@ -151,14 +168,10 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 TopicReaderOptions::builder()
                     .consumer("selectors")
                     .topic(TopicSelectors(vec![
-                        TopicSelector::builder()
-                            .path(topic_path.clone())
-                            .partition_ids(vec![0])
-                            .build(),
+                        TopicSelector::new(topic_path.clone()),
                         TopicSelector::builder()
                             .path(second_topic.clone())
-                            .partition_ids(vec![1])
-                            .read_from(SystemTime::UNIX_EPOCH)
+                            .read_from(SystemTime::now() - Duration::from_secs(3600))
                             .build(),
                     ]))
                     .build(),
@@ -185,13 +198,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                     while *received < 2 {
                         // [BEGIN topic_read_tx]
                         let batch = reader.pop_batch_in_tx(tx).await?;
+                        // processing batch.messages and committing the transaction
+                        // [END topic_read_tx]
                         for message in &batch.messages {
                             tracing::info!(
                                 offset = message.offset,
                                 "Received a message in transaction"
                             );
                         }
-                        // [END topic_read_tx]
                         *received += batch.messages.len();
                     }
                     Ok(())
