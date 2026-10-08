@@ -97,8 +97,8 @@ pub(super) struct MessageBuffer {
     /// All partition sessions owned by this reader, ended or not, until `stop`.
     entries: HashMap<PartitionSessionId, PartitionEntry>,
 
-    /// Partition id -> owning session id, kept in sync with `entries`.
-    partition_to_session: HashMap<PartitionId, PartitionSessionId>,
+    /// (Topic, partition id) -> owning session id, kept in sync with `entries`.
+    partition_to_session: HashMap<(String, PartitionId), PartitionSessionId>,
 
     /// Ended (input-closed) sessions in end order. Drained front-first before
     /// any round-robin session, which keeps each parent ahead of its children.
@@ -113,8 +113,9 @@ impl MessageBuffer {
     pub(super) fn start(&mut self, session: PartitionSession) -> YdbResult<()> {
         let psid = session.partition_session_id;
         let pid = session.partition_id;
+        let partition_key = (session.topic.clone(), pid);
 
-        if let Some(existing) = self.partition_to_session.get(&pid) {
+        if let Some(existing) = self.partition_to_session.get(&partition_key) {
             return Err(YdbError::custom(format!(
                 "topic reader start partition session: duplicate partition (partition {pid}, new session {psid}, existing session {existing})"
             )));
@@ -128,7 +129,7 @@ impl MessageBuffer {
 
         self.round_robin.push(psid);
 
-        self.partition_to_session.insert(pid, psid);
+        self.partition_to_session.insert(partition_key, psid);
         self.entries.insert(psid, PartitionEntry::new(session));
 
         Ok(())
@@ -309,8 +310,9 @@ impl MessageBuffer {
     ) -> YdbResult<PartitionEntry> {
         let entry = self.entry(partition_session_id, callsite)?;
         let partition_id = entry.session.partition_id;
+        let partition_key = (entry.session.topic.clone(), partition_id);
 
-        match self.partition_to_session.get(&partition_id) {
+        match self.partition_to_session.get(&partition_key) {
             Some(stored_session_id) if *stored_session_id == partition_session_id => {}
             Some(stored_session_id) => {
                 return Err(YdbError::custom(format!(
@@ -324,7 +326,7 @@ impl MessageBuffer {
             }
         }
 
-        self.partition_to_session.remove(&partition_id);
+        self.partition_to_session.remove(&partition_key);
         self.round_robin.remove(partition_session_id);
 
         self.entries.remove(&partition_session_id).ok_or_else(|| {
@@ -337,10 +339,12 @@ impl MessageBuffer {
     #[cfg(test)]
     pub(super) fn replace_partition_mapping(
         &mut self,
+        topic: &str,
         partition_id: PartitionId,
         session_id: PartitionSessionId,
     ) {
-        self.partition_to_session.insert(partition_id, session_id);
+        self.partition_to_session
+            .insert((topic.to_owned(), partition_id), session_id);
     }
 }
 
@@ -443,7 +447,41 @@ mod tests {
         assert!(buffer.start(session(2, 10)).is_err());
         assert!(buffer.is_active_session(psid(1)));
         assert!(!buffer.is_active_session(psid(2)));
-        assert_eq!(buffer.partition_to_session.get(&pid(10)), Some(&psid(1)));
+        assert_eq!(
+            buffer.partition_to_session.get(&(String::new(), pid(10))),
+            Some(&psid(1))
+        );
+    }
+
+    #[test]
+    fn same_partition_id_in_different_topics_has_independent_sessions() {
+        let mut buffer = MessageBuffer::default();
+        let mut first = session(1, 0);
+        first.topic = "first-topic".to_owned();
+        let mut second = session(2, 0);
+        second.topic = "second-topic".to_owned();
+        buffer.start(first).unwrap();
+        buffer.start(second).unwrap();
+        buffer
+            .push_raw_batch(raw_batch([(0, 1)]), psid(1), 0, 0)
+            .unwrap();
+        buffer
+            .push_raw_batch(raw_batch([(0, 1)]), psid(2), 0, 0)
+            .unwrap();
+
+        let first_batch = buffer.pop_batch(1).unwrap().unwrap();
+        let second_batch = buffer.pop_batch(1).unwrap().unwrap();
+        assert_eq!(
+            first_batch.messages[0].get_commit_marker().topic,
+            "first-topic"
+        );
+        assert_eq!(
+            second_batch.messages[0].get_commit_marker().topic,
+            "second-topic"
+        );
+        buffer.stop(psid(1)).unwrap();
+        assert!(buffer.is_active_session(psid(2)));
+        buffer.stop(psid(2)).unwrap();
     }
 
     #[test]
@@ -453,8 +491,13 @@ mod tests {
 
         assert!(buffer.start(session(1, 20)).is_err());
         assert!(buffer.is_active_session(psid(1)));
-        assert!(!buffer.partition_to_session.contains_key(&pid(20)));
-        assert_eq!(buffer.partition_to_session.get(&pid(10)), Some(&psid(1)));
+        assert!(!buffer
+            .partition_to_session
+            .contains_key(&(String::new(), pid(20))));
+        assert_eq!(
+            buffer.partition_to_session.get(&(String::new(), pid(10))),
+            Some(&psid(1))
+        );
     }
 
     #[test]
@@ -649,11 +692,9 @@ mod tests {
         buffer.start(session(1, 10)).unwrap();
         buffer.end(end(1, [], [])).unwrap();
 
-        assert!(
-            buffer
-                .push_raw_batch(raw_batch([(0, 1)]), psid(1), 0, 0)
-                .is_err()
-        );
+        assert!(buffer
+            .push_raw_batch(raw_batch([(0, 1)]), psid(1), 0, 0)
+            .is_err());
     }
 
     #[test]
@@ -743,11 +784,16 @@ mod tests {
         buffer
             .push_raw_batch(raw_batch([(0, 1)]), psid(1), 0, 0)
             .unwrap();
-        buffer.partition_to_session.insert(pid(10), psid(2));
+        buffer
+            .partition_to_session
+            .insert((String::new(), pid(10)), psid(2));
 
         assert!(buffer.stop(psid(1)).is_err());
         assert!(buffer.is_active_session(psid(1)));
-        assert_eq!(buffer.partition_to_session.get(&pid(10)), Some(&psid(2)));
+        assert_eq!(
+            buffer.partition_to_session.get(&(String::new(), pid(10))),
+            Some(&psid(2))
+        );
     }
 
     #[test]

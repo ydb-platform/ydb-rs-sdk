@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::Notify;
 use tokio::sync::futures::Notified;
+use tokio::sync::Notify;
 use tracing::{debug, warn};
 
 use crate::client_topic::topicreader::messages::TopicReaderBatch;
@@ -523,11 +523,9 @@ mod tests {
             session_id: "duplicate-session".to_string(),
         };
 
-        assert!(
-            runtime
-                .handle_from_server(RawFromServer::InitResponse(RawInitResponse::from(response)))
-                .is_err()
-        );
+        assert!(runtime
+            .handle_from_server(RawFromServer::InitResponse(RawInitResponse::from(response)))
+            .is_err());
     }
 
     #[test]
@@ -588,14 +586,12 @@ mod tests {
             .expect("fail should succeed");
 
         let (next_outgoing_tx, _next_outgoing_rx) = mpsc::unbounded_channel();
-        assert!(
-            runtime
-                .install_connection(
-                    Connection::new(next_outgoing_tx, 1),
-                    YdbError::custom("reconnect")
-                )
-                .is_err()
-        );
+        assert!(runtime
+            .install_connection(
+                Connection::new(next_outgoing_tx, 1),
+                YdbError::custom("reconnect")
+            )
+            .is_err());
         assert!(runtime.commit(commit_marker(1)).is_err());
     }
 
@@ -694,7 +690,9 @@ mod tests {
                 panic!("runtime should be active");
             };
             // Corrupt mapping so stop() returns an internal consistency error.
-            active.buffer.replace_partition_mapping(pid(20), psid(20));
+            active
+                .buffer
+                .replace_partition_mapping("test", pid(20), psid(20));
         }
 
         let req = RawStopPartitionSessionRequest {
@@ -702,11 +700,9 @@ mod tests {
             graceful: false,
             committed_offset: 5,
         };
-        assert!(
-            runtime
-                .handle_from_server(RawFromServer::StopPartitionSessionRequest(req))
-                .is_err()
-        );
+        assert!(runtime
+            .handle_from_server(RawFromServer::StopPartitionSessionRequest(req))
+            .is_err());
         let response = outgoing_rx
             .try_recv()
             .expect("stop response should still be sent");
