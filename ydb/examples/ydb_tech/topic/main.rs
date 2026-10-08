@@ -2,8 +2,8 @@ use std::time::{Duration, SystemTime};
 
 use ydb::{
     AlterTopicOptionsBuilder, ClientBuilder, Codec, ConsumerBuilder, CreateTopicOptionsBuilder,
-    DescribeTopicOptionsBuilder, TopicReaderOptions, TopicSelector, TopicSelectors, TopicWriterMessage,
-    TopicWriterOptions, Transaction, YdbError, closure,
+    DescribeTopicOptionsBuilder, TopicReaderOptions, TopicSelector, TopicSelectors,
+    TopicWriterMessage, TopicWriterOptions, Transaction, YdbError, closure,
 };
 
 #[tokio::main]
@@ -30,7 +30,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let topic_path = format!("ydb_tech_{}", uuid::Uuid::new_v4().simple());
     let second_topic = format!("{topic_path}_another");
     let consumers = vec![
-        ConsumerBuilder::default().name("my-consumer".into()).build()?,
+        ConsumerBuilder::default()
+            .name("my-consumer".into())
+            .build()?,
         ConsumerBuilder::default()
             .name("selectors".into())
             .build()?,
@@ -141,7 +143,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         writer.stop().await?;
 
         // [BEGIN topic_start_reader]
-        let mut reader = topic_client.create_reader("my-consumer", &topic_path).await?;
+        let mut reader = topic_client
+            .create_reader("my-consumer", &topic_path)
+            .await?;
         // [END topic_start_reader]
         let mut payloads = Vec::new();
         while payloads.len() < 2 {
