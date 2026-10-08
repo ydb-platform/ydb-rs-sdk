@@ -5,4 +5,5 @@ pub mod scheme;
 pub mod topic;
 
 pub mod handler;
+pub mod metrics;
 pub mod server;

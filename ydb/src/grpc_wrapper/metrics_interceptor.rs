@@ -11,8 +11,8 @@ use std::time::Instant;
 
 use crate::client_metrics::MetricsRecorder;
 use crate::grpc_wrapper::runtime_interceptors::{
-    ChannelResponse, GrpcInterceptor, InterceptorError, InterceptorRequest, InterceptorResult,
-    RequestMetadata,
+    ChannelResponse, EndpointLabel, GrpcInterceptor, InterceptorError, InterceptorRequest,
+    InterceptorResult, RequestMetadata,
 };
 
 /// Context of one in-flight RPC, carried between `on_call` and `on_feature_poll_ready`.
@@ -40,7 +40,13 @@ impl GrpcInterceptor for MetricsInterceptor {
         metadata: &mut RequestMetadata,
         req: InterceptorRequest,
     ) -> InterceptorResult<InterceptorRequest> {
-        let endpoint = intern_endpoint(authority_label(req.uri()));
+        // The channel stamps the endpoint label into the request extensions;
+        // the URI itself is path-only in tonic (no authority to parse).
+        let endpoint = req
+            .extensions()
+            .get::<EndpointLabel>()
+            .map(|label| label.0.clone())
+            .unwrap_or_else(|| intern_endpoint(authority_label(req.uri())));
         let (service, method) = parse_grpc_path(req.uri().path());
         *metadata = Some(Box::new(CallMeta {
             endpoint,
