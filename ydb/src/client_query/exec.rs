@@ -892,7 +892,7 @@ pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
     debug_assert_eq!(active.server_progress.operation, TxOperationState::Ready);
     active.server_progress.operation = TxOperationState::InFlight;
     let session_id = active.lease.session_id();
-    tracing::Span::current()
+    Span::current()
         .record("ydb.session.id", session_id)
         .record("ydb.tx.id", tx_id);
     let operation = active
@@ -937,7 +937,7 @@ pub(crate) async fn tx_rollback(tx: &mut TxExecContext) -> YdbResult<()> {
     debug_assert_eq!(active.server_progress.operation, TxOperationState::Ready);
     active.server_progress.operation = TxOperationState::InFlight;
     let session_id = active.lease.session_id();
-    tracing::Span::current()
+    Span::current()
         .record("ydb.session.id", session_id)
         .record("ydb.tx.id", tx_id);
     let started_at = Instant::now();

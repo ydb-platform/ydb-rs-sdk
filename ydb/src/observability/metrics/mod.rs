@@ -4,6 +4,9 @@ use crate::observability::telemetry::TelemetryMeta;
 pub mod operation_metrics;
 pub mod pool_metrics;
 
+#[cfg(test)]
+pub mod mocks;
+
 #[derive(Clone)]
 pub(crate) struct YdbMetrics {
     pub operation_metrics: OperationMetrics,
