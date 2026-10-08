@@ -33,6 +33,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         ConsumerBuilder::default()
             .name("my-consumer".into())
             .build()?,
+        ConsumerBuilder::default().name("ack".into()).build()?,
         ConsumerBuilder::default()
             .name("selectors".into())
             .build()?,
@@ -97,7 +98,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
         // [END topic_describe]
-        if description.consumers.len() != 3 {
+        if description.consumers.len() != 4 {
             return Err(YdbError::Custom("Unexpected consumer count".into()));
         }
 
@@ -152,8 +153,6 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             // [BEGIN topic_read_commit]
             let mut batch = reader.read_batch().await?;
             reader.commit(batch.get_commit_marker())?;
-            // or with waiting for ack from the server:
-            reader.commit_with_ack(batch.get_commit_marker()).await?;
             // [END topic_read_commit]
             for message in &mut batch.messages {
                 if let Some(payload) = message.read_and_take().await? {
@@ -163,6 +162,17 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         if payloads != vec![b"payload".to_vec(), b"payload".to_vec()] {
             return Err(YdbError::Custom("Unexpected topic payloads".into()));
+        }
+        drop(reader);
+
+        let mut reader = topic_client.create_reader("ack", &topic_path).await?;
+        let mut received = 0;
+        while received < 2 {
+            // [BEGIN topic_read_commit_ack]
+            let batch = reader.read_batch().await?;
+            reader.commit_with_ack(batch.get_commit_marker()).await?;
+            // [END topic_read_commit_ack]
+            received += batch.messages.len();
         }
         drop(reader);
 
