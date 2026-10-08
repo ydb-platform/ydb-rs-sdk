@@ -491,9 +491,11 @@ mod tests {
 
         assert!(buffer.start(session(1, 20)).is_err());
         assert!(buffer.is_active_session(psid(1)));
-        assert!(!buffer
-            .partition_to_session
-            .contains_key(&(String::new(), pid(20))));
+        assert!(
+            !buffer
+                .partition_to_session
+                .contains_key(&(String::new(), pid(20)))
+        );
         assert_eq!(
             buffer.partition_to_session.get(&(String::new(), pid(10))),
             Some(&psid(1))
@@ -692,9 +694,11 @@ mod tests {
         buffer.start(session(1, 10)).unwrap();
         buffer.end(end(1, [], [])).unwrap();
 
-        assert!(buffer
-            .push_raw_batch(raw_batch([(0, 1)]), psid(1), 0, 0)
-            .is_err());
+        assert!(
+            buffer
+                .push_raw_batch(raw_batch([(0, 1)]), psid(1), 0, 0)
+                .is_err()
+        );
     }
 
     #[test]
