@@ -9,7 +9,7 @@ use std::future::IntoFuture;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
-use tracing::instrument;
+use tracing::{Instrument, instrument};
 
 use crate::closure;
 use crate::errors::{Idempotency, YdbError, YdbResult};
@@ -18,6 +18,7 @@ use crate::grpc_wrapper::raw_query_service::execute_query::{
     RawExecMode, RawExecuteQueryRequest, RawQueryStatsPlan,
 };
 use crate::grpc_wrapper::raw_query_service::stream::ExecuteQueryStream;
+use crate::observability::tracing::execute_query::ExecuteQueryCompositeSpan;
 use crate::traces::helpers::ensure_len_string;
 
 use super::exec::ClientExecContext;
@@ -84,7 +85,21 @@ async fn explain_query_once(
     let mut req = RawExecuteQueryRequest::new("", text, HashMap::new(), None, false)?;
     req.exec_mode = RawExecMode::Explain;
 
-    let mut stream = ExecuteQueryStream::new(client.execute_query(req).await?);
+    let mut composite_span = ExecuteQueryCompositeSpan::new(ctx.metrics.clone(), None, text);
+
+    let raw_stream = client
+        .execute_query(req)
+        .instrument(composite_span.operation_span())
+        .await
+        .map_err(YdbError::from);
+    let raw_stream = match raw_stream {
+        Ok(stream) => stream,
+        Err(error) => {
+            composite_span.finish_error(&error);
+            return Err(error);
+        }
+    };
+    let mut stream = ExecuteQueryStream::with_composite_span(raw_stream, composite_span);
     // Drains the stream and checks every part's status. EXPLAIN sends no result sets, so the
     // returned vector is empty; the plan arrives as stream metadata.
     stream.materialize_all_result_sets().await?;
@@ -136,10 +151,10 @@ impl<'a> IntoFuture for ExplainQueryBuilder<'a> {
 mod unit_tests {
     use super::*;
     use crate::GrpcOptions;
-    use crate::client_metrics::names::MetricsNames;
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
+    use crate::observability::telemetry::Telemetry;
     use crate::retry_settings::RetrySettings;
     use crate::session_pool::{SessionPool, SessionPoolSettings};
     use http::Uri;
@@ -158,7 +173,7 @@ mod unit_tests {
             ),
             session_pool: SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
             retry_settings: RetrySettings::with_default_backoff(),
-            metrics_names: MetricsNames::new(None),
+            metrics: Telemetry::new_for_test(),
         }
     }
 

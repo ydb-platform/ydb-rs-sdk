@@ -1,5 +1,4 @@
 use crate::client_common::{DBCredentials, TokenCache};
-use crate::client_metrics::names::MetricsNames;
 use crate::client_topic::compression::Executor;
 use crate::credentials::{
     AccessTokenCredentials, CredentialsRef, GCEMetadata, ServiceAccountCredentials,
@@ -14,6 +13,7 @@ use crate::grpc_connection_manager::{
 use crate::grpc_wrapper::auth::AuthGrpcInterceptor;
 use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::SharedLoadBalancer;
+use crate::observability::telemetry::{Telemetry, TelemetryMeta};
 use crate::{Client, Credentials, GrpcOptions, HasGrpcOptions, RetrySettings};
 use http::Uri;
 use once_cell::sync::Lazy;
@@ -273,9 +273,10 @@ impl ClientBuilder {
     }
 
     pub async fn build(self) -> YdbResult<Client> {
-        let metrics_names = MetricsNames::new(self.driver_name);
-
-        metrics_names.client_new_counter.increment(1);
+        let metrics = Telemetry::new(&TelemetryMeta::new(
+            self.database.clone(),
+            self.endpoint.clone(),
+        ));
 
         let retry_settings = self
             .retry_settings
@@ -329,7 +330,7 @@ impl ClientBuilder {
             load_balancer,
             self.executor,
             retry_settings,
-            metrics_names,
+            metrics,
         )
         .await
     }

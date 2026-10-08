@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 use futures_util::TryFutureExt;
 use tokio::time::timeout;
 
-use crate::client_metrics::names::MetricsNames;
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
@@ -17,13 +16,13 @@ use crate::grpc_wrapper::raw_query_service::transaction_control::{
 use crate::retry_settings::RetrySettings;
 use crate::traces::helpers::ensure_len_string;
 
+use super::hooks::{QueryTxCommitStatus, QueryTxHook};
+use crate::observability::telemetry::Telemetry;
+use crate::observability::tracing::execute_query::ExecuteQueryCompositeSpan;
+use crate::session_pool::{SessionPool, SessionPoolLease, spawn_pool_release};
 use crate::types::Value;
 use crate::{TransactionOptions, TxMode, closure};
-use tracing::instrument;
-
-use crate::session_pool::{SessionPool, SessionPoolLease, spawn_pool_release};
-
-use super::hooks::{QueryTxCommitStatus, QueryTxHook};
+use tracing::{Instrument, Span, field, instrument};
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CallOptions {
@@ -50,7 +49,7 @@ pub(crate) struct ClientExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub session_pool: SessionPool,
     pub retry_settings: RetrySettings,
-    pub metrics_names: MetricsNames,
+    pub metrics: Telemetry,
 }
 
 /// Opened client stream and its explicit session ownership mode.
@@ -193,7 +192,7 @@ pub(crate) struct TxExecContext {
     pub state: TxState,
     /// Absolute deadline from [`QueryClient::retry_tx`] `.timeout()`, propagated to every RPC in the callback.
     pub retry_deadline: Option<Instant>,
-    pub metrics_names: MetricsNames,
+    pub metrics: Telemetry,
 }
 
 impl TxExecContext {
@@ -516,7 +515,7 @@ async fn client_implicit_session_request(
     Ok((client, req))
 }
 
-#[instrument(name = "ydb.Query.BeginStreamOnce", skip_all, fields(db.system.name = "ydb"), err)]
+#[instrument(name = "ydb.Query.BeginStreamOnce", skip_all, fields(db.system.name = "ydb", otel.status_code = field::Empty, error.message = field::Empty), err)]
 pub(super) async fn client_begin_stream_once(
     ctx: &ClientExecContext,
     text: &str,
@@ -524,18 +523,36 @@ pub(super) async fn client_begin_stream_once(
     opts: &CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<OpenedClientQueryStream> {
+    let once_span = Span::current();
     if opts.implicit_session {
         let (mut client, req) =
             client_implicit_session_request(ctx, text, params, opts, concurrent_result_sets)
                 .await?;
-        let stream = client.execute_query(req).await.map_err(YdbError::from)?;
+        let mut composite_span = ExecuteQueryCompositeSpan::new(ctx.metrics.clone(), None, text);
+        let stream = client
+            .execute_query(req)
+            .instrument(composite_span.operation_span())
+            .await
+            .map_err(YdbError::from);
+        let stream = match stream {
+            Ok(stream) => stream,
+            Err(error) => {
+                composite_span.finish_error(&error);
+                return Err(error);
+            }
+        };
+        let mut stream = ExecuteQueryStream::with_composite_span(stream, composite_span);
+        stream.attach_span(once_span);
         return Ok(OpenedClientQueryStream {
-            stream: ExecuteQueryStream::new(stream),
+            stream,
             session: ClientQuerySession::ServerImplicit,
         });
     }
 
-    open_pooled_query_stream(ctx, text, params, opts, concurrent_result_sets).await
+    let mut opened =
+        open_pooled_query_stream(ctx, text, params, opts, concurrent_result_sets).await?;
+    opened.stream.attach_span(once_span);
+    Ok(opened)
 }
 
 async fn open_pooled_query_stream(
@@ -561,8 +578,23 @@ async fn open_pooled_query_stream(
             opts.collect_stats,
         )?;
         req.concurrent_result_sets = concurrent_result_sets;
-        let stream = client.execute_query(req).await.map_err(YdbError::from)?;
-        Ok(ExecuteQueryStream::new(stream))
+        let mut composite_span =
+            ExecuteQueryCompositeSpan::new(ctx.metrics.clone(), Some(lease.session_id()), text);
+        let stream = client
+            .execute_query(req)
+            .instrument(composite_span.operation_span())
+            .await
+            .map_err(YdbError::from);
+        match stream {
+            Ok(stream) => Ok(ExecuteQueryStream::with_composite_span(
+                stream,
+                composite_span,
+            )),
+            Err(error) => {
+                composite_span.finish_error(&error);
+                Err(error)
+            }
+        }
     }
     .await;
 
@@ -575,7 +607,7 @@ async fn open_pooled_query_stream(
     }
 }
 
-#[instrument(name = "ydb.Query.BeginStream", skip_all, fields(db.system.name = "ydb", ydb.Query.text = %ensure_len_string(&text), ydb.Query.params = ?params, ydb.Query.opts = ?opts), err)]
+#[instrument(name = "ydb.RunWithRetry", skip_all, fields(db.system.name = "ydb", ydb.Query.text = %ensure_len_string(&text), ydb.Query.params = ?params, ydb.Query.opts = ?opts, otel.status_code = field::Empty, error.message = field::Empty), err)]
 pub(crate) async fn client_begin_stream(
     ctx: &ClientExecContext,
     text: String,
@@ -583,20 +615,38 @@ pub(crate) async fn client_begin_stream(
     opts: CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<OpenedClientQueryStream> {
-    ctx.retry_settings
+    let retry_span = Span::current();
+    let result = ctx
+        .retry_settings
         .clone()
         .with_deadline(opts.timeout)
         .retry_on_retriable_errors(
             opts.idempotency(),
-            closure!([&ctx, &text, &params, &opts], |_| client_begin_stream_once(
-                ctx,
-                text,
-                params,
-                opts,
-                concurrent_result_sets
-            )),
+            closure!([&ctx, &text, &params, &opts], async |_| {
+                let attempt_span = Span::current();
+                match client_begin_stream_once(ctx, text, params, opts, concurrent_result_sets)
+                    .await
+                {
+                    Ok(mut opened) => {
+                        opened.stream.attach_span(attempt_span);
+                        Ok(opened)
+                    }
+                    Err(error) => Err(error),
+                }
+            }),
         )
-        .await
+        .await;
+    match result {
+        Ok(mut opened) => {
+            opened.stream.attach_span(retry_span);
+            Ok(opened)
+        }
+        Err(error) => {
+            retry_span.record("otel.status_code", "ERROR");
+            retry_span.record("error.message", error.to_string());
+            Err(error)
+        }
+    }
 }
 
 /// Materialize the transaction and return its session-scoped identity for a cross-service RPC.
@@ -670,9 +720,6 @@ pub(crate) fn tx_finish_query(tx: &mut TxExecContext, commit_at_end: bool) -> Yd
     }
 
     if commit_at_end {
-        tx.metrics_names
-            .client_transaction_commit_counter
-            .increment(1);
         tx.finish_tx(TxState::Committed, QueryTxCommitStatus::Committed)?
             .return_to_pool();
         return Ok(());
@@ -724,7 +771,6 @@ pub(crate) fn tx_cancel_query(tx: &mut TxExecContext) {
     }
 }
 
-#[instrument(name = "ydb.ExecuteQuery", skip_all, fields(db.system.name = "ydb", ydb.Query.text = %ensure_len_string(&text), ydb.Query.params = ?params, ydb.Query.opts = ?opts))]
 fn tx_execute_request(
     tx: &TxExecContext,
     text: String,
@@ -743,7 +789,7 @@ fn tx_execute_request(
     Ok(request)
 }
 
-#[instrument(name = "ydb.Query.TransactionBeginStream", skip_all, fields(db.system.name = "ydb", ydb.tx.mode = ?tx.tx_mode, ydb.session.id = tracing::field::Empty), err)]
+#[instrument(name = "ydb.Query.TransactionBeginStream", skip_all, fields(db.system.name = "ydb", ydb.tx.mode = ?tx.tx_mode, ydb.session.id = tracing::field::Empty, otel.status_code = field::Empty, error.message = field::Empty), err)]
 pub(crate) async fn tx_begin_stream(
     tx: &mut TxExecContext,
     text: String,
@@ -751,6 +797,7 @@ pub(crate) async fn tx_begin_stream(
     opts: CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<ExecuteQueryStream> {
+    let begin_stream_span = Span::current();
     debug_assert!(
         !opts.implicit_session,
         "implicit_session is only available on QueryClient one-shot builders"
@@ -759,14 +806,19 @@ pub(crate) async fn tx_begin_stream(
     let operation_timeout = resolve_operation_timeout(tx.retry_deadline, opts.timeout);
     let result: YdbResult<ExecuteQueryStream> = with_optional_timeout(operation_timeout, async {
         tx.session_lease()?.ensure_healthy()?;
-        tracing::Span::current().record("ydb.session.id", tx.session_lease()?.session_id());
         if tx.begin {
             tx_ensure_begin(tx).await?;
         }
         if opts.commit_tx.unwrap_or(false) {
             tx_before_commit(tx).await?;
         }
+        let session_id = tx.session_lease()?.session_id().to_string();
         let request = tx_execute_request(tx, text, params, &opts, concurrent_result_sets)?;
+        let mut composite_span = ExecuteQueryCompositeSpan::new(
+            tx.metrics.clone(),
+            Some(&session_id),
+            &request.yql_text,
+        );
         let progress = &mut tx.active_mut()?.server_progress;
         debug_assert_eq!(progress.operation, TxOperationState::Ready);
         progress.operation = TxOperationState::InFlight;
@@ -774,14 +826,27 @@ pub(crate) async fn tx_begin_stream(
             .active_mut()?
             .client
             .execute_query(request)
+            .instrument(composite_span.operation_span())
             .await
-            .map_err(YdbError::from)?;
-        let mut stream = ExecuteQueryStream::new(stream);
-        stream.prime_first_part().await?;
+            .map_err(YdbError::from);
+        let stream = match stream {
+            Ok(stream) => stream,
+            Err(error) => {
+                composite_span.finish_error(&error);
+                return Err(error);
+            }
+        };
+        let mut stream = ExecuteQueryStream::with_composite_span(stream, composite_span);
+        stream.attach_span(begin_stream_span);
+        if let Err(error) = stream.prime_first_part().await {
+            stream.fail(&YdbError::from(error.clone()));
+            return Err(YdbError::from(error));
+        }
         if !stream.in_progress() {
             let error = YdbError::InternalError(
                 "ExecuteQuery response stream closed before the first part".to_string(),
             );
+            stream.fail(&error);
             return Err(error);
         }
         let tx_id = stream.take_captured_tx_id();
@@ -812,7 +877,7 @@ pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
         return Err(err);
     }
     let operation_timeout = remaining_retry_timeout(tx.retry_deadline);
-    let commit_counter = tx.metrics_names.client_transaction_commit_counter.clone();
+    let commit_metrics = tx.metrics.clone();
     let active = tx.active_mut()?;
     if active.server_progress.operation.is_in_flight() {
         return Err(TxServerProgress::operation_in_progress_error());
@@ -823,8 +888,7 @@ pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
         return Ok(());
     };
 
-    commit_counter.increment(1);
-
+    let started_at = Instant::now();
     debug_assert_eq!(active.server_progress.operation, TxOperationState::Ready);
     active.server_progress.operation = TxOperationState::InFlight;
     let session_id = active.lease.session_id();
@@ -836,6 +900,9 @@ pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
         .commit_transaction(session_id, tx_id)
         .map_err(YdbError::from);
     let result = with_optional_timeout(operation_timeout, operation).await;
+    commit_metrics
+        .operation_metrics
+        .record_commit_duration(started_at.elapsed());
 
     match result {
         Ok(()) => {
@@ -855,10 +922,8 @@ pub(crate) async fn tx_rollback(tx: &mut TxExecContext) -> YdbResult<()> {
     if !tx.state.is_active() {
         return Ok(());
     }
-    tx.metrics_names
-        .client_transaction_rollback_counter
-        .increment(1);
     let operation_timeout = remaining_retry_timeout(tx.retry_deadline);
+    let rollback_metrics = tx.metrics.clone();
     let active = tx.active_mut()?;
     if active.server_progress.operation.is_in_flight() {
         return Err(TxServerProgress::operation_in_progress_error());
@@ -875,11 +940,15 @@ pub(crate) async fn tx_rollback(tx: &mut TxExecContext) -> YdbResult<()> {
     tracing::Span::current()
         .record("ydb.session.id", session_id)
         .record("ydb.tx.id", tx_id);
+    let started_at = Instant::now();
     let operation = active
         .client
         .rollback_transaction(session_id, tx_id)
         .map_err(YdbError::from);
     let result = with_optional_timeout(operation_timeout, operation).await;
+    rollback_metrics
+        .operation_metrics
+        .record_rollback_duration(started_at.elapsed());
 
     match result {
         Ok(()) => {
@@ -908,14 +977,14 @@ pub(crate) fn tx_exec_context(
     lease: SessionPoolLease,
     options: TransactionOptions,
     retry_deadline: Option<Instant>,
-    metrics_names: MetricsNames,
+    metrics: Telemetry,
 ) -> TxExecContext {
     TxExecContext {
         tx_mode: options.mode(),
         begin: options.begin(),
         state: TxState::Active(ActiveTx::new(client, lease)),
         retry_deadline,
-        metrics_names,
+        metrics,
     }
 }
 
@@ -999,7 +1068,7 @@ mod unit_tests {
             lease,
             TransactionOptions::default(),
             None,
-            MetricsNames::new(None),
+            Telemetry::new_for_test(),
         )
     }
 
