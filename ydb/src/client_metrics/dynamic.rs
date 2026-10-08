@@ -60,8 +60,10 @@ pub(crate) type GrpcErrorsKey = (usize, GrpcCodeKey);
 pub(crate) type GrpcStreamMessagesKey = (usize, usize, usize, usize);
 pub(crate) type GrpcConnectionsKey = (usize, usize);
 pub(crate) type GrpcConnectionEstablishKey = (usize, bool);
+pub(crate) type QueryErrorsKey = (usize, usize);
+pub(crate) type QueryTransactionRetriesKey = usize;
 
-/// Handle caches for the dynamic gRPC series, stored inside
+/// Handle caches for the dynamic series (runtime string labels), stored inside
 /// [`MetricsNames`](super::names::MetricsNames) (so handles stay bound to its
 /// recorder's backend).
 #[derive(Debug, Default)]
@@ -72,6 +74,10 @@ pub(crate) struct DynamicCaches {
     pub(crate) grpc_stream_messages: RwLock<HashMap<GrpcStreamMessagesKey, Counter>>,
     pub(crate) grpc_connections: RwLock<HashMap<GrpcConnectionsKey, Gauge>>,
     pub(crate) grpc_connection_establish: RwLock<HashMap<GrpcConnectionEstablishKey, Histogram>>,
+    /// `ydb_query_errors_total` keyed by (operation index, interned status code).
+    pub(crate) query_errors: RwLock<HashMap<QueryErrorsKey, Counter>>,
+    /// `ydb_query_transaction_retries_total` keyed by interned status code.
+    pub(crate) query_tx_retries: RwLock<HashMap<QueryTransactionRetriesKey, Counter>>,
 }
 
 /// Cached handle lookup: a read lock on hit; on miss, build the handle under

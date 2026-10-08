@@ -2,6 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use metrics::{Counter, Histogram, counter, gauge, histogram};
+use ydb_grpc::ydb_proto::status_ids::StatusCode;
+
+use crate::errors::{YdbError, YdbOrCustomerError};
 
 pub(crate) mod dynamic;
 pub(crate) mod interning;
@@ -149,6 +152,106 @@ impl SessionPoolCloseReason {
     }
 }
 
+/// Operation label for the `ydb_query_*` metric series.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueryOperation {
+    Exec,
+    QueryRow,
+    QueryResultSet,
+    Query,
+    ExecuteScript,
+    FetchScriptResults,
+}
+
+impl QueryOperation {
+    /// Number of label values; sizes the pre-registered `ydb_query_*` handle
+    /// arrays in [`MetricsNames`](names::MetricsNames).
+    pub(crate) const LABEL_COUNT: usize = 6;
+
+    /// Label values in [`Self::index`] order.
+    pub(crate) const LABELS: [&'static str; Self::LABEL_COUNT] = [
+        "exec",
+        "query_row",
+        "query_result_set",
+        "query",
+        "execute_script",
+        "fetch_script_results",
+    ];
+
+    pub(crate) fn index(self) -> usize {
+        match self {
+            Self::Exec => 0,
+            Self::QueryRow => 1,
+            Self::QueryResultSet => 2,
+            Self::Query => 3,
+            Self::ExecuteScript => 4,
+            Self::FetchScriptResults => 5,
+        }
+    }
+}
+
+/// Outcome label for `ydb_query_transactions_total`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueryTransactionResult {
+    Commit,
+    Rollback,
+    Error,
+}
+
+impl QueryTransactionResult {
+    /// Number of label values; sizes the pre-registered
+    /// `ydb_query_transactions_total` handle array in
+    /// [`MetricsNames`](names::MetricsNames).
+    pub(crate) const LABEL_COUNT: usize = 3;
+
+    /// Label values in [`Self::index`] order.
+    pub(crate) const LABELS: [&'static str; Self::LABEL_COUNT] = ["commit", "rollback", "error"];
+
+    pub(crate) fn index(self) -> usize {
+        match self {
+            Self::Commit => 0,
+            Self::Rollback => 1,
+            Self::Error => 2,
+        }
+    }
+}
+
+/// `status_code` label value for the error and retry series: the native
+/// `Ydb.StatusIds.StatusCode` name, with transport-level errors mapped to the
+/// closest native status and unknown numeric codes to `STATUS_CODE_UNSPECIFIED`.
+pub(crate) fn ydb_status_code_label(error: &YdbError) -> &'static str {
+    match error {
+        YdbError::YdbStatusError(status) => StatusCode::try_from(status.operation_status)
+            .map(|code| code.as_str_name())
+            .unwrap_or(StatusCode::Unspecified.as_str_name()),
+        YdbError::TransportGRPCStatus(status) => match status.code() {
+            tonic::Code::DeadlineExceeded => StatusCode::Timeout.as_str_name(),
+            tonic::Code::Cancelled => StatusCode::Cancelled.as_str_name(),
+            tonic::Code::ResourceExhausted => StatusCode::Overloaded.as_str_name(),
+            _ => StatusCode::Unavailable.as_str_name(),
+        },
+        YdbError::TransportDial(_) | YdbError::Transport(_) => {
+            StatusCode::Unavailable.as_str_name()
+        }
+        YdbError::DeadlineExceeded => StatusCode::Timeout.as_str_name(),
+        YdbError::Custom(_)
+        | YdbError::Convert(_)
+        | YdbError::NoRows
+        | YdbError::InternalError(_)
+        | YdbError::EndpointHasNoHost(_) => StatusCode::GenericError.as_str_name(),
+    }
+}
+
+/// [`ydb_status_code_label`] for retry classification errors: customer errors
+/// never classify as retryable, so the fallback bucket is unreachable in
+/// practice on retry paths.
+pub(crate) fn ydb_or_customer_status_code_label(error: &YdbOrCustomerError) -> &'static str {
+    match error {
+        YdbOrCustomerError::YDB(error) => ydb_status_code_label(error),
+        YdbOrCustomerError::Customer(_) => StatusCode::GenericError.as_str_name(),
+    }
+}
+
 /// Synchronous session pool gauge values, re-emitted by the pool at every mutation
 /// site (never sampled by a timer).
 ///
@@ -265,6 +368,31 @@ pub trait MetricsRecorder: Send + Sync {
 
     /// Record the outcome of the background session liveness (attach stream) watcher.
     fn session_pool_keepalive(&self, _ok: bool) {}
+
+    /// Record one query service operation: `ydb_query_operations_total{operation,result}`
+    /// and `ydb_query_operation_duration_milliseconds{operation}`.
+    ///
+    /// For the streaming `query` operation this is recorded at stream open; result
+    /// sizes are recorded separately via [`Self::query_operation_result`] when the
+    /// stream is drained or dropped.
+    fn query_operation(&self, _operation: QueryOperation, _ok: bool, _duration: Duration) {}
+
+    /// Record the status of a failed query service operation
+    /// (`ydb_query_errors_total{operation,status_code}`); see [`ydb_status_code_label`].
+    fn query_operation_error(&self, _operation: QueryOperation, _status_code: &str) {}
+
+    /// Record the result size of a query service operation
+    /// (`ydb_query_result_rows` / `ydb_query_result_bytes` histograms).
+    fn query_operation_result(&self, _operation: QueryOperation, _rows: u64, _bytes: u64) {}
+
+    /// Record the outcome of a whole retried transaction:
+    /// `ydb_query_transactions_total{result}` and
+    /// `ydb_query_transaction_duration_milliseconds` (all attempts included).
+    fn query_transaction(&self, _result: QueryTransactionResult, _duration: Duration) {}
+
+    /// Record one retryable error inside a retried transaction
+    /// (`ydb_query_transaction_retries_total{status_code}`).
+    fn query_transaction_retry(&self, _status_code: &str) {}
 }
 
 /// Default [`MetricsRecorder`] implementation.
@@ -549,6 +677,51 @@ impl MetricsRecorder for DefaultMetricsRecorder {
 
     fn session_pool_keepalive(&self, ok: bool) {
         self.names.session_pool_keepalive_total[usize::from(!ok)].increment(1);
+    }
+
+    fn query_operation(&self, operation: QueryOperation, ok: bool, duration: Duration) {
+        self.names.query_operations_total[operation.index()][usize::from(!ok)].increment(1);
+        self.names.query_operation_duration_milliseconds[operation.index()]
+            .record(duration.as_secs_f64() * 1000.0);
+    }
+
+    fn query_operation_error(&self, operation: QueryOperation, status_code: &str) {
+        let status_code = intern(status_code);
+        dynamic::cached(
+            &self.names.dynamic.query_errors,
+            (operation.index(), status_code),
+            || {
+                let labels = self.names.dynamic_labels(vec![
+                    Label::new("operation", QueryOperation::LABELS[operation.index()]),
+                    Label::new("status_code", resolve(status_code)),
+                ]);
+                self.record(|| counter!("ydb_query_errors_total", labels.iter()))
+            },
+        )
+        .increment(1);
+    }
+
+    fn query_operation_result(&self, operation: QueryOperation, rows: u64, bytes: u64) {
+        self.names.query_result_rows[operation.index()].record(rows as f64);
+        self.names.query_result_bytes[operation.index()].record(bytes as f64);
+    }
+
+    fn query_transaction(&self, result: QueryTransactionResult, duration: Duration) {
+        self.names.query_transactions_total[result.index()].increment(1);
+        self.names
+            .query_transaction_duration_milliseconds
+            .record(duration.as_secs_f64() * 1000.0);
+    }
+
+    fn query_transaction_retry(&self, status_code: &str) {
+        let status_code = intern(status_code);
+        dynamic::cached(&self.names.dynamic.query_tx_retries, status_code, || {
+            let labels = self
+                .names
+                .dynamic_labels(vec![Label::new("status_code", resolve(status_code))]);
+            self.record(|| counter!("ydb_query_transaction_retries_total", labels.iter()))
+        })
+        .increment(1);
     }
 }
 
@@ -1054,6 +1227,212 @@ mod tests {
                 .count(),
             1,
             "with_backend must register handles into the provided backend"
+        );
+    }
+
+    #[test]
+    fn default_recorder_registers_query_series_per_enum_label() {
+        let capture = Arc::new(CaptureRecorder::default());
+        let _recorder = DefaultMetricsRecorder::from_parts(
+            Some("driver-q".to_string()),
+            Vec::new(),
+            Some(Arc::clone(&capture) as Arc<dyn metrics::Recorder + Send + Sync>),
+        );
+
+        // operations_total: one series per (operation, result) combination.
+        let operations: Vec<CapturedMetric> = capture
+            .registered()
+            .into_iter()
+            .filter(|metric| metric.name == "ydb_query_operations_total")
+            .collect();
+        assert_eq!(
+            operations.len(),
+            QueryOperation::LABEL_COUNT * names::QUERY_RESULT_COUNT,
+            "one ydb_query_operations_total series per operation/result pair"
+        );
+        let mut pairs: Vec<(String, String)> = operations
+            .iter()
+            .map(|metric| {
+                assert_eq!(
+                    metric.labels.first().map(|(key, _)| key.as_str()),
+                    Some("driver_name"),
+                    "driver_name must stay first"
+                );
+                let value = |name: &str| {
+                    metric
+                        .labels
+                        .iter()
+                        .find(|(key, _)| key == name)
+                        .map(|(_, value)| value.clone())
+                        .unwrap_or_default()
+                };
+                (value("operation"), value("result"))
+            })
+            .collect();
+        pairs.sort();
+        let mut expected: Vec<(String, String)> = QueryOperation::LABELS
+            .iter()
+            .flat_map(|operation| {
+                names::QUERY_RESULT_LABELS
+                    .iter()
+                    .map(move |result| (operation.to_string(), result.to_string()))
+            })
+            .collect();
+        expected.sort();
+        assert_eq!(pairs, expected);
+
+        assert_eq!(
+            capture.count("ydb_query_operation_duration_milliseconds"),
+            QueryOperation::LABEL_COUNT
+        );
+        assert_eq!(
+            capture.count("ydb_query_result_rows"),
+            QueryOperation::LABEL_COUNT
+        );
+        assert_eq!(
+            capture.count("ydb_query_result_bytes"),
+            QueryOperation::LABEL_COUNT
+        );
+        assert_eq!(
+            capture.count("ydb_query_transactions_total"),
+            QueryTransactionResult::LABEL_COUNT
+        );
+        assert_eq!(
+            capture.count("ydb_query_transaction_duration_milliseconds"),
+            1
+        );
+    }
+
+    #[test]
+    fn default_recorder_emits_query_series_values_into_backend() {
+        let test = Arc::new(crate::client_metrics::test_recorder::TestRecorder::new());
+        let recorder: Arc<dyn MetricsRecorder> = Arc::new(DefaultMetricsRecorder::with_backend(
+            Arc::clone(&test) as Arc<dyn metrics::Recorder + Send + Sync>,
+        ));
+
+        recorder.query_operation(QueryOperation::Exec, true, Duration::from_millis(10));
+        recorder.query_operation(QueryOperation::QueryRow, false, Duration::from_millis(20));
+        recorder.query_operation_error(QueryOperation::Exec, "UNAVAILABLE");
+        recorder.query_operation_error(QueryOperation::QueryRow, "ABORTED");
+        recorder.query_operation_result(QueryOperation::Exec, 5, 128);
+        recorder.query_operation_result(QueryOperation::Query, 3, 24);
+        recorder.query_transaction(QueryTransactionResult::Commit, Duration::from_millis(100));
+        recorder.query_transaction(QueryTransactionResult::Error, Duration::from_millis(50));
+        recorder.query_transaction_retry("ABORTED");
+        recorder.query_transaction_retry("ABORTED");
+
+        assert_eq!(
+            test.counter_value_with_label("ydb_query_operations_total", "operation", "exec"),
+            1
+        );
+        assert_eq!(
+            test.counter_value_with_label("ydb_query_operations_total", "result", "error"),
+            1
+        );
+        assert_eq!(
+            test.histogram_count("ydb_query_operation_duration_milliseconds"),
+            2
+        );
+        assert_eq!(
+            test.counter_value_with_label("ydb_query_errors_total", "status_code", "UNAVAILABLE"),
+            1
+        );
+        assert_eq!(
+            test.counter_value_with_label("ydb_query_errors_total", "status_code", "ABORTED"),
+            1
+        );
+        let mut rows = test.histogram_observations("ydb_query_result_rows");
+        rows.sort_by(|a, b| a.total_cmp(b));
+        assert_eq!(rows, vec![3.0, 5.0]);
+        let mut bytes = test.histogram_observations("ydb_query_result_bytes");
+        bytes.sort_by(|a, b| a.total_cmp(b));
+        assert_eq!(bytes, vec![24.0, 128.0]);
+        assert_eq!(
+            test.counter_value_with_label("ydb_query_transactions_total", "result", "commit"),
+            1
+        );
+        assert_eq!(
+            test.counter_value_with_label("ydb_query_transactions_total", "result", "error"),
+            1
+        );
+        assert_eq!(
+            test.histogram_count("ydb_query_transaction_duration_milliseconds"),
+            2
+        );
+        assert_eq!(
+            test.counter_value_with_label(
+                "ydb_query_transaction_retries_total",
+                "status_code",
+                "ABORTED"
+            ),
+            2
+        );
+        // Dynamic series carry the static labels too.
+        assert_eq!(
+            test.label_of_last("ydb_query_errors_total", "driver_name")
+                .as_deref(),
+            Some("main")
+        );
+        assert_eq!(
+            test.label_of_last("ydb_query_transaction_retries_total", "driver_name")
+                .as_deref(),
+            Some("main")
+        );
+    }
+
+    #[test]
+    fn ydb_status_code_label_maps_errors_to_native_statuses() {
+        use crate::errors::YdbStatusError;
+        use ydb_grpc::ydb_proto::status_ids::StatusCode;
+
+        let status = |code: StatusCode| {
+            YdbError::YdbStatusError(YdbStatusError::new("test", code as i32, Vec::new()))
+        };
+        assert_eq!(
+            ydb_status_code_label(&status(StatusCode::Aborted)),
+            "ABORTED"
+        );
+        assert_eq!(
+            ydb_status_code_label(&status(StatusCode::Overloaded)),
+            "OVERLOADED"
+        );
+        assert_eq!(
+            ydb_status_code_label(&YdbError::Transport("dial failed".to_string())),
+            "UNAVAILABLE"
+        );
+        assert_eq!(
+            ydb_status_code_label(&YdbError::TransportGRPCStatus(Arc::new(
+                tonic::Status::unavailable("off")
+            ))),
+            "UNAVAILABLE"
+        );
+        assert_eq!(
+            ydb_status_code_label(&YdbError::TransportGRPCStatus(Arc::new(
+                tonic::Status::deadline_exceeded("late")
+            ))),
+            "TIMEOUT"
+        );
+        assert_eq!(
+            ydb_status_code_label(&YdbError::TransportGRPCStatus(Arc::new(
+                tonic::Status::resource_exhausted("busy")
+            ))),
+            "OVERLOADED"
+        );
+        assert_eq!(
+            ydb_status_code_label(&YdbError::DeadlineExceeded),
+            "TIMEOUT"
+        );
+        assert_eq!(
+            ydb_status_code_label(&YdbError::Custom("client".to_string())),
+            "GENERIC_ERROR"
+        );
+        assert_eq!(
+            ydb_status_code_label(&YdbError::YdbStatusError(YdbStatusError::new(
+                "unknown",
+                999_999_999,
+                Vec::new(),
+            ))),
+            "STATUS_CODE_UNSPECIFIED"
         );
     }
 

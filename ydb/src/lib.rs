@@ -104,8 +104,9 @@ mod connection_pool_test;
 // The label enums and the gauge snapshot are part of the exported `MetricsRecorder`
 // trait surface: external trait implementations need them to implement its methods.
 pub use client_metrics::{
-    DefaultMetricsRecorder, GrpcConnectionState, MetricsRecorder, SessionPoolAcquireResult,
-    SessionPoolCloseReason, SessionPoolGaugeSnapshot, StreamDirection,
+    DefaultMetricsRecorder, GrpcConnectionState, MetricsRecorder, QueryOperation,
+    QueryTransactionResult, SessionPoolAcquireResult, SessionPoolCloseReason,
+    SessionPoolGaugeSnapshot, StreamDirection,
 };
 
 pub use async_closure::{

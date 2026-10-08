@@ -3,9 +3,18 @@ use std::string::ToString;
 use metrics::{Counter, Gauge, Histogram, counter, gauge, histogram};
 
 use crate::client_metrics::dynamic::DynamicCaches;
-use crate::client_metrics::{SessionPoolAcquireResult, SessionPoolCloseReason};
+use crate::client_metrics::{
+    QueryOperation, QueryTransactionResult, SessionPoolAcquireResult, SessionPoolCloseReason,
+};
 
 const DEFAULT_DRIVER_NAME: &str = "main";
+
+/// Number of `result` label values for `ydb_query_operations_total`; sizes its
+/// per-operation handle arrays. Indexed by `usize::from(!ok)`.
+pub(crate) const QUERY_RESULT_COUNT: usize = 2;
+
+/// `result` label values for `ydb_query_operations_total`.
+pub(crate) const QUERY_RESULT_LABELS: [&str; QUERY_RESULT_COUNT] = ["ok", "error"];
 
 /// Number of keepalive result label values; sizes the pre-registered
 /// `ydb_session_pool_keepalive_total` handle array.
@@ -66,7 +75,16 @@ pub(crate) struct MetricsNames {
     pub session_pool_sessions_closed_total: [Counter; SessionPoolCloseReason::LABEL_COUNT],
     pub session_pool_session_use_milliseconds: Histogram,
     pub session_pool_keepalive_total: [Counter; KEEPALIVE_RESULT_COUNT],
-    /// Handle caches for the dynamic gRPC series (runtime string labels).
+    // Query service series (closed enum label sets): handles are pre-registered
+    // per operation and indexed by the enum on the hot path, without macros or
+    // label construction.
+    pub query_operations_total: [[Counter; QUERY_RESULT_COUNT]; QueryOperation::LABEL_COUNT],
+    pub query_operation_duration_milliseconds: [Histogram; QueryOperation::LABEL_COUNT],
+    pub query_result_rows: [Histogram; QueryOperation::LABEL_COUNT],
+    pub query_result_bytes: [Histogram; QueryOperation::LABEL_COUNT],
+    pub query_transactions_total: [Counter; QueryTransactionResult::LABEL_COUNT],
+    pub query_transaction_duration_milliseconds: Histogram,
+    /// Handle caches for the dynamic series (runtime string labels).
     pub dynamic: DynamicCaches,
     /// Static label prefix (driver name + extra labels), prepended to dynamic
     /// series labels when their handles are first registered.
@@ -95,6 +113,15 @@ impl MetricsNames {
         let labeled = |name: &'static str, value: &'static str| {
             let mut labels = base.to_vec();
             labels.push(metrics::Label::new(name, value));
+            labels
+        };
+        let labeled2 = |name1: &'static str,
+                        value1: &'static str,
+                        name2: &'static str,
+                        value2: &'static str| {
+            let mut labels = base.to_vec();
+            labels.push(metrics::Label::new(name1, value1));
+            labels.push(metrics::Label::new(name2, value2));
             labels
         };
         Self {
@@ -130,6 +157,24 @@ impl MetricsNames {
             session_pool_keepalive_total: std::array::from_fn(
                 |i| counter!(description: "ydb session pool keepalive checks by result", "ydb_session_pool_keepalive_total", labeled("result", KEEPALIVE_RESULT_LABELS[i])),
             ),
+            query_operations_total: std::array::from_fn(|op| {
+                std::array::from_fn(
+                    |result| counter!(description: "ydb query operations by operation and result", "ydb_query_operations_total", labeled2("operation", QueryOperation::LABELS[op], "result", QUERY_RESULT_LABELS[result])),
+                )
+            }),
+            query_operation_duration_milliseconds: std::array::from_fn(
+                |op| histogram!(description: "ydb query operation duration", "ydb_query_operation_duration_milliseconds", labeled("operation", QueryOperation::LABELS[op])),
+            ),
+            query_result_rows: std::array::from_fn(
+                |op| histogram!(description: "ydb query result rows", "ydb_query_result_rows", labeled("operation", QueryOperation::LABELS[op])),
+            ),
+            query_result_bytes: std::array::from_fn(
+                |op| histogram!(description: "ydb query result bytes", "ydb_query_result_bytes", labeled("operation", QueryOperation::LABELS[op])),
+            ),
+            query_transactions_total: std::array::from_fn(
+                |result| counter!(description: "ydb retried transactions by result", "ydb_query_transactions_total", labeled("result", QueryTransactionResult::LABELS[result])),
+            ),
+            query_transaction_duration_milliseconds: histogram!(description: "ydb retried transaction duration including all attempts", "ydb_query_transaction_duration_milliseconds", base.iter()),
             dynamic: DynamicCaches::default(),
             base_labels: base.to_vec(),
         }
