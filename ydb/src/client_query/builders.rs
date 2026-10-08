@@ -9,6 +9,7 @@ use crate::result::{ResultSet, Row};
 use crate::types::Value;
 
 use super::FromYdbRow;
+use super::VirtualTimestamp;
 use super::exec::{
     CallOptions, ClientExecContext, ExecTarget, TxExecContext, client_begin_stream,
     resolve_commit_tx, tx_begin_stream,
@@ -207,6 +208,20 @@ impl<'a, S> IntoFuture for CallBuilder<'a, ExecCall, S> {
     }
 }
 
+impl<'a, S> CallBuilder<'a, ExecCall, S> {
+    /// Execute and return the optional commit timestamp for a StrictSerializableRW write.
+    ///
+    /// The timestamp is read from the final trailing ExecuteQuery response. A successful call
+    /// can return `None` when the server omitted it, such as for a read-only transaction.
+    pub async fn execute_with_commit_timestamp(mut self) -> YdbResult<Option<VirtualTimestamp>> {
+        Ok(
+            materialize_query(&mut self.core, self.text, self.params, self.opts)
+                .await?
+                .commit_timestamp,
+        )
+    }
+}
+
 impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OneRow<T>, S> {
     type Output = YdbResult<T>;
     type IntoFuture = BoxFuture<'a, Self::Output>;
@@ -215,7 +230,9 @@ impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OneRow<T>, S> {
         Box::pin(async move {
             let start = Instant::now();
             let set = exactly_one_set(
-                materialize_query(&mut self.core, self.text, self.params, self.opts).await?,
+                materialize_query(&mut self.core, self.text, self.params, self.opts)
+                    .await?
+                    .result_sets,
             )?;
             let row = take_single_row(set)?.ok_or(YdbError::NoRows)?;
             let delta = start.elapsed();
@@ -242,7 +259,9 @@ impl<'a, T: FromYdbRow + 'a, S> IntoFuture for CallBuilder<'a, OptionalRow<T>, S
         Box::pin(async move {
             let start = Instant::now();
             let set = exactly_one_set(
-                materialize_query(&mut self.core, self.text, self.params, self.opts).await?,
+                materialize_query(&mut self.core, self.text, self.params, self.opts)
+                    .await?
+                    .result_sets,
             )?;
             let row = take_single_row(set)?.map(T::from_row).transpose();
             let delta = start.elapsed();
@@ -268,7 +287,9 @@ impl<'a, S> IntoFuture for CallBuilder<'a, OneResultSet, S> {
     fn into_future(mut self) -> Self::IntoFuture {
         Box::pin(async move {
             exactly_one_set(
-                materialize_query(&mut self.core, self.text, self.params, self.opts).await?,
+                materialize_query(&mut self.core, self.text, self.params, self.opts)
+                    .await?
+                    .result_sets,
             )
         })
     }
@@ -286,7 +307,10 @@ impl<'a, S> IntoFuture for CallBuilder<'a, Streamed, S> {
                     let opened =
                         client_begin_stream(context, self.text, self.params, self.opts, false)
                             .await?;
-                    Ok(QueryStream::from_client(opened))
+                    Ok(QueryStream::from_client(
+                        opened,
+                        context.timestamp_scope.clone(),
+                    ))
                 }
                 ExecTarget::Tx(context) => {
                     let stream =

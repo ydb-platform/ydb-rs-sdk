@@ -12,6 +12,9 @@ pub mod ydb {
             include!("ydb.auth.v1.rs");
         }
     }
+    pub mod bridge {
+        include!("ydb.bridge.rs");
+    }
     pub mod coordination {
         include!("ydb.coordination.rs");
         pub mod v1 {
