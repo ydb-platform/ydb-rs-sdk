@@ -162,8 +162,8 @@ mod unit_tests {
         }
     }
 
-    #[test]
-    fn timeout_is_recorded_only_when_set() {
+    #[tokio::test]
+    async fn timeout_is_recorded_only_when_set() {
         let ctx = unreachable_ctx();
         assert_eq!(
             ExplainQueryBuilder::new(&ctx, "SELECT 1".to_string()).configured_timeout(),
