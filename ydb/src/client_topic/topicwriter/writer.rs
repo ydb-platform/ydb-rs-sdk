@@ -15,6 +15,7 @@ use crate::client_topic::topicwriter::message_write_status::{
 };
 use crate::client_topic::topicwriter::reconnector::{Reconnector, ReconnectorParams};
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
+use crate::driver_lifecycle::DriverResourceGuard;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::{YdbError, YdbResult};
 use ydb_grpc::ydb_proto::topic::TransactionIdentity;
@@ -26,6 +27,7 @@ pub struct TopicWriter {
     wait_for_fatal_error_handle: JoinHandle<()>,
     reconnector: Reconnector,
     _cancel_on_drop: DropGuard,
+    _driver_resource: DriverResourceGuard,
 }
 
 pub struct AckFuture {
@@ -50,8 +52,16 @@ impl TopicWriter {
         writer_options: TopicWriterOptions,
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
+        driver_resource: DriverResourceGuard,
     ) -> YdbResult<Self> {
-        Self::new_inner(writer_options, connection_manager, executor, None).await
+        Self::new_inner(
+            writer_options,
+            connection_manager,
+            executor,
+            None,
+            driver_resource,
+        )
+        .await
     }
 
     pub(crate) async fn with_tx_identity(
@@ -59,12 +69,14 @@ impl TopicWriter {
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
         tx_identity: TransactionIdentity,
+        driver_resource: DriverResourceGuard,
     ) -> YdbResult<Self> {
         Self::new_inner(
             writer_options,
             connection_manager,
             executor,
             Some(tx_identity),
+            driver_resource,
         )
         .await
     }
@@ -74,6 +86,7 @@ impl TopicWriter {
         connection_manager: GrpcConnectionManager,
         executor: Arc<dyn Executor>,
         tx_identity: Option<TransactionIdentity>,
+        driver_resource: DriverResourceGuard,
     ) -> YdbResult<Self> {
         let producer_id = writer_options
             .producer_id
@@ -117,6 +130,7 @@ impl TopicWriter {
             wait_for_fatal_error_handle,
             reconnector,
             _cancel_on_drop: cancel_on_drop,
+            _driver_resource: driver_resource,
         })
     }
 

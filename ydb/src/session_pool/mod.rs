@@ -11,8 +11,3 @@ pub use pool::{SessionPoolSettings, SessionPoolStats};
 pub(crate) use pool::{SessionPool, SessionPoolLease};
 
 pub(crate) use table_pool::TableSessionPool;
-
-/// Default session pool settings for a newly created [`crate::Client`].
-pub fn default_session_pool_settings() -> SessionPoolSettings {
-    SessionPoolSettings::default()
-}

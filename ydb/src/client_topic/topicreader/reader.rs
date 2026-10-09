@@ -14,6 +14,7 @@ use crate::client_topic::compression::Executor;
 use crate::client_topic::topicreader::ids::{PartitionId, PartitionSessionId};
 use crate::client_topic::topicreader::messages::TopicReaderBatch;
 use crate::client_topic::topicreader::reader_options::TopicReaderOptions;
+use crate::driver_lifecycle::DriverResourceGuard;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::client::RawTopicClient;
 use crate::grpc_wrapper::raw_topic_service::common::partition::RawOffsetsRange;
@@ -35,6 +36,7 @@ pub struct TopicReader {
     reconnect_handle: JoinHandle<YdbResult<()>>,
     runtime: RuntimeHandle,
     cancellation: CancellationToken,
+    _driver_resource: DriverResourceGuard,
 }
 
 static READER_ID: AtomicUsize = AtomicUsize::new(0);
@@ -49,6 +51,7 @@ impl TopicReader {
         manager: GrpcConnectionManager,
         token_cache: TokenCache,
         compression_executor: Arc<dyn Executor>,
+        driver_resource: DriverResourceGuard,
     ) -> YdbResult<Self> {
         let cancellation = CancellationToken::new();
         let ReconnectorTask {
@@ -71,6 +74,7 @@ impl TopicReader {
             reconnect_handle: join_handle,
             runtime,
             cancellation: cancellation_token,
+            _driver_resource: driver_resource,
         })
     }
 

@@ -11,6 +11,7 @@ use crate::client_topic::topicreader::reader_options::TopicReaderOptions;
 use crate::client_topic::topicwriter::writer::TopicWriter;
 use crate::client_topic::topicwriter::writer_options::TopicWriterOptions;
 use crate::client_topic::topicwriter::writer_tx::TopicWriterTx;
+use crate::driver_lifecycle::{DriverGuarded, DriverLifecycle};
 use crate::errors;
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_topic_service::alter_topic::RawAlterTopicRequest;
@@ -120,6 +121,11 @@ impl From<UninitializedFieldError> for errors::YdbError {
 
 #[derive(Clone)]
 pub struct TopicClient {
+    inner: DriverGuarded<TopicClientInner>,
+}
+
+#[derive(Clone)]
+struct TopicClientInner {
     timeouts: TimeoutSettings,
     connection_manager: GrpcConnectionManager,
     token_cache: TokenCache,
@@ -131,12 +137,15 @@ impl TopicClient {
         connection_manager: GrpcConnectionManager,
         token_cache: TokenCache,
         executor: Arc<dyn Executor>,
+        lifecycle: &DriverLifecycle,
     ) -> Self {
         Self {
-            timeouts: TimeoutSettings::default(),
-            connection_manager,
-            token_cache,
-            executor,
+            inner: lifecycle.guard(TopicClientInner {
+                timeouts: TimeoutSettings::default(),
+                connection_manager,
+                token_cache,
+                executor,
+            }),
         }
     }
 
@@ -146,9 +155,10 @@ impl TopicClient {
         path: String,
         options: CreateTopicOptions,
     ) -> YdbResult<()> {
-        let req = RawCreateTopicRequest::new(path, self.timeouts.operation_params(), options);
+        let inner = self.inner.access()?;
+        let req = RawCreateTopicRequest::new(path, inner.timeouts.operation_params(), options);
 
-        let mut service = self.raw_client_connection().await?;
+        let mut service = inner.raw_client_connection().await?;
         service.create_topic(req).await?;
 
         Ok(())
@@ -156,9 +166,10 @@ impl TopicClient {
 
     #[instrument(name = "ydb.TopicClient.AlterTopic", skip_all, fields(db.system.name = "ydb", ydb.topic.path = %path))]
     pub async fn alter_topic(&mut self, path: String, options: AlterTopicOptions) -> YdbResult<()> {
-        let req = RawAlterTopicRequest::new(path, self.timeouts.operation_params(), options);
+        let inner = self.inner.access()?;
+        let req = RawAlterTopicRequest::new(path, inner.timeouts.operation_params(), options);
 
-        let mut service = self.raw_client_connection().await?;
+        let mut service = inner.raw_client_connection().await?;
         service.alter_topic(req).await?;
 
         Ok(())
@@ -171,14 +182,15 @@ impl TopicClient {
         consumer: String,
         options: DescribeConsumerOptions,
     ) -> YdbResult<super::list_types::ConsumerDescription> {
+        let inner = self.inner.access()?;
         let req = RawDescribeConsumerRequest::new(
             path,
             consumer,
-            self.timeouts.operation_params(),
+            inner.timeouts.operation_params(),
             options,
         );
 
-        let mut service = self.raw_client_connection().await?;
+        let mut service = inner.raw_client_connection().await?;
         let result = service.describe_consumer(req).await?;
         let description = super::list_types::ConsumerDescription::from(result);
 
@@ -191,9 +203,10 @@ impl TopicClient {
         path: String,
         options: DescribeTopicOptions,
     ) -> YdbResult<TopicDescription> {
-        let req = RawDescribeTopicRequest::new(path, self.timeouts.operation_params(), options);
+        let inner = self.inner.access()?;
+        let req = RawDescribeTopicRequest::new(path, inner.timeouts.operation_params(), options);
 
-        let mut service = self.raw_client_connection().await?;
+        let mut service = inner.raw_client_connection().await?;
         let result = service.describe_topic(req).await?;
         let description = TopicDescription::from(result);
 
@@ -202,12 +215,13 @@ impl TopicClient {
 
     #[instrument(name = "ydb.TopicClient.DropTopic", skip_all, fields(db.system.name = "ydb", ydb.topic.path = %path))]
     pub async fn drop_topic(&mut self, path: String) -> YdbResult<()> {
+        let inner = self.inner.access()?;
         let req = RawDropTopicRequest {
-            operation_params: self.timeouts.operation_params(),
+            operation_params: inner.timeouts.operation_params(),
             path,
         };
 
-        let mut service = self.raw_client_connection().await?;
+        let mut service = inner.raw_client_connection().await?;
         service.delete_topic(req).await?;
 
         Ok(())
@@ -219,15 +233,18 @@ impl TopicClient {
         consumer: impl Into<String>,
         topic: impl Into<TopicSelectors>,
     ) -> YdbResult<TopicReader> {
+        let resource = self.inner.register_topic_reader()?;
+        let inner = self.inner.access()?;
         let options = TopicReaderOptions::builder()
             .consumer(consumer)
             .topic(topic)
             .build();
         TopicReader::new(
             options,
-            self.connection_manager.clone(),
-            self.token_cache.clone(),
-            self.executor.clone(),
+            inner.connection_manager.clone(),
+            inner.token_cache.clone(),
+            inner.executor.clone(),
+            resource,
         )
         .await
     }
@@ -237,11 +254,14 @@ impl TopicClient {
         &mut self,
         options: TopicReaderOptions,
     ) -> YdbResult<TopicReader> {
+        let resource = self.inner.register_topic_reader()?;
+        let inner = self.inner.access()?;
         TopicReader::new(
             options,
-            self.connection_manager.clone(),
-            self.token_cache.clone(),
-            self.executor.clone(),
+            inner.connection_manager.clone(),
+            inner.token_cache.clone(),
+            inner.executor.clone(),
+            resource,
         )
         .await
     }
@@ -251,10 +271,13 @@ impl TopicClient {
         &mut self,
         writer_options: TopicWriterOptions,
     ) -> YdbResult<TopicWriter> {
+        let resource = self.inner.register_topic_writer()?;
+        let inner = self.inner.access()?;
         TopicWriter::new(
             writer_options,
-            self.connection_manager.clone(),
-            self.executor.clone(),
+            inner.connection_manager.clone(),
+            inner.executor.clone(),
+            resource,
         )
         .await
     }
@@ -275,26 +298,41 @@ impl TopicClient {
         writer_tx_options: TopicWriterTxOptions,
         tx: &mut Transaction,
     ) -> YdbResult<TopicWriterTx> {
+        let resource = self.inner.register_topic_writer()?;
+        let inner = self.inner.access()?;
         TopicWriterTx::new(
             writer_tx_options,
-            self.connection_manager.clone(),
-            self.executor.clone(),
+            inner.connection_manager.clone(),
+            inner.executor.clone(),
             tx,
+            resource,
         )
         .await
     }
 
     #[instrument(name = "ydb.TopicClient.CreateWriter", skip_all)]
     pub async fn create_writer(&mut self, path: impl Into<String>) -> YdbResult<TopicWriter> {
+        let resource = self.inner.register_topic_writer()?;
+        let inner = self.inner.access()?;
         TopicWriter::new(
             TopicWriterOptions::builder().topic_path(path).build(),
-            self.connection_manager.clone(),
-            self.executor.clone(),
+            inner.connection_manager.clone(),
+            inner.executor.clone(),
+            resource,
         )
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn raw_client_connection(
+        &self,
+    ) -> YdbResult<grpc_wrapper::raw_topic_service::client::RawTopicClient> {
+        self.inner.access()?.raw_client_connection().await
+    }
+}
+
+impl TopicClientInner {
+    async fn raw_client_connection(
         &self,
     ) -> YdbResult<grpc_wrapper::raw_topic_service::client::RawTopicClient> {
         self.connection_manager

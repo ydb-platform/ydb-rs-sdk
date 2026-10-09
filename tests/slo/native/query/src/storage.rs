@@ -20,15 +20,10 @@ pub struct Storage {
 
 impl Storage {
     pub async fn new(fw: &Framework, params: &Params) -> Result<Self, String> {
-        let client = ClientBuilder::new_from_connection_string(&fw.config.connection_string)
-            .map_err(|err| err.to_string())?
-            .build()
-            .await
-            .map_err(|err| err.to_string())?;
-
         let pool_limit = params.pool_size() as usize;
         let session_rpc_timeout = params.read_timeout.max(params.write_timeout);
-        let client = client
+        let client = ClientBuilder::new_from_connection_string(&fw.config.connection_string)
+            .map_err(|err| err.to_string())?
             .with_session_pool(
                 SessionPoolSettings::new()
                     .with_limit(pool_limit)
@@ -36,6 +31,7 @@ impl Storage {
                     .with_session_create_timeout(session_rpc_timeout)
                     .with_session_delete_timeout(session_rpc_timeout),
             )
+            .build()
             .await
             .map_err(|err| err.to_string())?;
 
