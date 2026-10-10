@@ -1,0 +1,668 @@
+{
+  "uid": "ydb-sdk-metrics",
+  "title": "YDB SDK metrics",
+  "description": "All YDB Rust SDK metric series (client, query service, session pool, gRPC) driven by the `metrics` example.",
+  "tags": ["ydb", "ydb-rust-sdk", "metrics"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-30m", "to": "now" },
+  "annotations": { "list": [] },
+  "templating": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "type": "row",
+      "title": "Client",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "panels": []
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Client construction rate",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (__name__) (rate({__name__=~\"ydb_new_(client|table_client|query_client|scheme_client|topic_client)_counter\", driver_name=\"metrics-example\"}[$__rate_interval]))",
+          "legendFormat": "{{__name__}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Query / transaction counters rate",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (__name__) (rate({__name__=~\"ydb_client_(query_row|transaction_query_row|transaction_exec|transaction_commit|transaction_rollback)_counter\", driver_name=\"metrics-example\"}[$__rate_interval]))",
+          "legendFormat": "{{__name__}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Row query time quantiles (client, seconds)",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(ydb_row_query_time_histogram_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "legendFormat": "p50",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(ydb_row_query_time_histogram_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "legendFormat": "p95",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(ydb_row_query_time_histogram_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Row query time quantiles (transaction, seconds)",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(ydb_transaction_row_query_time_histogram_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "legendFormat": "p50",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(ydb_transaction_row_query_time_histogram_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "legendFormat": "p95",
+          "range": true
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(ydb_transaction_row_query_time_histogram_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Query Service",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "panels": []
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Operations rate by operation / result",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (operation, result) (rate(ydb_query_operations_total{driver_name=\"metrics-example\"}[$__rate_interval]))",
+          "legendFormat": "{{operation}} / {{result}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Operation duration p95 by operation (ms)",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(ydb_query_operation_duration_milliseconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "legendFormat": "{{operation}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Result rows p95 by operation",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+      "fieldConfig": {
+        "defaults": { "unit": "none", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(ydb_query_result_rows_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "legendFormat": "{{operation}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Result bytes p95 by operation",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(ydb_query_result_bytes_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "legendFormat": "{{operation}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Errors rate by operation / status_code",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 34 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (operation, status_code) (rate(ydb_query_errors_total{driver_name=\"metrics-example\"}[$__rate_interval]))",
+          "legendFormat": "{{operation}} / {{status_code}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Transactions rate by result",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 34 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (rate(ydb_query_transactions_total{driver_name=\"metrics-example\"}[$__rate_interval]))",
+          "legendFormat": "{{result}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Transaction duration p95 (ms)",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 42 },
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(ydb_query_transaction_duration_milliseconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "legendFormat": "p95",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Transaction retries rate by status_code",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 42 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (status_code) (rate(ydb_query_transaction_retries_total{driver_name=\"metrics-example\"}[$__rate_interval]))",
+          "legendFormat": "{{status_code}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Session Pool",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 50 },
+      "panels": []
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Sessions by state and pool limit",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 51 },
+      "fieldConfig": {
+        "defaults": { "unit": "none", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ydb_session_pool_sessions{driver_name=\"metrics-example\"}",
+          "legendFormat": "{{state}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "ydb_session_pool_size_limit{driver_name=\"metrics-example\"}",
+          "legendFormat": "limit",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Pending acquire requests",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 51 },
+      "fieldConfig": {
+        "defaults": { "unit": "none", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ydb_session_pool_pending_requests{driver_name=\"metrics-example\"}",
+          "legendFormat": "pending",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Acquire rate by result",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 59 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (rate(ydb_session_pool_acquire_total{driver_name=\"metrics-example\"}[$__rate_interval]))",
+          "legendFormat": "{{result}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Acquire duration p95 by result (ms)",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 59 },
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, result) (rate(ydb_session_pool_acquire_milliseconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "legendFormat": "{{result}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 25,
+      "type": "timeseries",
+      "title": "Sessions created / closed rate",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 67 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "rate(ydb_session_pool_sessions_created_total{driver_name=\"metrics-example\"}[$__rate_interval])",
+          "legendFormat": "created",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (reason) (rate(ydb_session_pool_sessions_closed_total{driver_name=\"metrics-example\"}[$__rate_interval]))",
+          "legendFormat": "closed: {{reason}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Session create / use duration p95 (ms)",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 67 },
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(ydb_session_pool_session_create_milliseconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "legendFormat": "create",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(ydb_session_pool_session_use_milliseconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "legendFormat": "use",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "Keepalive rate by result",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 75 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (rate(ydb_session_pool_keepalive_total{driver_name=\"metrics-example\"}[$__rate_interval]))",
+          "legendFormat": "{{result}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "row",
+      "title": "gRPC",
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 83 },
+      "panels": []
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Requests rate by service / method / code",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 84 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service, method, grpc_code) (rate(ydb_grpc_requests_total{driver_name=\"metrics-example\"}[$__rate_interval]))",
+          "legendFormat": "{{service}} / {{method}} / {{grpc_code}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "type": "timeseries",
+      "title": "Request duration p95 by service / method (ms)",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 84 },
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, service, method) (rate(ydb_grpc_request_duration_milliseconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "legendFormat": "{{service}} / {{method}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "type": "timeseries",
+      "title": "Transport errors rate by endpoint / code",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 92 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (endpoint, grpc_code) (rate(ydb_grpc_errors_total{driver_name=\"metrics-example\"}[$__rate_interval]))",
+          "legendFormat": "{{endpoint}} / {{grpc_code}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 34,
+      "type": "timeseries",
+      "title": "Stream messages rate by direction",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 92 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (service, method, direction) (rate(ydb_grpc_stream_messages_total{driver_name=\"metrics-example\"}[$__rate_interval]))",
+          "legendFormat": "{{service}} / {{method}} / {{direction}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 35,
+      "type": "timeseries",
+      "title": "Connections by endpoint / state",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 100 },
+      "fieldConfig": {
+        "defaults": { "unit": "none", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ydb_grpc_connections{driver_name=\"metrics-example\"}",
+          "legendFormat": "{{endpoint}} / {{state}}",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 36,
+      "type": "timeseries",
+      "title": "Connection establish duration p95 by result (ms)",
+      "datasource": { "type": "prometheus", "uid": "victoria" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 100 },
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "custom": { "drawStyle": "line", "spanNulls": false } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, endpoint, result) (rate(ydb_grpc_connection_establish_milliseconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "legendFormat": "{{endpoint}} / {{result}}",
+          "range": true
+        }
+      ]
+    }
+  ]
+}

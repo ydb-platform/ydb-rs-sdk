@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::future::IntoFuture;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::client::TimeoutSettings;
+use crate::client_metrics::{QueryOperation, ydb_status_code_label};
 use crate::closure;
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
@@ -80,10 +82,31 @@ impl<'a> IntoFuture for ExecuteScriptBuilder<'a> {
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let results_ttl = self.results_ttl.ok_or_else(|| {
-                YdbError::Custom("execute_script requires `.results_ttl(...)`".into())
-            })?;
-            client_execute_script(self.ctx, self.text, self.params, self.opts, results_ttl).await
+            let recorder = Arc::clone(&self.ctx.metrics_recorder);
+            let start = Instant::now();
+            let result = async {
+                let results_ttl = self.results_ttl.ok_or_else(|| {
+                    YdbError::Custom("execute_script requires `.results_ttl(...)`".into())
+                })?;
+                client_execute_script(self.ctx, self.text, self.params, self.opts, results_ttl)
+                    .await
+            }
+            .await;
+            match &result {
+                // ExecuteScript returns an operation handle, not rows: the
+                // result-size histograms do not apply.
+                Ok(_) => {
+                    recorder.query_operation(QueryOperation::ExecuteScript, true, start.elapsed())
+                }
+                Err(error) => {
+                    recorder.query_operation(QueryOperation::ExecuteScript, false, start.elapsed());
+                    recorder.query_operation_error(
+                        QueryOperation::ExecuteScript,
+                        ydb_status_code_label(error),
+                    );
+                }
+            }
+            result
         })
     }
 }
@@ -136,7 +159,9 @@ impl<'a> IntoFuture for FetchScriptResultsBuilder<'a> {
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            client_fetch_script_results(
+            let recorder = Arc::clone(&self.ctx.metrics_recorder);
+            let start = Instant::now();
+            let result = client_fetch_script_results(
                 self.ctx,
                 self.operation_id,
                 self.result_set_index,
@@ -144,7 +169,34 @@ impl<'a> IntoFuture for FetchScriptResultsBuilder<'a> {
                 self.rows_limit,
                 self.opts,
             )
-            .await
+            .await;
+            match result {
+                Ok((fetched, rows, bytes)) => {
+                    recorder.query_operation(
+                        QueryOperation::FetchScriptResults,
+                        true,
+                        start.elapsed(),
+                    );
+                    recorder.query_operation_result(
+                        QueryOperation::FetchScriptResults,
+                        rows,
+                        bytes,
+                    );
+                    Ok(fetched)
+                }
+                Err(error) => {
+                    recorder.query_operation(
+                        QueryOperation::FetchScriptResults,
+                        false,
+                        start.elapsed(),
+                    );
+                    recorder.query_operation_error(
+                        QueryOperation::FetchScriptResults,
+                        ydb_status_code_label(&error),
+                    );
+                    Err(error)
+                }
+            }
         })
     }
 }
@@ -210,7 +262,7 @@ async fn client_fetch_script_results(
     fetch_token: String,
     rows_limit: i64,
     opts: CallOptions,
-) -> YdbResult<FetchScriptResult> {
+) -> YdbResult<(FetchScriptResult, u64, u64)> {
     // FetchScriptResults is always safe to retry (aligned with Go SDK).
     ctx.retry_settings
         .clone()
@@ -240,7 +292,7 @@ async fn client_fetch_script_results_once(
     fetch_token: &str,
     rows_limit: i64,
     _opts: &CallOptions,
-) -> YdbResult<FetchScriptResult> {
+) -> YdbResult<(FetchScriptResult, u64, u64)> {
     let req = RawFetchScriptResultsRequest {
         operation_id: operation_id.to_string(),
         result_set_index,
@@ -256,9 +308,16 @@ async fn client_fetch_script_results_once(
         .await
         .map_err(YdbError::from)?;
 
-    Ok(FetchScriptResult {
-        result_set_index: index,
-        result_set: raw_set.try_into()?,
-        next_fetch_token: next_token,
-    })
+    // Result sizes are measured on the raw set: conversion consumes it.
+    let rows = raw_set.rows_count();
+    let bytes = raw_set.result_size_bytes();
+    Ok((
+        FetchScriptResult {
+            result_set_index: index,
+            result_set: raw_set.try_into()?,
+            next_fetch_token: next_token,
+        },
+        rows,
+        bytes,
+    ))
 }

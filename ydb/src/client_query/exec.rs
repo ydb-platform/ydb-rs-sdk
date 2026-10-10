@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::TryFutureExt;
 use tokio::time::timeout;
 
-use crate::client_metrics::names::MetricsNames;
+use crate::client_metrics::MetricsRecorder;
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
@@ -50,7 +51,7 @@ pub(crate) struct ClientExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub session_pool: SessionPool,
     pub retry_settings: RetrySettings,
-    pub metrics_names: MetricsNames,
+    pub metrics_recorder: Arc<dyn MetricsRecorder>,
 }
 
 /// Opened client stream and its explicit session ownership mode.
@@ -193,7 +194,7 @@ pub(crate) struct TxExecContext {
     pub state: TxState,
     /// Absolute deadline from [`QueryClient::retry_tx`] `.timeout()`, propagated to every RPC in the callback.
     pub retry_deadline: Option<Instant>,
-    pub metrics_names: MetricsNames,
+    pub metrics_recorder: Arc<dyn MetricsRecorder>,
 }
 
 impl TxExecContext {
@@ -670,8 +671,8 @@ pub(crate) fn tx_finish_query(tx: &mut TxExecContext, commit_at_end: bool) -> Yd
     }
 
     if commit_at_end {
-        tx.metrics_names
-            .client_transaction_commit_counter
+        tx.metrics_recorder
+            .client_transaction_commit_counter()
             .increment(1);
         tx.finish_tx(TxState::Committed, QueryTxCommitStatus::Committed)?
             .return_to_pool();
@@ -812,7 +813,7 @@ pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
         return Err(err);
     }
     let operation_timeout = remaining_retry_timeout(tx.retry_deadline);
-    let commit_counter = tx.metrics_names.client_transaction_commit_counter.clone();
+    let metrics_recorder = Arc::clone(&tx.metrics_recorder);
     let active = tx.active_mut()?;
     if active.server_progress.operation.is_in_flight() {
         return Err(TxServerProgress::operation_in_progress_error());
@@ -823,7 +824,9 @@ pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
         return Ok(());
     };
 
-    commit_counter.increment(1);
+    metrics_recorder
+        .client_transaction_commit_counter()
+        .increment(1);
 
     debug_assert_eq!(active.server_progress.operation, TxOperationState::Ready);
     active.server_progress.operation = TxOperationState::InFlight;
@@ -855,8 +858,8 @@ pub(crate) async fn tx_rollback(tx: &mut TxExecContext) -> YdbResult<()> {
     if !tx.state.is_active() {
         return Ok(());
     }
-    tx.metrics_names
-        .client_transaction_rollback_counter
+    tx.metrics_recorder
+        .client_transaction_rollback_counter()
         .increment(1);
     let operation_timeout = remaining_retry_timeout(tx.retry_deadline);
     let active = tx.active_mut()?;
@@ -908,14 +911,14 @@ pub(crate) fn tx_exec_context(
     lease: SessionPoolLease,
     options: TransactionOptions,
     retry_deadline: Option<Instant>,
-    metrics_names: MetricsNames,
+    metrics_recorder: Arc<dyn MetricsRecorder>,
 ) -> TxExecContext {
     TxExecContext {
         tx_mode: options.mode(),
         begin: options.begin(),
         state: TxState::Active(ActiveTx::new(client, lease)),
         retry_deadline,
-        metrics_names,
+        metrics_recorder,
     }
 }
 
@@ -970,6 +973,7 @@ mod unit_tests {
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
     use crate::GrpcOptions;
+    use crate::client_metrics::DefaultMetricsRecorder;
     use crate::client_query::TransactionOptions;
     use crate::errors::{Idempotency, YdbError, YdbOrCustomerError};
     use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -985,6 +989,7 @@ mod unit_tests {
             "bench".to_string(),
             MultiInterceptor::new(),
             GrpcOptions::default(),
+            Arc::new(DefaultMetricsRecorder::new()),
         )
     }
 
@@ -999,7 +1004,7 @@ mod unit_tests {
             lease,
             TransactionOptions::default(),
             None,
-            MetricsNames::new(None),
+            Arc::new(DefaultMetricsRecorder::new()),
         )
     }
 
