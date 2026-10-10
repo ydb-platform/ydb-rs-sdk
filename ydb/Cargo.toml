@@ -76,6 +76,7 @@ chrono = { version = "0.4", default-features = false, features = [
 ] }
 criterion = "0.8"
 lazy_static = "1.4"
+metrics-exporter-prometheus = "0.18.3"
 mockall = "0.14"
 ntest = "0.7"
 opentelemetry = "0.32.0"
