@@ -11,6 +11,11 @@
 //!   `ydb_query_errors_total{operation,status_code}`,
 //!   `ydb_query_transactions_total{result}`, `ydb_query_transaction_duration_milliseconds`,
 //!   `ydb_query_transaction_retries_total{status_code}`;
+//! - named queries (`.with_name(...)`): the same outcomes mirrored into
+//!   `ydb_query_named_operations_total{query_name,result}`,
+//!   `ydb_query_named_operation_duration_milliseconds{query_name}`,
+//!   `ydb_query_named_errors_total{query_name,status_code}`,
+//!   `ydb_query_named_result_rows` / `ydb_query_named_result_bytes{query_name}`;
 //! - session pool on the implicit-session path: `ydb_session_pool_acquire_*`,
 //!   `ydb_session_pool_session_use_milliseconds`;
 //! - gRPC: every RPC lands in `ydb_grpc_requests_total{endpoint,service,method,grpc_code}`
@@ -46,7 +51,7 @@ pub(crate) async fn run(client: SharedClient, cancel: CancellationToken) {
             return;
         }
         let client = client.read().await.clone();
-        let tick = rand::thread_rng().gen_range(0..7);
+        let tick = rand::thread_rng().gen_range(0..9);
         let result = match tick {
             0 => query_row_tick(&client).await,
             1 => failing_query_tick(&client).await,
@@ -54,7 +59,9 @@ pub(crate) async fn run(client: SharedClient, cancel: CancellationToken) {
             3 => retry_tx_rollback_tick(&client).await,
             4 => stream_tick(&client).await,
             5 => exec_ddl_tick(&client).await,
-            _ => script_tick(&client).await,
+            6 => script_tick(&client).await,
+            7 => named_query_row_tick(&client).await,
+            _ => named_failing_query_tick(&client).await,
         };
         if let Err(err) = result {
             warn!(?err, "query scenario tick failed");
@@ -202,8 +209,48 @@ async fn exec_ddl_tick(client: &ydb::Client) -> YdbResult<()> {
     Ok(())
 }
 
-/// Long-running script: start, poll until ready, paginate results.
+/// Named one-shot `query_row`: the `.with_name(...)` constant mirrors the
+/// outcome into the named series alongside the common ones.
 ///
+/// Moves: `ydb_query_named_operations_total{query_name="example_get_value",result="ok"}`,
+/// `ydb_query_named_operation_duration_milliseconds{query_name="example_get_value"}`,
+/// `ydb_query_named_result_rows` / `ydb_query_named_result_bytes{query_name="example_get_value"}`,
+/// plus the common `ydb_query_operations_total{operation="query_row"}` series.
+async fn named_query_row_tick(client: &ydb::Client) -> YdbResult<()> {
+    let mut qc = client.query_client();
+    let mut row = qc
+        .query_row("SELECT $value AS value")
+        .param("$value", 42_u64)
+        .with_name("example_get_value")
+        .await?;
+    let _value: Option<u64> = row.remove_field_by_name("value")?.try_into()?;
+    Ok(())
+}
+
+/// Named failing query: a missing table under a constant name.
+///
+/// Moves: `ydb_query_named_operations_total{query_name="example_missing_table",result="error"}`
+/// and `ydb_query_named_errors_total{query_name="example_missing_table",status_code=...}`
+/// (plus the common error series).
+async fn named_failing_query_tick(client: &ydb::Client) -> YdbResult<()> {
+    let mut qc = client.query_client();
+    match qc
+        .query_row("SELECT * FROM no_such_table_for_metrics_demo")
+        .with_name("example_missing_table")
+        .await
+    {
+        Ok(_) => {
+            warn!("missing-table query unexpectedly succeeded");
+            Ok(())
+        }
+        Err(err) => {
+            tracing::debug!(?err, "expected named query failure observed");
+            Ok(())
+        }
+    }
+}
+
+/// Long-running script: start, poll until ready, paginate results.
 /// Moves: `ydb_query_operations_total{operation="execute_script"}` and
 /// `{operation="fetch_script_results"}` with their duration/rows/bytes
 /// histograms.

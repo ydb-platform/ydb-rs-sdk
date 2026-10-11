@@ -240,6 +240,7 @@ pub struct ClientBuilder {
     driver_name: Option<String>,
     metrics_recorder: Option<Arc<dyn metrics::Recorder + Send + Sync>>,
     metrics_labels: Vec<(String, String)>,
+    metrics_max_query_names: Option<usize>,
 }
 
 impl ClientBuilder {
@@ -278,12 +279,17 @@ impl ClientBuilder {
     pub async fn build(mut self) -> YdbResult<Client> {
         validate_metrics_labels(&self.metrics_labels)?;
 
-        let metrics_recorder: Arc<dyn MetricsRecorder> =
-            Arc::new(DefaultMetricsRecorder::from_parts(
-                self.driver_name.take(),
-                std::mem::take(&mut self.metrics_labels),
-                self.metrics_recorder.take(),
-            ));
+        let metrics_recorder = DefaultMetricsRecorder::from_parts(
+            self.driver_name.take(),
+            std::mem::take(&mut self.metrics_labels),
+            self.metrics_recorder.take(),
+        );
+        let metrics_recorder: Arc<dyn MetricsRecorder> = match self.metrics_max_query_names.take() {
+            Some(max_query_names) => {
+                Arc::new(metrics_recorder.with_max_query_names(max_query_names))
+            }
+            None => Arc::new(metrics_recorder),
+        };
         metrics_recorder.client_new_counter().increment(1);
 
         let retry_settings = self
@@ -419,8 +425,18 @@ impl ClientBuilder {
         self
     }
 
-    /// Add one static label attached to all SDK metrics.
+    /// Cap the number of unique `query_name` values recorded through
+    /// [`crate::client_query::builders::CallBuilder::with_name`] (default 512).
     ///
+    /// Valid names beyond the cap are recorded under `query_name="__other__"`;
+    /// names outside `[a-z0-9_]{1,64}` under `query_name="__invalid__"`. The cap
+    /// bounds the cardinality of the `ydb_query_named_*` series per recorder.
+    pub fn with_metrics_max_query_names(mut self, max_query_names: usize) -> Self {
+        self.metrics_max_query_names = Some(max_query_names);
+        self
+    }
+
+    /// Add one static label attached to all SDK metrics.
     /// Labels accumulate across calls and are emitted in insertion order after
     /// the SDK-owned `driver_name` label. Values are fixed per client at
     /// `build()` time, so keep them static and low-cardinality (e.g. `env`,
@@ -467,6 +483,7 @@ impl ClientBuilder {
             driver_name: None,
             metrics_recorder: None,
             metrics_labels: Vec::new(),
+            metrics_max_query_names: None,
         }
     }
 }

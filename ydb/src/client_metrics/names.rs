@@ -9,6 +9,11 @@ use crate::client_metrics::{
 
 const DEFAULT_DRIVER_NAME: &str = "main";
 
+/// Default cap of unique `query_name` values admitted by one recorder; valid
+/// names beyond it collapse into the `__other__` bucket. Configurable per
+/// client through [`crate::ClientBuilder::with_metrics_max_query_names`].
+pub(crate) const DEFAULT_MAX_QUERY_NAMES: usize = 512;
+
 /// Number of `result` label values for `ydb_query_operations_total`; sizes its
 /// per-operation handle arrays. Indexed by `usize::from(!ok)`.
 pub(crate) const QUERY_RESULT_COUNT: usize = 2;
@@ -84,6 +89,9 @@ pub(crate) struct MetricsNames {
     pub query_result_bytes: [Histogram; QueryOperation::LABEL_COUNT],
     pub query_transactions_total: [Counter; QueryTransactionResult::LABEL_COUNT],
     pub query_transaction_duration_milliseconds: Histogram,
+    /// Registry of admitted query names for the named query series
+    /// (`ydb_query_named_*`), with the unique-name cap applied.
+    pub query_names: super::query_names::QueryNameRegistry,
     /// Handle caches for the dynamic series (runtime string labels).
     pub dynamic: DynamicCaches,
     /// Static label prefix (driver name + extra labels), prepended to dynamic
@@ -175,6 +183,7 @@ impl MetricsNames {
                 |result| counter!(description: "ydb retried transactions by result", "ydb_query_transactions_total", labeled("result", QueryTransactionResult::LABELS[result])),
             ),
             query_transaction_duration_milliseconds: histogram!(description: "ydb retried transaction duration including all attempts", "ydb_query_transaction_duration_milliseconds", base.iter()),
+            query_names: super::query_names::QueryNameRegistry::default(),
             dynamic: DynamicCaches::default(),
             base_labels: base.to_vec(),
         }

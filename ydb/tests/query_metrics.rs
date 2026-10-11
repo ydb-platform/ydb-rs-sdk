@@ -9,14 +9,17 @@ mod mock_server;
 use std::time::Duration;
 
 use ydb::{
-    Client, QueryExecutor, RetrySettings, Transaction, YdbResult, YdbResultWithCustomerErr, closure,
+    Client, ClientBuilder, QueryExecutor, RetrySettings, Transaction, YdbResult,
+    YdbResultWithCustomerErr, closure,
 };
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply};
 use crate::mock_server::metrics::*;
 use crate::mock_server::query::parts::status_part;
-use crate::mock_server::query::{ExecCountingHandler, QueryIncoming, QueryReply, QueryRowHandler};
+use crate::mock_server::query::{
+    ExecCountingHandler, QueryIncoming, QueryReply, QueryRowHandler, TxQueryRowHandler,
+};
 use crate::mock_server::server::MockServer;
 
 const ALL_OPERATIONS: [&str; 6] = [
@@ -244,6 +247,259 @@ async fn transactions_record_commit_and_rollback_outcomes() -> YdbResult<()> {
     assert!(
         histogram_sum(&registry, "ydb_query_transaction_duration_milliseconds") > 0.0,
         "ydb_query_transaction_duration_milliseconds sum must be positive"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn named_query_records_common_and_named_series() -> YdbResult<()> {
+    let (registry, recorder) = test_recorder();
+    // The transaction-id success part keeps both one-shot and interactive-tx
+    // ExecuteQuery calls working (see `TxQueryRowHandler`).
+    let handler = TxQueryRowHandler::new(tokio::sync::mpsc::unbounded_channel().0);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server, recorder).await?;
+
+    let mut qc = client.query_client();
+
+    // Named one-shot call: both the common and the named series move.
+    let _row = QueryExecutor::query_row(&mut qc, "SELECT 42 AS val")
+        .with_name("named_get")
+        .await?;
+    // Named streaming query: sizes accumulate into the named histograms too.
+    let mut stream = QueryExecutor::query(&mut qc, "SELECT 42 AS val")
+        .with_name("named_stream")
+        .await?;
+    while stream.next_result_set().await?.is_some() {}
+    stream.close().await?;
+    // Named script operations.
+    let operation = qc
+        .execute_script("SELECT 1 AS val")
+        .with_name("named_script")
+        .results_ttl(Duration::from_secs(3600))
+        .await?;
+    let _fetched = qc
+        .fetch_script_results(operation.id)
+        .with_name("named_fetch")
+        .await?;
+    // Named call inside an interactive transaction.
+    client
+        .query_client()
+        .retry_tx(closure!(async |tx: &mut Transaction| {
+            QueryExecutor::exec(&mut *tx, "UPSERT INTO t (id) VALUES (1)")
+                .with_name("named_tx_upsert")
+                .await?;
+            Ok(())
+        }))
+        .await?;
+
+    for (name, operations) in [
+        ("named_get", 1_u64),
+        ("named_stream", 1),
+        ("named_script", 1),
+        ("named_fetch", 1),
+        ("named_tx_upsert", 1),
+    ] {
+        assert_eq!(
+            counter_value_with_label(
+                &registry,
+                "ydb_query_named_operations_total",
+                "query_name",
+                name
+            ),
+            operations,
+            "one successful {name} call must be counted in the named series"
+        );
+        assert_eq!(
+            counter_value_with_label(
+                &registry,
+                "ydb_query_named_operations_total",
+                "result",
+                "ok"
+            ),
+            5,
+            "every named call must also keep the common operations series moving"
+        );
+    }
+    assert_eq!(
+        histogram_sample_count_with_label(
+            &registry,
+            "ydb_query_named_operation_duration_milliseconds",
+            "query_name",
+            "named_get"
+        ),
+        1,
+        "one named_get duration must be recorded"
+    );
+    assert!(
+        histogram_sum(&registry, "ydb_query_named_operation_duration_milliseconds") > 0.0,
+        "ydb_query_named_operation_duration_milliseconds sum must be positive"
+    );
+    // Result sizes land in the named histograms (execute_script returns a
+    // handle, so named_script has no sizes — the other four do).
+    assert_eq!(
+        histogram_sample_count_with_label(
+            &registry,
+            "ydb_query_named_result_rows",
+            "query_name",
+            "named_get"
+        ),
+        1
+    );
+    assert_eq!(
+        histogram_sample_count_with_label(
+            &registry,
+            "ydb_query_named_result_bytes",
+            "query_name",
+            "named_stream"
+        ),
+        1
+    );
+    assert!(
+        histogram_sum(&registry, "ydb_query_named_result_bytes") > 0.0,
+        "ydb_query_named_result_bytes sum must be positive"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn unnamed_query_writes_only_common_series() -> YdbResult<()> {
+    let (registry, recorder) = test_recorder();
+    let handler = QueryRowHandler::new(tokio::sync::mpsc::unbounded_channel().0);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server, recorder).await?;
+
+    let mut qc = client.query_client();
+    let _row = QueryExecutor::query_row(&mut qc, "SELECT 42 AS val").await?;
+
+    assert_eq!(
+        counter_value_with_label(
+            &registry,
+            "ydb_query_operations_total",
+            "operation",
+            "query_row"
+        ),
+        1,
+        "the common series must record the unnamed call"
+    );
+    assert!(
+        !metric_present(&registry, "ydb_query_named_operations_total"),
+        "unnamed calls must not create named series"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn failed_named_query_records_named_error_series() -> YdbResult<()> {
+    let (registry, recorder) = test_recorder();
+    let handler = AbortedHandler {
+        replies: tokio::sync::mpsc::unbounded_channel().0,
+    };
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = make_client(&server, recorder).await?;
+
+    let mut qc = client.query_client();
+    let result = QueryExecutor::query_row(&mut qc, "SELECT 42 AS val")
+        .with_name("named_failing")
+        .timeout(Duration::from_millis(500))
+        .await;
+    assert!(result.is_err(), "query_row must fail on ABORTED responses");
+
+    assert!(
+        counter_value_with_label(
+            &registry,
+            "ydb_query_named_operations_total",
+            "query_name",
+            "named_failing"
+        ) >= 1,
+        "failed named attempts must be counted"
+    );
+    assert!(
+        counter_value_with_label(
+            &registry,
+            "ydb_query_named_errors_total",
+            "query_name",
+            "named_failing"
+        ) >= 1,
+        "failed named attempts must count ydb_query_named_errors_total"
+    );
+    assert_eq!(
+        counter_value_with_label(
+            &registry,
+            "ydb_query_named_errors_total",
+            "status_code",
+            "ABORTED"
+        ),
+        counter_value_with_label(
+            &registry,
+            "ydb_query_named_errors_total",
+            "query_name",
+            "named_failing"
+        ),
+        "every failed named attempt must record the ABORTED status code"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn query_name_limit_collapses_to_other_bucket() -> YdbResult<()> {
+    let (registry, recorder) = test_recorder();
+    let handler = QueryRowHandler::new(tokio::sync::mpsc::unbounded_channel().0);
+    let (server, _reply_tx) = MockServer::start(handler).await;
+    let client = ClientBuilder::new_from_connection_string(format!(
+        "{}{DATABASE}?use_discovery=false",
+        server.endpoint()
+    ))?
+    .with_metrics_max_query_names(1)
+    .with_metrics_recorder(backend(recorder))
+    .build()
+    .await?;
+
+    let mut qc = client.query_client();
+    let _row = QueryExecutor::query_row(&mut qc, "SELECT 42 AS val")
+        .with_name("first_named")
+        .await?;
+    let _row = QueryExecutor::query_row(&mut qc, "SELECT 42 AS val")
+        .with_name("second_named")
+        .await?;
+
+    assert_eq!(
+        counter_value_with_label(
+            &registry,
+            "ydb_query_named_operations_total",
+            "query_name",
+            "first_named"
+        ),
+        1,
+        "the first name must be admitted"
+    );
+    assert_eq!(
+        counter_value_with_label(
+            &registry,
+            "ydb_query_named_operations_total",
+            "query_name",
+            "second_named"
+        ),
+        0,
+        "a name beyond the limit must not appear as its own series"
+    );
+    assert_eq!(
+        counter_value_with_label(
+            &registry,
+            "ydb_query_named_operations_total",
+            "query_name",
+            "__other__"
+        ),
+        1,
+        "names beyond the limit must collapse into the __other__ bucket"
     );
 
     Ok(())

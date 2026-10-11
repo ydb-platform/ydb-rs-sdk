@@ -896,6 +896,7 @@ mod unit_tests {
                 &mut tx.ctx,
                 false,
                 recorder,
+                None,
             );
             assert!(
                 stream
@@ -1068,6 +1069,7 @@ mod unit_tests {
                 &mut tx.ctx,
                 false,
                 recorder,
+                None,
             );
             drop(stream);
         }

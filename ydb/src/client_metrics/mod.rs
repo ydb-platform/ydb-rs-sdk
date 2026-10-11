@@ -9,12 +9,14 @@ use crate::errors::{YdbError, YdbOrCustomerError};
 pub(crate) mod dynamic;
 pub(crate) mod interning;
 pub(crate) mod names;
+pub(crate) mod query_names;
 #[cfg(test)]
 pub(crate) mod test_recorder;
 
 use dynamic::GrpcCodeKey;
 use interning::{intern, resolve};
 use metrics::Label;
+use query_names::QueryNameRegistry;
 
 /// Connection state label for the `ydb_grpc_connections` gauge.
 ///
@@ -393,6 +395,27 @@ pub trait MetricsRecorder: Send + Sync {
     /// Record one retryable error inside a retried transaction
     /// (`ydb_query_transaction_retries_total{status_code}`).
     fn query_transaction_retry(&self, _status_code: &str) {}
+
+    /// Record one named query service operation:
+    /// `ydb_query_named_operations_total{query_name,result}` and
+    /// `ydb_query_named_operation_duration_milliseconds{query_name}`.
+    ///
+    /// Called in addition to [`Self::query_operation`] when the caller set a
+    /// query name on the builder; `query_name` is the raw `&'static str` from
+    /// [`crate::client_query::builders::CallBuilder::with_name`] — validation
+    /// and the unique-name limit are applied by the recorder owning the name
+    /// registry.
+    fn query_named_operation(&self, _query_name: &'static str, _ok: bool, _duration: Duration) {}
+
+    /// Record the status of a failed named query service operation
+    /// (`ydb_query_named_errors_total{query_name,status_code}`); see
+    /// [`ydb_status_code_label`].
+    fn query_named_operation_error(&self, _query_name: &'static str, _status_code: &str) {}
+
+    /// Record the result size of a named query service operation
+    /// (`ydb_query_named_result_rows` / `ydb_query_named_result_bytes`
+    /// histograms).
+    fn query_named_operation_result(&self, _query_name: &'static str, _rows: u64, _bytes: u64) {}
 }
 
 /// Default [`MetricsRecorder`] implementation.
@@ -448,6 +471,19 @@ impl DefaultMetricsRecorder {
             names: names::MetricsNames::new(base, backend.as_deref()),
             _backend: backend,
         }
+    }
+
+    /// Cap the number of unique `query_name` values admitted into the named
+    /// query series (`ydb_query_named_*`); defaults to 512.
+    ///
+    /// Names within `[a-z0-9_]{1,64}` beyond the cap are recorded under the
+    /// `__other__` bucket; malformed names under `__invalid__`. Either
+    /// fallback keeps the named-series cardinality bounded. The registry is
+    /// empty at this point (names resolve lazily at first emission), so the
+    /// cap can be replaced freely before the first named call.
+    pub fn with_max_query_names(mut self, max_query_names: usize) -> Self {
+        self.names.query_names = QueryNameRegistry::new(max_query_names);
+        self
     }
 }
 
@@ -722,6 +758,76 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             self.record(|| counter!("ydb_query_transaction_retries_total", labels.iter()))
         })
         .increment(1);
+    }
+
+    fn query_named_operation(&self, query_name: &'static str, ok: bool, duration: Duration) {
+        let name = self.names.query_names.resolve(query_name);
+        let result = usize::from(!ok);
+        dynamic::cached(
+            &self.names.dynamic.query_named_operations,
+            (name, result),
+            || {
+                let labels = self.names.dynamic_labels(vec![
+                    Label::new("query_name", QueryNameRegistry::label_value(name)),
+                    Label::new("result", names::QUERY_RESULT_LABELS[result]),
+                ]);
+                self.record(|| counter!("ydb_query_named_operations_total", labels.iter()))
+            },
+        )
+        .increment(1);
+
+        dynamic::cached(
+            &self.names.dynamic.query_named_operation_duration,
+            name,
+            || {
+                let labels = self.names.dynamic_labels(vec![Label::new(
+                    "query_name",
+                    QueryNameRegistry::label_value(name),
+                )]);
+                self.record(|| {
+                    histogram!(
+                        "ydb_query_named_operation_duration_milliseconds",
+                        labels.iter()
+                    )
+                })
+            },
+        )
+        .record(duration.as_secs_f64() * 1000.0);
+    }
+
+    fn query_named_operation_error(&self, query_name: &'static str, status_code: &str) {
+        let name = self.names.query_names.resolve(query_name);
+        let status_code = intern(status_code);
+        dynamic::cached(
+            &self.names.dynamic.query_named_errors,
+            (name, status_code),
+            || {
+                let labels = self.names.dynamic_labels(vec![
+                    Label::new("query_name", QueryNameRegistry::label_value(name)),
+                    Label::new("status_code", resolve(status_code)),
+                ]);
+                self.record(|| counter!("ydb_query_named_errors_total", labels.iter()))
+            },
+        )
+        .increment(1);
+    }
+
+    fn query_named_operation_result(&self, query_name: &'static str, rows: u64, bytes: u64) {
+        let name = self.names.query_names.resolve(query_name);
+        let label = || {
+            self.names.dynamic_labels(vec![Label::new(
+                "query_name",
+                QueryNameRegistry::label_value(name),
+            )])
+        };
+        dynamic::cached(&self.names.dynamic.query_named_result_rows, name, || {
+            self.record(|| histogram!("ydb_query_named_result_rows", label().iter()))
+        })
+        .record(rows as f64);
+        dynamic::cached(&self.names.dynamic.query_named_result_bytes, name, || {
+            self.record(|| histogram!("ydb_query_named_result_bytes", label().iter()))
+        })
+        .record(bytes as f64);
     }
 }
 
@@ -1377,6 +1483,144 @@ mod tests {
             test.label_of_last("ydb_query_transaction_retries_total", "driver_name")
                 .as_deref(),
             Some("main")
+        );
+    }
+
+    #[test]
+    fn default_recorder_emits_named_query_series_into_backend() {
+        let test = Arc::new(crate::client_metrics::test_recorder::TestRecorder::new());
+        let recorder: Arc<dyn MetricsRecorder> = Arc::new(DefaultMetricsRecorder::with_backend(
+            Arc::clone(&test) as Arc<dyn metrics::Recorder + Send + Sync>,
+        ));
+
+        recorder.query_named_operation("get_account_balance", true, Duration::from_millis(12));
+        recorder.query_named_operation("get_account_balance", false, Duration::from_millis(34));
+        recorder.query_named_operation_error("get_account_balance", "ABORTED");
+        recorder.query_named_operation_result("get_account_balance", 7, 256);
+
+        assert_eq!(
+            test.counter_value_with_label("ydb_query_named_operations_total", "result", "ok"),
+            1
+        );
+        assert_eq!(
+            test.counter_value_with_label("ydb_query_named_operations_total", "result", "error"),
+            1
+        );
+        assert_eq!(
+            test.label_of_last("ydb_query_named_operations_total", "query_name")
+                .as_deref(),
+            Some("get_account_balance")
+        );
+        assert_eq!(
+            test.histogram_count("ydb_query_named_operation_duration_milliseconds"),
+            2
+        );
+        assert_eq!(
+            test.counter_value_with_label("ydb_query_named_errors_total", "status_code", "ABORTED"),
+            1
+        );
+        assert_eq!(
+            test.histogram_observations("ydb_query_named_result_rows"),
+            vec![7.0]
+        );
+        assert_eq!(
+            test.histogram_observations("ydb_query_named_result_bytes"),
+            vec![256.0]
+        );
+        // Named dynamic series carry the static labels first.
+        assert_eq!(
+            test.label_of_last("ydb_query_named_operations_total", "driver_name")
+                .as_deref(),
+            Some("main")
+        );
+    }
+
+    #[test]
+    fn named_series_register_once_per_query_name() {
+        let capture = Arc::new(CaptureRecorder::default());
+        let recorder = DefaultMetricsRecorder::with_backend(
+            Arc::clone(&capture) as Arc<dyn metrics::Recorder + Send + Sync>
+        );
+
+        for _ in 0..5 {
+            recorder.query_named_operation("named_q", true, Duration::from_millis(1));
+        }
+        assert_eq!(capture.count("ydb_query_named_operations_total"), 1);
+        assert_eq!(
+            capture.count("ydb_query_named_operation_duration_milliseconds"),
+            1
+        );
+
+        recorder.query_named_operation("other_q", true, Duration::from_millis(1));
+        assert_eq!(capture.count("ydb_query_named_operations_total"), 2);
+    }
+
+    #[test]
+    fn query_name_limit_collapses_new_names_to_other() {
+        let test = Arc::new(crate::client_metrics::test_recorder::TestRecorder::new());
+        let recorder: Arc<dyn MetricsRecorder> = Arc::new(
+            DefaultMetricsRecorder::with_backend(
+                Arc::clone(&test) as Arc<dyn metrics::Recorder + Send + Sync>
+            )
+            .with_max_query_names(1),
+        );
+
+        recorder.query_named_operation("first_query", true, Duration::from_millis(1));
+        recorder.query_named_operation("second_query", true, Duration::from_millis(1));
+
+        assert_eq!(
+            test.counter_value_with_label(
+                "ydb_query_named_operations_total",
+                "query_name",
+                "first_query"
+            ),
+            1
+        );
+        assert_eq!(
+            test.counter_value_with_label(
+                "ydb_query_named_operations_total",
+                "query_name",
+                "second_query"
+            ),
+            0,
+            "a name beyond the limit must not appear as its own series"
+        );
+        assert_eq!(
+            test.counter_value_with_label(
+                "ydb_query_named_operations_total",
+                "query_name",
+                "__other__"
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn invalid_query_name_maps_to_invalid_bucket() {
+        // Bypasses the `with_name` debug gate to pin the release-build mapping.
+        let test = Arc::new(crate::client_metrics::test_recorder::TestRecorder::new());
+        let recorder: Arc<dyn MetricsRecorder> = Arc::new(DefaultMetricsRecorder::with_backend(
+            Arc::clone(&test) as Arc<dyn metrics::Recorder + Send + Sync>,
+        ));
+
+        recorder.query_named_operation("Bad-Name", true, Duration::from_millis(1));
+
+        assert_eq!(
+            test.counter_value_with_label(
+                "ydb_query_named_operations_total",
+                "query_name",
+                "Bad-Name"
+            ),
+            0,
+            "a malformed name must never appear as its own series"
+        );
+        assert_eq!(
+            test.counter_value_with_label(
+                "ydb_query_named_operations_total",
+                "query_name",
+                "__invalid__"
+            ),
+            1
         );
     }
 

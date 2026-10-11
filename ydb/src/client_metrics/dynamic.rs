@@ -62,6 +62,8 @@ pub(crate) type GrpcConnectionsKey = (usize, usize);
 pub(crate) type GrpcConnectionEstablishKey = (usize, bool);
 pub(crate) type QueryErrorsKey = (usize, usize);
 pub(crate) type QueryTransactionRetriesKey = usize;
+pub(crate) type QueryNamedOperationsKey = (usize, usize);
+pub(crate) type QueryNamedErrorsKey = (usize, usize);
 
 /// Handle caches for the dynamic series (runtime string labels), stored inside
 /// [`MetricsNames`](super::names::MetricsNames) (so handles stay bound to its
@@ -78,6 +80,19 @@ pub(crate) struct DynamicCaches {
     pub(crate) query_errors: RwLock<HashMap<QueryErrorsKey, Counter>>,
     /// `ydb_query_transaction_retries_total` keyed by interned status code.
     pub(crate) query_tx_retries: RwLock<HashMap<QueryTransactionRetriesKey, Counter>>,
+    /// `ydb_query_named_operations_total` keyed by (canonical interned query
+    /// name, result index).
+    pub(crate) query_named_operations: RwLock<HashMap<QueryNamedOperationsKey, Counter>>,
+    /// `ydb_query_named_operation_duration_milliseconds` keyed by canonical
+    /// interned query name.
+    pub(crate) query_named_operation_duration: RwLock<HashMap<usize, Histogram>>,
+    /// `ydb_query_named_errors_total` keyed by (canonical interned query name,
+    /// interned status code).
+    pub(crate) query_named_errors: RwLock<HashMap<QueryNamedErrorsKey, Counter>>,
+    /// `ydb_query_named_result_rows` keyed by canonical interned query name.
+    pub(crate) query_named_result_rows: RwLock<HashMap<usize, Histogram>>,
+    /// `ydb_query_named_result_bytes` keyed by canonical interned query name.
+    pub(crate) query_named_result_bytes: RwLock<HashMap<usize, Histogram>>,
 }
 
 /// Cached handle lookup: a read lock on hit; on miss, build the handle under

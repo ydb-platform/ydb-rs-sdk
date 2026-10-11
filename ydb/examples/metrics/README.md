@@ -61,7 +61,7 @@ Four independent scenario loops run with randomized 5 s – 3 min intervals:
 
 | Scenario | What it does | Metric series it moves |
 |----------|--------------|------------------------|
-| `scenarios/query.rs` | Each tick picks one of: parameterized `query_row`, a failing query against a missing table, `retry_tx` commit (upsert + count), `retry_tx` explicit rollback, materialized result set + multi-result-set stream, DDL create/drop, `execute_script` + poll + `fetch_script_results` | Client counters + `ydb_row_query_time_histogram`; `ydb_query_operations_total{operation,result}`, `ydb_query_operation_duration_milliseconds`, `ydb_query_result_rows/bytes`, `ydb_query_errors_total`, `ydb_query_transactions_total`, `ydb_query_transaction_duration_milliseconds`; session pool acquire/use; every RPC in `ydb_grpc_requests_total` |
+| `scenarios/query.rs` | Each tick picks one of: parameterized `query_row`, a failing query against a missing table, `retry_tx` commit (upsert + count), `retry_tx` explicit rollback, materialized result set + multi-result-set stream, DDL create/drop, `execute_script` + poll + `fetch_script_results`, a named `query_row` (`.with_name(...)`), a named failing query | Client counters + `ydb_row_query_time_histogram`; `ydb_query_operations_total{operation,result}`, `ydb_query_operation_duration_milliseconds`, `ydb_query_result_rows/bytes`, `ydb_query_errors_total`, `ydb_query_transactions_total`, `ydb_query_transaction_duration_milliseconds`; named variants `ydb_query_named_*{query_name}`; session pool acquire/use; every RPC in `ydb_grpc_requests_total` |
 | `scenarios/session_pool.rs` | Builds a dedicated driver with `with_session_pool(limit=5, warm_up=2, item_usage_limit=10, idle_ttl=30s)` and fires 10 parallel `query_row`s | `ydb_session_pool_sessions{state}`, `size_limit`, `pending_requests`, `acquire_total/milliseconds{result}`, `sessions_created_total`, `sessions_closed_total{reason}` (idle_ttl/usage_limit over time, shutdown at drop), `session_create_milliseconds`, `session_use_milliseconds` |
 | `scenarios/topic.rs` | Creates a directory + topic with a consumer, produces 5 messages, consumes them with commit (deadline-bounded), drops everything | `ydb_new_topic_client_counter`, `ydb_grpc_stream_messages_total{direction="received"}` on `StreamRead`, topic/scheme RPCs in `ydb_grpc_requests_total` |
 | `scenarios/reconnect.rs` | Builds a fresh driver and swaps it into the shared slot, dropping the old one (no public `stop()` on `Client`) | `ydb_new_client_counter`, `ydb_grpc_connections{state="connecting"\|"active"}`, `ydb_grpc_connection_establish_milliseconds{result="ok"}`, discovery RPCs, `sessions_closed_total{reason="shutdown"}` on the old driver |
@@ -112,6 +112,16 @@ use these exact strings:
   `ydb_query_transactions_total{result=commit|rollback|error}`,
   `ydb_query_transaction_duration_milliseconds`,
   `ydb_query_transaction_retries_total{status_code}`.
+- **Named queries** (only for calls carrying `.with_name("...")`, mirrored from
+  the common series): `ydb_query_named_operations_total{query_name,result}`,
+  `ydb_query_named_operation_duration_milliseconds{query_name}`,
+  `ydb_query_named_errors_total{query_name,status_code}`,
+  `ydb_query_named_result_rows{query_name}`,
+  `ydb_query_named_result_bytes{query_name}`. The name must match
+  `[a-z0-9_]{1,64}` (constant from application code, never runtime data);
+  malformed names land in `query_name="__invalid__"` and names beyond the
+  per-recorder cap (`ClientBuilder::with_metrics_max_query_names`, default 512)
+  collapse into `query_name="__other__"`.
 
 ## Known gaps (by design, fixed in later SDK cycles)
 
@@ -135,4 +145,4 @@ use these exact strings:
 - `victoria/scrape.yml` — scrape job for `host.docker.internal:9090`.
 - `grafana/provisioning/` — datasource (`uid: victoria`) and dashboard provider.
 - `grafana/dashboards/ydb-sdk-metrics.json` — provisioned dashboard, 4 sections
-  (Client, Query Service, Session Pool, gRPC), ~25 panels.
+  (Client, Query Service, Session Pool, gRPC), ~29 panels.

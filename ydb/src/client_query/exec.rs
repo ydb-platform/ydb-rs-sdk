@@ -38,6 +38,10 @@ pub(crate) struct CallOptions {
     pub tx_mode: Option<TxMode>,
     /// One-shot [`QueryClient`] only: send `ExecuteQuery` with an empty `session_id`.
     pub implicit_session: bool,
+    /// Constant application-chosen name for the named query metric rows
+    /// (`ydb_query_named_*`); recorded into the `ydb.query.name` span field too,
+    /// so traces and metric series correlate.
+    pub query_name: Option<&'static str>,
 }
 
 impl CallOptions {
@@ -517,7 +521,7 @@ async fn client_implicit_session_request(
     Ok((client, req))
 }
 
-#[instrument(name = "ydb.Query.BeginStreamOnce", skip_all, fields(db.system.name = "ydb"), err)]
+#[instrument(name = "ydb.Query.BeginStreamOnce", skip_all, fields(db.system.name = "ydb", ydb.query.name = tracing::field::Empty), err)]
 pub(super) async fn client_begin_stream_once(
     ctx: &ClientExecContext,
     text: &str,
@@ -525,6 +529,9 @@ pub(super) async fn client_begin_stream_once(
     opts: &CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<OpenedClientQueryStream> {
+    if let Some(query_name) = opts.query_name {
+        tracing::Span::current().record("ydb.query.name", query_name);
+    }
     if opts.implicit_session {
         let (mut client, req) =
             client_implicit_session_request(ctx, text, params, opts, concurrent_result_sets)
@@ -744,7 +751,7 @@ fn tx_execute_request(
     Ok(request)
 }
 
-#[instrument(name = "ydb.Query.TransactionBeginStream", skip_all, fields(db.system.name = "ydb", ydb.tx.mode = ?tx.tx_mode, ydb.session.id = tracing::field::Empty), err)]
+#[instrument(name = "ydb.Query.TransactionBeginStream", skip_all, fields(db.system.name = "ydb", ydb.tx.mode = ?tx.tx_mode, ydb.session.id = tracing::field::Empty, ydb.query.name = tracing::field::Empty), err)]
 pub(crate) async fn tx_begin_stream(
     tx: &mut TxExecContext,
     text: String,
@@ -756,6 +763,9 @@ pub(crate) async fn tx_begin_stream(
         !opts.implicit_session,
         "implicit_session is only available on QueryClient one-shot builders"
     );
+    if let Some(query_name) = opts.query_name {
+        tracing::Span::current().record("ydb.query.name", query_name);
+    }
     tx.active()?;
     let operation_timeout = resolve_operation_timeout(tx.retry_deadline, opts.timeout);
     let result: YdbResult<ExecuteQueryStream> = with_optional_timeout(operation_timeout, async {

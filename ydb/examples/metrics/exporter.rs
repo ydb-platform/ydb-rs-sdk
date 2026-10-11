@@ -76,6 +76,14 @@ pub(crate) fn install() -> Result<(), Box<dyn std::error::Error>> {
             Matcher::Full("ydb_query_result_bytes".to_string()),
             RESULT_SIZE_BUCKETS,
         )?
+        .set_buckets_for_metric(
+            Matcher::Full("ydb_query_named_result_rows".to_string()),
+            RESULT_SIZE_BUCKETS,
+        )?
+        .set_buckets_for_metric(
+            Matcher::Full("ydb_query_named_result_bytes".to_string()),
+            RESULT_SIZE_BUCKETS,
+        )?
         .install()?;
 
     Ok(())

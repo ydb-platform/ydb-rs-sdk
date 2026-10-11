@@ -35,6 +35,7 @@ fn raw_sets_size(raw_sets: &[RawResultSet]) -> (u64, u64) {
 /// the stream finishes, closes, or is dropped mid-drain.
 struct StreamResultMetrics {
     recorder: Arc<dyn MetricsRecorder>,
+    query_name: Option<&'static str>,
     rows: u64,
     bytes: u64,
 }
@@ -48,6 +49,10 @@ impl StreamResultMetrics {
     fn record(self) {
         self.recorder
             .query_operation_result(QueryOperation::Query, self.rows, self.bytes);
+        if let Some(name) = self.query_name {
+            self.recorder
+                .query_named_operation_result(name, self.rows, self.bytes);
+        }
     }
 }
 
@@ -109,12 +114,14 @@ impl<'a> QueryStream<'a> {
     pub(crate) fn from_client(
         opened: OpenedClientQueryStream,
         recorder: Arc<dyn MetricsRecorder>,
+        query_name: Option<&'static str>,
     ) -> Self {
         Self {
             stream: opened.stream,
             lifecycle: QueryStreamLifecycle::Active(QueryStreamOwner::Client(opened.session)),
             result_metrics: Some(StreamResultMetrics {
                 recorder,
+                query_name,
                 rows: 0,
                 bytes: 0,
             }),
@@ -126,6 +133,7 @@ impl<'a> QueryStream<'a> {
         context: &'a mut TxExecContext,
         commit_at_end: bool,
         recorder: Arc<dyn MetricsRecorder>,
+        query_name: Option<&'static str>,
     ) -> Self {
         Self {
             stream,
@@ -135,6 +143,7 @@ impl<'a> QueryStream<'a> {
             }),
             result_metrics: Some(StreamResultMetrics {
                 recorder,
+                query_name,
                 rows: 0,
                 bytes: 0,
             }),
