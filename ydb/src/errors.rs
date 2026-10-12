@@ -521,6 +521,22 @@ macro_rules! to_custom_ydb_err {
     };
 }
 
+pub(crate) trait FlattenToYdbError<T> {
+    fn flatten_err(self) -> Result<T, YdbError>;
+}
+
+impl<T, E> FlattenToYdbError<T> for Result<Result<T, YdbError>, E>
+where
+    E: Into<YdbError>,
+{
+    fn flatten_err(self) -> Result<T, YdbError> {
+        match self {
+            Ok(inner) => inner,
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
 impl std::error::Error for YdbError {}
 
 #[cfg(test)]
