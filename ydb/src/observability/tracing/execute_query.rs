@@ -227,8 +227,16 @@ mod tests {
 
         assert_eq!(tracker.close_times(&operation_id), 1);
         assert_eq!(tracker.close_times(&attached_id), 1);
-        assert_eq!(recorder.histogram(OPERATION_DURATION, &operation_labels()).len(), 1);
-        assert_eq!(recorder.counter(FAILED_OPERATIONS, &failure_labels("UNKNOWN")), 0);
+        assert_eq!(
+            recorder
+                .histogram(OPERATION_DURATION, &operation_labels())
+                .len(),
+            1
+        );
+        assert_eq!(
+            recorder.counter(FAILED_OPERATIONS, &failure_labels("UNKNOWN")),
+            0
+        );
     }
 
     #[test]
@@ -239,7 +247,12 @@ mod tests {
         let mut composite_span = new_composite_span();
         composite_span.finish_error(&YdbError::DeadlineExceeded);
 
-        assert_eq!(recorder.histogram(OPERATION_DURATION, &operation_labels()).len(), 1);
+        assert_eq!(
+            recorder
+                .histogram(OPERATION_DURATION, &operation_labels())
+                .len(),
+            1
+        );
         assert_eq!(
             recorder.counter(FAILED_OPERATIONS, &failure_labels("DEADLINE_EXCEEDED")),
             1
@@ -254,7 +267,12 @@ mod tests {
         let mut composite_span = new_composite_span();
         composite_span.finish_cancelled();
 
-        assert_eq!(recorder.histogram(OPERATION_DURATION, &operation_labels()).len(), 1);
+        assert_eq!(
+            recorder
+                .histogram(OPERATION_DURATION, &operation_labels())
+                .len(),
+            1
+        );
         assert_eq!(
             recorder.counter(FAILED_OPERATIONS, &failure_labels("DEADLINE_EXCEEDED")),
             0
@@ -271,7 +289,12 @@ mod tests {
         composite_span.finish_error(&YdbError::DeadlineExceeded);
         drop(composite_span);
 
-        assert_eq!(recorder.histogram(OPERATION_DURATION, &operation_labels()).len(), 1);
+        assert_eq!(
+            recorder
+                .histogram(OPERATION_DURATION, &operation_labels())
+                .len(),
+            1
+        );
         assert_eq!(
             recorder.counter(FAILED_OPERATIONS, &failure_labels("DEADLINE_EXCEEDED")),
             0
@@ -291,7 +314,12 @@ mod tests {
         drop(composite_span);
 
         assert_eq!(tracker.close_times(&operation_id), 1);
-        assert_eq!(recorder.histogram(OPERATION_DURATION, &operation_labels()).len(), 1);
+        assert_eq!(
+            recorder
+                .histogram(OPERATION_DURATION, &operation_labels())
+                .len(),
+            1
+        );
     }
 
     #[test]

@@ -911,6 +911,11 @@ pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
             Ok(())
         }
         Err(error) => {
+            commit_metrics.operation_metrics.record_operation_failure(
+                "Commit",
+                &error,
+                &commit_metrics.meta,
+            );
             tx.fail_attempt(&error)?;
             Err(error)
         }
@@ -957,6 +962,11 @@ pub(crate) async fn tx_rollback(tx: &mut TxExecContext) -> YdbResult<()> {
             Ok(())
         }
         Err(error) => {
+            rollback_metrics.operation_metrics.record_operation_failure(
+                "Rollback",
+                &error,
+                &rollback_metrics.meta,
+            );
             tx.fail_attempt(&error)?;
             Err(error)
         }
