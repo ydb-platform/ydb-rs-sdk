@@ -1,9 +1,10 @@
 use crate::client_common::{DBCredentials, TokenCache};
 use crate::client_metrics::names::MetricsNames;
 use crate::client_topic::compression::Executor;
+#[cfg(feature = "service-account-credentials")]
+use crate::credentials::ServiceAccountCredentials;
 use crate::credentials::{
-    AccessTokenCredentials, CredentialsRef, GCEMetadata, ServiceAccountCredentials,
-    StaticCredentials, credentials_ref,
+    AccessTokenCredentials, CredentialsRef, GCEMetadata, StaticCredentials, credentials_ref,
 };
 use crate::discovery::{Discovery, StaticDiscovery, TimerDiscovery};
 use crate::discovery_pessimization_interceptor::DiscoveryPessimizationInterceptor;
@@ -34,6 +35,7 @@ static PARAM_HANDLERS: Lazy<Mutex<HashMap<String, ParamHandler>>> = Lazy::new(||
         m.insert("token_metadata".to_string(), token_metadata);
         m.insert("token_static_password".to_string(), token_static_password);
         m.insert("ca_certificate".to_string(), ca_certificate);
+        #[cfg(feature = "service-account-credentials")]
         m.insert("sa_key_file".to_string(), sa_key_file);
         m.insert("token_file".to_string(), token_file);
         m.insert("use_discovery".to_string(), use_discovery);
@@ -195,6 +197,7 @@ fn token_file(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientB
     Ok(client_builder)
 }
 
+#[cfg(feature = "service-account-credentials")]
 fn sa_key_file(uri: &str, mut client_builder: ClientBuilder) -> YdbResult<ClientBuilder> {
     for (key, value) in url::Url::parse(uri)?.query_pairs() {
         if key != "sa_key_file" {
@@ -497,6 +500,7 @@ mod test {
         assert!(matches!(res, Err(YdbError::Custom(_))));
     }
 
+    #[cfg(feature = "service-account-credentials")]
     #[test]
     fn sa_key_file_missing() {
         let res = ClientBuilder::new_from_connection_string(
