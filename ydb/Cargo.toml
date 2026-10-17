@@ -18,6 +18,29 @@ rust-version.workspace = true
 workspace = true
 
 [features]
+default = ["rustls-ring", "jwt-rust-crypto"]
+
+# TLS crypto provider. Exactly one should be enabled: `rustls` 0.23 links
+# whichever are present and picks between them at run time, so enabling both
+# wastes a crypto library and leaves the choice to whatever installed a
+# process default first. `ring` is the default because it is what every
+# release so far has linked.
+rustls-ring = ["tonic/tls-ring"]
+# `tonic` spells this one without the `-rs`.
+rustls-aws-lc-rs = ["tonic/tls-aws-lc"]
+
+# Signing for `ServiceAccountCredentials`, which is the only thing in the
+# crate that needs a JWT. A deployment authenticating any other way -- static
+# credentials, an access token, metadata, anonymous -- links no JWT crypto at
+# all with `default-features = false`.
+service-account-credentials = ["dep:jsonwebtoken"]
+# The backend is separate from the dependency on purpose. `jsonwebtoken` 11
+# panics at the first sign when both of its backends are enabled or neither
+# is, so a consumer that needs `aws-lc-rs` has to be able to say so rather
+# than inherit a choice that collides with its own.
+jwt-rust-crypto = ["service-account-credentials", "jsonwebtoken/rust_crypto"]
+jwt-aws-lc-rs = ["service-account-credentials", "jsonwebtoken/aws_lc_rs"]
+
 force-exhaustive-all = [
 ] # The feature disable all non_exhaustive attributes in ydb public interface.
 
@@ -32,7 +55,7 @@ flate2 = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
 itertools = { workspace = true }
-jsonwebtoken = { workspace = true }
+jsonwebtoken = { workspace = true, optional = true }
 metrics = { workspace = true }
 num = { workspace = true }
 once_cell = { workspace = true }
@@ -59,8 +82,6 @@ uuid = { workspace = true }
 ydb-grpc = { workspace = true }
 
 [dev-dependencies]
-async_once = { workspace = true }
-lazy_static = { workspace = true }
 metrics-prometheus = { workspace = true }
 mockall = { workspace = true }
 ntest = { workspace = true }
@@ -71,3 +92,9 @@ prometheus = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tracing-opentelemetry = { workspace = true }
 tracing-test = { workspace = true }
+
+# Needs `ServiceAccountCredentials`, which the default features carry and
+# `--no-default-features` does not.
+[[example]]
+name = "auth-ycloud-serviceaccount"
+required-features = ["service-account-credentials"]

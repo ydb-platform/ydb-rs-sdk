@@ -41,7 +41,9 @@ pbjson-types = "0.8.0"
 prost = "0.14.1"
 prost-build = "0.14.1"
 prost-types = "0.14.1"
-tonic = { version = "0.14.2", features = ["tls-ring", "tls-native-roots"] }
+# The crypto provider is chosen by the consumer, not here: `ydb` exposes it as
+# a feature so a binary can take `aws-lc-rs` instead of linking both.
+tonic = { version = "0.14.2", features = ["tls-native-roots"] }
 tonic-prost = "0.14.2"
 tonic-prost-build = "0.14.2"
 
@@ -119,8 +121,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Test-only dependencies of the `ydb` crate.
-async_once = "0.2"
-lazy_static = "1.4"
 metrics-prometheus = "0.11.2"
 mockall = "0.14"
 ntest = "0.7"

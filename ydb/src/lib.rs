@@ -209,10 +209,12 @@ pub use table_requests::{
 // full enum pub types
 pub use waiter::Waiter;
 // full enum pub types
+#[cfg(feature = "service-account-credentials")]
+pub use crate::credentials::ServiceAccountCredentials;
 pub use crate::{
     credentials::{
         AccessTokenCredentials, AnonymousCredentials, CommandLineCredentials, FromEnvCredentials,
-        GCEMetadata, MetadataUrlCredentials, ServiceAccountCredentials, StaticCredentials,
+        GCEMetadata, MetadataUrlCredentials, StaticCredentials,
     },
     errors::{
         YdbError, YdbIssue, YdbIssueSeverity, YdbOrCustomerError, YdbResult,
