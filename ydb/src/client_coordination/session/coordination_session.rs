@@ -159,6 +159,31 @@ impl CoordinationSession {
         self.cancellation_token.child_token()
     }
 
+    /// Awaits a method's reply, giving up if the session is lost.
+    ///
+    /// The receiver loop reports a lost session by cancelling the session's
+    /// token and returning. That leaves nothing to answer a request already in
+    /// flight: the loop holds a clone of the controllers, so the senders
+    /// outlive it and the response channel is never closed. Without this race
+    /// the caller waits for a reply that cannot arrive, with no deadline.
+    ///
+    /// Biased towards the reply, so one that lands in the same moment the
+    /// session ends is still delivered rather than discarded.
+    async fn recv_while_alive<Response>(
+        &self,
+        rx: &mut mpsc::UnboundedReceiver<Response>,
+    ) -> YdbResult<Response> {
+        tokio::select! {
+            biased;
+            response = rx.recv() => {
+                response.ok_or_else(|| YdbError::Custom("channel closed".to_string()))
+            }
+            () = self.cancellation_token.cancelled() => {
+                Err(YdbError::Custom("coordination session lost".to_string()))
+            }
+        }
+    }
+
     pub async fn create_semaphore<S: ToString>(
         &self,
         name: S,
@@ -173,10 +198,8 @@ impl CoordinationSession {
             .send(request)
             .await?;
 
-        match rx.recv().await {
-            Some(_) => Ok(()),
-            None => Err(YdbError::Custom("channel closed".to_string())),
-        }
+        self.recv_while_alive(&mut rx).await?;
+        Ok(())
     }
 
     pub async fn describe_semaphore<S: ToString>(
@@ -208,10 +231,8 @@ impl CoordinationSession {
             ))
             .await?;
 
-        match rx.recv().await {
-            Some(result) => Ok(result.semaphore_description),
-            None => Err(YdbError::Custom("channel closed".to_string())),
-        }
+        let result = self.recv_while_alive(&mut rx).await?;
+        Ok(result.semaphore_description)
     }
 
     pub async fn update_semaphore<S: ToString>(&self, name: S, data: Vec<u8>) -> YdbResult<()> {
@@ -221,10 +242,8 @@ impl CoordinationSession {
             .send(RawUpdateSemaphoreRequest::new(name.to_string(), data))
             .await?;
 
-        match rx.recv().await {
-            Some(_) => Ok(()),
-            None => Err(YdbError::Custom("channel closed".to_string())),
-        }
+        self.recv_while_alive(&mut rx).await?;
+        Ok(())
     }
 
     pub async fn delete_semaphore<S: ToString>(&self, name: S) -> YdbResult<()> {
@@ -234,10 +253,8 @@ impl CoordinationSession {
             .send(RawDeleteSemaphoreRequest::new(name.to_string(), false))
             .await?;
 
-        match rx.recv().await {
-            Some(_) => Ok(()),
-            None => Err(YdbError::Custom("channel closed".to_string())),
-        }
+        self.recv_while_alive(&mut rx).await?;
+        Ok(())
     }
 
     pub async fn force_delete_semaphore<S: ToString>(&self, name: S) -> YdbResult<()> {
@@ -247,10 +264,8 @@ impl CoordinationSession {
             .send(RawDeleteSemaphoreRequest::new(name.to_string(), true))
             .await?;
 
-        match rx.recv().await {
-            Some(_) => Ok(()),
-            None => Err(YdbError::Custom("channel closed".to_string())),
-        }
+        self.recv_while_alive(&mut rx).await?;
+        Ok(())
     }
 
     pub async fn acquire_semaphore<S: ToString>(&self, name: S, count: u64) -> YdbResult<Lease> {
@@ -276,7 +291,7 @@ impl CoordinationSession {
                 options.data,
             ))
             .await?;
-        let response = rx.recv().await.unwrap();
+        let response = self.recv_while_alive(&mut rx).await?;
         if response.acquired {
             Ok(Lease::new(
                 self.method_controllers.release_semaphore.clone(),
