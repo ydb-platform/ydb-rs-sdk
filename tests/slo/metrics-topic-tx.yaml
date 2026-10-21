@@ -29,6 +29,7 @@ metrics:
       )
 
   - name: transaction_retry_overhead_percent
+    role: diagnostic
     unit: "%"
     round: 0.01
     query: |
