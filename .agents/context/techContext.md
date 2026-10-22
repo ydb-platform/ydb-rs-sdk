@@ -39,7 +39,7 @@ CI uses `ydbplatform/local-ydb:nightly` (see `rust-tests.yml`); image tag may di
 | `linter.yaml` | push/PR to `master` | `cargo fmt --check`, `cargo clippy` on Rust 1.96 |
 | `rust-tests.yml` | push/PR + nightly cron | `cargo test --workspace --doc`, `cargo test --include-ignored` against `local-ydb:nightly` on MSRV and Rust 1.96 |
 | `publish-crate.yml` | manual dispatch | version bump + crates.io publish on Rust 1.96 |
-| `slo.yml` | PR label `SLO` + manual dispatch | SLO tests via `ydb-slo-action` v2; workload Docker images build on Rust 1.96 |
+| `slo.yml` | PR label `SLO` + manual dispatch | Action v3 with legacy Table/Topic telemetry; Rust 1.96 workload images; manual `runner_label` supports forks without self-hosted runners |
 | `slo-report.yml` | after `SLO` workflow | Publishes SLO report to PR comment |
 
 ## Workspace dependency policy

@@ -45,11 +45,15 @@ impl Params {
 }
 
 pub fn parse_params(fw: &Framework) -> Params {
-    let flags = KvFlags::parse_from(std::env::args().skip(1).collect::<Vec<_>>());
+    let flags = KvFlags::parse();
 
     let table_path = Path::new(&fw.config.database)
         .join(&fw.config.label)
-        .join(&fw.config.ref_name)
+        .join(format!(
+            "{}-{:032x}",
+            fw.config.ref_name,
+            rand::random::<u128>()
+        ))
         .to_string_lossy()
         .into_owned();
 

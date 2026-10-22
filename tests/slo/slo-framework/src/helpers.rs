@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use tokio::sync::Mutex;
+use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 
@@ -46,17 +47,18 @@ pub async fn run_workers<F, Fut>(
     workers: usize,
     limiter: RateLimiter,
     f: F,
-) where
+) -> Result<()>
+where
     F: Fn() -> Fut + Clone + Send + 'static,
     Fut: std::future::Future<Output = ()> + Send,
 {
     let limiter = Arc::new(limiter);
-    let mut handles = Vec::with_capacity(workers);
+    let mut handles = JoinSet::new();
     for _ in 0..workers {
         let ctx = ctx.clone();
         let limiter = limiter.clone();
         let f = f.clone();
-        handles.push(tokio::spawn(async move {
+        handles.spawn(async move {
             loop {
                 tokio::select! {
                     _ = ctx.cancelled() => break,
@@ -68,11 +70,21 @@ pub async fn run_workers<F, Fut>(
 
                 f().await;
             }
-        }));
+        });
     }
 
-    for handle in handles {
-        let _ = handle.await;
+    let mut failure = None;
+    while let Some(result) = handles.join_next().await {
+        if let Err(error) = result
+            && failure.is_none()
+        {
+            failure = Some(error);
+            ctx.cancel();
+        }
+    }
+    match failure {
+        Some(error) => Err(error.into()),
+        None => Ok(()),
     }
 }
 
@@ -126,12 +138,35 @@ mod tests {
         let workers = tokio::spawn({
             let ctx = ctx.clone();
             async move {
-                run_workers(&ctx, 2, new_rate_limiter(1), || async {}).await;
+                run_workers(&ctx, 2, new_rate_limiter(1), || async {})
+                    .await
+                    .expect("planned stop succeeds");
             }
         });
 
         tokio::task::yield_now().await;
         ctx.cancel();
         workers.await.expect("worker supervisor completes");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn worker_panic_cancels_peers_and_preserves_join_error() {
+        let ctx = CancellationToken::new();
+        let error = timeout(
+            Duration::from_secs(1),
+            run_workers(&ctx, 2, new_rate_limiter(1), || async {
+                panic!("worker invariant failed");
+            }),
+        )
+        .await
+        .expect("supervisor settles without waiting for another permit")
+        .expect_err("worker panic must fail the supervisor");
+
+        assert!(
+            error
+                .downcast_ref::<tokio::task::JoinError>()
+                .is_some_and(tokio::task::JoinError::is_panic)
+        );
+        assert!(ctx.is_cancelled());
     }
 }
