@@ -56,22 +56,21 @@ tower = "0.5"
 
 # HTTP. `reqwest` stays on the `hyper` 1.x / `http` 1.x / `rustls` 0.23
 # generation used by `tonic`. It takes `rustls-no-provider` rather than its own
-# `rustls` feature, which would add `aws-lc-rs` next to the `ring` that
-# `tonic`'s `tls-ring` already selects; `rustls` 0.23 fails at request time when
-# more than one provider is linked and none was chosen explicitly.
+# `rustls` feature, which would add `aws-lc-rs` next to the provider `ydb`
+# selects; `rustls` 0.23 fails at request time when more than one provider is
+# linked and none was chosen explicitly. A client built on `rustls-no-provider`
+# panics unless it is given a TLS configuration, see `ydb/src/http_client.rs`.
 http = "1.5"
 reqwest = { version = "0.13", default-features = false, features = [
     "blocking",
     "json",
     "rustls-no-provider",
 ] }
-# Used directly by the SLO workload to hand a preconfigured TLS backend to the
-# OTLP exporter. `ring` is the provider `tonic` selects, spelled out here so the
-# workload cannot end up with a second one.
-rustls = { version = "0.23", default-features = false, features = [
-    "ring",
-    "std",
-] }
+# Used directly to hand `reqwest` and the OTLP exporter a preconfigured TLS
+# backend. The crypto provider is not chosen here: `ydb` forwards its
+# `rustls-ring` / `rustls-aws-lc-rs` features to it, and the SLO workload
+# enables `ring` itself.
+rustls = { version = "0.23", default-features = false, features = ["std"] }
 rustls-platform-verifier = "0.7"
 
 # Serialization and data types.

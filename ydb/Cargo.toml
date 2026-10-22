@@ -25,9 +25,9 @@ default = ["rustls-ring", "jwt-rust-crypto"]
 # wastes a crypto library and leaves the choice to whatever installed a
 # process default first. `ring` is the default because it is what every
 # release so far has linked.
-rustls-ring = ["tonic/tls-ring"]
+rustls-ring = ["tonic/tls-ring", "rustls/ring"]
 # `tonic` spells this one without the `-rs`.
-rustls-aws-lc-rs = ["tonic/tls-aws-lc"]
+rustls-aws-lc-rs = ["tonic/tls-aws-lc", "rustls/aws_lc_rs"]
 
 # Signing for `ServiceAccountCredentials`, which is the only thing in the
 # crate that needs a JWT. A deployment authenticating any other way -- static
@@ -38,6 +38,10 @@ service-account-credentials = ["dep:jsonwebtoken"]
 # panics at the first sign when both of its backends are enabled or neither
 # is, so a consumer that needs `aws-lc-rs` has to be able to say so rather
 # than inherit a choice that collides with its own.
+# `rust_crypto` is the default: `ring` is already linked for TLS, and a second
+# C/assembly crypto library buys nothing for one signature per IAM token. It
+# links `rsa`, which carries RUSTSEC-2023-0071 (no patched release, see
+# deny.toml); `jwt-aws-lc-rs` does not.
 jwt-rust-crypto = ["service-account-credentials", "jsonwebtoken/rust_crypto"]
 jwt-aws-lc-rs = ["service-account-credentials", "jsonwebtoken/aws_lc_rs"]
 
@@ -65,6 +69,8 @@ prost-types = { workspace = true }
 rand = { workspace = true }
 rayon = { workspace = true }
 reqwest = { workspace = true }
+rustls = { workspace = true }
+rustls-platform-verifier = { workspace = true }
 secrecy = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
