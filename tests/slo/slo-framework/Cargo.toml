@@ -26,7 +26,7 @@ rand_core = { workspace = true }
 reqwest = { workspace = true, features = ["http2"] }
 # The workload prefers `ring`; it is the only provider enabled in the binary, so
 # rustls picks it as the implicit default.
-rustls = { workspace = true }
+rustls = { workspace = true, features = ["ring"] }
 rustls-platform-verifier = { workspace = true }
 tokio = { workspace = true, features = ["signal"] }
 tokio-util = { workspace = true }

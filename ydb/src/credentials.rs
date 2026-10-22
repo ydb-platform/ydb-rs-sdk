@@ -498,7 +498,7 @@ impl Credentials for ServiceAccountCredentials {
         let jwt = self.build_jwt()?;
 
         let req = TokenRequest { jwt };
-        let client = reqwest::blocking::Client::new();
+        let client = crate::http_client::blocking_client()?;
         let res: TokenResponse = client
             .request(reqwest::Method::POST, self.audience_url.clone())
             .json(&req)
@@ -570,7 +570,7 @@ impl Credentials for GCEMetadata {
             token_type: String,
         }
 
-        let client = reqwest::blocking::Client::new();
+        let client = crate::http_client::blocking_client()?;
         let res: TokenResponse = client
             .request(reqwest::Method::GET, self.uri.as_str())
             .header("Metadata-Flavor", "Google")
