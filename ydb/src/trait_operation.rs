@@ -19,8 +19,8 @@ use ydb_grpc::ydb_proto::table::{
     RollbackTransactionResponse,
 };
 use ydb_grpc::ydb_proto::topic::{
-    AlterTopicResponse, CreateTopicResponse, DescribeConsumerResponse, DescribeTopicResponse,
-    DropTopicResponse, UpdateOffsetsInTransactionResponse,
+    AlterTopicResponse, CommitOffsetResponse, CreateTopicResponse, DescribeConsumerResponse,
+    DescribeTopicResponse, DropTopicResponse, UpdateOffsetsInTransactionResponse,
 };
 
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
@@ -123,6 +123,7 @@ operation_impl_for!(AlterTopicResponse);
 operation_impl_for!(CreateTopicResponse);
 operation_impl_for!(DescribeTopicResponse);
 operation_impl_for!(DropTopicResponse);
+operation_impl_for!(CommitOffsetResponse);
 operation_impl_for!(CreateNodeResponse);
 operation_impl_for!(DescribeNodeResponse);
 operation_impl_for!(AlterNodeResponse);
