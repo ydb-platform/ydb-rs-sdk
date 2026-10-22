@@ -40,8 +40,11 @@ ignore = [
     # which is a default feature), where it signs one PS256 token per IAM token
     # refresh with the service account's own key, off any request path. The
     # advisory's own guidance is to avoid `rsa` where an attacker can observe
-    # timing over the network. Way out: `jwt-aws-lc-rs`, which does not link
-    # `rsa`, or a fixed `rsa` release.
+    # timing over the network. Review when a stable `rsa` 0.10 (constant-time
+    # rewrite, in release candidates) is out and `jsonwebtoken` moves to it;
+    # the entry then becomes unnecessary and must go. Whether the default
+    # should stay on this backend at all is
+    # https://github.com/ydb-platform/ydb-rs-sdk/issues/655.
     "RUSTSEC-2023-0071",
 ]
 
