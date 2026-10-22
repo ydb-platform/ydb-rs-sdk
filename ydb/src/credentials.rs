@@ -7,21 +7,29 @@ use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
 use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
 use crate::pub_traits::{Credentials, TokenInfo};
 use crate::{GrpcOptions, HasGrpcOptions};
+#[cfg(feature = "service-account-credentials")]
 use chrono::DateTime;
 use http::Uri;
 
+#[cfg(feature = "service-account-credentials")]
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use secrecy::{ExposeSecret, SecretString};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+#[cfg(feature = "service-account-credentials")]
+use serde::Serialize;
 use std::env;
 use std::fmt::Debug;
 use std::ops::Add;
 use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
+#[cfg(any(feature = "service-account-credentials", test))]
+use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(feature = "service-account-credentials")]
 use tracing::{debug, trace};
 
 const YDB_ANONYMOUS_CREDENTIALS: &str = "YDB_ANONYMOUS_CREDENTIALS";
+#[cfg(feature = "service-account-credentials")]
 const YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS: &str = "YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS";
 const YDB_METADATA_CREDENTIALS: &str = "YDB_METADATA_CREDENTIALS";
 const YDB_ACCESS_TOKEN_CREDENTIALS: &str = "YDB_ACCESS_TOKEN_CREDENTIALS";
@@ -142,6 +150,10 @@ impl Credentials for FromEnvCredentials {
 }
 
 fn get_credentials_from_env() -> YdbResult<Box<dyn Credentials>> {
+    // Without `service-account-credentials` the key-file variable is not
+    // recognised, and the chain falls through to the next form rather than
+    // failing: a build that cannot sign a JWT has nothing to do with the file.
+    #[cfg(feature = "service-account-credentials")]
     if let Ok(file_creds) = env::var(YDB_SERVICE_ACCOUNT_KEY_FILE_CREDENTIALS) {
         return Ok(Box::new(ServiceAccountCredentials::from_file(file_creds)?));
     }
@@ -220,6 +232,7 @@ impl Credentials for AccessTokenCredentials {
 ///
 /// Fails instead of panicking when the system clock is set before the epoch,
 /// which `SystemTime::duration_since` reports as an error.
+#[cfg(any(feature = "service-account-credentials", test))]
 pub(crate) fn unix_timestamp(time: SystemTime) -> YdbResult<u64> {
     let elapsed = time.duration_since(UNIX_EPOCH).map_err(|err| {
         YdbError::custom(format!("system clock is set before the UNIX epoch: {err}"))
@@ -357,6 +370,7 @@ impl Credentials for CommandLineCredentials {
 /// use ydb::ServiceAccountCredentials;
 /// let cred = ServiceAccountCredentials::from_file("/path/to/file");
 /// ```
+#[cfg(feature = "service-account-credentials")]
 pub struct ServiceAccountCredentials {
     audience_url: String,
     private_key: SecretString,
@@ -364,6 +378,7 @@ pub struct ServiceAccountCredentials {
     key_id: String,
 }
 
+#[cfg(feature = "service-account-credentials")]
 impl ServiceAccountCredentials {
     pub fn new(
         service_account_id: impl Into<String>,
@@ -416,7 +431,10 @@ impl ServiceAccountCredentials {
     const IAM_TOKEN_DEFAULT: &'static str = "https://iam.api.cloud.yandex.net/iam/v1/tokens";
     const JWT_TOKEN_LIFE_TIME: u64 = 720; // max 3600
 
-    fn build_jwt(&self) -> YdbResult<String> {
+    /// `pub(crate)` for the test that signs with a usable key: the exchange
+    /// that follows needs a listening IAM endpoint, where the signature does
+    /// not.
+    pub(crate) fn build_jwt(&self) -> YdbResult<String> {
         let private_key = self.private_key.expose_secret().as_bytes();
 
         #[derive(Debug, Serialize, Deserialize)]
@@ -460,6 +478,7 @@ impl ServiceAccountCredentials {
     }
 }
 
+#[cfg(feature = "service-account-credentials")]
 impl Credentials for ServiceAccountCredentials {
     fn create_token(&self) -> YdbResult<TokenInfo> {
         use chrono::Utc;
@@ -479,7 +498,7 @@ impl Credentials for ServiceAccountCredentials {
         let jwt = self.build_jwt()?;
 
         let req = TokenRequest { jwt };
-        let client = reqwest::blocking::Client::new();
+        let client = crate::http_client::blocking_client()?;
         let res: TokenResponse = client
             .request(reqwest::Method::POST, self.audience_url.clone())
             .json(&req)
@@ -551,7 +570,7 @@ impl Credentials for GCEMetadata {
             token_type: String,
         }
 
-        let client = reqwest::blocking::Client::new();
+        let client = crate::http_client::blocking_client()?;
         let res: TokenResponse = client
             .request(reqwest::Method::GET, self.uri.as_str())
             .header("Metadata-Flavor", "Google")

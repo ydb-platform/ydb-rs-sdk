@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     sync::{Arc, atomic},
 };
-use tracing::log::trace;
+use tracing::trace;
 
 use tokio::sync::{Mutex, mpsc};
 use ydb_grpc::ydb_proto::coordination::{SessionRequest, session_request};

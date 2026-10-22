@@ -474,7 +474,7 @@ impl RetryProbability {
 
 impl RetryStrategy for RetryProbability {
     async fn wait_retry(&self, _retry: &RetryState) -> ControlFlow<()> {
-        if rand::thread_rng().gen_range(0..100) < self.percent {
+        if rand::rng().random_range(0..100) < self.percent {
             ControlFlow::Continue(())
         } else {
             ControlFlow::Break(())

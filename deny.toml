@@ -1,0 +1,113 @@
+# cargo-deny configuration: the dependency-graph policy of the workspace.
+#
+# CI runs two invocations, see `.github/workflows/dependencies.yml`:
+#
+#   1. the published graph — `--exclude-unpublished --exclude-dev`, which keeps
+#      only what a user of the `ydb` and `ydb-grpc` crates compiles. This one is
+#      blocking, and `bans.multiple-versions = "deny"` makes a second version of
+#      any crate a build failure instead of something that has to be noticed by
+#      hand;
+#   2. the full workspace, including dev-dependencies and the SLO workloads,
+#      for advisories only.
+#
+# `--all-features` is deliberate: it is the union of every optional dependency
+# of the published crates, and it enables both TLS and both JWT backends at
+# once. That union is not a build anyone makes — the providers are mutually
+# exclusive — so the "one provider per build" rule is checked separately with
+# `cargo tree` in `dependencies.yml`. `cargo-deny` cannot isolate a feature set
+# in this workspace: the other members enable `ydb`'s default features, and
+# the graph is built from the workspace as a whole.
+#
+# Version requirements live in `[workspace.dependencies]` in the root
+# `Cargo.toml`; this file is what keeps the resolved tree in line with them.
+
+[graph]
+all-features = true
+
+[advisories]
+# RustSec advisories that are known and accepted, each with the reason and the
+# way out. Everything else fails the check.
+ignore = [
+    # `derivative` is unmaintained. It is used in two files of the `ydb` crate
+    # (`connection_pool.rs`, `grpc_connection_manager.rs`) for `Debug`/`Clone`
+    # derives and is being replaced by hand-written impls; it carries no known
+    # vulnerability. It is also the last crate in the published graph that
+    # pulls `syn` 1.
+    "RUSTSEC-2024-0388",
+    # `rsa` 0.9, "Marvin Attack": a timing side channel in RSA private-key
+    # operations, with no patched release. It is reached only through
+    # `jsonwebtoken`'s `rust_crypto` backend (the `jwt-rust-crypto` feature,
+    # which is a default feature), where it signs one PS256 token per IAM token
+    # refresh with the service account's own key, off any request path. The
+    # advisory's own guidance is to avoid `rsa` where an attacker can observe
+    # timing over the network. Review when a stable `rsa` 0.10 (constant-time
+    # rewrite, in release candidates) is out and `jsonwebtoken` moves to it;
+    # the entry then becomes unnecessary and must go. Whether the default
+    # should stay on this backend at all is
+    # https://github.com/ydb-platform/ydb-rs-sdk/issues/655.
+    "RUSTSEC-2023-0071",
+]
+
+[licenses]
+# Permissive licenses only: the SDK itself ships under Apache-2.0.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+# `publish = false` members depend on `ydb` by path only; that is not a wildcard
+# requirement that could ever reach crates.io.
+allow-wildcard-paths = true
+
+# Duplicates that this workspace cannot collapse: every entry names what keeps
+# the second version alive. CI runs the check with `-D unmatched-skip -D
+# unnecessary-skip`, so an entry that stops matching, or that covers a crate
+# which now has a single version, fails the build and has to be deleted — the
+# list cannot rot into a blanket allowance.
+skip = [
+    # Three versions, one per consumer: `ring` (through `rustls`) is on 0.2,
+    # `rand` 0.9 on 0.3, `uuid` 1 on 0.4. None of them is ours to move.
+    { crate = "getrandom", reason = "ring pins getrandom 0.2, rand 0.9 pins 0.3, uuid 1 pins 0.4" },
+    { crate = "r-efi", reason = "UEFI-only dependency of getrandom, one version per getrandom major" },
+    # Proc-macro and build-time only, never linked into a user binary. The
+    # ecosystem is mid-transition from `syn` 2 to `syn` 3, and `derivative`
+    # (unmaintained, see the advisory ignore above) is still on `syn` 1.
+    { crate = "syn", reason = "proc-macro dependency, ecosystem is between syn 2 and syn 3" },
+    # `jsonwebtoken`'s `rust_crypto` backend (default feature `jwt-rust-crypto`)
+    # signs through `rsa`, which builds on `num-bigint-dig` and `rand` 0.8;
+    # `ydb` itself is on `rand` 0.9.
+    { crate = "rand", reason = "rsa (jsonwebtoken rust_crypto) is on rand 0.8, ydb on rand 0.9" },
+    { crate = "rand_chacha", reason = "one version per rand major" },
+    { crate = "rand_core", reason = "one version per rand major" },
+    # Whenever `aws-lc-rs` is linked (the `rustls-aws-lc-rs` and `jwt-aws-lc-rs`
+    # features): it is on 0.7, `rustls-webpki` on 0.9. The default `ring` build
+    # has one.
+    { crate = "untrusted", reason = "aws-lc-rs is on untrusted 0.7, rustls-webpki on 0.9" },
+    { crate = "hashbrown", reason = "build-time only: indexmap is on 0.17, petgraph (via prost-build) on 0.15" },
+]
+
+# `windows-sys` is a Windows-only binding crate: `ring` is on 0.52, `tokio` and
+# `mio` on 0.61. Nothing in this workspace chooses those versions, and they are
+# behind `cfg(windows)`, so the whole family is skipped instead of being tracked
+# version by version.
+skip-tree = [
+    { crate = "windows-sys", reason = "Windows-only bindings, version chosen by each upstream crate" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

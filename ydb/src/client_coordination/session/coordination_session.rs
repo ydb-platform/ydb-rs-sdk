@@ -77,7 +77,7 @@ impl CoordinationSession {
             .await?;
 
         let mut protection_key = vec![0; 16];
-        rand::thread_rng().fill_bytes(&mut protection_key);
+        rand::rng().fill_bytes(&mut protection_key);
 
         let session_start_request = SessionStart {
             path: path.clone(),

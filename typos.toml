@@ -1,2 +1,7 @@
 [files]
 extend-exclude = ["ydb-grpc/src/generated/*"]
+
+[default]
+# Base64 bodies of PEM blocks in tests: a line made only of base64 characters
+# and at least 60 of them. Random letters spell words by accident.
+extend-ignore-re = ["(?m)^[A-Za-z0-9+/=]{60,}$"]

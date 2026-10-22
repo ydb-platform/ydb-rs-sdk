@@ -1,7 +1,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use rand::Rng;
 use rand::prelude::StdRng;
-use rand_core::{OsRng, RngCore, SeedableRng};
+use rand::{Rng, TryRngCore};
+use rand_core::{OsRng, SeedableRng};
 use std::sync::{Arc, Mutex};
 
 use crate::row::{RowID, TestRow};
@@ -19,7 +19,7 @@ impl Generator {
     pub fn new(id: RowID) -> Self {
         Self {
             current_id: Arc::new(Mutex::new(id)),
-            rng: Arc::new(Mutex::new(SeedableRng::from_entropy())),
+            rng: Arc::new(Mutex::new(StdRng::from_os_rng())),
         }
     }
 
@@ -32,7 +32,7 @@ impl Generator {
         };
 
         let mut rng = self.rng.lock().unwrap();
-        let payload_double = rng.r#gen::<f64>();
+        let payload_double = rng.random::<f64>();
         let payload_timestamp = std::time::SystemTime::now();
         let payload_str = gen_payload_string(&mut rng);
 
@@ -41,8 +41,10 @@ impl Generator {
 }
 
 fn gen_payload_string(rng: &mut StdRng) -> String {
-    let length = MIN_LENGTH + rng.gen_range(0..=(MAX_LENGTH - MIN_LENGTH));
+    let length = MIN_LENGTH + rng.random_range(0..=(MAX_LENGTH - MIN_LENGTH));
     let mut buffer = vec![0u8; length];
-    OsRng.fill_bytes(&mut buffer);
+    OsRng
+        .try_fill_bytes(&mut buffer)
+        .expect("os rng is properly configured");
     STANDARD.encode(buffer)
 }
