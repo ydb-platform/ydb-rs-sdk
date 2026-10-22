@@ -10,6 +10,14 @@
 #   2. the full workspace, including dev-dependencies and the SLO workloads,
 #      for advisories only.
 #
+# `--all-features` is deliberate: it is the union of every optional dependency
+# of the published crates, and it enables both TLS and both JWT backends at
+# once. That union is not a build anyone makes — the providers are mutually
+# exclusive — so the "one provider per build" rule is checked separately with
+# `cargo tree` in `dependencies.yml`. `cargo-deny` cannot isolate a feature set
+# in this workspace: the other members enable `ydb`'s default features, and
+# the graph is built from the workspace as a whole.
+#
 # Version requirements live in `[workspace.dependencies]` in the root
 # `Cargo.toml`; this file is what keeps the resolved tree in line with them.
 
@@ -26,6 +34,15 @@ ignore = [
     # vulnerability. It is also the last crate in the published graph that
     # pulls `syn` 1.
     "RUSTSEC-2024-0388",
+    # `rsa` 0.9, "Marvin Attack": a timing side channel in RSA private-key
+    # operations, with no patched release. It is reached only through
+    # `jsonwebtoken`'s `rust_crypto` backend (the `jwt-rust-crypto` feature,
+    # which is a default feature), where it signs one PS256 token per IAM token
+    # refresh with the service account's own key, off any request path. The
+    # advisory's own guidance is to avoid `rsa` where an attacker can observe
+    # timing over the network. Way out: `jwt-aws-lc-rs`, which does not link
+    # `rsa`, or a fixed `rsa` release.
+    "RUSTSEC-2023-0071",
 ]
 
 [licenses]
@@ -66,6 +83,16 @@ skip = [
     # ecosystem is mid-transition from `syn` 2 to `syn` 3, and `derivative`
     # (unmaintained, see the advisory ignore above) is still on `syn` 1.
     { crate = "syn", reason = "proc-macro dependency, ecosystem is between syn 2 and syn 3" },
+    # `jsonwebtoken`'s `rust_crypto` backend (default feature `jwt-rust-crypto`)
+    # signs through `rsa`, which builds on `num-bigint-dig` and `rand` 0.8;
+    # `ydb` itself is on `rand` 0.9.
+    { crate = "rand", reason = "rsa (jsonwebtoken rust_crypto) is on rand 0.8, ydb on rand 0.9" },
+    { crate = "rand_chacha", reason = "one version per rand major" },
+    { crate = "rand_core", reason = "one version per rand major" },
+    # Whenever `aws-lc-rs` is linked (the `rustls-aws-lc-rs` and `jwt-aws-lc-rs`
+    # features): it is on 0.7, `rustls-webpki` on 0.9. The default `ring` build
+    # has one.
+    { crate = "untrusted", reason = "aws-lc-rs is on untrusted 0.7, rustls-webpki on 0.9" },
     { crate = "hashbrown", reason = "build-time only: indexmap is on 0.17, petgraph (via prost-build) on 0.15" },
 ]
 

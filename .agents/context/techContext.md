@@ -41,7 +41,7 @@ CI uses `ydbplatform/local-ydb:nightly` (see `rust-tests.yml`); image tag may di
 | `publish-crate.yml` | manual dispatch | version bump + crates.io publish on Rust 1.96 |
 | `slo.yml` | PR label `SLO` + manual dispatch | SLO tests via `ydb-slo-action` v2; workload Docker images build on Rust 1.96 |
 | `slo-report.yml` | after `SLO` workflow | Publishes SLO report to PR comment |
-| `dependencies.yml` | push/PR + nightly cron | `cargo deny` on the published graph (bans/licenses/sources) and advisories on the whole workspace, plus the `[workspace.dependencies]` inheritance check |
+| `dependencies.yml` | push/PR + nightly cron | `cargo deny` on the published graph (bans/licenses/sources) and advisories on the whole workspace, a `cargo tree` check that each build links one crypto provider, plus the `[workspace.dependencies]` inheritance check |
 
 ## Workspace dependency policy
 
@@ -58,7 +58,9 @@ cargo deny --locked --all-features --exclude-unpublished --exclude-dev \
 cargo deny --locked --all-features check advisories
 ```
 
-Duplicates that the workspace cannot collapse are listed in `[bans].skip` with the crates that keep them alive. `-D unmatched-skip -D unnecessary-skip` turns an entry that no longer matches, or that now covers a single-version crate, into a failure, so the list has to be pruned when a bump makes it obsolete. Same for `[advisories].ignore`: the only entry is `RUSTSEC-2024-0388` (`derivative` unmaintained, being replaced).
+Duplicates that the workspace cannot collapse are listed in `[bans].skip` with the crates that keep them alive. `-D unmatched-skip -D unnecessary-skip` turns an entry that no longer matches, or that now covers a single-version crate, into a failure, so the list has to be pruned when a bump makes it obsolete. Same for `[advisories].ignore`, which has two entries: `RUSTSEC-2024-0388` (`derivative` unmaintained, being replaced) and `RUSTSEC-2023-0071` (`rsa` timing side channel, no patched release; reached only through the default `jwt-rust-crypto` feature, and `jwt-aws-lc-rs` avoids it).
+
+`cargo deny` runs on `--all-features`, which enables both TLS providers and both JWT backends at once, and `untrusted` is skipped because `aws-lc-rs` and `rustls-webpki` each pin a different version. It cannot isolate one feature set in this workspace (other members enable `ydb`'s defaults), so `dependencies.yml` checks with `cargo tree -i` that the default build links `ring` and no `aws-lc-rs`, and that the `rustls-aws-lc-rs` + `jwt-aws-lc-rs` build links no `ring`.
 
 `--exclude-unpublished` drops the `publish = false` SLO workloads from the graph, `--exclude-dev` drops dev-dependencies; both are checked for advisories by the second invocation but are not part of the single-version rule.
 
@@ -73,6 +75,9 @@ Do not run `cargo update` or bump dependency versions unless the task requires i
 ## Features
 
 - `force-exhaustive-all` on `ydb` crate — removes `#[non_exhaustive]` for compile-time enum coverage in downstream crates.
+- `rustls-ring` (default) / `rustls-aws-lc-rs` — TLS crypto provider for gRPC (`tonic`) and for the HTTP client used by token endpoints (`src/http_client.rs`). Alternatives: enable one, with `default-features = false` for `aws-lc-rs`.
+- `service-account-credentials` — `ServiceAccountCredentials` and its `jsonwebtoken` dependency. `jwt-rust-crypto` (default) / `jwt-aws-lc-rs` select its signing backend; `jsonwebtoken` panics when none or both are enabled.
+- `reqwest` is on `rustls-no-provider` and panics when a client is built without a provider, so every client in the crate comes from `http_client::blocking_client()`, which passes a `rustls::ClientConfig` built from the selected provider; nothing installs a process-wide default.
 
 ## Publishing
 

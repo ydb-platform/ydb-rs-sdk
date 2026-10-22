@@ -57,6 +57,21 @@ jobs:
           cargo deny --locked --all-features --exclude-unpublished --exclude-dev \
             check bans licenses sources -D unmatched-skip -D unnecessary-skip
 
+      # `rustls-ring` and `rustls-aws-lc-rs` are alternatives, and so are the
+      # `jwt-*` backends: a build links one crypto library, not both. The check
+      # above runs on the union of all features, where both are present, so this
+      # is what keeps each real build to one. `cargo tree -i` prints nothing when
+      # the package is not in the graph.
+      - name: One crypto provider per build
+        run: |
+          ring=$(cargo tree --locked -p ydb -e normal -i ring 2>/dev/null)
+          test -n "$ring" || { echo "default build no longer links ring"; exit 1; }
+          aws=$(cargo tree --locked -p ydb -e normal -i aws-lc-rs 2>/dev/null)
+          test -z "$aws" || { echo "default build links aws-lc-rs:"; echo "$aws"; exit 1; }
+          ring=$(cargo tree --locked -p ydb --no-default-features \
+            --features rustls-aws-lc-rs,jwt-aws-lc-rs -e normal -i ring 2>/dev/null)
+          test -z "$ring" || { echo "aws-lc-rs build links ring:"; echo "$ring"; exit 1; }
+
       # Advisories cover everything that is built in this repository, including
       # dev-dependencies and the SLO workloads.
       - name: Security advisories
