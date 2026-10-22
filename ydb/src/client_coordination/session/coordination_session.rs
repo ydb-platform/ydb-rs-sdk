@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::trace;
 use ydb_grpc::ydb_proto::coordination::{
     SessionRequest, SessionResponse,
-    session_request::{self, SessionStart},
+    session_request::{self, SessionStart, SessionStop},
     session_response::SessionStarted,
 };
 
@@ -126,8 +126,8 @@ impl CoordinationSession {
                 )
                 .await
                 {
-                    Ok(()) => {}
-                    Err(_iteration_error) => {
+                    Ok(LoopStep::Continue) => {}
+                    Ok(LoopStep::Stopped) | Err(_) => {
                         loop_token.cancel();
                         return;
                     }
@@ -292,7 +292,7 @@ impl CoordinationSession {
         server_messages_receiver: &mut AsyncGrpcStreamWrapper<SessionRequest, SessionResponse>,
         raw_sender: &UnboundedSender<SessionRequest>,
         method_controllers: &MethodControllers,
-    ) -> YdbResult<()> {
+    ) -> YdbResult<LoopStep> {
         let response = server_messages_receiver
             .receive::<RawSessionResponse>()
             .await;
@@ -318,6 +318,10 @@ impl CoordinationSession {
                 }
                 RawSessionResponse::Pong(_pong_response) => {
                     // noop
+                }
+                RawSessionResponse::SessionStopped(stopped) => {
+                    trace!("session {} stopped", stopped.session_id);
+                    return Ok(LoopStep::Stopped);
                 }
                 RawSessionResponse::CreateSemaphoreResult(semaphore_created) => {
                     method_controllers
@@ -365,6 +369,35 @@ impl CoordinationSession {
                 return Err(YdbError::from(some_err));
             }
         }
-        Ok(())
+        Ok(LoopStep::Continue)
     }
+}
+
+/// Stops the session on the server.
+///
+/// Without this the receiver task, which owns the stream, would keep
+/// answering the server's pings, and the session and everything it holds
+/// would outlive this handle for as long as the process runs.
+///
+/// `SessionStop` goes out on the session's stream, after any release a
+/// dropped [`Lease`] queued before it. The server ends the session, releasing
+/// what it holds, and answers `SessionStopped`, which ends the receiver task.
+impl Drop for CoordinationSession {
+    fn drop(&mut self) {
+        let stop = SessionRequest {
+            request: Some(session_request::Request::SessionStop(SessionStop {})),
+        };
+        // A failed send means the receiver task has already ended, and with
+        // it the stream: there is no session left to stop.
+        if self.raw_sender.send(stop).is_err() {
+            trace!("session {} already ended before drop", self.id);
+        }
+    }
+}
+
+/// What the receiver task does after handling one server message.
+enum LoopStep {
+    Continue,
+    /// The server confirmed the session stopped.
+    Stopped,
 }
