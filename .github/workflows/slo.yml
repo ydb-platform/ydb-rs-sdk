@@ -51,14 +51,14 @@ jobs:
         sdk:
           - name: native-query
             path: native/query
-            metrics_schema: legacy_table
+            workload_type: table
           - name: native-topic
             path: native/topic
-            metrics_schema: legacy_topic
+            workload_type: topic
             metrics_yaml_path: current/tests/slo/metrics-topic.yaml
           - name: native-topic-tx
             path: native/topic-tx
-            metrics_schema: legacy_topic_tx
+            workload_type: topic_tx
             metrics_yaml_path: current/tests/slo/metrics-topic-tx.yaml
             thresholds_yaml_path: current/tests/slo/thresholds-topic-tx.yaml
 
@@ -139,7 +139,7 @@ jobs:
       - name: Check baseline workload availability
         id: baseline-workload
         run: |
-          if [[ "${{ matrix.sdk.metrics_schema }}" == "legacy_table" ]]; then
+          if [[ "${{ matrix.sdk.workload_type }}" == "table" ]]; then
             # Share the Table checker, not the SDK sources or built image.
             rm -rf "$GITHUB_WORKSPACE/baseline/tests/slo/${{ matrix.sdk.path }}"
             mkdir -p "$(dirname "$GITHUB_WORKSPACE/baseline/tests/slo/${{ matrix.sdk.path }}")"
@@ -180,7 +180,7 @@ jobs:
 
       - name: Run SLO Tests
         # Pin legacy telemetry fixes until ydb-slo-action#81 is merged.
-        uses: ydb-platform/ydb-slo-action/init@e136720bca3783a0bd2d14e78ac591275573c0b3
+        uses: ydb-platform/ydb-slo-action/init@d66bd1e10f893e5f70d542c4430a3cffb6d6f9f8
         timeout-minutes: 30
         with:
           github_issue: ${{ github.event.inputs.github_issue }}
@@ -192,7 +192,7 @@ jobs:
           workload_current_image: ydb-app-current
           workload_baseline_ref: ${{ steps.baseline-workload.outputs.available == 'true' && steps.baseline.outputs.ref || '' }}
           workload_baseline_image: ${{ steps.baseline-workload.outputs.available == 'true' && 'ydb-app-baseline' || '' }}
-          metrics_schema: ${{ matrix.sdk.metrics_schema }}
+          workload_type: ${{ matrix.sdk.workload_type }}
           metrics_yaml_path: ${{ matrix.sdk.metrics_yaml_path }}
           thresholds_yaml_path: ${{ matrix.sdk.thresholds_yaml_path }}
           disable_compose_profiles: ${{ steps.baseline-workload.outputs.available != 'true' && 'workload-baseline' || '' }}
