@@ -55,6 +55,15 @@ impl TryFrom<ProtoValue> for RawValue {
             return Ok(Pairs(pairs?));
         };
 
+        // An entirely empty `Value` message is how the wire spells both `Void`
+        // and an empty container: `Void` has no representation of its own, and
+        // an empty list/dict carries neither items nor pairs. This decoder has
+        // no type context, so it yields `NullFlag` and lets the type-directed
+        // layer above turn it into the right empty value.
+        if value == ProtoValue::default() {
+            return Ok(NullFlag);
+        }
+
         decode_err("empty value item")
     }
 }
@@ -75,9 +84,19 @@ impl TryFrom<ydb_grpc::ydb_proto::ValuePair> for RawValuePair {
             return decode_err("empty payload value in proto pair");
         };
 
+        // `Void` has no wire representation, so the server sends it as an
+        // entirely empty `Value` message. That is how the payloads of a
+        // `Dict<T, Void>` - i.e. a `Set<T>` - arrive, and the generic value
+        // decoder would reject it as malformed.
+        let payload = if payload == ProtoValue::default() {
+            RawValue::NullFlag
+        } else {
+            payload.try_into()?
+        };
+
         Ok(RawValuePair {
             key: key.try_into()?,
-            payload: payload.try_into()?,
+            payload,
         })
     }
 }

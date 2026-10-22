@@ -9,8 +9,10 @@ use uuid::Uuid;
 
 use super::r#type::DecimalType;
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
-use crate::grpc_wrapper::raw_table_service::value::r#type::{RawType, StructMember, StructType};
-use crate::grpc_wrapper::raw_table_service::value::{RawTypedValue, RawValue};
+use crate::grpc_wrapper::raw_table_service::value::r#type::{
+    DictType, RawType, StructMember, StructType,
+};
+use crate::grpc_wrapper::raw_table_service::value::{RawTypedValue, RawValue, RawValuePair};
 use crate::types::YdbDecimal;
 use crate::types::{
     SECONDS_PER_DAY, signed_days_to_system_time, signed_micros_to_system_time,
@@ -187,6 +189,29 @@ impl TryFrom<crate::Value> for RawTypedValue {
                 RawTypedValue {
                     r#type: RawType::List(Box::new(type_example.r#type)),
                     value: RawValue::Items(items_res?.into_iter().map(|item| item.value).collect()),
+                }
+            }
+            // YDB has no wire type for Set: `Set<T>` travels as `Dict<T, Void>`
+            // with a null-flag payload for every key.
+            Value::Set(v) => {
+                let type_example: RawTypedValue = v.t.try_into()?;
+                let items_res: Result<Vec<RawTypedValue>, _> =
+                    v.values.into_iter().map(|item| item.try_into()).collect();
+
+                RawTypedValue {
+                    r#type: RawType::Dict(Box::new(DictType {
+                        key: type_example.r#type,
+                        payload: RawType::Void,
+                    })),
+                    value: RawValue::Pairs(
+                        items_res?
+                            .into_iter()
+                            .map(|item| RawValuePair {
+                                key: item.value,
+                                payload: RawValue::NullFlag,
+                            })
+                            .collect(),
+                    ),
                 }
             }
             Value::Struct(v) => {
@@ -389,6 +414,46 @@ impl TryFrom<RawTypedValue> for Value {
                     Err(err) => {
                         return Err(RawError::custom(format!(
                             "can't create list value from rawtype: {err}"
+                        )));
+                    }
+                }
+            }
+            // `Dict<T, Void>` is how YDB spells `Set<T>`. A dict with any other
+            // payload is a real dict, which the public API does not model yet.
+            (RawType::Dict(dict_type), v) if dict_type.payload == RawType::Void => {
+                let key_type = dict_type.key;
+                let values = match v {
+                    RawValue::NullFlag => Vec::default(),
+                    RawValue::Pairs(pairs) => {
+                        let values_res: Result<Vec<_>, _> = pairs
+                            .into_iter()
+                            .map(|pair| {
+                                RawTypedValue {
+                                    r#type: key_type.clone(),
+                                    value: pair.key,
+                                }
+                                .try_into()
+                            })
+                            .collect();
+
+                        values_res?
+                    }
+                    v => {
+                        return types_mismatch(
+                            RawType::Dict(Box::new(DictType {
+                                key: key_type,
+                                payload: RawType::Void,
+                            })),
+                            v,
+                        );
+                    }
+                };
+                let type_example = key_type.into_value_example()?;
+                match Value::set_from(type_example, values) {
+                    Ok(val) => val,
+                    Err(err) => {
+                        return Err(RawError::custom(format!(
+                            "can't create set value from rawtype: {err}"
                         )));
                     }
                 }
