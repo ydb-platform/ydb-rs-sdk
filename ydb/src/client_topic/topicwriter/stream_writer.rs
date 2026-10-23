@@ -9,7 +9,7 @@ use ydb_grpc::ydb_proto::topic::stream_write_message;
 use ydb_grpc::ydb_proto::topic::stream_write_message::write_request::MessageData;
 
 use crate::client_topic::compression::{
-    CodecRegistry, CompressedChunk, CompressionWorker, Executor,
+    CodecRegistry, CompressedChunk, CompressionWorker, Executor, OUTPUT_BACKLOG_PER_TASK,
 };
 use crate::client_topic::list_types::Codec;
 use crate::client_topic::topicwriter::message_write_status::WriteAck;
@@ -55,13 +55,17 @@ impl StreamWriter {
         let worker = CompressionWorker::new(
             writer_options.codec_selector,
             Arc::new(codec_registry),
-            executor,
+            executor.clone(),
             server_codecs,
         )?;
 
-        let (batch_tx, batch_rx) = mpsc::unbounded_channel::<Vec<MessageData>>();
+        let compression_backlog = executor
+            .available_parallelism()
+            .saturating_mul(OUTPUT_BACKLOG_PER_TASK)
+            .get();
+        let (batch_tx, batch_rx) = mpsc::channel::<Vec<MessageData>>(compression_backlog);
         let (compressed_tx, compressed_rx) =
-            mpsc::unbounded_channel::<YdbResult<CompressedChunk>>();
+            mpsc::channel::<YdbResult<CompressedChunk>>(compression_backlog);
 
         let request_stream = stream.clone_sender();
 
@@ -74,7 +78,12 @@ impl StreamWriter {
             batch_tx,
         ));
 
-        worker.spawn_into(&mut tasks, batch_rx, compressed_tx);
+        worker.spawn_into(
+            &mut tasks,
+            batch_rx,
+            compressed_tx,
+            cancellation_token.clone(),
+        );
 
         tasks.spawn(StreamWriter::grpc_send_loop(
             cancellation_token.clone(),
@@ -101,7 +110,7 @@ impl StreamWriter {
         cancellation_token: CancellationToken,
         error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
         queue: Queue,
-        batch_tx: mpsc::UnboundedSender<Vec<MessageData>>,
+        batch_tx: mpsc::Sender<Vec<MessageData>>,
     ) {
         loop {
             tokio::select! {
@@ -110,7 +119,11 @@ impl StreamWriter {
                     if messages.is_empty() {
                         continue;
                     }
-                    if batch_tx.send(messages).is_err() {
+                    let batch_sent = tokio::select! {
+                        _ = cancellation_token.cancelled() => return,
+                        result = batch_tx.send(messages) => result,
+                    };
+                    if batch_sent.is_err() {
                         let err = YdbError::custom("compression worker input channel closed");
                         warn!("error sending message in topic writer write_messages_loop: {}", &err);
                         if let Err(send_err) = StreamWriter::loop_iteration_error(cancellation_token, error_tx, err).await {
@@ -126,7 +139,7 @@ impl StreamWriter {
     async fn grpc_send_loop(
         cancellation_token: CancellationToken,
         error_tx: Arc<Mutex<Option<oneshot::Sender<YdbError>>>>,
-        mut compressed_rx: mpsc::UnboundedReceiver<YdbResult<CompressedChunk>>,
+        mut compressed_rx: mpsc::Receiver<YdbResult<CompressedChunk>>,
         request_stream: mpsc::UnboundedSender<stream_write_message::FromClient>,
         write_request_settings: WriteRequestSettings,
     ) {
