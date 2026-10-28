@@ -1,5 +1,5 @@
 # SLO workloads build on the pinned modern Rust version used by CI.
-FROM rust:1.96.0-bookworm AS build
+FROM rust:1.99.1-bookworm AS build
 ARG PKG_NAME=slo-native-query
 COPY . /src
 WORKDIR /src
