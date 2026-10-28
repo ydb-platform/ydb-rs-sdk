@@ -14,7 +14,7 @@ env:
   # MSRV. Keep in sync with [workspace.package].rust-version in Cargo.toml.
   RUST_VERSION_MSRV: "1.88"
   # Pinned modern Rust version used for forward compatibility coverage.
-  RUST_VERSION_MODERN: "1.96"
+  RUST_VERSION_MODERN: "1.99.1"
   # Stable Rust version used against dependencies test
   RUST_VERSION_STABLE: stable
 
