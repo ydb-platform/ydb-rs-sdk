@@ -1,0 +1,38 @@
+# Observability stack for the `metrics` example: local YDB (included from the
+# repo root), VictoriaMetrics, and Grafana with a provisioned dashboard.
+#
+# Requires Docker Compose >= 2.20 (the `include` directive).
+#
+#   docker compose -f ydb/examples/metrics/docker-compose.yaml up -d
+#   cargo run --example metrics
+#   open http://localhost:3000/d/ydb-sdk-metrics   (Grafana, anonymous Viewer)
+name: ydb-metrics-example
+
+include:
+  - path: ../../../docker-compose.yaml
+
+services:
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:latest
+    command: ["-promscrape.config=/etc/vm/scrape.yml", "-retentionPeriod=1d"]
+    volumes:
+      - ./victoria/scrape.yml:/etc/vm/scrape.yml:ro
+    ports:
+      - "8428:8428"
+    extra_hosts:
+      # Scraping the example running on the Docker host; on Linux the
+      # host-gateway mapping is required for host.docker.internal.
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - victoriametrics

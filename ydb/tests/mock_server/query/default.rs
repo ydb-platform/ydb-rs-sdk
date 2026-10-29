@@ -1,16 +1,20 @@
 use tracing::error;
+use ydb_grpc::ydb_proto::operations::Operation;
 use ydb_grpc::ydb_proto::query::{
     BeginTransactionResponse, CommitTransactionResponse, CreateSessionResponse,
-    DeleteSessionResponse, RollbackTransactionResponse, SessionState, TransactionMeta,
+    DeleteSessionResponse, FetchScriptResultsResponse, RollbackTransactionResponse, SessionState,
+    TransactionMeta,
 };
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply};
 
 use super::handler::{QueryIncoming, QueryReply};
+use super::parts::result_set_with_value;
 
 pub const QUERY_SESSION_ID: &str = "session-id-xyz";
 pub const QUERY_TX_ID: &str = "tx-id-abc";
+pub const SCRIPT_OPERATION_ID: &str = "op-id";
 
 pub struct QueryDefaultHandler {
     tx: FromHandlerToService,
@@ -67,6 +71,23 @@ impl Handler for QueryDefaultHandler {
                 let _ = reply_tx.send(Ok(tonic::Response::new(RollbackTransactionResponse {
                     status: StatusCode::Success as i32,
                     issues: Vec::new(),
+                })));
+            }
+            QueryIncoming::ExecuteScript(_, reply_tx) => {
+                let _ = reply_tx.send(Ok(tonic::Response::new(Operation {
+                    status: StatusCode::Success as i32,
+                    issues: Vec::new(),
+                    id: SCRIPT_OPERATION_ID.to_string(),
+                    ..Default::default()
+                })));
+            }
+            QueryIncoming::FetchScriptResults(_, reply_tx) => {
+                let _ = reply_tx.send(Ok(tonic::Response::new(FetchScriptResultsResponse {
+                    status: StatusCode::Success as i32,
+                    issues: Vec::new(),
+                    result_set_index: 0,
+                    result_set: Some(result_set_with_value(42)),
+                    next_fetch_token: String::new(),
                 })));
             }
             QueryIncoming::AttachSession(_, stream_id) => {

@@ -1,3 +1,5 @@
+use crate::client_metrics::{GrpcConnectionState, MetricsRecorder};
+use crate::grpc_wrapper::metrics_interceptor::intern_endpoint;
 use crate::{GrpcOptions, YdbError, YdbResult};
 use derivative::Derivative;
 use futures_util::FutureExt;
@@ -9,6 +11,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::task::Poll;
+use std::time::Instant;
 use tokio::sync::OnceCell;
 use tokio::task::JoinHandle;
 use tokio_stream::StreamExt;
@@ -16,10 +19,13 @@ use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
 use tracing::instrument;
 use tracing::trace;
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub(crate) struct ConnectionPool<ConnectionT: Connection> {
     connections: std::sync::Mutex<HashMap<Uri, Arc<OnceCell<ConnectionT>>>>,
     opts: GrpcOptions,
+    #[derivative(Debug = "ignore")]
+    metrics: Arc<dyn MetricsRecorder>,
 }
 
 impl<ConnectionT: Connection> Default for ConnectionPool<ConnectionT> {
@@ -27,16 +33,23 @@ impl<ConnectionT: Connection> Default for ConnectionPool<ConnectionT> {
         Self {
             connections: std::sync::Mutex::new(HashMap::new()),
             opts: GrpcOptions::default(),
+            metrics: Arc::new(crate::client_metrics::DefaultMetricsRecorder::new()),
         }
     }
 }
 
 impl<ConnectionT: Connection> ConnectionPool<ConnectionT> {
-    pub(crate) fn new(opts: GrpcOptions) -> Self {
+    pub(crate) fn new(opts: GrpcOptions, metrics: Arc<dyn MetricsRecorder>) -> Self {
         Self {
             connections: HashMap::new().into(),
             opts,
+            metrics,
         }
+    }
+
+    /// Recorder shared with the owning connection manager.
+    pub(crate) fn metrics(&self) -> Arc<dyn MetricsRecorder> {
+        Arc::clone(&self.metrics)
     }
 
     #[instrument(name = "ydb.ConnectionPool.GetConnection", skip_all, fields(network.peer.address = uri.host(), network.peer.port = uri.port_u16()), err)]
@@ -48,12 +61,50 @@ impl<ConnectionT: Connection> ConnectionPool<ConnectionT> {
             .or_default()
             .clone();
 
-        connection
+        // Metrics only cover actual pool entry creation: reuse neither re-establishes
+        // a connection nor changes entry counts. With lazy channels the gauge tracks
+        // pool entries, not live sockets; `idle` cannot be observed and is not emitted.
+        if let Some(conn) = connection.get() {
+            return conn.channel().await;
+        }
+
+        let endpoint = intern_endpoint(&endpoint_label(uri));
+        let start = Instant::now();
+        self.metrics
+            .grpc_connections_add(&endpoint, GrpcConnectionState::Connecting, 1.0);
+
+        let init = connection
             .get_or_try_init(|| async { ConnectionT::init(uri.to_owned(), &self.opts).await })
-            .await?
-            .channel()
-            .await
+            .await;
+
+        match init {
+            Ok(conn) => {
+                self.metrics
+                    .grpc_connection_establish(&endpoint, true, start.elapsed());
+                self.metrics
+                    .grpc_connections_add(&endpoint, GrpcConnectionState::Connecting, -1.0);
+                self.metrics
+                    .grpc_connections_add(&endpoint, GrpcConnectionState::Active, 1.0);
+                conn.channel().await
+            }
+            Err(err) => {
+                self.metrics
+                    .grpc_connection_establish(&endpoint, false, start.elapsed());
+                self.metrics
+                    .grpc_connections_add(&endpoint, GrpcConnectionState::Connecting, -1.0);
+                self.metrics
+                    .grpc_connections_add(&endpoint, GrpcConnectionState::Failed, 1.0);
+                Err(err)
+            }
+        }
     }
+}
+
+/// Endpoint label: the authority when present, the whole URI otherwise.
+pub(crate) fn endpoint_label(uri: &Uri) -> String {
+    uri.authority()
+        .map(|authority| authority.as_str().to_string())
+        .unwrap_or_else(|| uri.to_string())
 }
 
 pub(crate) trait Connection: Sized {

@@ -5,6 +5,9 @@ mod table_pool;
 #[cfg(test)]
 mod regression_tests;
 
+#[cfg(test)]
+mod pool_metrics_tests;
+
 pub use pool::{SessionPoolSettings, SessionPoolStats};
 
 pub(crate) use pool::{SessionPool, SessionPoolLease, spawn_pool_release};

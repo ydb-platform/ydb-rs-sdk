@@ -135,8 +135,10 @@ impl<'a> IntoFuture for ExplainQueryBuilder<'a> {
 #[cfg(test)]
 mod unit_tests {
     use super::*;
+    use std::sync::Arc;
+
     use crate::GrpcOptions;
-    use crate::client_metrics::names::MetricsNames;
+    use crate::client_metrics::DefaultMetricsRecorder;
     use crate::grpc_connection_manager::GrpcConnectionManager;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
     use crate::load_balancer::{SharedLoadBalancer, StaticLoadBalancer};
@@ -155,10 +157,11 @@ mod unit_tests {
                 "test".to_string(),
                 MultiInterceptor::new(),
                 GrpcOptions::default(),
+                Arc::new(DefaultMetricsRecorder::new()),
             ),
             session_pool: SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1)),
             retry_settings: RetrySettings::with_default_backoff(),
-            metrics_names: MetricsNames::new(None),
+            metrics_recorder: Arc::new(DefaultMetricsRecorder::new()),
         }
     }
 

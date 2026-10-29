@@ -225,19 +225,22 @@ impl QueryService for MockQueryService {
 
     async fn execute_script(
         &self,
-        _request: tonic::Request<ExecuteScriptRequest>,
+        request: tonic::Request<ExecuteScriptRequest>,
     ) -> Result<tonic::Response<Operation>, tonic::Status> {
-        Err(tonic::Status::unimplemented(
-            "mock query ExecuteScript is not implemented",
-        ))
+        let (tx, rx) = oneshot::channel();
+        self.send_unary(QueryIncoming::ExecuteScript(request.into_inner(), tx), rx)
+            .await
     }
 
     async fn fetch_script_results(
         &self,
-        _request: tonic::Request<FetchScriptResultsRequest>,
+        request: tonic::Request<FetchScriptResultsRequest>,
     ) -> Result<tonic::Response<FetchScriptResultsResponse>, tonic::Status> {
-        Err(tonic::Status::unimplemented(
-            "mock query FetchScriptResults is not implemented",
-        ))
+        let (tx, rx) = oneshot::channel();
+        self.send_unary(
+            QueryIncoming::FetchScriptResults(request.into_inner(), tx),
+            rx,
+        )
+        .await
     }
 }

@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::TryFutureExt;
 use tokio::time::timeout;
 
-use crate::client_metrics::names::MetricsNames;
+use crate::client_metrics::MetricsRecorder;
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
@@ -37,6 +38,10 @@ pub(crate) struct CallOptions {
     pub tx_mode: Option<TxMode>,
     /// One-shot [`QueryClient`] only: send `ExecuteQuery` with an empty `session_id`.
     pub implicit_session: bool,
+    /// Constant application-chosen name for the named query metric rows
+    /// (`ydb_query_named_*`); recorded into the `ydb.query.name` span field too,
+    /// so traces and metric series correlate.
+    pub query_name: Option<&'static str>,
 }
 
 impl CallOptions {
@@ -50,7 +55,7 @@ pub(crate) struct ClientExecContext {
     pub connection_manager: GrpcConnectionManager,
     pub session_pool: SessionPool,
     pub retry_settings: RetrySettings,
-    pub metrics_names: MetricsNames,
+    pub metrics_recorder: Arc<dyn MetricsRecorder>,
 }
 
 /// Opened client stream and its explicit session ownership mode.
@@ -193,7 +198,7 @@ pub(crate) struct TxExecContext {
     pub state: TxState,
     /// Absolute deadline from [`QueryClient::retry_tx`] `.timeout()`, propagated to every RPC in the callback.
     pub retry_deadline: Option<Instant>,
-    pub metrics_names: MetricsNames,
+    pub metrics_recorder: Arc<dyn MetricsRecorder>,
 }
 
 impl TxExecContext {
@@ -516,7 +521,7 @@ async fn client_implicit_session_request(
     Ok((client, req))
 }
 
-#[instrument(name = "ydb.Query.BeginStreamOnce", skip_all, fields(db.system.name = "ydb"), err)]
+#[instrument(name = "ydb.Query.BeginStreamOnce", skip_all, fields(db.system.name = "ydb", ydb.query.name = tracing::field::Empty), err)]
 pub(super) async fn client_begin_stream_once(
     ctx: &ClientExecContext,
     text: &str,
@@ -524,6 +529,9 @@ pub(super) async fn client_begin_stream_once(
     opts: &CallOptions,
     concurrent_result_sets: bool,
 ) -> YdbResult<OpenedClientQueryStream> {
+    if let Some(query_name) = opts.query_name {
+        tracing::Span::current().record("ydb.query.name", query_name);
+    }
     if opts.implicit_session {
         let (mut client, req) =
             client_implicit_session_request(ctx, text, params, opts, concurrent_result_sets)
@@ -670,8 +678,8 @@ pub(crate) fn tx_finish_query(tx: &mut TxExecContext, commit_at_end: bool) -> Yd
     }
 
     if commit_at_end {
-        tx.metrics_names
-            .client_transaction_commit_counter
+        tx.metrics_recorder
+            .client_transaction_commit_counter()
             .increment(1);
         tx.finish_tx(TxState::Committed, QueryTxCommitStatus::Committed)?
             .return_to_pool();
@@ -743,7 +751,7 @@ fn tx_execute_request(
     Ok(request)
 }
 
-#[instrument(name = "ydb.Query.TransactionBeginStream", skip_all, fields(db.system.name = "ydb", ydb.tx.mode = ?tx.tx_mode, ydb.session.id = tracing::field::Empty), err)]
+#[instrument(name = "ydb.Query.TransactionBeginStream", skip_all, fields(db.system.name = "ydb", ydb.tx.mode = ?tx.tx_mode, ydb.session.id = tracing::field::Empty, ydb.query.name = tracing::field::Empty), err)]
 pub(crate) async fn tx_begin_stream(
     tx: &mut TxExecContext,
     text: String,
@@ -755,6 +763,9 @@ pub(crate) async fn tx_begin_stream(
         !opts.implicit_session,
         "implicit_session is only available on QueryClient one-shot builders"
     );
+    if let Some(query_name) = opts.query_name {
+        tracing::Span::current().record("ydb.query.name", query_name);
+    }
     tx.active()?;
     let operation_timeout = resolve_operation_timeout(tx.retry_deadline, opts.timeout);
     let result: YdbResult<ExecuteQueryStream> = with_optional_timeout(operation_timeout, async {
@@ -812,7 +823,7 @@ pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
         return Err(err);
     }
     let operation_timeout = remaining_retry_timeout(tx.retry_deadline);
-    let commit_counter = tx.metrics_names.client_transaction_commit_counter.clone();
+    let metrics_recorder = Arc::clone(&tx.metrics_recorder);
     let active = tx.active_mut()?;
     if active.server_progress.operation.is_in_flight() {
         return Err(TxServerProgress::operation_in_progress_error());
@@ -823,7 +834,9 @@ pub(crate) async fn tx_commit(tx: &mut TxExecContext) -> YdbResult<()> {
         return Ok(());
     };
 
-    commit_counter.increment(1);
+    metrics_recorder
+        .client_transaction_commit_counter()
+        .increment(1);
 
     debug_assert_eq!(active.server_progress.operation, TxOperationState::Ready);
     active.server_progress.operation = TxOperationState::InFlight;
@@ -855,8 +868,8 @@ pub(crate) async fn tx_rollback(tx: &mut TxExecContext) -> YdbResult<()> {
     if !tx.state.is_active() {
         return Ok(());
     }
-    tx.metrics_names
-        .client_transaction_rollback_counter
+    tx.metrics_recorder
+        .client_transaction_rollback_counter()
         .increment(1);
     let operation_timeout = remaining_retry_timeout(tx.retry_deadline);
     let active = tx.active_mut()?;
@@ -908,14 +921,14 @@ pub(crate) fn tx_exec_context(
     lease: SessionPoolLease,
     options: TransactionOptions,
     retry_deadline: Option<Instant>,
-    metrics_names: MetricsNames,
+    metrics_recorder: Arc<dyn MetricsRecorder>,
 ) -> TxExecContext {
     TxExecContext {
         tx_mode: options.mode(),
         begin: options.begin(),
         state: TxState::Active(ActiveTx::new(client, lease)),
         retry_deadline,
-        metrics_names,
+        metrics_recorder,
     }
 }
 
@@ -970,6 +983,7 @@ mod unit_tests {
     use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
     use crate::GrpcOptions;
+    use crate::client_metrics::DefaultMetricsRecorder;
     use crate::client_query::TransactionOptions;
     use crate::errors::{Idempotency, YdbError, YdbOrCustomerError};
     use crate::grpc_connection_manager::GrpcConnectionManager;
@@ -985,6 +999,7 @@ mod unit_tests {
             "bench".to_string(),
             MultiInterceptor::new(),
             GrpcOptions::default(),
+            Arc::new(DefaultMetricsRecorder::new()),
         )
     }
 
@@ -999,7 +1014,7 @@ mod unit_tests {
             lease,
             TransactionOptions::default(),
             None,
-            MetricsNames::new(None),
+            Arc::new(DefaultMetricsRecorder::new()),
         )
     }
 

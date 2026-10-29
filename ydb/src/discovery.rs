@@ -495,6 +495,7 @@ mod test {
 
     use crate::GrpcOptions;
     use crate::client_common::{DBCredentials, TokenCache};
+    use crate::client_metrics::DefaultMetricsRecorder;
     use crate::discovery::{Discovery, DiscoverySharedState, DiscoveryState, NodeInfo};
     use crate::errors::YdbResult;
     use crate::grpc_connection_manager::{DiscoveryConnectionManager, NoBalancer};
@@ -513,6 +514,7 @@ mod test {
             DATABASE.to_string(),
             MultiInterceptor::new(),
             GrpcOptions::default(),
+            Arc::new(DefaultMetricsRecorder::new()),
         );
 
         DiscoverySharedState::new(connection_manager, ENDPOINT)
@@ -560,6 +562,7 @@ mod test {
             cred.database,
             interceptor,
             GrpcOptions::default(),
+            Arc::new(DefaultMetricsRecorder::new()),
         );
 
         let discovery_shared =

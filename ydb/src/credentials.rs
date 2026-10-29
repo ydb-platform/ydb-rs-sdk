@@ -1,4 +1,5 @@
 use crate::client::TimeoutSettings;
+use crate::client_metrics::DefaultMetricsRecorder;
 use crate::errors::{YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_auth_service::client::RawAuthClient;
@@ -584,6 +585,7 @@ impl StaticCredentials {
             self.database.clone(),
             MultiInterceptor::new(),
             self.grpc_opts.clone(),
+            Arc::new(DefaultMetricsRecorder::new()),
         );
 
         let mut auth_client = empty_connection_manager

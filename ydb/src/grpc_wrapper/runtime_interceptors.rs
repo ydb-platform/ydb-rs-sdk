@@ -10,17 +10,28 @@ use tonic::transport::Channel;
 pub(crate) type InterceptorResult<T> = std::result::Result<T, InterceptorError>;
 pub(crate) type InterceptorRequest = http::request::Request<tonic::body::Body>;
 
+/// Endpoint label of the channel an RPC travels through, stamped into every
+/// request by [`InterceptedChannel`]. Tonic builds request URIs path-only
+/// (the authority lives in the channel), so interceptors cannot recover the
+/// endpoint from `req.uri()`; the channel stamps it instead.
+#[derive(Clone, Debug)]
+pub(crate) struct EndpointLabel(pub Arc<str>);
+
 #[derive(Clone)]
 pub(crate) struct InterceptedChannel {
     inner: Channel,
     interceptor: MultiInterceptor,
+    endpoint: Option<Arc<str>>,
 }
 
 impl InterceptedChannel {
-    pub fn new(channel: Channel, interceptor: MultiInterceptor) -> Self {
+    /// Stamps `endpoint` into every request's extensions as [`EndpointLabel`]
+    /// for the interceptors.
+    pub fn new(channel: Channel, interceptor: MultiInterceptor, endpoint: Arc<str>) -> Self {
         Self {
             inner: channel,
             interceptor,
+            endpoint: Some(endpoint),
         }
     }
 }
@@ -30,13 +41,16 @@ impl tower::Service<InterceptorRequest> for InterceptedChannel {
     type Error = InterceptorError;
     type Future = ChannelFuture;
 
-    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+    fn poll_ready(&mut self, cx: &mut Context) -> Poll<Result<(), Self::Error>> {
         self.inner
             .poll_ready(cx)
             .map_err(InterceptorError::Transport)
     }
 
     fn call(&mut self, mut req: InterceptorRequest) -> Self::Future {
+        if let Some(endpoint) = &self.endpoint {
+            req.extensions_mut().insert(EndpointLabel(endpoint.clone()));
+        }
         let mut metadata: RequestMetadata = None;
         req = match self.interceptor.on_call(&mut metadata, req) {
             Ok(res) => res,
