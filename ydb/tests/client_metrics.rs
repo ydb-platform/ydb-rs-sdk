@@ -1,4 +1,4 @@
-//! Mock-server tests for the part1 client metrics: creation counters, static
+//! Mock-server tests for the existing client metrics: creation counters, static
 //! labels, operation counters, and row-query-time histograms.
 //!
 //! Each test injects an isolated `metrics_prometheus::Recorder` backed by its own

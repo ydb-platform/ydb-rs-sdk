@@ -51,21 +51,21 @@ it binds to the ambient global recorder) and carries two static labels:
 `with_metrics_label`).
 
 Duration histograms are exported with custom buckets
-(`PrometheusBuilder::set_buckets_for_metric`): the SDK records durations in
-**milliseconds** (`*_milliseconds` series) and the part1 row-query-time
-histograms in **seconds**, so the exporter defaults (0.005–10 s) would put
-every observation in the +Inf bucket. Result sizes (rows/bytes) are u64
-counts with their own buckets. Histograms render as
+(`PrometheusBuilder::set_buckets_for_metric`): all SDK durations are recorded
+in **seconds**. New series use the `_seconds` suffix; the two existing
+row-query-time histograms keep their names. The shared buckets span
+0.0005–60 s. Result rows are exact counts; result bytes are approximate u64
+counts. Both use their own buckets. Histograms render as
 `<name>_bucket/_sum/_count`; the Grafana queries use `histogram_quantile`.
 
 Four independent scenario loops run with randomized 5 s – 3 min intervals:
 
 | Scenario | What it does | Metric series it moves |
 |----------|--------------|------------------------|
-| `scenarios/query.rs` | Each tick picks one of: parameterized `query_row`, a failing query against a missing table, `retry_tx` commit (upsert + count), `retry_tx` explicit rollback, materialized result set + multi-result-set stream, DDL create/drop, `execute_script` + poll + `fetch_script_results`, a named `query_row` (`.with_name(...)`), a named failing query | Client counters + `ydb_row_query_time_histogram`; `ydb_query_operations_total{operation,result}`, `ydb_query_operation_duration_milliseconds`, `ydb_query_result_rows/bytes`, `ydb_query_errors_total`, `ydb_query_transactions_total`, `ydb_query_transaction_duration_milliseconds`; named variants `ydb_query_named_*{query_name}`; session pool acquire/use; every RPC in `ydb_grpc_requests_total` |
-| `scenarios/session_pool.rs` | Builds a dedicated driver with `with_session_pool(limit=5, warm_up=2, item_usage_limit=10, idle_ttl=30s)` and fires 10 parallel `query_row`s | `ydb_session_pool_sessions{state}`, `size_limit`, `pending_requests`, `acquire_total/milliseconds{result}`, `sessions_created_total`, `sessions_closed_total{reason}` (idle_ttl/usage_limit over time, shutdown at drop), `session_create_milliseconds`, `session_use_milliseconds` |
+| `scenarios/query.rs` | Each tick picks one of: parameterized `query_row`, a failing query against a missing table, `retry_tx` commit (upsert + count), `retry_tx` explicit rollback, materialized result set + multi-result-set stream, DDL create/drop, `execute_script` + poll + `fetch_script_results`, a named `query_row` (`.with_name(...)`), a named failing query | Client counters + `ydb_row_query_time_histogram`; `ydb_query_operations_total{operation,result}`, `ydb_query_operation_duration_seconds`, `ydb_query_result_rows/bytes`, `ydb_query_errors_total`, `ydb_query_transactions_total`, `ydb_query_transaction_duration_seconds`; named variants `ydb_query_named_*{query_name}`; session pool acquire/use; every RPC in `ydb_grpc_requests_total` |
+| `scenarios/session_pool.rs` | Builds a dedicated driver with `with_session_pool(limit=5, warm_up=2, item_usage_limit=10, idle_ttl=30s)` and fires 10 parallel `query_row`s | `ydb_session_pool_sessions{state}`, `size_limit`, `pending_requests`, `acquire_total/seconds{result}`, `sessions_created_total`, `sessions_closed_total{reason}` (idle_ttl/usage_limit over time, shutdown at drop), `session_create_seconds`, `session_use_seconds` |
 | `scenarios/topic.rs` | Creates a directory + topic with a consumer, produces 5 messages, consumes them with commit (deadline-bounded), drops everything | `ydb_new_topic_client_counter`, `ydb_grpc_stream_messages_total{direction="received"}` on `StreamRead`, topic/scheme RPCs in `ydb_grpc_requests_total` |
-| `scenarios/reconnect.rs` | Builds a fresh driver and swaps it into the shared slot, dropping the old one (no public `stop()` on `Client`) | `ydb_new_client_counter`, `ydb_grpc_connections{state="connecting"\|"active"}`, `ydb_grpc_connection_establish_milliseconds{result="ok"}`, discovery RPCs, `sessions_closed_total{reason="shutdown"}` on the old driver |
+| `scenarios/reconnect.rs` | Builds a fresh driver and swaps it into the shared slot, dropping the old one (no public `stop()` on `Client`) | `ydb_new_client_counter`, `ydb_grpc_connections{state="connecting"\|"active"}`, `ydb_grpc_connection_establish_seconds{result="ok"}`, discovery RPCs, `sessions_closed_total{reason="shutdown"}` on the old driver |
 
 The failing-query tick is a useful teaching point: the gRPC RPC succeeds
 (`grpc_code="ok"`), so only the query-service series move —
@@ -93,29 +93,29 @@ use these exact strings:
   `ydb_row_query_time_histogram` (seconds),
   `ydb_transaction_row_query_time_histogram` (seconds).
 - **gRPC:** `ydb_grpc_requests_total{endpoint,service,method,grpc_code}`,
-  `ydb_grpc_request_duration_milliseconds{endpoint,service,method}`,
+  `ydb_grpc_request_duration_seconds{endpoint,service,method}`,
   `ydb_grpc_errors_total{endpoint,grpc_code}`,
   `ydb_grpc_stream_messages_total{endpoint,service,method,direction}`,
-  `ydb_grpc_connections{endpoint,state}`, `ydb_grpc_connection_establish_milliseconds{endpoint,result=ok|error}`.
+  `ydb_grpc_connections{endpoint,state}`, `ydb_grpc_connection_establish_seconds{endpoint,result=ok|error}`.
 - **Session pool:** `ydb_session_pool_sessions{state=idle|active|creating}`,
   `ydb_session_pool_size_limit`, `ydb_session_pool_pending_requests`,
   `ydb_session_pool_acquire_total{result=ok|timeout|error}`,
-  `ydb_session_pool_acquire_milliseconds{result}`,
-  `ydb_session_pool_session_create_milliseconds`,
+  `ydb_session_pool_acquire_seconds{result}`,
+  `ydb_session_pool_session_create_seconds`,
   `ydb_session_pool_sessions_created_total`,
   `ydb_session_pool_sessions_closed_total{reason=idle_ttl|usage_limit|bad_session|shutdown|keepalive_failed}`,
-  `ydb_session_pool_session_use_milliseconds`,
+  `ydb_session_pool_session_use_seconds`,
   `ydb_session_pool_keepalive_total{result=ok|error}`.
 - **Query service:** `ydb_query_operations_total{operation=exec|query_row|query_result_set|query|execute_script|fetch_script_results,result=ok|error}`,
-  `ydb_query_operation_duration_milliseconds{operation}`,
+  `ydb_query_operation_duration_seconds{operation}`,
   `ydb_query_result_rows{operation}`, `ydb_query_result_bytes{operation}`,
   `ydb_query_errors_total{operation,status_code}`,
   `ydb_query_transactions_total{result=commit|rollback|error}`,
-  `ydb_query_transaction_duration_milliseconds`,
+  `ydb_query_transaction_duration_seconds`,
   `ydb_query_transaction_retries_total{status_code}`.
 - **Named queries** (only for calls carrying `.with_name("...")`, mirrored from
   the common series): `ydb_query_named_operations_total{query_name,result}`,
-  `ydb_query_named_operation_duration_milliseconds{query_name}`,
+  `ydb_query_named_operation_duration_seconds{query_name}`,
   `ydb_query_named_errors_total{query_name,status_code}`,
   `ydb_query_named_result_rows{query_name}`,
   `ydb_query_named_result_bytes{query_name}`. The name must match

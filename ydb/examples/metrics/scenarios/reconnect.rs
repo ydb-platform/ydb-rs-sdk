@@ -9,7 +9,7 @@
 //! Moves:
 //! - `ydb_new_client_counter` on every rebuild;
 //! - `ydb_grpc_connections{state="connecting"|"active"}` and
-//!   `ydb_grpc_connection_establish_milliseconds{result="ok"}` for the new
+//!   `ydb_grpc_connection_establish_seconds{result="ok"}` for the new
 //!   driver's pool entries;
 //! - discovery RPCs in `ydb_grpc_requests_total{service="...DiscoveryService"}`;
 //! - dropping the old driver shuts its session pool down:

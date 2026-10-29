@@ -532,14 +532,14 @@ impl MetricsRecorder for DefaultMetricsRecorder {
                     MetricLabel::new("result", if ok { "ok" } else { "error" }),
                 ]);
                 self.names.histogram(
-                    "ydb_grpc_connection_establish_milliseconds",
-                    MetricUnit::Milliseconds,
+                    "ydb_grpc_connection_establish_seconds",
+                    MetricUnit::Seconds,
                     "ydb gRPC connection establishment duration by result",
                     &labels,
                 )
             },
         );
-        handle.record(duration.as_secs_f64() * 1000.0);
+        handle.record(duration.as_secs_f64());
     }
 
     fn grpc_request(
@@ -588,14 +588,14 @@ impl MetricsRecorder for DefaultMetricsRecorder {
                     MetricLabel::new("method", resolve(method)),
                 ]);
                 self.names.histogram(
-                    "ydb_grpc_request_duration_milliseconds",
-                    MetricUnit::Milliseconds,
+                    "ydb_grpc_request_duration_seconds",
+                    MetricUnit::Seconds,
                     "ydb gRPC request duration",
                     &labels,
                 )
             },
         )
-        .record(duration.as_secs_f64() * 1000.0);
+        .record(duration.as_secs_f64());
 
         if !code.is_ok() {
             dynamic::cached(&self.names.dynamic.grpc_errors, (endpoint, code), || {
@@ -659,14 +659,13 @@ impl MetricsRecorder for DefaultMetricsRecorder {
 
     fn session_pool_acquire(&self, result: SessionPoolAcquireResult, duration: Duration) {
         self.names.session_pool_acquire_total[result.index()].increment(1);
-        self.names.session_pool_acquire_milliseconds[result.index()]
-            .record(duration.as_secs_f64() * 1000.0);
+        self.names.session_pool_acquire_seconds[result.index()].record(duration.as_secs_f64());
     }
 
     fn session_pool_session_create(&self, duration: Duration) {
         self.names
-            .session_pool_session_create_milliseconds
-            .record(duration.as_secs_f64() * 1000.0);
+            .session_pool_session_create_seconds
+            .record(duration.as_secs_f64());
     }
 
     fn session_pool_session_created(&self) {
@@ -679,8 +678,8 @@ impl MetricsRecorder for DefaultMetricsRecorder {
 
     fn session_pool_session_use(&self, duration: Duration) {
         self.names
-            .session_pool_session_use_milliseconds
-            .record(duration.as_secs_f64() * 1000.0);
+            .session_pool_session_use_seconds
+            .record(duration.as_secs_f64());
     }
 
     fn session_pool_keepalive(&self, ok: bool) {
@@ -689,8 +688,8 @@ impl MetricsRecorder for DefaultMetricsRecorder {
 
     fn query_operation(&self, operation: QueryOperation, ok: bool, duration: Duration) {
         self.names.query_operations_total[operation.index()][usize::from(!ok)].increment(1);
-        self.names.query_operation_duration_milliseconds[operation.index()]
-            .record(duration.as_secs_f64() * 1000.0);
+        self.names.query_operation_duration_seconds[operation.index()]
+            .record(duration.as_secs_f64());
     }
 
     fn query_operation_error(&self, operation: QueryOperation, status_code: &str) {
@@ -722,8 +721,8 @@ impl MetricsRecorder for DefaultMetricsRecorder {
     fn query_transaction(&self, result: QueryTransactionResult, duration: Duration) {
         self.names.query_transactions_total[result.index()].increment(1);
         self.names
-            .query_transaction_duration_milliseconds
-            .record(duration.as_secs_f64() * 1000.0);
+            .query_transaction_duration_seconds
+            .record(duration.as_secs_f64());
     }
 
     fn query_transaction_retry(&self, status_code: &str) {
@@ -772,14 +771,14 @@ impl MetricsRecorder for DefaultMetricsRecorder {
                     QueryNameRegistry::label_value(name),
                 )]);
                 self.names.histogram(
-                    "ydb_query_named_operation_duration_milliseconds",
-                    MetricUnit::Milliseconds,
+                    "ydb_query_named_operation_duration_seconds",
+                    MetricUnit::Seconds,
                     "ydb named query operation duration",
                     &labels,
                 )
             },
         )
-        .record(duration.as_secs_f64() * 1000.0);
+        .record(duration.as_secs_f64());
     }
 
     fn query_named_operation_error(&self, query_name: &'static str, status_code: &str) {
@@ -825,7 +824,7 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             self.names.histogram(
                 "ydb_query_named_result_bytes",
                 MetricUnit::Bytes,
-                "ydb named query result bytes",
+                "ydb named query approximate result bytes",
                 &label(),
             )
         })
@@ -854,9 +853,11 @@ mod tests {
         backend.register_histogram(&description, &[]).record(1.0);
     }
 
-    #[derive(Clone, Default)]
+    #[derive(Clone)]
     struct CapturedMetric {
         name: String,
+        unit: MetricUnit,
+        description: String,
         labels: Vec<(String, String)>,
     }
 
@@ -874,6 +875,8 @@ mod tests {
                 .collect();
             self.registered.lock().unwrap().push(CapturedMetric {
                 name: description.name().to_string(),
+                unit: description.unit(),
+                description: description.description().to_string(),
                 labels,
             });
         }
@@ -937,7 +940,7 @@ mod tests {
     }
 
     #[test]
-    fn default_recorder_registers_part1_series_with_labels() {
+    fn default_recorder_registers_existing_series_with_labels() {
         let capture = Arc::new(CaptureRecorder::default());
         let recorder = DefaultMetricsRecorder::from_parts(
             Some("driver-a".to_string()),
@@ -947,12 +950,12 @@ mod tests {
 
         let _ = Arc::new(recorder);
 
-        // The pool series are pre-registered too; this test pins part1 only.
-        let part1 = expected_metric_names();
+        // The pool series are pre-registered too; this test pins existing only.
+        let existing = expected_metric_names();
         let mut registered: Vec<CapturedMetric> = capture
             .registered()
             .into_iter()
-            .filter(|metric| part1.contains(&metric.name.as_str()))
+            .filter(|metric| existing.contains(&metric.name.as_str()))
             .collect();
         registered.sort_by(|a, b| a.name.cmp(&b.name));
         let mut expected = expected_metric_names();
@@ -963,7 +966,7 @@ mod tests {
                 .map(|m| m.name.as_str())
                 .collect::<Vec<_>>(),
             expected,
-            "all part1 series must register unchanged"
+            "all existing series must register unchanged"
         );
 
         for metric in &registered {
@@ -1019,7 +1022,7 @@ mod tests {
                 SessionPoolAcquireResult::LABELS.to_vec(),
             ),
             (
-                "ydb_session_pool_acquire_milliseconds",
+                "ydb_session_pool_acquire_seconds",
                 "result",
                 SessionPoolAcquireResult::LABELS.to_vec(),
             ),
@@ -1080,6 +1083,53 @@ mod tests {
     }
 
     #[test]
+    fn duration_units_and_approximate_size_descriptions_are_registered() {
+        let capture = Arc::new(CaptureRecorder::default());
+        let recorder =
+            DefaultMetricsRecorder::with_backend(Arc::clone(&capture) as Arc<dyn MetricsBackend>);
+        recorder.grpc_request(
+            "ep:2135",
+            "service",
+            "method",
+            "ok",
+            Duration::from_millis(1),
+        );
+        recorder.grpc_connection_establish("ep:2135", true, Duration::from_millis(1));
+        recorder.query_named_operation("named", true, Duration::from_millis(1));
+        recorder.query_named_operation_result("named", 1, 1);
+
+        let registered = capture.registered();
+        for metric in registered.iter().filter(|metric| {
+            metric.name.ends_with("_seconds")
+                || matches!(
+                    metric.name.as_str(),
+                    "ydb_row_query_time_histogram" | "ydb_transaction_row_query_time_histogram"
+                )
+        }) {
+            assert_eq!(metric.unit, MetricUnit::Seconds, "metric {}", metric.name);
+        }
+        assert!(
+            registered
+                .iter()
+                .all(|metric| !metric.name.ends_with("_milliseconds"))
+        );
+
+        for name in ["ydb_query_result_bytes", "ydb_query_named_result_bytes"] {
+            let metrics: Vec<_> = registered
+                .iter()
+                .filter(|metric| metric.name == name)
+                .collect();
+            assert!(!metrics.is_empty(), "{name} must be registered");
+            assert!(
+                metrics
+                    .iter()
+                    .all(|metric| metric.description.contains("approximate")),
+                "{name} must describe its byte count as approximate"
+            );
+        }
+    }
+
+    #[test]
     fn dynamic_series_register_once_per_label_combination() {
         let capture = Arc::new(CaptureRecorder::default());
         let recorder =
@@ -1100,7 +1150,7 @@ mod tests {
             1,
             "repeated emissions of one series must register exactly once"
         );
-        assert_eq!(capture.count("ydb_grpc_request_duration_milliseconds"), 1);
+        assert_eq!(capture.count("ydb_grpc_request_duration_seconds"), 1);
         assert_eq!(capture.count("ydb_grpc_errors_total"), 0);
 
         // A different endpoint is a new series: one more registration each.
@@ -1112,7 +1162,7 @@ mod tests {
             Duration::from_millis(2),
         );
         assert_eq!(capture.count("ydb_grpc_requests_total"), 2);
-        assert_eq!(capture.count("ydb_grpc_request_duration_milliseconds"), 2);
+        assert_eq!(capture.count("ydb_grpc_request_duration_seconds"), 2);
 
         // Known combinations stay cached; emissions keep flowing.
         for _ in 0..5 {
@@ -1156,7 +1206,7 @@ mod tests {
             1,
             "80 racing first emissions of one series must register exactly once"
         );
-        assert_eq!(capture.count("ydb_grpc_request_duration_milliseconds"), 1);
+        assert_eq!(capture.count("ydb_grpc_request_duration_seconds"), 1);
     }
 
     #[test]
@@ -1182,10 +1232,7 @@ mod tests {
         );
 
         assert_eq!(test.counter_value("ydb_grpc_requests_total"), 2);
-        assert_eq!(
-            test.histogram_count("ydb_grpc_request_duration_milliseconds"),
-            2
-        );
+        assert_eq!(test.histogram_count("ydb_grpc_request_duration_seconds"), 2);
         assert_eq!(
             test.counter_value_with_label("ydb_grpc_errors_total", "grpc_code", "unavailable"),
             1
@@ -1218,7 +1265,7 @@ mod tests {
 
         recorder.grpc_connection_establish("ep:2135", true, Duration::from_millis(10));
         assert_eq!(
-            test.histogram_count("ydb_grpc_connection_establish_milliseconds"),
+            test.histogram_count("ydb_grpc_connection_establish_seconds"),
             1
         );
     }
@@ -1235,10 +1282,7 @@ mod tests {
             test.counter_value_with_label("ydb_session_pool_acquire_total", "result", "ok"),
             1
         );
-        assert_eq!(
-            test.histogram_count("ydb_session_pool_acquire_milliseconds"),
-            1
-        );
+        assert_eq!(test.histogram_count("ydb_session_pool_acquire_seconds"), 1);
 
         recorder.session_pool_session_created();
         recorder.session_pool_session_create(Duration::from_millis(30));
@@ -1247,7 +1291,7 @@ mod tests {
             1
         );
         assert_eq!(
-            test.histogram_count("ydb_session_pool_session_create_milliseconds"),
+            test.histogram_count("ydb_session_pool_session_create_seconds"),
             1
         );
 
@@ -1263,7 +1307,7 @@ mod tests {
 
         recorder.session_pool_session_use(Duration::from_millis(100));
         assert_eq!(
-            test.histogram_count("ydb_session_pool_session_use_milliseconds"),
+            test.histogram_count("ydb_session_pool_session_use_seconds"),
             1
         );
 
@@ -1306,6 +1350,36 @@ mod tests {
                 .as_deref(),
             Some("main")
         );
+    }
+
+    #[test]
+    fn duration_metrics_record_seconds_without_rescaling() {
+        let test = Arc::new(crate::client_metrics::test_recorder::TestRecorder::new());
+        let recorder: Arc<dyn MetricsRecorder> = Arc::new(DefaultMetricsRecorder::with_backend(
+            Arc::clone(&test) as Arc<dyn MetricsBackend>,
+        ));
+
+        recorder.grpc_request("ep", "service", "method", "ok", Duration::from_millis(5));
+        recorder.grpc_connection_establish("ep", true, Duration::from_millis(10));
+        recorder.session_pool_acquire(SessionPoolAcquireResult::Ok, Duration::from_millis(3));
+        recorder.session_pool_session_create(Duration::from_millis(30));
+        recorder.session_pool_session_use(Duration::from_millis(100));
+        recorder.query_operation(QueryOperation::Exec, true, Duration::from_millis(10));
+        recorder.query_transaction(QueryTransactionResult::Commit, Duration::from_millis(100));
+        recorder.query_named_operation("named", true, Duration::from_millis(12));
+
+        for (name, expected) in [
+            ("ydb_grpc_request_duration_seconds", 0.005),
+            ("ydb_grpc_connection_establish_seconds", 0.010),
+            ("ydb_session_pool_acquire_seconds", 0.003),
+            ("ydb_session_pool_session_create_seconds", 0.030),
+            ("ydb_session_pool_session_use_seconds", 0.100),
+            ("ydb_query_operation_duration_seconds", 0.010),
+            ("ydb_query_transaction_duration_seconds", 0.100),
+            ("ydb_query_named_operation_duration_seconds", 0.012),
+        ] {
+            assert_eq!(test.histogram_observations(name), vec![expected], "{name}");
+        }
     }
 
     #[test]
@@ -1380,7 +1454,7 @@ mod tests {
         assert_eq!(pairs, expected);
 
         assert_eq!(
-            capture.count("ydb_query_operation_duration_milliseconds"),
+            capture.count("ydb_query_operation_duration_seconds"),
             QueryOperation::LABEL_COUNT
         );
         assert_eq!(
@@ -1395,10 +1469,7 @@ mod tests {
             capture.count("ydb_query_transactions_total"),
             QueryTransactionResult::LABEL_COUNT
         );
-        assert_eq!(
-            capture.count("ydb_query_transaction_duration_milliseconds"),
-            1
-        );
+        assert_eq!(capture.count("ydb_query_transaction_duration_seconds"), 1);
     }
 
     #[test]
@@ -1428,7 +1499,7 @@ mod tests {
             1
         );
         assert_eq!(
-            test.histogram_count("ydb_query_operation_duration_milliseconds"),
+            test.histogram_count("ydb_query_operation_duration_seconds"),
             2
         );
         assert_eq!(
@@ -1454,7 +1525,7 @@ mod tests {
             1
         );
         assert_eq!(
-            test.histogram_count("ydb_query_transaction_duration_milliseconds"),
+            test.histogram_count("ydb_query_transaction_duration_seconds"),
             2
         );
         assert_eq!(
@@ -1504,7 +1575,7 @@ mod tests {
             Some("get_account_balance")
         );
         assert_eq!(
-            test.histogram_count("ydb_query_named_operation_duration_milliseconds"),
+            test.histogram_count("ydb_query_named_operation_duration_seconds"),
             2
         );
         assert_eq!(
@@ -1538,7 +1609,7 @@ mod tests {
         }
         assert_eq!(capture.count("ydb_query_named_operations_total"), 1);
         assert_eq!(
-            capture.count("ydb_query_named_operation_duration_milliseconds"),
+            capture.count("ydb_query_named_operation_duration_seconds"),
             1
         );
 

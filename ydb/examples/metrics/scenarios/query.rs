@@ -6,18 +6,18 @@
 //! - `ydb_client_query_row_counter`, `ydb_client_transaction_*_counter`,
 //!   `ydb_row_query_time_histogram` (seconds), `ydb_transaction_row_query_time_histogram`;
 //! - query service: `ydb_query_operations_total{operation,result}`,
-//!   `ydb_query_operation_duration_milliseconds{operation}` (ms),
+//!   `ydb_query_operation_duration_seconds{operation}` (seconds),
 //!   `ydb_query_result_rows` / `ydb_query_result_bytes{operation}` (u64),
 //!   `ydb_query_errors_total{operation,status_code}`,
-//!   `ydb_query_transactions_total{result}`, `ydb_query_transaction_duration_milliseconds`,
+//!   `ydb_query_transactions_total{result}`, `ydb_query_transaction_duration_seconds`,
 //!   `ydb_query_transaction_retries_total{status_code}`;
 //! - named queries (`.with_name(...)`): the same outcomes mirrored into
 //!   `ydb_query_named_operations_total{query_name,result}`,
-//!   `ydb_query_named_operation_duration_milliseconds{query_name}`,
+//!   `ydb_query_named_operation_duration_seconds{query_name}`,
 //!   `ydb_query_named_errors_total{query_name,status_code}`,
 //!   `ydb_query_named_result_rows` / `ydb_query_named_result_bytes{query_name}`;
 //! - session pool on the implicit-session path: `ydb_session_pool_acquire_*`,
-//!   `ydb_session_pool_session_use_milliseconds`;
+//!   `ydb_session_pool_session_use_seconds`;
 //! - gRPC: every RPC lands in `ydb_grpc_requests_total{endpoint,service,method,grpc_code}`
 //!   (+ duration histogram), the query stream adds
 //!   `ydb_grpc_stream_messages_total{direction="received"}`.
@@ -124,7 +124,7 @@ async fn failing_query_tick(client: &ydb::Client) -> YdbResult<()> {
 /// `ydb_client_transaction_query_row_counter`,
 /// `ydb_client_transaction_commit_counter`,
 /// `ydb_query_transactions_total{result="commit"}`,
-/// `ydb_query_transaction_duration_milliseconds`,
+/// `ydb_query_transaction_duration_seconds`,
 /// `ydb_transaction_row_query_time_histogram`.
 async fn retry_tx_commit_tick(client: &ydb::Client) -> YdbResult<()> {
     let qc = client.query_client();
@@ -213,7 +213,7 @@ async fn exec_ddl_tick(client: &ydb::Client) -> YdbResult<()> {
 /// outcome into the named series alongside the common ones.
 ///
 /// Moves: `ydb_query_named_operations_total{query_name="example_get_value",result="ok"}`,
-/// `ydb_query_named_operation_duration_milliseconds{query_name="example_get_value"}`,
+/// `ydb_query_named_operation_duration_seconds{query_name="example_get_value"}`,
 /// `ydb_query_named_result_rows` / `ydb_query_named_result_bytes{query_name="example_get_value"}`,
 /// plus the common `ydb_query_operations_total{operation="query_row"}` series.
 async fn named_query_row_tick(client: &ydb::Client) -> YdbResult<()> {

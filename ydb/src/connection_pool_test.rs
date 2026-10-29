@@ -145,12 +145,11 @@ mod metrics_tests {
             0.0
         );
 
-        let observations =
-            recorder.histogram_observations("ydb_grpc_connection_establish_milliseconds");
+        let observations = recorder.histogram_observations("ydb_grpc_connection_establish_seconds");
         assert_eq!(observations.len(), 1, "exactly one establish observation");
         assert!(
             observations[0] >= 0.0,
-            "duration must be recorded in milliseconds"
+            "duration must be recorded in seconds"
         );
         Ok(())
     }
@@ -178,8 +177,7 @@ mod metrics_tests {
             0.0
         );
 
-        let observations =
-            recorder.histogram_observations("ydb_grpc_connection_establish_milliseconds");
+        let observations = recorder.histogram_observations("ydb_grpc_connection_establish_seconds");
         assert_eq!(observations.len(), 1);
         Ok(())
     }
@@ -194,7 +192,7 @@ mod metrics_tests {
 
         assert_eq!(
             recorder
-                .histogram_observations("ydb_grpc_connection_establish_milliseconds")
+                .histogram_observations("ydb_grpc_connection_establish_seconds")
                 .len(),
             1,
             "pooled channel reuse must not re-record establishment"

@@ -57,12 +57,12 @@ async fn grpc_request_metrics_after_query() -> YdbResult<()> {
 
     // Duration histogram: no grpc_code label, one sample per completed RPC.
     assert!(
-        histogram_sample_count(&registry, "ydb_grpc_request_duration_milliseconds") >= 1,
+        histogram_sample_count(&registry, "ydb_grpc_request_duration_seconds") >= 1,
         "each completed RPC must record a duration sample"
     );
     assert!(
-        histogram_sum(&registry, "ydb_grpc_request_duration_milliseconds") > 0.0,
-        "ydb_grpc_request_duration_milliseconds sum must be positive"
+        histogram_sum(&registry, "ydb_grpc_request_duration_seconds") > 0.0,
+        "ydb_grpc_request_duration_seconds sum must be positive"
     );
 
     // Connection pool gauges and the establishment histogram. The channel is
@@ -72,12 +72,12 @@ async fn grpc_request_metrics_after_query() -> YdbResult<()> {
     })
     .await;
     assert!(
-        histogram_sample_count(&registry, "ydb_grpc_connection_establish_milliseconds") >= 1,
+        histogram_sample_count(&registry, "ydb_grpc_connection_establish_seconds") >= 1,
         "channel establishment must record a duration sample"
     );
     assert!(
-        histogram_sum(&registry, "ydb_grpc_connection_establish_milliseconds") > 0.0,
-        "ydb_grpc_connection_establish_milliseconds sum must be positive"
+        histogram_sum(&registry, "ydb_grpc_connection_establish_seconds") > 0.0,
+        "ydb_grpc_connection_establish_seconds sum must be positive"
     );
 
     Ok(())

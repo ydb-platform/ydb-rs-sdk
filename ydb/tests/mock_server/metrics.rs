@@ -81,7 +81,6 @@ impl Histogram for HistogramHandle {
 fn unit(unit: MetricUnit) -> Option<metrics::Unit> {
     match unit {
         MetricUnit::Count => Some(metrics::Unit::Count),
-        MetricUnit::Milliseconds => Some(metrics::Unit::Milliseconds),
         MetricUnit::Seconds => Some(metrics::Unit::Seconds),
         MetricUnit::Bytes => Some(metrics::Unit::Bytes),
         _ => panic!("unsupported metric unit in the test backend"),

@@ -373,12 +373,12 @@ impl crate::client_metrics::MetricsRecorder for TestRecorder {
 
     fn grpc_connection_establish(&self, endpoint: &str, ok: bool, duration: Duration) {
         self.record_observation(
-            "ydb_grpc_connection_establish_milliseconds",
+            "ydb_grpc_connection_establish_seconds",
             &[
                 ("endpoint", endpoint),
                 ("result", if ok { "ok" } else { "error" }),
             ],
-            duration.as_secs_f64() * 1000.0,
+            duration.as_secs_f64(),
         );
     }
 
@@ -401,13 +401,13 @@ impl crate::client_metrics::MetricsRecorder for TestRecorder {
             1,
         );
         self.record_observation(
-            "ydb_grpc_request_duration_milliseconds",
+            "ydb_grpc_request_duration_seconds",
             &[
                 ("endpoint", endpoint),
                 ("service", service),
                 ("method", method),
             ],
-            duration.as_secs_f64() * 1000.0,
+            duration.as_secs_f64(),
         );
         if grpc_code != "ok" {
             self.increment_counter_key(
@@ -468,17 +468,17 @@ impl crate::client_metrics::MetricsRecorder for TestRecorder {
             1,
         );
         self.record_observation(
-            "ydb_session_pool_acquire_milliseconds",
+            "ydb_session_pool_acquire_seconds",
             &[("result", result.as_label())],
-            duration.as_secs_f64() * 1000.0,
+            duration.as_secs_f64(),
         );
     }
 
     fn session_pool_session_create(&self, duration: Duration) {
         self.record_observation(
-            "ydb_session_pool_session_create_milliseconds",
+            "ydb_session_pool_session_create_seconds",
             &[],
-            duration.as_secs_f64() * 1000.0,
+            duration.as_secs_f64(),
         );
     }
 
@@ -496,9 +496,9 @@ impl crate::client_metrics::MetricsRecorder for TestRecorder {
 
     fn session_pool_session_use(&self, duration: Duration) {
         self.record_observation(
-            "ydb_session_pool_session_use_milliseconds",
+            "ydb_session_pool_session_use_seconds",
             &[],
-            duration.as_secs_f64() * 1000.0,
+            duration.as_secs_f64(),
         );
     }
 

@@ -2,8 +2,8 @@
 //! exports them in Prometheus format on `http://0.0.0.0:9090/metrics` (port
 //! overridden by `METRICS_PORT`).
 //!
-//! The example covers the metric series implemented on this branch (client
-//! part1, gRPC, session pool, query service). See `README.md` for the series
+//! The example covers client, gRPC, session pool, and query service metrics.
+//! See `README.md` for the series
 //! list, the scenario-to-metric map, and known gaps:
 //! - `ydb_grpc_stream_messages_total{direction="sent"}` is never emitted (all
 //!   stream senders use `clone_sender()`, bypassing the counting wrapper);

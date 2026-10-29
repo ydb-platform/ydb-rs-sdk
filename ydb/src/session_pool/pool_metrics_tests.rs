@@ -286,8 +286,7 @@ async fn session_creates_are_counted_and_measured() {
         2,
         "each created session must be counted"
     );
-    let observations =
-        recorder.histogram_observations("ydb_session_pool_session_create_milliseconds");
+    let observations = recorder.histogram_observations("ydb_session_pool_session_create_seconds");
     assert_eq!(
         observations.len(),
         2,
@@ -379,10 +378,10 @@ async fn session_use_duration_is_recorded_on_return() {
     tokio::time::sleep(Duration::from_millis(5)).await;
     lease.return_to_pool();
 
-    let observations = recorder.histogram_observations("ydb_session_pool_session_use_milliseconds");
+    let observations = recorder.histogram_observations("ydb_session_pool_session_use_seconds");
     assert_eq!(observations.len(), 1, "exactly one use duration on return");
     assert!(
-        observations[0] >= 4.0,
+        observations[0] >= 0.004,
         "use duration must cover the lease time, got {}",
         observations[0]
     );

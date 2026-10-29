@@ -35,7 +35,7 @@ pub(crate) const KEEPALIVE_RESULT_COUNT: usize = 2;
 pub(crate) const KEEPALIVE_RESULT_LABELS: [&str; KEEPALIVE_RESULT_COUNT] = ["ok", "error"];
 
 /// Static label prefix shared by every series of one recorder: the driver
-/// name label first, extra static labels after (part1 label order).
+/// name label first, extra static labels after (existing label order).
 pub(crate) fn base_labels(
     driver_name: Option<String>,
     extra_labels: Vec<(String, String)>,
@@ -83,7 +83,7 @@ fn histogram(
 }
 
 /// The full metric surface of one recorder: pre-registered handles for the
-/// part1 and session pool series, plus the handle caches for the dynamic gRPC
+/// existing and session pool series, plus the handle caches for the dynamic gRPC
 /// series.
 pub(crate) struct MetricsNames {
     pub client_new_counter: CounterHandle,
@@ -107,21 +107,21 @@ pub(crate) struct MetricsNames {
     pub session_pool_size_limit: GaugeHandle,
     pub session_pool_pending_requests: GaugeHandle,
     pub session_pool_acquire_total: [CounterHandle; SessionPoolAcquireResult::LABEL_COUNT],
-    pub session_pool_acquire_milliseconds: [HistogramHandle; SessionPoolAcquireResult::LABEL_COUNT],
-    pub session_pool_session_create_milliseconds: HistogramHandle,
+    pub session_pool_acquire_seconds: [HistogramHandle; SessionPoolAcquireResult::LABEL_COUNT],
+    pub session_pool_session_create_seconds: HistogramHandle,
     pub session_pool_sessions_created_total: CounterHandle,
     pub session_pool_sessions_closed_total: [CounterHandle; SessionPoolCloseReason::LABEL_COUNT],
-    pub session_pool_session_use_milliseconds: HistogramHandle,
+    pub session_pool_session_use_seconds: HistogramHandle,
     pub session_pool_keepalive_total: [CounterHandle; KEEPALIVE_RESULT_COUNT],
     // Query service series (closed enum label sets): handles are pre-registered
     // per operation and indexed by the enum on the hot path, without macros or
     // label construction.
     pub query_operations_total: [[CounterHandle; QUERY_RESULT_COUNT]; QueryOperation::LABEL_COUNT],
-    pub query_operation_duration_milliseconds: [HistogramHandle; QueryOperation::LABEL_COUNT],
+    pub query_operation_duration_seconds: [HistogramHandle; QueryOperation::LABEL_COUNT],
     pub query_result_rows: [HistogramHandle; QueryOperation::LABEL_COUNT],
     pub query_result_bytes: [HistogramHandle; QueryOperation::LABEL_COUNT],
     pub query_transactions_total: [CounterHandle; QueryTransactionResult::LABEL_COUNT],
-    pub query_transaction_duration_milliseconds: HistogramHandle,
+    pub query_transaction_duration_seconds: HistogramHandle,
     /// Registry of admitted query names for the named query series
     /// (`ydb_query_named_*`), with the unique-name cap applied.
     pub query_names: super::query_names::QueryNameRegistry,
@@ -283,19 +283,19 @@ impl MetricsNames {
                     &labeled("result", SessionPoolAcquireResult::LABELS[i]),
                 )
             }),
-            session_pool_acquire_milliseconds: std::array::from_fn(|i| {
+            session_pool_acquire_seconds: std::array::from_fn(|i| {
                 histogram(
                     backend_ref,
-                    "ydb_session_pool_acquire_milliseconds",
-                    MetricUnit::Milliseconds,
+                    "ydb_session_pool_acquire_seconds",
+                    MetricUnit::Seconds,
                     "ydb session pool acquire duration by result",
                     &labeled("result", SessionPoolAcquireResult::LABELS[i]),
                 )
             }),
-            session_pool_session_create_milliseconds: histogram(
+            session_pool_session_create_seconds: histogram(
                 backend_ref,
-                "ydb_session_pool_session_create_milliseconds",
-                MetricUnit::Milliseconds,
+                "ydb_session_pool_session_create_seconds",
+                MetricUnit::Seconds,
                 "ydb session pool session creation duration",
                 base,
             ),
@@ -315,10 +315,10 @@ impl MetricsNames {
                     &labeled("reason", SessionPoolCloseReason::LABELS[i]),
                 )
             }),
-            session_pool_session_use_milliseconds: histogram(
+            session_pool_session_use_seconds: histogram(
                 backend_ref,
-                "ydb_session_pool_session_use_milliseconds",
-                MetricUnit::Milliseconds,
+                "ydb_session_pool_session_use_seconds",
+                MetricUnit::Seconds,
                 "ydb session pool session lease duration",
                 base,
             ),
@@ -347,11 +347,11 @@ impl MetricsNames {
                     )
                 })
             }),
-            query_operation_duration_milliseconds: std::array::from_fn(|op| {
+            query_operation_duration_seconds: std::array::from_fn(|op| {
                 histogram(
                     backend_ref,
-                    "ydb_query_operation_duration_milliseconds",
-                    MetricUnit::Milliseconds,
+                    "ydb_query_operation_duration_seconds",
+                    MetricUnit::Seconds,
                     "ydb query operation duration",
                     &labeled("operation", QueryOperation::LABELS[op]),
                 )
@@ -370,7 +370,7 @@ impl MetricsNames {
                     backend_ref,
                     "ydb_query_result_bytes",
                     MetricUnit::Bytes,
-                    "ydb query result bytes",
+                    "ydb query approximate result bytes",
                     &labeled("operation", QueryOperation::LABELS[op]),
                 )
             }),
@@ -383,10 +383,10 @@ impl MetricsNames {
                     &labeled("result", QueryTransactionResult::LABELS[result]),
                 )
             }),
-            query_transaction_duration_milliseconds: histogram(
+            query_transaction_duration_seconds: histogram(
                 backend_ref,
-                "ydb_query_transaction_duration_milliseconds",
-                MetricUnit::Milliseconds,
+                "ydb_query_transaction_duration_seconds",
+                MetricUnit::Seconds,
                 "ydb retried transaction duration including all attempts",
                 base,
             ),

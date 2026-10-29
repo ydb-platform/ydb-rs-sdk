@@ -8,9 +8,9 @@
 //! - `ydb_session_pool_sessions{state="idle"|"active"|"creating"}` gauges,
 //!   `ydb_session_pool_size_limit`, `ydb_session_pool_pending_requests`;
 //! - `ydb_session_pool_acquire_total{result}` +
-//!   `ydb_session_pool_acquire_milliseconds{result}`;
+//!   `ydb_session_pool_acquire_seconds{result}`;
 //! - `ydb_session_pool_sessions_created_total`, the session-create duration
-//!   histogram, `ydb_session_pool_session_use_milliseconds`;
+//!   histogram, `ydb_session_pool_session_use_seconds`;
 //! - with `idle_ttl`/`item_usage_limit` configured, later ticks surface
 //!   `ydb_session_pool_sessions_closed_total{reason="idle_ttl"|"usage_limit"}`;
 //! - dropping the burst driver at the end of the tick emits

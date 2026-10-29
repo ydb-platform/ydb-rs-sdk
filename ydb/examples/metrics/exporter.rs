@@ -13,21 +13,14 @@ use metrics_exporter_prometheus::{Matcher, PrometheusBuilder};
 /// Default port of the `/metrics` HTTP endpoint (`METRICS_PORT` overrides).
 const DEFAULT_METRICS_PORT: u16 = 9090;
 
-/// Buckets for SDK duration histograms named `*_milliseconds` (values are f64
-/// milliseconds). The exporter default buckets (0.005–10 s) would leave every
-/// duration observation in the +Inf bucket.
-const MILLISECONDS_BUCKETS: &[f64] = &[
-    0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0, 10000.0,
-];
-
-/// Buckets for the part1 row-query-time histograms, which record **seconds**
-/// (`Duration::as_secs_f64`), unlike the `*_milliseconds` series.
-const SECONDS_BUCKETS: &[f64] = &[
-    0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+/// Buckets for all SDK duration histograms, which record seconds with
+/// `Duration::as_secs_f64`.
+const DURATION_BUCKETS: &[f64] = &[
+    0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0,
 ];
 
 /// Buckets for query result size histograms (`ydb_query_result_rows` counts
-/// rows, `ydb_query_result_bytes` counts bytes; both are u64).
+/// rows, `ydb_query_result_bytes` counts approximate bytes; both are u64).
 const RESULT_SIZE_BUCKETS: &[f64] = &[
     1.0,
     5.0,
@@ -54,19 +47,16 @@ pub(crate) fn install() -> Result<(), Box<dyn std::error::Error>> {
 
     PrometheusBuilder::new()
         .with_http_listener(SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port))
-        // All SDK duration series end in `_milliseconds`; rows/bytes keep
-        // their exact names (histograms render as `<name>_bucket/_sum/_count`).
-        .set_buckets_for_metric(
-            Matcher::Suffix("_milliseconds".to_string()),
-            MILLISECONDS_BUCKETS,
-        )?
+        // New duration series end in `_seconds`; the two existing histograms
+        // predate that convention and are matched by their exact names.
+        .set_buckets_for_metric(Matcher::Suffix("_seconds".to_string()), DURATION_BUCKETS)?
         .set_buckets_for_metric(
             Matcher::Full("ydb_row_query_time_histogram".to_string()),
-            SECONDS_BUCKETS,
+            DURATION_BUCKETS,
         )?
         .set_buckets_for_metric(
             Matcher::Full("ydb_transaction_row_query_time_histogram".to_string()),
-            SECONDS_BUCKETS,
+            DURATION_BUCKETS,
         )?
         .set_buckets_for_metric(
             Matcher::Full("ydb_query_result_rows".to_string()),

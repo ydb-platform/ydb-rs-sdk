@@ -78,7 +78,6 @@ fn histogram_handle(handle: metrics::Histogram) -> HistogramHandle {
 fn unit(unit: MetricUnit) -> metrics::Unit {
     match unit {
         MetricUnit::Count => metrics::Unit::Count,
-        MetricUnit::Milliseconds => metrics::Unit::Milliseconds,
         MetricUnit::Seconds => metrics::Unit::Seconds,
         MetricUnit::Bytes => metrics::Unit::Bytes,
     }

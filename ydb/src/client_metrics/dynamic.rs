@@ -50,7 +50,7 @@ impl GrpcCodeKey {
 }
 
 // One key type per series, exactly mirroring its label set. Series with
-// different label sets must not share a key: `ydb_grpc_request_duration_milliseconds`
+// different label sets must not share a key: `ydb_grpc_request_duration_seconds`
 // has no `grpc_code` label, and a shared four-part key would re-record each
 // observation through both handles.
 pub(crate) type GrpcRequestsKey = (usize, usize, usize, GrpcCodeKey);
@@ -83,7 +83,7 @@ pub(crate) struct DynamicCaches {
     /// `ydb_query_named_operations_total` keyed by (canonical interned query
     /// name, result index).
     pub(crate) query_named_operations: RwLock<HashMap<QueryNamedOperationsKey, CounterHandle>>,
-    /// `ydb_query_named_operation_duration_milliseconds` keyed by canonical
+    /// `ydb_query_named_operation_duration_seconds` keyed by canonical
     /// interned query name.
     pub(crate) query_named_operation_duration: RwLock<HashMap<usize, HistogramHandle>>,
     /// `ydb_query_named_errors_total` keyed by (canonical interned query name,

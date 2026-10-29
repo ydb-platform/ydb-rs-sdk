@@ -366,7 +366,7 @@ mod tests {
         );
 
         assert_eq!(
-            recorder.histogram_count("ydb_grpc_request_duration_milliseconds"),
+            recorder.histogram_count("ydb_grpc_request_duration_seconds"),
             1,
             "duration must be recorded once per RPC"
         );

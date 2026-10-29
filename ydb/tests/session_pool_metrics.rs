@@ -55,15 +55,15 @@ async fn acquire_create_gauges_and_use_metrics() -> YdbResult<()> {
     assert!(
         histogram_sample_count_with_label(
             &registry,
-            "ydb_session_pool_acquire_milliseconds",
+            "ydb_session_pool_acquire_seconds",
             "result",
             "ok"
         ) >= 1,
         "one acquire duration must be recorded"
     );
     assert!(
-        histogram_sum(&registry, "ydb_session_pool_acquire_milliseconds") > 0.0,
-        "ydb_session_pool_acquire_milliseconds sum must be positive"
+        histogram_sum(&registry, "ydb_session_pool_acquire_seconds") > 0.0,
+        "ydb_session_pool_acquire_seconds sum must be positive"
     );
 
     // Session creation: counter and duration.
@@ -72,13 +72,13 @@ async fn acquire_create_gauges_and_use_metrics() -> YdbResult<()> {
         "the pooled call must create at least one session"
     );
     assert!(
-        histogram_sample_count(&registry, "ydb_session_pool_session_create_milliseconds") >= 1,
+        histogram_sample_count(&registry, "ydb_session_pool_session_create_seconds") >= 1,
         "session creation duration must be recorded"
     );
 
     // Session lease duration.
     assert!(
-        histogram_sample_count(&registry, "ydb_session_pool_session_use_milliseconds") >= 1,
+        histogram_sample_count(&registry, "ydb_session_pool_session_use_seconds") >= 1,
         "returning the session must record a use duration"
     );
 

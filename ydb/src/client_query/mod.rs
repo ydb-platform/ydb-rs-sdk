@@ -952,7 +952,7 @@ mod unit_tests {
             1
         );
         assert_eq!(
-            test.histogram_count("ydb_query_transaction_duration_milliseconds"),
+            test.histogram_count("ydb_query_transaction_duration_seconds"),
             1
         );
     }
@@ -978,7 +978,7 @@ mod unit_tests {
             1
         );
         assert_eq!(
-            test.histogram_count("ydb_query_transaction_duration_milliseconds"),
+            test.histogram_count("ydb_query_transaction_duration_seconds"),
             1
         );
     }
@@ -1016,7 +1016,7 @@ mod unit_tests {
             1
         );
         assert_eq!(
-            test.histogram_count("ydb_query_transaction_duration_milliseconds"),
+            test.histogram_count("ydb_query_transaction_duration_seconds"),
             1
         );
     }
@@ -1038,7 +1038,7 @@ mod unit_tests {
             1
         );
         assert_eq!(
-            test.histogram_count("ydb_query_operation_duration_milliseconds"),
+            test.histogram_count("ydb_query_operation_duration_seconds"),
             1
         );
         if result.is_ok() {

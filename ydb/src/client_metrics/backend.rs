@@ -23,7 +23,6 @@ pub trait Histogram: Send + Sync {
 #[cfg_attr(not(feature = "force-exhaustive-all"), non_exhaustive)]
 pub enum MetricUnit {
     Count,
-    Milliseconds,
     Seconds,
     Bytes,
 }

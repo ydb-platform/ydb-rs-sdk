@@ -173,7 +173,7 @@
     {
       "id": 12,
       "type": "timeseries",
-      "title": "Operation duration p95 by operation (ms)",
+      "title": "Operation duration p95 by operation (s)",
       "datasource": { "type": "prometheus", "uid": "victoria" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
       "fieldConfig": {
@@ -187,7 +187,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(ydb_query_operation_duration_milliseconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(ydb_query_operation_duration_seconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
           "legendFormat": "{{operation}}",
           "range": true
         }
@@ -288,7 +288,7 @@
     {
       "id": 17,
       "type": "timeseries",
-      "title": "Transaction duration p95 (ms)",
+      "title": "Transaction duration p95 (s)",
       "datasource": { "type": "prometheus", "uid": "victoria" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 42 },
       "fieldConfig": {
@@ -302,7 +302,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(ydb_query_transaction_duration_milliseconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(ydb_query_transaction_duration_seconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
           "legendFormat": "p95",
           "range": true
         }
@@ -357,7 +357,7 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "Named operation duration p95 by query_name (ms)",
+      "title": "Named operation duration p95 by query_name (s)",
       "datasource": { "type": "prometheus", "uid": "victoria" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 50 },
       "fieldConfig": {
@@ -371,7 +371,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, query_name) (rate(ydb_query_named_operation_duration_milliseconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, query_name) (rate(ydb_query_named_operation_duration_seconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
           "legendFormat": "{{query_name}}",
           "range": true
         }
@@ -509,7 +509,7 @@
     {
       "id": 24,
       "type": "timeseries",
-      "title": "Acquire duration p95 by result (ms)",
+      "title": "Acquire duration p95 by result (s)",
       "datasource": { "type": "prometheus", "uid": "victoria" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 75 },
       "fieldConfig": {
@@ -523,7 +523,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, result) (rate(ydb_session_pool_acquire_milliseconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, result) (rate(ydb_session_pool_acquire_seconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
           "legendFormat": "{{result}}",
           "range": true
         }
@@ -561,7 +561,7 @@
     {
       "id": 26,
       "type": "timeseries",
-      "title": "Session create / use duration p95 (ms)",
+      "title": "Session create / use duration p95 (s)",
       "datasource": { "type": "prometheus", "uid": "victoria" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 83 },
       "fieldConfig": {
@@ -575,13 +575,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(ydb_session_pool_session_create_milliseconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(ydb_session_pool_session_create_seconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
           "legendFormat": "create",
           "range": true
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(ydb_session_pool_session_use_milliseconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(ydb_session_pool_session_use_seconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
           "legendFormat": "use",
           "range": true
         }
@@ -644,7 +644,7 @@
     {
       "id": 32,
       "type": "timeseries",
-      "title": "Request duration p95 by service / method (ms)",
+      "title": "Request duration p95 by service / method (s)",
       "datasource": { "type": "prometheus", "uid": "victoria" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 100 },
       "fieldConfig": {
@@ -658,7 +658,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, service, method) (rate(ydb_grpc_request_duration_milliseconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, service, method) (rate(ydb_grpc_request_duration_seconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
           "legendFormat": "{{service}} / {{method}}",
           "range": true
         }
@@ -736,7 +736,7 @@
     {
       "id": 36,
       "type": "timeseries",
-      "title": "Connection establish duration p95 by result (ms)",
+      "title": "Connection establish duration p95 by result (s)",
       "datasource": { "type": "prometheus", "uid": "victoria" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 116 },
       "fieldConfig": {
@@ -750,7 +750,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, endpoint, result) (rate(ydb_grpc_connection_establish_milliseconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, endpoint, result) (rate(ydb_grpc_connection_establish_seconds_bucket{driver_name=\"metrics-example\"}[$__rate_interval])))",
           "legendFormat": "{{endpoint}} / {{result}}",
           "range": true
         }

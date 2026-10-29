@@ -170,7 +170,7 @@ impl<'a, K, S> CallBuilder<'a, K, S> {
     /// Give the call a constant application-chosen name for the named query
     /// metric rows: in addition to the common `ydb_query_*` series the operation
     /// is recorded into `ydb_query_named_operations_total{query_name,result}`,
-    /// `ydb_query_named_operation_duration_milliseconds{query_name}`,
+    /// `ydb_query_named_operation_duration_seconds{query_name}`,
     /// `ydb_query_named_errors_total{query_name,status_code}` (on failure), and
     /// `ydb_query_named_result_rows` / `ydb_query_named_result_bytes{query_name}`
     /// (on success).
@@ -470,7 +470,7 @@ fn record_query_operation<T>(
     }
 }
 
-/// Record the part1 row-query-time histogram (client or transaction variant).
+/// Record the existing row-query-time histogram (client or transaction variant).
 fn record_row_query_time(core: &ExecTarget<'_>, delta: Duration) {
     match core {
         ExecTarget::Client(core) => core

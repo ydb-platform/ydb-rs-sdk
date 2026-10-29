@@ -71,7 +71,7 @@ async fn operations_recorded_with_result_and_duration() -> YdbResult<()> {
         assert_eq!(
             histogram_sample_count_with_label(
                 &registry,
-                "ydb_query_operation_duration_milliseconds",
+                "ydb_query_operation_duration_seconds",
                 "operation",
                 operation
             ),
@@ -80,8 +80,8 @@ async fn operations_recorded_with_result_and_duration() -> YdbResult<()> {
         );
     }
     assert!(
-        histogram_sum(&registry, "ydb_query_operation_duration_milliseconds") > 0.0,
-        "ydb_query_operation_duration_milliseconds sum must be positive"
+        histogram_sum(&registry, "ydb_query_operation_duration_seconds") > 0.0,
+        "ydb_query_operation_duration_seconds sum must be positive"
     );
 
     // Result sizes: every row-carrying operation except execute_script (it
@@ -240,13 +240,13 @@ async fn transactions_record_commit_and_rollback_outcomes() -> YdbResult<()> {
     );
 
     assert_eq!(
-        histogram_sample_count(&registry, "ydb_query_transaction_duration_milliseconds"),
+        histogram_sample_count(&registry, "ydb_query_transaction_duration_seconds"),
         2,
         "each retry_tx outcome must record a transaction duration"
     );
     assert!(
-        histogram_sum(&registry, "ydb_query_transaction_duration_milliseconds") > 0.0,
-        "ydb_query_transaction_duration_milliseconds sum must be positive"
+        histogram_sum(&registry, "ydb_query_transaction_duration_seconds") > 0.0,
+        "ydb_query_transaction_duration_seconds sum must be positive"
     );
 
     Ok(())
@@ -326,7 +326,7 @@ async fn named_query_records_common_and_named_series() -> YdbResult<()> {
     assert_eq!(
         histogram_sample_count_with_label(
             &registry,
-            "ydb_query_named_operation_duration_milliseconds",
+            "ydb_query_named_operation_duration_seconds",
             "query_name",
             "named_get"
         ),
@@ -334,8 +334,8 @@ async fn named_query_records_common_and_named_series() -> YdbResult<()> {
         "one named_get duration must be recorded"
     );
     assert!(
-        histogram_sum(&registry, "ydb_query_named_operation_duration_milliseconds") > 0.0,
-        "ydb_query_named_operation_duration_milliseconds sum must be positive"
+        histogram_sum(&registry, "ydb_query_named_operation_duration_seconds") > 0.0,
+        "ydb_query_named_operation_duration_seconds sum must be positive"
     );
     // Result sizes land in the named histograms (execute_script returns a
     // handle, so named_script has no sizes — the other four do).
