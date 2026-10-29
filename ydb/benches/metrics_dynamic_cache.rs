@@ -1,49 +1,33 @@
-//! CPU cost of dynamic metric series access: per-call `counter!` facade
-//! emission vs the SDK's interned handle caches.
+//! CPU cost of dynamic metric series access: backend registration on every
+//! emission versus cached SDK counter handles.
 //!
 //! Both paths emit the same counter series — `ydb_grpc_stream_messages_total`
 //! with `driver_name + endpoint + service + method + direction` labels — into
-//! the same kind of minimal in-memory backend, round-robin over a growing
+//! the same minimal in-memory [`MetricsBackend`], round-robin over a growing
 //! number of unique label combinations (unique endpoints).
 //!
-//! * `facade_macro` — the pre-cache approach: every emission materializes
-//!   owned label values, builds a `metrics::Key`, and calls `register_counter`
-//!   on the backend. Macros resolve through the ambient global recorder, the
-//!   cheapest pre-cache variant (a caller-provided backend additionally paid
-//!   `with_local_recorder` per emission).
-//! * `interned_cache` — `DefaultMetricsRecorder` with the same kind of
-//!   backend: `grpc_stream_message` interns the label strings and increments
-//!   a cached handle; the backend sees exactly one registration per unique
+//! * `register_per_emission` — every emission materializes owned label values
+//!   and calls `register_counter` on the backend.
+//! * `cached_handles` — one counter handle per unique endpoint is registered
+//!   up front and retained in a map; each emission performs only the map lookup
+//!   and atomic increment. The backend sees exactly one registration per unique
 //!   label combination (asserted below before timing).
 //!
 //! The backend hands out atomic-backed counters behind a map lookup, modeling
-//! what any real exporter does per `register_counter`; per-increment work is
-//! identical for both paths, so the measured difference is the access
-//! strategy.
-//!
-//! Reference run (2026-10-07, aarch64 Apple Silicon, release, criterion 0.8;
-//! mean time per single emission, i.e. routine time divided by the number of
-//! unique labels — machine-specific, indicative only):
-//!
-//! ```text
-//! unique labels   facade_macro   interned_cache   speedup
-//! 100             160.8 ns       53.8 ns          2.99x
-//! 200             155.8 ns       53.0 ns          2.94x
-//! 500             149.2 ns       53.0 ns          2.81x
-//! 1000            152.3 ns       52.8 ns          2.88x
-//! 5000            151.5 ns       54.0 ns          2.81x
-//! ```
+//! what an exporter does per `register_counter`; per-increment work is identical
+//! for both paths, so the measured difference is the access strategy. The
+//! benchmark uses only the public backend API and does not expose SDK-internal
+//! recorder types.
 //!
 //! Run: `cargo bench -p ydb --bench metrics_dynamic_cache`
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use metrics::{CounterFn, Key, Recorder, counter};
-use ydb::{DefaultMetricsRecorder, MetricsRecorder, StreamDirection};
+use ydb::{Counter, Gauge, Histogram, MetricDescription, MetricLabel, MetricUnit, MetricsBackend};
 
 const METRIC_NAME: &str = "ydb_grpc_stream_messages_total";
 const DRIVER_NAME: &str = "bench";
@@ -57,22 +41,50 @@ fn unique_endpoints(count: usize) -> Vec<String> {
         .collect()
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct BenchKey {
+    name: String,
+    labels: Vec<(String, String)>,
+}
+
+impl BenchKey {
+    fn new(description: &MetricDescription, labels: &[MetricLabel]) -> Self {
+        Self {
+            name: description.name().to_string(),
+            labels: labels
+                .iter()
+                .map(|label| (label.key().to_string(), label.value().to_string()))
+                .collect(),
+        }
+    }
+}
+
 struct CounterState(Arc<AtomicU64>);
 
-impl CounterFn for CounterState {
+impl Counter for CounterState {
     fn increment(&self, value: u64) {
         self.0.fetch_add(value, Ordering::Relaxed);
     }
+}
 
-    fn absolute(&self, value: u64) {
-        self.0.store(value, Ordering::Relaxed);
-    }
+struct NoopHandle;
+
+impl Gauge for NoopHandle {
+    fn increment(&self, _value: f64) {}
+
+    fn decrement(&self, _value: f64) {}
+
+    fn set(&self, _value: f64) {}
+}
+
+impl Histogram for NoopHandle {
+    fn record(&self, _value: f64) {}
 }
 
 /// Minimal in-memory backend: one atomic counter per key.
 #[derive(Default)]
 struct BenchBackend {
-    counters: RwLock<HashMap<Key, Arc<AtomicU64>>>,
+    counters: RwLock<HashMap<BenchKey, Arc<AtomicU64>>>,
     stream_registrations: AtomicUsize,
 }
 
@@ -81,80 +93,66 @@ impl BenchBackend {
         self.stream_registrations.load(Ordering::Relaxed)
     }
 
-    fn shared_counter(&self, key: &Key) -> metrics::Counter {
-        if let Some(state) = self.counters.read().unwrap().get(key).cloned() {
-            return metrics::Counter::from_arc(Arc::new(CounterState(state)));
+    fn shared_counter(
+        &self,
+        description: &MetricDescription,
+        labels: &[MetricLabel],
+    ) -> Arc<dyn Counter> {
+        let key = BenchKey::new(description, labels);
+        if let Some(state) = self.counters.read().unwrap().get(&key).cloned() {
+            return Arc::new(CounterState(state));
         }
         let state = self
             .counters
             .write()
             .unwrap()
-            .entry(key.clone())
+            .entry(key)
             .or_insert_with(|| Arc::new(AtomicU64::new(0)))
             .clone();
-        metrics::Counter::from_arc(Arc::new(CounterState(state)))
+        Arc::new(CounterState(state))
     }
 }
 
-impl Recorder for BenchBackend {
-    fn describe_counter(
+impl MetricsBackend for BenchBackend {
+    fn register_counter(
         &self,
-        _key: metrics::KeyName,
-        _unit: Option<metrics::Unit>,
-        _description: metrics::SharedString,
-    ) {
-    }
-
-    fn describe_gauge(
-        &self,
-        _key: metrics::KeyName,
-        _unit: Option<metrics::Unit>,
-        _description: metrics::SharedString,
-    ) {
-    }
-
-    fn describe_histogram(
-        &self,
-        _key: metrics::KeyName,
-        _unit: Option<metrics::Unit>,
-        _description: metrics::SharedString,
-    ) {
-    }
-
-    fn register_counter(&self, key: &Key, _metadata: &metrics::Metadata<'_>) -> metrics::Counter {
-        if key.name() == METRIC_NAME {
+        description: &MetricDescription,
+        labels: &[MetricLabel],
+    ) -> Arc<dyn Counter> {
+        if description.name() == METRIC_NAME {
             self.stream_registrations.fetch_add(1, Ordering::Relaxed);
         }
-        self.shared_counter(key)
+        self.shared_counter(description, labels)
     }
 
-    fn register_gauge(&self, _key: &Key, _metadata: &metrics::Metadata<'_>) -> metrics::Gauge {
-        metrics::Gauge::noop()
+    fn register_gauge(
+        &self,
+        _description: &MetricDescription,
+        _labels: &[MetricLabel],
+    ) -> Arc<dyn Gauge> {
+        Arc::new(NoopHandle)
     }
 
     fn register_histogram(
         &self,
-        _key: &Key,
-        _metadata: &metrics::Metadata<'_>,
-    ) -> metrics::Histogram {
-        metrics::Histogram::noop()
+        _description: &MetricDescription,
+        _labels: &[MetricLabel],
+    ) -> Arc<dyn Histogram> {
+        Arc::new(NoopHandle)
     }
 }
 
-/// The facade macros resolve through the ambient global recorder; install the
-/// macro-path backend once per process.
-fn install_global_backend() {
-    static ONCE: OnceLock<()> = OnceLock::new();
-    ONCE.get_or_init(|| {
-        // An already-installed recorder is kept: the macro path then measures
-        // against it, which does not change its cost profile.
-        let _ = metrics::set_global_recorder(BenchBackend::default());
-    });
+fn labels(endpoint: &str, service: &str, method: &str) -> Vec<MetricLabel> {
+    vec![
+        MetricLabel::new("driver_name", DRIVER_NAME),
+        MetricLabel::new("endpoint", endpoint.to_string()),
+        MetricLabel::new("service", service.to_string()),
+        MetricLabel::new("method", method.to_string()),
+        MetricLabel::new("direction", "sent"),
+    ]
 }
 
 fn bench_counter_emission(c: &mut Criterion) {
-    install_global_backend();
-
     let mut group = c.benchmark_group("counter_emission");
     group
         .warm_up_time(Duration::from_millis(500))
@@ -165,51 +163,48 @@ fn bench_counter_emission(c: &mut Criterion) {
         let endpoints = unique_endpoints(unique);
         let service = SERVICE.to_string();
         let method = METHOD.to_string();
+        let description = MetricDescription::new(
+            METRIC_NAME,
+            MetricUnit::Count,
+            "Number of gRPC stream messages.",
+        );
         group.throughput(Throughput::Elements(unique as u64));
 
-        group.bench_function(format!("facade_macro/unique_labels={unique}"), |b| {
-            b.iter(|| {
-                for endpoint in &endpoints {
-                    // The pre-cache code materialized owned label values and
-                    // re-registered the key on every emission.
-                    counter!(
-                        METRIC_NAME,
-                        "driver_name" => DRIVER_NAME,
-                        "endpoint" => endpoint.clone(),
-                        "service" => service.clone(),
-                        "method" => method.clone(),
-                        "direction" => "sent",
-                    )
-                    .increment(1);
-                }
+        let registering_backend = BenchBackend::default();
+        group.bench_function(
+            format!("register_per_emission/unique_labels={unique}"),
+            |b| {
+                b.iter(|| {
+                    for endpoint in &endpoints {
+                        registering_backend
+                            .register_counter(&description, &labels(endpoint, &service, &method))
+                            .increment(1);
+                    }
+                })
+            },
+        );
+
+        let cached_backend = BenchBackend::default();
+        let handles: HashMap<&str, Arc<dyn Counter>> = endpoints
+            .iter()
+            .map(|endpoint| {
+                (
+                    endpoint.as_str(),
+                    cached_backend
+                        .register_counter(&description, &labels(endpoint, &service, &method)),
+                )
             })
-        });
-
-        let backend = Arc::new(BenchBackend::default());
-        let recorder: Arc<dyn MetricsRecorder> = Arc::new(DefaultMetricsRecorder::with_backend(
-            Arc::clone(&backend) as Arc<dyn Recorder + Send + Sync>,
-        ));
-
-        // Warm every series once and prove the point of the caches: one
-        // registration per unique label combination, not per emission.
-        for endpoint in &endpoints {
-            recorder.grpc_stream_message(endpoint, &service, &method, StreamDirection::Sent);
-        }
+            .collect();
         assert_eq!(
-            backend.stream_registrations(),
+            cached_backend.stream_registrations(),
             unique,
             "cached access must register each series exactly once"
         );
 
-        group.bench_function(format!("interned_cache/unique_labels={unique}"), |b| {
+        group.bench_function(format!("cached_handles/unique_labels={unique}"), |b| {
             b.iter(|| {
                 for endpoint in &endpoints {
-                    recorder.grpc_stream_message(
-                        endpoint,
-                        &service,
-                        &method,
-                        StreamDirection::Sent,
-                    );
+                    handles[endpoint.as_str()].increment(1);
                 }
             })
         });

@@ -101,8 +101,8 @@ impl QueryNameRegistry {
     }
 
     /// Label value for a canonical id returned by [`Self::resolve`].
-    pub(crate) fn label_value(canonical: usize) -> metrics::SharedString {
-        metrics::SharedString::from_shared(resolve(canonical))
+    pub(crate) fn label_value(canonical: usize) -> String {
+        resolve(canonical)
     }
 }
 
@@ -128,7 +128,7 @@ mod tests {
         let registry = QueryNameRegistry::new(2);
         let canonical = registry.resolve("get_account_balance");
         assert_eq!(
-            QueryNameRegistry::label_value(canonical).as_ref(),
+            QueryNameRegistry::label_value(canonical),
             "get_account_balance"
         );
         // Repeat: cached, same canonical id.
@@ -140,7 +140,7 @@ mod tests {
         let registry = QueryNameRegistry::new(2);
         let canonical = registry.resolve("Bad-Name");
         assert_eq!(
-            QueryNameRegistry::label_value(canonical).as_ref(),
+            QueryNameRegistry::label_value(canonical),
             INVALID_QUERY_NAME
         );
     }
@@ -155,10 +155,7 @@ mod tests {
         assert_eq!(registry.resolve("first_query"), first);
         assert_eq!(registry.resolve("second_query"), second);
         // New names beyond the limit share the overflow bucket.
-        assert_eq!(
-            QueryNameRegistry::label_value(third).as_ref(),
-            OVERFLOW_QUERY_NAME
-        );
+        assert_eq!(QueryNameRegistry::label_value(third), OVERFLOW_QUERY_NAME);
         assert_eq!(registry.resolve("fourth_query"), third);
         // Fallback buckets do not consume the name budget.
         assert_eq!(

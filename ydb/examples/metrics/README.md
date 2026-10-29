@@ -14,7 +14,7 @@ provisioned dashboard — no manual setup needed.
 ```bash
 # from the repository root
 docker compose -f ydb/examples/metrics/docker-compose.yaml up -d
-cargo run --example metrics
+cargo run --features metrics --example metrics
 
 # open the provisioned dashboard (anonymous Viewer access)
 open http://localhost:3000/d/ydb-sdk-metrics
@@ -31,7 +31,7 @@ docker compose -f ydb/examples/metrics/docker-compose.yaml up -d victoriametrics
 Or bring your own YDB (and compose stack) via `YDB_CONNECTION_STRING`:
 
 ```bash
-YDB_CONNECTION_STRING=grpc://localhost:2136/local cargo run --example metrics
+YDB_CONNECTION_STRING=grpc://localhost:2136/local cargo run --features metrics --example metrics
 curl localhost:9090/metrics
 ```
 
@@ -44,8 +44,9 @@ dropped, which emits `ydb_session_pool_sessions_closed_total{reason="shutdown"}`
 **before** building the client: the SDK binds all metric handles at
 `Client::build()` time, so a recorder installed later would leave every handle
 on the no-op recorder. The client is built without
-`with_metrics_recorder` (the shortest demo — it binds to the ambient global
-recorder) and carries two static labels: `driver_name="metrics-example"`
+`with_metrics_recorder` (the shortest demo — with the SDK's `metrics` feature
+it binds to the ambient global recorder) and carries two static labels:
+`driver_name="metrics-example"`
 (via `with_driver_name`) and `app="metrics-example"` (via
 `with_metrics_label`).
 

@@ -12,10 +12,9 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::RwLock;
 
-use metrics::{Counter, Gauge, Histogram};
-
 use crate::grpc_wrapper::metrics_interceptor::GrpcCode;
 
+use super::backend::{CounterHandle, GaugeHandle, HistogramHandle};
 use super::interning;
 
 /// Cache key component for the `grpc_code` label: the closed gRPC status set
@@ -42,10 +41,10 @@ impl GrpcCodeKey {
         self == Self::Code(GrpcCode::Ok)
     }
 
-    pub(crate) fn label_value(self) -> metrics::SharedString {
+    pub(crate) fn label_value(self) -> String {
         match self {
-            Self::Code(code) => metrics::SharedString::from(code.as_label()),
-            Self::Interned(id) => metrics::SharedString::from_shared(interning::resolve(id)),
+            Self::Code(code) => code.as_label().to_string(),
+            Self::Interned(id) => interning::resolve(id),
         }
     }
 }
@@ -68,31 +67,32 @@ pub(crate) type QueryNamedErrorsKey = (usize, usize);
 /// Handle caches for the dynamic series (runtime string labels), stored inside
 /// [`MetricsNames`](super::names::MetricsNames) (so handles stay bound to its
 /// recorder's backend).
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub(crate) struct DynamicCaches {
-    pub(crate) grpc_requests: RwLock<HashMap<GrpcRequestsKey, Counter>>,
-    pub(crate) grpc_request_duration: RwLock<HashMap<GrpcRequestDurationKey, Histogram>>,
-    pub(crate) grpc_errors: RwLock<HashMap<GrpcErrorsKey, Counter>>,
-    pub(crate) grpc_stream_messages: RwLock<HashMap<GrpcStreamMessagesKey, Counter>>,
-    pub(crate) grpc_connections: RwLock<HashMap<GrpcConnectionsKey, Gauge>>,
-    pub(crate) grpc_connection_establish: RwLock<HashMap<GrpcConnectionEstablishKey, Histogram>>,
+    pub(crate) grpc_requests: RwLock<HashMap<GrpcRequestsKey, CounterHandle>>,
+    pub(crate) grpc_request_duration: RwLock<HashMap<GrpcRequestDurationKey, HistogramHandle>>,
+    pub(crate) grpc_errors: RwLock<HashMap<GrpcErrorsKey, CounterHandle>>,
+    pub(crate) grpc_stream_messages: RwLock<HashMap<GrpcStreamMessagesKey, CounterHandle>>,
+    pub(crate) grpc_connections: RwLock<HashMap<GrpcConnectionsKey, GaugeHandle>>,
+    pub(crate) grpc_connection_establish:
+        RwLock<HashMap<GrpcConnectionEstablishKey, HistogramHandle>>,
     /// `ydb_query_errors_total` keyed by (operation index, interned status code).
-    pub(crate) query_errors: RwLock<HashMap<QueryErrorsKey, Counter>>,
+    pub(crate) query_errors: RwLock<HashMap<QueryErrorsKey, CounterHandle>>,
     /// `ydb_query_transaction_retries_total` keyed by interned status code.
-    pub(crate) query_tx_retries: RwLock<HashMap<QueryTransactionRetriesKey, Counter>>,
+    pub(crate) query_tx_retries: RwLock<HashMap<QueryTransactionRetriesKey, CounterHandle>>,
     /// `ydb_query_named_operations_total` keyed by (canonical interned query
     /// name, result index).
-    pub(crate) query_named_operations: RwLock<HashMap<QueryNamedOperationsKey, Counter>>,
+    pub(crate) query_named_operations: RwLock<HashMap<QueryNamedOperationsKey, CounterHandle>>,
     /// `ydb_query_named_operation_duration_milliseconds` keyed by canonical
     /// interned query name.
-    pub(crate) query_named_operation_duration: RwLock<HashMap<usize, Histogram>>,
+    pub(crate) query_named_operation_duration: RwLock<HashMap<usize, HistogramHandle>>,
     /// `ydb_query_named_errors_total` keyed by (canonical interned query name,
     /// interned status code).
-    pub(crate) query_named_errors: RwLock<HashMap<QueryNamedErrorsKey, Counter>>,
+    pub(crate) query_named_errors: RwLock<HashMap<QueryNamedErrorsKey, CounterHandle>>,
     /// `ydb_query_named_result_rows` keyed by canonical interned query name.
-    pub(crate) query_named_result_rows: RwLock<HashMap<usize, Histogram>>,
+    pub(crate) query_named_result_rows: RwLock<HashMap<usize, HistogramHandle>>,
     /// `ydb_query_named_result_bytes` keyed by canonical interned query name.
-    pub(crate) query_named_result_bytes: RwLock<HashMap<usize, Histogram>>,
+    pub(crate) query_named_result_bytes: RwLock<HashMap<usize, HistogramHandle>>,
 }
 
 /// Cached handle lookup: a read lock on hit; on miss, build the handle under
@@ -147,20 +147,20 @@ mod tests {
             GrpcCodeKey::Interned(interning::intern("exotic-code")),
             "unknown codes must be interned, not remapped"
         );
-        assert_eq!(key.label_value().as_ref(), "exotic-code");
+        assert_eq!(key.label_value(), "exotic-code");
         assert!(!key.is_ok());
     }
 
     #[test]
     fn cached_registers_once_per_key() {
-        let cache = RwLock::new(HashMap::<usize, Counter>::new());
+        let cache = RwLock::new(HashMap::<usize, CounterHandle>::new());
         let registrations = std::sync::atomic::AtomicUsize::new(0);
 
         let handles: Vec<_> = (0..5)
             .map(|_| {
                 cached(&cache, 7, || {
                     registrations.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    Counter::noop()
+                    crate::client_metrics::backend::noop_counter()
                 })
             })
             .collect();

@@ -926,7 +926,7 @@ mod unit_tests {
     fn recorder_with_test_backend() -> (Arc<dyn MetricsRecorder>, Arc<TestRecorder>) {
         let test = Arc::new(TestRecorder::new());
         let recorder: Arc<dyn MetricsRecorder> = Arc::new(DefaultMetricsRecorder::with_backend(
-            Arc::clone(&test) as Arc<dyn metrics::Recorder + Send + Sync>,
+            Arc::clone(&test) as Arc<dyn crate::client_metrics::MetricsBackend>,
         ));
         (recorder, test)
     }

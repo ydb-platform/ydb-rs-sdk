@@ -1,12 +1,17 @@
-//! Stateful in-memory [`metrics::Recorder`] for unit tests.
+//! Stateful in-memory [`MetricsBackend`] for unit tests.
 //!
-//! Unlike the capture-only recorder used in [`crate::client_metrics`] registration
-//! tests, this recorder keeps per-key state: counter totals, gauge values, and
-//! histogram observations, so unit tests can assert recorded values and labels.
+//! The recorder keeps per-key state: counter totals, gauge values, and
+//! histogram observations, so unit tests can assert recorded values and labels
+//! without depending on the external `metrics` crate.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+use super::backend::{
+    Counter, CounterHandle, Gauge, Histogram, HistogramHandle, MetricDescription, MetricLabel,
+    MetricsBackend, noop_counter, noop_histogram,
+};
 
 /// Per-key metric state shared between the recorder and emitted handles.
 #[derive(Default)]
@@ -16,15 +21,27 @@ struct MetricState {
     observations: Vec<f64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TestKey {
+    name: String,
+    labels: Vec<(String, String)>,
+}
+
+impl TestKey {
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
 #[derive(Default)]
 struct Inner {
-    states: Mutex<HashMap<metrics::Key, Arc<Mutex<MetricState>>>>,
+    states: Mutex<HashMap<TestKey, Arc<Mutex<MetricState>>>>,
     /// Insertion order of keys, for label assertions on the latest series.
-    order: Mutex<Vec<metrics::Key>>,
+    order: Mutex<Vec<TestKey>>,
 }
 
 impl Inner {
-    fn state_for(&self, key: &metrics::Key) -> Arc<Mutex<MetricState>> {
+    fn state_for(&self, key: &TestKey) -> Arc<Mutex<MetricState>> {
         let mut states = self.states.lock().unwrap();
         states
             .entry(key.clone())
@@ -36,21 +53,17 @@ impl Inner {
     }
 }
 
-struct CounterHandle(Arc<Mutex<MetricState>>);
+struct CounterHandleImpl(Arc<Mutex<MetricState>>);
 
-impl metrics::CounterFn for CounterHandle {
+impl Counter for CounterHandleImpl {
     fn increment(&self, value: u64) {
         self.0.lock().unwrap().counter += value;
     }
-
-    fn absolute(&self, value: u64) {
-        self.0.lock().unwrap().counter = value;
-    }
 }
 
-struct GaugeHandle(Arc<Mutex<MetricState>>);
+struct GaugeHandleImpl(Arc<Mutex<MetricState>>);
 
-impl metrics::GaugeFn for GaugeHandle {
+impl Gauge for GaugeHandleImpl {
     fn increment(&self, value: f64) {
         self.0.lock().unwrap().gauge += value;
     }
@@ -64,9 +77,9 @@ impl metrics::GaugeFn for GaugeHandle {
     }
 }
 
-struct HistogramHandle(Arc<Mutex<MetricState>>);
+struct HistogramHandleImpl(Arc<Mutex<MetricState>>);
 
-impl metrics::HistogramFn for HistogramHandle {
+impl Histogram for HistogramHandleImpl {
     fn record(&self, value: f64) {
         self.0.lock().unwrap().observations.push(value);
     }
@@ -75,11 +88,11 @@ impl metrics::HistogramFn for HistogramHandle {
 /// No-op handles backing the client-metric getters, which tests never assert on.
 #[derive(Clone)]
 struct NoopHandles {
-    counter: metrics::Counter,
-    histogram: metrics::Histogram,
+    counter: CounterHandle,
+    histogram: HistogramHandle,
 }
 
-/// In-memory recorder capturing counters, gauges, and histograms by key.
+/// In-memory backend capturing counters, gauges, and histograms by key.
 #[derive(Clone)]
 pub struct TestRecorder {
     inner: Arc<Inner>,
@@ -91,8 +104,8 @@ impl Default for TestRecorder {
         Self {
             inner: Arc::new(Inner::default()),
             noop: NoopHandles {
-                counter: metrics::Counter::noop(),
-                histogram: metrics::Histogram::noop(),
+                counter: noop_counter(),
+                histogram: noop_histogram(),
             },
         }
     }
@@ -103,7 +116,7 @@ impl TestRecorder {
         Self::default()
     }
 
-    fn state_for(&self, key: &metrics::Key) -> Arc<Mutex<MetricState>> {
+    fn state_for(&self, key: &TestKey) -> Arc<Mutex<MetricState>> {
         self.inner.state_for(key)
     }
 
@@ -131,7 +144,7 @@ impl TestRecorder {
         self.state_for(&key).lock().unwrap().gauge = value;
     }
 
-    fn last_key(&self, name: &str) -> Option<metrics::Key> {
+    fn last_key(&self, name: &str) -> Option<TestKey> {
         self.inner
             .order
             .lock()
@@ -161,7 +174,7 @@ impl TestRecorder {
             .lock()
             .unwrap()
             .iter()
-            .filter(|(key, _)| key.name() == name && labels_contain(key.labels(), label, value))
+            .filter(|(key, _)| key.name() == name && labels_contain(key, label, value))
             .map(|(_, state)| state.lock().unwrap().counter)
             .sum()
     }
@@ -178,7 +191,7 @@ impl TestRecorder {
             .sum()
     }
 
-    /// All recorded observations for `name`, over all label combinations.
+    /// All recorded observations for `name`.
     pub fn histogram_observations(&self, name: &str) -> Vec<f64> {
         self.inner
             .states
@@ -210,7 +223,7 @@ impl TestRecorder {
             .lock()
             .unwrap()
             .iter()
-            .filter(|(key, _)| key.name() == name && labels_contain(key.labels(), label, value))
+            .filter(|(key, _)| key.name() == name && labels_contain(key, label, value))
             .map(|(_, state)| state.lock().unwrap().gauge)
             .sum()
     }
@@ -218,14 +231,15 @@ impl TestRecorder {
     /// Label value of the most recently recorded series of `name`.
     pub fn label_of_last(&self, name: &str, label: &str) -> Option<String> {
         let key = self.last_key(name)?;
-        key.labels()
-            .find(|item| item.key() == label)
-            .map(|item| item.value().to_string())
+        key.labels
+            .iter()
+            .find(|(key, _)| key == label)
+            .map(|(_, value)| value.clone())
     }
 
     /// All keys recorded for `name` (used for cardinality assertions).
     #[allow(dead_code)]
-    pub fn keys(&self, name: &str) -> Vec<metrics::Key> {
+    pub fn keys(&self, name: &str) -> Vec<TestKey> {
         self.inner
             .order
             .lock()
@@ -237,120 +251,110 @@ impl TestRecorder {
     }
 }
 
-fn owned_key(name: &str, labels: &[(&str, &str)]) -> metrics::Key {
-    let owned: Vec<metrics::Label> = labels
+fn backend_key(description: &MetricDescription, labels: &[MetricLabel]) -> TestKey {
+    TestKey {
+        name: description.name().to_string(),
+        labels: labels
+            .iter()
+            .map(|label| (label.key().to_string(), label.value().to_string()))
+            .collect(),
+    }
+}
+
+fn owned_key(name: &str, labels: &[(&str, &str)]) -> TestKey {
+    TestKey {
+        name: name.to_string(),
+        labels: labels
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect(),
+    }
+}
+
+fn labels_contain(key: &TestKey, name: &str, value: &str) -> bool {
+    key.labels
         .iter()
-        .map(|(key, value)| metrics::Label::new((*key).to_string(), (*value).to_string()))
-        .collect();
-    metrics::Key::from_parts(name.to_string(), owned)
+        .any(|(key, current)| key == name && current == value)
 }
 
-fn labels_contain<'a>(
-    mut labels: impl Iterator<Item = &'a metrics::Label>,
-    name: &str,
-    value: &str,
-) -> bool {
-    labels.any(|label| label.key() == name && label.value() == value)
-}
-
-/// Facade backend path: handles created through the emission macros write into the
-/// same per-key state as the direct [`MetricsRecorder`] implementation below.
-impl metrics::Recorder for TestRecorder {
-    fn describe_counter(
-        &self,
-        _key: metrics::KeyName,
-        _unit: Option<metrics::Unit>,
-        _description: metrics::SharedString,
-    ) {
-    }
-
-    fn describe_gauge(
-        &self,
-        _key: metrics::KeyName,
-        _unit: Option<metrics::Unit>,
-        _description: metrics::SharedString,
-    ) {
-    }
-
-    fn describe_histogram(
-        &self,
-        _key: metrics::KeyName,
-        _unit: Option<metrics::Unit>,
-        _description: metrics::SharedString,
-    ) {
-    }
-
+impl MetricsBackend for TestRecorder {
     fn register_counter(
         &self,
-        key: &metrics::Key,
-        _metadata: &metrics::Metadata<'_>,
-    ) -> metrics::Counter {
-        metrics::Counter::from_arc(Arc::new(CounterHandle(self.state_for(key))))
+        description: &MetricDescription,
+        labels: &[MetricLabel],
+    ) -> Arc<dyn Counter> {
+        Arc::new(CounterHandleImpl(
+            self.state_for(&backend_key(description, labels)),
+        ))
     }
 
     fn register_gauge(
         &self,
-        key: &metrics::Key,
-        _metadata: &metrics::Metadata<'_>,
-    ) -> metrics::Gauge {
-        metrics::Gauge::from_arc(Arc::new(GaugeHandle(self.state_for(key))))
+        description: &MetricDescription,
+        labels: &[MetricLabel],
+    ) -> Arc<dyn Gauge> {
+        Arc::new(GaugeHandleImpl(
+            self.state_for(&backend_key(description, labels)),
+        ))
     }
 
     fn register_histogram(
         &self,
-        key: &metrics::Key,
-        _metadata: &metrics::Metadata<'_>,
-    ) -> metrics::Histogram {
-        metrics::Histogram::from_arc(Arc::new(HistogramHandle(self.state_for(key))))
+        description: &MetricDescription,
+        labels: &[MetricLabel],
+    ) -> Arc<dyn Histogram> {
+        Arc::new(HistogramHandleImpl(
+            self.state_for(&backend_key(description, labels)),
+        ))
     }
 }
 
 impl crate::client_metrics::MetricsRecorder for TestRecorder {
-    fn client_new_counter(&self) -> &metrics::Counter {
+    fn client_new_counter(&self) -> &CounterHandle {
         &self.noop.counter
     }
 
-    fn client_new_table_client_counter(&self) -> &metrics::Counter {
+    fn client_new_table_client_counter(&self) -> &CounterHandle {
         &self.noop.counter
     }
 
-    fn client_new_query_client_counter(&self) -> &metrics::Counter {
+    fn client_new_query_client_counter(&self) -> &CounterHandle {
         &self.noop.counter
     }
 
-    fn client_new_scheme_client_counter(&self) -> &metrics::Counter {
+    fn client_new_scheme_client_counter(&self) -> &CounterHandle {
         &self.noop.counter
     }
 
-    fn client_new_topic_client_counter(&self) -> &metrics::Counter {
+    fn client_new_topic_client_counter(&self) -> &CounterHandle {
         &self.noop.counter
     }
 
-    fn client_query_row_counter(&self) -> &metrics::Counter {
+    fn client_query_row_counter(&self) -> &CounterHandle {
         &self.noop.counter
     }
 
-    fn client_transaction_query_row_counter(&self) -> &metrics::Counter {
+    fn client_transaction_query_row_counter(&self) -> &CounterHandle {
         &self.noop.counter
     }
 
-    fn client_transaction_exec_counter(&self) -> &metrics::Counter {
+    fn client_transaction_exec_counter(&self) -> &CounterHandle {
         &self.noop.counter
     }
 
-    fn client_transaction_commit_counter(&self) -> &metrics::Counter {
+    fn client_transaction_commit_counter(&self) -> &CounterHandle {
         &self.noop.counter
     }
 
-    fn client_transaction_rollback_counter(&self) -> &metrics::Counter {
+    fn client_transaction_rollback_counter(&self) -> &CounterHandle {
         &self.noop.counter
     }
 
-    fn client_row_query_time_histogram(&self) -> &metrics::Histogram {
+    fn client_row_query_time_histogram(&self) -> &HistogramHandle {
         &self.noop.histogram
     }
 
-    fn client_transaction_row_query_time_histogram(&self) -> &metrics::Histogram {
+    fn client_transaction_row_query_time_histogram(&self) -> &HistogramHandle {
         &self.noop.histogram
     }
 

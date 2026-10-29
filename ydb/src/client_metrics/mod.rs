@@ -1,21 +1,27 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use metrics::{Counter, Histogram, counter, gauge, histogram};
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
 use crate::errors::{YdbError, YdbOrCustomerError};
 
+pub(crate) mod backend;
 pub(crate) mod dynamic;
 pub(crate) mod interning;
+#[cfg(feature = "metrics")]
+pub(crate) mod metrics_facade;
 pub(crate) mod names;
 pub(crate) mod query_names;
 #[cfg(test)]
 pub(crate) mod test_recorder;
 
+pub use backend::{
+    Counter, Gauge, Histogram, MetricDescription, MetricLabel, MetricUnit, MetricsBackend,
+};
+
+use backend::{CounterHandle, HistogramHandle};
 use dynamic::GrpcCodeKey;
 use interning::{intern, resolve};
-use metrics::Label;
 use query_names::QueryNameRegistry;
 
 /// Connection state label for the `ydb_grpc_connections` gauge.
@@ -23,7 +29,7 @@ use query_names::QueryNameRegistry;
 /// The `idle` state from the metrics spec is not emitted: pool channels are created
 /// with `connect_lazy`, so an idle live-socket state cannot be observed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GrpcConnectionState {
+pub(crate) enum GrpcConnectionState {
     Connecting,
     Active,
     Failed,
@@ -53,7 +59,7 @@ impl GrpcConnectionState {
 
 /// Direction of a gRPC stream message (`ydb_grpc_stream_messages_total`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StreamDirection {
+pub(crate) enum StreamDirection {
     Sent,
     Received,
 }
@@ -80,7 +86,7 @@ impl StreamDirection {
 
 /// Acquire outcome for `ydb_session_pool_acquire_*` metrics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionPoolAcquireResult {
+pub(crate) enum SessionPoolAcquireResult {
     Ok,
     Timeout,
     Error,
@@ -113,7 +119,7 @@ impl SessionPoolAcquireResult {
 
 /// Why a session was closed (`ydb_session_pool_sessions_closed_total`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionPoolCloseReason {
+pub(crate) enum SessionPoolCloseReason {
     IdleTtl,
     UsageLimit,
     BadSession,
@@ -156,7 +162,7 @@ impl SessionPoolCloseReason {
 
 /// Operation label for the `ydb_query_*` metric series.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum QueryOperation {
+pub(crate) enum QueryOperation {
     Exec,
     QueryRow,
     QueryResultSet,
@@ -194,7 +200,7 @@ impl QueryOperation {
 
 /// Outcome label for `ydb_query_transactions_total`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum QueryTransactionResult {
+pub(crate) enum QueryTransactionResult {
     Commit,
     Rollback,
     Error,
@@ -260,7 +266,7 @@ pub(crate) fn ydb_or_customer_status_code_label(error: &YdbOrCustomerError) -> &
 /// The values are derived from the pool's own counters, so they are always consistent
 /// with `SessionPool::stats()`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct SessionPoolGaugeSnapshot {
+pub(crate) struct SessionPoolGaugeSnapshot {
     /// Sessions waiting in the idle stack (`state="idle"`).
     pub idle: f64,
     /// Sessions leased to callers (`state="active"`).
@@ -286,30 +292,23 @@ impl SessionPoolGaugeSnapshot {
     }
 }
 
-/// Access to the SDK's individual metric handles.
+/// Internal component-facing access to the SDK's individual metric handles.
 ///
-/// SDK components record through the read-only handle getters only; they never touch
-/// metric names or label sets directly. The default implementation,
-/// [`DefaultMetricsRecorder`], registers its handles into a `metrics` backend — the
-/// ambient/global recorder or a caller-provided one — at construction time.
-///
-/// Alternative implementations may map the getters onto their own metric names,
-/// labels, and buckets without changing component code. Handles are internally
-/// atomic, so `&self` getters need no interior mutability and components can share
-/// an `Arc<dyn MetricsRecorder>` without locks.
-pub trait MetricsRecorder: Send + Sync {
-    fn client_new_counter(&self) -> &Counter;
-    fn client_new_table_client_counter(&self) -> &Counter;
-    fn client_new_query_client_counter(&self) -> &Counter;
-    fn client_new_scheme_client_counter(&self) -> &Counter;
-    fn client_new_topic_client_counter(&self) -> &Counter;
-    fn client_query_row_counter(&self) -> &Counter;
-    fn client_transaction_query_row_counter(&self) -> &Counter;
-    fn client_transaction_exec_counter(&self) -> &Counter;
-    fn client_transaction_commit_counter(&self) -> &Counter;
-    fn client_transaction_rollback_counter(&self) -> &Counter;
-    fn client_row_query_time_histogram(&self) -> &Histogram;
-    fn client_transaction_row_query_time_histogram(&self) -> &Histogram;
+/// External backends implement [`MetricsBackend`]; component metric names and
+/// label enums remain crate-private.
+pub(crate) trait MetricsRecorder: Send + Sync {
+    fn client_new_counter(&self) -> &CounterHandle;
+    fn client_new_table_client_counter(&self) -> &CounterHandle;
+    fn client_new_query_client_counter(&self) -> &CounterHandle;
+    fn client_new_scheme_client_counter(&self) -> &CounterHandle;
+    fn client_new_topic_client_counter(&self) -> &CounterHandle;
+    fn client_query_row_counter(&self) -> &CounterHandle;
+    fn client_transaction_query_row_counter(&self) -> &CounterHandle;
+    fn client_transaction_exec_counter(&self) -> &CounterHandle;
+    fn client_transaction_commit_counter(&self) -> &CounterHandle;
+    fn client_transaction_rollback_counter(&self) -> &CounterHandle;
+    fn client_row_query_time_histogram(&self) -> &HistogramHandle;
+    fn client_transaction_row_query_time_histogram(&self) -> &HistogramHandle;
 
     /// Change a connection pool entry count for `endpoint` (gRPC transport gauge).
     ///
@@ -348,9 +347,6 @@ pub trait MetricsRecorder: Send + Sync {
     }
 
     /// Emit the session pool gauges synchronously after a pool state change.
-    ///
-    /// All values are recomputed from the pool's own counters at the mutation site —
-    /// never sampled by a timer, so state between mutations is never stale.
     fn session_pool_gauges(&self, _snapshot: SessionPoolGaugeSnapshot) {}
 
     /// Record one acquire attempt outcome and its duration.
@@ -371,117 +367,68 @@ pub trait MetricsRecorder: Send + Sync {
     /// Record the outcome of the background session liveness (attach stream) watcher.
     fn session_pool_keepalive(&self, _ok: bool) {}
 
-    /// Record one query service operation: `ydb_query_operations_total{operation,result}`
-    /// and `ydb_query_operation_duration_milliseconds{operation}`.
-    ///
-    /// For the streaming `query` operation this is recorded at stream open; result
-    /// sizes are recorded separately via [`Self::query_operation_result`] when the
-    /// stream is drained or dropped.
+    /// Record one query service operation and its duration.
     fn query_operation(&self, _operation: QueryOperation, _ok: bool, _duration: Duration) {}
 
-    /// Record the status of a failed query service operation
-    /// (`ydb_query_errors_total{operation,status_code}`); see [`ydb_status_code_label`].
+    /// Record the status of a failed query service operation.
     fn query_operation_error(&self, _operation: QueryOperation, _status_code: &str) {}
 
-    /// Record the result size of a query service operation
-    /// (`ydb_query_result_rows` / `ydb_query_result_bytes` histograms).
+    /// Record the result size of a query service operation.
     fn query_operation_result(&self, _operation: QueryOperation, _rows: u64, _bytes: u64) {}
 
-    /// Record the outcome of a whole retried transaction:
-    /// `ydb_query_transactions_total{result}` and
-    /// `ydb_query_transaction_duration_milliseconds` (all attempts included).
+    /// Record the outcome and duration of a whole retried transaction.
     fn query_transaction(&self, _result: QueryTransactionResult, _duration: Duration) {}
 
-    /// Record one retryable error inside a retried transaction
-    /// (`ydb_query_transaction_retries_total{status_code}`).
+    /// Record one retryable error inside a retried transaction.
     fn query_transaction_retry(&self, _status_code: &str) {}
 
-    /// Record one named query service operation:
-    /// `ydb_query_named_operations_total{query_name,result}` and
-    /// `ydb_query_named_operation_duration_milliseconds{query_name}`.
-    ///
-    /// Called in addition to [`Self::query_operation`] when the caller set a
-    /// query name on the builder; `query_name` is the raw `&'static str` from
-    /// [`crate::client_query::builders::CallBuilder::with_name`] — validation
-    /// and the unique-name limit are applied by the recorder owning the name
-    /// registry.
+    /// Record one named query service operation and its duration.
     fn query_named_operation(&self, _query_name: &'static str, _ok: bool, _duration: Duration) {}
 
-    /// Record the status of a failed named query service operation
-    /// (`ydb_query_named_errors_total{query_name,status_code}`); see
-    /// [`ydb_status_code_label`].
+    /// Record the status of a failed named query service operation.
     fn query_named_operation_error(&self, _query_name: &'static str, _status_code: &str) {}
 
-    /// Record the result size of a named query service operation
-    /// (`ydb_query_named_result_rows` / `ydb_query_named_result_bytes`
-    /// histograms).
+    /// Record the result size of a named query service operation.
     fn query_named_operation_result(&self, _query_name: &'static str, _rows: u64, _bytes: u64) {}
 }
 
-/// Default [`MetricsRecorder`] implementation.
+/// Default internal [`MetricsRecorder`] implementation.
 ///
-/// Owns the metric handles created from a driver name and static labels (see
-/// [`crate::ClientBuilder::with_driver_name`] and
-/// [`crate::ClientBuilder::with_metrics_label`]), optionally registering them into a
-/// caller-provided `metrics::Recorder` backend which is kept alive here. Metric
-/// names, labels, and buckets are an internal detail: components only reach the
-/// handles through the [`MetricsRecorder`] getters.
-///
-/// Metric access is allocation-free on the hot path. Series with closed enum
-/// label sets are pre-registered at construction and indexed by the enum.
-/// Dynamic series (gRPC transport metrics) intern their label strings
-/// ([`interning`]) and cache one handle per label combination; labels are
-/// materialized and the handle registered into the backend only on the first
-/// emission of a combination. With no caller-provided backend, handles bind to
-/// the ambient/global recorder at first emission, so that recorder must be
-/// installed before the first emission of a series (the same holds for the
-/// pre-registered series, which bind at construction).
-pub struct DefaultMetricsRecorder {
+/// Handles are registered through the SDK [`MetricsBackend`]. With no explicit
+/// backend, the `metrics` feature selects the ambient facade adapter; without
+/// that feature the default backend is a no-op.
+pub(crate) struct DefaultMetricsRecorder {
     names: names::MetricsNames,
-    /// Keeps a caller-provided backend recorder alive: handles above reference it.
-    _backend: Option<Arc<dyn metrics::Recorder + Send + Sync>>,
 }
 
 impl DefaultMetricsRecorder {
-    /// Recorder over the ambient/global `metrics` recorder with default settings
-    /// (driver name `main`, no extra labels).
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::from_parts(None, Vec::new(), None)
     }
 
-    /// Recorder registering SDK metrics into a caller-provided `metrics` backend.
-    ///
-    /// Use [`Self::from_parts`] to also set the driver name and static labels.
-    pub fn with_backend(recorder: Arc<dyn metrics::Recorder + Send + Sync>) -> Self {
-        Self::from_parts(None, Vec::new(), Some(recorder))
+    #[cfg(test)]
+    pub(crate) fn with_backend<B>(backend: B) -> Self
+    where
+        B: MetricsBackend + 'static,
+    {
+        Self::from_parts(None, Vec::new(), Some(Arc::new(backend)))
     }
 
-    /// Recorder with explicit driver name, extra static labels, and optional backend.
-    ///
-    /// This is the constructor used by [`crate::ClientBuilder::build`]; the parts
-    /// mirror the builder's `driver_name`, metrics labels, and metrics recorder
-    /// settings. Without a backend, handles bind to the ambient/global recorder.
-    pub fn from_parts(
+    pub(crate) fn from_parts(
         driver_name: Option<String>,
         extra_labels: Vec<(String, String)>,
-        backend: Option<Arc<dyn metrics::Recorder + Send + Sync>>,
+        backend: Option<Arc<dyn MetricsBackend>>,
     ) -> Self {
         let base = names::base_labels(driver_name, extra_labels);
+        let backend = backend.unwrap_or_else(default_backend);
         Self {
-            names: names::MetricsNames::new(base, backend.as_deref()),
-            _backend: backend,
+            names: names::MetricsNames::new(base, backend),
         }
     }
 
     /// Cap the number of unique `query_name` values admitted into the named
     /// query series (`ydb_query_named_*`); defaults to 512.
-    ///
-    /// Names within `[a-z0-9_]{1,64}` beyond the cap are recorded under the
-    /// `__other__` bucket; malformed names under `__invalid__`. Either
-    /// fallback keeps the named-series cardinality bounded. The registry is
-    /// empty at this point (names resolve lazily at first emission), so the
-    /// cap can be replaced freely before the first named call.
-    pub fn with_max_query_names(mut self, max_query_names: usize) -> Self {
+    pub(crate) fn with_max_query_names(mut self, max_query_names: usize) -> Self {
         self.names.query_names = QueryNameRegistry::new(max_query_names);
         self
     }
@@ -493,66 +440,63 @@ impl Default for DefaultMetricsRecorder {
     }
 }
 
-impl DefaultMetricsRecorder {
-    /// Run a handle registration either through the caller-provided backend or
-    /// through the ambient/global recorder.
-    ///
-    /// Called only on dynamic-series cache misses; hits write into already
-    /// registered handles and skip this entirely.
-    fn record<T>(&self, record: impl FnOnce() -> T) -> T {
-        match self._backend.as_deref() {
-            Some(recorder) => metrics::with_local_recorder(recorder, record),
-            None => record(),
-        }
+fn default_backend() -> Arc<dyn MetricsBackend> {
+    #[cfg(feature = "metrics")]
+    {
+        Arc::new(metrics_facade::MetricsFacadeBackend::ambient())
+    }
+    #[cfg(not(feature = "metrics"))]
+    {
+        Arc::new(backend::NoopMetricsBackend)
     }
 }
 
 impl MetricsRecorder for DefaultMetricsRecorder {
-    fn client_new_counter(&self) -> &Counter {
+    fn client_new_counter(&self) -> &CounterHandle {
         &self.names.client_new_counter
     }
 
-    fn client_new_table_client_counter(&self) -> &Counter {
+    fn client_new_table_client_counter(&self) -> &CounterHandle {
         &self.names.client_new_table_client_counter
     }
 
-    fn client_new_query_client_counter(&self) -> &Counter {
+    fn client_new_query_client_counter(&self) -> &CounterHandle {
         &self.names.client_new_query_client_counter
     }
 
-    fn client_new_scheme_client_counter(&self) -> &Counter {
+    fn client_new_scheme_client_counter(&self) -> &CounterHandle {
         &self.names.client_new_scheme_client_counter
     }
 
-    fn client_new_topic_client_counter(&self) -> &Counter {
+    fn client_new_topic_client_counter(&self) -> &CounterHandle {
         &self.names.client_new_topic_client_counter
     }
 
-    fn client_query_row_counter(&self) -> &Counter {
+    fn client_query_row_counter(&self) -> &CounterHandle {
         &self.names.client_query_row_counter
     }
 
-    fn client_transaction_query_row_counter(&self) -> &Counter {
+    fn client_transaction_query_row_counter(&self) -> &CounterHandle {
         &self.names.client_transaction_query_row_counter
     }
 
-    fn client_transaction_exec_counter(&self) -> &Counter {
+    fn client_transaction_exec_counter(&self) -> &CounterHandle {
         &self.names.client_transaction_exec_counter
     }
 
-    fn client_transaction_commit_counter(&self) -> &Counter {
+    fn client_transaction_commit_counter(&self) -> &CounterHandle {
         &self.names.client_transaction_commit_counter
     }
 
-    fn client_transaction_rollback_counter(&self) -> &Counter {
+    fn client_transaction_rollback_counter(&self) -> &CounterHandle {
         &self.names.client_transaction_rollback_counter
     }
 
-    fn client_row_query_time_histogram(&self) -> &Histogram {
+    fn client_row_query_time_histogram(&self) -> &HistogramHandle {
         &self.names.client_row_query_time_histogram
     }
 
-    fn client_transaction_row_query_time_histogram(&self) -> &Histogram {
+    fn client_transaction_row_query_time_histogram(&self) -> &HistogramHandle {
         &self.names.client_transaction_row_query_time_histogram
     }
 
@@ -563,10 +507,15 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             (endpoint, state.index()),
             || {
                 let labels = self.names.dynamic_labels(vec![
-                    Label::new("endpoint", resolve(endpoint)),
-                    Label::new("state", state.as_label()),
+                    MetricLabel::new("endpoint", resolve(endpoint)),
+                    MetricLabel::new("state", state.as_label()),
                 ]);
-                self.record(|| gauge!("ydb_grpc_connections", labels.iter()))
+                self.names.gauge(
+                    "ydb_grpc_connections",
+                    MetricUnit::Count,
+                    "ydb gRPC connection pool entries by state",
+                    &labels,
+                )
             },
         );
         handle.increment(delta);
@@ -579,12 +528,15 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             (endpoint, ok),
             || {
                 let labels = self.names.dynamic_labels(vec![
-                    Label::new("endpoint", resolve(endpoint)),
-                    Label::new("result", if ok { "ok" } else { "error" }),
+                    MetricLabel::new("endpoint", resolve(endpoint)),
+                    MetricLabel::new("result", if ok { "ok" } else { "error" }),
                 ]);
-                self.record(|| {
-                    histogram!("ydb_grpc_connection_establish_milliseconds", labels.iter())
-                })
+                self.names.histogram(
+                    "ydb_grpc_connection_establish_milliseconds",
+                    MetricUnit::Milliseconds,
+                    "ydb gRPC connection establishment duration by result",
+                    &labels,
+                )
             },
         );
         handle.record(duration.as_secs_f64() * 1000.0);
@@ -608,12 +560,17 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             (endpoint, service, method, code),
             || {
                 let labels = self.names.dynamic_labels(vec![
-                    Label::new("endpoint", resolve(endpoint)),
-                    Label::new("service", resolve(service)),
-                    Label::new("method", resolve(method)),
-                    Label::new("grpc_code", code.label_value()),
+                    MetricLabel::new("endpoint", resolve(endpoint)),
+                    MetricLabel::new("service", resolve(service)),
+                    MetricLabel::new("method", resolve(method)),
+                    MetricLabel::new("grpc_code", code.label_value()),
                 ]);
-                self.record(|| counter!("ydb_grpc_requests_total", labels.iter()))
+                self.names.counter(
+                    "ydb_grpc_requests_total",
+                    MetricUnit::Count,
+                    "ydb gRPC requests by status",
+                    &labels,
+                )
             },
         )
         .increment(1);
@@ -626,11 +583,16 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             (endpoint, service, method),
             || {
                 let labels = self.names.dynamic_labels(vec![
-                    Label::new("endpoint", resolve(endpoint)),
-                    Label::new("service", resolve(service)),
-                    Label::new("method", resolve(method)),
+                    MetricLabel::new("endpoint", resolve(endpoint)),
+                    MetricLabel::new("service", resolve(service)),
+                    MetricLabel::new("method", resolve(method)),
                 ]);
-                self.record(|| histogram!("ydb_grpc_request_duration_milliseconds", labels.iter()))
+                self.names.histogram(
+                    "ydb_grpc_request_duration_milliseconds",
+                    MetricUnit::Milliseconds,
+                    "ydb gRPC request duration",
+                    &labels,
+                )
             },
         )
         .record(duration.as_secs_f64() * 1000.0);
@@ -638,10 +600,15 @@ impl MetricsRecorder for DefaultMetricsRecorder {
         if !code.is_ok() {
             dynamic::cached(&self.names.dynamic.grpc_errors, (endpoint, code), || {
                 let labels = self.names.dynamic_labels(vec![
-                    Label::new("endpoint", resolve(endpoint)),
-                    Label::new("grpc_code", code.label_value()),
+                    MetricLabel::new("endpoint", resolve(endpoint)),
+                    MetricLabel::new("grpc_code", code.label_value()),
                 ]);
-                self.record(|| counter!("ydb_grpc_errors_total", labels.iter()))
+                self.names.counter(
+                    "ydb_grpc_errors_total",
+                    MetricUnit::Count,
+                    "ydb gRPC transport errors by status",
+                    &labels,
+                )
             })
             .increment(1);
         }
@@ -662,12 +629,17 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             (endpoint, service, method, direction.index()),
             || {
                 let labels = self.names.dynamic_labels(vec![
-                    Label::new("endpoint", resolve(endpoint)),
-                    Label::new("service", resolve(service)),
-                    Label::new("method", resolve(method)),
-                    Label::new("direction", direction.as_label()),
+                    MetricLabel::new("endpoint", resolve(endpoint)),
+                    MetricLabel::new("service", resolve(service)),
+                    MetricLabel::new("method", resolve(method)),
+                    MetricLabel::new("direction", direction.as_label()),
                 ]);
-                self.record(|| counter!("ydb_grpc_stream_messages_total", labels.iter()))
+                self.names.counter(
+                    "ydb_grpc_stream_messages_total",
+                    MetricUnit::Count,
+                    "ydb gRPC stream messages by direction",
+                    &labels,
+                )
             },
         )
         .increment(1);
@@ -728,10 +700,15 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             (operation.index(), status_code),
             || {
                 let labels = self.names.dynamic_labels(vec![
-                    Label::new("operation", QueryOperation::LABELS[operation.index()]),
-                    Label::new("status_code", resolve(status_code)),
+                    MetricLabel::new("operation", QueryOperation::LABELS[operation.index()]),
+                    MetricLabel::new("status_code", resolve(status_code)),
                 ]);
-                self.record(|| counter!("ydb_query_errors_total", labels.iter()))
+                self.names.counter(
+                    "ydb_query_errors_total",
+                    MetricUnit::Count,
+                    "ydb query errors by operation and status",
+                    &labels,
+                )
             },
         )
         .increment(1);
@@ -754,8 +731,13 @@ impl MetricsRecorder for DefaultMetricsRecorder {
         dynamic::cached(&self.names.dynamic.query_tx_retries, status_code, || {
             let labels = self
                 .names
-                .dynamic_labels(vec![Label::new("status_code", resolve(status_code))]);
-            self.record(|| counter!("ydb_query_transaction_retries_total", labels.iter()))
+                .dynamic_labels(vec![MetricLabel::new("status_code", resolve(status_code))]);
+            self.names.counter(
+                "ydb_query_transaction_retries_total",
+                MetricUnit::Count,
+                "ydb query transaction retryable errors by status",
+                &labels,
+            )
         })
         .increment(1);
     }
@@ -768,10 +750,15 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             (name, result),
             || {
                 let labels = self.names.dynamic_labels(vec![
-                    Label::new("query_name", QueryNameRegistry::label_value(name)),
-                    Label::new("result", names::QUERY_RESULT_LABELS[result]),
+                    MetricLabel::new("query_name", QueryNameRegistry::label_value(name)),
+                    MetricLabel::new("result", names::QUERY_RESULT_LABELS[result]),
                 ]);
-                self.record(|| counter!("ydb_query_named_operations_total", labels.iter()))
+                self.names.counter(
+                    "ydb_query_named_operations_total",
+                    MetricUnit::Count,
+                    "ydb named query operations by result",
+                    &labels,
+                )
             },
         )
         .increment(1);
@@ -780,16 +767,16 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             &self.names.dynamic.query_named_operation_duration,
             name,
             || {
-                let labels = self.names.dynamic_labels(vec![Label::new(
+                let labels = self.names.dynamic_labels(vec![MetricLabel::new(
                     "query_name",
                     QueryNameRegistry::label_value(name),
                 )]);
-                self.record(|| {
-                    histogram!(
-                        "ydb_query_named_operation_duration_milliseconds",
-                        labels.iter()
-                    )
-                })
+                self.names.histogram(
+                    "ydb_query_named_operation_duration_milliseconds",
+                    MetricUnit::Milliseconds,
+                    "ydb named query operation duration",
+                    &labels,
+                )
             },
         )
         .record(duration.as_secs_f64() * 1000.0);
@@ -803,10 +790,15 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             (name, status_code),
             || {
                 let labels = self.names.dynamic_labels(vec![
-                    Label::new("query_name", QueryNameRegistry::label_value(name)),
-                    Label::new("status_code", resolve(status_code)),
+                    MetricLabel::new("query_name", QueryNameRegistry::label_value(name)),
+                    MetricLabel::new("status_code", resolve(status_code)),
                 ]);
-                self.record(|| counter!("ydb_query_named_errors_total", labels.iter()))
+                self.names.counter(
+                    "ydb_query_named_errors_total",
+                    MetricUnit::Count,
+                    "ydb named query errors by status",
+                    &labels,
+                )
             },
         )
         .increment(1);
@@ -815,17 +807,27 @@ impl MetricsRecorder for DefaultMetricsRecorder {
     fn query_named_operation_result(&self, query_name: &'static str, rows: u64, bytes: u64) {
         let name = self.names.query_names.resolve(query_name);
         let label = || {
-            self.names.dynamic_labels(vec![Label::new(
+            self.names.dynamic_labels(vec![MetricLabel::new(
                 "query_name",
                 QueryNameRegistry::label_value(name),
             )])
         };
         dynamic::cached(&self.names.dynamic.query_named_result_rows, name, || {
-            self.record(|| histogram!("ydb_query_named_result_rows", label().iter()))
+            self.names.histogram(
+                "ydb_query_named_result_rows",
+                MetricUnit::Count,
+                "ydb named query result rows",
+                &label(),
+            )
         })
         .record(rows as f64);
         dynamic::cached(&self.names.dynamic.query_named_result_bytes, name, || {
-            self.record(|| histogram!("ydb_query_named_result_bytes", label().iter()))
+            self.names.histogram(
+                "ydb_query_named_result_bytes",
+                MetricUnit::Bytes,
+                "ydb named query result bytes",
+                &label(),
+            )
         })
         .record(bytes as f64);
     }
@@ -837,26 +839,41 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[cfg(not(feature = "metrics"))]
+    #[test]
+    fn default_backend_without_metrics_feature_is_noop() {
+        let backend = default_backend();
+        let description =
+            MetricDescription::new("noop_test", MetricUnit::Count, "No-op backend test");
+
+        backend.register_counter(&description, &[]).increment(1);
+        let gauge = backend.register_gauge(&description, &[]);
+        gauge.increment(1.0);
+        gauge.decrement(0.5);
+        gauge.set(2.0);
+        backend.register_histogram(&description, &[]).record(1.0);
+    }
+
     #[derive(Clone, Default)]
     struct CapturedMetric {
         name: String,
         labels: Vec<(String, String)>,
     }
 
-    /// Minimal `metrics::Recorder` capturing counter/histogram handle registrations.
-    #[derive(Default)]
+    /// Minimal SDK backend capturing counter/gauge/histogram registrations.
+    #[derive(Clone, Default)]
     struct CaptureRecorder {
-        registered: Mutex<Vec<CapturedMetric>>,
+        registered: Arc<Mutex<Vec<CapturedMetric>>>,
     }
 
     impl CaptureRecorder {
-        fn push(&self, key: &metrics::Key) {
-            let labels = key
-                .labels()
+        fn push(&self, description: &MetricDescription, labels: &[MetricLabel]) {
+            let labels = labels
+                .iter()
                 .map(|label| (label.key().to_string(), label.value().to_string()))
                 .collect();
             self.registered.lock().unwrap().push(CapturedMetric {
-                name: key.name().to_string(),
+                name: description.name().to_string(),
                 labels,
             });
         }
@@ -873,56 +890,32 @@ mod tests {
         }
     }
 
-    impl metrics::Recorder for CaptureRecorder {
-        fn describe_counter(
-            &self,
-            _key: metrics::KeyName,
-            _unit: Option<metrics::Unit>,
-            _description: metrics::SharedString,
-        ) {
-        }
-
-        fn describe_gauge(
-            &self,
-            _key: metrics::KeyName,
-            _unit: Option<metrics::Unit>,
-            _description: metrics::SharedString,
-        ) {
-        }
-
-        fn describe_histogram(
-            &self,
-            _key: metrics::KeyName,
-            _unit: Option<metrics::Unit>,
-            _description: metrics::SharedString,
-        ) {
-        }
-
+    impl MetricsBackend for CaptureRecorder {
         fn register_counter(
             &self,
-            key: &metrics::Key,
-            _metadata: &metrics::Metadata<'_>,
-        ) -> Counter {
-            self.push(key);
-            Counter::noop()
+            description: &MetricDescription,
+            labels: &[MetricLabel],
+        ) -> Arc<dyn Counter> {
+            self.push(description, labels);
+            backend::noop_counter()
         }
 
         fn register_gauge(
             &self,
-            key: &metrics::Key,
-            _metadata: &metrics::Metadata<'_>,
-        ) -> metrics::Gauge {
-            self.push(key);
-            metrics::Gauge::noop()
+            description: &MetricDescription,
+            labels: &[MetricLabel],
+        ) -> Arc<dyn Gauge> {
+            self.push(description, labels);
+            backend::noop_gauge()
         }
 
         fn register_histogram(
             &self,
-            key: &metrics::Key,
-            _metadata: &metrics::Metadata<'_>,
-        ) -> Histogram {
-            self.push(key);
-            Histogram::noop()
+            description: &MetricDescription,
+            labels: &[MetricLabel],
+        ) -> Arc<dyn Histogram> {
+            self.push(description, labels);
+            backend::noop_histogram()
         }
     }
 
@@ -949,7 +942,7 @@ mod tests {
         let recorder = DefaultMetricsRecorder::from_parts(
             Some("driver-a".to_string()),
             vec![("env".to_string(), "prod".to_string())],
-            Some(Arc::clone(&capture) as Arc<dyn metrics::Recorder + Send + Sync>),
+            Some(Arc::clone(&capture) as Arc<dyn MetricsBackend>),
         );
 
         let _ = Arc::new(recorder);
@@ -992,7 +985,7 @@ mod tests {
         let _recorder = DefaultMetricsRecorder::from_parts(
             None,
             Vec::new(),
-            Some(Arc::clone(&capture) as Arc<dyn metrics::Recorder + Send + Sync>),
+            Some(Arc::clone(&capture) as Arc<dyn MetricsBackend>),
         );
 
         for metric in capture.registered() {
@@ -1014,7 +1007,7 @@ mod tests {
         let _recorder = DefaultMetricsRecorder::from_parts(
             Some("driver-pool".to_string()),
             Vec::new(),
-            Some(Arc::clone(&capture) as Arc<dyn metrics::Recorder + Send + Sync>),
+            Some(Arc::clone(&capture) as Arc<dyn MetricsBackend>),
         );
 
         // One pre-registered series per closed enum label value, each carrying
@@ -1089,9 +1082,8 @@ mod tests {
     #[test]
     fn dynamic_series_register_once_per_label_combination() {
         let capture = Arc::new(CaptureRecorder::default());
-        let recorder = DefaultMetricsRecorder::with_backend(
-            Arc::clone(&capture) as Arc<dyn metrics::Recorder + Send + Sync>
-        );
+        let recorder =
+            DefaultMetricsRecorder::with_backend(Arc::clone(&capture) as Arc<dyn MetricsBackend>);
 
         for _ in 0..5 {
             recorder.grpc_request(
@@ -1139,7 +1131,7 @@ mod tests {
     fn concurrent_first_emissions_register_once() {
         let capture = Arc::new(CaptureRecorder::default());
         let recorder = Arc::new(DefaultMetricsRecorder::with_backend(
-            Arc::clone(&capture) as Arc<dyn metrics::Recorder + Send + Sync>
+            Arc::clone(&capture) as Arc<dyn MetricsBackend>
         ));
 
         std::thread::scope(|scope| {
@@ -1171,7 +1163,7 @@ mod tests {
     fn default_recorder_emits_dynamic_series_values_into_backend() {
         let test = Arc::new(crate::client_metrics::test_recorder::TestRecorder::new());
         let recorder: Arc<dyn MetricsRecorder> = Arc::new(DefaultMetricsRecorder::with_backend(
-            Arc::clone(&test) as Arc<dyn metrics::Recorder + Send + Sync>,
+            Arc::clone(&test) as Arc<dyn MetricsBackend>,
         ));
 
         recorder.grpc_request(
@@ -1235,7 +1227,7 @@ mod tests {
     fn default_recorder_emits_pool_series_values_into_backend() {
         let test = Arc::new(crate::client_metrics::test_recorder::TestRecorder::new());
         let recorder: Arc<dyn MetricsRecorder> = Arc::new(DefaultMetricsRecorder::with_backend(
-            Arc::clone(&test) as Arc<dyn metrics::Recorder + Send + Sync>,
+            Arc::clone(&test) as Arc<dyn MetricsBackend>,
         ));
 
         recorder.session_pool_acquire(SessionPoolAcquireResult::Ok, Duration::from_millis(3));
@@ -1320,7 +1312,7 @@ mod tests {
     fn default_recorder_with_backend_registers_into_backend() {
         let capture = Arc::new(CaptureRecorder::default());
         let recorder: Arc<dyn MetricsRecorder> = Arc::new(DefaultMetricsRecorder::with_backend(
-            Arc::clone(&capture) as Arc<dyn metrics::Recorder + Send + Sync>,
+            Arc::clone(&capture) as Arc<dyn MetricsBackend>,
         ));
 
         recorder.client_new_counter().increment(1);
@@ -1342,7 +1334,7 @@ mod tests {
         let _recorder = DefaultMetricsRecorder::from_parts(
             Some("driver-q".to_string()),
             Vec::new(),
-            Some(Arc::clone(&capture) as Arc<dyn metrics::Recorder + Send + Sync>),
+            Some(Arc::clone(&capture) as Arc<dyn MetricsBackend>),
         );
 
         // operations_total: one series per (operation, result) combination.
@@ -1413,7 +1405,7 @@ mod tests {
     fn default_recorder_emits_query_series_values_into_backend() {
         let test = Arc::new(crate::client_metrics::test_recorder::TestRecorder::new());
         let recorder: Arc<dyn MetricsRecorder> = Arc::new(DefaultMetricsRecorder::with_backend(
-            Arc::clone(&test) as Arc<dyn metrics::Recorder + Send + Sync>,
+            Arc::clone(&test) as Arc<dyn MetricsBackend>,
         ));
 
         recorder.query_operation(QueryOperation::Exec, true, Duration::from_millis(10));
@@ -1490,7 +1482,7 @@ mod tests {
     fn default_recorder_emits_named_query_series_into_backend() {
         let test = Arc::new(crate::client_metrics::test_recorder::TestRecorder::new());
         let recorder: Arc<dyn MetricsRecorder> = Arc::new(DefaultMetricsRecorder::with_backend(
-            Arc::clone(&test) as Arc<dyn metrics::Recorder + Send + Sync>,
+            Arc::clone(&test) as Arc<dyn MetricsBackend>,
         ));
 
         recorder.query_named_operation("get_account_balance", true, Duration::from_millis(12));
@@ -1538,9 +1530,8 @@ mod tests {
     #[test]
     fn named_series_register_once_per_query_name() {
         let capture = Arc::new(CaptureRecorder::default());
-        let recorder = DefaultMetricsRecorder::with_backend(
-            Arc::clone(&capture) as Arc<dyn metrics::Recorder + Send + Sync>
-        );
+        let recorder =
+            DefaultMetricsRecorder::with_backend(Arc::clone(&capture) as Arc<dyn MetricsBackend>);
 
         for _ in 0..5 {
             recorder.query_named_operation("named_q", true, Duration::from_millis(1));
@@ -1559,10 +1550,8 @@ mod tests {
     fn query_name_limit_collapses_new_names_to_other() {
         let test = Arc::new(crate::client_metrics::test_recorder::TestRecorder::new());
         let recorder: Arc<dyn MetricsRecorder> = Arc::new(
-            DefaultMetricsRecorder::with_backend(
-                Arc::clone(&test) as Arc<dyn metrics::Recorder + Send + Sync>
-            )
-            .with_max_query_names(1),
+            DefaultMetricsRecorder::with_backend(Arc::clone(&test) as Arc<dyn MetricsBackend>)
+                .with_max_query_names(1),
         );
 
         recorder.query_named_operation("first_query", true, Duration::from_millis(1));
@@ -1600,7 +1589,7 @@ mod tests {
         // Bypasses the `with_name` debug gate to pin the release-build mapping.
         let test = Arc::new(crate::client_metrics::test_recorder::TestRecorder::new());
         let recorder: Arc<dyn MetricsRecorder> = Arc::new(DefaultMetricsRecorder::with_backend(
-            Arc::clone(&test) as Arc<dyn metrics::Recorder + Send + Sync>,
+            Arc::clone(&test) as Arc<dyn MetricsBackend>,
         ));
 
         recorder.query_named_operation("Bad-Name", true, Duration::from_millis(1));
@@ -1684,76 +1673,76 @@ mod tests {
     /// trait is object safe and usable through `Arc<dyn MetricsRecorder>`.
     struct CountingRecorder {
         accesses: AtomicUsize,
-        counter: Counter,
-        histogram: Histogram,
+        counter: CounterHandle,
+        histogram: HistogramHandle,
     }
 
     impl CountingRecorder {
         fn new() -> Self {
             Self {
                 accesses: AtomicUsize::new(0),
-                counter: Counter::noop(),
-                histogram: Histogram::noop(),
+                counter: backend::noop_counter(),
+                histogram: backend::noop_histogram(),
             }
         }
 
-        fn counter_getter(&self) -> &Counter {
+        fn counter_getter(&self) -> &CounterHandle {
             self.accesses.fetch_add(1, Ordering::SeqCst);
             &self.counter
         }
 
-        fn histogram_getter(&self) -> &Histogram {
+        fn histogram_getter(&self) -> &HistogramHandle {
             self.accesses.fetch_add(1, Ordering::SeqCst);
             &self.histogram
         }
     }
 
     impl MetricsRecorder for CountingRecorder {
-        fn client_new_counter(&self) -> &Counter {
+        fn client_new_counter(&self) -> &CounterHandle {
             self.counter_getter()
         }
 
-        fn client_new_table_client_counter(&self) -> &Counter {
+        fn client_new_table_client_counter(&self) -> &CounterHandle {
             self.counter_getter()
         }
 
-        fn client_new_query_client_counter(&self) -> &Counter {
+        fn client_new_query_client_counter(&self) -> &CounterHandle {
             self.counter_getter()
         }
 
-        fn client_new_scheme_client_counter(&self) -> &Counter {
+        fn client_new_scheme_client_counter(&self) -> &CounterHandle {
             self.counter_getter()
         }
 
-        fn client_new_topic_client_counter(&self) -> &Counter {
+        fn client_new_topic_client_counter(&self) -> &CounterHandle {
             self.counter_getter()
         }
 
-        fn client_query_row_counter(&self) -> &Counter {
+        fn client_query_row_counter(&self) -> &CounterHandle {
             self.counter_getter()
         }
 
-        fn client_transaction_query_row_counter(&self) -> &Counter {
+        fn client_transaction_query_row_counter(&self) -> &CounterHandle {
             self.counter_getter()
         }
 
-        fn client_transaction_exec_counter(&self) -> &Counter {
+        fn client_transaction_exec_counter(&self) -> &CounterHandle {
             self.counter_getter()
         }
 
-        fn client_transaction_commit_counter(&self) -> &Counter {
+        fn client_transaction_commit_counter(&self) -> &CounterHandle {
             self.counter_getter()
         }
 
-        fn client_transaction_rollback_counter(&self) -> &Counter {
+        fn client_transaction_rollback_counter(&self) -> &CounterHandle {
             self.counter_getter()
         }
 
-        fn client_row_query_time_histogram(&self) -> &Histogram {
+        fn client_row_query_time_histogram(&self) -> &HistogramHandle {
             self.histogram_getter()
         }
 
-        fn client_transaction_row_query_time_histogram(&self) -> &Histogram {
+        fn client_transaction_row_query_time_histogram(&self) -> &HistogramHandle {
             self.histogram_getter()
         }
     }

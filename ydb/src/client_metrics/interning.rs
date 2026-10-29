@@ -63,18 +63,18 @@ pub(crate) fn intern(value: &str) -> usize {
     id
 }
 
-/// Materialize the string interned for `id` (a cheap `Arc` clone).
+/// Materialize an owned copy of the string interned for `id`.
 ///
 /// Ids are only produced by [`intern`], so the fallback is unreachable in
 /// practice; it exists to keep the function total without panicking.
-pub(crate) fn resolve(id: usize) -> Arc<str> {
+pub(crate) fn resolve(id: usize) -> String {
     interner()
         .values
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(id)
-        .cloned()
-        .unwrap_or_else(|| Arc::from("unknown"))
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 #[cfg(test)]

@@ -18,6 +18,8 @@ rust-version.workspace = true
 workspace = true
 
 [features]
+default = []
+metrics = ["dep:metrics"]
 force-exhaustive-all = [
 ] # The feature disable all non_exhaustive attributes in ydb public interface.
 
@@ -64,7 +66,7 @@ uuid = { version = "1.17.0", features = ["v4", "v7"] }
 ydb-grpc = { version = "0.2.2", path = "../ydb-grpc" }
 flate2 = "1.1.9"
 rayon = "1.10"
-metrics = "0.24.6"
+metrics = { version = "0.24.6", optional = true }
 
 [dev-dependencies]
 prometheus = "0.14.0"
@@ -76,6 +78,7 @@ chrono = { version = "0.4", default-features = false, features = [
 ] }
 criterion = "0.8"
 lazy_static = "1.4"
+metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
 mockall = "0.14"
 ntest = "0.7"
@@ -86,6 +89,11 @@ tokio = { version = "1.22", features = ["test-util"] }
 tracing-opentelemetry = "0.33.0"
 tracing-test = "0.2.1"
 uuid = { version = "1.17.0", features = ["v4"] }
+
+[[example]]
+name = "metrics"
+path = "examples/metrics/main.rs"
+required-features = ["metrics"]
 
 [[bench]]
 name = "metrics_dynamic_cache"

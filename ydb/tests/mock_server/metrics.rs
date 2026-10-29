@@ -8,8 +8,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use metrics::Recorder as _;
 use prometheus::{Registry, proto::MetricFamily};
-use ydb::{Client, ClientBuilder, YdbResult};
+use ydb::{
+    Client, ClientBuilder, Counter, Gauge, Histogram, MetricDescription, MetricLabel, MetricUnit,
+    MetricsBackend, YdbResult,
+};
 
 use crate::mock_server::server::MockServer;
 
@@ -40,9 +44,113 @@ pub fn test_recorder() -> (Registry, metrics_prometheus::Recorder) {
     (registry, recorder)
 }
 
+pub struct PrometheusBackend(metrics_prometheus::Recorder);
+
+struct CounterHandle(metrics::Counter);
+
+impl Counter for CounterHandle {
+    fn increment(&self, value: u64) {
+        self.0.increment(value);
+    }
+}
+
+struct GaugeHandle(metrics::Gauge);
+
+impl Gauge for GaugeHandle {
+    fn increment(&self, value: f64) {
+        self.0.increment(value);
+    }
+
+    fn decrement(&self, value: f64) {
+        self.0.decrement(value);
+    }
+
+    fn set(&self, value: f64) {
+        self.0.set(value);
+    }
+}
+
+struct HistogramHandle(metrics::Histogram);
+
+impl Histogram for HistogramHandle {
+    fn record(&self, value: f64) {
+        self.0.record(value);
+    }
+}
+
+fn unit(unit: MetricUnit) -> Option<metrics::Unit> {
+    match unit {
+        MetricUnit::Count => Some(metrics::Unit::Count),
+        MetricUnit::Milliseconds => Some(metrics::Unit::Milliseconds),
+        MetricUnit::Seconds => Some(metrics::Unit::Seconds),
+        MetricUnit::Bytes => Some(metrics::Unit::Bytes),
+        _ => panic!("unsupported metric unit in the test backend"),
+    }
+}
+
+fn key(description: &MetricDescription, labels: &[MetricLabel]) -> metrics::Key {
+    metrics::Key::from_parts(
+        description.name().to_string(),
+        labels
+            .iter()
+            .map(|label| metrics::Label::new(label.key().to_string(), label.value().to_string()))
+            .collect::<Vec<_>>(),
+    )
+}
+
+impl MetricsBackend for PrometheusBackend {
+    fn register_counter(
+        &self,
+        description: &MetricDescription,
+        labels: &[MetricLabel],
+    ) -> Arc<dyn Counter> {
+        self.0.describe_counter(
+            metrics::KeyName::from(description.name().to_string()),
+            unit(description.unit()),
+            metrics::SharedString::from(description.description().to_string()),
+        );
+        Arc::new(CounterHandle(self.0.register_counter(
+            &key(description, labels),
+            &metrics::Metadata::new(module_path!(), metrics::Level::INFO, None),
+        )))
+    }
+
+    fn register_gauge(
+        &self,
+        description: &MetricDescription,
+        labels: &[MetricLabel],
+    ) -> Arc<dyn Gauge> {
+        self.0.describe_gauge(
+            metrics::KeyName::from(description.name().to_string()),
+            unit(description.unit()),
+            metrics::SharedString::from(description.description().to_string()),
+        );
+        Arc::new(GaugeHandle(self.0.register_gauge(
+            &key(description, labels),
+            &metrics::Metadata::new(module_path!(), metrics::Level::INFO, None),
+        )))
+    }
+
+    fn register_histogram(
+        &self,
+        description: &MetricDescription,
+        labels: &[MetricLabel],
+    ) -> Arc<dyn Histogram> {
+        self.0.describe_histogram(
+            metrics::KeyName::from(description.name().to_string()),
+            unit(description.unit()),
+            metrics::SharedString::from(description.description().to_string()),
+        );
+        Arc::new(HistogramHandle(self.0.register_histogram(
+            &key(description, labels),
+            &metrics::Metadata::new(module_path!(), metrics::Level::INFO, None),
+        )))
+    }
+}
+
 /// Adapter for `ClientBuilder::with_metrics_recorder`.
-pub fn backend(recorder: metrics_prometheus::Recorder) -> Arc<dyn metrics::Recorder + Send + Sync> {
-    Arc::new(recorder)
+pub fn backend(recorder: metrics_prometheus::Recorder) -> PrometheusBackend {
+    PrometheusBackend(recorder)
 }
 
 /// Client against `server` with `use_discovery=false` and the given recorder.

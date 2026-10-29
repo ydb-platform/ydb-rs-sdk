@@ -1,5 +1,5 @@
 use crate::client_common::{DBCredentials, TokenCache};
-use crate::client_metrics::{DefaultMetricsRecorder, MetricsRecorder};
+use crate::client_metrics::{DefaultMetricsRecorder, MetricsBackend, MetricsRecorder};
 use crate::client_topic::compression::Executor;
 use crate::credentials::{
     AccessTokenCredentials, CredentialsRef, GCEMetadata, ServiceAccountCredentials,
@@ -238,7 +238,7 @@ pub struct ClientBuilder {
     executor: Option<Arc<dyn Executor>>,
     retry_settings: Option<RetrySettings>,
     driver_name: Option<String>,
-    metrics_recorder: Option<Arc<dyn metrics::Recorder + Send + Sync>>,
+    metrics_backend: Option<Arc<dyn MetricsBackend>>,
     metrics_labels: Vec<(String, String)>,
     metrics_max_query_names: Option<usize>,
 }
@@ -279,18 +279,18 @@ impl ClientBuilder {
     pub async fn build(mut self) -> YdbResult<Client> {
         validate_metrics_labels(&self.metrics_labels)?;
 
-        let metrics_recorder = DefaultMetricsRecorder::from_parts(
+        let metrics_backend = DefaultMetricsRecorder::from_parts(
             self.driver_name.take(),
             std::mem::take(&mut self.metrics_labels),
-            self.metrics_recorder.take(),
+            self.metrics_backend.take(),
         );
-        let metrics_recorder: Arc<dyn MetricsRecorder> = match self.metrics_max_query_names.take() {
+        let metrics_backend: Arc<dyn MetricsRecorder> = match self.metrics_max_query_names.take() {
             Some(max_query_names) => {
-                Arc::new(metrics_recorder.with_max_query_names(max_query_names))
+                Arc::new(metrics_backend.with_max_query_names(max_query_names))
             }
-            None => Arc::new(metrics_recorder),
+            None => Arc::new(metrics_backend),
         };
-        metrics_recorder.client_new_counter().increment(1);
+        metrics_backend.client_new_counter().increment(1);
 
         let retry_settings = self
             .retry_settings
@@ -302,7 +302,7 @@ impl ClientBuilder {
         };
 
         let interceptor = MultiInterceptor::new()
-            .with_interceptor(MetricsInterceptor::new(Arc::clone(&metrics_recorder)))
+            .with_interceptor(MetricsInterceptor::new(Arc::clone(&metrics_backend)))
             .with_interceptor(AuthGrpcInterceptor::new(db_cred.clone())?);
 
         let discovery_connection_manager = DiscoveryConnectionManager::new(
@@ -310,7 +310,7 @@ impl ClientBuilder {
             db_cred.database.clone(),
             interceptor.clone(),
             self.grpc_opts.clone(),
-            Arc::clone(&metrics_recorder),
+            Arc::clone(&metrics_backend),
         );
 
         let discovery: Box<dyn Discovery> = match self.discovery {
@@ -337,7 +337,7 @@ impl ClientBuilder {
             db_cred.database.clone(),
             interceptor,
             self.grpc_opts.clone(),
-            metrics_recorder.clone(),
+            metrics_backend.clone(),
         );
 
         Client::init(
@@ -347,7 +347,7 @@ impl ClientBuilder {
             load_balancer,
             self.executor,
             retry_settings,
-            metrics_recorder,
+            metrics_backend,
         )
         .await
     }
@@ -408,20 +408,17 @@ impl ClientBuilder {
         self
     }
 
-    /// Register SDK metrics into a caller-provided non-global `metrics` backend.
+    /// Register SDK metrics into a caller-provided [`MetricsBackend`].
     ///
-    /// The backend (any [`metrics::Recorder`], e.g. a `metrics_prometheus::Recorder`
-    /// over a caller-owned `prometheus::Registry`) receives all SDK metric handles,
-    /// registered with this builder's `driver_name` and static metrics labels.
-    ///
-    /// When unset (the default), handles bind to the ambient `metrics` recorder
-    /// (e.g. one installed with `metrics_prometheus::try_install`). In both cases the
-    /// SDK records through a [`DefaultMetricsRecorder`] built at `build()` time.
-    pub fn with_metrics_recorder(
-        mut self,
-        recorder: Arc<dyn metrics::Recorder + Send + Sync>,
-    ) -> Self {
-        self.metrics_recorder = Some(recorder);
+    /// The backend receives all SDK metric handles with this builder's driver
+    /// name and static metrics labels. With no explicit backend, the `metrics`
+    /// feature selects the ambient `metrics` recorder; without that feature,
+    /// the default recorder is a no-op.
+    pub fn with_metrics_recorder<B>(mut self, backend: B) -> Self
+    where
+        B: MetricsBackend + 'static,
+    {
+        self.metrics_backend = Some(Arc::new(backend));
         self
     }
 
@@ -481,7 +478,7 @@ impl ClientBuilder {
             executor: None,
             retry_settings: None,
             driver_name: None,
-            metrics_recorder: None,
+            metrics_backend: None,
             metrics_labels: Vec::new(),
             metrics_max_query_names: None,
         }

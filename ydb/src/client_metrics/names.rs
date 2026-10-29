@@ -1,7 +1,11 @@
+use std::borrow::Cow;
 use std::string::ToString;
+use std::sync::Arc;
 
-use metrics::{Counter, Gauge, Histogram, counter, gauge, histogram};
-
+use crate::client_metrics::backend::{
+    CounterHandle, GaugeHandle, HistogramHandle, MetricDescription, MetricLabel, MetricUnit,
+    MetricsBackend,
+};
 use crate::client_metrics::dynamic::DynamicCaches;
 use crate::client_metrics::{
     QueryOperation, QueryTransactionResult, SessionPoolAcquireResult, SessionPoolCloseReason,
@@ -35,60 +39,89 @@ pub(crate) const KEEPALIVE_RESULT_LABELS: [&str; KEEPALIVE_RESULT_COUNT] = ["ok"
 pub(crate) fn base_labels(
     driver_name: Option<String>,
     extra_labels: Vec<(String, String)>,
-) -> Vec<metrics::Label> {
-    let mut labels = vec![metrics::Label::new(
+) -> Vec<MetricLabel> {
+    let mut labels = vec![MetricLabel::new(
         "driver_name",
         driver_name.unwrap_or_else(|| DEFAULT_DRIVER_NAME.to_string()),
     )];
     labels.extend(
         extra_labels
             .into_iter()
-            .map(|(key, value)| metrics::Label::new(key, value)),
+            .map(|(key, value)| MetricLabel::new(key, value)),
     );
     labels
+}
+
+fn counter(
+    backend: &dyn MetricsBackend,
+    name: impl Into<Cow<'static, str>>,
+    unit: MetricUnit,
+    description: impl Into<Cow<'static, str>>,
+    labels: &[MetricLabel],
+) -> CounterHandle {
+    backend.register_counter(&MetricDescription::new(name, unit, description), labels)
+}
+
+fn gauge(
+    backend: &dyn MetricsBackend,
+    name: impl Into<Cow<'static, str>>,
+    unit: MetricUnit,
+    description: impl Into<Cow<'static, str>>,
+    labels: &[MetricLabel],
+) -> GaugeHandle {
+    backend.register_gauge(&MetricDescription::new(name, unit, description), labels)
+}
+
+fn histogram(
+    backend: &dyn MetricsBackend,
+    name: impl Into<Cow<'static, str>>,
+    unit: MetricUnit,
+    description: impl Into<Cow<'static, str>>,
+    labels: &[MetricLabel],
+) -> HistogramHandle {
+    backend.register_histogram(&MetricDescription::new(name, unit, description), labels)
 }
 
 /// The full metric surface of one recorder: pre-registered handles for the
 /// part1 and session pool series, plus the handle caches for the dynamic gRPC
 /// series.
-#[derive(Debug)]
 pub(crate) struct MetricsNames {
-    pub client_new_counter: Counter,
-    pub client_new_table_client_counter: Counter,
-    pub client_new_query_client_counter: Counter,
-    pub client_new_scheme_client_counter: Counter,
-    pub client_new_topic_client_counter: Counter,
-    pub client_query_row_counter: Counter,
-    pub client_transaction_query_row_counter: Counter,
-    pub client_transaction_exec_counter: Counter,
-    pub client_transaction_commit_counter: Counter,
-    pub client_transaction_rollback_counter: Counter,
-    pub client_row_query_time_histogram: Histogram,
-    pub client_transaction_row_query_time_histogram: Histogram,
+    pub client_new_counter: CounterHandle,
+    pub client_new_table_client_counter: CounterHandle,
+    pub client_new_query_client_counter: CounterHandle,
+    pub client_new_scheme_client_counter: CounterHandle,
+    pub client_new_topic_client_counter: CounterHandle,
+    pub client_query_row_counter: CounterHandle,
+    pub client_transaction_query_row_counter: CounterHandle,
+    pub client_transaction_exec_counter: CounterHandle,
+    pub client_transaction_commit_counter: CounterHandle,
+    pub client_transaction_rollback_counter: CounterHandle,
+    pub client_row_query_time_histogram: HistogramHandle,
+    pub client_transaction_row_query_time_histogram: HistogramHandle,
     // Session pool series (closed enum label sets): handles are pre-registered
     // per enum value and indexed by the enum on the hot path, without macros
     // or label construction.
-    pub session_pool_sessions_idle: Gauge,
-    pub session_pool_sessions_active: Gauge,
-    pub session_pool_sessions_creating: Gauge,
-    pub session_pool_size_limit: Gauge,
-    pub session_pool_pending_requests: Gauge,
-    pub session_pool_acquire_total: [Counter; SessionPoolAcquireResult::LABEL_COUNT],
-    pub session_pool_acquire_milliseconds: [Histogram; SessionPoolAcquireResult::LABEL_COUNT],
-    pub session_pool_session_create_milliseconds: Histogram,
-    pub session_pool_sessions_created_total: Counter,
-    pub session_pool_sessions_closed_total: [Counter; SessionPoolCloseReason::LABEL_COUNT],
-    pub session_pool_session_use_milliseconds: Histogram,
-    pub session_pool_keepalive_total: [Counter; KEEPALIVE_RESULT_COUNT],
+    pub session_pool_sessions_idle: GaugeHandle,
+    pub session_pool_sessions_active: GaugeHandle,
+    pub session_pool_sessions_creating: GaugeHandle,
+    pub session_pool_size_limit: GaugeHandle,
+    pub session_pool_pending_requests: GaugeHandle,
+    pub session_pool_acquire_total: [CounterHandle; SessionPoolAcquireResult::LABEL_COUNT],
+    pub session_pool_acquire_milliseconds: [HistogramHandle; SessionPoolAcquireResult::LABEL_COUNT],
+    pub session_pool_session_create_milliseconds: HistogramHandle,
+    pub session_pool_sessions_created_total: CounterHandle,
+    pub session_pool_sessions_closed_total: [CounterHandle; SessionPoolCloseReason::LABEL_COUNT],
+    pub session_pool_session_use_milliseconds: HistogramHandle,
+    pub session_pool_keepalive_total: [CounterHandle; KEEPALIVE_RESULT_COUNT],
     // Query service series (closed enum label sets): handles are pre-registered
     // per operation and indexed by the enum on the hot path, without macros or
     // label construction.
-    pub query_operations_total: [[Counter; QUERY_RESULT_COUNT]; QueryOperation::LABEL_COUNT],
-    pub query_operation_duration_milliseconds: [Histogram; QueryOperation::LABEL_COUNT],
-    pub query_result_rows: [Histogram; QueryOperation::LABEL_COUNT],
-    pub query_result_bytes: [Histogram; QueryOperation::LABEL_COUNT],
-    pub query_transactions_total: [Counter; QueryTransactionResult::LABEL_COUNT],
-    pub query_transaction_duration_milliseconds: Histogram,
+    pub query_operations_total: [[CounterHandle; QUERY_RESULT_COUNT]; QueryOperation::LABEL_COUNT],
+    pub query_operation_duration_milliseconds: [HistogramHandle; QueryOperation::LABEL_COUNT],
+    pub query_result_rows: [HistogramHandle; QueryOperation::LABEL_COUNT],
+    pub query_result_bytes: [HistogramHandle; QueryOperation::LABEL_COUNT],
+    pub query_transactions_total: [CounterHandle; QueryTransactionResult::LABEL_COUNT],
+    pub query_transaction_duration_milliseconds: HistogramHandle,
     /// Registry of admitted query names for the named query series
     /// (`ydb_query_named_*`), with the unique-name cap applied.
     pub query_names: super::query_names::QueryNameRegistry,
@@ -96,31 +129,19 @@ pub(crate) struct MetricsNames {
     pub dynamic: DynamicCaches,
     /// Static label prefix (driver name + extra labels), prepended to dynamic
     /// series labels when their handles are first registered.
-    base_labels: Vec<metrics::Label>,
-}
-
-impl Default for MetricsNames {
-    fn default() -> Self {
-        MetricsNames::new(base_labels(None, Vec::new()), None)
-    }
+    base_labels: Vec<MetricLabel>,
+    backend: Arc<dyn MetricsBackend>,
 }
 
 impl MetricsNames {
-    pub fn new(
-        base: Vec<metrics::Label>,
-        recorder: Option<&(dyn metrics::Recorder + Send + Sync)>,
-    ) -> Self {
-        let build = || Self::from_base(&base);
-        match recorder {
-            Some(recorder) => metrics::with_local_recorder(recorder, build),
-            None => build(),
-        }
+    pub fn new(base: Vec<MetricLabel>, backend: Arc<dyn MetricsBackend>) -> Self {
+        Self::from_base(&base, backend)
     }
 
-    fn from_base(base: &[metrics::Label]) -> Self {
+    fn from_base(base: &[MetricLabel], backend: Arc<dyn MetricsBackend>) -> Self {
         let labeled = |name: &'static str, value: &'static str| {
             let mut labels = base.to_vec();
-            labels.push(metrics::Label::new(name, value));
+            labels.push(MetricLabel::new(name, value));
             labels
         };
         let labeled2 = |name1: &'static str,
@@ -128,72 +149,289 @@ impl MetricsNames {
                         name2: &'static str,
                         value2: &'static str| {
             let mut labels = base.to_vec();
-            labels.push(metrics::Label::new(name1, value1));
-            labels.push(metrics::Label::new(name2, value2));
+            labels.push(MetricLabel::new(name1, value1));
+            labels.push(MetricLabel::new(name2, value2));
             labels
         };
+        let backend_ref = backend.as_ref();
         Self {
-            client_new_counter: counter!(description: "ydb new client counter", "ydb_new_client_counter", base.iter()),
-            client_new_table_client_counter: counter!(description: "ydb new table client counter", "ydb_new_table_client_counter", base.iter()),
-            client_new_query_client_counter: counter!(description: "ydb new query client counter", "ydb_new_query_client_counter", base.iter()),
-            client_new_scheme_client_counter: counter!(description: "ydb new scheme client counter", "ydb_new_scheme_client_counter", base.iter()),
-            client_new_topic_client_counter: counter!(description: "ydb new topic client counter", "ydb_new_topic_client_counter", base.iter()),
-            client_query_row_counter: counter!(description: "ydb client query row counter", "ydb_client_query_row_counter", base.iter()),
-            client_transaction_query_row_counter: counter!(description: "ydb client transaction query row counter", "ydb_client_transaction_query_row_counter", base.iter()),
-            client_transaction_exec_counter: counter!(description: "ydb client transaction exec counter", "ydb_client_transaction_exec_counter", base.iter()),
-            client_transaction_commit_counter: counter!(description: "ydb client transaction commit counter", "ydb_client_transaction_commit_counter", base.iter()),
-            client_transaction_rollback_counter: counter!(description: "ydb client transaction rollback counter", "ydb_client_transaction_rollback_counter", base.iter()),
-            client_row_query_time_histogram: histogram!(description: "ydb row query time histogram", "ydb_row_query_time_histogram", base.iter()),
-            client_transaction_row_query_time_histogram: histogram!(description: "ydb transaction row query time histogram", "ydb_transaction_row_query_time_histogram", base.iter()),
-            session_pool_sessions_idle: gauge!(description: "ydb session pool sessions in idle state", "ydb_session_pool_sessions", labeled("state", "idle")),
-            session_pool_sessions_active: gauge!(description: "ydb session pool sessions leased to callers", "ydb_session_pool_sessions", labeled("state", "active")),
-            session_pool_sessions_creating: gauge!(description: "ydb session pool CreateSession RPCs in flight", "ydb_session_pool_sessions", labeled("state", "creating")),
-            session_pool_size_limit: gauge!(description: "ydb session pool size limit", "ydb_session_pool_size_limit", base.iter()),
-            session_pool_pending_requests: gauge!(description: "ydb session pool callers waiting for a session", "ydb_session_pool_pending_requests", base.iter()),
-            session_pool_acquire_total: std::array::from_fn(
-                |i| counter!(description: "ydb session pool acquire attempts by result", "ydb_session_pool_acquire_total", labeled("result", SessionPoolAcquireResult::LABELS[i])),
+            client_new_counter: counter(
+                backend_ref,
+                "ydb_new_client_counter",
+                MetricUnit::Count,
+                "ydb new client counter",
+                base,
             ),
-            session_pool_acquire_milliseconds: std::array::from_fn(
-                |i| histogram!(description: "ydb session pool acquire duration by result", "ydb_session_pool_acquire_milliseconds", labeled("result", SessionPoolAcquireResult::LABELS[i])),
+            client_new_table_client_counter: counter(
+                backend_ref,
+                "ydb_new_table_client_counter",
+                MetricUnit::Count,
+                "ydb new table client counter",
+                base,
             ),
-            session_pool_session_create_milliseconds: histogram!(description: "ydb session pool session creation duration", "ydb_session_pool_session_create_milliseconds", base.iter()),
-            session_pool_sessions_created_total: counter!(description: "ydb session pool sessions created", "ydb_session_pool_sessions_created_total", base.iter()),
-            session_pool_sessions_closed_total: std::array::from_fn(
-                |i| counter!(description: "ydb session pool sessions closed by reason", "ydb_session_pool_sessions_closed_total", labeled("reason", SessionPoolCloseReason::LABELS[i])),
+            client_new_query_client_counter: counter(
+                backend_ref,
+                "ydb_new_query_client_counter",
+                MetricUnit::Count,
+                "ydb new query client counter",
+                base,
             ),
-            session_pool_session_use_milliseconds: histogram!(description: "ydb session pool session lease duration", "ydb_session_pool_session_use_milliseconds", base.iter()),
-            session_pool_keepalive_total: std::array::from_fn(
-                |i| counter!(description: "ydb session pool keepalive checks by result", "ydb_session_pool_keepalive_total", labeled("result", KEEPALIVE_RESULT_LABELS[i])),
+            client_new_scheme_client_counter: counter(
+                backend_ref,
+                "ydb_new_scheme_client_counter",
+                MetricUnit::Count,
+                "ydb new scheme client counter",
+                base,
             ),
-            query_operations_total: std::array::from_fn(|op| {
-                std::array::from_fn(
-                    |result| counter!(description: "ydb query operations by operation and result", "ydb_query_operations_total", labeled2("operation", QueryOperation::LABELS[op], "result", QUERY_RESULT_LABELS[result])),
+            client_new_topic_client_counter: counter(
+                backend_ref,
+                "ydb_new_topic_client_counter",
+                MetricUnit::Count,
+                "ydb new topic client counter",
+                base,
+            ),
+            client_query_row_counter: counter(
+                backend_ref,
+                "ydb_client_query_row_counter",
+                MetricUnit::Count,
+                "ydb client query row counter",
+                base,
+            ),
+            client_transaction_query_row_counter: counter(
+                backend_ref,
+                "ydb_client_transaction_query_row_counter",
+                MetricUnit::Count,
+                "ydb client transaction query row counter",
+                base,
+            ),
+            client_transaction_exec_counter: counter(
+                backend_ref,
+                "ydb_client_transaction_exec_counter",
+                MetricUnit::Count,
+                "ydb client transaction exec counter",
+                base,
+            ),
+            client_transaction_commit_counter: counter(
+                backend_ref,
+                "ydb_client_transaction_commit_counter",
+                MetricUnit::Count,
+                "ydb client transaction commit counter",
+                base,
+            ),
+            client_transaction_rollback_counter: counter(
+                backend_ref,
+                "ydb_client_transaction_rollback_counter",
+                MetricUnit::Count,
+                "ydb client transaction rollback counter",
+                base,
+            ),
+            client_row_query_time_histogram: histogram(
+                backend_ref,
+                "ydb_row_query_time_histogram",
+                MetricUnit::Seconds,
+                "ydb row query time histogram",
+                base,
+            ),
+            client_transaction_row_query_time_histogram: histogram(
+                backend_ref,
+                "ydb_transaction_row_query_time_histogram",
+                MetricUnit::Seconds,
+                "ydb transaction row query time histogram",
+                base,
+            ),
+            session_pool_sessions_idle: gauge(
+                backend_ref,
+                "ydb_session_pool_sessions",
+                MetricUnit::Count,
+                "ydb session pool sessions in idle state",
+                &labeled("state", "idle"),
+            ),
+            session_pool_sessions_active: gauge(
+                backend_ref,
+                "ydb_session_pool_sessions",
+                MetricUnit::Count,
+                "ydb session pool sessions leased to callers",
+                &labeled("state", "active"),
+            ),
+            session_pool_sessions_creating: gauge(
+                backend_ref,
+                "ydb_session_pool_sessions",
+                MetricUnit::Count,
+                "ydb session pool CreateSession RPCs in flight",
+                &labeled("state", "creating"),
+            ),
+            session_pool_size_limit: gauge(
+                backend_ref,
+                "ydb_session_pool_size_limit",
+                MetricUnit::Count,
+                "ydb session pool size limit",
+                base,
+            ),
+            session_pool_pending_requests: gauge(
+                backend_ref,
+                "ydb_session_pool_pending_requests",
+                MetricUnit::Count,
+                "ydb session pool callers waiting for a session",
+                base,
+            ),
+            session_pool_acquire_total: std::array::from_fn(|i| {
+                counter(
+                    backend_ref,
+                    "ydb_session_pool_acquire_total",
+                    MetricUnit::Count,
+                    "ydb session pool acquire attempts by result",
+                    &labeled("result", SessionPoolAcquireResult::LABELS[i]),
                 )
             }),
-            query_operation_duration_milliseconds: std::array::from_fn(
-                |op| histogram!(description: "ydb query operation duration", "ydb_query_operation_duration_milliseconds", labeled("operation", QueryOperation::LABELS[op])),
+            session_pool_acquire_milliseconds: std::array::from_fn(|i| {
+                histogram(
+                    backend_ref,
+                    "ydb_session_pool_acquire_milliseconds",
+                    MetricUnit::Milliseconds,
+                    "ydb session pool acquire duration by result",
+                    &labeled("result", SessionPoolAcquireResult::LABELS[i]),
+                )
+            }),
+            session_pool_session_create_milliseconds: histogram(
+                backend_ref,
+                "ydb_session_pool_session_create_milliseconds",
+                MetricUnit::Milliseconds,
+                "ydb session pool session creation duration",
+                base,
             ),
-            query_result_rows: std::array::from_fn(
-                |op| histogram!(description: "ydb query result rows", "ydb_query_result_rows", labeled("operation", QueryOperation::LABELS[op])),
+            session_pool_sessions_created_total: counter(
+                backend_ref,
+                "ydb_session_pool_sessions_created_total",
+                MetricUnit::Count,
+                "ydb session pool sessions created",
+                base,
             ),
-            query_result_bytes: std::array::from_fn(
-                |op| histogram!(description: "ydb query result bytes", "ydb_query_result_bytes", labeled("operation", QueryOperation::LABELS[op])),
+            session_pool_sessions_closed_total: std::array::from_fn(|i| {
+                counter(
+                    backend_ref,
+                    "ydb_session_pool_sessions_closed_total",
+                    MetricUnit::Count,
+                    "ydb session pool sessions closed by reason",
+                    &labeled("reason", SessionPoolCloseReason::LABELS[i]),
+                )
+            }),
+            session_pool_session_use_milliseconds: histogram(
+                backend_ref,
+                "ydb_session_pool_session_use_milliseconds",
+                MetricUnit::Milliseconds,
+                "ydb session pool session lease duration",
+                base,
             ),
-            query_transactions_total: std::array::from_fn(
-                |result| counter!(description: "ydb retried transactions by result", "ydb_query_transactions_total", labeled("result", QueryTransactionResult::LABELS[result])),
+            session_pool_keepalive_total: std::array::from_fn(|i| {
+                counter(
+                    backend_ref,
+                    "ydb_session_pool_keepalive_total",
+                    MetricUnit::Count,
+                    "ydb session pool keepalive checks by result",
+                    &labeled("result", KEEPALIVE_RESULT_LABELS[i]),
+                )
+            }),
+            query_operations_total: std::array::from_fn(|op| {
+                std::array::from_fn(|result| {
+                    counter(
+                        backend_ref,
+                        "ydb_query_operations_total",
+                        MetricUnit::Count,
+                        "ydb query operations by operation and result",
+                        &labeled2(
+                            "operation",
+                            QueryOperation::LABELS[op],
+                            "result",
+                            QUERY_RESULT_LABELS[result],
+                        ),
+                    )
+                })
+            }),
+            query_operation_duration_milliseconds: std::array::from_fn(|op| {
+                histogram(
+                    backend_ref,
+                    "ydb_query_operation_duration_milliseconds",
+                    MetricUnit::Milliseconds,
+                    "ydb query operation duration",
+                    &labeled("operation", QueryOperation::LABELS[op]),
+                )
+            }),
+            query_result_rows: std::array::from_fn(|op| {
+                histogram(
+                    backend_ref,
+                    "ydb_query_result_rows",
+                    MetricUnit::Count,
+                    "ydb query result rows",
+                    &labeled("operation", QueryOperation::LABELS[op]),
+                )
+            }),
+            query_result_bytes: std::array::from_fn(|op| {
+                histogram(
+                    backend_ref,
+                    "ydb_query_result_bytes",
+                    MetricUnit::Bytes,
+                    "ydb query result bytes",
+                    &labeled("operation", QueryOperation::LABELS[op]),
+                )
+            }),
+            query_transactions_total: std::array::from_fn(|result| {
+                counter(
+                    backend_ref,
+                    "ydb_query_transactions_total",
+                    MetricUnit::Count,
+                    "ydb retried transactions by result",
+                    &labeled("result", QueryTransactionResult::LABELS[result]),
+                )
+            }),
+            query_transaction_duration_milliseconds: histogram(
+                backend_ref,
+                "ydb_query_transaction_duration_milliseconds",
+                MetricUnit::Milliseconds,
+                "ydb retried transaction duration including all attempts",
+                base,
             ),
-            query_transaction_duration_milliseconds: histogram!(description: "ydb retried transaction duration including all attempts", "ydb_query_transaction_duration_milliseconds", base.iter()),
             query_names: super::query_names::QueryNameRegistry::default(),
             dynamic: DynamicCaches::default(),
             base_labels: base.to_vec(),
+            backend,
         }
     }
 
     /// Full label set for a first dynamic-series registration: the recorder's
     /// static labels first, then the series' dynamic labels.
-    pub(crate) fn dynamic_labels(&self, dynamic: Vec<metrics::Label>) -> Vec<metrics::Label> {
+    pub(crate) fn dynamic_labels(&self, dynamic: Vec<MetricLabel>) -> Vec<MetricLabel> {
         let mut labels = self.base_labels.clone();
         labels.extend(dynamic);
         labels
+    }
+
+    pub(crate) fn counter(
+        &self,
+        name: impl Into<Cow<'static, str>>,
+        unit: MetricUnit,
+        description: impl Into<Cow<'static, str>>,
+        labels: &[MetricLabel],
+    ) -> CounterHandle {
+        counter(self.backend.as_ref(), name, unit, description, labels)
+    }
+
+    pub(crate) fn gauge(
+        &self,
+        name: impl Into<Cow<'static, str>>,
+        unit: MetricUnit,
+        description: impl Into<Cow<'static, str>>,
+        labels: &[MetricLabel],
+    ) -> GaugeHandle {
+        gauge(self.backend.as_ref(), name, unit, description, labels)
+    }
+
+    pub(crate) fn histogram(
+        &self,
+        name: impl Into<Cow<'static, str>>,
+        unit: MetricUnit,
+        description: impl Into<Cow<'static, str>>,
+        labels: &[MetricLabel],
+    ) -> HistogramHandle {
+        histogram(self.backend.as_ref(), name, unit, description, labels)
     }
 }
