@@ -28,11 +28,6 @@ impl TopicTxStorage {
     pub(super) async fn connect(framework: &Framework, params: Params) -> Result<Self> {
         let client = ClientBuilder::new_from_connection_string(&framework.config.connection_string)
             .context("parse YDB connection string")?
-            .build()
-            .await
-            .context("create YDB client")?;
-
-        let client = client
             .with_session_pool(
                 SessionPoolSettings::new()
                     .with_limit(params.session_pool_size)
@@ -40,8 +35,9 @@ impl TopicTxStorage {
                     .with_session_create_timeout(params.operation_timeout)
                     .with_session_delete_timeout(params.operation_timeout),
             )
+            .build()
             .await
-            .context("initialize query session pool")?;
+            .context("create YDB client")?;
 
         Ok(Self {
             topic_client: client.topic_client(),

@@ -3,6 +3,7 @@ use ydb_grpc::ydb_proto::status_ids::StatusCode;
 use crate::RefWithLifetime;
 use crate::async_closure::AsyncFnMut;
 use crate::closure;
+use crate::driver_lifecycle::{DriverGuarded, DriverLifecycle};
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_operation_service::client::RawOperationClient;
@@ -18,6 +19,11 @@ use tracing::instrument;
 
 #[derive(Clone)]
 pub struct OperationClient {
+    inner: DriverGuarded<OperationClientInner>,
+}
+
+#[derive(Clone)]
+struct OperationClientInner {
     connection_manager: GrpcConnectionManager,
     retry_settings: RetrySettings,
 }
@@ -26,10 +32,13 @@ impl OperationClient {
     pub(crate) fn new(
         connection_manager: GrpcConnectionManager,
         retry_settings: RetrySettings,
+        lifecycle: &DriverLifecycle,
     ) -> Self {
         Self {
-            connection_manager,
-            retry_settings,
+            inner: lifecycle.guard(OperationClientInner {
+                connection_manager,
+                retry_settings,
+            }),
         }
     }
 
@@ -50,7 +59,9 @@ impl OperationClient {
     where
         F: AsyncFnMut<RefWithLifetime<RetryState>, Output = YdbResult<T>>,
     {
-        self.retry_settings
+        self.inner
+            .access()?
+            .retry_settings
             .clone()
             .with_deadline(opts.timeout)
             .retry_on_retriable_errors(Idempotency::Idempotent, attempt_fn)
@@ -169,7 +180,9 @@ impl OperationClient {
     }
 
     async fn raw_client(&self) -> YdbResult<RawOperationClient> {
-        self.connection_manager
+        self.inner
+            .access()?
+            .connection_manager
             .get_auth_service(RawOperationClient::new)
             .await
     }

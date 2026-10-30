@@ -187,7 +187,8 @@ pub(crate) async fn materialize_query(
     let commit_at_end = resolve_commit_tx(core, &opts);
     match core {
         ExecTarget::Client(ctx) => {
-            ctx.retry_settings
+            ctx.access()?
+                .retry_settings
                 .clone()
                 .with_deadline(opts.timeout)
                 .retry_on_retriable_errors(

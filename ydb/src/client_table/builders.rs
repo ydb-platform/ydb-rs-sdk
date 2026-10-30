@@ -28,7 +28,7 @@ macro_rules! impl_table_call_builder {
             /// Default depends on the operation: `true` for `read_rows` and `bulk_upsert`,
             /// `false` for DDL and describe calls.
             pub fn idempotent(mut self, idempotent: bool) -> Self {
-                self.opts.idempotent = Some(idempotent);
+                self.opts.idempotency = Some(idempotent.into());
                 self
             }
         }

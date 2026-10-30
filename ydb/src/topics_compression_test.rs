@@ -133,7 +133,7 @@ where
     W: FnOnce(String) -> TopicWriterOptions,
     R: FnOnce(String, String) -> TopicReaderOptions,
 {
-    let (mut topic_client, topic_path, consumer_name) =
+    let (_client, mut topic_client, topic_path, consumer_name) =
         topic_setup(test_name, supported_codecs).await?;
 
     let writer = topic_client
@@ -167,7 +167,10 @@ where
     Ok(())
 }
 
-async fn topic_setup(name: &str, codecs: &[Codec]) -> YdbResult<(TopicClient, String, String)> {
+async fn topic_setup(
+    name: &str,
+    codecs: &[Codec],
+) -> YdbResult<(Arc<Client>, TopicClient, String, String)> {
     let client = create_client().await?;
     setup_topic(name, codecs, client).await
 }
@@ -176,7 +179,7 @@ async fn setup_topic(
     name: &str,
     codecs: &[Codec],
     client: Arc<Client>,
-) -> YdbResult<(TopicClient, String, String)> {
+) -> YdbResult<(Arc<Client>, TopicClient, String, String)> {
     let topic_path = format!("{}/{name}", client.database());
     let consumer_name = format!("test-consumer-{name}");
 
@@ -202,14 +205,14 @@ async fn setup_topic(
 
     trace!("topic created");
 
-    Ok((topic_client, topic_path, consumer_name))
+    Ok((client, topic_client, topic_path, consumer_name))
 }
 
 #[tokio::test]
 #[traced_test]
 #[ignore] // need YDB access
 async fn codec_fail_fast() -> YdbResult<()> {
-    let (mut topic_client, topic_path, consumer_name) =
+    let (_client, mut topic_client, topic_path, consumer_name) =
         topic_setup("codec_fail_fast_write", &[Codec::RAW, Codec::INV]).await?;
 
     let success_count = 10;

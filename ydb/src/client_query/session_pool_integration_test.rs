@@ -117,15 +117,11 @@ async fn create_client_with_short_pool_acquire_timeout(
 ) -> Arc<Client> {
     let client = test_client_builder()
         .with_executor(Arc::new(crate::test_integration_helper::InplaceExecutor))
+        .with_session_pool(settings.with_acquire_timeout(Duration::from_millis(300)))
         .build()
         .await
         .expect("client builder");
-    Arc::new(
-        client
-            .with_session_pool(settings.with_acquire_timeout(Duration::from_millis(300)))
-            .await
-            .expect("session pool"),
-    )
+    Arc::new(client)
 }
 
 #[tokio::test]
