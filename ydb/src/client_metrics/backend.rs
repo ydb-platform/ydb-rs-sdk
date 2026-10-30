@@ -149,7 +149,6 @@ pub(crate) type CounterHandle = Arc<dyn Counter>;
 pub(crate) type GaugeHandle = Arc<dyn Gauge>;
 pub(crate) type HistogramHandle = Arc<dyn Histogram>;
 
-#[cfg(any(not(feature = "metrics"), test))]
 mod noop {
     use super::*;
 
@@ -183,10 +182,8 @@ mod noop {
         Arc::new(NoopHandle)
     }
 
-    #[cfg(not(feature = "metrics"))]
     pub(crate) struct NoopMetricsBackend;
 
-    #[cfg(not(feature = "metrics"))]
     impl MetricsBackend for NoopMetricsBackend {
         fn register_counter(
             &self,
@@ -214,7 +211,6 @@ mod noop {
     }
 }
 
-#[cfg(not(feature = "metrics"))]
 pub(crate) use noop::NoopMetricsBackend;
 #[cfg(test)]
 pub(crate) use noop::{noop_counter, noop_gauge, noop_histogram};

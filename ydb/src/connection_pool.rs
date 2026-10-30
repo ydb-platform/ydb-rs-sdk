@@ -61,42 +61,78 @@ impl<ConnectionT: Connection> ConnectionPool<ConnectionT> {
             .or_default()
             .clone();
 
-        // Metrics only cover actual pool entry creation: reuse neither re-establishes
-        // a connection nor changes entry counts. With lazy channels the gauge tracks
-        // pool entries, not live sockets; `idle` cannot be observed and is not emitted.
+        // Metrics only cover the task that actually initializes the pool entry.
+        // Tasks waiting on the same OnceCell and reuse of an initialized entry
+        // emit nothing. With lazy channels the gauge tracks pool entries, not
+        // live sockets; `idle` cannot be observed and is not emitted.
         if let Some(conn) = connection.get() {
             return conn.channel().await;
         }
 
         let endpoint = intern_endpoint(&endpoint_label(uri));
-        let start = Instant::now();
-        self.metrics
-            .grpc_connections_add(&endpoint, GrpcConnectionState::Connecting, 1.0);
+        let conn = connection
+            .get_or_try_init(|| async {
+                let start = Instant::now();
+                let connecting =
+                    ConnectingMetricGuard::new(Arc::clone(&self.metrics), Arc::clone(&endpoint));
 
-        let init = connection
-            .get_or_try_init(|| async { ConnectionT::init(uri.to_owned(), &self.opts).await })
-            .await;
+                match ConnectionT::init(uri.to_owned(), &self.opts).await {
+                    Ok(conn) => {
+                        self.metrics
+                            .grpc_connection_establish(&endpoint, true, start.elapsed());
+                        drop(connecting);
+                        self.metrics.grpc_connections_add(
+                            &endpoint,
+                            GrpcConnectionState::Active,
+                            1.0,
+                        );
+                        Ok(conn)
+                    }
+                    Err(err) => {
+                        self.metrics
+                            .grpc_connection_establish(&endpoint, false, start.elapsed());
+                        Err(err)
+                    }
+                }
+            })
+            .await?;
 
-        match init {
-            Ok(conn) => {
+        conn.channel().await
+    }
+}
+
+impl<ConnectionT: Connection> Drop for ConnectionPool<ConnectionT> {
+    fn drop(&mut self) {
+        let connections = self
+            .connections
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (uri, connection) in connections.iter() {
+            if connection.get().is_some() {
+                let endpoint = intern_endpoint(&endpoint_label(uri));
                 self.metrics
-                    .grpc_connection_establish(&endpoint, true, start.elapsed());
-                self.metrics
-                    .grpc_connections_add(&endpoint, GrpcConnectionState::Connecting, -1.0);
-                self.metrics
-                    .grpc_connections_add(&endpoint, GrpcConnectionState::Active, 1.0);
-                conn.channel().await
-            }
-            Err(err) => {
-                self.metrics
-                    .grpc_connection_establish(&endpoint, false, start.elapsed());
-                self.metrics
-                    .grpc_connections_add(&endpoint, GrpcConnectionState::Connecting, -1.0);
-                self.metrics
-                    .grpc_connections_add(&endpoint, GrpcConnectionState::Failed, 1.0);
-                Err(err)
+                    .grpc_connections_add(&endpoint, GrpcConnectionState::Active, -1.0);
             }
         }
+    }
+}
+
+struct ConnectingMetricGuard {
+    metrics: Arc<dyn MetricsRecorder>,
+    endpoint: Arc<str>,
+}
+
+impl ConnectingMetricGuard {
+    fn new(metrics: Arc<dyn MetricsRecorder>, endpoint: Arc<str>) -> Self {
+        metrics.grpc_connections_add(&endpoint, GrpcConnectionState::Connecting, 1.0);
+        Self { metrics, endpoint }
+    }
+}
+
+impl Drop for ConnectingMetricGuard {
+    fn drop(&mut self) {
+        self.metrics
+            .grpc_connections_add(&self.endpoint, GrpcConnectionState::Connecting, -1.0);
     }
 }
 

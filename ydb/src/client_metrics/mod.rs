@@ -35,15 +35,14 @@ use query_names::QueryNameRegistry;
 pub(crate) enum GrpcConnectionState {
     Connecting,
     Active,
-    Failed,
 }
 
 impl GrpcConnectionState {
     /// Number of label values.
-    pub(crate) const LABEL_COUNT: usize = 3;
+    pub(crate) const LABEL_COUNT: usize = 2;
 
     /// Label values in [`Self::index`] order.
-    pub(crate) const LABELS: [&'static str; Self::LABEL_COUNT] = ["connecting", "active", "failed"];
+    pub(crate) const LABELS: [&'static str; Self::LABEL_COUNT] = ["connecting", "active"];
 
     /// Index of the value in [`MetricsNames`](names::MetricsNames) handle
     /// arrays and in dynamic cache keys.
@@ -51,7 +50,6 @@ impl GrpcConnectionState {
         match self {
             Self::Connecting => 0,
             Self::Active => 1,
-            Self::Failed => 2,
         }
     }
 
@@ -407,6 +405,15 @@ pub(crate) struct DefaultMetricsRecorder {
 impl DefaultMetricsRecorder {
     pub(crate) fn new() -> Self {
         Self::from_parts(None, Vec::new(), None)
+    }
+
+    /// Recorder for internal auxiliary clients that must not emit SDK metrics.
+    pub(crate) fn noop() -> Self {
+        Self::from_parts(
+            None,
+            Vec::new(),
+            Some(Arc::new(backend::NoopMetricsBackend)),
+        )
     }
 
     #[cfg(test)]

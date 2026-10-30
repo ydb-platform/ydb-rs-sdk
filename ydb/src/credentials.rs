@@ -585,7 +585,7 @@ impl StaticCredentials {
             self.database.clone(),
             MultiInterceptor::new(),
             self.grpc_opts.clone(),
-            Arc::new(DefaultMetricsRecorder::new()),
+            Arc::new(DefaultMetricsRecorder::noop()),
         );
 
         let mut auth_client = empty_connection_manager

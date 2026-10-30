@@ -137,8 +137,8 @@ use these exact strings:
   alerts if such reconnects are normal for your workload.
 - `ydb_grpc_connections{state="idle"}` is **never emitted**: pool channels are
   created with `connect_lazy`, so an idle live-socket state cannot be observed.
-  The gauge tracks pool entries, not live sockets, and is not decremented when
-  a driver is dropped — the reconnect scenario grows it by design.
+  The gauge tracks pool entries, not live sockets. Each initialized entry adds
+  one to `state="active"`; dropping its pool subtracts that contribution.
 - `ydb_session_pool_acquire_total{result="timeout|error"}` needs an
   overloaded or unavailable YDB; see the retry experiment above.
 
