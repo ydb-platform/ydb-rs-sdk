@@ -235,6 +235,28 @@ pub fn counter_label_value(registry: &Registry, name: &str, key: &str) -> Option
         })
 }
 
+/// A label value from the counter series identified by another label.
+pub fn counter_label_value_for_series(
+    registry: &Registry,
+    name: &str,
+    series_key: &str,
+    series_value: &str,
+    key: &str,
+) -> Option<String> {
+    metric_family(&registry.gather(), name)
+        .and_then(|mf| {
+            mf.metric
+                .iter()
+                .find(|m| has_label(m, series_key, series_value))
+        })
+        .and_then(|m| {
+            m.label
+                .iter()
+                .find(|l| l.name() == key)
+                .map(|l| l.value().to_string())
+        })
+}
+
 /// Sum of a counter over the series carrying `key=value`.
 pub fn counter_value_with_label(registry: &Registry, name: &str, key: &str, value: &str) -> u64 {
     metric_family(&registry.gather(), name)

@@ -1,8 +1,13 @@
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 
+use futures_util::Stream;
 use tokio::sync::mpsc;
+use tokio_stream::wrappers::UnboundedReceiverStream;
 
 use crate::client_metrics::{MetricsRecorder, StreamDirection};
+use crate::grpc_wrapper::metrics_interceptor::parse_grpc_path;
 use crate::grpc_wrapper::raw_errors::{RawError, RawResult};
 
 /// Unbound stream-message metrics context: the recorder plus the endpoint of the
@@ -19,12 +24,9 @@ impl GrpcStreamMetrics {
         Self { recorder, endpoint }
     }
 
-    /// Bind the context to one streaming RPC (`service`/`method` are static).
-    pub(crate) fn bind(
-        &self,
-        service: &'static str,
-        method: &'static str,
-    ) -> GrpcStreamMetricsBound {
+    /// Bind the context to the same canonical gRPC path used by request metrics.
+    pub(crate) fn bind(&self, path: &str) -> GrpcStreamMetricsBound {
+        let (service, method) = parse_grpc_path(path);
         GrpcStreamMetricsBound {
             recorder: Arc::clone(&self.recorder),
             endpoint: Arc::clone(&self.endpoint),
@@ -39,14 +41,53 @@ impl GrpcStreamMetrics {
 pub(crate) struct GrpcStreamMetricsBound {
     recorder: Arc<dyn MetricsRecorder>,
     endpoint: Arc<str>,
-    service: &'static str,
-    method: &'static str,
+    service: Arc<str>,
+    method: Arc<str>,
 }
 
 impl GrpcStreamMetricsBound {
     fn message(&self, direction: StreamDirection) {
         self.recorder
-            .grpc_stream_message(&self.endpoint, self.service, self.method, direction);
+            .grpc_stream_message(&self.endpoint, &self.service, &self.method, direction);
+    }
+}
+
+/// Counts messages when tonic polls them from the gRPC request stream.
+///
+/// This boundary includes the init message and messages submitted through
+/// cloned senders, without coupling the metric to any particular send helper.
+pub(crate) struct MetricsRequestStream<T> {
+    inner: UnboundedReceiverStream<T>,
+    metrics: Option<GrpcStreamMetricsBound>,
+}
+
+impl<T> MetricsRequestStream<T> {
+    pub(crate) fn new(
+        receiver: mpsc::UnboundedReceiver<T>,
+        metrics: Option<GrpcStreamMetricsBound>,
+    ) -> Self {
+        Self {
+            inner: UnboundedReceiverStream::new(receiver),
+            metrics,
+        }
+    }
+}
+
+impl<T> Stream for MetricsRequestStream<T> {
+    type Item = T;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let item = match Pin::new(&mut this.inner).poll_next(cx) {
+            Poll::Ready(item) => item,
+            Poll::Pending => return Poll::Pending,
+        };
+        if item.is_some()
+            && let Some(metrics) = &this.metrics
+        {
+            metrics.message(StreamDirection::Sent);
+        }
+        Poll::Ready(item)
     }
 }
 
@@ -68,7 +109,7 @@ impl<RequestT, ResponseT> AsyncGrpcStreamWrapper<RequestT, ResponseT> {
         }
     }
 
-    /// Like [`Self::new`], but counts sent/received messages as gRPC stream metrics.
+    /// Like [`Self::new`], but counts messages received from the response stream.
     pub(crate) fn new_with_metrics(
         request_stream: mpsc::UnboundedSender<RequestT>,
         response_stream: tonic::Streaming<ResponseT>,
@@ -93,13 +134,7 @@ impl<RequestT, ResponseT> AsyncGrpcStreamWrapper<RequestT, ResponseT> {
     where
         Message: Into<RequestT>,
     {
-        let result = self.from_client_grpc.send(message.into());
-        if result.is_ok()
-            && let Some(metrics) = &self.metrics
-        {
-            metrics.message(StreamDirection::Sent);
-        }
-        Ok(result?)
+        Ok(self.from_client_grpc.send(message.into())?)
     }
 
     pub(crate) fn clone_sender(&self) -> mpsc::UnboundedSender<RequestT> {
@@ -142,10 +177,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sent_messages_are_counted_with_static_labels() {
+    async fn request_stream_counts_init_and_all_senders_exactly_once() {
+        use futures_util::StreamExt;
+
         let (metrics, recorder) = metrics_with_recorder();
-        let bound = metrics.bind("topic_service", "stream_write");
-        let (tx, _rx) = mpsc::unbounded_channel::<stream_write_message::FromClient>();
+        let bound = metrics.bind(crate::grpc_wrapper::metrics_interceptor::TOPIC_STREAM_WRITE_PATH);
+        let (tx, rx) = mpsc::unbounded_channel::<stream_write_message::FromClient>();
+        tx.send(stream_write_message::FromClient::default())
+            .expect("init send must succeed");
+        let mut request_stream = MetricsRequestStream::new(rx, Some(bound.clone()));
         let wrapper: AsyncGrpcStreamWrapper<
             stream_write_message::FromClient,
             stream_write_message::FromServer,
@@ -153,16 +193,28 @@ mod tests {
 
         wrapper
             .send_nowait(stream_write_message::FromClient::default())
-            .expect("unbounded send must succeed");
+            .expect("wrapper send must succeed");
         wrapper
-            .send_nowait(stream_write_message::FromClient::default())
-            .expect("unbounded send must succeed");
-
+            .clone_sender()
+            .send(stream_write_message::FromClient::default())
+            .expect("cloned sender send must succeed");
         assert_eq!(
             recorder.counter_value("ydb_grpc_stream_messages_total"),
-            2,
-            "each accepted send must count one sent message"
+            0,
+            "queueing a message must not count it before tonic polls the request stream"
         );
+
+        for expected in 1..=3 {
+            request_stream
+                .next()
+                .await
+                .expect("three request messages must reach tonic");
+            assert_eq!(
+                recorder.counter_value("ydb_grpc_stream_messages_total"),
+                expected,
+                "init, wrapper, and cloned-sender messages must each count once"
+            );
+        }
         assert_eq!(
             recorder
                 .label_of_last("ydb_grpc_stream_messages_total", "direction")
@@ -173,13 +225,13 @@ mod tests {
             recorder
                 .label_of_last("ydb_grpc_stream_messages_total", "service")
                 .as_deref(),
-            Some("topic_service")
+            Some("Ydb.Topic.V1.TopicService")
         );
         assert_eq!(
             recorder
                 .label_of_last("ydb_grpc_stream_messages_total", "method")
                 .as_deref(),
-            Some("stream_write")
+            Some("StreamWrite")
         );
         assert_eq!(
             recorder

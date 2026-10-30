@@ -57,16 +57,18 @@ impl RawCoordinationClient {
         };
         tx.send(mess)?;
 
-        let request_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+        let stream_metrics = self.stream_metrics.as_ref().map(|metrics| {
+            metrics.bind(crate::grpc_wrapper::metrics_interceptor::COORDINATION_SESSION_PATH)
+        });
+        let request_stream = crate::grpc_wrapper::grpc_stream_wrapper::MetricsRequestStream::new(
+            rx,
+            stream_metrics.clone(),
+        );
         let stream_writer_result = self.service.session(request_stream).await;
         let response_stream = stream_writer_result?.into_inner();
 
-        let wrapper = match &self.stream_metrics {
-            Some(metrics) => AsyncGrpcStreamWrapper::new_with_metrics(
-                tx,
-                response_stream,
-                metrics.bind("coordination_service", "session"),
-            ),
+        let wrapper = match stream_metrics {
+            Some(metrics) => AsyncGrpcStreamWrapper::new_with_metrics(tx, response_stream, metrics),
             None => AsyncGrpcStreamWrapper::new(tx, response_stream),
         };
         Ok(wrapper)

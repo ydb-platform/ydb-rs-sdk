@@ -1,12 +1,15 @@
 //! gRPC transport metrics interceptor.
 //!
 //! Sits in [`MultiInterceptor`](crate::grpc_wrapper::runtime_interceptors::MultiInterceptor):
-//! `on_call` parses the RPC path and stores call context in the free-form
-//! `RequestMetadata` channel; `on_feature_poll_ready` extracts it and records the
-//! request counter, duration, and transport error views.
+//! `on_call` parses the RPC path and stores an exactly-once completion guard in
+//! the free-form `RequestMetadata` channel; `on_feature_poll_ready` moves that
+//! guard into the response body, whose terminal trailers record the request
+//! counter, full-stream duration, and transport error views.
 
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::{Arc, OnceLock, RwLock};
+use std::task::{Context, Poll};
 use std::time::Instant;
 
 use crate::client_metrics::MetricsRecorder;
@@ -15,12 +18,96 @@ use crate::grpc_wrapper::runtime_interceptors::{
     InterceptorResult, RequestMetadata,
 };
 
-/// Context of one in-flight RPC, carried between `on_call` and `on_feature_poll_ready`.
+pub(crate) const TOPIC_STREAM_READ_PATH: &str = "/Ydb.Topic.V1.TopicService/StreamRead";
+pub(crate) const TOPIC_STREAM_WRITE_PATH: &str = "/Ydb.Topic.V1.TopicService/StreamWrite";
+pub(crate) const COORDINATION_SESSION_PATH: &str =
+    "/Ydb.Coordination.V1.CoordinationService/Session";
+
+/// Exactly-once completion state for one in-flight RPC.
+///
+/// The guard travels from the channel future into the response body. Dropping
+/// either one before a terminal gRPC status records client-side cancellation.
 struct CallMeta {
+    recorder: Arc<dyn MetricsRecorder>,
     endpoint: Arc<str>,
     service: Arc<str>,
     method: Arc<str>,
     start: Instant,
+    completed: bool,
+}
+
+impl CallMeta {
+    fn new(
+        recorder: Arc<dyn MetricsRecorder>,
+        endpoint: Arc<str>,
+        service: Arc<str>,
+        method: Arc<str>,
+    ) -> Self {
+        Self {
+            recorder,
+            endpoint,
+            service,
+            method,
+            start: Instant::now(),
+            completed: false,
+        }
+    }
+
+    fn complete(&mut self, code: GrpcCode) {
+        if self.completed {
+            return;
+        }
+        self.completed = true;
+        self.recorder.grpc_request(
+            &self.endpoint,
+            &self.service,
+            &self.method,
+            code.as_label(),
+            self.start.elapsed(),
+        );
+    }
+}
+
+impl Drop for CallMeta {
+    fn drop(&mut self) {
+        self.complete(GrpcCode::Cancelled);
+    }
+}
+
+/// Response body that completes the RPC on its terminal trailers or clean EOS.
+struct MetricsBody {
+    inner: tonic::body::Body,
+    call: CallMeta,
+}
+
+impl http_body::Body for MetricsBody {
+    type Data = <tonic::body::Body as http_body::Body>::Data;
+    type Error = <tonic::body::Body as http_body::Body>::Error;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.inner).poll_frame(cx) {
+            Poll::Ready(Some(Ok(frame))) => {
+                if let Some(trailers) = frame.trailers_ref() {
+                    let code = grpc_status_from_headers(trailers).unwrap_or(GrpcCode::Unknown);
+                    this.call.complete(code);
+                }
+                Poll::Ready(Some(Ok(frame)))
+            }
+            Poll::Ready(Some(Err(error))) => {
+                this.call.complete(GrpcCode::Unknown);
+                Poll::Ready(Some(Err(error)))
+            }
+            Poll::Ready(None) => {
+                this.call.complete(GrpcCode::Unknown);
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }
 
 /// Records gRPC transport metrics for every RPC flowing through the channel.
@@ -48,12 +135,12 @@ impl GrpcInterceptor for MetricsInterceptor {
             .map(|label| label.0.clone())
             .unwrap_or_else(|| intern_endpoint(authority_label(req.uri())));
         let (service, method) = parse_grpc_path(req.uri().path());
-        *metadata = Some(Box::new(CallMeta {
+        *metadata = Some(Box::new(CallMeta::new(
+            Arc::clone(&self.recorder),
             endpoint,
             service,
             method,
-            start: Instant::now(),
-        }));
+        )));
         Ok(req)
     }
 
@@ -62,43 +149,37 @@ impl GrpcInterceptor for MetricsInterceptor {
         metadata: &mut RequestMetadata,
         res: Result<ChannelResponse, InterceptorError>,
     ) -> Result<ChannelResponse, InterceptorError> {
-        let Some(meta) = take_call_meta(metadata) else {
+        let Some(mut meta) = take_call_meta(metadata) else {
             return res;
         };
-        let duration = meta.start.elapsed();
 
-        match &res {
+        match res {
             Ok(response) => {
-                let code = grpc_status_from_headers(response.headers());
-                self.recorder.grpc_request(
-                    &meta.endpoint,
-                    &meta.service,
-                    &meta.method,
-                    code.as_label(),
-                    duration,
-                );
+                if let Some(code) = grpc_status_from_headers(response.headers()) {
+                    // Trailers-only responses carry their terminal status in the
+                    // response headers and do not need a body wrapper.
+                    meta.complete(code);
+                    Ok(response)
+                } else {
+                    let (parts, body) = response.into_parts();
+                    let body = tonic::body::Body::new(MetricsBody {
+                        inner: body,
+                        call: meta,
+                    });
+                    Ok(http::Response::from_parts(parts, body))
+                }
             }
-            Err(InterceptorError::Transport(_)) => {
-                self.recorder.grpc_request(
-                    &meta.endpoint,
-                    &meta.service,
-                    &meta.method,
-                    GrpcCode::Unavailable.as_label(),
-                    duration,
-                );
-            }
-            Err(InterceptorError::Custom(_) | InterceptorError::Internal(_)) => {
-                self.recorder.grpc_request(
-                    &meta.endpoint,
-                    &meta.service,
-                    &meta.method,
-                    GrpcCode::Internal.as_label(),
-                    duration,
-                );
+            Err(error) => {
+                let code = match &error {
+                    InterceptorError::Transport(_) => GrpcCode::Unavailable,
+                    InterceptorError::Custom(_) | InterceptorError::Internal(_) => {
+                        GrpcCode::Internal
+                    }
+                };
+                meta.complete(code);
+                Err(error)
             }
         }
-
-        res
     }
 }
 
@@ -216,21 +297,24 @@ impl GrpcCode {
     }
 }
 
-/// Read the gRPC status from response headers (trailers-only responses).
+/// Read a terminal gRPC status from response headers or trailers.
 ///
-/// Regular successful responses carry the status in trailers, which are not yet
-/// available at response-head time; such calls are recorded as `ok`.
-fn grpc_status_from_headers(headers: &http::HeaderMap) -> GrpcCode {
-    headers
-        .get("grpc-status")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<i32>().ok())
-        .map(GrpcCode::from_i32)
-        .unwrap_or(GrpcCode::Ok)
+/// `None` means the status has not arrived yet (or the stream ended without
+/// one); it must not be interpreted as a successful RPC.
+fn grpc_status_from_headers(headers: &http::HeaderMap) -> Option<GrpcCode> {
+    headers.get("grpc-status").map(|value| {
+        value
+            .to_str()
+            .ok()
+            .and_then(|value| value.parse::<i32>().ok())
+            .map(GrpcCode::from_i32)
+            .unwrap_or(GrpcCode::Unknown)
+    })
 }
 
-/// Interned `(service, method)` pair for a gRPC path.
-fn parse_grpc_path(path: &str) -> (Arc<str>, Arc<str>) {
+/// Interned `(service, method)` pair for a gRPC path, shared by request and
+/// stream-message metrics so both expose identical canonical labels.
+pub(crate) fn parse_grpc_path(path: &str) -> (Arc<str>, Arc<str>) {
     static CACHE: OnceLock<ServiceMethodCache> = OnceLock::new();
     let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
 
@@ -282,6 +366,12 @@ mod tests {
     use super::*;
     use crate::client_metrics::test_recorder::TestRecorder;
     use crate::grpc_wrapper::runtime_interceptors::MultiInterceptor;
+    use bytes::Bytes;
+    use futures_util::stream;
+    use http_body_util::{BodyExt, StreamBody};
+
+    type TestFrame = http_body::Frame<Bytes>;
+    type TestFrameResult = Result<TestFrame, tonic::Status>;
 
     fn interceptor_with_recorder() -> (MultiInterceptor, Arc<TestRecorder>) {
         let recorder = Arc::new(TestRecorder::new());
@@ -306,17 +396,44 @@ mod tests {
     }
 
     fn fake_response(headers: &[(&str, &str)]) -> ChannelResponse {
+        response_with_frames(headers, Vec::new())
+    }
+
+    fn response_with_frames(
+        headers: &[(&str, &str)],
+        frames: Vec<TestFrameResult>,
+    ) -> ChannelResponse {
         let mut builder = http::Response::builder();
         for (key, value) in headers {
             builder = builder.header(*key, *value);
         }
-        builder
-            .body(tonic::body::Body::default())
-            .expect("valid test response")
+        let body = tonic::body::Body::new(StreamBody::new(stream::iter(frames)));
+        builder.body(body).expect("valid test response")
     }
 
-    #[test]
-    fn request_path_and_labels_are_recorded_on_success() {
+    fn trailers(code: i32) -> TestFrameResult {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(
+            "grpc-status",
+            http::HeaderValue::from_str(&code.to_string()).expect("valid gRPC status"),
+        );
+        Ok(http_body::Frame::trailers(headers))
+    }
+
+    fn data() -> TestFrameResult {
+        Ok(http_body::Frame::data(Bytes::from_static(b"response")))
+    }
+
+    async fn consume_body(response: ChannelResponse) {
+        response
+            .into_body()
+            .collect()
+            .await
+            .expect("test response body must succeed");
+    }
+
+    #[tokio::test]
+    async fn request_path_and_labels_are_recorded_on_success() {
         let (interceptor, recorder) = interceptor_with_recorder();
 
         let mut metadata: RequestMetadata = None;
@@ -332,13 +449,27 @@ mod tests {
         );
         let _ = req;
 
-        let response = Ok(fake_response(&[]));
-        let _ = interceptor.on_feature_poll_ready(&mut metadata, response);
+        let response = interceptor
+            .on_feature_poll_ready(
+                &mut metadata,
+                Ok(response_with_frames(&[], vec![data(), trailers(0)])),
+            )
+            .expect("response must pass through");
+        assert_eq!(
+            recorder.counter_value("ydb_grpc_requests_total"),
+            0,
+            "response headers must not complete the RPC before its trailers"
+        );
+        assert_eq!(
+            recorder.histogram_count("ydb_grpc_request_duration_seconds"),
+            0
+        );
 
+        consume_body(response).await;
         assert_eq!(
             recorder.counter_value("ydb_grpc_requests_total"),
             1,
-            "each completed RPC must increment ydb_grpc_requests_total"
+            "each completed RPC must increment ydb_grpc_requests_total exactly once"
         );
         assert_eq!(
             recorder
@@ -374,6 +505,135 @@ mod tests {
             recorder.counter_value("ydb_grpc_errors_total"),
             0,
             "successful RPC must not count as transport error"
+        );
+    }
+
+    #[tokio::test]
+    async fn trailers_after_headers_determine_final_error_status() {
+        let (interceptor, recorder) = interceptor_with_recorder();
+        let mut metadata: RequestMetadata = None;
+        let _ = interceptor.on_call(
+            &mut metadata,
+            fake_request(TOPIC_STREAM_READ_PATH, "host:2135"),
+        );
+
+        let response = interceptor
+            .on_feature_poll_ready(
+                &mut metadata,
+                Ok(response_with_frames(&[], vec![data(), trailers(13)])),
+            )
+            .expect("response must pass through");
+        assert_eq!(recorder.counter_value("ydb_grpc_requests_total"), 0);
+
+        consume_body(response).await;
+        assert_eq!(
+            recorder.counter_value_with_label("ydb_grpc_requests_total", "grpc_code", "internal"),
+            1
+        );
+        assert_eq!(recorder.counter_value("ydb_grpc_requests_total"), 1);
+        assert_eq!(
+            recorder.histogram_count("ydb_grpc_request_duration_seconds"),
+            1
+        );
+        assert_eq!(recorder.counter_value("ydb_grpc_errors_total"), 1);
+    }
+
+    #[tokio::test]
+    async fn body_frame_error_without_grpc_status_is_unknown() {
+        let (interceptor, recorder) = interceptor_with_recorder();
+        let mut metadata: RequestMetadata = None;
+        let _ = interceptor.on_call(
+            &mut metadata,
+            fake_request(TOPIC_STREAM_READ_PATH, "host:2135"),
+        );
+        let response = interceptor
+            .on_feature_poll_ready(
+                &mut metadata,
+                Ok(response_with_frames(
+                    &[],
+                    vec![data(), Err(tonic::Status::unavailable("body failed"))],
+                )),
+            )
+            .expect("response must pass through");
+        assert_eq!(recorder.counter_value("ydb_grpc_requests_total"), 0);
+
+        let result = response.into_body().collect().await;
+        assert!(result.is_err(), "the body frame error must propagate");
+        assert_eq!(
+            recorder.counter_value_with_label("ydb_grpc_requests_total", "grpc_code", "unknown"),
+            1
+        );
+        assert_eq!(recorder.counter_value("ydb_grpc_requests_total"), 1);
+        assert_eq!(
+            recorder.histogram_count("ydb_grpc_request_duration_seconds"),
+            1
+        );
+        assert_eq!(recorder.counter_value("ydb_grpc_errors_total"), 1);
+    }
+
+    #[tokio::test]
+    async fn clean_eos_without_grpc_status_is_unknown() {
+        let (interceptor, recorder) = interceptor_with_recorder();
+        let mut metadata: RequestMetadata = None;
+        let _ = interceptor.on_call(
+            &mut metadata,
+            fake_request("/ydb.api.v1.QueryService/ExecuteQuery", "host:2135"),
+        );
+        let response = interceptor
+            .on_feature_poll_ready(&mut metadata, Ok(fake_response(&[])))
+            .expect("response must pass through");
+
+        consume_body(response).await;
+        assert_eq!(
+            recorder.counter_value_with_label("ydb_grpc_requests_total", "grpc_code", "unknown"),
+            1
+        );
+        assert_eq!(recorder.counter_value("ydb_grpc_errors_total"), 1);
+    }
+
+    #[test]
+    fn dropping_call_before_response_records_cancelled_once() {
+        let (interceptor, recorder) = interceptor_with_recorder();
+        let mut metadata: RequestMetadata = None;
+        let _ = interceptor.on_call(
+            &mut metadata,
+            fake_request("/ydb.api.v1.QueryService/ExecuteQuery", "host:2135"),
+        );
+
+        drop(metadata);
+        assert_eq!(
+            recorder.counter_value_with_label("ydb_grpc_requests_total", "grpc_code", "cancelled"),
+            1
+        );
+        assert_eq!(recorder.counter_value("ydb_grpc_requests_total"), 1);
+        assert_eq!(
+            recorder.histogram_count("ydb_grpc_request_duration_seconds"),
+            1
+        );
+    }
+
+    #[test]
+    fn dropping_response_body_records_cancelled_once() {
+        let (interceptor, recorder) = interceptor_with_recorder();
+        let mut metadata: RequestMetadata = None;
+        let _ = interceptor.on_call(
+            &mut metadata,
+            fake_request("/ydb.api.v1.QueryService/ExecuteQuery", "host:2135"),
+        );
+        let response = interceptor
+            .on_feature_poll_ready(&mut metadata, Ok(fake_response(&[])))
+            .expect("response must pass through");
+        assert_eq!(recorder.counter_value("ydb_grpc_requests_total"), 0);
+
+        drop(response);
+        assert_eq!(
+            recorder.counter_value_with_label("ydb_grpc_requests_total", "grpc_code", "cancelled"),
+            1
+        );
+        assert_eq!(recorder.counter_value("ydb_grpc_requests_total"), 1);
+        assert_eq!(
+            recorder.histogram_count("ydb_grpc_request_duration_seconds"),
+            1
         );
     }
 
@@ -440,7 +700,8 @@ mod tests {
 
         let mut metadata: RequestMetadata = None;
         let _ = interceptor.on_call(&mut metadata, fake_request("/weird.service/path", "host:1"));
-        let _ = interceptor.on_feature_poll_ready(&mut metadata, Ok(fake_response(&[])));
+        let _ = interceptor
+            .on_feature_poll_ready(&mut metadata, Ok(fake_response(&[("grpc-status", "0")])));
 
         assert_eq!(
             recorder

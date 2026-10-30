@@ -50,11 +50,12 @@ async fn grpc_request_metrics_after_query() -> YdbResult<()> {
         counter_label_value(&registry, "ydb_grpc_requests_total", "endpoint"),
         None
     );
-    // The pooled one-shot also goes through CreateSession and AttachSession.
-    for method in ["CreateSession", "AttachSession"] {
+    // The pooled one-shot also goes through CreateSession. AttachSession is a
+    // long-lived stream and must not be completed merely on response headers.
+    for method in ["CreateSession", "ExecuteQuery"] {
         assert!(
             counter_value_with_label(&registry, "ydb_grpc_requests_total", "method", method) >= 1,
-            "ydb_grpc_requests_total must count {method} RPCs"
+            "ydb_grpc_requests_total must count completed {method} RPCs"
         );
     }
 
@@ -197,27 +198,57 @@ async fn grpc_stream_messages_total_on_topic_stream() -> YdbResult<()> {
     let batch = reader.read_batch().await?;
     assert_eq!(batch.messages.len(), 1);
 
-    // Received stream messages are counted per message through the stream
-    // wrapper. The `sent` direction is not assertable e2e yet: every sender
-    // (reader/writer loops, coordination controllers) bypasses the counting
-    // wrapper via `clone_sender()` — registered as a finding for review.
-    assert!(
-        counter_value_with_label(
-            &registry,
-            "ydb_grpc_stream_messages_total",
-            "direction",
-            "received"
-        ) >= 1,
-        "ydb_grpc_stream_messages_total must count received stream messages"
-    );
+    // Both directions are counted at the actual gRPC stream boundaries. The
+    // sent series includes InitRequest and messages from cloned senders.
+    for direction in ["sent", "received"] {
+        assert!(
+            counter_value_with_label(
+                &registry,
+                "ydb_grpc_stream_messages_total",
+                "direction",
+                direction
+            ) >= 1,
+            "ydb_grpc_stream_messages_total must count {direction} stream messages"
+        );
+    }
     for (key, value) in [
-        ("service", "topic_service"),
-        ("method", "stream_read"),
+        ("service", "Ydb.Topic.V1.TopicService"),
+        ("method", "StreamRead"),
         ("endpoint", endpoint_authority(&server)),
     ] {
         assert!(
             counter_value_with_label(&registry, "ydb_grpc_stream_messages_total", key, value) >= 1,
             "ydb_grpc_stream_messages_total must carry {key}={value}"
+        );
+    }
+
+    // Closing the reader completes the long-lived request. Compare the actual
+    // request and stream series directly so their URI labels cannot drift.
+    drop(reader);
+    wait_for(|| {
+        counter_value_with_label(&registry, "ydb_grpc_requests_total", "method", "StreamRead") >= 1
+    })
+    .await;
+    for key in ["service", "method"] {
+        let stream_label = counter_label_value_for_series(
+            &registry,
+            "ydb_grpc_stream_messages_total",
+            "method",
+            "StreamRead",
+            key,
+        )
+        .expect("StreamRead stream series must exist");
+        let request_label = counter_label_value_for_series(
+            &registry,
+            "ydb_grpc_requests_total",
+            "method",
+            "StreamRead",
+            key,
+        )
+        .expect("completed StreamRead request series must exist");
+        assert_eq!(
+            request_label, stream_label,
+            "request and stream metrics must use the same {key} label"
         );
     }
 

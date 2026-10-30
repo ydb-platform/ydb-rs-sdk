@@ -126,16 +126,18 @@ impl RawTopicClient {
         };
         tx.send(mess)?;
 
-        let request_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+        let stream_metrics = self.stream_metrics.as_ref().map(|metrics| {
+            metrics.bind(crate::grpc_wrapper::metrics_interceptor::TOPIC_STREAM_READ_PATH)
+        });
+        let request_stream = crate::grpc_wrapper::grpc_stream_wrapper::MetricsRequestStream::new(
+            rx,
+            stream_metrics.clone(),
+        );
         let stream_reader_result = self.service.stream_read(request_stream).await;
         let response_stream = stream_reader_result?.into_inner();
 
-        let wrapper = match &self.stream_metrics {
-            Some(metrics) => AsyncGrpcStreamWrapper::new_with_metrics(
-                tx,
-                response_stream,
-                metrics.bind("topic_service", "stream_read"),
-            ),
+        let wrapper = match stream_metrics {
+            Some(metrics) => AsyncGrpcStreamWrapper::new_with_metrics(tx, response_stream, metrics),
             None => AsyncGrpcStreamWrapper::new(tx, response_stream),
         };
         Ok(wrapper)
@@ -160,16 +162,18 @@ impl RawTopicClient {
         };
         tx.send(mess)?;
 
-        let request_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
+        let stream_metrics = self.stream_metrics.as_ref().map(|metrics| {
+            metrics.bind(crate::grpc_wrapper::metrics_interceptor::TOPIC_STREAM_WRITE_PATH)
+        });
+        let request_stream = crate::grpc_wrapper::grpc_stream_wrapper::MetricsRequestStream::new(
+            rx,
+            stream_metrics.clone(),
+        );
         let stream_writer_result = self.service.stream_write(request_stream).await;
         let response_stream = stream_writer_result?.into_inner();
 
-        let wrapper = match &self.stream_metrics {
-            Some(metrics) => AsyncGrpcStreamWrapper::new_with_metrics(
-                tx,
-                response_stream,
-                metrics.bind("topic_service", "stream_write"),
-            ),
+        let wrapper = match stream_metrics {
+            Some(metrics) => AsyncGrpcStreamWrapper::new_with_metrics(tx, response_stream, metrics),
             None => AsyncGrpcStreamWrapper::new(tx, response_stream),
         };
         Ok(wrapper)

@@ -70,7 +70,7 @@ Four independent scenario loops run with randomized 5 s – 3 min intervals:
 |----------|--------------|------------------------|
 | `scenarios/query.rs` | Each tick picks one of: parameterized `query_row`, a failing query against a missing table, `retry_tx` commit (upsert + count), `retry_tx` explicit rollback, materialized result set + multi-result-set stream, DDL create/drop, `execute_script` + poll + `fetch_script_results`, a named `query_row` (`.with_name(...)`), a named failing query | Client counters + `ydb_row_query_time_histogram`; `ydb_query_operations_total{operation,result}`, `ydb_query_operation_duration_seconds`, `ydb_query_result_rows/bytes`, `ydb_query_errors_total`, `ydb_query_transactions_total`, `ydb_query_transaction_duration_seconds`; named variants `ydb_query_named_*{query_name}`; session pool acquire/use; every RPC in `ydb_grpc_requests_total` |
 | `scenarios/session_pool.rs` | Builds a dedicated driver with `with_session_pool(limit=5, warm_up=2, item_usage_limit=10, idle_ttl=30s)` and fires 10 parallel `query_row`s | `ydb_session_pool_sessions{state}`, `size_limit`, `pending_requests`, `acquire_total/seconds{result}`, `sessions_created_total`, `sessions_closed_total{reason}` (idle_ttl/usage_limit over time, shutdown at drop), `session_create_seconds`, `session_use_seconds` |
-| `scenarios/topic.rs` | Creates a directory + topic with a consumer, produces 5 messages, consumes them with commit (deadline-bounded), drops everything | `ydb_new_topic_client_counter`, `ydb_grpc_stream_messages_total{direction="received"}` on `StreamRead`, topic/scheme RPCs in `ydb_grpc_requests_total` |
+| `scenarios/topic.rs` | Creates a directory + topic with a consumer, produces 5 messages, consumes them with commit (deadline-bounded), drops everything | `ydb_new_topic_client_counter`, `ydb_grpc_stream_messages_total{direction="sent"\|"received"}` on `StreamRead`/`StreamWrite`, topic/scheme RPCs in `ydb_grpc_requests_total` |
 | `scenarios/reconnect.rs` | Builds a fresh driver and swaps it into the shared slot, dropping the old one (no public `stop()` on `Client`) | `ydb_new_client_counter`, `ydb_grpc_connections{state="connecting"\|"active"}`, `ydb_grpc_connection_establish_seconds{result="ok"}`, discovery RPCs, `sessions_closed_total{reason="shutdown"}` on the old driver |
 
 The failing-query tick is a useful teaching point: the gRPC RPC succeeds
@@ -130,11 +130,11 @@ use these exact strings:
   per-recorder cap (`ClientBuilder::with_metrics_max_query_names`, default 512)
   collapse into `query_name="__other__"`.
 
-## Known gaps (by design, fixed in later SDK cycles)
+## Known limitations
 
-- `ydb_grpc_stream_messages_total{direction="sent"}` is **never emitted**: all
-  stream senders (topic reader/writer, coordination) use `clone_sender()`,
-  bypassing the counting wrapper. Only `direction="received"` shows data.
+- `ydb_grpc_errors_total` includes `grpc_code="cancelled"` when long-lived streams
+  are dropped during expected reconnects or shutdown. Exclude that code from
+  alerts if such reconnects are normal for your workload.
 - `ydb_grpc_connections{state="idle"}` is **never emitted**: pool channels are
   created with `connect_lazy`, so an idle live-socket state cannot be observed.
   The gauge tracks pool entries, not live sockets, and is not decremented when
