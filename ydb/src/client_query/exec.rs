@@ -21,7 +21,7 @@ use crate::types::Value;
 use crate::{TransactionOptions, TxMode, closure};
 use tracing::instrument;
 
-use crate::session_pool::{SessionPool, SessionPoolLease, spawn_pool_release};
+use crate::session_pool::{SessionPool, SessionPoolLease};
 
 use super::hooks::{QueryTxCommitStatus, QueryTxHook};
 
@@ -269,30 +269,19 @@ impl TxExecContext {
         }
 
         let ActiveTx {
-            mut client,
             lease,
             server_progress,
             ..
         } = active;
-        let tx_id = match (server_progress.operation, server_progress.tx_id) {
+        match (server_progress.operation, server_progress.tx_id) {
             (TxOperationState::Ready, None) => {
                 lease.return_to_pool();
-                return Ok(());
             }
             (TxOperationState::Ready, Some(tx_id)) | (TxOperationState::InFlight, Some(tx_id)) => {
-                tx_id
+                lease.schedule_rollback(tx_id);
             }
-            (TxOperationState::InFlight, None) => return Ok(()),
-        };
-        let cleanup_timeout = lease.cleanup_timeout();
-        let session_id = lease.session_id().to_string();
-
-        spawn_pool_release(async move {
-            let rollback = client
-                .rollback_transaction(&session_id, tx_id.as_str())
-                .map_err(YdbError::from);
-            finish_rollback_cleanup(lease, cleanup_timeout, rollback).await;
-        });
+            (TxOperationState::InFlight, None) => {}
+        }
         Ok(())
     }
 
@@ -330,29 +319,15 @@ impl Drop for TxExecContext {
 
         active.notify_hooks(QueryTxCommitStatus::Aborted);
         let ActiveTx {
-            mut client,
             lease,
             server_progress,
             ..
         } = active;
-        let tx_id = match (server_progress.operation, server_progress.tx_id) {
-            (TxOperationState::Ready, None) => {
-                lease.return_to_pool();
-                return;
-            }
-            (TxOperationState::Ready, Some(tx_id)) => tx_id,
-            (TxOperationState::InFlight, _) => return,
-        };
-
-        let cleanup_timeout = lease.cleanup_timeout();
-        let session_id = lease.session_id().to_string();
-
-        spawn_pool_release(async move {
-            let rollback = client
-                .rollback_transaction(&session_id, tx_id.as_str())
-                .map_err(YdbError::from);
-            finish_rollback_cleanup(lease, cleanup_timeout, rollback).await;
-        });
+        match (server_progress.operation, server_progress.tx_id) {
+            (TxOperationState::Ready, None) => lease.return_to_pool(),
+            (TxOperationState::Ready, Some(tx_id)) => lease.schedule_rollback(tx_id),
+            (TxOperationState::InFlight, _) => {}
+        }
     }
 }
 
@@ -894,15 +869,6 @@ pub(crate) async fn tx_rollback(tx: &mut TxExecContext) -> YdbResult<()> {
     }
 }
 
-async fn finish_rollback_cleanup<F>(lease: SessionPoolLease, cleanup_timeout: Duration, rollback: F)
-where
-    F: Future<Output = YdbResult<()>>,
-{
-    if matches!(timeout(cleanup_timeout, rollback).await, Ok(Ok(()))) {
-        lease.return_to_pool();
-    }
-}
-
 pub(crate) fn tx_exec_context(
     client: RawQueryClient,
     lease: SessionPoolLease,
@@ -1013,8 +979,8 @@ mod unit_tests {
     }
 
     #[tokio::test]
-    async fn rejected_query_does_not_reuse_session_with_unfinished_tx() {
-        for tx_id in [None, Some("tx-1".to_string())] {
+    async fn rejected_query_reuses_session_only_after_known_tx_is_rolled_back() {
+        for (tx_id, expect_reuse) in [(None, false), (Some("tx-1".to_string()), true)] {
             let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
             let lease = pool.acquire_explicit().await.expect("acquire test session");
             let session_id = lease.session_id().to_string();
@@ -1035,17 +1001,17 @@ mod unit_tests {
                 .expect("rejected operation must finish the transaction");
 
             assert!(matches!(ctx.state, TxState::AttemptFailed(_)));
-            let replacement = pool
+            let acquired = pool
                 .acquire_explicit()
                 .await
-                .expect("session with an unfinished transaction must be replaced");
-            assert_ne!(replacement.session_id(), session_id);
-            replacement.return_to_pool();
+                .expect("a session must become available after failed-attempt cleanup");
+            assert_eq!(acquired.session_id() == session_id, expect_reuse);
+            acquired.return_to_pool();
         }
     }
 
     #[tokio::test]
-    async fn transient_dispatched_error_discards_session_when_cleanup_fails() {
+    async fn transient_dispatched_error_cleans_up_possibly_active_transaction() {
         for status in [StatusCode::Unavailable, StatusCode::Overloaded] {
             let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
             let lease = pool.acquire_explicit().await.expect("acquire test session");
@@ -1062,12 +1028,12 @@ mod unit_tests {
                 .expect("temporary failure must finish the local transaction attempt");
 
             assert!(matches!(ctx.state, TxState::AttemptFailed(_)));
-            let replacement = pool
+            let reused = pool
                 .acquire_explicit()
                 .await
-                .expect("session with an unconfirmed transaction must be replaced");
-            assert_ne!(replacement.session_id(), session_id);
-            replacement.return_to_pool();
+                .expect("session must become available after cleanup");
+            assert_eq!(reused.session_id(), session_id);
+            reused.return_to_pool();
         }
     }
 
@@ -1089,27 +1055,6 @@ mod unit_tests {
             .acquire_explicit()
             .await
             .expect("acquire replacement session");
-        assert_ne!(replacement.session_id(), session_id);
-        replacement.return_to_pool();
-    }
-
-    #[tokio::test]
-    async fn rollback_cleanup_timeout_discards_session_and_releases_pool_permit() {
-        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
-        let lease = pool.acquire_explicit().await.expect("acquire test session");
-        let session_id = lease.session_id().to_string();
-
-        finish_rollback_cleanup(
-            lease,
-            Duration::ZERO,
-            std::future::pending::<YdbResult<()>>(),
-        )
-        .await;
-
-        let replacement = pool
-            .acquire_explicit()
-            .await
-            .expect("timed-out rollback must release the pool permit");
         assert_ne!(replacement.session_id(), session_id);
         replacement.return_to_pool();
     }
