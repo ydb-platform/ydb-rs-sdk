@@ -7,6 +7,7 @@ use crate::errors::{YdbError, YdbOrCustomerError};
 
 pub(crate) mod backend;
 pub(crate) mod dynamic;
+pub(crate) mod endpoints;
 pub(crate) mod interning;
 #[cfg(feature = "metrics")]
 pub(crate) mod metrics_facade;
@@ -18,9 +19,11 @@ pub(crate) mod test_recorder;
 pub use backend::{
     Counter, Gauge, Histogram, MetricDescription, MetricLabel, MetricUnit, MetricsBackend,
 };
+pub use endpoints::MetricsDetail;
 
 use backend::{CounterHandle, HistogramHandle};
 use dynamic::GrpcCodeKey;
+use endpoints::EndpointKey;
 use interning::{intern, resolve};
 use query_names::QueryNameRegistry;
 
@@ -426,11 +429,32 @@ impl DefaultMetricsRecorder {
         }
     }
 
+    pub(crate) fn with_metrics_detail(mut self, detail: MetricsDetail) -> Self {
+        self.names.endpoints.set_detail(detail);
+        self
+    }
+
+    pub(crate) fn with_max_endpoints(mut self, max_endpoints: usize) -> Self {
+        self.names.endpoints.set_max_endpoints(max_endpoints);
+        self
+    }
+
     /// Cap the number of unique `query_name` values admitted into the named
     /// query series (`ydb_query_named_*`); defaults to 512.
     pub(crate) fn with_max_query_names(mut self, max_query_names: usize) -> Self {
         self.names.query_names = QueryNameRegistry::new(max_query_names);
         self
+    }
+
+    fn grpc_labels(
+        &self,
+        endpoint: EndpointKey,
+        mut dynamic: Vec<MetricLabel>,
+    ) -> Vec<MetricLabel> {
+        if let Some(label) = endpoint.label() {
+            dynamic.insert(0, label);
+        }
+        self.names.dynamic_labels(dynamic)
     }
 }
 
@@ -501,15 +525,13 @@ impl MetricsRecorder for DefaultMetricsRecorder {
     }
 
     fn grpc_connections_add(&self, endpoint: &str, state: GrpcConnectionState, delta: f64) {
-        let endpoint = intern(endpoint);
+        let endpoint = self.names.endpoints.resolve(endpoint);
         let handle = dynamic::cached(
             &self.names.dynamic.grpc_connections,
             (endpoint, state.index()),
             || {
-                let labels = self.names.dynamic_labels(vec![
-                    MetricLabel::new("endpoint", resolve(endpoint)),
-                    MetricLabel::new("state", state.as_label()),
-                ]);
+                let labels =
+                    self.grpc_labels(endpoint, vec![MetricLabel::new("state", state.as_label())]);
                 self.names.gauge(
                     "ydb_grpc_connections",
                     MetricUnit::Count,
@@ -522,15 +544,15 @@ impl MetricsRecorder for DefaultMetricsRecorder {
     }
 
     fn grpc_connection_establish(&self, endpoint: &str, ok: bool, duration: Duration) {
-        let endpoint = intern(endpoint);
+        let endpoint = self.names.endpoints.resolve(endpoint);
         let handle = dynamic::cached(
             &self.names.dynamic.grpc_connection_establish,
             (endpoint, ok),
             || {
-                let labels = self.names.dynamic_labels(vec![
-                    MetricLabel::new("endpoint", resolve(endpoint)),
-                    MetricLabel::new("result", if ok { "ok" } else { "error" }),
-                ]);
+                let labels = self.grpc_labels(
+                    endpoint,
+                    vec![MetricLabel::new("result", if ok { "ok" } else { "error" })],
+                );
                 self.names.histogram(
                     "ydb_grpc_connection_establish_seconds",
                     MetricUnit::Seconds,
@@ -550,7 +572,7 @@ impl MetricsRecorder for DefaultMetricsRecorder {
         grpc_code: &str,
         duration: Duration,
     ) {
-        let endpoint = intern(endpoint);
+        let endpoint = self.names.endpoints.resolve(endpoint);
         let service = intern(service);
         let method = intern(method);
         let code = GrpcCodeKey::from_label(grpc_code);
@@ -559,12 +581,14 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             &self.names.dynamic.grpc_requests,
             (endpoint, service, method, code),
             || {
-                let labels = self.names.dynamic_labels(vec![
-                    MetricLabel::new("endpoint", resolve(endpoint)),
-                    MetricLabel::new("service", resolve(service)),
-                    MetricLabel::new("method", resolve(method)),
-                    MetricLabel::new("grpc_code", code.label_value()),
-                ]);
+                let labels = self.grpc_labels(
+                    endpoint,
+                    vec![
+                        MetricLabel::new("service", resolve(service)),
+                        MetricLabel::new("method", resolve(method)),
+                        MetricLabel::new("grpc_code", code.label_value()),
+                    ],
+                );
                 self.names.counter(
                     "ydb_grpc_requests_total",
                     MetricUnit::Count,
@@ -582,11 +606,13 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             &self.names.dynamic.grpc_request_duration,
             (endpoint, service, method),
             || {
-                let labels = self.names.dynamic_labels(vec![
-                    MetricLabel::new("endpoint", resolve(endpoint)),
-                    MetricLabel::new("service", resolve(service)),
-                    MetricLabel::new("method", resolve(method)),
-                ]);
+                let labels = self.grpc_labels(
+                    endpoint,
+                    vec![
+                        MetricLabel::new("service", resolve(service)),
+                        MetricLabel::new("method", resolve(method)),
+                    ],
+                );
                 self.names.histogram(
                     "ydb_grpc_request_duration_seconds",
                     MetricUnit::Seconds,
@@ -599,10 +625,10 @@ impl MetricsRecorder for DefaultMetricsRecorder {
 
         if !code.is_ok() {
             dynamic::cached(&self.names.dynamic.grpc_errors, (endpoint, code), || {
-                let labels = self.names.dynamic_labels(vec![
-                    MetricLabel::new("endpoint", resolve(endpoint)),
-                    MetricLabel::new("grpc_code", code.label_value()),
-                ]);
+                let labels = self.grpc_labels(
+                    endpoint,
+                    vec![MetricLabel::new("grpc_code", code.label_value())],
+                );
                 self.names.counter(
                     "ydb_grpc_errors_total",
                     MetricUnit::Count,
@@ -621,19 +647,21 @@ impl MetricsRecorder for DefaultMetricsRecorder {
         method: &str,
         direction: StreamDirection,
     ) {
-        let endpoint = intern(endpoint);
+        let endpoint = self.names.endpoints.resolve(endpoint);
         let service = intern(service);
         let method = intern(method);
         dynamic::cached(
             &self.names.dynamic.grpc_stream_messages,
             (endpoint, service, method, direction.index()),
             || {
-                let labels = self.names.dynamic_labels(vec![
-                    MetricLabel::new("endpoint", resolve(endpoint)),
-                    MetricLabel::new("service", resolve(service)),
-                    MetricLabel::new("method", resolve(method)),
-                    MetricLabel::new("direction", direction.as_label()),
-                ]);
+                let labels = self.grpc_labels(
+                    endpoint,
+                    vec![
+                        MetricLabel::new("service", resolve(service)),
+                        MetricLabel::new("method", resolve(method)),
+                        MetricLabel::new("direction", direction.as_label()),
+                    ],
+                );
                 self.names.counter(
                     "ydb_grpc_stream_messages_total",
                     MetricUnit::Count,
@@ -1130,10 +1158,115 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_series_register_once_per_label_combination() {
+    fn basic_detail_aggregates_grpc_series_without_endpoint_labels() {
         let capture = Arc::new(CaptureRecorder::default());
         let recorder =
             DefaultMetricsRecorder::with_backend(Arc::clone(&capture) as Arc<dyn MetricsBackend>);
+
+        for endpoint in ["r3-basic-a:2135", "r3-basic-b:2135"] {
+            recorder.grpc_request(
+                endpoint,
+                "ydb.api.v1.QueryService",
+                "ExecuteQuery",
+                "unavailable",
+                Duration::from_millis(2),
+            );
+            recorder.grpc_stream_message(
+                endpoint,
+                "ydb.api.v1.QueryService",
+                "ExecuteQuery",
+                StreamDirection::Received,
+            );
+            recorder.grpc_connections_add(endpoint, GrpcConnectionState::Active, 1.0);
+            recorder.grpc_connection_establish(endpoint, true, Duration::from_millis(2));
+            assert_eq!(interning::lookup(endpoint), None);
+        }
+
+        for name in [
+            "ydb_grpc_requests_total",
+            "ydb_grpc_request_duration_seconds",
+            "ydb_grpc_errors_total",
+            "ydb_grpc_stream_messages_total",
+            "ydb_grpc_connections",
+            "ydb_grpc_connection_establish_seconds",
+        ] {
+            assert_eq!(capture.count(name), 1, "{name} must be aggregated");
+        }
+        for metric in capture
+            .registered()
+            .into_iter()
+            .filter(|metric| metric.name.starts_with("ydb_grpc_"))
+        {
+            assert!(
+                metric.labels.iter().all(|(key, _)| key != "endpoint"),
+                "{} must not carry an endpoint label",
+                metric.name
+            );
+            assert_eq!(
+                metric.labels.first().map(|(key, _)| key.as_str()),
+                Some("driver_name")
+            );
+        }
+    }
+
+    #[test]
+    fn endpoint_overflow_bounds_series_without_retaining_addresses() {
+        let capture = Arc::new(CaptureRecorder::default());
+        let recorder =
+            DefaultMetricsRecorder::with_backend(Arc::clone(&capture) as Arc<dyn MetricsBackend>)
+                .with_metrics_detail(MetricsDetail::Endpoints)
+                .with_max_endpoints(2);
+
+        for index in 0..1_000 {
+            let endpoint = format!("r3-series-overflow-{index}:2135");
+            recorder.grpc_request(
+                &endpoint,
+                "ydb.api.v1.QueryService",
+                "ExecuteQuery",
+                "ok",
+                Duration::from_millis(1),
+            );
+            if index >= 2 {
+                assert_eq!(interning::lookup(&endpoint), None);
+            }
+        }
+        assert_eq!(capture.count("ydb_grpc_requests_total"), 3);
+        assert_eq!(capture.count("ydb_grpc_request_duration_seconds"), 3);
+
+        let mut endpoints: Vec<String> = capture
+            .registered()
+            .into_iter()
+            .filter(|metric| metric.name == "ydb_grpc_requests_total")
+            .map(|metric| {
+                assert_eq!(
+                    metric.labels.first().map(|(key, _)| key.as_str()),
+                    Some("driver_name")
+                );
+                metric
+                    .labels
+                    .into_iter()
+                    .find(|(key, _)| key == "endpoint")
+                    .map(|(_, value)| value)
+                    .expect("endpoint detail must add the endpoint label")
+            })
+            .collect();
+        endpoints.sort_unstable();
+        assert_eq!(
+            endpoints,
+            vec![
+                "__other__".to_string(),
+                "r3-series-overflow-0:2135".to_string(),
+                "r3-series-overflow-1:2135".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn dynamic_series_register_once_per_label_combination() {
+        let capture = Arc::new(CaptureRecorder::default());
+        let recorder =
+            DefaultMetricsRecorder::with_backend(Arc::clone(&capture) as Arc<dyn MetricsBackend>)
+                .with_metrics_detail(MetricsDetail::Endpoints);
 
         for _ in 0..5 {
             recorder.grpc_request(
@@ -1212,9 +1345,10 @@ mod tests {
     #[test]
     fn default_recorder_emits_dynamic_series_values_into_backend() {
         let test = Arc::new(crate::client_metrics::test_recorder::TestRecorder::new());
-        let recorder: Arc<dyn MetricsRecorder> = Arc::new(DefaultMetricsRecorder::with_backend(
-            Arc::clone(&test) as Arc<dyn MetricsBackend>,
-        ));
+        let recorder: Arc<dyn MetricsRecorder> = Arc::new(
+            DefaultMetricsRecorder::with_backend(Arc::clone(&test) as Arc<dyn MetricsBackend>)
+                .with_metrics_detail(MetricsDetail::Endpoints),
+        );
 
         recorder.grpc_request(
             "ep:2135",

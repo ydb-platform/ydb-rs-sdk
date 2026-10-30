@@ -48,7 +48,13 @@ on the no-op recorder. The client is built without
 it binds to the ambient global recorder) and carries two static labels:
 `driver_name="metrics-example"`
 (via `with_driver_name`) and `app="metrics-example"` (via
-`with_metrics_label`).
+`with_metrics_label`). The example opts into
+`MetricsDetail::Endpoints` to demonstrate per-endpoint gRPC series. SDK clients
+use aggregated `MetricsDetail::Basic` series without an `endpoint` label by
+default. Endpoint detail retains at most 64 distinct addresses per client by
+default (`with_metrics_max_endpoints` overrides this); further addresses share
+`endpoint="__other__"` without being retained in SDK caches or the interner.
+The limit does not remove series already retained by an external backend.
 
 Duration histograms are exported with custom buckets
 (`PrometheusBuilder::set_buckets_for_metric`): all SDK durations are recorded

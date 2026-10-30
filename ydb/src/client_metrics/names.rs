@@ -7,6 +7,7 @@ use crate::client_metrics::backend::{
     MetricsBackend,
 };
 use crate::client_metrics::dynamic::DynamicCaches;
+use crate::client_metrics::endpoints::EndpointRegistry;
 use crate::client_metrics::{
     QueryOperation, QueryTransactionResult, SessionPoolAcquireResult, SessionPoolCloseReason,
 };
@@ -125,6 +126,8 @@ pub(crate) struct MetricsNames {
     /// Registry of admitted query names for the named query series
     /// (`ydb_query_named_*`), with the unique-name cap applied.
     pub query_names: super::query_names::QueryNameRegistry,
+    /// Endpoint label policy and bounded set of admitted endpoint values.
+    pub endpoints: EndpointRegistry,
     /// Handle caches for the dynamic series (runtime string labels).
     pub dynamic: DynamicCaches,
     /// Static label prefix (driver name + extra labels), prepended to dynamic
@@ -391,6 +394,7 @@ impl MetricsNames {
                 base,
             ),
             query_names: super::query_names::QueryNameRegistry::default(),
+            endpoints: EndpointRegistry::default(),
             dynamic: DynamicCaches::default(),
             base_labels: base.to_vec(),
             backend,

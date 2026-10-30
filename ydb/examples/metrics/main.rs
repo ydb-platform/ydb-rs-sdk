@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tokio::signal;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
-use ydb::{Client, ClientBuilder, YdbError, YdbResult};
+use ydb::{Client, ClientBuilder, MetricsDetail, YdbError, YdbResult};
 
 /// The client shared by scenario tasks. `RwLock` allows the reconnect scenario
 /// to swap in a freshly built client; scenarios clone the inner `Arc` and drop
@@ -32,6 +32,7 @@ pub(crate) async fn build_client(connection_string: &str) -> YdbResult<Client> {
     ClientBuilder::new_from_connection_string(connection_string)?
         .with_driver_name("metrics-example")
         .with_metrics_label("app", "metrics-example")
+        .with_metrics_detail(MetricsDetail::Endpoints)
         .build()
         .await
 }

@@ -15,6 +15,7 @@ use std::sync::RwLock;
 use crate::grpc_wrapper::metrics_interceptor::GrpcCode;
 
 use super::backend::{CounterHandle, GaugeHandle, HistogramHandle};
+use super::endpoints::EndpointKey;
 use super::interning;
 
 /// Cache key component for the `grpc_code` label: the closed gRPC status set
@@ -53,12 +54,12 @@ impl GrpcCodeKey {
 // different label sets must not share a key: `ydb_grpc_request_duration_seconds`
 // has no `grpc_code` label, and a shared four-part key would re-record each
 // observation through both handles.
-pub(crate) type GrpcRequestsKey = (usize, usize, usize, GrpcCodeKey);
-pub(crate) type GrpcRequestDurationKey = (usize, usize, usize);
-pub(crate) type GrpcErrorsKey = (usize, GrpcCodeKey);
-pub(crate) type GrpcStreamMessagesKey = (usize, usize, usize, usize);
-pub(crate) type GrpcConnectionsKey = (usize, usize);
-pub(crate) type GrpcConnectionEstablishKey = (usize, bool);
+pub(crate) type GrpcRequestsKey = (EndpointKey, usize, usize, GrpcCodeKey);
+pub(crate) type GrpcRequestDurationKey = (EndpointKey, usize, usize);
+pub(crate) type GrpcErrorsKey = (EndpointKey, GrpcCodeKey);
+pub(crate) type GrpcStreamMessagesKey = (EndpointKey, usize, usize, usize);
+pub(crate) type GrpcConnectionsKey = (EndpointKey, usize);
+pub(crate) type GrpcConnectionEstablishKey = (EndpointKey, bool);
 pub(crate) type QueryErrorsKey = (usize, usize);
 pub(crate) type QueryTransactionRetriesKey = usize;
 pub(crate) type QueryNamedOperationsKey = (usize, usize);

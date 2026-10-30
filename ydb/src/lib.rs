@@ -103,6 +103,7 @@ mod connection_pool_test;
 
 pub use client_metrics::{
     Counter, Gauge, Histogram, MetricDescription, MetricLabel, MetricUnit, MetricsBackend,
+    MetricsDetail,
 };
 
 pub use async_closure::{

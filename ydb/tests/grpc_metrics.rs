@@ -30,23 +30,26 @@ async fn grpc_request_metrics_after_query() -> YdbResult<()> {
     let handler = QueryRowHandler::new(tokio::sync::mpsc::unbounded_channel().0);
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server, recorder).await?;
-    let authority = endpoint_authority(&server).to_string();
 
     let mut qc = client.query_client();
     let _row = QueryExecutor::query_row(&mut qc, "SELECT 42 AS val").await?;
 
-    // One requests_total series per (service, method, grpc_code) combination.
+    // One aggregated requests_total series per (service, method, grpc_code)
+    // combination. Basic detail does not attach endpoint labels.
     for (key, value) in [
         ("service", "Ydb.Query.V1.QueryService"),
         ("method", "ExecuteQuery"),
         ("grpc_code", "ok"),
-        ("endpoint", authority.as_str()),
     ] {
         assert!(
             counter_value_with_label(&registry, "ydb_grpc_requests_total", key, value) >= 1,
             "ydb_grpc_requests_total must have a series with {key}={value}"
         );
     }
+    assert_eq!(
+        counter_label_value(&registry, "ydb_grpc_requests_total", "endpoint"),
+        None
+    );
     // The pooled one-shot also goes through CreateSession and AttachSession.
     for method in ["CreateSession", "AttachSession"] {
         assert!(
@@ -169,7 +172,7 @@ async fn grpc_stream_messages_total_on_topic_stream() -> YdbResult<()> {
         stream_id: stream_id.clone(),
     })
     .await;
-    let client = make_client(&server, recorder).await?;
+    let client = make_client_with_endpoint_metrics(&server, recorder).await?;
 
     let mut reader = client
         .topic_client()

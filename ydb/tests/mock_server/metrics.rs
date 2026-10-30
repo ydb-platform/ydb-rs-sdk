@@ -12,7 +12,7 @@ use metrics::Recorder as _;
 use prometheus::{Registry, proto::MetricFamily};
 use ydb::{
     Client, ClientBuilder, Counter, Gauge, Histogram, MetricDescription, MetricLabel, MetricUnit,
-    MetricsBackend, YdbResult,
+    MetricsBackend, MetricsDetail, YdbResult,
 };
 
 use crate::mock_server::server::MockServer;
@@ -158,6 +158,21 @@ pub async fn make_client(
     recorder: metrics_prometheus::Recorder,
 ) -> YdbResult<Client> {
     make_client_with_labels(server, recorder, Vec::<(String, String)>::new()).await
+}
+
+/// Client with per-endpoint gRPC metric series enabled explicitly.
+pub async fn make_client_with_endpoint_metrics(
+    server: &MockServer,
+    recorder: metrics_prometheus::Recorder,
+) -> YdbResult<Client> {
+    ClientBuilder::new_from_connection_string(format!(
+        "{}{DATABASE}?use_discovery=false",
+        server.endpoint()
+    ))?
+    .with_metrics_detail(MetricsDetail::Endpoints)
+    .with_metrics_recorder(backend(recorder))
+    .build()
+    .await
 }
 
 /// Like [`make_client`], plus custom static metric labels.

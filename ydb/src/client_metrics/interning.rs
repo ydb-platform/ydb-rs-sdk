@@ -12,8 +12,9 @@ use std::sync::{Arc, OnceLock, RwLock};
 /// Interned string table shared by all [`DefaultMetricsRecorder`] instances.
 ///
 /// Lock order: `map` is always acquired before `values` when both are needed,
-/// so the two locks cannot deadlock. Entries are never removed: label sources
-/// (endpoints, gRPC services and methods) are finite for a given cluster.
+/// so the two locks cannot deadlock. Entries are never removed. Endpoint
+/// admission is bounded per recorder before interning; gRPC services and
+/// methods are finite for the YDB API.
 struct Interner {
     map: RwLock<HashMap<Box<str>, usize>>,
     values: RwLock<Vec<Arc<str>>>,
@@ -26,6 +27,16 @@ fn interner() -> &'static Interner {
         map: RwLock::new(HashMap::new()),
         values: RwLock::new(Vec::new()),
     })
+}
+
+/// Return the existing id for `value` without interning or allocating it.
+pub(crate) fn lookup(value: &str) -> Option<usize> {
+    interner()
+        .map
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(value)
+        .copied()
 }
 
 /// Map `value` to a stable id, interning it on first use.

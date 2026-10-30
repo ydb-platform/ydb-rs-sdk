@@ -1,5 +1,7 @@
 use crate::client_common::{DBCredentials, TokenCache};
-use crate::client_metrics::{DefaultMetricsRecorder, MetricsBackend, MetricsRecorder};
+use crate::client_metrics::{
+    DefaultMetricsRecorder, MetricsBackend, MetricsDetail, MetricsRecorder,
+};
 use crate::client_topic::compression::Executor;
 use crate::credentials::{
     AccessTokenCredentials, CredentialsRef, GCEMetadata, ServiceAccountCredentials,
@@ -240,6 +242,8 @@ pub struct ClientBuilder {
     driver_name: Option<String>,
     metrics_backend: Option<Arc<dyn MetricsBackend>>,
     metrics_labels: Vec<(String, String)>,
+    metrics_detail: MetricsDetail,
+    metrics_max_endpoints: Option<usize>,
     metrics_max_query_names: Option<usize>,
 }
 
@@ -283,7 +287,12 @@ impl ClientBuilder {
             self.driver_name.take(),
             std::mem::take(&mut self.metrics_labels),
             self.metrics_backend.take(),
-        );
+        )
+        .with_metrics_detail(self.metrics_detail);
+        let metrics_backend = match self.metrics_max_endpoints.take() {
+            Some(max_endpoints) => metrics_backend.with_max_endpoints(max_endpoints),
+            None => metrics_backend,
+        };
         let metrics_backend: Arc<dyn MetricsRecorder> = match self.metrics_max_query_names.take() {
             Some(max_query_names) => {
                 Arc::new(metrics_backend.with_max_query_names(max_query_names))
@@ -422,6 +431,27 @@ impl ClientBuilder {
         self
     }
 
+    /// Set the level of detail for gRPC transport metrics.
+    ///
+    /// [`MetricsDetail::Basic`] is the default: series are aggregated across
+    /// endpoints without an `endpoint` label. [`MetricsDetail::Endpoints`]
+    /// splits the same series by endpoint; it does not emit both variants.
+    pub fn with_metrics_detail(mut self, detail: MetricsDetail) -> Self {
+        self.metrics_detail = detail;
+        self
+    }
+
+    /// Cap distinct `endpoint` label values per client (default 64).
+    ///
+    /// This setting applies only with [`MetricsDetail::Endpoints`]. New
+    /// endpoints beyond the cap share `endpoint="__other__"` and are not
+    /// retained in SDK caches or the string interner. The cap bounds SDK memory
+    /// and newly created series; a backend may retain series already created.
+    pub fn with_metrics_max_endpoints(mut self, max_endpoints: usize) -> Self {
+        self.metrics_max_endpoints = Some(max_endpoints);
+        self
+    }
+
     /// Cap the number of unique `query_name` values recorded through
     /// [`crate::client_query::builders::CallBuilder::with_name`] (default 512).
     ///
@@ -480,6 +510,8 @@ impl ClientBuilder {
             driver_name: None,
             metrics_backend: None,
             metrics_labels: Vec::new(),
+            metrics_detail: MetricsDetail::Basic,
+            metrics_max_endpoints: None,
             metrics_max_query_names: None,
         }
     }
