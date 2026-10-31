@@ -7,28 +7,22 @@ mod mock_server;
 
 use std::sync::{Arc, Mutex};
 
-use ydb::{Client, ClientBuilder, YdbError, YdbResult};
+use ydb::{Client, YdbError};
 use ydb_grpc::ydb_proto::query::{ExecMode, ExecuteQueryRequest, ExecuteQueryResponsePart};
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 use ydb_grpc::ydb_proto::table_stats::QueryStats;
 
 use crate::mock_server::handler::{FromHandlerToService, Handler, Incoming, Reply};
+use crate::mock_server::metrics::{
+    counter_value, counter_value_with_label, histogram_sample_count_with_label, make_client,
+    test_recorder,
+};
 use crate::mock_server::query::{QueryIncoming, QueryReply};
 use crate::mock_server::server::MockServer;
 
-const DATABASE: &str = "/local";
 const QUERY: &str = "SELECT 1";
 const PLAN: &str = r#"{"Plan":{"Node Type":"ResultSet"}}"#;
 const AST: &str = "(return (Just (AsList (AsStruct))))";
-
-async fn make_client(server: &MockServer) -> YdbResult<Client> {
-    ClientBuilder::new_from_connection_string(format!(
-        "{}{DATABASE}?use_discovery=false",
-        server.endpoint()
-    ))?
-    .build()
-    .await
-}
 
 /// What the mock answers an `ExecuteQuery` with.
 #[derive(Clone)]
@@ -113,11 +107,19 @@ impl Handler for RecordingHandler {
     }
 }
 
-async fn start(response: Response) -> (MockServer, Client, Arc<Mutex<Vec<ExecuteQueryRequest>>>) {
+async fn start(
+    response: Response,
+) -> (
+    MockServer,
+    Client,
+    Arc<Mutex<Vec<ExecuteQueryRequest>>>,
+    prometheus::Registry,
+) {
     let (handler, requests) = RecordingHandler::new(response);
     let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server).await.expect("build client");
-    (server, client, requests)
+    let (registry, recorder) = test_recorder();
+    let client = make_client(&server, recorder).await.expect("build client");
+    (server, client, requests, registry)
 }
 
 /// Every analysis request must be minimal: implicit session, no transaction, no parameters,
@@ -138,7 +140,7 @@ fn only_request(requests: &Arc<Mutex<Vec<ExecuteQueryRequest>>>) -> ExecuteQuery
 
 #[tokio::test]
 async fn explain_sends_explain_mode_and_returns_plan_and_ast() {
-    let (_server, client, requests) = start(Response::WithStats).await;
+    let (_server, client, requests, registry) = start(Response::WithStats).await;
 
     let result = client
         .query_client()
@@ -149,11 +151,34 @@ async fn explain_sends_explain_mode_and_returns_plan_and_ast() {
     assert_eq!(result.query_plan, PLAN);
     assert_eq!(result.query_ast, AST);
     assert_minimal_request(&only_request(&requests), ExecMode::Explain);
+    assert_eq!(
+        counter_value_with_label(
+            &registry,
+            "ydb_query_operations_total",
+            "operation",
+            "explain"
+        ),
+        1
+    );
+    assert_eq!(
+        counter_value_with_label(&registry, "ydb_query_operations_total", "result", "ok"),
+        1
+    );
+    assert_eq!(counter_value(&registry, "ydb_query_errors_total"), 0);
+    assert_eq!(
+        histogram_sample_count_with_label(
+            &registry,
+            "ydb_query_operation_duration_seconds",
+            "operation",
+            "explain"
+        ),
+        1
+    );
 }
 
 #[tokio::test]
 async fn explain_without_stats_is_an_error() {
-    let (_server, client, _requests) = start(Response::StatusOnly).await;
+    let (_server, client, _requests, registry) = start(Response::StatusOnly).await;
 
     let err = client
         .query_client()
@@ -170,11 +195,30 @@ async fn explain_without_stats_is_an_error() {
         }
         other => panic!("expected a Custom error, got {other:?}"),
     }
+    assert_eq!(
+        counter_value_with_label(
+            &registry,
+            "ydb_query_errors_total",
+            "status_code",
+            "CLIENT_ERROR"
+        ),
+        1
+    );
+    assert_eq!(
+        histogram_sample_count_with_label(
+            &registry,
+            "ydb_query_operation_duration_seconds",
+            "operation",
+            "explain"
+        ),
+        1
+    );
 }
 
 #[tokio::test]
 async fn non_success_status_is_propagated() {
-    let (_server, client, _requests) = start(Response::Failing(StatusCode::BadRequest)).await;
+    let (_server, client, _requests, registry) =
+        start(Response::Failing(StatusCode::BadRequest)).await;
 
     let err = client
         .query_client()
@@ -185,5 +229,23 @@ async fn non_success_status_is_propagated() {
     assert!(
         matches!(err, YdbError::YdbStatusError(_)),
         "expected a server status error, got {err:?}"
+    );
+    assert_eq!(
+        counter_value_with_label(
+            &registry,
+            "ydb_query_errors_total",
+            "status_code",
+            "BAD_REQUEST"
+        ),
+        1
+    );
+    assert_eq!(
+        histogram_sample_count_with_label(
+            &registry,
+            "ydb_query_operation_duration_seconds",
+            "operation",
+            "explain"
+        ),
+        1
     );
 }

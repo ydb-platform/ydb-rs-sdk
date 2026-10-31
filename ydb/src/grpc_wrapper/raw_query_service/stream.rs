@@ -32,6 +32,8 @@ pub(crate) struct ExecuteQueryStream {
     plan: Option<RawQueryStatsPlan>,
     #[cfg(test)]
     test_parts: Option<Vec<ExecuteQueryResponsePart>>,
+    #[cfg(test)]
+    test_close_error: Option<crate::grpc_wrapper::raw_errors::RawError>,
 }
 
 impl Drop for ExecuteQueryStream {
@@ -52,6 +54,8 @@ impl ExecuteQueryStream {
             plan: None,
             #[cfg(test)]
             test_parts: None,
+            #[cfg(test)]
+            test_close_error: None,
         }
     }
 
@@ -67,7 +71,17 @@ impl ExecuteQueryStream {
             stats: None,
             plan: None,
             test_parts: Some(parts),
+            test_close_error: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_close_error(
+        mut self,
+        error: crate::grpc_wrapper::raw_errors::RawError,
+    ) -> Self {
+        self.test_close_error = Some(error);
+        self
     }
 
     pub fn stats(&self) -> Option<Duration> {
@@ -352,6 +366,10 @@ impl ExecuteQueryStream {
         }
         drop(self.grpc.take());
         self.finished = true;
+        #[cfg(test)]
+        if let Some(error) = self.test_close_error.take() {
+            return Err(error);
+        }
         Ok(StreamCloseMeta {
             tx_id: self.captured_tx_id.take(),
         })

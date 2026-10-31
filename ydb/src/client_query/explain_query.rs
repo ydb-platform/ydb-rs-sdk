@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::future::IntoFuture;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_util::future::BoxFuture;
 use tracing::instrument;
@@ -128,7 +128,20 @@ impl<'a> IntoFuture for ExplainQueryBuilder<'a> {
     type IntoFuture = BoxFuture<'a, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(explain_query(self.ctx, self.text, self.timeout))
+        Box::pin(async move {
+            let recorder = self.ctx.metrics_recorder.clone();
+            let start = Instant::now();
+            let result = explain_query(self.ctx, self.text, self.timeout).await;
+            super::builders::record_query_operation(
+                &recorder,
+                crate::client_metrics::QueryOperation::Explain,
+                None,
+                start,
+                &result,
+                None,
+            );
+            result
+        })
     }
 }
 

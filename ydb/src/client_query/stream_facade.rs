@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::client_metrics::{MetricsRecorder, QueryOperation};
 use crate::closure;
@@ -10,6 +10,7 @@ use crate::grpc_wrapper::raw_table_service::value::RawResultSet;
 use crate::result::ResultSet;
 use crate::types::Value;
 
+use super::builders::record_query_operation;
 use super::exec::{
     CallOptions, ClientExecContext, ClientQuerySession, ExecTarget, OpenedClientQueryStream,
     TxExecContext, apply_stream_tx_id, client_begin_stream_once, resolve_commit_tx,
@@ -30,28 +31,41 @@ fn raw_sets_size(raw_sets: &[RawResultSet]) -> (u64, u64) {
     )
 }
 
-/// Per-stream result-size accounting for the streaming `query` operation:
-/// rows and bytes are accumulated as result sets arrive and recorded once when
-/// the stream finishes, closes, or is dropped mid-drain.
-struct StreamResultMetrics {
+/// Terminal accounting for one streaming `query` operation. Opening a stream
+/// starts the timer; its first terminal outcome consumes this guard exactly once.
+struct StreamTerminalMetrics {
     recorder: Arc<dyn MetricsRecorder>,
     query_name: Option<&'static str>,
+    start: Instant,
     rows: u64,
     bytes: u64,
 }
 
-impl StreamResultMetrics {
+impl StreamTerminalMetrics {
     fn observe(&mut self, raw: &RawResultSet) {
         self.rows += raw.rows_count();
         self.bytes += raw.result_size_bytes();
     }
 
-    fn record(self) {
-        self.recorder
-            .query_operation_result(QueryOperation::Query, self.rows, self.bytes);
-        if let Some(name) = self.query_name {
+    fn record(self, result: Result<(), &YdbError>) {
+        let result = result.map_err(Clone::clone);
+        let sizes = (self.rows, self.bytes);
+        record_query_operation(
+            &self.recorder,
+            QueryOperation::Query,
+            self.query_name,
+            self.start,
+            &result,
+            result.as_ref().ok().map(|_| sizes),
+        );
+        if result.is_err() {
+            // Preserve the existing partial-result accounting on errors and drops.
             self.recorder
-                .query_named_operation_result(name, self.rows, self.bytes);
+                .query_operation_result(QueryOperation::Query, self.rows, self.bytes);
+            if let Some(name) = self.query_name {
+                self.recorder
+                    .query_named_operation_result(name, self.rows, self.bytes);
+            }
         }
     }
 }
@@ -63,7 +77,7 @@ impl StreamResultMetrics {
 pub struct QueryStream<'a> {
     stream: ExecuteQueryStream,
     lifecycle: QueryStreamLifecycle<'a>,
-    result_metrics: Option<StreamResultMetrics>,
+    terminal_metrics: Option<StreamTerminalMetrics>,
 }
 
 enum QueryStreamLifecycle<'a> {
@@ -90,7 +104,10 @@ impl QueryStream<'_> {
         if let Err(error) = self.apply_captured_transaction_id() {
             tracing::warn!(%error, "failed to capture transaction id while cancelling query stream");
         }
-        self.record_result_sizes();
+        let error = YdbError::TransportGRPCStatus(Arc::new(tonic::Status::cancelled(
+            "query stream dropped before close",
+        )));
+        self.record_terminal(Err(&error));
         self.stream.cancel();
         self.finish_cancelled_lifecycle();
     }
@@ -102,10 +119,10 @@ impl QueryStream<'_> {
         }
     }
 
-    /// Record the accumulated `query` operation result sizes exactly once.
-    fn record_result_sizes(&mut self) {
-        if let Some(metrics) = self.result_metrics.take() {
-            metrics.record();
+    /// Record the terminal operation outcome and accumulated sizes exactly once.
+    fn record_terminal(&mut self, result: Result<(), &YdbError>) {
+        if let Some(metrics) = self.terminal_metrics.take() {
+            metrics.record(result);
         }
     }
 }
@@ -115,13 +132,15 @@ impl<'a> QueryStream<'a> {
         opened: OpenedClientQueryStream,
         recorder: Arc<dyn MetricsRecorder>,
         query_name: Option<&'static str>,
+        start: Instant,
     ) -> Self {
         Self {
             stream: opened.stream,
             lifecycle: QueryStreamLifecycle::Active(QueryStreamOwner::Client(opened.session)),
-            result_metrics: Some(StreamResultMetrics {
+            terminal_metrics: Some(StreamTerminalMetrics {
                 recorder,
                 query_name,
+                start,
                 rows: 0,
                 bytes: 0,
             }),
@@ -134,6 +153,7 @@ impl<'a> QueryStream<'a> {
         commit_at_end: bool,
         recorder: Arc<dyn MetricsRecorder>,
         query_name: Option<&'static str>,
+        start: Instant,
     ) -> Self {
         Self {
             stream,
@@ -141,9 +161,10 @@ impl<'a> QueryStream<'a> {
                 context,
                 commit_at_end,
             }),
-            result_metrics: Some(StreamResultMetrics {
+            terminal_metrics: Some(StreamTerminalMetrics {
                 recorder,
                 query_name,
+                start,
                 rows: 0,
                 bytes: 0,
             }),
@@ -174,7 +195,6 @@ impl<'a> QueryStream<'a> {
     }
 
     fn finish(&mut self) -> YdbResult<()> {
-        self.record_result_sizes();
         let lifecycle = std::mem::replace(&mut self.lifecycle, QueryStreamLifecycle::Finished);
         match lifecycle {
             QueryStreamLifecycle::Active(QueryStreamOwner::Client(session)) => {
@@ -189,7 +209,7 @@ impl<'a> QueryStream<'a> {
         }
     }
 
-    pub async fn next_result_set(&mut self) -> YdbResult<Option<ResultSet>> {
+    async fn next_result_set_inner(&mut self) -> YdbResult<Option<ResultSet>> {
         let next = match self.stream.next_result_set().await {
             Ok(v) => v,
             Err(err) => {
@@ -210,7 +230,7 @@ impl<'a> QueryStream<'a> {
         match next {
             Some((raw, transaction_id)) => {
                 self.apply_transaction_id(transaction_id)?;
-                if let Some(metrics) = &mut self.result_metrics {
+                if let Some(metrics) = &mut self.terminal_metrics {
                     metrics.observe(&raw);
                 }
                 ResultSet::try_from(raw).map(Some)
@@ -222,13 +242,21 @@ impl<'a> QueryStream<'a> {
         }
     }
 
+    pub async fn next_result_set(&mut self) -> YdbResult<Option<ResultSet>> {
+        let result = self.next_result_set_inner().await;
+        if let Err(error) = &result {
+            self.record_terminal(Err(error));
+        }
+        result
+    }
+
     pub fn stats(&self) -> Option<QueryStats> {
         self.stream
             .stats()
             .map(|total_duration| QueryStats { total_duration })
     }
 
-    pub async fn close(mut self) -> YdbResult<()> {
+    async fn close_inner(&mut self) -> YdbResult<()> {
         match self.stream.close().await {
             Ok(meta) => {
                 self.apply_transaction_id(meta.tx_id)?;
@@ -237,11 +265,19 @@ impl<'a> QueryStream<'a> {
             Err(err) => {
                 let ydb_err = YdbError::from(err);
                 self.handle_error(&ydb_err)?;
-                self.record_result_sizes();
                 self.lifecycle = QueryStreamLifecycle::Finished;
                 Err(ydb_err)
             }
         }
+    }
+
+    pub async fn close(mut self) -> YdbResult<()> {
+        let result = self.close_inner().await;
+        match &result {
+            Ok(()) => self.record_terminal(Ok(())),
+            Err(error) => self.record_terminal(Err(error)),
+        }
+        result
     }
 }
 

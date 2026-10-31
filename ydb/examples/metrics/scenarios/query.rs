@@ -51,7 +51,7 @@ pub(crate) async fn run(client: SharedClient, cancel: CancellationToken) {
             return;
         }
         let client = client.read().await.clone();
-        let tick = rand::thread_rng().gen_range(0..9);
+        let tick = rand::thread_rng().gen_range(0..10);
         let result = match tick {
             0 => query_row_tick(&client).await,
             1 => failing_query_tick(&client).await,
@@ -60,7 +60,8 @@ pub(crate) async fn run(client: SharedClient, cancel: CancellationToken) {
             4 => stream_tick(&client).await,
             5 => exec_ddl_tick(&client).await,
             6 => script_tick(&client).await,
-            7 => named_query_row_tick(&client).await,
+            7 => explain_tick(&client).await,
+            8 => named_query_row_tick(&client).await,
             _ => named_failing_query_tick(&client).await,
         };
         if let Err(err) = result {
@@ -91,6 +92,21 @@ async fn query_row_tick(client: &ydb::Client) -> YdbResult<()> {
         .param("$value", 42_u64)
         .await?;
     let _value: Option<u64> = row.remove_field_by_name("value")?.try_into()?;
+    Ok(())
+}
+
+/// Explain the example query without executing it.
+///
+/// Moves `ydb_query_operations_total{operation="explain",result="ok"}` and its
+/// duration histogram. Explain has no result rows/bytes observations.
+async fn explain_tick(client: &ydb::Client) -> YdbResult<()> {
+    let qc = client.query_client();
+    let explanation = qc.explain(format!("SELECT id, val FROM {TABLE}")).await?;
+    tracing::debug!(
+        plan = %explanation.query_plan,
+        ast = %explanation.query_ast,
+        "query explained"
+    );
     Ok(())
 }
 

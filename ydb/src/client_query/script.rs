@@ -4,9 +4,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::client::TimeoutSettings;
-use crate::client_metrics::{
-    QueryOperation, query_names::is_valid_query_name, ydb_status_code_label,
-};
+use crate::client_metrics::{QueryOperation, query_names::is_valid_query_name};
 use crate::closure;
 use crate::errors::{Idempotency, YdbError, YdbResult};
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
@@ -116,31 +114,16 @@ impl<'a> IntoFuture for ExecuteScriptBuilder<'a> {
                     .await
             }
             .await;
-            match &result {
-                // ExecuteScript returns an operation handle, not rows: the
-                // result-size histograms do not apply.
-                Ok(_) => {
-                    recorder.query_operation(QueryOperation::ExecuteScript, true, start.elapsed())
-                }
-                Err(error) => {
-                    recorder.query_operation(QueryOperation::ExecuteScript, false, start.elapsed());
-                    recorder.query_operation_error(
-                        QueryOperation::ExecuteScript,
-                        ydb_status_code_label(error),
-                    );
-                }
-            }
-            if let Some(name) = query_name {
-                match &result {
-                    Ok(_) => {
-                        recorder.query_named_operation(name, true, start.elapsed());
-                    }
-                    Err(error) => {
-                        recorder.query_named_operation(name, false, start.elapsed());
-                        recorder.query_named_operation_error(name, ydb_status_code_label(error));
-                    }
-                }
-            }
+            // ExecuteScript returns an operation handle, not rows: result sizes
+            // do not apply.
+            super::builders::record_query_operation(
+                &recorder,
+                QueryOperation::ExecuteScript,
+                query_name,
+                start,
+                &result,
+                None,
+            );
             result
         })
     }
@@ -199,6 +182,7 @@ impl<'a> IntoFuture for FetchScriptResultsBuilder<'a> {
             let recorder = Arc::clone(&self.ctx.metrics_recorder);
             let start = Instant::now();
             let query_name = self.opts.query_name;
+            let mut sizes = None;
             let result = client_fetch_script_results(
                 self.ctx,
                 self.operation_id,
@@ -207,42 +191,20 @@ impl<'a> IntoFuture for FetchScriptResultsBuilder<'a> {
                 self.rows_limit,
                 self.opts,
             )
-            .await;
-            match result {
-                Ok((fetched, rows, bytes)) => {
-                    recorder.query_operation(
-                        QueryOperation::FetchScriptResults,
-                        true,
-                        start.elapsed(),
-                    );
-                    recorder.query_operation_result(
-                        QueryOperation::FetchScriptResults,
-                        rows,
-                        bytes,
-                    );
-                    if let Some(name) = query_name {
-                        recorder.query_named_operation(name, true, start.elapsed());
-                        recorder.query_named_operation_result(name, rows, bytes);
-                    }
-                    Ok(fetched)
-                }
-                Err(error) => {
-                    recorder.query_operation(
-                        QueryOperation::FetchScriptResults,
-                        false,
-                        start.elapsed(),
-                    );
-                    recorder.query_operation_error(
-                        QueryOperation::FetchScriptResults,
-                        ydb_status_code_label(&error),
-                    );
-                    if let Some(name) = query_name {
-                        recorder.query_named_operation(name, false, start.elapsed());
-                        recorder.query_named_operation_error(name, ydb_status_code_label(&error));
-                    }
-                    Err(error)
-                }
-            }
+            .await
+            .map(|(fetched, rows, bytes)| {
+                sizes = Some((rows, bytes));
+                fetched
+            });
+            super::builders::record_query_operation(
+                &recorder,
+                QueryOperation::FetchScriptResults,
+                query_name,
+                start,
+                &result,
+                sizes,
+            );
+            result
         })
     }
 }

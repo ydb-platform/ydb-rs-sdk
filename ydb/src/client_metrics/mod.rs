@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use ydb_grpc::ydb_proto::status_ids::StatusCode;
 
-use crate::errors::{YdbError, YdbOrCustomerError};
+use crate::errors::YdbError;
 
 pub(crate) mod backend;
 pub(crate) mod dynamic;
@@ -215,12 +215,13 @@ pub(crate) enum QueryOperation {
     Query,
     ExecuteScript,
     FetchScriptResults,
+    Explain,
 }
 
 impl QueryOperation {
     /// Number of label values; sizes the pre-registered `ydb_query_*` handle
     /// arrays in [`MetricsNames`](names::MetricsNames).
-    pub(crate) const LABEL_COUNT: usize = 6;
+    pub(crate) const LABEL_COUNT: usize = 7;
 
     /// Label values in [`Self::index`] order.
     pub(crate) const LABELS: [&'static str; Self::LABEL_COUNT] = [
@@ -230,6 +231,7 @@ impl QueryOperation {
         "query",
         "execute_script",
         "fetch_script_results",
+        "explain",
     ];
 
     pub(crate) fn index(self) -> usize {
@@ -240,6 +242,7 @@ impl QueryOperation {
             Self::Query => 3,
             Self::ExecuteScript => 4,
             Self::FetchScriptResults => 5,
+            Self::Explain => 6,
         }
     }
 }
@@ -247,8 +250,12 @@ impl QueryOperation {
 /// Outcome label for `ydb_query_transactions_total`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum QueryTransactionResult {
+    /// The transaction committed successfully.
     Commit,
+    /// The transaction rolled back explicitly, or a business callback error
+    /// was followed by a successful rollback.
     Rollback,
+    /// Commit, rollback, transport, or other infrastructure processing failed.
     Error,
 }
 
@@ -271,8 +278,9 @@ impl QueryTransactionResult {
 }
 
 /// `status_code` label value for the error and retry series: the native
-/// `Ydb.StatusIds.StatusCode` name, with transport-level errors mapped to the
-/// closest native status and unknown numeric codes to `STATUS_CODE_UNSPECIFIED`.
+/// `Ydb.StatusIds.StatusCode` name, transport-level errors mapped to the closest
+/// native status, client-side shape/conversion errors to `CLIENT_ERROR`, and
+/// unknown numeric codes to `STATUS_CODE_UNSPECIFIED`.
 pub(crate) fn ydb_status_code_label(error: &YdbError) -> &'static str {
     match error {
         YdbError::YdbStatusError(status) => StatusCode::try_from(status.operation_status)
@@ -288,21 +296,10 @@ pub(crate) fn ydb_status_code_label(error: &YdbError) -> &'static str {
             StatusCode::Unavailable.as_str_name()
         }
         YdbError::DeadlineExceeded => StatusCode::Timeout.as_str_name(),
-        YdbError::Custom(_)
-        | YdbError::Convert(_)
-        | YdbError::NoRows
-        | YdbError::InternalError(_)
-        | YdbError::EndpointHasNoHost(_) => StatusCode::GenericError.as_str_name(),
-    }
-}
-
-/// [`ydb_status_code_label`] for retry classification errors: customer errors
-/// never classify as retryable, so the fallback bucket is unreachable in
-/// practice on retry paths.
-pub(crate) fn ydb_or_customer_status_code_label(error: &YdbOrCustomerError) -> &'static str {
-    match error {
-        YdbOrCustomerError::YDB(error) => ydb_status_code_label(error),
-        YdbOrCustomerError::Customer(_) => StatusCode::GenericError.as_str_name(),
+        YdbError::Custom(_) | YdbError::Convert(_) | YdbError::NoRows => "CLIENT_ERROR",
+        YdbError::InternalError(_) | YdbError::EndpointHasNoHost(_) => {
+            StatusCode::GenericError.as_str_name()
+        }
     }
 }
 
@@ -1947,10 +1944,13 @@ mod tests {
             ydb_status_code_label(&YdbError::DeadlineExceeded),
             "TIMEOUT"
         );
-        assert_eq!(
-            ydb_status_code_label(&YdbError::Custom("client".to_string())),
-            "GENERIC_ERROR"
-        );
+        for error in [
+            YdbError::Custom("client".to_string()),
+            YdbError::Convert("conversion".to_string()),
+            YdbError::NoRows,
+        ] {
+            assert_eq!(ydb_status_code_label(&error), "CLIENT_ERROR");
+        }
         assert_eq!(
             ydb_status_code_label(&YdbError::YdbStatusError(YdbStatusError::new(
                 "unknown",

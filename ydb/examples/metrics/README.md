@@ -68,7 +68,7 @@ Four independent scenario loops run with randomized 5 s – 3 min intervals:
 
 | Scenario | What it does | Metric series it moves |
 |----------|--------------|------------------------|
-| `scenarios/query.rs` | Each tick picks one of: parameterized `query_row`, a failing query against a missing table, `retry_tx` commit (upsert + count), `retry_tx` explicit rollback, materialized result set + multi-result-set stream, DDL create/drop, `execute_script` + poll + `fetch_script_results`, a named `query_row` (`.with_name(...)`), a named failing query | Client counters + `ydb_row_query_time_histogram`; `ydb_query_operations_total{operation,result}`, `ydb_query_operation_duration_seconds`, `ydb_query_result_rows/bytes`, `ydb_query_errors_total`, `ydb_query_transactions_total`, `ydb_query_transaction_duration_seconds`; named variants `ydb_query_named_*{query_name}`; session pool acquire/use; every RPC in `ydb_grpc_requests_total` |
+| `scenarios/query.rs` | Each tick picks one of: parameterized `query_row`, a failing query against a missing table, `retry_tx` commit (upsert + count), `retry_tx` explicit rollback, materialized result set + multi-result-set stream, DDL create/drop, `execute_script` + poll + `fetch_script_results`, `explain`, a named `query_row` (`.with_name(...)`), a named failing query | Client counters + `ydb_row_query_time_histogram`; `ydb_query_operations_total{operation,result}`, `ydb_query_operation_duration_seconds`, `ydb_query_result_rows/bytes`, `ydb_query_errors_total`, `ydb_query_transactions_total`, `ydb_query_transaction_duration_seconds`; named variants `ydb_query_named_*{query_name}`; session pool acquire/use; every RPC in `ydb_grpc_requests_total` |
 | `scenarios/session_pool.rs` | Builds a dedicated driver with `with_session_pool(limit=5, warm_up=2, item_usage_limit=10, idle_ttl=30s)` and fires 10 parallel `query_row`s | `ydb_session_pool_sessions{state}`, `size_limit`, `pending_requests`, `acquire_total/seconds{result}`, `sessions_created_total`, `sessions_closed_total{reason}` (idle_ttl/usage_limit over time, shutdown at drop), `session_create_seconds`, `session_use_seconds` |
 | `scenarios/topic.rs` | Creates a directory + topic with a consumer, produces 5 messages, consumes them with commit (deadline-bounded), drops everything | `ydb_new_topic_client_counter`, `ydb_grpc_stream_messages_total{direction="sent"\|"received"}` on `StreamRead`/`StreamWrite`, topic/scheme RPCs in `ydb_grpc_requests_total` |
 | `scenarios/reconnect.rs` | Builds a fresh driver and swaps it into the shared slot, dropping the old one (no public `stop()` on `Client`) | `ydb_new_client_counter`, `ydb_grpc_connections{state="connecting"\|"active"}`, `ydb_grpc_connection_establish_seconds{result="ok"}`, discovery RPCs, `sessions_closed_total{reason="shutdown"}` on the old driver |
@@ -116,13 +116,15 @@ use these exact strings:
   subtracts only its own contribution. `cancelled` means the acquire future was
   dropped before completion. Aborting an attach listener during ordinary session
   cleanup does not emit an attach-stream closure.
-- **Query service:** `ydb_query_operations_total{operation=exec|query_row|query_result_set|query|execute_script|fetch_script_results,result=ok|error}`,
+- **Query service:** `ydb_query_operations_total{operation=exec|query_row|query_result_set|query|execute_script|fetch_script_results|explain,result=ok|error}`,
   `ydb_query_operation_duration_seconds{operation}`,
-  `ydb_query_result_rows{operation}`, `ydb_query_result_bytes{operation}`,
-  `ydb_query_errors_total{operation,status_code}`,
+  `ydb_query_result_rows{operation}`, `ydb_query_result_bytes{operation}` (not emitted for explain),
+  `ydb_query_errors_total{operation,status_code}` (`CLIENT_ERROR` for client-side shape/conversion failures),
   `ydb_query_transactions_total{result=commit|rollback|error}`,
   `ydb_query_transaction_duration_seconds`,
-  `ydb_query_transaction_retries_total{status_code}`.
+  `ydb_query_transaction_retries_total{status_code}` (only when the next attempt starts).
+  Stream outcomes, durations, and sizes are recorded once at close, failure, or
+  drop; dropping an unclosed stream produces `CANCELLED`.
 - **Named queries** (only for calls carrying `.with_name("...")`, mirrored from
   the common series): `ydb_query_named_operations_total{query_name,result}`,
   `ydb_query_named_operation_duration_seconds{query_name}`,

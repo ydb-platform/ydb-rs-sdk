@@ -360,27 +360,20 @@ impl<'a, S> IntoFuture for CallBuilder<'a, Streamed, S> {
                         client_begin_stream(context, self.text, self.params, self.opts, false)
                             .await;
                     match opened {
-                        Ok(opened) => {
-                            recorder.query_operation(QueryOperation::Query, true, start.elapsed());
-                            if let Some(name) = query_name {
-                                recorder.query_named_operation(name, true, start.elapsed());
-                            }
-                            Ok(QueryStream::from_client(opened, recorder, query_name))
-                        }
+                        Ok(opened) => Ok(QueryStream::from_client(
+                            opened, recorder, query_name, start,
+                        )),
                         Err(error) => {
-                            recorder.query_operation(QueryOperation::Query, false, start.elapsed());
-                            recorder.query_operation_error(
+                            let result: YdbResult<QueryStream<'a>> = Err(error);
+                            record_query_operation(
+                                &recorder,
                                 QueryOperation::Query,
-                                ydb_status_code_label(&error),
+                                query_name,
+                                start,
+                                &result,
+                                None,
                             );
-                            if let Some(name) = query_name {
-                                recorder.query_named_operation(name, false, start.elapsed());
-                                recorder.query_named_operation_error(
-                                    name,
-                                    ydb_status_code_label(&error),
-                                );
-                            }
-                            Err(error)
+                            result
                         }
                     }
                 }
@@ -388,33 +381,25 @@ impl<'a, S> IntoFuture for CallBuilder<'a, Streamed, S> {
                     let stream =
                         tx_begin_stream(context, self.text, self.params, self.opts, false).await;
                     match stream {
-                        Ok(stream) => {
-                            recorder.query_operation(QueryOperation::Query, true, start.elapsed());
-                            if let Some(name) = query_name {
-                                recorder.query_named_operation(name, true, start.elapsed());
-                            }
-                            Ok(QueryStream::from_tx(
-                                stream,
-                                context,
-                                commit_at_end,
-                                recorder,
-                                query_name,
-                            ))
-                        }
+                        Ok(stream) => Ok(QueryStream::from_tx(
+                            stream,
+                            context,
+                            commit_at_end,
+                            recorder,
+                            query_name,
+                            start,
+                        )),
                         Err(error) => {
-                            recorder.query_operation(QueryOperation::Query, false, start.elapsed());
-                            recorder.query_operation_error(
+                            let result: YdbResult<QueryStream<'a>> = Err(error);
+                            record_query_operation(
+                                &recorder,
                                 QueryOperation::Query,
-                                ydb_status_code_label(&error),
+                                query_name,
+                                start,
+                                &result,
+                                None,
                             );
-                            if let Some(name) = query_name {
-                                recorder.query_named_operation(name, false, start.elapsed());
-                                recorder.query_named_operation_error(
-                                    name,
-                                    ydb_status_code_label(&error),
-                                );
-                            }
-                            Err(error)
+                            result
                         }
                     }
                 }
@@ -434,7 +419,7 @@ fn target_recorder(core: &ExecTarget<'_>) -> Arc<dyn MetricsRecorder> {
 /// the `{operation,result}` counter and the duration histogram on any outcome,
 /// the error status on failure, and the result sizes on success. With a query
 /// name set, the same outcome is mirrored into the named series.
-fn record_query_operation<T>(
+pub(crate) fn record_query_operation<T>(
     recorder: &Arc<dyn MetricsRecorder>,
     operation: QueryOperation,
     query_name: Option<&'static str>,

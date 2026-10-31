@@ -35,9 +35,7 @@ use std::time::{Duration, Instant};
 use http::Uri;
 use tracing::instrument;
 
-use crate::client_metrics::{
-    MetricsRecorder, QueryTransactionResult, ydb_or_customer_status_code_label,
-};
+use crate::client_metrics::{MetricsRecorder, QueryTransactionResult, ydb_status_code_label};
 use crate::client_query::exec::TxState;
 use crate::closure;
 use crate::errors::{
@@ -163,6 +161,37 @@ impl Clone for QueryClient {
     }
 }
 
+/// Terminal attempt outcome carries the transaction metric classification even
+/// when the caller receives a business error instead of a returned value.
+enum TxAttemptTerminal<T> {
+    Success(T, QueryTransactionResult),
+    Error {
+        error: YdbOrCustomerError,
+        outcome: QueryTransactionResult,
+    },
+}
+
+impl<T> TxAttemptTerminal<T> {
+    fn error(error: YdbOrCustomerError) -> Self {
+        Self::Error {
+            error,
+            outcome: QueryTransactionResult::Error,
+        }
+    }
+}
+
+/// `retry_flow` uses `Result<T, E>` as its break payload, but every terminal
+/// retry outcome must be an error. Preserve that invariant without panicking.
+fn retry_terminal_error<T>(result: YdbResultWithCustomerErr<T>) -> YdbOrCustomerError {
+    match result {
+        Err(error) => error,
+        Ok(_) => YdbError::InternalError(
+            "retry flow produced a successful value for a terminal error outcome".to_string(),
+        )
+        .into(),
+    }
+}
+
 impl QueryClient {
     impl_client_query_methods!();
 
@@ -219,7 +248,7 @@ impl QueryClient {
         callback: &mut F,
         mut tx: Transaction,
         idempotency: Idempotency,
-    ) -> ControlFlow<YdbResultWithCustomerErr<(T, QueryTransactionResult)>, YdbOrCustomerError>
+    ) -> ControlFlow<TxAttemptTerminal<T>, YdbOrCustomerError>
     where
         F: RetryTxAttempt<T>,
         T: Send,
@@ -237,69 +266,87 @@ impl QueryClient {
 
         let callback_result = try_attempt(callback, &mut tx).await;
         if let Err(error) = tx.ctx.resolve_unobserved_operation() {
-            return ControlFlow::Break(Err(error.into()));
+            return ControlFlow::Break(TxAttemptTerminal::error(error.into()));
         }
 
         let value = match callback_result {
             Ok(value) => value,
             Err(err) => {
                 if matches!(&tx.ctx.state, TxState::Committed) {
-                    return ControlFlow::Break(Err(err));
+                    return ControlFlow::Break(TxAttemptTerminal::error(err));
                 }
+                let business_error = matches!(&err, YdbOrCustomerError::Customer(_));
                 let mut retry_error = retry_error_before_cleanup(&tx.ctx.state, err);
-                if let Err(error) = tx_rollback(&mut tx.ctx).await {
-                    tracing::warn!(
-                        %error,
-                        "rollback after transaction callback failure did not complete"
-                    );
-                    if !matches!(
-                        &retry_error,
-                        RetryError::AccordingToError(YdbOrCustomerError::Customer(_))
-                    ) {
-                        retry_error = retry_error_for_operation(&tx.ctx.state, error);
+                let rollback_succeeded = match tx_rollback(&mut tx.ctx).await {
+                    Ok(()) => true,
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            "rollback after transaction callback failure did not complete"
+                        );
+                        if !matches!(
+                            &retry_error,
+                            RetryError::AccordingToError(YdbOrCustomerError::Customer(_))
+                        ) {
+                            retry_error = retry_error_for_operation(&tx.ctx.state, error);
+                        }
+                        false
                     }
-                }
-                return self.record_tx_retry(retry_error.retry_flow(idempotency));
+                };
+                return match retry_error.retry_flow::<()>(idempotency) {
+                    ControlFlow::Continue(error) => ControlFlow::Continue(error),
+                    ControlFlow::Break(result) => {
+                        let outcome = if business_error && rollback_succeeded {
+                            QueryTransactionResult::Rollback
+                        } else {
+                            QueryTransactionResult::Error
+                        };
+                        ControlFlow::Break(TxAttemptTerminal::Error {
+                            error: retry_terminal_error(result),
+                            outcome,
+                        })
+                    }
+                };
             }
         };
 
         let retry_error = match &tx.ctx.state {
             TxState::Committed => {
-                return ControlFlow::Break(Ok((value, QueryTransactionResult::Commit)));
+                return ControlFlow::Break(TxAttemptTerminal::Success(
+                    value,
+                    QueryTransactionResult::Commit,
+                ));
             }
             TxState::RolledBack => {
-                return ControlFlow::Break(Ok((value, QueryTransactionResult::Rollback)));
+                return ControlFlow::Break(TxAttemptTerminal::Success(
+                    value,
+                    QueryTransactionResult::Rollback,
+                ));
             }
             TxState::AttemptFailed(error) => RetryError::AccordingToError(error.clone().into()),
             TxState::Undetermined(error) => RetryError::UndeterminedTx(error.clone()),
             TxState::Active(_) => match tx_commit(&mut tx.ctx).await {
                 Ok(()) => {
-                    return ControlFlow::Break(Ok((value, QueryTransactionResult::Commit)));
+                    return ControlFlow::Break(TxAttemptTerminal::Success(
+                        value,
+                        QueryTransactionResult::Commit,
+                    ));
                 }
                 Err(error) => {
                     if matches!(&tx.ctx.state, TxState::Committed) {
-                        return ControlFlow::Break(Err(error.into()));
+                        return ControlFlow::Break(TxAttemptTerminal::error(error.into()));
                     }
                     retry_error_for_operation(&tx.ctx.state, error)
                 }
             },
         };
 
-        self.record_tx_retry(retry_error.retry_flow(idempotency))
-    }
-
-    /// Count a retryable error the retry loop schedules another attempt for,
-    /// unless the retry budget is already exhausted.
-    fn record_tx_retry<T>(
-        &self,
-        flow: ControlFlow<T, YdbOrCustomerError>,
-    ) -> ControlFlow<T, YdbOrCustomerError> {
-        if let ControlFlow::Continue(error) = &flow {
-            self.ctx
-                .metrics_recorder
-                .query_transaction_retry(ydb_or_customer_status_code_label(error));
+        match retry_error.retry_flow::<()>(idempotency) {
+            ControlFlow::Continue(error) => ControlFlow::Continue(error),
+            ControlFlow::Break(result) => {
+                ControlFlow::Break(TxAttemptTerminal::error(retry_terminal_error(result)))
+            }
         }
-        flow
     }
 
     #[instrument(name = "ydb.RunWithRetry", skip_all, fields(db.system.name = "ydb", ydb.Query.idempotent = idempotency.is_idempotent()), err)]
@@ -316,30 +363,54 @@ impl QueryClient {
     {
         ensure_interactive_tx_mode(options.mode())?;
         let start = Instant::now();
+        let mut previous_retry_error: Option<YdbError> = None;
         let result = self
             .ctx
             .retry_settings
             .clone()
             .with_deadline(wall_timeout)
             .retry(closure!(
-                [&client = self, callback, &options],
+                [
+                    &client = self,
+                    callback,
+                    &options,
+                    &mut previous_retry_error
+                ],
                 async |retry: &RetryState| {
-                    let tx = match client
+                    if retry.attempt > 0
+                        && let Some(error) = previous_retry_error.as_ref()
+                    {
+                        client
+                            .ctx
+                            .metrics_recorder
+                            .query_transaction_retry(ydb_status_code_label(error));
+                    }
+
+                    let flow = match client
                         .create_tx_attempt(
                             options.clone(),
                             wall_timeout.map(|duration| retry.start_time + duration),
                         )
                         .await
                     {
-                        Ok(tx) => tx,
-                        Err(err) => {
-                            let flow =
-                                YdbOrCustomerError::from(err).retry_flow(Idempotency::Idempotent);
-                            return client.record_tx_retry(flow);
-                        }
+                        Ok(tx) => client.run_tx_attempt(callback, tx, idempotency).await,
+                        Err(err) => match YdbOrCustomerError::from(err)
+                            .retry_flow::<()>(Idempotency::Idempotent)
+                        {
+                            ControlFlow::Continue(error) => ControlFlow::Continue(error),
+                            ControlFlow::Break(result) => ControlFlow::Break(
+                                TxAttemptTerminal::error(retry_terminal_error(result)),
+                            ),
+                        },
                     };
-
-                    client.run_tx_attempt(callback, tx, idempotency).await
+                    *previous_retry_error = match &flow {
+                        ControlFlow::Continue(YdbOrCustomerError::YDB(error)) => {
+                            Some(error.clone())
+                        }
+                        ControlFlow::Continue(YdbOrCustomerError::Customer(_))
+                        | ControlFlow::Break(_) => None,
+                    };
+                    flow
                 }
             ))
             .await;
@@ -354,13 +425,13 @@ impl QueryClient {
                     .query_transaction(QueryTransactionResult::Error, elapsed);
                 Err(err.unwrap_or(YdbError::DeadlineExceeded.into()))
             }
-            ControlFlow::Break(Err(err)) => {
+            ControlFlow::Break(TxAttemptTerminal::Error { error, outcome }) => {
                 self.ctx
                     .metrics_recorder
-                    .query_transaction(QueryTransactionResult::Error, elapsed);
-                Err(err)
+                    .query_transaction(outcome, elapsed);
+                Err(error)
             }
-            ControlFlow::Break(Ok((value, outcome))) => {
+            ControlFlow::Break(TxAttemptTerminal::Success(value, outcome)) => {
                 self.ctx
                     .metrics_recorder
                     .query_transaction(outcome, elapsed);
@@ -897,6 +968,7 @@ mod unit_tests {
                 false,
                 recorder,
                 None,
+                Instant::now(),
             );
             assert!(
                 stream
@@ -984,7 +1056,7 @@ mod unit_tests {
     }
 
     #[tokio::test]
-    async fn retry_tx_records_transaction_error_and_retry_metrics() {
+    async fn retry_tx_records_error_without_retry_when_no_next_attempt_starts() {
         let (recorder, test) = recorder_with_test_backend();
         let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
         let client = query_client_with_metrics(&pool, recorder);
@@ -1013,7 +1085,8 @@ mod unit_tests {
                 "status_code",
                 "ABORTED"
             ),
-            1
+            0,
+            "a retryable error without a following attempt is not a retry"
         );
         assert_eq!(
             test.histogram_count("ydb_query_transaction_duration_seconds"),
@@ -1070,12 +1143,84 @@ mod unit_tests {
                 false,
                 recorder,
                 None,
+                Instant::now(),
             );
             drop(stream);
         }
 
         // Dropping the stream aborts it and must flush the accumulated sizes
         // exactly once (zero here: no result sets were drained).
+        assert_eq!(
+            test.histogram_observations("ydb_query_result_rows"),
+            vec![0.0]
+        );
+        assert_eq!(
+            test.histogram_observations("ydb_query_result_bytes"),
+            vec![0.0]
+        );
+        assert_eq!(
+            test.counter_value_with_label("ydb_query_operations_total", "operation", "query"),
+            1
+        );
+        assert_eq!(
+            test.counter_value_with_label("ydb_query_operations_total", "result", "error"),
+            1
+        );
+        assert_eq!(
+            test.counter_value_with_label("ydb_query_errors_total", "status_code", "CANCELLED"),
+            1
+        );
+        assert_eq!(
+            test.histogram_count("ydb_query_operation_duration_seconds"),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn query_stream_close_error_records_terminal_outcome_once() {
+        let (recorder, test) = recorder_with_test_backend();
+        let pool = SessionPool::new_explicit_bench(SessionPoolSettings::new().with_limit(1));
+        let lease = pool.acquire_explicit().await.expect("acquire test session");
+        let mut tx = test_transaction(lease).await;
+        tx.ctx.mark_query_in_flight_for_test("tx-1");
+
+        let raw_stream = ExecuteQueryStream::from_test_parts(Vec::new()).with_test_close_error(
+            crate::grpc_wrapper::raw_errors::RawError::YdbStatus(YdbStatusError::new(
+                "close failed",
+                StatusCode::Aborted as i32,
+                Vec::new(),
+            )),
+        );
+        let stream = QueryStream::from_tx(
+            raw_stream,
+            &mut tx.ctx,
+            false,
+            recorder,
+            None,
+            Instant::now(),
+        );
+
+        let error = stream.close().await.expect_err("injected close error");
+        assert!(matches!(error, YdbError::YdbStatusError(_)));
+
+        // `close` consumes the stream, so its Drop runs here as well. The terminal
+        // guard must prevent a second operation/error/duration/size observation.
+        assert_eq!(
+            test.counter_value_with_label("ydb_query_operations_total", "operation", "query"),
+            1
+        );
+        assert_eq!(
+            test.counter_value_with_label("ydb_query_operations_total", "result", "error"),
+            1
+        );
+        assert_eq!(
+            test.counter_value_with_label("ydb_query_errors_total", "status_code", "ABORTED"),
+            1
+        );
+        assert_eq!(
+            test.histogram_count("ydb_query_operation_duration_seconds"),
+            1
+        );
         assert_eq!(
             test.histogram_observations("ydb_query_result_rows"),
             vec![0.0]
