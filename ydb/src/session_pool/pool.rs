@@ -7,7 +7,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tracing::{instrument, trace, warn};
 
 use crate::client_metrics::{
-    MetricsRecorder, SessionPoolAcquireResult, SessionPoolCloseReason, SessionPoolGaugeSnapshot,
+    MetricsRecorder, SessionPoolAcquireResult, SessionPoolAttachStreamCloseReason,
+    SessionPoolCloseReason, SessionPoolGaugeSnapshot,
 };
 use crate::discovery::Discovery;
 use crate::errors::{YdbError, YdbResult};
@@ -58,6 +59,29 @@ impl Drop for PendingAcquireGuard<'_> {
     fn drop(&mut self) {
         self.inner.pending_acquires.fetch_sub(1, Ordering::SeqCst);
         self.inner.update_session_pool_gauges();
+    }
+}
+
+/// Records every completed acquire exactly once and classifies a dropped future
+/// as cancelled.
+struct AcquireMetricGuard<'a> {
+    inner: &'a SessionPoolInner,
+    start: Instant,
+    result: Option<SessionPoolAcquireResult>,
+}
+
+impl AcquireMetricGuard<'_> {
+    fn finish(&mut self, result: SessionPoolAcquireResult) {
+        self.result = Some(result);
+    }
+}
+
+impl Drop for AcquireMetricGuard<'_> {
+    fn drop(&mut self) {
+        self.inner.metrics.session_pool_acquire(
+            self.result.unwrap_or(SessionPoolAcquireResult::Cancelled),
+            self.start.elapsed(),
+        );
     }
 }
 
@@ -277,6 +301,11 @@ impl SessionPoolLease {
     pub(crate) fn invalidate(&mut self) {
         self.inner.record.session.invalidate();
     }
+
+    #[cfg(test)]
+    pub(crate) fn invalidate_keepalive(&mut self) {
+        self.inner.record.session.invalidate_keepalive();
+    }
 }
 
 #[derive(Clone)]
@@ -320,10 +349,10 @@ impl SessionPoolObserver {
         pool.drain_idle_for_node(node_uri);
     }
 
-    /// Report the outcome of a session's attach-stream (liveness) watcher.
-    pub(super) fn session_keepalive_finished(&self, ok: bool) {
+    /// Report why a session's AttachSession listener terminated.
+    pub(super) fn attach_stream_closed(&self, reason: SessionPoolAttachStreamCloseReason) {
         if let Some(pool) = self.pool.upgrade() {
-            pool.session_keepalive_recorded(ok);
+            pool.metrics.session_pool_attach_stream_closed(reason);
         }
     }
 }
@@ -340,6 +369,8 @@ pub(super) struct SessionPoolInner {
     sessions_created: AtomicU64,
     /// Callers currently waiting for a free session (pending gauge).
     pending_acquires: AtomicUsize,
+    /// Last emitted contribution; also serializes stats snapshots and emissions.
+    gauge_state: Mutex<SessionPoolGaugeSnapshot>,
     pub(super) metrics: Arc<dyn MetricsRecorder>,
     /// Stub create/close paths without RPC (see `session_pool_bench` and regression tests).
     #[cfg(test)]
@@ -350,20 +381,13 @@ pub(super) struct SessionPoolInner {
 
 impl Drop for SessionPoolInner {
     fn drop(&mut self) {
-        // Pool teardown: every session still idle is closed with the `shutdown`
-        // reason (spec §5 maps pool drop to `shutdown`). Leases hold an `Arc` to
-        // this struct, so by the time it drops no lease exists and the only
-        // remaining sessions are the idle ones owned by `explicit_idle`; they are
-        // dropped with the struct below and their close emissions are disarmed so
-        // only the shutdown reason is counted. Gauges are not re-emitted: the pool
-        // no longer exists, so its gauges carry no further meaning.
+        // Leases hold an `Arc` to this struct, so only idle sessions remain here.
+        // Disarm their abnormal-close emissions and count the explicit shutdown.
         let remaining = {
             let mut idle = self
                 .explicit_idle
-                // A poisoned lock must not panic during teardown unwinding; the
-                // guard contents stay valid and are still drained.
                 .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             idle.drain(..).collect::<Vec<_>>()
         };
         for mut item in remaining {
@@ -371,6 +395,13 @@ impl Drop for SessionPoolInner {
             self.metrics
                 .session_pool_session_closed(SessionPoolCloseReason::Shutdown);
         }
+
+        let previous = self
+            .gauge_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.metrics
+            .session_pool_gauges(*previous, SessionPoolGaugeSnapshot::zero());
     }
 }
 
@@ -383,7 +414,8 @@ impl SessionPool {
     ) -> Self {
         let settings = normalize_pool_settings(settings);
         let limit = settings.limit;
-        metrics.session_pool_gauges(SessionPoolGaugeSnapshot::initial(limit));
+        let initial = SessionPoolGaugeSnapshot::initial(limit);
+        metrics.session_pool_gauges(SessionPoolGaugeSnapshot::zero(), initial);
         let inner = Arc::new_cyclic(
             |weak: &std::sync::Weak<SessionPoolInner>| SessionPoolInner {
                 settings: settings.clone(),
@@ -403,6 +435,7 @@ impl SessionPool {
                 create_in_progress: AtomicUsize::new(0),
                 sessions_created: AtomicU64::new(0),
                 pending_acquires: AtomicUsize::new(0),
+                gauge_state: Mutex::new(initial),
                 metrics,
                 #[cfg(test)]
                 bench_mode: false,
@@ -438,16 +471,18 @@ impl SessionPool {
 
     #[instrument(name = "ydb.SessionPool.AcquireSession", skip_all, fields(db.system.name = "ydb"), err)]
     pub async fn acquire_explicit(&self) -> YdbResult<SessionPoolLease> {
-        let start = Instant::now();
+        let mut acquire = AcquireMetricGuard {
+            inner: self.inner.as_ref(),
+            start: Instant::now(),
+            result: None,
+        };
         let result = self.acquire_explicit_inner().await;
-        let outcome = match &result {
+        acquire.finish(match &result {
             Ok(_) => SessionPoolAcquireResult::Ok,
             Err(AcquireSessionError::Timeout(_)) => SessionPoolAcquireResult::Timeout,
             Err(AcquireSessionError::Other(_)) => SessionPoolAcquireResult::Error,
-        };
-        self.inner
-            .metrics
-            .session_pool_acquire(outcome, start.elapsed());
+        });
+        drop(acquire);
         result.map_err(|err| match err {
             AcquireSessionError::Timeout(error) | AcquireSessionError::Other(error) => error,
         })
@@ -486,6 +521,7 @@ impl SessionPool {
                 Ok(SessionPoolLease::new(item, permit, self.inner.clone()))
             }
             Err(error) => {
+                drop(permit);
                 self.inner.update_session_pool_gauges();
                 Err(AcquireSessionError::Other(error))
             }
@@ -520,30 +556,35 @@ impl From<AcquirePermitError> for AcquireSessionError {
 impl SessionPoolInner {
     /// Count a session close that was not handled by an explicit pool close site:
     /// the session record was dropped while its close emission was armed.
-    pub(super) fn record_abnormal_session_close(&self) {
-        self.metrics
-            .session_pool_session_closed(SessionPoolCloseReason::BadSession);
+    pub(super) fn record_abnormal_session_close(&self, close_cause: SessionCloseCause) {
+        let reason = match close_cause {
+            SessionCloseCause::KeepaliveFailed => SessionPoolCloseReason::KeepaliveFailed,
+            SessionCloseCause::Healthy | SessionCloseCause::Broken => {
+                SessionPoolCloseReason::BadSession
+            }
+        };
+        self.metrics.session_pool_session_closed(reason);
         self.update_session_pool_gauges();
     }
 
-    /// Record the outcome of a session's attach-stream (liveness) watcher.
-    pub(super) fn session_keepalive_recorded(&self, ok: bool) {
-        self.metrics.session_pool_keepalive(ok);
-    }
     fn acquire_timeout(&self) -> Duration {
         Duration::from_millis(self.acquire_timeout_ms.load(Ordering::Relaxed))
     }
 
     async fn acquire_permit(&self) -> Result<OwnedSemaphorePermit, AcquirePermitError> {
-        let acquire_timeout = self.acquire_timeout();
-        let acquire = self.semaphore.clone().acquire_owned();
+        let acquire = match self.semaphore.clone().try_acquire_owned() {
+            Ok(permit) => return Ok(permit),
+            Err(tokio::sync::TryAcquireError::NoPermits) => self.semaphore.clone().acquire_owned(),
+            Err(tokio::sync::TryAcquireError::Closed) => {
+                return Err(AcquirePermitError::Closed);
+            }
+        };
 
+        let acquire_timeout = self.acquire_timeout();
         self.pending_acquires.fetch_add(1, Ordering::SeqCst);
         self.update_session_pool_gauges();
-        // RAII pairing: the decrement must run even when the acquire future is
-        // cancelled mid-await (dropped `acquire_explicit`), otherwise the pending
-        // gauge leaks upward forever. Binding (not `let _ =`) keeps the guard alive
-        // until scope end.
+        // Only a real semaphore wait is pending. The guard balances the gauge on
+        // success, timeout, and cancellation of the acquire future.
         let _pending = PendingAcquireGuard { inner: self };
         let waited = if acquire_timeout.is_zero() {
             acquire.await
@@ -557,27 +598,37 @@ impl SessionPoolInner {
                 }
             }
         };
-        // `pending` (and the gauge decrement) drops at scope end, after the wait is over.
         waited.map_err(|_| AcquirePermitError::Closed)
     }
 
-    /// Re-emit the session pool gauges from the current internal counters.
+    /// Emit the delta from this pool's previous gauge contribution.
     ///
-    /// Called synchronously at every pool mutation site so gauge values never lag
-    /// the actual pool state; no timer-based snapshots are involved.
+    /// The per-pool mutex keeps stats sampling and emission ordered, preventing a
+    /// delayed snapshot from overwriting a newer one. Multiple pools sharing a
+    /// recorder contribute to the same gauges additively.
     pub(super) fn update_session_pool_gauges(&self) {
+        let mut previous = self
+            .gauge_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let stats = self.stats();
-        self.metrics.session_pool_gauges(SessionPoolGaugeSnapshot {
+        let current = SessionPoolGaugeSnapshot {
             idle: stats.idle as f64,
             active: stats.in_use as f64,
             creating: stats.create_in_progress as f64,
             limit: stats.limit as f64,
             pending: self.pending_acquires.load(Ordering::SeqCst) as f64,
-        });
+        };
+        self.metrics.session_pool_gauges(*previous, current);
+        *previous = current;
     }
 
     fn stats(&self) -> SessionPoolStats {
-        let idle = self.explicit_idle.lock().expect("explicit idle lock").len();
+        let idle = self
+            .explicit_idle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
         let permits_held = self
             .settings
             .limit
@@ -642,7 +693,10 @@ impl SessionPoolInner {
 
         for item in created {
             let overflow = {
-                let mut idle = inner.explicit_idle.lock().expect("explicit idle lock");
+                let mut idle = inner
+                    .explicit_idle
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if idle.len() < inner.settings.limit {
                     idle.push(item);
                     None
@@ -654,7 +708,7 @@ impl SessionPoolInner {
                 item.record.session.disarm_close_emission();
                 inner
                     .metrics
-                    .session_pool_session_closed(SessionPoolCloseReason::UsageLimit);
+                    .session_pool_session_closed(SessionPoolCloseReason::PoolFull);
                 drop(item);
             }
         }
@@ -664,12 +718,14 @@ impl SessionPoolInner {
 
     /// Close every idle session attached to `node_uri` (pessimization / node shutdown).
     ///
-    /// Drained sessions are counted with the `shutdown` close reason — the plan's
-    /// five-value reason list does not have a separate `node_shutdown` value, so node
-    /// draining maps onto it (the injection doc's `node_shutdown` label is an alias).
+    /// Drained sessions use the `shutdown` close reason: it covers pool-initiated
+    /// shutdown cleanup, while the attach-stream metric reports `node_shutdown`.
     fn drain_idle_for_node(&self, node_uri: &Uri) {
         let drained = {
-            let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
+            let mut idle = self
+                .explicit_idle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let mut drained = Vec::new();
             let mut i = 0;
             while i < idle.len() {
@@ -802,7 +858,10 @@ impl SessionPoolInner {
     }
 
     fn pop_explicit_idle(&self) -> Option<IdleSession> {
-        let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
+        let mut idle = self
+            .explicit_idle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         idle.pop()
     }
 
@@ -834,7 +893,10 @@ impl SessionPoolInner {
             drop(item);
         } else {
             let overflow = {
-                let mut idle = self.explicit_idle.lock().expect("explicit idle lock");
+                let mut idle = self
+                    .explicit_idle
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 if idle.len() < self.settings.limit {
                     idle.push(IdleSession { record: item });
                     None
@@ -847,7 +909,7 @@ impl SessionPoolInner {
             if let Some(mut item) = overflow {
                 item.session.disarm_close_emission();
                 self.metrics
-                    .session_pool_session_closed(SessionPoolCloseReason::UsageLimit);
+                    .session_pool_session_closed(SessionPoolCloseReason::PoolFull);
                 drop(item);
             }
         }
@@ -873,7 +935,7 @@ fn session_close_reason(
         return Some(SessionPoolCloseReason::UsageLimit);
     }
     if settings.item_usage_ttl > Duration::ZERO && created.elapsed() >= settings.item_usage_ttl {
-        return Some(SessionPoolCloseReason::UsageLimit);
+        return Some(SessionPoolCloseReason::MaxAge);
     }
     if settings.idle_ttl > Duration::ZERO && last_used.elapsed() >= settings.idle_ttl {
         return Some(SessionPoolCloseReason::IdleTtl);
@@ -906,7 +968,8 @@ impl SessionPool {
         let settings = normalize_pool_settings(settings);
         let warm_up = settings.warm_up;
         let limit = settings.limit;
-        metrics.session_pool_gauges(SessionPoolGaugeSnapshot::initial(limit));
+        let initial = SessionPoolGaugeSnapshot::initial(limit);
+        metrics.session_pool_gauges(SessionPoolGaugeSnapshot::zero(), initial);
         let connection_manager = GrpcConnectionManager::new(
             SharedLoadBalancer::new_with_balancer(Box::new(StaticLoadBalancer::new(
                 Uri::from_static("http://127.0.0.1/bench"),
@@ -936,13 +999,17 @@ impl SessionPool {
             create_in_progress: AtomicUsize::new(0),
             sessions_created: AtomicU64::new(0),
             pending_acquires: AtomicUsize::new(0),
+            gauge_state: Mutex::new(initial),
             metrics,
             bench_mode: true,
             bench_create_failures_remaining: AtomicUsize::new(0),
         });
 
         if warm_up > 0 {
-            let mut idle = inner.explicit_idle.lock().expect("explicit idle lock");
+            let mut idle = inner
+                .explicit_idle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             for i in 0..warm_up {
                 let node_uri = Uri::from_static("http://127.0.0.1/bench");
                 let now = Instant::now();
@@ -971,6 +1038,19 @@ impl SessionPool {
         create_failures: usize,
     ) -> Self {
         let pool = Self::new_explicit_bench(settings);
+        pool.inner
+            .bench_create_failures_remaining
+            .store(create_failures, Ordering::SeqCst);
+        pool
+    }
+
+    /// Bench pool with caller-provided metrics and injected create failures.
+    pub(crate) fn new_explicit_bench_with_metrics_and_create_failures(
+        settings: SessionPoolSettings,
+        metrics: Arc<dyn MetricsRecorder>,
+        create_failures: usize,
+    ) -> Self {
+        let pool = Self::new_explicit_bench_with_metrics(settings, metrics);
         pool.inner
             .bench_create_failures_remaining
             .store(create_failures, Ordering::SeqCst);

@@ -18,7 +18,20 @@ use super::backend::{
 struct MetricState {
     counter: u64,
     gauge: f64,
+    gauge_observations: Vec<f64>,
     observations: Vec<f64>,
+}
+
+impl MetricState {
+    fn change_gauge(&mut self, delta: f64) {
+        self.gauge += delta;
+        self.gauge_observations.push(self.gauge);
+    }
+
+    fn set_gauge(&mut self, value: f64) {
+        self.gauge = value;
+        self.gauge_observations.push(self.gauge);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -65,15 +78,15 @@ struct GaugeHandleImpl(Arc<Mutex<MetricState>>);
 
 impl Gauge for GaugeHandleImpl {
     fn increment(&self, value: f64) {
-        self.0.lock().unwrap().gauge += value;
+        self.0.lock().unwrap().change_gauge(value);
     }
 
     fn decrement(&self, value: f64) {
-        self.0.lock().unwrap().gauge -= value;
+        self.0.lock().unwrap().change_gauge(-value);
     }
 
     fn set(&self, value: f64) {
-        self.0.lock().unwrap().gauge = value;
+        self.0.lock().unwrap().set_gauge(value);
     }
 }
 
@@ -136,12 +149,7 @@ impl TestRecorder {
 
     fn change_gauge_key(&self, name: &str, labels: &[(&str, &str)], delta: f64) {
         let key = owned_key(name, labels);
-        self.state_for(&key).lock().unwrap().gauge += delta;
-    }
-
-    fn set_gauge_key(&self, name: &str, labels: &[(&str, &str)], value: f64) {
-        let key = owned_key(name, labels);
-        self.state_for(&key).lock().unwrap().gauge = value;
+        self.state_for(&key).lock().unwrap().change_gauge(delta);
     }
 
     fn last_key(&self, name: &str) -> Option<TestKey> {
@@ -214,6 +222,18 @@ impl TestRecorder {
             .filter(|(key, _)| key.name() == name)
             .map(|(_, state)| state.lock().unwrap().gauge)
             .sum()
+    }
+
+    /// Gauge values observed after every change, across all label combinations.
+    pub fn gauge_observations(&self, name: &str) -> Vec<f64> {
+        self.inner
+            .states
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(key, _)| key.name() == name)
+            .flat_map(|(_, state)| state.lock().unwrap().gauge_observations.clone())
+            .collect()
     }
 
     /// Gauge value for `name` with a specific label value, e.g. `state=active`.
@@ -437,24 +457,36 @@ impl crate::client_metrics::MetricsRecorder for TestRecorder {
         );
     }
 
-    fn session_pool_gauges(&self, snapshot: crate::client_metrics::SessionPoolGaugeSnapshot) {
-        self.set_gauge_key(
+    fn session_pool_gauges(
+        &self,
+        previous: crate::client_metrics::SessionPoolGaugeSnapshot,
+        current: crate::client_metrics::SessionPoolGaugeSnapshot,
+    ) {
+        self.change_gauge_key(
             "ydb_session_pool_sessions",
             &[("state", "idle")],
-            snapshot.idle,
+            current.idle - previous.idle,
         );
-        self.set_gauge_key(
+        self.change_gauge_key(
             "ydb_session_pool_sessions",
             &[("state", "active")],
-            snapshot.active,
+            current.active - previous.active,
         );
-        self.set_gauge_key(
+        self.change_gauge_key(
             "ydb_session_pool_sessions",
             &[("state", "creating")],
-            snapshot.creating,
+            current.creating - previous.creating,
         );
-        self.set_gauge_key("ydb_session_pool_size_limit", &[], snapshot.limit);
-        self.set_gauge_key("ydb_session_pool_pending_requests", &[], snapshot.pending);
+        self.change_gauge_key(
+            "ydb_session_pool_size_limit",
+            &[],
+            current.limit - previous.limit,
+        );
+        self.change_gauge_key(
+            "ydb_session_pool_pending_requests",
+            &[],
+            current.pending - previous.pending,
+        );
     }
 
     fn session_pool_acquire(
@@ -502,10 +534,13 @@ impl crate::client_metrics::MetricsRecorder for TestRecorder {
         );
     }
 
-    fn session_pool_keepalive(&self, ok: bool) {
+    fn session_pool_attach_stream_closed(
+        &self,
+        reason: crate::client_metrics::SessionPoolAttachStreamCloseReason,
+    ) {
         self.increment_counter_key(
-            "ydb_session_pool_keepalive_total",
-            &[("result", if ok { "ok" } else { "error" })],
+            "ydb_session_pool_attach_stream_closed_total",
+            &[("reason", reason.as_label())],
             1,
         );
     }

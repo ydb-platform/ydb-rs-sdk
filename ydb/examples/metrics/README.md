@@ -105,13 +105,17 @@ use these exact strings:
   `ydb_grpc_connections{endpoint,state}`, `ydb_grpc_connection_establish_seconds{endpoint,result=ok|error}`.
 - **Session pool:** `ydb_session_pool_sessions{state=idle|active|creating}`,
   `ydb_session_pool_size_limit`, `ydb_session_pool_pending_requests`,
-  `ydb_session_pool_acquire_total{result=ok|timeout|error}`,
+  `ydb_session_pool_acquire_total{result=ok|timeout|error|cancelled}`,
   `ydb_session_pool_acquire_seconds{result}`,
   `ydb_session_pool_session_create_seconds`,
   `ydb_session_pool_sessions_created_total`,
-  `ydb_session_pool_sessions_closed_total{reason=idle_ttl|usage_limit|bad_session|shutdown|keepalive_failed}`,
+  `ydb_session_pool_sessions_closed_total{reason=idle_ttl|usage_limit|max_age|pool_full|bad_session|shutdown|keepalive_failed}`,
   `ydb_session_pool_session_use_seconds`,
-  `ydb_session_pool_keepalive_total{result=ok|error}`.
+  `ydb_session_pool_attach_stream_closed_total{reason=session_shutdown|node_shutdown|stream_closed|error}`.
+  Pool gauges are additive across pools sharing a recorder; dropping a pool
+  subtracts only its own contribution. `cancelled` means the acquire future was
+  dropped before completion. Aborting an attach listener during ordinary session
+  cleanup does not emit an attach-stream closure.
 - **Query service:** `ydb_query_operations_total{operation=exec|query_row|query_result_set|query|execute_script|fetch_script_results,result=ok|error}`,
   `ydb_query_operation_duration_seconds{operation}`,
   `ydb_query_result_rows{operation}`, `ydb_query_result_bytes{operation}`,

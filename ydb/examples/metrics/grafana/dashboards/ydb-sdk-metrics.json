@@ -590,7 +590,7 @@
     {
       "id": 27,
       "type": "timeseries",
-      "title": "Keepalive rate by result",
+      "title": "Attach stream closures by reason",
       "datasource": { "type": "prometheus", "uid": "victoria" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 91 },
       "fieldConfig": {
@@ -604,8 +604,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (result) (rate(ydb_session_pool_keepalive_total{driver_name=\"metrics-example\"}[$__rate_interval]))",
-          "legendFormat": "{{result}}",
+          "expr": "sum by (reason) (rate(ydb_session_pool_attach_stream_closed_total{driver_name=\"metrics-example\"}[$__rate_interval]))",
+          "legendFormat": "{{reason}}",
           "range": true
         }
       ]

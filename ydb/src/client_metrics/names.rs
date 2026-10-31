@@ -9,7 +9,8 @@ use crate::client_metrics::backend::{
 use crate::client_metrics::dynamic::DynamicCaches;
 use crate::client_metrics::endpoints::EndpointRegistry;
 use crate::client_metrics::{
-    QueryOperation, QueryTransactionResult, SessionPoolAcquireResult, SessionPoolCloseReason,
+    QueryOperation, QueryTransactionResult, SessionPoolAcquireResult,
+    SessionPoolAttachStreamCloseReason, SessionPoolCloseReason,
 };
 
 const DEFAULT_DRIVER_NAME: &str = "main";
@@ -25,15 +26,6 @@ pub(crate) const QUERY_RESULT_COUNT: usize = 2;
 
 /// `result` label values for `ydb_query_operations_total`.
 pub(crate) const QUERY_RESULT_LABELS: [&str; QUERY_RESULT_COUNT] = ["ok", "error"];
-
-/// Number of keepalive result label values; sizes the pre-registered
-/// `ydb_session_pool_keepalive_total` handle array.
-pub(crate) const KEEPALIVE_RESULT_COUNT: usize = 2;
-
-/// Result label values for `ydb_session_pool_keepalive_total` (no enum: the
-/// pool reports a plain `bool`). Indexed by `usize::from(!ok)`, matching
-/// [`crate::client_metrics::MetricsRecorder::session_pool_keepalive`].
-pub(crate) const KEEPALIVE_RESULT_LABELS: [&str; KEEPALIVE_RESULT_COUNT] = ["ok", "error"];
 
 /// Static label prefix shared by every series of one recorder: the driver
 /// name label first, extra static labels after (existing label order).
@@ -113,7 +105,8 @@ pub(crate) struct MetricsNames {
     pub session_pool_sessions_created_total: CounterHandle,
     pub session_pool_sessions_closed_total: [CounterHandle; SessionPoolCloseReason::LABEL_COUNT],
     pub session_pool_session_use_seconds: HistogramHandle,
-    pub session_pool_keepalive_total: [CounterHandle; KEEPALIVE_RESULT_COUNT],
+    pub session_pool_attach_stream_closed_total:
+        [CounterHandle; SessionPoolAttachStreamCloseReason::LABEL_COUNT],
     // Query service series (closed enum label sets): handles are pre-registered
     // per operation and indexed by the enum on the hot path, without macros or
     // label construction.
@@ -325,13 +318,13 @@ impl MetricsNames {
                 "ydb session pool session lease duration",
                 base,
             ),
-            session_pool_keepalive_total: std::array::from_fn(|i| {
+            session_pool_attach_stream_closed_total: std::array::from_fn(|i| {
                 counter(
                     backend_ref,
-                    "ydb_session_pool_keepalive_total",
+                    "ydb_session_pool_attach_stream_closed_total",
                     MetricUnit::Count,
-                    "ydb session pool keepalive checks by result",
-                    &labeled("result", KEEPALIVE_RESULT_LABELS[i]),
+                    "ydb session pool AttachSession stream closures by reason",
+                    &labeled("reason", SessionPoolAttachStreamCloseReason::LABELS[i]),
                 )
             }),
             query_operations_total: std::array::from_fn(|op| {

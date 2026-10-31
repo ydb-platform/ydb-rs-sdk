@@ -91,22 +91,25 @@ pub(crate) enum SessionPoolAcquireResult {
     Ok,
     Timeout,
     Error,
+    Cancelled,
 }
 
 impl SessionPoolAcquireResult {
     /// Number of label values; sizes the pre-registered
     /// `ydb_session_pool_acquire_*` handle arrays in
     /// [`MetricsNames`](names::MetricsNames).
-    pub(crate) const LABEL_COUNT: usize = 3;
+    pub(crate) const LABEL_COUNT: usize = 4;
 
     /// Label values in [`Self::index`] order.
-    pub(crate) const LABELS: [&'static str; Self::LABEL_COUNT] = ["ok", "timeout", "error"];
+    pub(crate) const LABELS: [&'static str; Self::LABEL_COUNT] =
+        ["ok", "timeout", "error", "cancelled"];
 
     pub(crate) fn index(self) -> usize {
         match self {
             Self::Ok => 0,
             Self::Timeout => 1,
             Self::Error => 2,
+            Self::Cancelled => 3,
         }
     }
 
@@ -123,6 +126,8 @@ impl SessionPoolAcquireResult {
 pub(crate) enum SessionPoolCloseReason {
     IdleTtl,
     UsageLimit,
+    MaxAge,
+    PoolFull,
     BadSession,
     Shutdown,
     KeepaliveFailed,
@@ -132,12 +137,14 @@ impl SessionPoolCloseReason {
     /// Number of label values; sizes the pre-registered
     /// `ydb_session_pool_sessions_closed_total` handle array in
     /// [`MetricsNames`](names::MetricsNames).
-    pub(crate) const LABEL_COUNT: usize = 5;
+    pub(crate) const LABEL_COUNT: usize = 7;
 
     /// Label values in [`Self::index`] order.
     pub(crate) const LABELS: [&'static str; Self::LABEL_COUNT] = [
         "idle_ttl",
         "usage_limit",
+        "max_age",
+        "pool_full",
         "bad_session",
         "shutdown",
         "keepalive_failed",
@@ -147,14 +154,52 @@ impl SessionPoolCloseReason {
         match self {
             Self::IdleTtl => 0,
             Self::UsageLimit => 1,
-            Self::BadSession => 2,
-            Self::Shutdown => 3,
-            Self::KeepaliveFailed => 4,
+            Self::MaxAge => 2,
+            Self::PoolFull => 3,
+            Self::BadSession => 4,
+            Self::Shutdown => 5,
+            Self::KeepaliveFailed => 6,
         }
     }
 
     /// Label of the value; used by the test recorder (production code indexes
     /// the pre-registered handle arrays via [`Self::index`]).
+    #[cfg(test)]
+    pub(crate) fn as_label(self) -> &'static str {
+        Self::LABELS[self.index()]
+    }
+}
+
+/// Why an AttachSession listener terminated
+/// (`ydb_session_pool_attach_stream_closed_total`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SessionPoolAttachStreamCloseReason {
+    SessionShutdown,
+    NodeShutdown,
+    StreamClosed,
+    Error,
+}
+
+impl SessionPoolAttachStreamCloseReason {
+    pub(crate) const LABEL_COUNT: usize = 4;
+
+    /// Label values in [`Self::index`] order.
+    pub(crate) const LABELS: [&'static str; Self::LABEL_COUNT] = [
+        "session_shutdown",
+        "node_shutdown",
+        "stream_closed",
+        "error",
+    ];
+
+    pub(crate) fn index(self) -> usize {
+        match self {
+            Self::SessionShutdown => 0,
+            Self::NodeShutdown => 1,
+            Self::StreamClosed => 2,
+            Self::Error => 3,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn as_label(self) -> &'static str {
         Self::LABELS[self.index()]
@@ -281,14 +326,22 @@ pub(crate) struct SessionPoolGaugeSnapshot {
 }
 
 impl SessionPoolGaugeSnapshot {
-    /// Snapshot of a freshly created pool: nothing idle, active, or pending.
-    pub(crate) fn initial(limit: usize) -> Self {
+    /// Zero contribution used as the baseline for per-pool gauge deltas.
+    pub(crate) fn zero() -> Self {
         Self {
             idle: 0.0,
             active: 0.0,
             creating: 0.0,
-            limit: limit as f64,
+            limit: 0.0,
             pending: 0.0,
+        }
+    }
+
+    /// Snapshot of a freshly created pool: nothing idle, active, or pending.
+    pub(crate) fn initial(limit: usize) -> Self {
+        Self {
+            limit: limit as f64,
+            ..Self::zero()
         }
     }
 }
@@ -347,8 +400,13 @@ pub(crate) trait MetricsRecorder: Send + Sync {
     ) {
     }
 
-    /// Emit the session pool gauges synchronously after a pool state change.
-    fn session_pool_gauges(&self, _snapshot: SessionPoolGaugeSnapshot) {}
+    /// Apply the delta between two snapshots of one pool's gauge contribution.
+    fn session_pool_gauges(
+        &self,
+        _previous: SessionPoolGaugeSnapshot,
+        _current: SessionPoolGaugeSnapshot,
+    ) {
+    }
 
     /// Record one acquire attempt outcome and its duration.
     fn session_pool_acquire(&self, _result: SessionPoolAcquireResult, _duration: Duration) {}
@@ -365,8 +423,8 @@ pub(crate) trait MetricsRecorder: Send + Sync {
     /// Record how long a session was leased to one caller.
     fn session_pool_session_use(&self, _duration: Duration) {}
 
-    /// Record the outcome of the background session liveness (attach stream) watcher.
-    fn session_pool_keepalive(&self, _ok: bool) {}
+    /// Record why an AttachSession stream listener terminated.
+    fn session_pool_attach_stream_closed(&self, _reason: SessionPoolAttachStreamCloseReason) {}
 
     /// Record one query service operation and its duration.
     fn query_operation(&self, _operation: QueryOperation, _ok: bool, _duration: Duration) {}
@@ -680,16 +738,26 @@ impl MetricsRecorder for DefaultMetricsRecorder {
         .increment(1);
     }
 
-    fn session_pool_gauges(&self, snapshot: SessionPoolGaugeSnapshot) {
-        self.names.session_pool_sessions_idle.set(snapshot.idle);
-        self.names.session_pool_sessions_active.set(snapshot.active);
+    fn session_pool_gauges(
+        &self,
+        previous: SessionPoolGaugeSnapshot,
+        current: SessionPoolGaugeSnapshot,
+    ) {
+        self.names
+            .session_pool_sessions_idle
+            .increment(current.idle - previous.idle);
+        self.names
+            .session_pool_sessions_active
+            .increment(current.active - previous.active);
         self.names
             .session_pool_sessions_creating
-            .set(snapshot.creating);
-        self.names.session_pool_size_limit.set(snapshot.limit);
+            .increment(current.creating - previous.creating);
+        self.names
+            .session_pool_size_limit
+            .increment(current.limit - previous.limit);
         self.names
             .session_pool_pending_requests
-            .set(snapshot.pending);
+            .increment(current.pending - previous.pending);
     }
 
     fn session_pool_acquire(&self, result: SessionPoolAcquireResult, duration: Duration) {
@@ -717,8 +785,8 @@ impl MetricsRecorder for DefaultMetricsRecorder {
             .record(duration.as_secs_f64());
     }
 
-    fn session_pool_keepalive(&self, ok: bool) {
-        self.names.session_pool_keepalive_total[usize::from(!ok)].increment(1);
+    fn session_pool_attach_stream_closed(&self, reason: SessionPoolAttachStreamCloseReason) {
+        self.names.session_pool_attach_stream_closed_total[reason.index()].increment(1);
     }
 
     fn query_operation(&self, operation: QueryOperation, ok: bool, duration: Duration) {
@@ -1067,9 +1135,9 @@ mod tests {
                 SessionPoolCloseReason::LABELS.to_vec(),
             ),
             (
-                "ydb_session_pool_keepalive_total",
-                "result",
-                names::KEEPALIVE_RESULT_LABELS.to_vec(),
+                "ydb_session_pool_attach_stream_closed_total",
+                "reason",
+                SessionPoolAttachStreamCloseReason::LABELS.to_vec(),
             ),
             (
                 "ydb_session_pool_sessions",
@@ -1452,24 +1520,36 @@ mod tests {
             1
         );
 
-        recorder.session_pool_keepalive(false);
-        recorder.session_pool_keepalive(true);
+        recorder.session_pool_attach_stream_closed(SessionPoolAttachStreamCloseReason::Error);
+        recorder
+            .session_pool_attach_stream_closed(SessionPoolAttachStreamCloseReason::StreamClosed);
         assert_eq!(
-            test.counter_value_with_label("ydb_session_pool_keepalive_total", "result", "error"),
+            test.counter_value_with_label(
+                "ydb_session_pool_attach_stream_closed_total",
+                "reason",
+                "error"
+            ),
             1
         );
         assert_eq!(
-            test.counter_value_with_label("ydb_session_pool_keepalive_total", "result", "ok"),
+            test.counter_value_with_label(
+                "ydb_session_pool_attach_stream_closed_total",
+                "reason",
+                "stream_closed"
+            ),
             1
         );
 
-        recorder.session_pool_gauges(SessionPoolGaugeSnapshot {
-            idle: 1.0,
-            active: 2.0,
-            creating: 3.0,
-            limit: 10.0,
-            pending: 4.0,
-        });
+        recorder.session_pool_gauges(
+            SessionPoolGaugeSnapshot::zero(),
+            SessionPoolGaugeSnapshot {
+                idle: 1.0,
+                active: 2.0,
+                creating: 3.0,
+                limit: 10.0,
+                pending: 4.0,
+            },
+        );
         assert_eq!(
             test.gauge_value_with_label("ydb_session_pool_sessions", "state", "idle"),
             1.0

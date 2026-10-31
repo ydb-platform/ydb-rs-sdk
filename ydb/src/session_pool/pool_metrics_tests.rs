@@ -34,7 +34,7 @@ fn gauge(recorder: &TestRecorder, name: &str, state: &str) -> f64 {
 struct Ledger {
     idle: f64,
     active: f64,
-    closed_usage_limit: u64,
+    closed_pool_full: u64,
     closed_bad: u64,
 }
 
@@ -69,10 +69,10 @@ fn assert_matches_ledger(recorder: &TestRecorder, ledger: &Ledger, limit: usize)
         recorder.counter_value_with_label(
             "ydb_session_pool_sessions_closed_total",
             "reason",
-            "usage_limit"
+            "pool_full"
         ),
-        ledger.closed_usage_limit,
-        "usage_limit closes must match the operation ledger"
+        ledger.closed_pool_full,
+        "pool_full closes must match the operation ledger"
     );
     assert_eq!(
         recorder.counter_value_with_label(
@@ -82,6 +82,11 @@ fn assert_matches_ledger(recorder: &TestRecorder, ledger: &Ledger, limit: usize)
         ),
         ledger.closed_bad,
         "bad_session closes must match the operation ledger"
+    );
+    assert!(
+        recorder.counter_value("ydb_session_pool_sessions_created_total")
+            >= recorder.counter_value("ydb_session_pool_sessions_closed_total"),
+        "closed sessions must never exceed created sessions"
     );
 }
 
@@ -152,7 +157,7 @@ async fn acquire_return_and_drop_keep_gauges_in_sync() {
                         if ledger.idle < limit as f64 {
                             ledger.idle += 1.0;
                         } else {
-                            ledger.closed_usage_limit += 1;
+                            ledger.closed_pool_full += 1;
                         }
                     }
                     // Abnormal drop: session is discarded and counted as bad.
@@ -178,7 +183,7 @@ async fn acquire_return_and_drop_keep_gauges_in_sync() {
         if ledger.idle < limit as f64 {
             ledger.idle += 1.0;
         } else {
-            ledger.closed_usage_limit += 1;
+            ledger.closed_pool_full += 1;
         }
     }
     assert_matches_ledger(&recorder, &ledger, limit);
@@ -194,6 +199,15 @@ async fn acquire_return_and_drop_keep_gauges_in_sync() {
         recorder.counter_value_with_label("ydb_session_pool_acquire_total", "result", "ok"),
         acquire_calls,
         "acquire counter must cover all attempts"
+    );
+
+    drop(pool);
+    assert_eq!(recorder.gauge_value("ydb_session_pool_sessions"), 0.0);
+    assert_eq!(recorder.gauge_value("ydb_session_pool_size_limit"), 0.0);
+    assert_eq!(
+        recorder.counter_value("ydb_session_pool_sessions_created_total"),
+        recorder.counter_value("ydb_session_pool_sessions_closed_total"),
+        "pool teardown must leave the independent created/closed ledger balanced"
     );
 }
 
@@ -213,6 +227,13 @@ async fn acquire_timeout_counts_timeout_and_clears_pending() {
         recorder.gauge_value("ydb_session_pool_pending_requests"),
         0.0,
         "immediate acquire must not stay pending"
+    );
+    assert!(
+        recorder
+            .gauge_observations("ydb_session_pool_pending_requests")
+            .iter()
+            .all(|value| *value == 0.0),
+        "a fast-path acquire must never increment pending"
     );
 
     let result = pool.acquire_explicit().await;
@@ -272,6 +293,66 @@ async fn pending_gauge_tracks_waiters_while_blocked() {
 }
 
 #[tokio::test]
+async fn cancelled_acquire_records_cancelled_and_clears_pending() {
+    let (pool, recorder) = bench_pool(
+        SessionPoolSettings::new()
+            .with_limit(1)
+            .with_acquire_timeout(Duration::from_secs(10)),
+    );
+    let _lease = pool.acquire_explicit().await.expect("first acquire");
+    let waiter = tokio::spawn({
+        let pool = pool.clone();
+        async move { pool.acquire_explicit().await }
+    });
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        recorder.gauge_value("ydb_session_pool_pending_requests"),
+        1.0
+    );
+    waiter.abort();
+    let error = waiter.await.err().expect("waiter task must be cancelled");
+    assert!(error.is_cancelled());
+
+    assert_eq!(
+        recorder.gauge_value("ydb_session_pool_pending_requests"),
+        0.0
+    );
+    assert_eq!(
+        recorder.counter_value_with_label("ydb_session_pool_acquire_total", "result", "cancelled"),
+        1,
+        "dropping the acquire future must record one cancelled outcome"
+    );
+    assert_eq!(
+        recorder.counter_value("ydb_session_pool_acquire_total"),
+        2,
+        "successful and cancelled acquires must each be recorded exactly once"
+    );
+}
+
+#[tokio::test]
+async fn create_failure_releases_permit_before_gauge_update() {
+    let recorder = Arc::new(TestRecorder::new());
+    let pool = SessionPool::new_explicit_bench_with_metrics_and_create_failures(
+        SessionPoolSettings::new().with_limit(1),
+        recorder.clone(),
+        1,
+    );
+
+    let result = pool.acquire_explicit().await;
+    assert!(result.is_err(), "injected create failure must surface");
+    assert_eq!(gauge(&recorder, "ydb_session_pool_sessions", "active"), 0.0);
+    assert_eq!(
+        gauge(&recorder, "ydb_session_pool_sessions", "creating"),
+        0.0
+    );
+    assert_eq!(
+        recorder.counter_value_with_label("ydb_session_pool_acquire_total", "result", "error"),
+        1
+    );
+}
+
+#[tokio::test]
 async fn session_creates_are_counted_and_measured() {
     let (pool, recorder) = bench_pool(SessionPoolSettings::new().with_limit(2));
 
@@ -315,6 +396,33 @@ async fn close_reasons_are_recorded() {
         ),
         1,
         "session closed at the usage limit must be counted"
+    );
+
+    // max_age: session lifetime expiry is distinct from the use-count limit.
+    let (pool, recorder) = bench_pool(
+        SessionPoolSettings::new()
+            .with_limit(1)
+            .with_item_usage_ttl(Duration::from_millis(30)),
+    );
+    let lease = pool.acquire_explicit().await.expect("acquire");
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    lease.return_to_pool();
+    assert_eq!(
+        recorder.counter_value_with_label(
+            "ydb_session_pool_sessions_closed_total",
+            "reason",
+            "max_age"
+        ),
+        1,
+        "session closed at its lifetime limit must be counted as max_age"
+    );
+    assert_eq!(
+        recorder.counter_value_with_label(
+            "ydb_session_pool_sessions_closed_total",
+            "reason",
+            "usage_limit"
+        ),
+        0
     );
 
     // bad_session: lease dropped without returning.
@@ -371,6 +479,32 @@ async fn close_reasons_are_recorded() {
 }
 
 #[tokio::test]
+async fn abnormal_drop_preserves_keepalive_failure_reason() {
+    let (pool, recorder) = bench_pool(SessionPoolSettings::new().with_limit(1));
+    let mut lease = pool.acquire_explicit().await.expect("acquire");
+    lease.invalidate_keepalive();
+    drop(lease);
+
+    assert_eq!(
+        recorder.counter_value_with_label(
+            "ydb_session_pool_sessions_closed_total",
+            "reason",
+            "keepalive_failed"
+        ),
+        1
+    );
+    assert_eq!(
+        recorder.counter_value_with_label(
+            "ydb_session_pool_sessions_closed_total",
+            "reason",
+            "bad_session"
+        ),
+        0
+    );
+    assert_gauges_match_stats(&pool, &recorder);
+}
+
+#[tokio::test]
 async fn session_use_duration_is_recorded_on_return() {
     let (pool, recorder) = bench_pool(SessionPoolSettings::new().with_limit(1));
 
@@ -388,23 +522,132 @@ async fn session_use_duration_is_recorded_on_return() {
 }
 
 #[test]
-fn keepalive_outcomes_are_counted_via_observer() {
+fn attach_stream_close_reasons_are_counted_via_observer() {
+    use crate::client_metrics::SessionPoolAttachStreamCloseReason;
+
     let (pool, recorder) = bench_pool(SessionPoolSettings::new().with_limit(1));
+    for reason in [
+        SessionPoolAttachStreamCloseReason::SessionShutdown,
+        SessionPoolAttachStreamCloseReason::NodeShutdown,
+        SessionPoolAttachStreamCloseReason::StreamClosed,
+        SessionPoolAttachStreamCloseReason::Error,
+    ] {
+        pool.observer_for_metrics_tests()
+            .attach_stream_closed(reason);
+    }
 
-    pool.observer_for_metrics_tests()
-        .session_keepalive_finished(false);
-    pool.observer_for_metrics_tests()
-        .session_keepalive_finished(true);
+    for reason in SessionPoolAttachStreamCloseReason::LABELS {
+        assert_eq!(
+            recorder.counter_value_with_label(
+                "ydb_session_pool_attach_stream_closed_total",
+                "reason",
+                reason
+            ),
+            1,
+            "AttachSession close reason {reason} must be recorded"
+        );
+    }
+}
 
+#[tokio::test]
+async fn warm_up_overflow_closes_sessions_as_pool_full() {
+    let (pool, recorder) = bench_pool(SessionPoolSettings::new().with_limit(2));
+    pool.warm_up_for_tests(5)
+        .await
+        .expect("warm-up must succeed");
+
+    assert_eq!(gauge(&recorder, "ydb_session_pool_sessions", "idle"), 2.0);
     assert_eq!(
-        recorder.counter_value_with_label("ydb_session_pool_keepalive_total", "result", "error"),
-        1,
-        "failed liveness watching must count as keepalive error"
+        recorder.counter_value_with_label(
+            "ydb_session_pool_sessions_closed_total",
+            "reason",
+            "pool_full"
+        ),
+        3
     );
     assert_eq!(
-        recorder.counter_value_with_label("ydb_session_pool_keepalive_total", "result", "ok"),
-        1,
-        "clean liveness watching must count as keepalive ok"
+        recorder.counter_value_with_label(
+            "ydb_session_pool_sessions_closed_total",
+            "reason",
+            "usage_limit"
+        ),
+        0
+    );
+}
+
+#[tokio::test]
+async fn two_pools_contribute_deltas_and_drop_independently() {
+    let recorder = Arc::new(TestRecorder::new());
+    let first = SessionPool::new_explicit_bench_with_metrics(
+        SessionPoolSettings::new().with_limit(2),
+        recorder.clone(),
+    );
+    let second = SessionPool::new_explicit_bench_with_metrics(
+        SessionPoolSettings::new().with_limit(3),
+        recorder.clone(),
+    );
+    assert_eq!(recorder.gauge_value("ydb_session_pool_size_limit"), 5.0);
+
+    let first_lease = first.acquire_explicit().await.expect("first pool acquire");
+    let second_lease = second
+        .acquire_explicit()
+        .await
+        .expect("second pool acquire");
+    assert_eq!(gauge(&recorder, "ydb_session_pool_sessions", "active"), 2.0);
+    first_lease.return_to_pool();
+    second_lease.return_to_pool();
+    assert_eq!(gauge(&recorder, "ydb_session_pool_sessions", "idle"), 2.0);
+
+    drop(first);
+    assert_eq!(recorder.gauge_value("ydb_session_pool_size_limit"), 3.0);
+    assert_eq!(gauge(&recorder, "ydb_session_pool_sessions", "idle"), 1.0);
+    assert_eq!(
+        recorder.counter_value_with_label(
+            "ydb_session_pool_sessions_closed_total",
+            "reason",
+            "shutdown"
+        ),
+        1
+    );
+
+    drop(second);
+    assert_eq!(recorder.gauge_value("ydb_session_pool_sessions"), 0.0);
+    assert_eq!(recorder.gauge_value("ydb_session_pool_size_limit"), 0.0);
+    assert_eq!(
+        recorder.gauge_value("ydb_session_pool_pending_requests"),
+        0.0
+    );
+}
+
+#[tokio::test]
+async fn parallel_mutations_keep_additive_gauges_consistent() {
+    let (pool, recorder) = bench_pool(SessionPoolSettings::new().with_limit(4));
+    let mut tasks = Vec::new();
+    for _ in 0..8 {
+        tasks.push(tokio::spawn({
+            let pool = pool.clone();
+            async move {
+                for _ in 0..25 {
+                    let lease = pool.acquire_explicit().await.expect("parallel acquire");
+                    tokio::task::yield_now().await;
+                    lease.return_to_pool();
+                }
+            }
+        }));
+    }
+    for task in tasks {
+        task.await.expect("parallel worker must finish");
+    }
+
+    assert_gauges_match_stats(&pool, &recorder);
+    assert_eq!(gauge(&recorder, "ydb_session_pool_sessions", "active"), 0.0);
+    assert_eq!(gauge(&recorder, "ydb_session_pool_sessions", "idle"), 4.0);
+    assert!(
+        recorder
+            .gauge_observations("ydb_session_pool_sessions")
+            .iter()
+            .all(|value| *value >= 0.0),
+        "ordered per-pool deltas must never produce negative gauges"
     );
 }
 

@@ -203,13 +203,22 @@ async fn idle_expired_session_closed_on_next_acquire() -> YdbResult<()> {
     Ok(())
 }
 
-/// Completes the AttachSession handshake, then closes the attach stream; the
-/// liveness watcher must report a successful keepalive.
-struct AttachThenCloseHandler {
-    replies: FromHandlerToService,
+#[derive(Clone, Copy)]
+enum AttachStreamOutcome {
+    CloseBeforeActive,
+    Close,
+    Fail,
+    SessionShutdown,
+    NodeShutdown,
 }
 
-impl Handler for AttachThenCloseHandler {
+/// Drives the AttachSession stream through a selected lifecycle outcome.
+struct AttachStreamHandler {
+    replies: FromHandlerToService,
+    outcome: AttachStreamOutcome,
+}
+
+impl Handler for AttachStreamHandler {
     fn set_channel(&mut self, tx: FromHandlerToService) {
         self.replies = tx;
     }
@@ -217,68 +226,56 @@ impl Handler for AttachThenCloseHandler {
     fn handle(&self, incoming: Incoming) -> Option<Incoming> {
         match incoming {
             Incoming::Query(QueryIncoming::AttachSession(_, stream_id)) => {
-                self.replies
-                    .send(Reply::Query(QueryReply::AttachSession {
-                        stream_id,
-                        state: SessionState {
-                            status: StatusCode::Success as i32,
-                            issues: Vec::new(),
-                            session_hint: None,
-                        },
-                    }))
-                    .expect("mock response channel must remain open");
-                self.replies
-                    .send(Reply::Query(QueryReply::AttachSessionClose { stream_id }))
-                    .expect("mock response channel must remain open");
-                None
-            }
-            Incoming::Query(QueryIncoming::ExecuteQuery(_, stream_id)) => {
-                self.replies
-                    .send(Reply::Query(QueryReply::ExecuteQuery {
-                        stream_id,
-                        part: success_part(Some(QUERY_TX_ID)),
-                    }))
-                    .expect("mock response channel must remain open");
-                self.replies
-                    .send(Reply::Query(QueryReply::ExecuteQueryClose { stream_id }))
-                    .expect("mock response channel must remain open");
-                None
-            }
-            other => Some(other),
-        }
-    }
-}
-
-/// Completes the AttachSession handshake, then fails the attach stream; the
-/// liveness watcher must report a failed keepalive.
-struct AttachThenFailHandler {
-    replies: FromHandlerToService,
-}
-
-impl Handler for AttachThenFailHandler {
-    fn set_channel(&mut self, tx: FromHandlerToService) {
-        self.replies = tx;
-    }
-
-    fn handle(&self, incoming: Incoming) -> Option<Incoming> {
-        match incoming {
-            Incoming::Query(QueryIncoming::AttachSession(_, stream_id)) => {
-                self.replies
-                    .send(Reply::Query(QueryReply::AttachSession {
-                        stream_id,
-                        state: SessionState {
-                            status: StatusCode::Success as i32,
-                            issues: Vec::new(),
-                            session_hint: None,
-                        },
-                    }))
-                    .expect("mock response channel must remain open");
-                self.replies
-                    .send(Reply::Query(QueryReply::AttachSessionFail {
-                        stream_id,
-                        status: tonic::Status::unavailable("mock attach stream failure"),
-                    }))
-                    .expect("mock response channel must remain open");
+                if !matches!(self.outcome, AttachStreamOutcome::CloseBeforeActive) {
+                    self.replies
+                        .send(Reply::Query(QueryReply::AttachSession {
+                            stream_id,
+                            state: SessionState {
+                                status: StatusCode::Success as i32,
+                                issues: Vec::new(),
+                                session_hint: None,
+                            },
+                        }))
+                        .expect("mock response channel must remain open");
+                }
+                match self.outcome {
+                    AttachStreamOutcome::CloseBeforeActive | AttachStreamOutcome::Close => {
+                        self.replies
+                            .send(Reply::Query(QueryReply::AttachSessionClose { stream_id }))
+                            .expect("mock response channel must remain open");
+                    }
+                    AttachStreamOutcome::Fail => {
+                        self.replies
+                            .send(Reply::Query(QueryReply::AttachSessionFail {
+                                stream_id,
+                                status: tonic::Status::unavailable("mock attach stream failure"),
+                            }))
+                            .expect("mock response channel must remain open");
+                    }
+                    AttachStreamOutcome::SessionShutdown | AttachStreamOutcome::NodeShutdown => {
+                        use ydb_grpc::ydb_proto::query::session_state::SessionHint;
+                        use ydb_grpc::ydb_proto::query::{NodeShutdownHint, SessionShutdownHint};
+                        let session_hint =
+                            if matches!(self.outcome, AttachStreamOutcome::SessionShutdown) {
+                                SessionHint::SessionShutdown(SessionShutdownHint {})
+                            } else {
+                                SessionHint::NodeShutdown(NodeShutdownHint {})
+                            };
+                        self.replies
+                            .send(Reply::Query(QueryReply::AttachSession {
+                                stream_id,
+                                state: SessionState {
+                                    status: StatusCode::Success as i32,
+                                    issues: Vec::new(),
+                                    session_hint: Some(session_hint),
+                                },
+                            }))
+                            .expect("mock response channel must remain open");
+                        self.replies
+                            .send(Reply::Query(QueryReply::AttachSessionClose { stream_id }))
+                            .expect("mock response channel must remain open");
+                    }
+                }
                 None
             }
             Incoming::Query(QueryIncoming::ExecuteQuery(_, stream_id)) => {
@@ -300,51 +297,64 @@ impl Handler for AttachThenFailHandler {
 
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn attach_stream_close_reports_successful_keepalive() -> YdbResult<()> {
-    let (registry, recorder) = test_recorder();
-    let handler = AttachThenCloseHandler {
-        replies: tokio::sync::mpsc::unbounded_channel().0,
-    };
-    let (server, _reply_tx) = MockServer::start(handler).await;
-    let client = make_client(&server, recorder).await?;
+async fn attach_stream_close_reasons_are_reported() -> YdbResult<()> {
+    for (outcome, reason) in [
+        (AttachStreamOutcome::Close, "stream_closed"),
+        (AttachStreamOutcome::Fail, "error"),
+        (AttachStreamOutcome::SessionShutdown, "session_shutdown"),
+        (AttachStreamOutcome::NodeShutdown, "node_shutdown"),
+    ] {
+        let (registry, recorder) = test_recorder();
+        let handler = AttachStreamHandler {
+            replies: tokio::sync::mpsc::unbounded_channel().0,
+            outcome,
+        };
+        let (server, _reply_tx) = MockServer::start(handler).await;
+        let client = make_client(&server, recorder).await?;
 
-    tx_upsert(&client, 1).await?;
+        tx_upsert(&client, 1).await?;
 
-    // The watcher task observes the stream close asynchronously.
-    wait_for(|| {
-        counter_value_with_label(
-            &registry,
-            "ydb_session_pool_keepalive_total",
-            "result",
-            "ok",
-        ) >= 1
-    })
-    .await;
+        // The listener task observes the terminal stream event asynchronously.
+        wait_for(|| {
+            counter_value_with_label(
+                &registry,
+                "ydb_session_pool_attach_stream_closed_total",
+                "reason",
+                reason,
+            ) >= 1
+        })
+        .await;
+    }
 
     Ok(())
 }
 
 #[tokio::test]
 #[tracing_test::traced_test]
-async fn attach_stream_failure_reports_failed_keepalive() -> YdbResult<()> {
+async fn attach_failure_before_active_emits_no_session_lifecycle_metrics() -> YdbResult<()> {
     let (registry, recorder) = test_recorder();
-    let handler = AttachThenFailHandler {
+    let handler = AttachStreamHandler {
         replies: tokio::sync::mpsc::unbounded_channel().0,
+        outcome: AttachStreamOutcome::CloseBeforeActive,
     };
     let (server, _reply_tx) = MockServer::start(handler).await;
     let client = make_client(&server, recorder).await?;
 
-    tx_upsert(&client, 1).await?;
-
-    wait_for(|| {
-        counter_value_with_label(
-            &registry,
-            "ydb_session_pool_keepalive_total",
-            "result",
-            "error",
-        ) >= 1
-    })
-    .await;
+    let result = tx_upsert(&client, 1).await;
+    assert!(result.is_err(), "attach failure must fail the operation");
+    assert_eq!(
+        counter_value(&registry, "ydb_session_pool_sessions_created_total"),
+        0
+    );
+    assert_eq!(
+        counter_value(&registry, "ydb_session_pool_sessions_closed_total"),
+        0
+    );
+    assert_eq!(
+        counter_value(&registry, "ydb_session_pool_attach_stream_closed_total"),
+        0,
+        "a failed attach must not spawn a listener or emit its terminal event"
+    );
 
     Ok(())
 }

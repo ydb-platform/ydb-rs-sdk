@@ -13,6 +13,7 @@ use http::Uri;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
+use crate::client_metrics::SessionPoolAttachStreamCloseReason;
 use crate::errors::{YdbError, YdbResult, YdbStatusError};
 use crate::grpc_connection_manager::GrpcConnectionManager;
 use crate::grpc_wrapper::raw_query_service::client::RawQueryClient;
@@ -71,9 +72,11 @@ impl CreatedSession {
             listener_health,
             observer,
         ));
+        let mut resource = self.resource;
+        resource.close_emission.arm(health.clone());
         Ok(AttachedSession {
             _attach_listener: AttachSessionListener::Task(listener),
-            resource: self.resource,
+            resource,
             health,
         })
     }
@@ -135,6 +138,11 @@ impl AttachedSession {
         self.health.mark_broken();
     }
 
+    #[cfg(test)]
+    pub(super) fn invalidate_keepalive(&self) {
+        self.health.mark_keepalive_failed();
+    }
+
     pub(super) fn ensure_healthy(&self) -> YdbResult<()> {
         if self.is_healthy() {
             Ok(())
@@ -157,10 +165,12 @@ impl AttachedSession {
         cleanup: SessionCleanup,
         pool: std::sync::Weak<super::pool::SessionPoolInner>,
     ) -> Self {
-        let resource = SessionResource::new(cleanup, session_id, node_uri, pool);
+        let mut resource = SessionResource::new(cleanup, session_id, node_uri, pool);
+        let health = Arc::new(SessionHealth::new());
+        resource.close_emission.arm(health.clone());
         Self {
             _attach_listener: AttachSessionListener::Stub,
-            health: Arc::new(SessionHealth::new()),
+            health,
             resource,
         }
     }
@@ -201,29 +211,34 @@ impl SessionResource {
 }
 
 /// RAII guard counting an abnormal session close (lease dropped without returning
-/// the session to the pool). Disarmed by every explicit close site.
+/// the session to the pool). It stays disarmed until AttachSession succeeds and is
+/// disarmed again by every explicit close site.
 struct SessionCloseEmission {
     pool: std::sync::Weak<super::pool::SessionPoolInner>,
-    armed: bool,
+    health: Option<Arc<SessionHealth>>,
 }
 
 impl SessionCloseEmission {
     fn new(pool: std::sync::Weak<super::pool::SessionPoolInner>) -> Self {
-        Self { pool, armed: true }
+        Self { pool, health: None }
+    }
+
+    fn arm(&mut self, health: Arc<SessionHealth>) {
+        self.health = Some(health);
     }
 
     fn disarm(&mut self) {
-        self.armed = false;
+        self.health = None;
     }
 }
 
 impl Drop for SessionCloseEmission {
     fn drop(&mut self) {
-        if !self.armed {
+        let Some(health) = &self.health else {
             return;
-        }
+        };
         if let Some(pool) = self.pool.upgrade() {
-            pool.record_abnormal_session_close();
+            pool.record_abnormal_session_close(health.close_cause());
         }
     }
 }
@@ -370,8 +385,7 @@ async fn listen_attach_stream(
             .map_err(YdbError::from)
             .and_then(|message| RawSessionState::try_from(message).map_err(YdbError::from))
     });
-    let mut keepalive_failed = false;
-    let node_shutdown = loop {
+    let reason = loop {
         match events.next().await {
             Some(Ok(RawSessionState::Active)) => {}
             Some(Ok(RawSessionState::SessionShutdown)) => {
@@ -380,7 +394,7 @@ async fn listen_attach_stream(
                     hint = ?RawSessionState::SessionShutdown,
                     "query session attach listener received a shutdown hint"
                 );
-                break false;
+                break SessionPoolAttachStreamCloseReason::SessionShutdown;
             }
             Some(Ok(RawSessionState::NodeShutdown)) => {
                 warn!(
@@ -388,7 +402,7 @@ async fn listen_attach_stream(
                     hint = ?RawSessionState::NodeShutdown,
                     "query session attach listener received a shutdown hint"
                 );
-                break true;
+                break SessionPoolAttachStreamCloseReason::NodeShutdown;
             }
             Some(Err(err)) => {
                 warn!(
@@ -396,27 +410,25 @@ async fn listen_attach_stream(
                     error = %err,
                     "query session attach listener failed"
                 );
-                keepalive_failed = true;
-                break false;
+                break SessionPoolAttachStreamCloseReason::Error;
             }
             None => {
                 warn!(
                     session_id = %identity.session_id,
                     "query session attach stream closed"
                 );
-                break false;
+                break SessionPoolAttachStreamCloseReason::StreamClosed;
             }
         }
     };
 
-    observer.session_keepalive_finished(!keepalive_failed);
-    if keepalive_failed {
-        // The liveness stream failed: record it as a keep-alive failure so the
-        // session close metric can attribute the close to it.
+    observer.attach_stream_closed(reason);
+    if reason == SessionPoolAttachStreamCloseReason::Error {
+        // Preserve the transport failure for the later abnormal-close metric.
         health.mark_keepalive_failed();
     }
     health.mark_broken();
-    if node_shutdown {
+    if reason == SessionPoolAttachStreamCloseReason::NodeShutdown {
         observer.node_shutdown(&identity.node_uri);
     }
 }

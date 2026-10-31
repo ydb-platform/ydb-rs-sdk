@@ -11,10 +11,13 @@
 //!   `ydb_session_pool_acquire_seconds{result}`;
 //! - `ydb_session_pool_sessions_created_total`, the session-create duration
 //!   histogram, `ydb_session_pool_session_use_seconds`;
-//! - with `idle_ttl`/`item_usage_limit` configured, later ticks surface
-//!   `ydb_session_pool_sessions_closed_total{reason="idle_ttl"|"usage_limit"}`;
+//! - pool closes distinguish `idle_ttl`, `usage_limit`, `max_age`, `pool_full`,
+//!   `bad_session`, `shutdown`, and `keepalive_failed`;
+//! - attach listener termination is reported by
+//!   `ydb_session_pool_attach_stream_closed_total{reason}`;
 //! - dropping the burst driver at the end of the tick emits
-//!   `ydb_session_pool_sessions_closed_total{reason="shutdown"}`.
+//!   `ydb_session_pool_sessions_closed_total{reason="shutdown"}` and subtracts
+//!   this pool's contribution from the shared gauges.
 
 use std::sync::Arc;
 use std::time::Duration;
