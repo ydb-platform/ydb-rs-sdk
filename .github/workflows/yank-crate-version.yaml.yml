@@ -2,7 +2,7 @@ name: Yank published crate from crates.io
 env:
   CARGO_TERM_COLOR: always
   # Pinned modern Rust version for crates.io operations.
-  RUST_VERSION_MODERN: "1.96"
+  RUST_VERSION_MODERN: "1.99.1"
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 on:

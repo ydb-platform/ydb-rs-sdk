@@ -13,7 +13,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
   # Pinned modern Rust version for formatter and Clippy coverage.
-  RUST_VERSION_MODERN: "1.96"
+  RUST_VERSION_MODERN: "1.99.1"
 
 jobs:
   check-code-style:
